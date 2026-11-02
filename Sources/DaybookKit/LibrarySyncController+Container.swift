@@ -30,7 +30,7 @@ extension LibrarySyncController {
         startContainer(identifier)
     }
 
-    func restoreFolder() {
+    private func restoreFolder() {
         guard let data = defaults.data(forKey: Key.folderBookmark) else { return }
         do {
             var stale = false
@@ -82,21 +82,21 @@ extension LibrarySyncController {
         startContainer(identifier)
     }
 
-    func saveBookmark(_ url: URL) throws {
+    private func saveBookmark(_ url: URL) throws {
         let data = try url.bookmarkData(options: Self.bookmarkCreation, includingResourceValuesForKeys: nil, relativeTo: nil)
         defaults.set(data, forKey: Key.folderBookmark)
         rememberLocation(of: url)
     }
 
     /// Keeps a plain bookmark of the chosen folder beside the scoped one (`Key.folderLocation`).
-    func rememberLocation(of url: URL) {
+    private func rememberLocation(of url: URL) {
         if let data = try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) {
             defaults.set(data, forKey: Key.folderLocation)
         }
     }
 
     /// Where the previous folder was, from the plain bookmark, when it's there at all.
-    func previousFolderLocation() -> URL? {
+    private func previousFolderLocation() -> URL? {
         guard let data = defaults.data(forKey: Key.folderLocation) else { return nil }
         var stale = false
         guard let url = try? URL(resolvingBookmarkData: data, options: [.withoutUI, .withoutMounting], relativeTo: nil, bookmarkDataIsStale: &stale),
@@ -123,7 +123,7 @@ extension LibrarySyncController {
 
     // MARK: iCloud container
 
-    func startContainer(_ identifier: String) {
+    private func startContainer(_ identifier: String) {
         containerIdentifier = identifier
         observeAccount()
         containerTask?.cancel(); migrationTask?.cancel(); migrationTask = nil
@@ -132,12 +132,12 @@ extension LibrarySyncController {
         containerTask = Task { [weak self] in await self?.prepareContainer(identifier, generation: generation) }
     }
 
-    func isCurrent(_ generation: UUID) -> Bool { generation == containerGeneration && !Task.isCancelled }
+    private func isCurrent(_ generation: UUID) -> Bool { generation == containerGeneration && !Task.isCancelled }
 
     /// Connects the container, in three phases: the account (`checkAccount`), whose journal the container holds when the
     /// account record reads differently (`waitForThisLibrary`), and attaching it (`attachContainer`). Each says where sync
     /// stands when it stops.
-    func prepareContainer(_ identifier: String, generation: UUID) async {
+    private func prepareContainer(_ identifier: String, generation: UUID) async {
         if transport == .iCloudContainer { detach() }
         if defaults.bool(forKey: Key.turnedOff) {
             iCloud = .turnedOff; status = .off; return
@@ -160,7 +160,7 @@ extension LibrarySyncController {
     }
 
     /// The account signed in, and whether the account this library synced with reads differently from it.
-    struct AccountCheck {
+    private struct AccountCheck {
         var account: Data
         /// The record reads differently: another app's (iCloud's account token is per app), or this app's own with the
         /// library it last synced there known. The container decides (`waitForThisLibrary`).
@@ -177,7 +177,7 @@ extension LibrarySyncController {
     /// (`local.daybook`) carried over, or the other way round. The container decides: holding this library's journal,
     /// it's the same account. This app's own record reading differently is another account, unless the container holds
     /// the very library this device last synced with it (`Key.accountLibrary`): the token archived to other bytes.
-    func checkAccount(generation: UUID) async -> AccountCheck? {
+    private func checkAccount(generation: UUID) async -> AccountCheck? {
         guard let account = environment.accountIdentity() else {
             let signedIn = await environment.accountSignedIn()
             guard isCurrent(generation) else { return nil }
@@ -207,7 +207,7 @@ extension LibrarySyncController {
     /// manifest may still be in iCloud (the first launch after the change, or a fresh install): it's asked for, and sync
     /// keeps saying "Connecting to iCloud…" until it's here. Only a manifest naming another library, or none turning up
     /// after a while (`accountJournalWaitPasses`), means another account: false, paused.
-    func waitForThisLibrary(in root: URL, expected: UUID?, generation: UUID) async -> Bool {
+    private func waitForThisLibrary(in root: URL, expected: UUID?, generation: UUID) async -> Bool {
         let (localRoot, deviceID, cloud) = (localRoot, deviceID, environment.cloud)
         var passesWithoutManifest = 0
         while true {
@@ -242,7 +242,7 @@ extension LibrarySyncController {
     /// The attach phase: records the account (the library is bound to it from here on, so a change mid-migration pauses
     /// too), moves a folder this Mac synced through before, waits out a cancelled pass still unwinding, and attaches the
     /// engine to the container.
-    func attachContainer(_ root: URL, account: Data, identifier: String, generation: UUID) async {
+    private func attachContainer(_ root: URL, account: Data, identifier: String, generation: UUID) async {
         if forgetsSealedLibrary {
             forgetsSealedLibrary = false
             LibrarySyncEngine.forgetSealedLibrary(localRoot: localRoot, remoteRoot: root)
@@ -276,7 +276,7 @@ extension LibrarySyncController {
     /// Moves a previously chosen folder's journal into the container, once. True when sync can switch over:
     /// there was nothing to move, or the manifest, events, and metadata are all copied. Waits (retrying)
     /// while iCloud downloads the source's files.
-    func migrateFolder(into root: URL, identifier: String, generation: UUID) async -> Bool {
+    private func migrateFolder(into root: URL, identifier: String, generation: UUID) async -> Bool {
         guard let bookmark = defaults.data(forKey: Key.folderBookmark) else { return true }
         guard let source = Self.resolve(bookmark), Self.canOpen(source) else {
             // There but unreadable (a bookmark made before the App Sandbox), or gone.
@@ -328,7 +328,7 @@ extension LibrarySyncController {
     }
 
     /// After the switch, keeps copying the previous folder's remaining audio objects in the background.
-    func finishMigration(into root: URL, identifier: String, generation: UUID) async {
+    private func finishMigration(into root: URL, identifier: String, generation: UUID) async {
         guard let bookmark = defaults.data(forKey: Key.migratedFolderBookmark), let source = Self.resolve(bookmark),
               var record = migrationRecord,
               let migration = try? LibrarySyncMigration(source: source, destination: root, localRoot: localRoot, deviceID: deviceID, cloud: environment.cloud,
@@ -346,7 +346,7 @@ extension LibrarySyncController {
     }
 
     /// One pass of `migration`, with access to the previous folder for its duration.
-    func run(_ migration: LibrarySyncMigration, generation: UUID) async -> Result<SyncMigrationOutcome, Error> {
+    private func run(_ migration: LibrarySyncMigration, generation: UUID) async -> Result<SyncMigrationOutcome, Error> {
         let source = migration.source
         let scoped = source.startAccessingSecurityScopedResource()
         defer { if scoped { source.stopAccessingSecurityScopedResource() } }
@@ -361,24 +361,24 @@ extension LibrarySyncController {
         } catch { return .failure(error) }
     }
 
-    func showMigration(_ progress: SyncMigrationProgress, generation: UUID, attempt: Int) {
+    private func showMigration(_ progress: SyncMigrationProgress, generation: UUID, attempt: Int) {
         guard generation == containerGeneration, attempt > settledMigrationAttempt, case .migrating = iCloud else { return }
         iCloud = .migrating(progress); status = .migrating(progress)
     }
 
-    func saveMigration(_ record: SyncMigrationRecord) {
+    private func saveMigration(_ record: SyncMigrationRecord) {
         migrationRecord = record
         if let data = try? JSONEncoder().encode(record) { defaults.set(data, forKey: Key.migration) }
     }
 
     /// The previous folder is never connected again. Its bookmark is kept apart, only to finish copying audio.
-    func retireFolderBookmark() {
+    private func retireFolderBookmark() {
         if let data = defaults.data(forKey: Key.folderBookmark) { defaults.set(data, forKey: Key.migratedFolderBookmark) }
         defaults.removeObject(forKey: Key.folderBookmark)
         retiredFolderChanges &+= 1
     }
 
-    func observeAccount() {
+    private func observeAccount() {
         guard accountObserver == nil else { return }
         accountObserver = NotificationCenter.default.addObserver(forName: .NSUbiquityIdentityDidChange, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.accountDidChange() }
@@ -387,7 +387,7 @@ extension LibrarySyncController {
 
     /// Pauses: the pass in flight is cancelled and its receipt can't be acknowledged. Then the container is
     /// checked again, which waits for the person if the account is now a different one.
-    func accountDidChange() {
+    private func accountDidChange() {
         guard transport != .folder, !isOnSameAccount, let identifier = containerIdentifier else { return }
         detach()
         startContainer(identifier)
@@ -420,13 +420,13 @@ extension LibrarySyncController {
     }
 
     /// Whether this build can list `url`, with its security scope held while it checks.
-    static func canOpen(_ url: URL) -> Bool {
+    private static func canOpen(_ url: URL) -> Bool {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         return (try? FileManager.default.contentsOfDirectory(atPath: url.path)) != nil
     }
 
-    static func samePlace(_ a: URL, _ b: URL) -> Bool {
+    private static func samePlace(_ a: URL, _ b: URL) -> Bool {
         a.standardizedFileURL.resolvingSymlinksInPath().path == b.standardizedFileURL.resolvingSymlinksInPath().path
     }
 

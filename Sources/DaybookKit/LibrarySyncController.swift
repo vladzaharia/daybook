@@ -178,8 +178,8 @@ public struct SyncContainerEnvironment: Sendable {
 /// Optimistic until the monitor first reports, which it does at once.
 final class SyncNetworkPath: Sendable {
     static let shared = SyncNetworkPath()
-    let satisfied = Mutex(true)
-    let monitor = NWPathMonitor()
+    private let satisfied = Mutex(true)
+    private let monitor = NWPathMonitor()
 
     private init() {
         monitor.pathUpdateHandler = { path in self.satisfied.withLock { $0 = path.status == .satisfied } }
@@ -192,7 +192,7 @@ final class SyncNetworkPath: Sendable {
 @MainActor
 @Observable
 public final class LibrarySyncController {
-    public internal(set) var folder: URL?
+    public private(set) var folder: URL?
     public internal(set) var isICloudLocation = false
     /// Where sync stands (`SyncStatus`): what both apps show, and whether it needs the person (`status.problem`).
     public internal(set) var status: SyncStatus = .off
@@ -223,9 +223,9 @@ public final class LibrarySyncController {
     /// A random ID for this app on this device, kept in its own preferences (`Key.appInstallation`): apps that share the
     /// device's identity through the keychain differ in it.
     public let appInstallation: String
-    let identityStore: SyncDeviceIdentityStore
+    private let identityStore: SyncDeviceIdentityStore
     /// Another device writes presence under this device ID; a new identity is taken once the pass ends.
-    var needsNewIdentity = false
+    private var needsNewIdentity = false
     /// The container sync uses, once restored.
     public internal(set) var containerIdentifier: String?
     /// The engine for the connected library: on-demand audio (`fetchAudio`, `evictAudio`), presence
@@ -283,17 +283,17 @@ public final class LibrarySyncController {
     /// The person chose to sync with another iCloud account: forget the container's library was encrypted.
     @ObservationIgnored var forgetsSealedLibrary = false
     /// iCloud has listed the connected folder once (its metadata query finished gathering).
-    internal(set) var containerListed = false
+    private(set) var containerListed = false
     /// The first listing was empty and made offline: it counts once one has something in it or the network is up
     /// (`noteListing`).
-    @ObservationIgnored internal(set) var listingDeferred = false
+    @ObservationIgnored private(set) var listingDeferred = false
     /// Something here asked for a pass (`requestSync`: an edit saved, a delivery, iCloud's listing changing) since the
     /// last one started.
     @ObservationIgnored var requestedSinceLastPass = false
     /// When the last pass started.
     @ObservationIgnored var lastPassStarted: Date?
     /// Polls that skipped their pass because it would change nothing (tests).
-    @ObservationIgnored internal(set) var pollsSkipped = 0
+    @ObservationIgnored private(set) var pollsSkipped = 0
 
     /// Unsigned and ad hoc development builds can't use the iCloud container. Setting this preference
     /// (`-DaybookDevelopmentFolderSync YES` as a launch argument, or `defaults write`) brings back the folder
@@ -378,7 +378,7 @@ public final class LibrarySyncController {
 
     /// Another device shares this device ID (presence says so): this one takes a new identity, keeps its place in
     /// the journal, and reconnects.
-    func takeNewIdentity() {
+    private func takeNewIdentity() {
         guard needsNewIdentity, !isSyncing else { return }
         needsNewIdentity = false
         let fresh = StoredSyncIdentity(deviceID: UUID().uuidString, installation: installation)
@@ -491,7 +491,7 @@ public final class LibrarySyncController {
         await withCheckedContinuation { passEndWaiters.append($0) }
     }
 
-    func passEnded() {
+    private func passEnded() {
         let waiters = passEndWaiters
         passEndWaiters = []
         waiters.forEach { $0.resume() }
@@ -598,7 +598,7 @@ public final class LibrarySyncController {
     /// Where sync stands after a pass: iCloud storage is full when the pass found iCloud refusing uploads for it, or the
     /// courier did while uploads wait (CloudKit and iCloud Drive share the quota); else files still moving; else up to
     /// date, which needs nothing waiting to upload.
-    func settledStatus(uploads: Int, downloads: Int, at date: Date) -> SyncStatus {
+    private func settledStatus(uploads: Int, downloads: Int, at date: Date) -> SyncStatus {
         if lastResultStorageFull || (courierStatus.storageFull && uploads > 0) { return .storageFull }
         return uploads > 0 || downloads > 0 ? .exchanged(uploads: uploads, downloads: downloads) : .upToDate(at: date)
     }
@@ -682,7 +682,7 @@ public final class LibrarySyncController {
 
     /// A large conversation edited here again soon after it was published is held back by the engine
     /// (`LibrarySyncEngine.publicationInterval`): a pass is asked for when it may go.
-    func schedulePublication(_ due: Date?) {
+    private func schedulePublication(_ due: Date?) {
         publicationTimer?.cancel(); publicationTimer = nil
         guard let due else { return }
         publicationTimer = Task { [weak self] in
@@ -716,7 +716,7 @@ public final class LibrarySyncController {
     /// status says when sync last checked. The iPhone's own cadence is the same (`PhoneSync.presenceInterval`).
     static let idlePassInterval: TimeInterval = 10 * 60
 
-    func startMonitoring(_ root: URL) {
+    private func startMonitoring(_ root: URL) {
         let query = NSMetadataQuery()
         query.searchScopes = [NSMetadataQueryUbiquitousDocumentsScope, NSMetadataQueryUbiquitousDataScope, NSMetadataQueryAccessibleUbiquitousExternalDocumentsScope]
         query.predicate = NSPredicate(format: "%K BEGINSWITH %@", NSMetadataItemPathKey, root.path + "/")
@@ -757,7 +757,7 @@ public final class LibrarySyncController {
     /// iCloud has listed the container (the query's first gather, or an update after one made offline). An empty listing
     /// made offline says nothing about what iCloud holds: a device that started a library then would start a second one
     /// beside one it can't see yet, so it waits until a listing has something in it or the network is up.
-    func noteListing() async {
+    private func noteListing() async {
         guard let engine, let query, !containerListed else { listingDeferred = false; return }
         guard query.resultCount > 0 || environment.networkReachable() else { listingDeferred = true; return }
         listingDeferred = false
@@ -784,7 +784,7 @@ public final class LibrarySyncController {
 
     /// Notes another installation of Daybook syncing as this device (`LibrarySyncEngine.otherInstallationWrote`), kept
     /// across launches, and says so in `warning` while it's recent.
-    func noteOtherInstallation(_ engine: LibrarySyncEngine) async {
+    private func noteOtherInstallation(_ engine: LibrarySyncEngine) async {
         var seen = defaults.object(forKey: Key.otherInstallationWrote) as? Date
         if let wrote = await engine.otherInstallationWrote, wrote > (seen ?? .distantPast) {
             seen = wrote
@@ -800,13 +800,13 @@ public final class LibrarySyncController {
     }
 
     /// Whether the poll may skip its pass (`poll`).
-    func mayIdle(now: Date = Date()) async -> Bool {
+    private func mayIdle(now: Date = Date()) async -> Bool {
         guard case .upToDate = status, !requestedSinceLastPass, !hasMoreWork, !isSyncing, let engine,
               let started = lastPassStarted, now.timeIntervalSince(started) < Self.idlePassInterval else { return false }
         return await !engine.hasRemoteChanges()
     }
 
-    func stopMonitoring() {
+    private func stopMonitoring() {
         polling?.cancel(); polling = nil; debounce?.cancel(); debounce = nil; containerListed = false; listingDeferred = false
         debounceRunsPass = false; requestedDuringPass = false
         query?.stop(); query = nil
@@ -833,7 +833,7 @@ public final class LibrarySyncController {
 /// Numbers reports made on any thread so they're applied in the order they were made: one that arrives after a later
 /// one is dropped.
 final class StatusNumbering: Sendable {
-    let numbers = Mutex((issued: 0, applied: 0))
+    private let numbers = Mutex((issued: 0, applied: 0))
 
     /// The next report's number.
     func issue() -> Int { numbers.withLock { $0.issued += 1; return $0.issued } }
