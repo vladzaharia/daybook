@@ -38,8 +38,8 @@ struct LibraryPage: View {
         content
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
-            // One way into search, at the thumb (Search beside Record, or on the status sheet): the field opens under
-            // the title only while search is up, never at rest above the list.
+            // One way into search, at the thumb (Search beside Record, or on the status sheet): the field is there only
+            // while search is up, at the thumb above the keyboard, never at rest above the list.
             .modifier(SearchWhilePresented(library: library))
             .toolbar { toolbar }
             // A bar, not an inset: the list's edge effect then runs under Record and the status sheet.
@@ -367,8 +367,9 @@ struct LibraryPage: View {
     }
 }
 
-/// The search field, under the title only while search is up: Search beside Record, or on the status sheet, opens
-/// it. It's attached to the page's background, so opening and closing it never rebuilds the list or loses its place.
+/// The search field, only while search is up: Search beside Record, or on the status sheet, opens it, and the system
+/// keeps it at the thumb above the keyboard with the scopes over the results. It's attached to the page's
+/// background, so opening and closing it never rebuilds the list or loses its place.
 private struct SearchWhilePresented: ViewModifier {
     let library: LibraryController
     @Environment(ReadingSession.self) private var session

@@ -8,6 +8,12 @@ import SwiftUI
 /// The shared label style, by the name the reading screens use.
 typealias CompactLabelStyle = DaybookUI.CompactLabelStyle
 
+/// A summary snippet as plain words, by the shared rule (`SearchHit.plainText(fromMarkdown:)`), under the name the
+/// reading tests know it by.
+enum SearchSnippet {
+    static func plain(_ markdown: String) -> String { SearchHit.plainText(fromMarkdown: markdown) }
+}
+
 /// What a row says on this iPhone (`ConversationStatusPresentation.row`): a Mac recording it now (over the link),
 /// a Mac's live progress on it before sync says so, where its summary runs, this iPhone's own work, and what the
 /// library says; and the mint waveform while it plays here.
