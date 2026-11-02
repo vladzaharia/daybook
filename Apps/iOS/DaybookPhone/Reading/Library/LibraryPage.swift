@@ -217,12 +217,12 @@ struct LibraryPage: View {
         }
     }
 
-    /// The conversations whose saved captions search reads: those the search could list (its scope and tokens), and
-    /// only while this iPhone's transcript page shows their captions (`Meeting.showsLiveCaptions`), so a caption result
-    /// always opens at them.
+    /// The conversations whose saved captions search reads: those the search could list (its scope and tokens). Which
+    /// captions still show is the transcript page's own rule (`SavedCaptions.shown`), which the search reads too, so a
+    /// caption result always opens at them.
     static func captionCandidates(in meetings: [Meeting], tokens: [SearchToken], scope: SearchScope) -> [Meeting] {
         let scoped = Set(LibrarySearch.hits(in: meetings, text: "", tokens: tokens, scope: scope).map(\.meetingID))
-        return meetings.filter { scoped.contains($0.id) && $0.showsLiveCaptions }
+        return meetings.filter { scoped.contains($0.id) }
     }
 
     /// The folder being viewed, which the scopes offer too.
@@ -486,8 +486,10 @@ enum PhoneActions {
         case .tags: session.sheet = .tags(meetings.map(\.id))
         case .moveTo(let placement): library.setPlacement(meetings.map(\.id), placement, undoManager: undoManager)
         case .moveToTrash: session.confirmingTrash = meetings.map(\.id)
-        case .export, .exportMarkdown, .exportJSON, .shareAudio, .reprocess, .addRecording, .addRecordingFromFile:
+        case .share, .shareMarkdown, .shareJSON, .shareAudio, .reprocess, .addRecording, .addRecordingFromFile:
             break // Menus this iPhone draws itself (`custom`).
+        case .export, .exportMarkdown, .exportJSON:
+            break // The Mac's.
         case .showFloatingNotes, .rename, .showInFinder:
             break // The Mac's.
         case .play, .adjustTiming, .showOriginalTranscript, .moveToNewConversation, .removeRecording:
@@ -500,7 +502,7 @@ enum PhoneActions {
     static func custom(_ action: ConversationAction, ids: [UUID], library: LibraryController) -> AnyView? {
         guard ids.count == 1, let meeting = library.meeting(ids[0]) else { return nil }
         switch action.id {
-        case .export: return AnyView(ExportMenu(meeting: meeting))
+        case .share: return AnyView(ExportMenu(meeting: meeting))
         case .reprocess: return AnyView(ReprocessMenu(library: library, meeting: meeting))
         case .addRecording: return AnyView(EmptyView())
         default: return nil

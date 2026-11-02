@@ -136,7 +136,7 @@ struct PhoneCaptions: View {
             let segments = captions.state == .listening ? captions.recent(style.lines) : []
             LiveCaptionStrip(lines: segments.map { segment in
                                  CaptionLine(id: segment.id, text: segment.text, isTentative: segment.isTentative,
-                                             speaker: LiveCaptionsController.name(of: segment, names: captions.sourceNames))
+                                             speaker: LiveCaptionLabels.speaker(segment, names: captions.sourceNames))
                              },
                              status: status(captions.state),
                              style: style)

@@ -134,23 +134,22 @@ final class LibraryListPhoneTests: XCTestCase {
         let folder = LibraryCaptionSearch.directory(libraryRoot: root)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let captioned = Meeting(title: "Onboarding design review")
-        // An iPhone's recording joined to a conversation a Mac had already transcribed: an earlier transcript, newer
-        // captions. This iPhone's transcript page shows the transcript, so search doesn't offer the captions.
-        var joined = Meeting(title: "Already transcribed")
-        joined.transcripts = [TrackTranscript(trackID: UUID(), segments: [], modelID: "m", createdAt: Date().addingTimeInterval(-3_600))]
-        joined.unifiedTranscript = [TranscriptSegment(trackID: UUID(), start: 0, end: 1, text: "Hello")]
-        for meeting in [captioned, joined] {
+        // Transcribed after its captions began: the transcript replaced them, so the page doesn't show them and search
+        // doesn't offer them.
+        var replaced = Meeting(title: "Already transcribed")
+        replaced.transcripts = [TrackTranscript(trackID: UUID(), segments: [], modelID: "m", createdAt: Date().addingTimeInterval(3_600))]
+        replaced.unifiedTranscript = [TranscriptSegment(trackID: UUID(), start: 0, end: 1, text: "Hello")]
+        for meeting in [captioned, replaced] {
             let captions = LiveCaptions(meetingID: meeting.id, localeIdentifier: "en_US",
                                         segments: [LiveCaptionSegment(start: 12, end: 14, text: "The onboarding checklist.", isTentative: false)])
             try JSONEncoder().encode(captions).write(to: folder.appendingPathComponent("\(meeting.id.uuidString).json"))
         }
-        XCTAssertFalse(joined.showsLiveCaptions)
 
-        let candidates = LibraryPage.captionCandidates(in: [captioned, joined], tokens: [], scope: .all)
-        XCTAssertEqual(candidates.map(\.id), [captioned.id])
+        let candidates = LibraryPage.captionCandidates(in: [captioned, replaced], tokens: [], scope: .all)
+        XCTAssertEqual(Set(candidates.map(\.id)), [captioned.id, replaced.id])
         let hits = await LibraryCaptionSearch.hits(in: candidates, query: "checklist", excluding: [], libraryRoot: root)
         XCTAssertEqual(hits.map(\.meeting.id), [captioned.id], "never a result that opens a page with no captions to show")
-        XCTAssertTrue(LibraryPage.captionCandidates(in: [captioned, joined], tokens: [], scope: .work).isEmpty,
+        XCTAssertTrue(LibraryPage.captionCandidates(in: [captioned, replaced], tokens: [], scope: .work).isEmpty,
                       "and only in the search's scope")
     }
 }

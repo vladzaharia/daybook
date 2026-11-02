@@ -99,10 +99,16 @@ final class StatusSheetModelTests: XCTestCase {
     func testBehaviorTheRecorderLineSaysToKeepDaybookOpenDuringFastTransfer() {
         let starting = line(recorder {
             $0.importing = .init(position: 1, total: 1, fraction: 0)
-            $0.fastTransfer = .joining
+            $0.fastTransfer = .starting
         })
         XCTAssertEqual(starting.text, "Importing · Starting Wi‑Fi…")
         XCTAssertEqual(starting.shortText, "Starting Wi‑Fi…")
+        let joining = line(recorder {
+            $0.importing = .init(position: 1, total: 1, fraction: 0)
+            $0.fastTransfer = .joining(recorder: "Soundcore Work")
+        })
+        XCTAssertEqual(joining.text, "Importing · Joining Wi‑Fi…")
+        XCTAssertEqual(joining.shortText, "Joining Wi‑Fi…")
         let transferring = line(recorder {
             $0.importing = .init(position: 1, total: 1, fraction: 0.64)
             $0.fastTransfer = .transferring
