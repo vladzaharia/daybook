@@ -11,7 +11,9 @@ import Observation
 /// **Owed work.** A conversation queued here stays owed until its work finishes, fails, the person pauses or cancels
 /// it, it goes to the Trash, or another device takes it over. Quitting, a restart, or a crash doesn't settle it: the
 /// record is kept in the library as `local-queue.json` (never synced: it's this Mac's), and the next launch queues
-/// it again (`resumeOwedWork`). A request another device made isn't owed here; it's picked up again from the library.
+/// it again (`resumeOwedWork`). Work Daybook didn't come back from twice (it crashed, or was stopped, mid-run) is left
+/// to the person instead, so work that brings Daybook down doesn't do so at every launch. A request another device
+/// made isn't owed here; it's picked up again from the library.
 @MainActor
 @Observable
 final class ProcessingQueue {
@@ -43,6 +45,9 @@ final class ProcessingQueue {
     @ObservationIgnored var currentRequest: Task<Void, Error>?
     /// Everything is stopping because Daybook is quitting: what was cancelled stays owed.
     @ObservationIgnored private(set) var isStopping = false
+    /// The running job's conversation while its run counts on its owed work as one that hasn't ended
+    /// (`OwedWork.interruptedRuns`).
+    @ObservationIgnored private var countedRun: UUID?
 
     // MARK: The claim's heartbeat (AppState+Requests.swift)
 
@@ -92,15 +97,21 @@ final class ProcessingQueue {
         jobs.isEmpty ? nil : jobs.removeFirst()
     }
 
-    /// `job` runs now.
+    /// `job` runs now. Its owed work counts the run until it ends here: if Daybook crashes meanwhile, the count stays.
     func start(_ job: ProcessingJob) {
         runningID = job.meetingID
         running = job
         claimsLost.remove(job.meetingID)
+        if let index = owed.firstIndex(where: { $0.meetingID == job.meetingID }) {
+            owed[index].interruptedRuns += 1
+            countedRun = job.meetingID
+            saveOwed()
+        }
     }
 
     /// The running job is done, however it ended.
     func finishRunning() {
+        runEnded()
         currentRequest = nil
         running = nil
         runningID = nil
@@ -114,9 +125,11 @@ final class ProcessingQueue {
         return removed
     }
 
-    /// Daybook is quitting: the loop and the running job stop, the queue empties, and what it held stays owed.
+    /// Daybook is quitting: the loop and the running job stop, the queue empties, and what it held stays owed. The
+    /// running job's run ends here, now: the quit may be over before its work notices.
     func stopAll() {
         isStopping = true
+        runEnded()
         task?.cancel()
         currentRequest?.cancel()
         jobs.removeAll()
@@ -129,6 +142,26 @@ final class ProcessingQueue {
         var meetingID: UUID
         var mode: ProcessingRequest.Mode
         var upgrade: ProcessingRequest.Upgrade?
+        /// Runs of this work that started and never ended here: Daybook crashed, or was stopped, mid-run. A quit ends
+        /// a run as it stops it.
+        var interruptedRuns = 0
+
+        /// Whether the next launch queues it again: once after a run that never ended, not after a second.
+        var resumesAtLaunch: Bool { interruptedRuns < 2 }
+
+        init(meetingID: UUID, mode: ProcessingRequest.Mode, upgrade: ProcessingRequest.Upgrade?) {
+            self.meetingID = meetingID
+            self.mode = mode
+            self.upgrade = upgrade
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            meetingID = try container.decode(UUID.self, forKey: .meetingID)
+            mode = try container.decode(ProcessingRequest.Mode.self, forKey: .mode)
+            upgrade = try container.decodeIfPresent(ProcessingRequest.Upgrade.self, forKey: .upgrade)
+            interruptedRuns = try container.decodeIfPresent(Int.self, forKey: .interruptedRuns) ?? 0
+        }
     }
 
     /// The work owed when Daybook last ran, read once the library opens, before anything is queued. It stays owed until
@@ -139,14 +172,15 @@ final class ProcessingQueue {
         for work in saved where !owed.contains(where: { $0.meetingID == work.meetingID }) { owed.append(work) }
     }
 
-    /// This Mac owes `id` the work `mode` asks for: a later ask replaces an earlier one.
+    /// This Mac owes `id` the work `mode` asks for: a later ask replaces an earlier one, and keeps its runs that never
+    /// ended.
     func owe(_ id: UUID, mode: ProcessingRequest.Mode, upgrade: ProcessingRequest.Upgrade?) {
-        let work = OwedWork(meetingID: id, mode: mode, upgrade: upgrade)
         if let index = owed.firstIndex(where: { $0.meetingID == id }) {
-            guard owed[index] != work else { return }
-            owed[index] = work
+            guard owed[index].mode != mode || owed[index].upgrade != upgrade else { return }
+            owed[index].mode = mode
+            owed[index].upgrade = upgrade
         } else {
-            owed.append(work)
+            owed.append(OwedWork(meetingID: id, mode: mode, upgrade: upgrade))
         }
         saveOwed()
     }
@@ -160,6 +194,15 @@ final class ProcessingQueue {
     }
 
     func isOwed(_ id: UUID) -> Bool { owed.contains { $0.meetingID == id } }
+
+    /// The running job's run ended here, whichever way: it no longer counts as one that never ended.
+    private func runEnded() {
+        guard let id = countedRun else { return }
+        countedRun = nil
+        guard let index = owed.firstIndex(where: { $0.meetingID == id }), owed[index].interruptedRuns > 0 else { return }
+        owed[index].interruptedRuns -= 1
+        saveOwed()
+    }
 
     private func saveOwed() {
         guard let owedURL else { return }
@@ -317,11 +360,13 @@ extension AppState {
 
     /// At launch, once the library is open: the work this Mac owed when it last quit, restarted, or crashed is queued
     /// again, as it was asked for. What the person paused, what failed, and what's gone stay as they are; recorded audio
-    /// that's transcribed and summarized already isn't done again.
+    /// that's transcribed and summarized already isn't done again. Work whose run Daybook didn't come back from a second
+    /// time (`OwedWork.resumesAtLaunch`) is left to the person: the page offers Transcribe or Try Again.
     func resumeOwedWork() {
         for work in queue.owed {
             // Queued or running again already (a recovered recording, a request it carries out): nothing to add.
             guard processingID != work.meetingID, !queue.isQueued(work.meetingID) else { continue }
+            guard work.resumesAtLaunch else { queue.settle(work.meetingID); continue }
             guard let meeting = meetings.first(where: { $0.id == work.meetingID }), meeting.status != .failed,
                   !queue.paused.contains(meeting.id) else { queue.settle(work.meetingID); continue }
             if work.mode == .newAudio, work.upgrade == nil, !meeting.hasUntranscribedTranscribableAudio,

@@ -17,9 +17,9 @@ final class ProcessingQueueTests: XCTestCase {
     }
 
     /// The same library opened again, as the next launch opens it: without models, so nothing runs and what's queued
-    /// waits for them.
-    private func relaunch(_ rig: MultiSourceRig) async -> AppState {
-        await rig.state.flush()
+    /// waits for them. `after` is the launch before (the rig's own by default); unless the test quit it, it crashed.
+    private func relaunch(_ rig: MultiSourceRig, after earlier: AppState? = nil) async -> AppState {
+        await (earlier ?? rig.state).flush()
         ProcessingQueue.drainWrites()
         let next = AppState(libraryURL: rig.root, defaults: rig.defaults)
         await next.initialize()
@@ -51,6 +51,55 @@ final class ProcessingQueueTests: XCTestCase {
             return XCTFail("Waiting for models, not 'Not transcribed yet'")
         }
         try rig.inference.unblock(firstAudio)
+    }
+
+    /// The models arrive in a relaunched `state`, as when a download finishes: what waited for them starts, on the rig's
+    /// fake engine.
+    private func modelsArrive(_ state: AppState, _ rig: MultiSourceRig) {
+        state.sources.inference = rig.inference
+        state.sources.alignAudio = { _, _, _, _ in nil }
+        state.installedModels = [state.transcriptionModel, state.summaryModel, state.processingPreferences.speakerModelID]
+        for id in state.awaitingModels.sorted(by: { $0.uuidString < $1.uuidString }) { state.enqueue(id) }
+    }
+
+    func testBehaviorWorkDaybookDidntComeBackFromTwiceIsLeftToThePerson() async throws {
+        let rig = try await rig()
+        let audio = try rig.audio("heavy.wav", frequency: 320)
+        let id = try await rig.macConversation("All hands", at: Date(), seconds: 0.5, audio: audio)
+        try rig.inference.block(audio)
+        rig.state.enqueue(id)
+        try await waitUntil("it to be transcribing") { rig.inference.isWaiting(on: audio) }
+
+        // Daybook crashes mid-run (nothing quit it): the next launch tries the work once more.
+        let second = await relaunch(rig)
+        XCTAssertEqual(second.awaitingModels, [id], "Queued again after one crash")
+        modelsArrive(second, rig)
+        try await waitUntil("it to run again") { second.processingID == id }
+
+        // A quit ends that run as it stops it, so it doesn't count: the next launch queues it again.
+        second.cancelProcessing()
+        try await waitUntil("the job to stop") { second.processingID == nil && second.processingTask == nil }
+        let third = await relaunch(rig, after: second)
+        XCTAssertEqual(third.awaitingModels, [id], "A quit isn't a crash")
+        modelsArrive(third, rig)
+        try await waitUntil("it to run again") { third.processingID == id }
+
+        // It crashes a second time: the next launch leaves it to the person.
+        let fourth = await relaunch(rig, after: third)
+        XCTAssertTrue(fourth.awaitingModels.isEmpty && fourth.queuedIDs.isEmpty, "Not queued again")
+        XCTAssertFalse(fourth.queue.isOwed(id), "Settled")
+        ProcessingQueue.drainWrites()
+        let saved = ProcessingQueue(owedURL: rig.root.appendingPathComponent("local-queue.json"))
+        saved.loadOwedWork()
+        XCTAssertFalse(saved.isOwed(id), "Nor at the launch after")
+        let meeting = try XCTUnwrap(fourth.meetings.first { $0.id == id })
+        XCTAssertEqual(meeting.status, .imported, "Transcribe is the person's")
+        XCTAssertEqual(meeting.errorMessage, "Processing was interrupted. Your audio and notes are saved.")
+
+        // The launches that crashed stop now.
+        rig.state.cancelProcessing()
+        third.cancelProcessing()
+        try rig.inference.unblock(audio)
     }
 
     func testBehaviorWorkThePersonPausedOrThatFailedIsntQueuedAgain() async throws {

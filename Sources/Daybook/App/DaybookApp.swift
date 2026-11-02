@@ -249,6 +249,8 @@ final class DaybookDelegate: NSObject, NSApplicationDelegate {
         // Recorders and phones that recorded along hear the stop before the link goes (briefly).
         await state.sources.recorders.settle(within: .seconds(5))
         await state.flush()
+        // What the queue still owes, as the stop left it, is on disk before Daybook goes.
+        ProcessingQueue.drainWrites()
         state.recordReplicaIdentity()
         await state.phoneLink.shutDown()
     }
