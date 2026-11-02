@@ -84,7 +84,9 @@ DeviceHub (@MainActor @Observable)       │  configured devices, persisted as [
   (`DeviceRetryPolicy`), then a failure with Try Again. It holds an idle-sleep assertion while
   transferring, posts one notification per batch and one a day for low storage (bundled app
   only, and only while Daybook is in the background), and imports automatically where the
-  method and preference allow.
+  method and preference allow. Each notification carries where opening it goes
+  (`DeviceNotificationDestination` in its `userInfo`): a batch whose recordings all went into one
+  conversation opens it, anything else the recorder's page.
 - **Hub** (`DeviceHub`): owns the sessions, persists configured devices, runs setup (a device
   joins the sidebar only once one of its methods is set up), migrates the single folder and
   recorder of earlier versions, and follows the library to recompute each device's links.

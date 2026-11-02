@@ -2,9 +2,9 @@
 import AppKit
 #endif
 import Foundation
-@preconcurrency import UserNotifications
+import UserNotifications
 
-/// Keeps the Mac from idle-sleeping while a transfer or live capture runs, so an hour-long import
+/// Keeps this device from idle-sleeping while a transfer or live capture runs, so an hour-long import
 /// doesn't stop halfway. The display may still sleep.
 @MainActor
 public final class SleepAssertion {
@@ -25,9 +25,46 @@ public final class SleepAssertion {
     }
 }
 
+/// Where opening a device notification takes the person, carried in the notification's `userInfo` for the
+/// app's notification delegate: the conversation the recordings went into, when they all went into one, else
+/// the recorder's page.
+public enum DeviceNotificationDestination: Equatable, Sendable {
+    /// The recorder's page, by its device ID.
+    case device(String)
+    /// A conversation, by its ID.
+    case conversation(UUID)
+
+    private static let placeKey = "daybook.place"
+    private static let deviceKey = "daybook.deviceID"
+    private static let conversationKey = "daybook.conversationID"
+
+    /// What the notification carries.
+    public var userInfo: [String: String] {
+        switch self {
+        case .device(let id): return [Self.placeKey: "device", Self.deviceKey: id]
+        case .conversation(let id): return [Self.placeKey: "conversation", Self.conversationKey: id.uuidString]
+        }
+    }
+
+    /// Read back from a notification's `userInfo`; nil for one that isn't a device notification's.
+    public init?(userInfo: [AnyHashable: Any]) {
+        switch userInfo[Self.placeKey] as? String {
+        case "device":
+            guard let id = userInfo[Self.deviceKey] as? String, !id.isEmpty else { return nil }
+            self = .device(id)
+        case "conversation":
+            guard let id = (userInfo[Self.conversationKey] as? String).flatMap(UUID.init(uuidString:)) else { return nil }
+            self = .conversation(id)
+        default:
+            return nil
+        }
+    }
+}
+
 /// Device notifications (§5.12): a finished batch and a nearly full recorder. They're posted only
 /// while Daybook is in the background (in the foreground the result is visible in place), and only
-/// from a bundled app: UNUserNotificationCenter crashes in an unbundled binary.
+/// from a bundled app: UNUserNotificationCenter crashes in an unbundled binary. Each carries where opening
+/// it goes (`DeviceNotificationDestination`).
 @MainActor
 public enum DeviceNotifications {
     public static var isAvailable: Bool { Bundle.main.bundleIdentifier != nil && Bundle.main.bundleURL.pathExtension == "app" }
@@ -45,10 +82,10 @@ public enum DeviceNotifications {
     /// Asks once, when the person first imports. Later calls do nothing.
     public static func requestAuthorizationIfNeeded() {
         guard isAvailable else { return }
-        let center = UNUserNotificationCenter.current()
-        center.getNotificationSettings { settings in
-            guard settings.authorizationStatus == .notDetermined else { return }
-            center.requestAuthorization(options: [.alert]) { _, _ in }
+        Task {
+            let center = UNUserNotificationCenter.current()
+            guard await center.notificationSettings().authorizationStatus == .notDetermined else { return }
+            _ = try? await center.requestAuthorization(options: [.alert])
         }
     }
 
@@ -57,27 +94,30 @@ public enum DeviceNotifications {
         (device, count == 1 ? "1 recording imported." : "\(count) recordings imported.")
     }
 
-    public static func postBatchImported(count: Int, device: String, id: String) {
+    /// A batch finished: opening the notification goes to `destination` (the conversation they went into, or
+    /// the recorder's page).
+    public static func postBatchImported(count: Int, device: String, id: String, destination: DeviceNotificationDestination? = nil) {
         guard count > 0 else { return }
         let text = batchText(count: count, device: device)
-        post(id: "device-batch-\(id)", title: text.title, body: text.body)
+        post(id: "device-batch-\(id)", title: text.title, body: text.body, destination: destination ?? .device(id))
     }
 
-    /// "Soundcore Work is almost full." Returns whether it was posted.
+    /// "Soundcore Work is almost full." Returns whether it was posted. Opening it goes to the recorder's page.
     @discardableResult
     public static func postLowStorage(_ storage: DeviceStatus.Storage, device: String, id: String) -> Bool {
         let hours = storage.hoursLeft
         let rounded = StorageFormat.roundedHours(hours)
         let left = hours < 1 ? "Less than an hour" : "About \(rounded) hour\(rounded == 1 ? "" : "s")"
-        return post(id: "device-storage-\(id)", title: "\(device) is almost full.", body: "\(left) of space left.")
+        return post(id: "device-storage-\(id)", title: "\(device) is almost full.", body: "\(left) of space left.", destination: .device(id))
     }
 
     @discardableResult
-    private static func post(id: String, title: String, body: String) -> Bool {
+    private static func post(id: String, title: String, body: String, destination: DeviceNotificationDestination) -> Bool {
         guard isAvailable, !isInForeground() else { return false }
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
+        content.userInfo = destination.userInfo
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
         return true
     }

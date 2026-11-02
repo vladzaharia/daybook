@@ -223,7 +223,9 @@ final class DeviceHubTests: XCTestCase {
         try files.watch(folder)
         defer { session.shutDown() }
 
-        try await waitUntil("the stable files") { meetings.count == 1 && session.failures.count == 1 }
+        try await waitUntil("the stable files") { meetings.count == 1 && session.failures.count == 1 && session.lastBatch != nil }
+        // Its notification opens the conversation the one recording went into.
+        XCTAssertEqual(session.lastBatch, .init(count: 1, destination: .conversation(meetings[0].id)))
         XCTAssertEqual(meetings[0].tracks[0].device?.kind, OtherRecorderIntegration.id)
         XCTAssertEqual(meetings[0].tracks[0].device?.recordingID, ImportFolderWatcher.recordingID(sha256: try AudioDigest.sha256(fileURL: good)))
         XCTAssertEqual(session.failures[0].message, "Couldn’t read this file.")

@@ -459,7 +459,10 @@ public final class DeviceSession: Identifiable {
         guard let started = queue.startNext() else { return }
         let token = UUID()
         runnerToken = token
-        if queue.imported + queue.failed == 0 && started.attempts == 0 { rate.reset() }
+        if queue.imported + queue.failed == 0 && started.attempts == 0 {
+            rate.reset()
+            batchConversations = []
+        }
         phase = .preparing
         receivedBytes = 0
         lastProgressPublish = .distantPast
@@ -467,7 +470,8 @@ public final class DeviceSession: Identifiable {
         runner = Task { [weak self] in await self?.run(started, on: connection, token: token) }
     }
 
-    private enum Outcome { case imported, failed(DeviceTransferError, String) }
+    /// Imported, into the conversation that holds it.
+    private enum Outcome { case imported(UUID?), failed(DeviceTransferError, String) }
 
     private func run(_ item: DeviceImportQueue.Item, on connection: any DeviceConnection, token: UUID) async {
         let outcome: Outcome
@@ -483,11 +487,12 @@ public final class DeviceSession: Identifiable {
                 let identity = DeviceRecordingIdentity(kind: kind.id, serial: audio.serial, recordingID: item.recording.id)
                 // Another device's import of it may have arrived through sync while this transferred:
                 // the library keeps the one it has rather than a second conversation.
-                if DeviceLibraryLinks.meeting(holding: identity, in: meetings) == nil {
-                    _ = try await importer(audio.url, identity, item.attachTo ?? links.partial[item.recording.id], kind.audioSource)
+                var holder = DeviceLibraryLinks.meeting(holding: identity, in: meetings)
+                if holder == nil {
+                    holder = try await importer(audio.url, identity, item.attachTo ?? links.partial[item.recording.id], kind.audioSource)
                 }
                 connection.didImport(item.recording)
-                outcome = .imported
+                outcome = .imported(holder)
             } catch {
                 outcome = .failed(.unreadable(ImportFolderWatcher.failureMessage(error)), ImportFolderWatcher.failureMessage(error))
             }
@@ -506,8 +511,9 @@ public final class DeviceSession: Identifiable {
         runner = nil
         runnerToken = nil
         switch outcome {
-        case .imported:
+        case .imported(let conversation):
             queue.finishCurrent()
+            batchConversations.insert(conversation)
             rate.transferFinished()
             failures.removeAll { $0.id == item.id }
             if transferProblem?.isTransferProblem == true { transferProblem = nil }
@@ -539,7 +545,29 @@ public final class DeviceSession: Identifiable {
         phase = nil
         rate.reset()
         sleep.hold(false)
-        if imported > 0 { DeviceNotifications.postBatchImported(count: imported, device: device.name, id: device.id) }
+        if imported > 0 {
+            let batch = ImportedBatch(count: imported, destination: batchDestination)
+            lastBatch = batch
+            DeviceNotifications.postBatchImported(count: batch.count, device: device.name, id: device.id, destination: batch.destination)
+        }
+        batchConversations = []
+    }
+
+    /// A finished batch: how many imported, and where its notification goes.
+    struct ImportedBatch: Equatable {
+        let count: Int
+        let destination: DeviceNotificationDestination
+    }
+
+    /// The last batch that imported anything (tests).
+    @ObservationIgnored private(set) var lastBatch: ImportedBatch?
+    /// The conversations this batch's recordings went into (nil: one whose conversation isn't known).
+    @ObservationIgnored private var batchConversations: Set<UUID?> = []
+
+    /// The conversation every recording of the batch went into, else the recorder's page.
+    private var batchDestination: DeviceNotificationDestination {
+        if batchConversations.count == 1, let only = batchConversations.first, let conversation = only { return .conversation(conversation) }
+        return .device(device.id)
     }
 
     /// Publishes progress at most four times a second.

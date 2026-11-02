@@ -209,14 +209,13 @@ public final class SpeechCaptioner: LiveCaptioning, Sendable {
                 let modules: [any SpeechModule] = [Self.transcriber(locale: supported)]
                 if let request = try await AssetInventory.assetInstallationRequest(supporting: modules) {
                     statesContinuation.yield(.downloading(nil))
-                    let progress = request.progress, states = statesContinuation
-                    let watcher = Task {
-                        while !Task.isCancelled {
-                            states.yield(.downloading(progress.totalUnitCount > 0 ? progress.fractionCompleted : nil))
-                            try? await Task.sleep(for: .seconds(1))
-                        }
+                    // Told as the download moves (KVO), once per whole percent, rather than polled.
+                    let states = statesContinuation, told = DownloadPercent()
+                    let watcher = request.progress.observe(\.fractionCompleted, options: [.new]) { progress, _ in
+                        guard progress.totalUnitCount > 0, told.changed(to: progress.fractionCompleted) else { return }
+                        states.yield(.downloading(progress.fractionCompleted))
                     }
-                    defer { watcher.cancel() }
+                    defer { watcher.invalidate() }
                     // Finished meanwhile: the download goes on for the next recording; nothing else starts.
                     try await request.downloadAndInstall()
                 }
@@ -486,5 +485,22 @@ public final class ScriptedCaptioner: LiveCaptioning, Sendable {
         statesContinuation.yield(.finished)
         updatesContinuation.finish()
         statesContinuation.finish()
+    }
+}
+
+/// The whole percent a download was last told at, so its progress is told once per percent, from whichever thread
+/// reports it.
+final class DownloadPercent: @unchecked Sendable {
+    private let lock = NSLock()
+    private var last: Int?
+
+    /// True when `fraction` is a different whole percent from the last one told.
+    func changed(to fraction: Double) -> Bool {
+        let percent = Int((min(1, max(0, fraction)) * 100).rounded(.down))
+        return lock.withLock {
+            guard last != percent else { return false }
+            last = percent
+            return true
+        }
     }
 }
