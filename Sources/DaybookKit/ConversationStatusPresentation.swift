@@ -474,13 +474,8 @@ extension ConversationStatusPresentation {
             var line = ConversationStatusPresentation(kind: .line, symbol: "clock", title: title, countdownUntil: planner.deadline,
                                                       actions: planner.actions.map(Action.placement))
             if case .started(.cloud) = planner.phase { line.symbol = nil; line.isWorking = true; line.countdownUntil = nil }
-            if planner.phase == .waitingForMac {
-                line.detail = inputs.mac?.detail(at: now)
-                // No Mac has turned up and nothing here summarizes: say so rather than wait.
-                if !inputs.local.summarizes, inputs.mac?.isNoMac == true {
-                    line.symbol = "desktopcomputer"; line.title = needsMacToSummarize; line.countdownUntil = nil
-                }
-            }
+            // Waiting for a Mac with the cloud on offer: Use the Cloud makes it, so it's a wait, not "Needs your Mac".
+            if planner.phase == .waitingForMac { line.detail = inputs.mac?.detail(at: now) }
             return line
         }
         if let link = inputs.link, link.phase == .summaryCountdown, let until = link.countdownUntil {
