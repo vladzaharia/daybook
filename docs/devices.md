@@ -46,7 +46,11 @@ DeviceHub (@MainActor @Observable)       │  configured devices, persisted as [
 - **Configured device** (`ConfiguredDevice`): one the person added: kind, name, which methods
   are turned off, and the automatic-import preference. Each method stores its own
   configuration (the remembered recorder, the folder bookmark) under
-  `device.<id>.<method>.` in preferences.
+  `device.<id>.<method>.` in preferences. Only the ID and kind are required to read one back: a field
+  an older build didn't store takes its default, and a method a newer build added is left out of the
+  turned-off ones. A stored device that still can't be read (`StoredDevices`) doesn't cost the others:
+  it's written back as it was beside them, and the list as stored is copied once to
+  `devices.configured.unreadable.<date>` first.
 - **Connection** (`DeviceConnection`): the common interface for one method of one device.
   - State: `ConnectionState` (`notSetUp`, `notConnected`, `searching`, `connecting`,
     `reconnecting`, `connected`, `unavailable`), `problem`, `lastConnectedAt`, `summary`.

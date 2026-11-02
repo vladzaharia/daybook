@@ -1,6 +1,7 @@
 import DaybookCore
 import Foundation
 import Observation
+import os
 
 /// Every recorder the person added: their sessions, persisted configuration, setup, and the
 /// library links each needs. Its own state changes only when devices are added or removed; each
@@ -26,6 +27,8 @@ public final class DeviceHub {
     @ObservationIgnored private var ownershipWatch: ObservationWatch?
     /// The library's recorder ownership and this device's sync ID, once known.
     private var ownership: (owners: [RecorderOwnership], thisDevice: String)?
+    /// The configured devices as stored, with any this build couldn't read, which are written back as they were.
+    @ObservationIgnored private var stored = StoredDevices()
 
     public static let storageKey = "devices.configured"
 
@@ -49,10 +52,22 @@ public final class DeviceHub {
         if demo.isRequested { demo.load?(self); return }
         #endif
         DeviceHubMigration.migrateIfNeeded(environment.defaults)
-        let stored = environment.defaults.data(forKey: Self.storageKey)
-            .flatMap { try? JSONDecoder().decode([ConfiguredDevice].self, from: $0) } ?? []
-        sessions = stored.compactMap(makeSession)
+        if let data = environment.defaults.data(forKey: Self.storageKey) {
+            stored = StoredDevices(data)
+            if stored.isDamaged || !stored.unreadable.isEmpty { Self.keepUnreadable(data, in: environment.defaults) }
+        }
+        sessions = stored.devices.compactMap(makeSession)
     }
+
+    /// Keeps a copy of a stored device list that couldn't all be read, once a day at most, before anything is
+    /// written over it: what a newer build stored isn't lost to an older one.
+    private static func keepUnreadable(_ data: Data, in defaults: UserDefaults) {
+        let key = StoredDevices.backupKey(storageKey)
+        if defaults.data(forKey: key) == nil { defaults.set(data, forKey: key) }
+        log.error("Some configured devices couldn't be read; a copy is kept under \(key, privacy: .public)")
+    }
+
+    private static let log = Logger(subsystem: "local.daybook.devices", category: "Devices")
 
     /// Restores folders and, where the person allowed it, reconnects to remembered recorders.
     public func start() {
@@ -205,6 +220,8 @@ public final class DeviceHub {
     private func makeSession(_ device: ConfiguredDevice) -> DeviceSession? {
         guard let integration = DeviceCatalog.integration(device.kindID) else { return nil }
         let kind = integration.kind
+        var device = device
+        if device.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { device.name = kind.name }
         let connections: [any DeviceConnection] = kind.implementedMethods.compactMap { method in
             if method.kind == .files {
                 // A kind may bring its own files method (Daybook on iPhone's arrive through sync);
@@ -225,7 +242,7 @@ public final class DeviceHub {
         #if DEBUG
         if Self.demo.isRequested { return }
         #endif
-        if let data = try? JSONEncoder().encode(devices) { environment.defaults.set(data, forKey: Self.storageKey) }
+        if let data = try? stored.encoded(devices) { environment.defaults.set(data, forKey: Self.storageKey) }
     }
 
     #if DEBUG

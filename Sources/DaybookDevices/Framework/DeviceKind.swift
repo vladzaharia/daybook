@@ -173,7 +173,73 @@ public struct ConfiguredDevice: Codable, Identifiable, Hashable {
         self.automaticImportsSince = addedAt
     }
 
+    /// Leniently: only the ID and the kind are required. Anything else missing (a device stored by an older
+    /// build, or written by hand) takes its default, and a method this build doesn't know (a newer build's) is
+    /// left out of `disabledMethods`, so one field never costs the whole device.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        kindID = try container.decode(String.self, forKey: .kindID)
+        name = (try? container.decodeIfPresent(String.self, forKey: .name)) ?? ""
+        let added = try? container.decodeIfPresent(Date.self, forKey: .addedAt)
+        addedAt = added ?? Date()
+        let methods = (try? container.decodeIfPresent([String].self, forKey: .disabledMethods)) ?? []
+        disabledMethods = Set(methods.compactMap(ConnectionMethodKind.init(rawValue:)))
+        importsAutomatically = (try? container.decodeIfPresent(Bool.self, forKey: .importsAutomatically)) ?? true
+        // Without its date, automatic import starts when the device was added, or now: nothing already on the
+        // recorder imports unasked.
+        automaticImportsSince = (try? container.decodeIfPresent(Date.self, forKey: .automaticImportsSince)) ?? added ?? Date()
+        alsoRecordsWithMac = try? container.decodeIfPresent(Bool.self, forKey: .alsoRecordsWithMac)
+        fastTransferForLongRecordings = try? container.decodeIfPresent(Bool.self, forKey: .fastTransferForLongRecordings)
+    }
+
     public func isEnabled(_ method: ConnectionMethodKind) -> Bool { !disabledMethods.contains(method) }
+}
+
+/// The configured devices as stored, read one at a time: a device this build can't read (a newer build's, or
+/// damaged) doesn't take the others with it. It's kept as it was, written back with the others, so a later build
+/// still has it, and a copy of the whole stored list is kept once under `backupKey` before anything is written
+/// over it.
+public struct StoredDevices {
+    public var devices: [ConfiguredDevice] = []
+    /// What couldn't be read, as stored.
+    public var unreadable: [Data] = []
+    /// Nothing could be read as a list of devices at all.
+    public var isDamaged = false
+
+    public init(devices: [ConfiguredDevice] = [], unreadable: [Data] = [], isDamaged: Bool = false) {
+        self.devices = devices
+        self.unreadable = unreadable
+        self.isDamaged = isDamaged
+    }
+
+    public init(_ data: Data) {
+        guard let entries = (try? JSONSerialization.jsonObject(with: data)) as? [Any] else {
+            isDamaged = true
+            return
+        }
+        let decoder = JSONDecoder()
+        for entry in entries {
+            guard let entryData = try? JSONSerialization.data(withJSONObject: entry, options: [.fragmentsAllowed]) else { continue }
+            if let device = try? decoder.decode(ConfiguredDevice.self, from: entryData) {
+                devices.append(device)
+            } else {
+                unreadable.append(entryData)
+            }
+        }
+    }
+
+    /// Everything to store: the devices, then what couldn't be read, unchanged.
+    public func encoded(_ devices: [ConfiguredDevice]) throws -> Data {
+        let known = try JSONSerialization.jsonObject(with: JSONEncoder().encode(devices)) as? [Any] ?? []
+        let kept = unreadable.compactMap { try? JSONSerialization.jsonObject(with: $0, options: [.fragmentsAllowed]) }
+        return try JSONSerialization.data(withJSONObject: known + kept)
+    }
+
+    /// Where a copy of a stored list that couldn't be read whole goes, by the day it was found: "devices.configured.unreadable.2026-11-01".
+    public static func backupKey(_ storageKey: String, at date: Date = Date()) -> String {
+        "\(storageKey).unreadable.\(date.formatted(.iso8601.year().month().day()))"
+    }
 }
 
 /// What a connection needs from the app, injected so tests and demos never touch real hardware.

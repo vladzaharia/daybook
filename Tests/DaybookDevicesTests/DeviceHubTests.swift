@@ -16,12 +16,7 @@ final class DeviceHubTests: XCTestCase {
     override func setUp() async throws {
         suite = makeTestSuite("local.daybook.tests.devices")
         defaults = UserDefaults(suiteName: suite)
-        root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookDevices-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    }
-
-    override func tearDown() async throws {
-        try? FileManager.default.removeItem(at: root)
+        root = makeTemporaryFolder("DaybookDevices")
     }
 
     private func environment() -> DeviceEnvironment {
@@ -79,6 +74,57 @@ final class DeviceHubTests: XCTestCase {
         relaunched.start()
         XCTAssertEqual(relaunched.sessions.first?.files?.folder?.standardizedFileURL, root.standardizedFileURL, "Its folder is restored")
         relaunched.shutDown()
+        hub.shutDown()
+    }
+
+    /// A stored device this build can't read (a newer build's method, a damaged entry) doesn't empty the list:
+    /// the others load, the unreadable one is written back as it was, and a copy of what was stored is kept.
+    func testBehaviorADeviceThatCantBeReadDoesNotCostTheOthers() throws {
+        let other = OtherRecorderIntegration().kind
+        let added = Date(timeIntervalSince1970: 1_780_000_000)
+        var known = ConfiguredDevice(id: "zoom", kind: other, name: "Zoom H1n", addedAt: added)
+        known.importsAutomatically = false
+        var encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(known)) as? [String: Any])
+        // A newer build's method among the turned-off ones: left out, not fatal.
+        encoded["disabledMethods"] = ["usb"]
+        // An older build's device: only its identity and name.
+        let older: [String: Any] = ["id": "old", "kindID": SoundcoreWorkIntegration.id, "name": "Soundcore Work"]
+        let damaged: [String: Any] = ["name": "No identity"]
+        let original = try JSONSerialization.data(withJSONObject: [encoded, older, damaged])
+        defaults.set(original, forKey: DeviceHub.storageKey)
+
+        let hub = DeviceHub(environment: environment())
+        XCTAssertEqual(hub.devices.map(\.id), ["zoom", "old"])
+        let zoom = try XCTUnwrap(hub.devices.first)
+        XCTAssertEqual(zoom.name, "Zoom H1n")
+        XCTAssertFalse(zoom.importsAutomatically)
+        XCTAssertTrue(zoom.disabledMethods.isEmpty)
+        XCTAssertEqual(zoom.addedAt, added)
+        XCTAssertEqual(zoom.automaticImportsSince, added)
+        let old = try XCTUnwrap(hub.devices.last)
+        XCTAssertTrue(old.importsAutomatically, "defaults for what an older build didn't store")
+        XCTAssertNil(old.alsoRecordsWithMac)
+        XCTAssertEqual(defaults.data(forKey: StoredDevices.backupKey(DeviceHub.storageKey)), original, "what was stored, kept")
+
+        // Adding a device writes the list back with the unreadable entry as it was.
+        let session = try XCTUnwrap(hub.beginSetup(other))
+        try session.files?.watch(root)
+        hub.commitSetup()
+        let written = try XCTUnwrap(defaults.data(forKey: DeviceHub.storageKey))
+        let entries = try XCTUnwrap(JSONSerialization.jsonObject(with: written) as? [[String: Any]])
+        XCTAssertEqual(entries.count, 4)
+        XCTAssertEqual(entries.last?["name"] as? String, "No identity", "kept for a build that can read it")
+        XCTAssertEqual(DeviceHub(environment: environment()).devices.map(\.id), ["zoom", "old", session.id])
+        hub.shutDown()
+    }
+
+    /// A stored list that isn't a list at all is kept aside, and the hub starts with none.
+    func testBehaviorAStoredListThatCantBeReadIsKeptAside() throws {
+        let garbage = Data("{not json".utf8)
+        defaults.set(garbage, forKey: DeviceHub.storageKey)
+        let hub = DeviceHub(environment: environment())
+        XCTAssertTrue(hub.devices.isEmpty)
+        XCTAssertEqual(defaults.data(forKey: StoredDevices.backupKey(DeviceHub.storageKey)), garbage)
         hub.shutDown()
     }
 
