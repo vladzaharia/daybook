@@ -281,8 +281,11 @@ public struct WorkProgressLine: View {
     }
 }
 
+
 /// A compact status: glyph (or the red dot) and a short label in a quiet capsule: the Mac's Floating
-/// Notes status bar, and the shape the iPhone's multipoint line ("● Also recording on Studio Mac") takes.
+/// Notes status bar, and the recorder's chips on both apps. Work in progress fills the capsule itself from
+/// its leading edge in the brand gradient, and such a chip can span its row (`expands`), so how far the
+/// work has gone reads at a glance.
 public struct StatusChip: View {
     public struct Metrics: Equatable, Sendable {
         public var textSize: CGFloat
@@ -306,6 +309,20 @@ public struct StatusChip: View {
         public static func `for`(_ density: DaybookDensity) -> Metrics { density == .touch ? .phone : .mac }
     }
 
+    /// How strongly the brand gradient fills a chip at work: the words on it keep 4.5:1 in body ink (the
+    /// token tests check every stop of the gradient in every appearance).
+    public static func progressFillOpacity(dark: Bool) -> Double { dark ? 0.22 : 0.28 }
+
+    /// The ink of the words on a chip at work: body, which holds its contrast over the gradient's fill.
+    public static let progressInk = DaybookPalette.Shade.body
+
+    /// What VoiceOver says of a chip's work: "40 percent", whole percents rounded down as the words are.
+    public static func accessibilityValue(progress: Double?) -> String? {
+        guard let progress else { return nil }
+        let percent = progress.isFinite ? Int((min(1, max(0, progress)) * 100).rounded(.down)) : 0
+        return "\(percent) percent"
+    }
+
     private let symbol: String?
     private let text: String?
     private let tone: StatusTone
@@ -313,6 +330,7 @@ public struct StatusChip: View {
     private let progress: Double?
     private let filled: Bool
     private let truncates: Bool
+    private let expands: Bool
     private let override: Metrics?
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -320,12 +338,13 @@ public struct StatusChip: View {
 
     /// - Parameters:
     ///   - showsDot: The red recording dot after the glyph (a device recording along).
-    ///   - progress: Work in progress: the gradient line along the chip's foot.
+    ///   - progress: Work in progress, 0...1: the capsule fills from its leading edge.
     ///   - filled: A quiet capsule behind it; off for a bare glyph and label.
     ///   - truncates: The label gives way to a narrow container (a sentence); chips in a row keep theirs.
+    ///   - expands: Spans the width it's offered, its glyph and words at the leading edge (a chip at work in a row).
     ///   - metrics: An explicit size; nil takes the surface's density's.
     public init(symbol: String?, text: String?, tone: StatusTone, showsDot: Bool = false, progress: Double? = nil,
-                filled: Bool = true, truncates: Bool = false, metrics: Metrics? = nil) {
+                filled: Bool = true, truncates: Bool = false, expands: Bool = false, metrics: Metrics? = nil) {
         self.symbol = symbol
         self.text = text
         self.tone = tone
@@ -333,10 +352,17 @@ public struct StatusChip: View {
         self.progress = progress
         self.filled = filled
         self.truncates = truncates
+        self.expands = expands
         override = metrics
     }
 
     private var metrics: Metrics { override ?? .for(density) }
+
+    private var textInk: Color {
+        // On the warning wash, warning words take the ink that keeps 4.5:1 there; over the work's fill, body ink.
+        if tone == .attention { return filled ? DaybookPalette.Ink.onAttention : DaybookPalette.Ink.warning }
+        return progress == nil ? DaybookPalette.Ink.secondary : Self.progressInk.color
+    }
 
     public var body: some View {
         let metrics = self.metrics
@@ -356,9 +382,7 @@ public struct StatusChip: View {
                 Text(text)
                     .font(metrics.usesTextStyles ? .footnote.weight(.medium) : .system(size: metrics.textSize, weight: .medium))
                     .monospacedDigit()
-                    // On the warning wash, warning words take the ink that keeps 4.5:1 there.
-                    .foregroundStyle(tone == .attention ? (filled ? DaybookPalette.Ink.onAttention : DaybookPalette.Ink.warning)
-                                     : DaybookPalette.Ink.secondary)
+                    .foregroundStyle(textInk)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .fixedSize(horizontal: !truncates, vertical: false)
@@ -366,22 +390,41 @@ public struct StatusChip: View {
             }
         }
         .padding(.horizontal, filled ? metrics.horizontalPadding : 2)
-        .frame(minHeight: metrics.height)
+        .frame(maxWidth: expands ? .infinity : nil, minHeight: metrics.height, alignment: .leading)
         .background {
-            if filled {
-                DaybookRadius.chip.fill(tone == .attention ? DaybookPalette.attentionFill : DaybookPalette.quietFill)
+            ZStack {
+                if filled {
+                    DaybookRadius.chip.fill(tone == .attention ? DaybookPalette.attentionFill : DaybookPalette.quietFill)
+                }
+                if let progress { ProgressFill(fraction: progress) }
             }
         }
         .overlay {
             if filled && contrast == .increased { DaybookRadius.chip.strokeBorder(DaybookPalette.Ink.meta.opacity(0.6), lineWidth: 1) }
         }
-        .overlay(alignment: .bottom) {
-            if let progress {
-                WorkProgressLine(fraction: progress)
-                    .padding(.horizontal, filled ? metrics.horizontalPadding : 2)
-                    .padding(.bottom, filled ? 2 : 0)
-            }
-        }
         .accessibilityElement(children: .combine)
+        .accessibilityValue(Self.accessibilityValue(progress: progress) ?? "")
+    }
+}
+
+/// The work done, as the chip's own fill: the brand gradient from the leading edge to the fraction, faint enough
+/// that the words over it keep their contrast. It moves smoothly to each new fraction, and steps under Reduce Motion.
+private struct ProgressFill: View {
+    let fraction: Double
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let clamped = fraction.isFinite ? min(1, max(0, fraction)) : 0
+        GeometryReader { proxy in
+            DaybookPalette.brandGradient(.progress)
+                .opacity(StatusChip.progressFillOpacity(dark: scheme == .dark))
+                .mask(alignment: .leading) {
+                    Rectangle().frame(width: proxy.size.width * clamped)
+                        .animation(reduceMotion ? nil : DaybookMotion.state, value: clamped)
+                }
+        }
+        .clipShape(DaybookRadius.chip)
+        .accessibilityHidden(true)
     }
 }
