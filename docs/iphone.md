@@ -16,9 +16,9 @@ Everything below is in v1:
   - Photos from the camera at their moment in the recording ([photos](photos.md)).
   - Start, stop, and bookmark from the Lock Screen, Dynamic Island / Live Activity, Control Center, the Action button, and Siri (App Intents).
   - **Live captions while recording.** Tentative, on-device captions, shown like closed captions: from the live models when they're downloaded (local transcription, speakers, and names; "Live transcription", below), else from the Speech framework's `SpeechTranscriber` (volatile results). They prove the audio pipeline is working and give something to read until the transcript arrives, and they are never the transcript: phone-local (`<library>/LiveCaptions/<id>.json`, never synced), never fused, summarized, or used as evidence, and replaced, as on the Mac, by a transcript made after they began (`SavedCaptions.shown`, the rule both apps read): until then they read on the transcript's page, in the transcript's place while there's none, else after an earlier recording's transcript (`SavedCaptionsView`, shared with the Mac), and search finds them; then they're deleted (`LiveCaptionStore`, DaybookCaptions). If the language isn't available, the app says so and recording is unaffected.
-- **Library.** Places (All, Work, Personal), folders, tags, search (titles, notes, transcripts, summaries), Trash, and multi-select. New Note starts a conversation that's only your notes (and any photos), titled "Note at 10:15 AM", as on the Mac. Its page says "No recording yet" with Record, which records into it; the recording joins after the notes.
+- **Library.** Places (All, Work, Personal), folders, tags, search (titles, notes, transcripts, summaries), Trash, and multi-select. New Note starts a conversation that's only your notes (and any photos), titled "Note at 10:15 AM", as on the Mac. Its byline says "Notes only", as on the Mac, and the page offers Record, which records into it; the recording joins after the notes.
 - **Reading.**
-  - The summary page: lede, next steps, sections, your notes, bookmarks, colophon.
+  - The summary page: lede, next steps, sections, your notes, bookmarks, colophon. Its blocks are the Mac's, from DaybookUI (`ConversationHeader`, `StatusBlock`, `SummaryBody`, `YourNotes`, `Colophon`): the same words, order, and behaviour, at the iPhone's size. A title or a bookmark label is saved once editing ends, and an emptied title puts the old one back; ticking a next step, editing a label, and deleting a bookmark can be undone (shake, or three-finger swipe).
   - The transcript: speakers, times, tap to play.
   - Audio playback that downloads on demand.
   - Version History, with restore.
@@ -44,17 +44,19 @@ Everything below is in v1:
 
 ## Processing on the Mac
 
-A conversation's processing state comes from its data and is shown the same way on both platforms (`ProcessingStatus` in DaybookKit):
+A conversation's processing state comes from its data and is shown the same way on both platforms (`ProcessingStatus` in DaybookKit), in the words and boxes the Mac's page uses (DaybookKit's `ConversationStatusPresentation`, drawn by DaybookUI's `StatusBlock` on both apps):
 
 | State | Meaning | Phone shows |
 |---|---|---|
-| **Recorded** | Audio with no transcript yet; no request yet | "Not transcribed yet". Everything except transcript and summary works |
-| **Requested** | A `ProcessingRequest` is in the library, waiting | "Waiting for your Mac" (with "Last seen 2 h ago" when no Mac has checked in recently) |
-| **Processing** | A Mac claimed it | "Transcribing on <Mac name> · 40%" (live over the local link; coarse over sync) |
-| **Transcribed** | A transcript with no summary, and nothing asked for one (a summary stopped partway, say) | "Not summarized yet" with Summarize, which writes a Summarize request. The list row shows its preview. A Mac's page offers Summarize at its foot, with the template |
-| **Waiting for a recording** | A Mac's audio is transcribed and summarized; a recorder that recorded along hasn't been added yet ([multipoint](multipoint.md#mac-first)) | "Waiting for audio from Soundcore Work" on the page; "Waiting for Soundcore Work audio" in the list |
+| **Recorded** | Audio with no transcript yet; no request yet | "Not transcribed yet" with Transcribe, in a box. Everything except transcript and summary works |
+| **Requested** | A `ProcessingRequest` is in the library, waiting | "Waiting for your Mac", or "Waiting for Studio Mac" when one is around; under it "Last seen 2 h ago", "Studio Mac is recording", "Studio Mac is working on another conversation", "Needs iCloud", or "No Mac has synced this library yet. Open Daybook on your Mac." Cancel takes back a request this iPhone made that no device has started (nothing goes to Version History) |
+| **Requested, this iPhone could do it** | Its own recording, Transcribe on This iPhone on, its models not downloaded, and no Mac around | "Download models to transcribe this conversation" with the size and Download; then "Downloading Parakeet · 40%" with Cancel. The processor takes the request once they're in |
+| **Requested, nothing can summarize** | A summary with no Mac ever seen, no summarizer here, and no cloud key | "Needs your Mac to summarize" (no clock: nothing is coming until a Mac turns up) |
+| **Processing** | A Mac claimed it | "Transcribing on <Mac name> · 40%" (live over the local link the moment the Mac starts, before sync brings its claim; coarse over sync), whole percents rounded down |
+| **Transcribed** | A transcript with no summary, and nothing asked for one (a summary stopped partway, say) | "Not summarized yet" with Summarize, on both apps. The list row shows its preview |
+| **Waiting for a recording** | A Mac's audio is transcribed and summarized; a recorder that recorded along hasn't been added yet ([multipoint](multipoint.md#mac-first)) | "Waiting for audio from Soundcore Work" on the page, with Don't Wait (it stops waiting on every device; the recording is still added if it arrives); "Waiting for Soundcore Work audio" in the list |
 | **Done** | Transcript and summary present | Normal page |
-| **Couldn't finish** | The Mac reported a failure | What it means in plain words, Try Again (which writes a new request), and the Mac's own reason behind Details |
+| **Couldn't finish** | The Mac reported a failure | What it means in plain words, naming the device ("…on Studio Mac", "…on this iPhone"), ending "The recording is saved."; the fix (Try Again, which writes a new request), and the device's own reason behind Details. A cloud summary that couldn't run is titled "Couldn't summarize with Claude Sonnet 5.5", with the cloud's own sentence; Cloud Settings… for a key, credit, or model, Try Again only when it was offline or busy, and Summarize on This iPhone (with its own summarizer) or Use Your Mac |
 
 - **Requests travel in the library.** A `ProcessingRequest` (meeting, mode, template, requested by, when) is synced metadata, like an edit. Recording on the phone requests **Transcribe** automatically.
 - **Requests run on a Mac.**
@@ -87,9 +89,10 @@ counts down too ("Studio Mac · Summarizing in 12 s"), and its Macs card lists i
 on its own while it waits), with the same choices. A first summary waiting for a Mac says "Waiting for your Mac to
 summarize"; Summarize Again's, "… to summarize again". In the
 background, where a countdown can't run, each countdown's default happens as the app leaves the screen, and a
-summary waiting for a Mac is left to one through the library. The colophon says where a summary ran:
-"Summarized on your Mac" (a summary that doesn't say), "on Studio Mac", "on this iPhone", or "with Claude
-Sonnet 5.5".
+summary waiting for a Mac is left to one through the library. The colophon says where a summary ran, with the
+model and the date, as the Mac's does (DaybookKit's `SummaryColophon`): "Summarized on your Mac" (a summary that
+doesn't say), "on Studio Mac", "on this iPhone", or "with Claude Sonnet 5.5"; its glyph is the device's kind (an
+iPhone, a MacBook, another Mac, the cloud).
 
 How it's wired (`PhoneAppModel.wireProcessing`): the processor hands each conversation it fused to the placement
 (`Services.summaryDue` → `summaryIsDue`, or `summarize` for work the person asked for); the placement hands a summary
