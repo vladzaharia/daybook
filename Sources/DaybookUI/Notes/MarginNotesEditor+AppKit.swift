@@ -414,7 +414,17 @@ final class MarginGutterView: NSView {
     private(set) var labels: [Label] = []
     private(set) var ticks: [Tick] = []
     var font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular) { didSet { if font != oldValue { needsDisplay = true } } }
-    var playTime: ((TimeInterval) -> Void)? { didSet { if (playTime == nil) != (oldValue == nil) { hovered = nil; window?.invalidateCursorRects(for: self) } } }
+    var playTime: ((TimeInterval) -> Void)? {
+        didSet {
+            guard (playTime == nil) != (oldValue == nil) else { return }
+            // The times become buttons, or stop being them (a page while a recording starts or stops): VoiceOver's
+            // elements are made again with the role, name, and press that now apply.
+            hovered = nil
+            elements = []
+            window?.invalidateCursorRects(for: self)
+            if let container { NSAccessibility.post(element: container, notification: .layoutChanged) }
+        }
+    }
     private var hovered: Int? { didSet { if hovered != oldValue { needsDisplay = true } } }
     private var elements: [NSAccessibilityElement] = []
     /// What VoiceOver finds the times and marks in.

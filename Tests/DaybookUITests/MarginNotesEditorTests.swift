@@ -94,6 +94,31 @@ final class MarginNotesEditorTests: XCTestCase {
         XCTAssertNil(view.accessibilityCustomActions()?.first { $0.name == MarginNotesEditor.playFromHere })
     }
 
+    /// Regression: a page open while a recording stopped (the Summary page turns playing on once it does) kept its
+    /// times as "Note at …" that played nothing, and while recording kept "Play from …" buttons that did nothing.
+    /// VoiceOver's elements are made again when playing turns on or off.
+    func testBehaviorTimesBecomeButtonsWhenPlayingTurnsOnAndStopWhenItTurnsOff() throws {
+        let view = editor("Written while recording", times: [12])
+        let container = NotesContainerView(textView: view, content: view)
+        let before = try XCTUnwrap(container.accessibilityChildren()?.dropFirst().first as? NSAccessibilityElement)
+        XCTAssertEqual(before.accessibilityRole(), .staticText)
+
+        var played: [TimeInterval] = []
+        view.playTime = { played.append($0) }
+        let playing = try XCTUnwrap(container.accessibilityChildren()?.dropFirst().first as? NSAccessibilityElement)
+        XCTAssertEqual(playing.accessibilityRole(), .button)
+        XCTAssertEqual(playing.accessibilityLabel(), "Play from \(SpokenTime.format(12))")
+        XCTAssertTrue(playing.accessibilityPerformPress())
+        XCTAssertEqual(played, [12])
+
+        view.playTime = nil
+        let after = try XCTUnwrap(container.accessibilityChildren()?.dropFirst().first as? NSAccessibilityElement)
+        XCTAssertEqual(after.accessibilityRole(), .staticText)
+        XCTAssertEqual(after.accessibilityLabel(), "Note at \(SpokenTime.format(12))")
+        XCTAssertFalse(after.accessibilityPerformPress(), "nothing to play while recording")
+        XCTAssertEqual(played, [12])
+    }
+
     /// Regression: the times' elements sat under the NSTextView, which reports no children, so VoiceOver never
     /// reached them however they were made. Through what SwiftUI hands VoiceOver for the editor (its host view's
     /// children, the container left out), each time and mark is found beside the notes, on the page and in Floating
