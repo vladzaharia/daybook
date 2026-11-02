@@ -64,7 +64,16 @@ struct PhoneWelcome: View {
         }
         return WelcomeWords.readyMessage(downloading: downloading && model.settings.processesOnThisIPhone,
                                          canTranscribe: model.processingCapabilities.transcribes,
-                                         transcribesElsewhere: !model.link.macs.isEmpty)
+                                         transcribesElsewhere: Self.macTranscribes(model.macPresence))
+    }
+
+    /// A Mac that transcribes this library is known: connected now, or by its last sync. Pairing alone doesn't say;
+    /// a Mac transcribes this iPhone's recordings through the library it syncs.
+    static func macTranscribes(_ presence: MacPresence) -> Bool {
+        switch presence {
+        case .connected, .seen: return true
+        default: return false
+        }
     }
 
     private func allowMicrophone() {
@@ -138,6 +147,17 @@ struct PhoneWelcome: View {
         #endif
         return !hasConversations && !hasPairedMac
     }
+
+    /// Whether Welcome opens once the library has loaded, and whether this person is at home here already, so it never
+    /// opens for them. A paired Mac counts from the stored pairings: the link lists them only once it starts, after
+    /// the library and sync.
+    static func presentation(completed: Bool, arguments: [String], isTestHost: Bool,
+                             library: LibraryController, link: PhoneLink) -> (show: Bool, atHome: Bool) {
+        let conversations = !library.meetings.isEmpty, paired = link.hasPairedMac
+        let show = shouldPresent(completed: completed, arguments: arguments, isTestHost: isTestHost,
+                                 hasConversations: conversations, hasPairedMac: paired)
+        return (show, !show && (conversations || paired))
+    }
 }
 
 extension View {
@@ -174,13 +194,11 @@ private struct PhoneWelcomePresentation: ViewModifier {
             guard showing == nil, !completed else { return }
             let controller = model.library.controller
             await ObservationWatch.until { controller.isLoaded }
-            let show = PhoneWelcome.shouldPresent(completed: completed, arguments: CommandLine.arguments,
-                                                  isTestHost: LaunchOptions.isTestHost,
-                                                  hasConversations: !controller.meetings.isEmpty,
-                                                  hasPairedMac: !model.link.macs.isEmpty)
+            let decision = PhoneWelcome.presentation(completed: completed, arguments: CommandLine.arguments,
+                                                     isTestHost: LaunchOptions.isTestHost, library: controller, link: model.link)
             // Someone already at home here: nothing to welcome them to, now or later.
-            if !show, !controller.meetings.isEmpty || !model.link.macs.isEmpty { completed = true }
-            showing = show
+            if decision.atHome { completed = true }
+            showing = decision.show
         }
     }
 
@@ -258,8 +276,7 @@ private struct PhoneWelcomePair: View {
 
 // MARK: - Models
 
-/// This iPhone's own models for transcribing what it records: their size, Download and Continue, or Not Now (the
-/// Mac transcribes then).
+/// This iPhone's own models for transcribing what it records: their size, Download and Continue, or Not Now.
 private struct PhoneWelcomeModels: View {
     let models: PhoneModels
     let freeBytes: Int64?

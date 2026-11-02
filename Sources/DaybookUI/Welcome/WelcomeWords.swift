@@ -34,7 +34,7 @@ public enum WelcomeWords {
     public static let qualityMessage = "Models download once and run on this Mac."
     /// The iPhone's models page.
     public static let phoneModelsTitle = "Transcribe on This iPhone"
-    public static let phoneModelsMessage = "Download models so this iPhone transcribes what it records. Without them, your Mac does."
+    public static let phoneModelsMessage = "Download models so this iPhone transcribes what it records."
     /// What the download holds, beside its size.
     public static let phoneModelsRow = "Transcription and speakers"
     /// A download the disk can't hold: "Needs 16.5 GB · 12 GB free".
@@ -58,7 +58,7 @@ public enum WelcomeWords {
     // MARK: Pair
 
     public static let pairTitle = "Pair with Your Mac"
-    public static let pairMessage = "Record on both at once, and let your Mac transcribe what this iPhone records."
+    public static let pairMessage = "Start and stop recording on both at once."
     public static let pair = "Pair with Your Mac…"
     public static func paired(with mac: String) -> String { "Paired with \(mac)" }
 
@@ -70,8 +70,8 @@ public enum WelcomeWords {
     public static let recorderQuestion = "Use a wearable or handheld recorder?"
     public static let addDevice = "Add Device…"
 
-    /// The Ready page's line: what happens to a recording made now. `transcribesElsewhere`: another device (the
-    /// iPhone's Mac) transcribes what this one records.
+    /// The Ready page's line: what happens to a recording made now. `transcribesElsewhere`: a Mac known to transcribe
+    /// this library transcribes what this iPhone records.
     public static func readyMessage(downloading: Bool, canTranscribe: Bool, transcribesElsewhere: Bool = false) -> String {
         if downloading { return "Start a conversation now. It’s transcribed once the models download." }
         if canTranscribe { return "Start a conversation now." }

@@ -37,6 +37,17 @@ final class WelcomeWordsTests: XCTestCase {
         XCTAssertEqual(WelcomeWords.page(2, of: 4), "Page 2 of 4")
     }
 
+    /// The iPhone's pages say what its own models and pairing do. A Mac transcribes this iPhone's recordings through
+    /// the library they sync, paired or not, so neither page promises it.
+    func testBehaviorTheIPhonesModelsAndPairPagesSayOnlyWhatTheyDo() {
+        XCTAssertEqual(WelcomeWords.phoneModelsMessage, "Download models so this iPhone transcribes what it records.")
+        XCTAssertEqual(WelcomeWords.pairMessage, "Start and stop recording on both at once.")
+        for sentence in [WelcomeWords.phoneModelsMessage, WelcomeWords.pairMessage] {
+            XCTAssertFalse(sentence.localizedCaseInsensitiveContains("your Mac transcribe"), sentence)
+            XCTAssertFalse(sentence.localizedCaseInsensitiveContains("your Mac does"), sentence)
+        }
+    }
+
     /// Welcome may explain, but never in "not X, but Y" or with a dash aside.
     func testBehaviorNoWelcomeSentenceUsesADashAside() {
         let sentences = WelcomeWords.points(.mac).map(\.text) + WelcomeWords.points(.iPhone).map(\.text) + [

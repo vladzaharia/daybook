@@ -1,4 +1,6 @@
 import AVFAudio
+import DaybookKit
+import DaybookLink
 import DaybookUI
 import XCTest
 @testable import DaybookPhone
@@ -29,6 +31,40 @@ final class PhoneWelcomeTests: XCTestCase {
         XCTAssertFalse(shows(arguments: ["DaybookPhone", "--library-demo"]))
         XCTAssertTrue(shows(arguments: ["DaybookPhone", "--library-demo", "--welcome"]))
         XCTAssertFalse(shows(completed: true, arguments: ["DaybookPhone", "--welcome"]), "Done is done")
+    }
+
+    /// After an update, someone who paired a Mac but has no conversations here isn't welcomed: the decision is made as
+    /// the library loads, before the link has started and listed its Macs, so it reads the stored pairings.
+    func testBehaviorAPairedMacKeepsWelcomeAwayBeforeTheLinkStarts() async throws {
+        let library = LibraryController(rootURL: try temporaryDirectory("library"), sync: nil)
+        try await library.load()
+        XCTAssertTrue(library.meetings.isEmpty)
+        let mac = LinkPairingRecord(deviceID: UUID(), name: "Studio Mac", deviceClass: .mac, pairedAt: Date(),
+                                    linkKey: Data(repeating: 7, count: 32), pskIdentity: Data(repeating: 9, count: 16))
+        let paired = PhoneLink(identity: PhoneLink.identity(installation: UUID().uuidString, name: "Test iPhone", libraryID: nil),
+                               keyStore: MemoryLinkKeyStore([mac]), configuration: .loopback())
+        XCTAssertTrue(paired.macs.isEmpty, "Not started: the link hasn't listed its Macs")
+        let decision = PhoneWelcome.presentation(completed: false, arguments: ["DaybookPhone"], isTestHost: false,
+                                                 library: library, link: paired)
+        XCTAssertFalse(decision.show)
+        XCTAssertTrue(decision.atHome, "Welcome is done for them, now and later")
+
+        let unpaired = PhoneLink(identity: PhoneLink.identity(installation: UUID().uuidString, name: "Test iPhone", libraryID: nil),
+                                 keyStore: MemoryLinkKeyStore(), configuration: .loopback())
+        let first = PhoneWelcome.presentation(completed: false, arguments: ["DaybookPhone"], isTestHost: false,
+                                              library: library, link: unpaired)
+        XCTAssertTrue(first.show, "A first launch")
+        XCTAssertFalse(first.atHome)
+    }
+
+    /// The Ready page says a Mac transcribes only when one that transcribes this library is known, paired or not.
+    func testBehaviorTheReadyPageCountsOnlyAMacKnownToTranscribe() {
+        XCTAssertTrue(PhoneWelcome.macTranscribes(.connected(name: "Studio Mac")))
+        XCTAssertTrue(PhoneWelcome.macTranscribes(.seen(name: "Studio Mac", lastSeen: Date())))
+        XCTAssertFalse(PhoneWelcome.macTranscribes(.notProcessing(name: "Studio Mac", lastSeen: Date())))
+        XCTAssertFalse(PhoneWelcome.macTranscribes(.noMac))
+        XCTAssertFalse(PhoneWelcome.macTranscribes(.checking))
+        XCTAssertFalse(PhoneWelcome.macTranscribes(.unavailable("iCloud is off")))
     }
 
     func testBehaviorTheAllowPageSaysWhatSettingsWould() {

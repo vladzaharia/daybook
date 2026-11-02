@@ -110,6 +110,8 @@ final class PhoneLink {
     }
 
     private(set) var macs: [Mac] = []
+    /// Whether a Mac is paired, from the stored pairings as well: known before `start()` lists them in `macs`.
+    var hasPairedMac: Bool { !macs.isEmpty || !((try? keyStore.records()) ?? []).isEmpty }
     /// Macs on this network, while the pairing screen browses.
     private(set) var discovered: [LinkDiscoveredMac] = []
     /// Whether Macs can be found: browsing, not, or refused the Local Network permission. The link browses for
