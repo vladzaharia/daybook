@@ -30,7 +30,7 @@ final class PhoneLinkConnection: AnsweringRecordControl {
             guard let link else { return PhoneState() }
             return PhoneState(peer: link.peers[phoneID], recording: link.recordingStates[phoneID], paired: link.isPaired(phoneID),
                               damaged: link.isDamaged(phoneID), loaded: link.pairingsLoaded, lastConnected: link.lastConnected[phoneID],
-                              recorders: link.phoneRecorders[phoneID])
+                              recorders: link.phoneRecorders[phoneID], takesStarts: link.recordPermissions[phoneID])
         }, initial: false) { [weak self] _ in self?.onChange?() }
     }
 
@@ -43,6 +43,7 @@ final class PhoneLinkConnection: AnsweringRecordControl {
         var loaded = false
         var lastConnected: Date?
         var recorders: [LinkRecorderState]?
+        var takesStarts: Bool?
     }
 
     var peer: LinkPeer? { link.peers[phoneID] }
@@ -53,6 +54,9 @@ final class PhoneLinkConnection: AnsweringRecordControl {
     var isDamaged: Bool { link.isDamaged(phoneID) }
     /// It stops what it records when this Mac's page for it asks (`LinkCapabilities.pageStopFeature`).
     var stopsForPages: Bool { peer?.capabilities.stopsForPages == true }
+    /// It lets this Mac start a recording there (and stop one from this Mac's page), as far as this Mac knows: unless it
+    /// said its Can Start Recording for this Mac is off (`LinkRecordPermission`).
+    var takesStarts: Bool { link.recordPermissions[phoneID] != false }
 
     var state: ConnectionState {
         guard isSetUp else { return .notSetUp }
@@ -171,7 +175,10 @@ final class PhoneLinkConnection: AnsweringRecordControl {
                 if request.action == .stop { return .stopped(at: ack.stoppedAt) }
                 return .recording(recordingID: ack.recordingID, startedAt: ack.startedAt, alreadyRecording: ack.wasAlreadyRecording, clock: clock)
             case .refused(let refusal):
-                return refusal.reason == .notRecording && request.action == .stop ? .stopped(at: nil) : .refused(Self.words(for: refusal))
+                if refusal.reason == .notRecording && request.action == .stop { return .stopped(at: nil) }
+                // A start it declined is the person's setting there (its Can Start Recording for this Mac).
+                if refusal.reason == .declined && request.action == .start { return .declined(Self.words(for: refusal)) }
+                return .refused(Self.words(for: refusal))
             }
         } catch LinkError.notConnected {
             return .unavailable

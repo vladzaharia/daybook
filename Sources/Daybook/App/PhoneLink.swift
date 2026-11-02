@@ -59,6 +59,10 @@ final class PhoneLink {
     /// disconnects, for as long as it can be trusted (`LinkRecorderState.lifetime`).
     private(set) var phoneRecorders: [UUID: [LinkRecorderState]] = [:]
     @ObservationIgnored private var lastSentRecorders: [LinkRecorderState]?
+    /// What each connected phone last said about this Mac starting a recording there: its Can Start Recording for this
+    /// Mac (`LinkRecordPermission`). Nil until it says (an older phone never does).
+    private(set) var recordPermissions: [UUID: Bool] = [:]
+    @ObservationIgnored private var permissionSend: Task<Void, Never>?
     private(set) var lastConnected: [UUID: Date] = [:]
     private(set) var isRunning = false
 
@@ -148,7 +152,7 @@ final class PhoneLink {
         await service.stop()
         listening?.cancel(); listening = nil
         isRunning = false
-        peers = [:]; recordingStates = [:]
+        peers = [:]; recordingStates = [:]; recordPermissions = [:]
     }
 
     /// Stops for good (tests, and quitting).
@@ -162,7 +166,7 @@ final class PhoneLink {
         await service.stop()
         listening?.cancel(); listening = nil
         isRunning = false
-        peers = [:]
+        peers = [:]; recordPermissions = [:]
     }
 
     /// After sleep: probes every phone and reopens the listener if it failed, and reads the pairings again if the
@@ -338,6 +342,17 @@ final class PhoneLink {
         }
     }
 
+    /// Tells a connected phone that listens (`LinkCapabilities.recordPermissionFeature`) this Mac's Can start recording
+    /// for it. Sends go out one after another, in order, so the last change is what it keeps.
+    func sendRecordPermission(_ permission: LinkRecordPermission, to phoneID: UUID) {
+        guard service != nil, peers[phoneID]?.capabilities.tellsRecordPermission == true else { return }
+        let previous = permissionSend
+        permissionSend = Task { [weak self] in
+            await previous?.value
+            try? await self?.send(.recordPermission(permission), to: phoneID)
+        }
+    }
+
     private func answer(_ peer: LinkPeer, _ request: LinkRecordRequest) async -> LinkRecordReply.Outcome {
         guard let recordHandler else { return .refused(LinkRecordRefusal(reason: .unsupported)) }
         return await recordHandler(peer, request)
@@ -370,10 +385,13 @@ final class PhoneLink {
             paired.removeAll { $0.deviceID == deviceID }
             peers[deviceID] = nil
             recordingStates[deviceID] = nil
+            recordPermissions[deviceID] = nil
             onUnpaired?(deviceID)
         case .connected(let peer):
             peers[peer.deviceID] = peer
             lastConnected[peer.deviceID] = Date()
+            // It says again on this connection, if it says at all.
+            recordPermissions[peer.deviceID] = nil
             // A phone that (re)connects hears at once whether this Mac is recording, and what.
             sendRecordingState(to: peer.deviceID)
             onConnected?(peer)
@@ -383,6 +401,7 @@ final class PhoneLink {
         case .disconnected(let deviceID, _):
             peers[deviceID] = nil
             recordingStates[deviceID] = nil
+            recordPermissions[deviceID] = nil
             lastConnected[deviceID] = Date()
         case .received(let message, let from):
             if case .recordingState(let state) = message {
@@ -392,6 +411,7 @@ final class PhoneLink {
                     phoneRecorders[from] = recorders.map { $0.moved { clock?.localDate(fromPeer: $0) ?? $0 } }
                 }
             }
+            if case .recordPermission(let permission) = message { recordPermissions[from] = permission.allowed }
             onMessage?(message, from)
         case .discovered, .discovery, .connectionState:
             break

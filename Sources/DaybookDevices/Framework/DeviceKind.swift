@@ -162,6 +162,11 @@ public struct ConfiguredDevice: Codable, Identifiable, Hashable {
     /// stop one from its page), while the phone's own setting decides whether it records when the Mac starts.
     public var alsoRecordsWithMac: Bool?
     public var recordsAlongsideMac: Bool { alsoRecordsWithMac ?? true }
+    /// Daybook on iPhone on a Mac: its Record along with this Mac was off in a build where that also kept the Mac
+    /// from asking it to record, a choice that is now the iPhone's own (its Can Start Recording for the Mac). The Mac
+    /// doesn't ask it to record until the iPhone says it has turned that off, which the Mac asks once they connect
+    /// (`LinkRecordPermission.asksReceiverOff`). Nil once it has, and for every device since.
+    public var recordAlongOffOwed: Bool?
     /// "Fast Transfer" (iPhone): recordings over ten minutes come over the recorder's
     /// own Wi‑Fi while Daybook is open. Nil (the default) means on.
     public var fastTransferForLongRecordings: Bool?

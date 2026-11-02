@@ -103,6 +103,9 @@ protocol AnsweringRecordControl: RecordControlConnection {
     var recordingConversationID: UUID? { get }
     /// Its clock against this Mac's, as measured now.
     var clock: CompanionClock? { get }
+    /// It may record when this Mac starts, as far as this Mac knows: false once it said its own setting for this Mac
+    /// is off (Daybook on iPhone's Can Start Recording, `LinkRecordPermission`), so it isn't asked only to decline.
+    var takesStarts: Bool { get }
 }
 
 /// What a device that answers is asked to record: the conversation as this Mac has it, so a device
@@ -138,6 +141,9 @@ enum CompanionAnswer: Equatable {
     case stopped(at: Date?)
     /// It said no, and why, in a sentence.
     case refused(String)
+    /// It said no because the person set it not to let this Mac start recording there (`declined`): their choice,
+    /// and why, in a sentence.
+    case declined(String)
     /// It isn't connected.
     case unavailable
     /// It didn't answer in time.
@@ -237,14 +243,18 @@ final class CompanionRecorders {
     }
 
     /// Recorders that record alongside this Mac: record control, set up, its direct method on, and
-    /// "Record along with this Mac" on. A device that answers (Daybook on iPhone) is asked whatever this
-    /// Mac's switch for it says, which is only whether it may start a recording here (Can start recording):
-    /// its own Can Start Recording for this Mac decides, and it says why when it declines.
+    /// "Record along with this Mac" on. A device that answers (Daybook on iPhone) decides for itself, with its own
+    /// Can Start Recording for this Mac: this Mac's switch for it says only whether it may start a recording here. It's
+    /// asked unless it said that's off, or an off from an earlier build hasn't reached it yet (`recordAlongOffOwed`).
     func eligible() -> [(session: DeviceSession, control: any RecordControlConnection)] {
         sessions().compactMap { session in
-            guard session.direct is any AnsweringRecordControl || session.device.recordsAlongsideMac, session.device.isEnabled(.direct),
-                  let control = session.direct as? any RecordControlConnection,
+            guard session.device.isEnabled(.direct), let control = session.direct as? any RecordControlConnection,
                   control.capabilities.contains(.recordControl), control.isSetUp else { return nil }
+            if let answering = control as? any AnsweringRecordControl {
+                guard answering.takesStarts, session.device.recordAlongOffOwed != true else { return nil }
+            } else {
+                guard session.device.recordsAlongsideMac else { return nil }
+            }
             return (session, control)
         }
     }
@@ -266,7 +276,7 @@ final class CompanionRecorders {
         leads[meetingID] = lead
         recorderLeads[meetingID] = recorderLead
         let recorders = eligible().filter { $0.session.id != lead?.sessionID }
-        guard !recorders.isEmpty else { status = lead.map { "Recording here because \($0.deviceName) asked." }; return }
+        guard !recorders.isEmpty else { status = alone(meetingID); return }
         let cascade = LinkCascade(trigger: lead != nil ? .device : recorderLead != nil ? .recorder : trigger)
         starting[meetingID] = Task { [weak self] in
             guard let self else { return }
@@ -598,7 +608,8 @@ final class CompanionRecorders {
             status = stopRequested.contains(meetingID) ? nil : "\(name) isn’t connected. Recording on this Mac only."
             return
         }
-        status = "Asking \(name) to record…"
+        let asking = "Asking \(name) to record…"
+        status = asking
         var request = companionStart(meetingID, at: start)
         request.cascade = cascade
         let answer = await ask(control, toStart: request, meetingID: meetingID)
@@ -617,7 +628,12 @@ final class CompanionRecorders {
             if stopRequested.contains(meetingID), !already, let current = links(meetingID).first(where: { $0.id == link.id }) {
                 await stop(session, control, link: current, meetingID: meetingID, at: Date())
             }
-        case .refused(let reason):
+        case .declined where cascade != nil:
+            // Asked on its own, it said no as the person set it to: their choice, so nothing is said and nothing is
+            // kept of it, as for a device this Mac knew not to ask.
+            write(meetingID) { $0.removeAll { $0.id == link.id } }
+            if status == asking { status = alone(meetingID) }
+        case .refused(let reason), .declined(let reason):
             update(meetingID, link.id) { $0.state = .failed }
             status = "\(name) didn’t record. \(reason) Recording on this Mac only."
         case .unavailable:
@@ -627,6 +643,11 @@ final class CompanionRecorders {
             update(meetingID, link.id) { $0.state = .failed }
             status = "\(name) didn’t answer. Recording on this Mac only."
         }
+    }
+
+    /// The line while no other device records along: why this Mac records, when another device asked it to.
+    private func alone(_ meetingID: UUID) -> String? {
+        leads[meetingID].map { "Recording here because \($0.deviceName) asked." }
     }
 
     /// The start a device that answers is asked for: the conversation as this Mac has it, and its timing.
@@ -674,7 +695,7 @@ final class CompanionRecorders {
                 target.recordingID = recordingID
                 await stop(current, through: owner, recorder: target, meetingID: meetingID, at: Date())
             }
-        case .refused(let reason):
+        case .refused(let reason), .declined(let reason):
             update(meetingID, link.id) { $0.state = .failed }
             status = "\(name) didn’t record. \(reason) Recording on this Mac only."
         case .unavailable:
@@ -697,7 +718,7 @@ final class CompanionRecorders {
         case .stopped, .recording:
             update(meetingID, link.id) { $0.state = .stopped }
             status = "\(name) stopped. Its recording will be added here."
-        case .refused:
+        case .refused, .declined:
             update(meetingID, link.id) { $0.state = .stopFailed }
             status = "\(name) didn’t stop. Stop it on \(ownerName)."
         case .unavailable, .noAnswer:
@@ -716,7 +737,7 @@ final class CompanionRecorders {
             unanswered.remove(link.id)
             update(meetingID, link.id) { $0.state = .stopped }
             status = "\(name) stopped. Its recording will be added here."
-        case .refused:
+        case .refused, .declined:
             update(meetingID, link.id) { $0.state = .stopFailed }
             status = "\(name) didn’t stop. Stop it on the iPhone."
         case .unavailable, .noAnswer:

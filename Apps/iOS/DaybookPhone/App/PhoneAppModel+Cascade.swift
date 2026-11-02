@@ -47,8 +47,10 @@ extension PhoneAppModel {
     /// Asks every connected Mac not yet involved to record the shared recording too. Waits a moment
     /// for this iPhone's first sample, which the Mac places its recording by.
     func askMacsToJoin(trigger: LinkCascade.Trigger) {
+        // A Mac that said it doesn't let this iPhone start recording there isn't asked: it would only decline.
         let macs = link.connectedMacs.filter { mac in
             !mac.isRecording && !(multipoint?.macs.contains { $0.id == mac.id } ?? false) && (recorder.isCapturing || mac.cascades)
+                && mac.takesStartsFromHere != false
         }
         guard !macs.isEmpty else { return }
         Task {
@@ -66,7 +68,7 @@ extension PhoneAppModel {
     func macConnectedDuringCascade(_ macID: UUID) {
         let recording = recorder.isCapturing && multipoint?.isMacLed != true
         guard cascadesToMacs, recording || recorderOnly != nil, let until = cascadeAsksUntil, Date() < until || recorderOnly != nil,
-              let mac = link.macs.first(where: { $0.id == macID }), !mac.isRecording,
+              let mac = link.macs.first(where: { $0.id == macID }), !mac.isRecording, mac.takesStartsFromHere != false,
               !(multipoint?.macs.contains { $0.id == macID } ?? false) else { return }
         let cascade = LinkCascade(trigger: recorderOnly != nil ? .recorder : .person, requesterRecords: recorder.isCapturing,
                                   recorders: lastRecorders)

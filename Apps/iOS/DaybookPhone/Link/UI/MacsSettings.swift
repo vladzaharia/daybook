@@ -114,14 +114,15 @@ struct MacDetailScreen: View {
         let conversation = recording?.conversationID
         let activity: PeerFacts.Activity = recording?.phase == .paused ? .paused
             : recording != nil || model.isRecordingBySync(mac, now: now) ? .recording : .idle
-        // Stop is taken when it stops for a page, or when this iPhone records that conversation with it.
+        // Stop is taken when it stops for a page (and hasn't said this iPhone may not start recording there), or when
+        // this iPhone records that conversation with it.
         let recordsTogether = conversation != nil && model.recorder.isActive && model.recorder.captureID == conversation
         return PeerPage.Facts(
             id: mac.id.uuidString, name: mac.name, kind: .mac, isConnected: mac.isConnected, activity: activity,
             lastSeen: mac.lastConnectedAt,
             recordingSince: recording?.startedAt.map { mac.clock?.localDate(fromPeer: $0) ?? $0 },
             conversationTitle: conversation.flatMap { model.library.controller.meeting($0)?.title },
-            canStop: mac.stopsForPages || recordsTogether,
+            canStop: (mac.stopsForPages && mac.takesStartsFromHere != false) || recordsTogether,
             recorders: mac.recorders,
             // Whether it transcribes is known once it has connected.
             transcribes: mac.canProcess ? true : mac.isConnected ? false : nil,

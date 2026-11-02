@@ -150,11 +150,13 @@ from plain facts (`PeerPage`):
   Library Settings…; on the iPhone, Local Network turned off for Daybook while the Mac isn't connected ("Allow
   Daybook to find your Mac on this network.", the row saying "Local Network is off"), with Open Settings;
 - "Recording now · since 10:02 AM" with the conversation (a link on the Mac) and Stop on Studio Mac, offered when
-  the other device would take it: it lists `pageStopFeature`, or this device records that conversation with it;
+  the other device would take it: it lists `pageStopFeature` (both apps do) and hasn't said this device may not start
+  recording there, or this device records that conversation with it;
 - the recorders it manages ("Soundcore Work · Recording since 10:02");
 - Can start recording (Can Start Recording on the iPhone): whether it may start a recording here, and stop one from
-  its page, the same one way on both. On the Mac it's the device's `recordsAlongsideMac`, also in Settings ›
-  Devices; the Mac still asks the phone when it starts, and the phone's own toggle answers;
+  its page, the same one way on both: off, every start it asks for is declined. On the Mac it's the device's
+  `recordsAlongsideMac`, also in Settings › Devices. Each tells the other its own (`record.permission`), so neither
+  asks one that would only decline;
 - its facts: Transcribes (once it has said), Daybook (its version), Paired. The clock offset isn't shown;
 - Unpair….
 
@@ -239,6 +241,7 @@ DNS-SD's `PolicyDenied` (−65570); the client reads that as `localNetworkDenied
 | `levels` | `LinkLevels` | iPhone → Mac | an iPhone's input level during a shared recording, for the Mac's meters: its meter's readings since it last sent (0…1, oldest first, `interval` apart, at most 30), about five times a second; only to a Mac recording the same conversation that lists `liveLevels`, and never queued behind other messages (one still on its way drops the next) |
 | `processing.progress` | `LinkProcessingProgress` | Mac → phone | meeting, phase, fraction, Mac name, detail; while a summary counts down, phase `summaryCountdown` with `countdown` (seconds left as sent, whether Use the Cloud is on offer); in the cloud, `cloudModel` (both optional) |
 | `processing.nudge` | `LinkProcessingNudge` | phone → Mac | "I just wrote request X": the request itself travels through sync |
+| `record.permission` | `LinkRecordPermission` | both | the sender's Can start recording for the receiver (`allowed`), as a session begins and when it changes; from a Mac, once, `asksReceiverOff` (an off from an earlier build, below), which the iPhone answers with `turnedOff`; only to a peer listing `recordPermission` |
 | `processing.choice` | `LinkSummaryChoice` | phone → Mac | the person's choice for a summary the Mac counts down to: `useCloud` or `startNow`, the meeting, sent-at; only to a Mac listing `summaryPlacement` (docs/multipoint.md, "Where summaries run") |
 | `recorder.handoff.request` | `LinkRecorderHandoffRequest` | both | take (or give) a recorder, by kind and serial, addressed by the owner's sync ID |
 | `recorder.handoff.reply` | `LinkRecorderHandoffReply` | both | accepted (what it finishes first, time left) or refused with a reason; repeated as progress |
@@ -305,14 +308,24 @@ estimate with uncertainty.
 
 A refusal for the person to act on names the control that would allow it, worded for the device that
 reads it (`PairingWords.notAllowedToStart(asker:)`): "It isn’t set to let this iPhone start recording. Turn on
-Can start recording for this iPhone on the Mac."
+Can start recording for this iPhone on the Mac." Each side refuses every start from a device its Can start
+recording is off for as `declined`, and says so only to a start the person chose: a `declined` start that the
+asker sent on its own (`cascade`) is the person's choice on the other side, taken quietly.
+
+**Can start recording, both ways.** Devices listing `recordPermission` tell each other their own Can start
+recording for the other (`record.permission`) as a session begins and whenever it changes, and a device doesn't
+ask one that said no to join a recording on its own, nor offers Stop on its page. Before this was one way, the
+Mac's Record along with this Mac for an iPhone also kept the Mac from asking it; a Mac that had that off carries it
+over once (`ConfiguredDevice.recordAlongOffOwed`): it doesn't ask that iPhone, and sends `asksReceiverOff` as they
+connect until the iPhone answers `turnedOff`, having turned its Can Start Recording for that Mac off (once for each
+pairing, so turning it on again there stands).
 
 Additions within version 1, all optional, which older builds ignore:
 - `title` and `date`: the conversation as the requester has it, so a receiver that hasn't synced it
   makes the same record rather than a placeholder.
 - `standalone`: record a conversation of the receiver's own (a device page's Start Recording). A
   start without timing, from an older Mac, means the same. On a stop it's a device page's Stop on
-  <device>: a receiver listing `pageStop` (`LinkCapabilities.pageStopFeature`; the Mac lists it) stops
+  <device>: a receiver listing `pageStop` (`LinkCapabilities.pageStopFeature`; both apps list it) stops
   what it records when the asker can start recording on it, and otherwise only a recording it shares
   with the asker, as before. A page offers Stop only to a device that lists it or records with it.
 - `recorder` (`LinkRecorderTarget`: kind, serial, and for a stop the recording's ID): start or stop
@@ -554,8 +567,8 @@ the test process, and nothing is advertised.
   the code's one separator, the side to update, and the refusals.
 - **In the apps:** `PhoneLinkTests` on the Mac (a pairings read that fails keeps every phone and is
   tried again, a link that can't start keeps trying, a refused unpair is said, a damaged pairing,
-  wake, the page's Stop, a phone asked whatever Can start recording says here and declining in its own
-  words, notes owed to a phone that was away and a failed send owed again without undoing a newer
+  wake, the page's Stop, a phone asked whatever Can start recording says here and its decline taken quietly,
+  one that said no not asked, an off from an earlier build carried over and taken by the phone once, notes owed to a phone that was away and a failed send owed again without undoing a newer
   paragraph, Settings' Over Wi‑Fi line, `PeerPage` for both devices) and `LinkServicesTests` on the
   iPhone (the same keychain cases, sends in order, Stop on a Mac, a Mac's problems and Last seen, Local
   Network off on a paired Mac's row and page, a failed code's reason kept, Macs of another library).

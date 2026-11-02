@@ -53,6 +53,13 @@ final class PhoneLink {
         var recorders: [LinkRecorderState] = []
         /// It stops what it records when this iPhone's page for it asks (`LinkCapabilities.pageStopFeature`).
         var stopsForPages = false
+        /// It says whether this iPhone may start a recording there and takes this iPhone's word for the other way
+        /// (`LinkCapabilities.recordPermissionFeature`).
+        var tellsRecordPermission = false
+        /// Its Can start recording for this iPhone, as it said on this connection (`LinkRecordPermission`): false, it
+        /// isn't asked to join a recording on its own (it would only decline), and its page offers no Stop. Nil until
+        /// it says (an earlier Daybook never does).
+        var takesStartsFromHere: Bool?
         /// Its pairing is here but can't be read: it can't connect until it's paired again.
         var isDamaged = false
         /// Local Network is off for Daybook (`LinkDiscoveryState.localNetworkDenied`), as the link last found
@@ -173,6 +180,8 @@ final class PhoneLink {
     @ObservationIgnored var onSharedNotes: ((LinkMessage, UUID) -> Void)?
     /// A Mac's live progress on a conversation (its summary's countdown among them).
     @ObservationIgnored var onLiveProgress: ((LiveProgress) -> Void)?
+    /// A Mac said whether this iPhone may start a recording there, and maybe asked this iPhone to keep an off it had.
+    @ObservationIgnored var onRecordPermission: ((UUID, LinkRecordPermission) -> Void)?
 
     /// A Mac's word on its recorder lasts this long; it repeats it every 15 s while recording.
     static let recordingStateLifetime: TimeInterval = 45
@@ -198,7 +207,8 @@ final class PhoneLink {
                             appVersion: version, libraryID: libraryID, canProcess: false,
                             features: [LinkCapabilities.recordControlFeature, LinkCapabilities.bookmarksFeature,
                                        LinkCapabilities.recorderHandoffFeature, LinkCapabilities.recorderControlFeature,
-                                       LinkCapabilities.cascadeFeature, LinkCapabilities.sharedNotesFeature],
+                                       LinkCapabilities.cascadeFeature, LinkCapabilities.sharedNotesFeature,
+                                       LinkCapabilities.pageStopFeature, LinkCapabilities.recordPermissionFeature],
                             syncDeviceID: syncDeviceID)
     }
 
@@ -382,6 +392,12 @@ final class PhoneLink {
         try await client.send(message, to: macID)
     }
 
+    /// This iPhone's Can Start Recording for a connected Mac that takes it, in the order it changes.
+    func sendRecordPermission(_ permission: LinkRecordPermission, to macID: UUID) {
+        guard macs.contains(where: { $0.id == macID && $0.isConnected && $0.tellsRecordPermission }) else { return }
+        enqueue(.permissions) { try? await $0.send(.recordPermission(permission), to: macID) }
+    }
+
     /// A bookmark made here, to every connected Mac, in order with the notes and bookmark changes after it.
     func sendBookmark(_ bookmark: LinkBookmark) {
         guard !connectedMacs.isEmpty else { return }
@@ -405,6 +421,8 @@ final class PhoneLink {
         case notes
         case nudges
         case choices
+        /// Can Start Recording for each Mac: the last change is what it keeps.
+        case permissions
     }
 
     @ObservationIgnored private var sends: [SendChannel: Task<Void, Never>] = [:]
@@ -537,6 +555,9 @@ final class PhoneLink {
                 mac.processing = peer.capabilities.processing.map(ProcessingCapabilities.init)
                 mac.placesSummaries = peer.capabilities.placesSummaries
                 mac.stopsForPages = peer.capabilities.stopsForPages
+                mac.tellsRecordPermission = peer.capabilities.tellsRecordPermission
+                // It says again on a new connection, if it says at all.
+                if case .connected = event { mac.takesStartsFromHere = nil }
             }
             onMacsChanged?()
             if case .connected = event { onMacConnected?(peer.deviceID) }
@@ -544,6 +565,7 @@ final class PhoneLink {
             update(id) { mac in
                 mac.lastConnectedAt = Date()
                 mac.recording = nil
+                mac.takesStartsFromHere = nil
             }
             liveProgress = liveProgress.filter { $0.value.macName != macs.first(where: { $0.id == id })?.name }
             onMacsChanged?()
@@ -577,6 +599,9 @@ final class PhoneLink {
         case .bookmark, .note, .bookmarkChange:
             // While a Mac records a conversation with this iPhone, its notes and bookmarks show here too.
             onSharedNotes?(message, macID)
+        case .recordPermission(let permission):
+            update(macID) { $0.takesStartsFromHere = permission.allowed }
+            onRecordPermission?(macID, permission)
         case .processingNudge, .captions, .levels, .summaryChoice:
             // A Mac's captions stay on the Mac; this iPhone shows its own. Levels and choices go the other way.
             break

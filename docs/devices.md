@@ -425,8 +425,8 @@ that kind, the phone's device ID as serial, and the phone's recording ID.
   manages, Can start recording, its version and pairing date, and Unpair…. The list column shows its
   recordings, as they're all in Daybook.
 - **Settings › Devices.** Over Wi‑Fi status in the page's words ("Not connected · Last seen today, 9:12 AM",
-  "Needs pairing again" with Pair Again…), Can start recording (one way, as on the iPhone: off, the phone's
-  cascading starts and its page's Stop are declined; whether the phone records when this Mac starts is its
+  "Needs pairing again" with Pair Again…), Can start recording (one way, as on the iPhone: off, every start
+  the phone asks for and its page's Stop are declined; whether the phone records when this Mac starts is its
   own Can Start Recording's to say), how recordings arrive (with a link to sync settings when it's off), and
   Unpair…, confirmed in the page's words. Pair with iPhone… sits beside Add Device…, and in the empty state.
 - **Bluetooth ownership** of a Soundcore shared with the phone is a synced device setting, moved

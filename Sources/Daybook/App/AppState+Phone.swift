@@ -31,7 +31,8 @@ extension AppState {
                                                           LinkCapabilities.recorderHandoffFeature,
                                                           LinkCapabilities.cascadeFeature, LinkCapabilities.sharedNotesFeature,
                                                           LinkCapabilities.liveCaptionsFeature, LinkCapabilities.liveLevelsFeature,
-                                                          LinkCapabilities.summaryPlacementFeature, LinkCapabilities.pageStopFeature],
+                                                          LinkCapabilities.summaryPlacementFeature, LinkCapabilities.pageStopFeature,
+                                                          LinkCapabilities.recordPermissionFeature],
                             syncDeviceID: sync.deviceID)
     }
 
@@ -60,6 +61,11 @@ extension AppState {
         watches.append(ObservationWatch({ [weak self] in _ = self?.sync.folder }) { [weak self] in
             self?.phoneSessions.forEach { $0.connection(.files)?.refresh() }
         })
+        // A phone hears this Mac's Can start recording for it as it changes (on its page, or in Settings › Devices).
+        watches.append(ObservationWatch.distinctValues(of: { [weak self] in
+            self?.phoneSessions.map { PhoneStartPermission(id: $0.id, allowed: $0.device.recordsAlongsideMac) } ?? []
+        }, initial: false) { [weak self] _ in self?.sendRecordPermissions() })
+        carryOverRecordAlongOff()
         // The link follows the Mac's wake (the app's one wake observer) and hands it here.
         phoneLink.onWake = { [weak self] in await self?.systemDidWake() }
         // Going to sleep while recording, the devices recording along hear the stop first.
@@ -130,6 +136,8 @@ extension AppState {
     }
 
     private func phoneConnected(_ peer: LinkPeer) {
+        // It hears whether it may start recording here, and an off this Mac owes it.
+        sendRecordPermission(to: peer.deviceID)
         // A phone that reconnects while this Mac processes sees where it is at once.
         if let id = processingID { reportToPhones(id, force: true) }
         // A stop this Mac couldn't deliver goes now, and so do the notes and bookmarks it missed.
@@ -173,6 +181,8 @@ extension AppState {
             break
         case .summaryChoice(let choice):
             phoneChoseSummaryPlacement(choice)
+        case .recordPermission(let permission):
+            phoneSaidRecordPermission(permission, from: phone)
         case .recorderHandoffRequest, .recorderHandoffReply, .recorderRelease:
             recorderHandoff.receive(message, from: phone)
         case .libraryKeyRequest(let request):
@@ -318,9 +328,10 @@ extension AppState {
             if recordingID == id {
                 return .accepted(LinkRecordAck(conversationID: id, startedAt: recordingStartedAt, wasAlreadyRecording: true))
             }
-            // A phone that started recording asks every Mac it's connected to (a cascading start); this
-            // Mac's Can start recording for that phone (on by default) says whether it joins on its own.
-            if request.cascade != nil, !phoneMayStartRecording(peer.deviceID) {
+            // This Mac's Can start recording for that phone (on by default) says whether it may start a recording
+            // here at all: one it asks on its own as it starts (a cascading start), one the person chose there, and one
+            // from its page, as the phone's own toggle does for this Mac.
+            guard phoneMayStartRecording(peer.deviceID) else {
                 return .refused(LinkRecordRefusal(reason: .declined, message: PairingWords.notAllowedToStart(asker: .iPhone)))
             }
             if let current = recordingID {
@@ -384,6 +395,41 @@ extension AppState {
     /// starts is its own Can Start Recording's to say, as this is for the phone's starts.
     func phoneMayStartRecording(_ phoneID: UUID) -> Bool {
         devices.session(phoneID.uuidString)?.device.recordsAlongsideMac ?? true
+    }
+
+    // MARK: Can start recording, both ways
+
+    /// Tells a connected phone that listens this Mac's Can start recording for it and, until it has taken it, the off
+    /// this Mac owes it from an earlier build (`ConfiguredDevice.recordAlongOffOwed`).
+    func sendRecordPermission(to phoneID: UUID) {
+        let owed = devices.session(phoneID.uuidString)?.device.recordAlongOffOwed == true
+        phoneLink.sendRecordPermission(LinkRecordPermission(allowed: phoneMayStartRecording(phoneID), asksReceiverOff: owed ? true : nil),
+                                       to: phoneID)
+    }
+
+    private func sendRecordPermissions() {
+        for phone in phoneLink.peers.keys { sendRecordPermission(to: phone) }
+    }
+
+    /// A phone said whether this Mac may start a recording there (`PhoneLink.recordPermissions` keeps it, which
+    /// multipoint reads). One that says it took this Mac's owed off holds it now, so it's no longer owed.
+    private func phoneSaidRecordPermission(_ permission: LinkRecordPermission, from phone: UUID) {
+        guard permission.turnedOff == true, let session = devices.session(phone.uuidString), session.device.recordAlongOffOwed == true else { return }
+        session.update { $0.recordAlongOffOwed = nil }
+    }
+
+    /// Set once Record along with this Mac's off has been carried over for the phones paired then.
+    static let recordAlongCarriedOverKey = "phoneRecordAlongCarriedOver"
+
+    /// Before this build, a phone's Record along with this Mac off here also kept this Mac from asking it to record.
+    /// That off is the phone's own to keep now (its Can Start Recording for this Mac), so it's owed to the phone until it
+    /// says it has taken it, and meanwhile this Mac doesn't ask it. Once, for the phones paired then.
+    private func carryOverRecordAlongOff() {
+        guard !preferences.bool(forKey: Self.recordAlongCarriedOverKey) else { return }
+        preferences.set(true, forKey: Self.recordAlongCarriedOverKey)
+        for session in phoneSessions where session.device.alsoRecordsWithMac == false && session.device.recordAlongOffOwed == nil {
+            session.update { $0.recordAlongOffOwed = true }
+        }
     }
 
     /// Whether a phone records this Mac's recording `id` along with it: its link here says so (or it never
@@ -566,4 +612,10 @@ private struct RecordingPhaseKey: Equatable {
     var recording: UUID?
     var starting: Bool
     var stopping: Bool
+}
+
+/// A paired phone's Can start recording on this Mac, as the link's watch compares it.
+private struct PhoneStartPermission: Equatable {
+    var id: String
+    var allowed: Bool
 }

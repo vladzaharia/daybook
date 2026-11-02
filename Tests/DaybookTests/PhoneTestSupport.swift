@@ -38,6 +38,10 @@ final class LinkEvents: @unchecked Sendable {
     var states: [LinkRecordingState] {
         all.compactMap { if case .received(.recordingState(let state), _) = $0 { return state }; return nil }
     }
+    /// What the Mac said about the phone starting a recording there, in order.
+    var permissions: [LinkRecordPermission] {
+        all.compactMap { if case .received(.recordPermission(let permission), _) = $0 { return permission }; return nil }
+    }
 }
 
 /// What the phone's record-control handler was asked, and how it answers.

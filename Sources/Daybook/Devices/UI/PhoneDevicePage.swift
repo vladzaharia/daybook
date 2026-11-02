@@ -37,7 +37,8 @@ struct PhoneOverview: View {
         let phase = phone?.recordingPhase
         let conversation = phone?.recordingConversationID
         let phoneID = UUID(uuidString: session.id)
-        // Stop is taken when the phone stops for a page, or when it records this conversation with this Mac.
+        // Stop is taken when the phone stops for a page (and hasn't said this Mac may not start recording there), or
+        // when it records this conversation with this Mac.
         let recordsTogether = conversation.map { id in
             state.recordingID == id && (state.phoneLeads[id]?.sessionID == session.id || state.isRecording(id, with: session.id))
         } ?? false
@@ -57,7 +58,7 @@ struct PhoneOverview: View {
             activity: phase == .paused ? .paused : phase == nil ? .idle : .recording,
             lastSeen: session.direct?.lastConnectedAt, recordingSince: session.status?.recordingStartedAt,
             conversationTitle: conversation.flatMap { id in state.meetings.first { $0.id == id }?.title },
-            canStop: phone?.stopsForPages == true || recordsTogether,
+            canStop: (phone?.stopsForPages == true && phone?.takesStarts == true) || recordsTogether,
             recorders: phone?.recorders(now: now) ?? [],
             transcribes: phone?.peer?.capabilities.processing?.transcribes,
             appVersion: phone?.peer?.capabilities.appVersion,

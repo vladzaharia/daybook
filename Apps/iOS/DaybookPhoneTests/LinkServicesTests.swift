@@ -35,6 +35,9 @@ final class LinkServicesTests: XCTestCase {
         var states: [LinkRecordingState] {
             all.compactMap { if case .received(.recordingState(let state), _) = $0 { return state } else { return nil } }
         }
+        var permissions: [LinkRecordPermission] {
+            all.compactMap { if case .received(.recordPermission(let permission), _) = $0 { return permission } else { return nil } }
+        }
     }
 
     final class RequestLog: @unchecked Sendable {
@@ -836,6 +839,89 @@ final class LinkServicesTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? LinkError, .notConnected)
         }
+    }
+
+    /// The Mac's page (Stop on iPhone) stops this iPhone's recording only while that Mac may start recording here,
+    /// as the iPhone's page does on the Mac.
+    func testBehaviorTheMacsPageStopsThisIPhoneOnlyWhenItCanStartRecordingHere() async throws {
+        XCTAssertTrue(PhoneLink.identity(installation: UUID().uuidString, name: "Test iPhone", libraryID: nil).features
+            .contains(LinkCapabilities.pageStopFeature), "this iPhone stops for a Mac's page")
+        let mac = try await makeMac()
+        let link = makeLink()
+        let rig = RecorderRig()
+        let model = try makeModel(link: link, rig: rig)
+        try await pair(link, with: mac)
+        let paired = try XCTUnwrap(link.macs.first)
+        // A recording of this iPhone's own, which the Mac has nothing to do with.
+        try await model.startRecording()
+        rig.pump(1)
+        rig.recorder.updateLevels()
+        let id = try XCTUnwrap(model.recorder.captureID)
+
+        // Off: the Mac's page can't stop it, and says how to allow it.
+        model.settings.setMacMayStartRecording(false, for: paired.id, pairedAt: paired.pairedAt)
+        let refused = try await mac.service.request(LinkRecordRequest(action: .stop, conversationID: id, standalone: true), from: link.deviceID)
+        XCTAssertEqual(refused.outcome, .refused(LinkRecordRefusal(reason: .declined, message: PairingWords.notAllowedToStop(asker: .mac))))
+        XCTAssertTrue(model.recorder.isActive)
+        // A stop that isn't a page's (it doesn't record this conversation) is refused whatever the setting.
+        model.settings.setMacMayStartRecording(true, for: paired.id, pairedAt: paired.pairedAt)
+        let plain = try await mac.service.request(LinkRecordRequest(action: .stop, conversationID: id), from: link.deviceID)
+        guard case .refused = plain.outcome else { return XCTFail("\(plain.outcome)") }
+        XCTAssertTrue(model.recorder.isActive)
+
+        // On: Stop on iPhone stops it.
+        let stopped = try await mac.service.request(LinkRecordRequest(action: .stop, conversationID: id, standalone: true), from: link.deviceID)
+        guard case .accepted = stopped.outcome else { return XCTFail("\(stopped.outcome)") }
+        try await waitUntil("stopped") { !model.recorder.isActive && !model.isFiling }
+    }
+
+    /// This iPhone tells a Mac that listens whether it may start recording here, as they connect and when that
+    /// changes, and keeps the Mac's word for the other way. A Mac that had Record along with this Mac off for this
+    /// iPhone in an earlier build asks it once to keep that off: it's taken once for the pairing, so turning it on
+    /// again here stands.
+    func testBehaviorCanStartRecordingIsToldBothWaysAndAnEarlierOffIsTakenOnce() async throws {
+        let id = UUID()
+        let store = MemoryLinkKeyStore()
+        let service = LinkService(identity: LinkIdentity(deviceID: id, name: "Studio Mac", deviceClass: .mac, appVersion: "2.0", canProcess: true,
+                                                         features: [LinkCapabilities.recordPermissionFeature]),
+                                  keyStore: store, configuration: .loopback())
+        try await service.start()
+        addTeardownBlock { await service.stop() }
+        let listening = await service.port
+        let mac = Mac(service: service, id: id, endpoint: LinkEndpoint(host: "127.0.0.1", port: try XCTUnwrap(listening)), store: store)
+        let inbox = MacInbox(service.events())
+        let link = makeLink()
+        let model = try makeModel(link: link, rig: RecorderRig())
+        try await pair(link, with: mac)
+        let paired = try XCTUnwrap(link.macs.first)
+        XCTAssertTrue(paired.tellsRecordPermission)
+
+        try await waitUntil("its word as it connects") { inbox.permissions.map(\.allowed) == [true] }
+        model.settings.setMacMayStartRecording(false, for: paired.id, pairedAt: paired.pairedAt)
+        try await waitUntil("Can Start Recording off") { inbox.permissions.map(\.allowed) == [true, false] }
+        model.settings.setMacMayStartRecording(true, for: paired.id, pairedAt: paired.pairedAt)
+        try await waitUntil("on again") { inbox.permissions.map(\.allowed) == [true, false, true] }
+        model.settings.acceptsMacRecordRequests = false
+        try await waitUntil("Recording with Your Mac off") { inbox.permissions.map(\.allowed) == [true, false, true, false] }
+        model.settings.acceptsMacRecordRequests = true
+        try await waitUntil("on again") { inbox.permissions.count == 5 && inbox.permissions.last?.allowed == true }
+
+        // The Mac's word for the other way.
+        try await service.send(.recordPermission(LinkRecordPermission(allowed: false)))
+        try await waitUntil("the Mac's word") { link.macs.first?.takesStartsFromHere == false }
+
+        // The Mac asks this iPhone to keep the off it had: taken, and answered.
+        try await service.send(.recordPermission(LinkRecordPermission(allowed: true, asksReceiverOff: true)))
+        try await waitUntil("taken") { inbox.permissions.contains { $0.turnedOff == true } }
+        XCTAssertEqual(inbox.permissions.last { $0.turnedOff == true }?.allowed, false)
+        XCTAssertFalse(model.settings.macMayStartRecording(paired.id, pairedAt: paired.pairedAt))
+        // Turned on again here, it stands: asked again (its answer was lost), it's only answered.
+        model.settings.setMacMayStartRecording(true, for: paired.id, pairedAt: paired.pairedAt)
+        let answered = inbox.permissions.filter { $0.turnedOff == true }.count
+        try await service.send(.recordPermission(LinkRecordPermission(allowed: true, asksReceiverOff: true)))
+        try await waitUntil("answered again") { inbox.permissions.filter { $0.turnedOff == true }.count == answered + 1 }
+        XCTAssertEqual(inbox.permissions.last { $0.turnedOff == true }?.allowed, true)
+        XCTAssertTrue(model.settings.macMayStartRecording(paired.id, pairedAt: paired.pairedAt))
     }
 
     func testBehaviorStopOnAMacStopsItWhenItStopsForPages() async throws {

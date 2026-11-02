@@ -36,6 +36,9 @@ final class LinkWireTests: XCTestCase {
             .app(.processingProgress(LinkProcessingProgress(meetingID: id, phase: .summarizing, fraction: 0.5, macName: "M",
                                                             cloudModel: "Claude Sonnet 5.5"))),
             .app(.summaryChoice(LinkSummaryChoice(meetingID: id, choice: .useCloud, sentAt: t0))),
+            .app(.recordPermission(LinkRecordPermission(allowed: false, sentAt: t0))),
+            .app(.recordPermission(LinkRecordPermission(allowed: true, asksReceiverOff: true, sentAt: t0))),
+            .app(.recordPermission(LinkRecordPermission(allowed: false, turnedOff: true, sentAt: t0))),
             .app(.libraryKeyRequest(LinkLibraryKeyRequest(libraryID: id, keyIDs: [String(repeating: "a", count: 32)]))),
             .app(.libraryKeyGrant(LinkLibraryKeyGrant(libraryID: id, keyID: String(repeating: "a", count: 32), key: Data(repeating: 7, count: 32)))),
             .recordRequest(LinkRecordRequest(action: .stop, conversationID: id, timing: LinkTiming(startedAt: t0, elapsed: 60),
@@ -132,6 +135,9 @@ final class LinkWireTests: XCTestCase {
         // A build without `processing.choice` ignores it as an unknown type.
         let choice = try LinkWire.encode(.app(.summaryChoice(LinkSummaryChoice(meetingID: meeting, choice: .startNow))), version: 1)
         XCTAssertTrue(String(decoding: choice, as: UTF8.self).contains(#""type":"processing.choice""#))
+        // `record.permission` without the Mac's one-time ask reads as just the sender's own.
+        let permission = try LinkWire.decode(Data(#"{"v":1,"type":"record.permission","body":{"allowed":false,"sentAt":1800000000}}"#.utf8))
+        XCTAssertEqual(permission.message, .app(.recordPermission(LinkRecordPermission(allowed: false, sentAt: Date(timeIntervalSince1970: 1_800_000_000)))))
     }
 
     func testOlderPeersMissingOptionalFieldsStillDecode() throws {

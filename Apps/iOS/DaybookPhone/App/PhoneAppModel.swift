@@ -224,6 +224,12 @@ final class PhoneAppModel: RecordingCommandHandling {
         self.devices.cascade.onChange = { [weak self] in self?.sendRecordingState(force: true) }
         if !LaunchOptions.isTestHost { cascadeNotices = .app }
         self.link.onLibraryKeyMessage = { [weak self] message, mac in self?.libraryKeyMessage(message, from: mac) }
+        self.link.onRecordPermission = { [weak self] mac, permission in self?.macSaidRecordPermission(permission, from: mac) }
+        // Each connected Mac hears whether it may start recording here as that changes (its Can Start Recording, or
+        // Recording with Your Mac).
+        watches.append(ObservationWatch.distinctValues(of: { [weak self] in
+            self.map { model in Dictionary(model.link.macs.map { ($0.id, model.letsMacStartRecording($0)) }, uniquingKeysWith: { a, _ in a }) } ?? [:]
+        }, initial: false) { [weak self] _ in self?.sendRecordPermissions() })
         self.devices.onImported = { [weak self] filed in self?.filedElsewhere(filed) }
         wireRecorderHandoff()
         // Macs hear what the recorders this iPhone manages are doing, when that changes.
@@ -973,6 +979,10 @@ final class PhoneAppModel: RecordingCommandHandling {
                 entry.startedAt = ack.startedAt
                 entry.startedByPhone = !ack.wasAlreadyRecording
             }
+        case .failure(.refused(let refusal)) where cascade != nil && refusal.reason == .declined:
+            // Asked on its own, it said no as the person set it to (its Can start recording for this iPhone): their
+            // choice, so nothing is said, as for a Mac known not to take it.
+            multipoint?.macs.removeAll { $0.id == macID }
         case .failure(let failure):
             let message = failure.message(mac: mac.name)
             multipoint?.update(macID) { $0.state = failure == .unreachable ? .noAnswer(message) : .failed(message) }
@@ -1031,9 +1041,10 @@ final class PhoneAppModel: RecordingCommandHandling {
         startedFromMac == macID || multipoint?.macs.contains(where: { $0.id == macID }) == true
     }
 
-    /// A Mac connected: it hears this iPhone's recording state at once, and a stop that didn't reach
-    /// it before goes now.
+    /// A Mac connected: it hears this iPhone's recording state and whether it may start recording here at
+    /// once, and a stop that didn't reach it before goes now.
     private func macConnected(_ macID: UUID) {
+        sendRecordPermission(to: macID)
         sendRecordingState(force: true)
         sendPendingStop(to: macID)
         macConnectedDuringCascade(macID)
@@ -1078,6 +1089,34 @@ final class PhoneAppModel: RecordingCommandHandling {
         }
     }
 
+    // MARK: Can Start Recording, both ways
+
+    /// Whether a Mac may start a recording here (and stop one from its page): Recording with Your Mac, and its own
+    /// Can Start Recording.
+    func letsMacStartRecording(_ mac: PhoneLink.Mac) -> Bool {
+        settings.acceptsMacRecordRequests && settings.macMayStartRecording(mac.id, pairedAt: mac.pairedAt)
+    }
+
+    /// Tells a connected Mac that takes it whether it may start recording here; `turnedOff` answers its ask to keep an
+    /// off it had (`LinkRecordPermission.asksReceiverOff`).
+    func sendRecordPermission(to macID: UUID, turnedOff: Bool = false) {
+        guard let mac = link.macs.first(where: { $0.id == macID }) else { return }
+        link.sendRecordPermission(LinkRecordPermission(allowed: letsMacStartRecording(mac), turnedOff: turnedOff ? true : nil), to: macID)
+    }
+
+    private func sendRecordPermissions() {
+        for mac in link.connectedMacs { sendRecordPermission(to: mac.id) }
+    }
+
+    /// A Mac said whether this iPhone may start a recording there (`PhoneLink.Mac.takesStartsFromHere` keeps it). One
+    /// that had Record along with this Mac off for this iPhone in an earlier build asks it to keep that off: Can Start
+    /// Recording for it goes off here (once for this pairing), and the Mac hears it's taken.
+    private func macSaidRecordPermission(_ permission: LinkRecordPermission, from macID: UUID) {
+        guard permission.asksReceiverOff == true, let mac = link.macs.first(where: { $0.id == macID }) else { return }
+        settings.takeMacOff(mac.id, pairedAt: mac.pairedAt)
+        sendRecordPermission(to: macID, turnedOff: true)
+    }
+
     /// A Mac's record request: start recording its conversation here (with its timing), or stop.
     func answer(_ mac: PhoneLink.Mac, _ request: LinkRecordRequest) async -> LinkRecordReply.Outcome {
         // A recorder this iPhone manages, which the Mac records along with through it. A stop names the
@@ -1097,7 +1136,8 @@ final class PhoneAppModel: RecordingCommandHandling {
             guard settings.acceptsMacRecordRequests else {
                 return .refused(LinkRecordRefusal(reason: .declined, message: "Recording with a Mac is turned off on this iPhone."))
             }
-            // Can Start Recording for that Mac: the one thing that decides whether it records here when it starts.
+            // Can Start Recording for that Mac: the one thing that decides whether it records here when it starts, as
+            // the Mac's own does for this iPhone's starts.
             guard settings.macMayStartRecording(mac.id, pairedAt: mac.pairedAt) else {
                 return .refused(LinkRecordRefusal(reason: .declined, message: PairingWords.notAllowedToStart(asker: .mac)))
             }
@@ -1142,7 +1182,11 @@ final class PhoneAppModel: RecordingCommandHandling {
             return .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: recorder.startedAt ?? Date(),
                                            recordingID: recordingID, wasAlreadyRecording: false))
         case .stop:
-            if !recorder.isActive, let only = recorderOnly, only.conversationID == request.conversationID, mayStop(mac.id) {
+            // The Mac this recording is with (the one that started it, or one this iPhone asked to record), or that
+            // Mac's page (Stop on iPhone, a standalone stop) when it can start recording here, as on the Mac.
+            let shared = mayStop(mac.id)
+            let fromPage = request.isStandalone && letsMacStartRecording(mac)
+            if !recorder.isActive, let only = recorderOnly, only.conversationID == request.conversationID, shared || fromPage {
                 // Only its recorder records this conversation: it stops with the Mac.
                 Task { await self.endRecorderOnly(because: nil) }
                 return .accepted(LinkRecordAck(conversationID: request.conversationID, stoppedAt: Date()))
@@ -1150,13 +1194,14 @@ final class PhoneAppModel: RecordingCommandHandling {
             guard recorder.isActive, recorder.captureID == request.conversationID else {
                 return .refused(LinkRecordRefusal(reason: .notRecording, conversationID: recorder.captureID))
             }
-            // Only the Mac this recording is with: the one that started it, or one this iPhone asked to record.
-            guard mayStop(mac.id) else {
-                return .refused(LinkRecordRefusal(reason: .declined, message: "This recording was started on the iPhone. Stop it there."))
+            guard shared || fromPage else {
+                return .refused(LinkRecordRefusal(reason: .declined, message: request.isStandalone
+                    ? PairingWords.notAllowedToStop(asker: .mac) : "This recording was started on the iPhone. Stop it there."))
             }
             let stoppedAt = Date(), stopped = recordingID
-            // Answer now; finishing and filing a long recording can outlast the request's timeout.
-            stopIsFromMac = true
+            // Answer now; finishing and filing a long recording can outlast the request's timeout. A stop from the Mac
+            // it records with doesn't go back to it; one from another Mac's page goes on to the Mac this recording is with.
+            stopIsFromMac = shared
             Task { try? await self.stopRecording() }
             return .accepted(LinkRecordAck(conversationID: request.conversationID, stoppedAt: stoppedAt, recordingID: stopped))
         default:

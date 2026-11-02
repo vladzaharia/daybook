@@ -121,6 +121,49 @@ final class CascadingRecordingTests: XCTestCase {
         try await eventually("the Mac stops too") { await macRecorder.recording == nil }
     }
 
+    /// A Mac's Can start recording for this iPhone off is the person's choice there: a start this iPhone asks on its own
+    /// that the Mac declines is taken quietly, a Mac that said so isn't asked at all, and only a start the person chose
+    /// for that Mac (Record on Studio Mac too) says why, with the fix.
+    func testBehaviorAMacThatDoesntLetThisIPhoneStartIsntAskedAndItsDeclineIsQuiet() async throws {
+        let mac = try await makeMac(features: [LinkCapabilities.cascadeFeature, LinkCapabilities.sharedNotesFeature,
+                                               LinkCapabilities.recordPermissionFeature])
+        let requests = LinkServicesTests.RequestLog()
+        await mac.service.setRecordControlHandler { _, request in
+            requests.append(request)
+            return .refused(LinkRecordRefusal(reason: .declined, message: PairingWords.notAllowedToStart(asker: .iPhone)))
+        }
+        let link = makeLink()
+        let rig = RecorderRig()
+        let model = try makeModel(link: link, rig: rig)
+        try await pair(link, with: mac)
+
+        // An earlier Mac's decline, or one that crossed its word: asked, and quiet.
+        try await model.startRecording()
+        rig.pump(1)
+        try await waitUntil("asked on its own") { requests.all.count == 1 }
+        try await waitUntil("its answer") { model.multipoint?.macs.isEmpty ?? true }
+        XCTAssertNil(model.notice, "nothing asks the person to undo their choice")
+        XCTAssertNil(model.multipointLine)
+        // Record on Studio Mac too, chosen by the person: why, and the fix.
+        await model.recordOnMac(mac.id)
+        XCTAssertEqual(model.notice, PairingWords.notAllowedToStart(asker: .iPhone))
+        rig.pump(1)
+        try await model.stopRecording()
+        model.dismissNotice()
+
+        // It said so: not asked at all.
+        try await mac.service.send(.recordPermission(LinkRecordPermission(allowed: false)))
+        try await waitUntil("its word") { link.macs.first?.takesStartsFromHere == false }
+        let asked = requests.all.count
+        try await model.startRecording()
+        rig.pump(1)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(requests.all.count, asked)
+        XCTAssertNil(model.notice)
+        rig.pump(1)
+        try await model.stopRecording()
+    }
+
     func testAMacLedRecordingStoppedHereStopsTheMacButNotWhenTheMacStoppedIt() async throws {
         let mac = try await makeMac()
         let link = makeLink()

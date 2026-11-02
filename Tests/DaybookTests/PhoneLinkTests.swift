@@ -385,19 +385,138 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertEqual(rig.state.sources.recorders.status, "\(PhoneLinkRig.phoneName) stopped. Its recording will be added here.")
 
         // Can start recording off for the phone here says only whether it may start a recording on this Mac: it's
-        // still asked, and its own Can Start Recording for this Mac answers, in the words both apps use.
+        // still asked, and its own Can Start Recording for this Mac answers. That off is the person's choice, so the
+        // decline is taken quietly: no failed link, and nothing asks them to undo it.
         rig.state.devices.session(phone.phoneID.uuidString)?.update { $0.alsoRecordsWithMac = false }
         phone.recorder.answer = { _ in .refused(LinkRecordRefusal(reason: .declined, message: PairingWords.notAllowedToStart(asker: .mac))) }
         let other = macStartsRecording(rig)
         await rig.state.sources.recorders.settle()
         XCTAssertEqual(phone.recorder.requests.map(\.action), [.start, .stop, .start])
-        XCTAssertEqual(rig.meeting(other)?.companions?.first?.state, .failed)
-        XCTAssertEqual(rig.state.sources.recorders.status,
-                       "\(PhoneLinkRig.phoneName) didn’t record. \(PairingWords.notAllowedToStart(asker: .mac)) Recording on this Mac only.")
+        XCTAssertEqual(rig.meeting(other)?.companions ?? [], [], "nothing kept of a phone that declined as it was set to")
+        XCTAssertNil(rig.state.sources.recorders.status)
         XCTAssertFalse(rig.state.isRecording(other, with: phone.phoneID.uuidString), "a phone that declined isn't recording along")
         macStopsRecording(rig, other)
         await rig.state.sources.recorders.settle()
         XCTAssertEqual(phone.recorder.requests.count, 3, "it isn't recording, so it isn't stopped")
+
+        // A refusal for any other reason is still said.
+        phone.recorder.answer = { _ in .refused(LinkRecordRefusal(reason: .microphoneUnavailable)) }
+        let third = macStartsRecording(rig)
+        await rig.state.sources.recorders.settle()
+        XCTAssertEqual(rig.meeting(third)?.companions?.first?.state, .failed)
+        XCTAssertEqual(rig.state.sources.recorders.status,
+                       "\(PhoneLinkRig.phoneName) didn’t record. Its microphone isn’t available. Recording on this Mac only.")
+        macStopsRecording(rig, third)
+    }
+
+    /// Each says whether the other may start a recording on it (Can start recording), so neither asks only to be
+    /// declined: a phone that said no for this Mac isn't asked, and nothing is said or kept of it.
+    func testBehaviorAPhoneThatSaysItWontRecordForThisMacIsntAskedAndHearsThisMacsOwn() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        XCTAssertTrue(state.phoneLink.identity.features.contains(LinkCapabilities.recordPermissionFeature))
+        let phone = try await PhoneLinkRig.connect(state, features: [LinkCapabilities.recordPermissionFeature])
+        defer { Task { await phone.tearDown(state) } }
+        // As it connects it hears this Mac's Can start recording for it, and again when that changes.
+        try await waitUntil("this Mac's word") { phone.events.permissions.map(\.allowed) == [true] }
+        XCTAssertNil(phone.events.permissions.first?.asksReceiverOff, "nothing owed")
+        state.devices.session(phone.phoneID.uuidString)?.update { $0.alsoRecordsWithMac = false }
+        try await waitUntil("the change") { phone.events.permissions.map(\.allowed) == [true, false] }
+        state.devices.session(phone.phoneID.uuidString)?.update { $0.alsoRecordsWithMac = true }
+        try await waitUntil("on again") { phone.events.permissions.map(\.allowed) == [true, false, true] }
+
+        // Its own Can Start Recording for this Mac is off: it isn't asked.
+        try await phone.client.send(.recordPermission(LinkRecordPermission(allowed: false)), to: phone.macID)
+        try await waitUntil("its word") { state.phoneLink.recordPermissions[phone.phoneID] == false }
+        let control = try XCTUnwrap(state.devices.session(phone.phoneID.uuidString)?.direct as? PhoneLinkConnection)
+        XCTAssertFalse(control.takesStarts)
+        let id = macStartsRecording(rig)
+        await state.sources.recorders.settle()
+        XCTAssertTrue(phone.recorder.requests.isEmpty)
+        XCTAssertNil(rig.meeting(id)?.companions)
+        XCTAssertNil(state.sources.recorders.status)
+        macStopsRecording(rig, id)
+        await state.sources.recorders.settle()
+
+        // On again there: it's asked.
+        try await phone.client.send(.recordPermission(LinkRecordPermission(allowed: true)), to: phone.macID)
+        try await waitUntil("its word") { state.phoneLink.recordPermissions[phone.phoneID] == true }
+        let next = macStartsRecording(rig)
+        await state.sources.recorders.settle()
+        XCTAssertEqual(phone.recorder.requests.map(\.action), [.start])
+        XCTAssertEqual(rig.meeting(next)?.companions?.first?.state, .recording)
+        macStopsRecording(rig, next)
+        await state.sources.recorders.settle()
+    }
+
+    /// An iPhone whose Record along with this Mac was off here before Can start recording said one way keeps that off:
+    /// this Mac doesn't ask it to record, asks it to take the off as its own once they connect, and leaves the choice to
+    /// it once it has. Nothing tells the person to turn anything on.
+    func testBehaviorAPhoneSwitchedOffBeforeTheChangeIsntAskedAndTakesItsOff() async throws {
+        let rig = try await rig()
+        let phone = try await PhoneLinkRig.connect(rig.state, features: [LinkCapabilities.recordPermissionFeature])
+        // As an earlier build left it: the switch off here, nothing carried over yet.
+        rig.state.devices.session(phone.phoneID.uuidString)?.update { $0.alsoRecordsWithMac = false }
+        rig.defaults.removeObject(forKey: AppState.recordAlongCarriedOverKey)
+        await phone.client.disconnect(from: phone.macID)
+        await rig.state.phoneLink.shutDown()
+        await rig.state.flush()
+
+        // This build opens.
+        let relaunched = AppState(libraryURL: rig.root, defaults: rig.defaults)
+        PhoneLinkRig.useLoopback(relaunched, keyStore: phone.macKeyStore)
+        await relaunched.initialize()
+        defer { Task { await phone.client.disconnect(from: phone.macID); await relaunched.phoneLink.shutDown() } }
+        let again = MultiSourceRig(state: relaunched, root: rig.root, defaults: rig.defaults, suite: rig.suite)
+        let session = try XCTUnwrap(relaunched.devices.session(phone.phoneID.uuidString))
+        XCTAssertEqual(session.device.recordAlongOffOwed, true)
+        XCTAssertFalse(session.device.recordsAlongsideMac, "it still may not start recording here")
+
+        try await phone.reconnect(to: relaunched)
+        try await waitUntil("the off it owes") { phone.events.permissions.contains { $0.asksReceiverOff == true && !$0.allowed } }
+        let id = macStartsRecording(again)
+        await relaunched.sources.recorders.settle()
+        XCTAssertTrue(phone.recorder.requests.isEmpty, "not asked while the off is owed")
+        XCTAssertNil(relaunched.meetings.first { $0.id == id }?.companions)
+        XCTAssertNil(relaunched.sources.recorders.status)
+        macStopsRecording(again, id)
+        await relaunched.sources.recorders.settle()
+
+        // A word that doesn't answer the ask (it crossed it) leaves the off owed.
+        try await phone.client.send(.recordPermission(LinkRecordPermission(allowed: true)), to: phone.macID)
+        try await waitUntil("its word") { relaunched.phoneLink.recordPermissions[phone.phoneID] == true }
+        XCTAssertEqual(session.device.recordAlongOffOwed, true)
+        // The phone took it: the choice is the phone's from now on.
+        try await phone.client.send(.recordPermission(LinkRecordPermission(allowed: false, turnedOff: true)), to: phone.macID)
+        try await waitUntil("taken") { session.device.recordAlongOffOwed == nil }
+        XCTAssertFalse(session.device.recordsAlongsideMac)
+        // Turned on there later: it's asked.
+        try await phone.client.send(.recordPermission(LinkRecordPermission(allowed: true)), to: phone.macID)
+        try await waitUntil("its word") { relaunched.phoneLink.recordPermissions[phone.phoneID] == true }
+        let next = macStartsRecording(again)
+        await relaunched.sources.recorders.settle()
+        XCTAssertEqual(phone.recorder.requests.map(\.action), [.start])
+        macStopsRecording(again, next)
+        await relaunched.sources.recorders.settle()
+    }
+
+    /// Only an off set in an earlier build is carried over, and only once: a phone switched off since isn't owed it.
+    func testBehaviorOnlyAnOffFromBeforeTheChangeIsCarriedOver() async throws {
+        let rig = try await rig()
+        let phoneID = UUID()
+        var off = ConfiguredDevice(id: phoneID.uuidString, kind: DaybookPhoneIntegration().kind, name: PhoneLinkRig.phoneName)
+        off.alsoRecordsWithMac = false
+        rig.state.devices.add(off)
+        let on = ConfiguredDevice(id: UUID().uuidString, kind: DaybookPhoneIntegration().kind, name: "Other iPhone")
+        rig.state.devices.add(on)
+        await rig.state.flush()
+        XCTAssertTrue(rig.defaults.bool(forKey: AppState.recordAlongCarriedOverKey), "carried over when this build first opened")
+        let relaunched = AppState(libraryURL: rig.root, defaults: rig.defaults)
+        defer { Task { await relaunched.phoneLink.shutDown() } }
+        let switchedOff = try XCTUnwrap(relaunched.devices.session(phoneID.uuidString)?.device)
+        XCTAssertEqual(switchedOff.alsoRecordsWithMac, false)
+        XCTAssertNil(switchedOff.recordAlongOffOwed, "switched off since: its Can start recording here, nothing more")
+        XCTAssertNil(try XCTUnwrap(relaunched.devices.session(on.id)?.device).recordAlongOffOwed)
     }
 
     func testTheMacTellsPhonesWhatItRecordsAsItChangesWhileItRecordsAndAsTheyConnect() async throws {
@@ -534,7 +653,7 @@ final class PhoneLinkTests: XCTestCase {
         let id = macStartsRecording(rig)
         await state.sources.recorders.settle()
         XCTAssertEqual(phone.recorder.requests.map(\.action), [.start])
-        XCTAssertEqual(rig.meeting(id)?.companions?.first?.state, .failed)
+        XCTAssertNil(rig.meeting(id)?.companions?.first)
 
         // Off: the phone's page can't stop it, and says how to allow it.
         let refused = try await phone.client.request(LinkRecordRequest(action: .stop, conversationID: id, standalone: true), from: phone.macID)

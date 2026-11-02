@@ -71,7 +71,24 @@ final class PhoneSettings {
         macRecordDecisions[macID.uuidString] = MacRecordDecision(allowed: allowed, pairedAt: pairedAt)
     }
 
-    func forgetMacRecordDecision(_ macID: UUID) { macRecordDecisions[macID.uuidString] = nil }
+    func forgetMacRecordDecision(_ macID: UUID) {
+        macRecordDecisions[macID.uuidString] = nil
+        takenMacOffs[macID.uuidString] = nil
+    }
+
+    /// Macs whose off from an earlier build this iPhone has taken (`takeMacOff`), by pairing.
+    private var takenMacOffs: [String: Date] {
+        didSet { defaults.set(try? JSONEncoder().encode(takenMacOffs), forKey: Keys.takenMacOffs) }
+    }
+
+    /// A Mac asks this iPhone to keep the off it had for it (its Record along with this Mac, in a build where that kept
+    /// the Mac from asking): Can Start Recording for that Mac goes off, once for this pairing, so turning it on again
+    /// here stands.
+    func takeMacOff(_ macID: UUID, pairedAt: Date) {
+        if let taken = takenMacOffs[macID.uuidString], abs(taken.timeIntervalSince(pairedAt)) < 0.001 { return }
+        takenMacOffs[macID.uuidString] = pairedAt
+        setMacMayStartRecording(false, for: macID, pairedAt: pairedAt)
+    }
 
     @ObservationIgnored private let defaults: UserDefaults
 
@@ -94,6 +111,7 @@ final class PhoneSettings {
         encryptsOverCellular = defaults.bool(forKey: Keys.encryptsOverCellular)
         macRecordDecisions = defaults.data(forKey: Keys.macRecordDecisions)
             .flatMap { try? JSONDecoder().decode([String: MacRecordDecision].self, from: $0) } ?? [:]
+        takenMacOffs = defaults.data(forKey: Keys.takenMacOffs).flatMap { try? JSONDecoder().decode([String: Date].self, from: $0) } ?? [:]
         if let since = defaults.object(forKey: Keys.macRecordDecisionsSince) as? Date {
             macRecordDecisionsSince = since
         } else {
@@ -117,5 +135,6 @@ final class PhoneSettings {
         static let encryptsOverCellular = "phone.encryptsOverCellular"
         static let macRecordDecisions = "phone.macRecordDecisions"
         static let macRecordDecisionsSince = "phone.macRecordDecisionsSince"
+        static let takenMacOffs = "phone.takenMacOffs"
     }
 }

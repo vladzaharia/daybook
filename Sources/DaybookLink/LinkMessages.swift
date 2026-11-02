@@ -365,6 +365,10 @@ extension LinkCapabilities {
     /// Counts down before summarizing and says so (`processing.progress` with `summaryCountdown`), and takes
     /// the person's choice from the other device (`processing.choice`: Use the Cloud, Start Now).
     public static let summaryPlacementFeature = "summaryPlacement"
+    /// Says whether the other device may start a recording on it, its Can start recording for that device
+    /// (`record.permission`), as a session begins and whenever that changes, and takes the other's: a device
+    /// doesn't ask one that wouldn't record for it.
+    public static let recordPermissionFeature = "recordPermission"
 
     public var controlsRecorders: Bool { features.contains(Self.recorderControlFeature) }
     public var cascades: Bool { features.contains(Self.cascadeFeature) }
@@ -373,6 +377,7 @@ extension LinkCapabilities {
     public var showsLevels: Bool { features.contains(Self.liveLevelsFeature) }
     public var placesSummaries: Bool { features.contains(Self.summaryPlacementFeature) }
     public var stopsForPages: Bool { features.contains(Self.pageStopFeature) }
+    public var tellsRecordPermission: Bool { features.contains(Self.recordPermissionFeature) }
 }
 
 /// The receiver did what was asked.
@@ -733,6 +738,29 @@ public struct LinkSummaryChoice: Codable, Sendable, Equatable {
     }
 }
 
+/// A device's Can start recording for the device it's sent to (`PairingWords.canStartRecording`): whether that device may
+/// start a recording on the sender, and stop one from its page. Sent as a session begins and whenever it changes, to a
+/// peer listing `recordPermissionFeature`, so neither asks the other to record when it would only be declined.
+public struct LinkRecordPermission: Codable, Sendable, Equatable {
+    /// The receiver may start a recording on the sender.
+    public var allowed: Bool
+    /// From a Mac only, until the iPhone holds it: the Mac's person turned Record along with this Mac off for the
+    /// iPhone in a build where that also kept the Mac from asking it to record, a choice now the iPhone's own Can Start
+    /// Recording for that Mac. The iPhone turns that off (once for each pairing) and answers with `turnedOff`.
+    public var asksReceiverOff: Bool?
+    /// The answer to `asksReceiverOff`: the sender has turned its own off as asked, so the receiver owes it nothing more.
+    public var turnedOff: Bool?
+    /// When this was sent, on the sender's clock.
+    public var sentAt: Date
+
+    public init(allowed: Bool, asksReceiverOff: Bool? = nil, turnedOff: Bool? = nil, sentAt: Date = Date()) {
+        self.allowed = allowed
+        self.asksReceiverOff = asksReceiverOff
+        self.turnedOff = turnedOff
+        self.sentAt = sentAt
+    }
+}
+
 /// "I just wrote this processing request." The request itself travels through sync; this only
 /// tells a Mac that's listening to look now instead of at the next sync pass.
 public struct LinkProcessingNudge: Codable, Sendable, Equatable {
@@ -791,4 +819,7 @@ public enum LinkMessage: Sendable, Equatable {
     /// The person's choice on a phone for a summary a Mac counts down to (`summaryPlacementFeature`).
     /// Additive within version 1: an older build ignores it.
     case summaryChoice(LinkSummaryChoice)
+    /// The sender's Can start recording for the receiver (`recordPermissionFeature`). Additive within version 1: an
+    /// older build ignores it.
+    case recordPermission(LinkRecordPermission)
 }

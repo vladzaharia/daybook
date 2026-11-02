@@ -93,18 +93,28 @@ final class CascadingRecordingTests: XCTestCase {
         _ = try await phone.client.request(LinkRecordRequest(action: .stop, conversationID: conversation), from: phone.macID)
         XCTAssertNil(rig.state.recordingID)
 
-        // Can start recording off for Pocket iPhone on this Mac: its cascading starts are declined, while a
-        // start the person chose on the phone for this Mac still records.
+        // Can start recording off for Pocket iPhone on this Mac: every start it asks for is declined, as the iPhone
+        // declines every start from a Mac it's off for: one it asks on its own, one the person chose on the phone
+        // for this Mac (Record on Studio Mac too), and one from its page for this Mac.
         rig.state.devices.session(phone.phoneID.uuidString)?.update { $0.alsoRecordsWithMac = false }
+        let refusal = LinkRecordReply.Outcome.refused(LinkRecordRefusal(reason: .declined, message: PairingWords.notAllowedToStart(asker: .iPhone)))
         let (_, declined) = try await phoneStarts(phone)
-        XCTAssertEqual(declined, .refused(LinkRecordRefusal(reason: .declined, message: PairingWords.notAllowedToStart(asker: .iPhone))))
+        XCTAssertEqual(declined, refusal)
+        let chosen = try await phone.client.request(LinkRecordRequest(action: .start, conversationID: UUID(),
+                                                                      timing: LinkTiming(startedAt: Date())), from: phone.macID)
+        XCTAssertEqual(chosen.outcome, refusal)
+        let page = try await phone.client.request(LinkRecordRequest(action: .start, conversationID: UUID(), standalone: true), from: phone.macID)
+        XCTAssertEqual(page.outcome, refusal)
         XCTAssertNil(rig.state.recordingID)
-        let chosen = UUID()
-        let reply = try await phone.client.request(LinkRecordRequest(action: .start, conversationID: chosen,
+
+        // On again: a start the person chose records.
+        rig.state.devices.session(phone.phoneID.uuidString)?.update { $0.alsoRecordsWithMac = true }
+        let allowed = UUID()
+        let reply = try await phone.client.request(LinkRecordRequest(action: .start, conversationID: allowed,
                                                                      timing: LinkTiming(startedAt: Date())), from: phone.macID)
         guard case .accepted = reply.outcome else { return XCTFail("\(reply.outcome)") }
-        XCTAssertEqual(rig.state.recordingID, chosen)
-        _ = try await phone.client.request(LinkRecordRequest(action: .stop, conversationID: chosen), from: phone.macID)
+        XCTAssertEqual(rig.state.recordingID, allowed)
+        _ = try await phone.client.request(LinkRecordRequest(action: .stop, conversationID: allowed), from: phone.macID)
     }
 
     // MARK: Stopping anywhere

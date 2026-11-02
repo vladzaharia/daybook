@@ -210,7 +210,8 @@ final class AppState {
     let liveModels: MacLiveModels
     let monitor = MeetingMonitor()
     let storageURL: URL
-    private let preferences: UserDefaults
+    /// This Mac's preferences (the app's, or a test's own suite).
+    let preferences: UserDefaults
     /// Cloud summaries' keys, models, and this Mac's preferences (Settings › Cloud; docs/cloud.md): the one place the
     /// summary step reads them. Made when first used (Settings, or a summary step), so a launch that never needs it
     /// never reads the keychain. Demos and tests set their own (`CloudSetup.demo`).
