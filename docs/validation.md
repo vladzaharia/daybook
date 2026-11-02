@@ -1,5 +1,52 @@
 # Validation record
 
+## The Mac app's lifecycle: the copy a library move opens, and quitting (2026-11-02)
+
+Review fixes to the wave 2 Mac app work (MSQ-01, MSQ-23, MSQ-21, HIG-24).
+
+- **The copy a library move opens froze.** `SingleInstance.ensureOnlyCopy` awaited the old copy's exit. Past that
+  `await`, the async `DaybookEntry.main` ran the app inside one main-queue job, where no main-actor task ran: the
+  library never opened, and Quit never finished. Everything before `DaybookApp.main()` is synchronous again, and the
+  wait blocks (`kill(pid, 0)` every 20 ms). The new copy sets AppKit up before it waits. That checks it in with Launch
+  Services, which is what answers the old copy's `openApplication`, so the old copy starts quitting at once, not after
+  the new one's 10 s limit.
+- **The old copy couldn't quit.** `NSApp.terminate` called from a main-actor task never finished while the delegate
+  answered `.terminateLater` and did its work in a main-actor task. Quits from tasks (`AppRelaunch`, its "Couldn’t
+  Reopen Daybook", declining a library move) call `NSApp.terminateFromRunLoop()`.
+- **A second quit cut the stop short.** While `.terminateLater` is pending, AppKit quits at once on another quit
+  without asking the delegate. An ordinary quit is now turned down while its work runs, then asked again from the run
+  loop and answered `.terminateNow`. Logout, restart, and shutdown still get `.terminateLater`, told apart by the quit
+  event's `kAEQuitReason` instead of a flag that never reset.
+- **A capture's warning replaced why a recording stopped.** `finishCapture` adds its warnings as notice lines
+  (`post`), and so do the recorder's and the iPhone's stop reasons.
+- **Several rows to the Trash.** The neighbour is selected as the selected row's move returns, before the list's
+  `reconcileSelection` runs.
+
+**How it was verified.**
+
+- Launch checks of the debug build, `--library <scratch> --device-demo none --snapshot <dir> --snapshot-delay 3`. With
+  `--relaunched-from 999999`, it wrote its snapshot with the library open and exited in 5 s. With `--relaunched-from`
+  a process that ended 4 s later, it took 8 s. With neither, it took 4 s. Before the fix, the first run never wrote a
+  snapshot (the review's run was killed at 20 s). Sent two quit Apple events 0.2 s apart
+  (`NSRunningApplication.terminate()`, as the Dock's Quit does), the app quit within a second.
+- A minimal AppKit app with the delegate's shape quit from a main-actor task, with a second quit 0.7 s later. It
+  turned both down, finished its 2 s of work, was asked again, and quit. The old shape (`.terminateLater`, replied
+  from a task) never quit before its 8 s watchdog.
+- Tests: `AppStateTests` (the delegate turns down a second quit and answers a logout once the work is done; quit
+  reasons from constructed quit events; several rows to the Trash, with the list's reconciliation run between moves as
+  SwiftUI runs it, which fails on the old code), `SingleInstanceTests` (the blocking wait, including a process that
+  ends while it's waited for), and `CascadingRecordingTests`. In 20 runs of the cascading suite, 10 of them at
+  background QoS while other test runs shared the Mac, the stop-reason checks never failed. One background run took
+  50 s instead of the usual 4 to 6 and timed out at an earlier wait this change doesn't touch (the recorder's button
+  starting a second recording). That didn't happen again in the next 10 runs.
+- The whole `DaybookTests` target: 388 tests, 0 failures. An earlier full run under the same contention timed out
+  once in `SpeakerProfileProcessingTests.testGivingVoicesGivesWayToQueuedWork` (waiting for voices to start), which
+  then passed 5 runs of its own. It also caught `PhoneLinkTests` expecting a phone's second stop reason to replace
+  the first; it now expects both lines.
+
+**Still needs a person.** A real library move in a bundled build (the new copy opens with the library, the old one
+quits, one Dock icon), and a logout with a recording under way.
+
 ## Release review for 0.5.0 (2026-11-01)
 
 Window snapshots of the Mac (library, summary, transcript, inspector, the summary countdown, Upgrade, Floating Notes,
