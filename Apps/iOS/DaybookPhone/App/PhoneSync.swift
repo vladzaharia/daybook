@@ -363,7 +363,7 @@ final class PhoneSync {
 
     /// iCloud has no room for what this iPhone sends: a pass found iCloud refusing it, or the courier is refused while
     /// its sends wait (they share the quota). Read live, so it goes as soon as either finds room.
-    var isStorageFull: Bool { isConnected && (controller?.status == .storageFull || courier.storageFull) }
+    var isStorageFull: Bool { isConnected && (controller?.isStorageFull == true || courier.storageFull) }
 
     /// What Settings › iCloud shows, in the words the Mac's iCloud Sync uses. `keyPeers`: the Macs that can send the
     /// library's key while this iPhone waits for it.

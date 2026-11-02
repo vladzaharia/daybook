@@ -210,5 +210,8 @@ final class ICloudSyncShownTests: XCTestCase {
         XCTAssertTrue(ICloudSyncConfirmation.erase.isDestructive)
         XCTAssertEqual(ICloudSyncConfirmation.turnOff.title, "Stop syncing this Mac?")
         XCTAssertEqual(ICloudSyncConfirmation.startOver.message, LibraryWords.startOverConsequence)
+        // Get Key from a device that can't be reached, the same on both apps.
+        XCTAssertEqual(ICloudSyncShown.couldntReach("Alex’s iPhone"),
+                       "Couldn’t reach Alex’s iPhone. Make sure both are on the same Wi‑Fi, then try again.")
     }
 }

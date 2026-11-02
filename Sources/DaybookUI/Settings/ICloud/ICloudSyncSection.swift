@@ -10,8 +10,8 @@ public struct ICloudSyncActions {
     public var tryAgain: @MainActor () -> Void
     /// Sync with This Account, once the person has confirmed it (`LibrarySyncController.useCurrentICloudAccount`).
     public var useCurrentAccount: @MainActor () -> Void
-    /// Get Key from a device that holds the library's key.
-    public var requestKey: @MainActor (UUID) -> Void
+    /// Get Key from a device that holds the library's key. Throws when that device can't be reached.
+    public var requestKey: @MainActor (UUID) async throws -> Void
     /// Where the person signs in or turns iCloud Drive on: the Mac's System Settings, the iPhone's Settings.
     public var openSettings: (@MainActor () -> Void)?
     /// Where iCloud storage is managed, when it's full (the Mac's Apple Account settings).
@@ -29,7 +29,7 @@ public struct ICloudSyncActions {
     public var deleteRetiredFolderJournal: (@MainActor () throws -> Void)?
 
     public init(syncNow: @escaping @MainActor () -> Void, tryAgain: @escaping @MainActor () -> Void,
-                useCurrentAccount: @escaping @MainActor () -> Void, requestKey: @escaping @MainActor (UUID) -> Void,
+                useCurrentAccount: @escaping @MainActor () -> Void, requestKey: @escaping @MainActor (UUID) async throws -> Void,
                 openSettings: (@MainActor () -> Void)? = nil, manageStorage: (@MainActor () -> Void)? = nil,
                 startNewLibrary: (@MainActor () async throws -> Void)? = nil, turnOn: (@MainActor () -> Void)? = nil,
                 turnOff: (@MainActor () -> Void)? = nil, choosePreviousFolderAgain: (@MainActor (URL?) -> Void)? = nil,
@@ -274,7 +274,7 @@ public struct ICloudSyncSection<DevicesRow: View, Extras: View>: View {
         case .waitingForKey:
             ProblemLine(text: ICloudSyncShown.waitingForKeyLine, symbol: "lock.icloud.fill") {
                 ForEach(shown.keyPeers) { peer in
-                    Button("Get Key from \(peer.name)") { actions.requestKey(peer.id) }
+                    Button("Get Key from \(peer.name)") { getKey(from: peer) }
                 }
                 Button("Enter Recovery Key…") { sheet = .enterRecoveryKey }
                 if shown.mayStartOverEncryption {
@@ -364,6 +364,17 @@ public struct ICloudSyncSection<DevicesRow: View, Extras: View>: View {
         Task {
             do { sheet = .recoveryKey(try await controller.createRecoveryKey()) } catch {
                 problem = SyncSettingsProblem(error: error, fallback: "A recovery key couldn’t be created. Try again.")
+            }
+        }
+    }
+
+    /// Asks a device for the library's key; one that can't be reached is said in the section's problem line.
+    private func getKey(from peer: ICloudSyncShown.KeyPeer) {
+        problem = nil
+        let request = actions.requestKey
+        Task {
+            do { try await request(peer.id) } catch {
+                problem = SyncSettingsProblem(message: ICloudSyncShown.couldntReach(peer.name))
             }
         }
     }

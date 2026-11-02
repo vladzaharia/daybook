@@ -57,10 +57,11 @@ struct SyncSettingsView: View {
             syncNow: { Task { await state.synchronizeLibrary() } },
             tryAgain: { sync.retryContainer() },
             useCurrentAccount: { sync.useCurrentICloudAccount() },
-            requestKey: { phone in Task { await state.requestLibraryKey(from: phone) } },
+            requestKey: { phone in try await state.requestLibraryKey(from: phone) },
             openSettings: Self.openAccountSettings,
             // iCloud's storage is managed from the Apple Account's iCloud settings.
             manageStorage: Self.openAccountSettings,
+            startNewLibrary: { try await sync.startNewLibrary() },
             turnOn: { sync.turnOnICloudSync() },
             turnOff: { sync.disconnect() },
             choosePreviousFolderAgain: { sync.choosePreviousFolderAgain(near: $0) },

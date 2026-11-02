@@ -233,7 +233,12 @@ public struct ICloudSyncShown: Equatable {
     public static let otherInstallationLine = "Daybook is also installed as an older app on this \(device). Delete the older app."
 
     /// The fix for a library that was removed from iCloud.
-    public static let startNewLibraryTitle = "Start a New Library in iCloud"
+    public static let startNewLibraryTitle = LibraryWords.startNewLibrary
+
+    /// Get Key from a device that couldn't be reached.
+    public static func couldntReach(_ name: String) -> String {
+        "Couldn’t reach \(name). Make sure both are on the same Wi‑Fi, then try again."
+    }
 
     /// While waiting for the library's key: how to get it.
     public static let waitingForKeyLine = "Turn on iCloud Keychain, or get the key from another device."

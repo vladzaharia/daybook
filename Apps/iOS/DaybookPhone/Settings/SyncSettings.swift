@@ -80,9 +80,10 @@ struct ICloudScreen: View {
             syncNow: { Task { await model.sync.synchronize(.manual) } },
             tryAgain: { Task { await model.refreshCloud() } },
             useCurrentAccount: { Task { await model.sync.useCurrentAccount() } },
-            requestKey: { mac in Task { await model.requestLibraryKey(from: mac) } },
+            requestKey: { mac in try await model.requestLibraryKey(from: mac) },
             // Settings can fix it (signing in, or iCloud Drive); a build without iCloud can't.
-            openSettings: model.cloud.settingsCanFix ? settings.map { url in { openURL(url) } } : nil)
+            openSettings: model.cloud.settingsCanFix ? settings.map { url in { openURL(url) } } : nil,
+            startNewLibrary: model.sync.controller.map { controller in { try await controller.startNewLibrary() } })
     }
 }
 

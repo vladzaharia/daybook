@@ -476,6 +476,87 @@ final class SyncServicesTests: XCTestCase {
         XCTAssertFalse(phone.sync.isUpToDate)
     }
 
+    func testBehaviorAFullICloudIsSaidBeforeWhatWaitsToUpload() async throws {
+        let container = try temporaryDirectory("container")
+        let quota = QuotaRefusal()
+        let cloud = SyncCloudFiles(requestDownload: { _ in }, isUploaded: { FileManager.default.fileExists(atPath: $0.path) },
+                                   uploadRefusedForQuota: { _ in quota.refusing })
+        let phone = try await makePhone(container, cloud: cloud)
+        await phone.sync.synchronize(.launch)
+        XCTAssertEqual(phone.sync.statusLine, "Up to date")
+        XCTAssertFalse(phone.sync.isStorageFull)
+
+        // iCloud refuses what this iPhone writes for lack of storage: the line says so, as the Mac's iCloud row does,
+        // and nothing reads as up to date while the recording waits.
+        quota.refusing = true
+        _ = try await record(into: phone)
+        await phone.sync.synchronize(.filed)
+        XCTAssertGreaterThan(phone.sync.pendingUploads, 0)
+        XCTAssertNil(phone.sync.lastError)
+        XCTAssertTrue(phone.sync.isStorageFull)
+        XCTAssertEqual(phone.sync.statusLine, "iCloud storage is full")
+        XCTAssertFalse(phone.sync.isUpToDate)
+        XCTAssertTrue(phone.sync.needsAttention)
+
+        // Room again: the next pass says so.
+        quota.refusing = false
+        await phone.sync.synchronize(.manual)
+        XCTAssertFalse(phone.sync.isStorageFull)
+        XCTAssertEqual(phone.sync.statusLine, "Up to date")
+        XCTAssertFalse(phone.sync.needsAttention)
+    }
+
+    /// The older app kept beside the one that replaced it reads this iPhone's identity from the keychain and syncs as it
+    /// too: Settings › iCloud says so, with what to do, until a day after it last synced.
+    func testBehaviorAnOlderAppSyncingAsThisIPhoneIsSaidUntilItStops() async throws {
+        let container = try temporaryDirectory("container")
+        let shared = StoredSyncIdentity(deviceID: "this-iphone", installation: "shared-installation")
+        let defaults = makeTestDefaults("SyncServicesTests")
+        let phone = try await makePhone(container, name: "New iPhone", defaults: defaults, identityStore: .memory(shared))
+        await phone.sync.synchronize(.launch)
+        XCTAssertFalse(phone.sync.shown().otherInstallation, "Nothing else syncs as this iPhone yet")
+
+        let older = try await makePhone(container, name: "Old iPhone", identityStore: .memory(shared))
+        await older.sync.synchronize(.launch)
+        await phone.sync.synchronize(.manual)
+        XCTAssertTrue(phone.sync.shown().otherInstallation)
+        XCTAssertEqual(ICloudSyncShown.otherInstallationLine, "Daybook is also installed as an older app on this iPhone. Delete the older app.")
+        XCTAssertEqual(phone.sync.statusLine, "Up to date", "Said in its own line: sync carries on")
+
+        // The older app is deleted. A day after it last synced (`LibrarySyncController.otherInstallationWindow`, kept in
+        // the controller's preferences), the warning goes on the next launch, and the line with it.
+        defaults.set(Date().addingTimeInterval(-2 * 86_400), forKey: "syncOtherInstallationWrote")
+        try phone.sync.connect(toFolder: container, monitor: false)
+        await phone.sync.synchronize(.launch)
+        XCTAssertNil(phone.sync.controller?.warning)
+        XCTAssertFalse(phone.sync.shown().otherInstallation)
+    }
+
+    func testBehaviorOnlyALibraryRemovedFromICloudOffersANewOne() async throws {
+        let container = try temporaryDirectory("container")
+        let phone = try await makePhone(container, keyStore: MemoryLibraryKeyStore())
+        await phone.sync.synchronize(.launch)
+        XCTAssertTrue(phone.sync.encryption.isOn, "A new library starts encrypted")
+        XCTAssertFalse(phone.sync.shown().offersNewLibrary(canStart: true))
+
+        // Someone deletes Daybook's data from iCloud: sync pauses, and Settings › iCloud offers the one way on.
+        for item in try FileManager.default.contentsOfDirectory(at: container, includingPropertiesForKeys: nil) {
+            try FileManager.default.removeItem(at: item)
+        }
+        await phone.sync.synchronize(.manual)
+        XCTAssertEqual(phone.sync.controller?.status, .libraryRemoved)
+        XCTAssertEqual(phone.sync.statusLine, "Sync paused")
+        XCTAssertTrue(phone.sync.shown().offersNewLibrary(canStart: true))
+        XCTAssertEqual(ICloudSyncShown.startNewLibraryTitle, "Start a New Library in iCloud", "As the Mac's button says it")
+
+        try await XCTUnwrap(phone.sync.controller).startNewLibrary()
+        XCTAssertFalse(phone.sync.shown().offersNewLibrary(canStart: true))
+        await phone.sync.synchronize(.manual)
+        XCTAssertEqual(phone.sync.statusLine, "Up to date")
+        XCTAssertTrue(phone.sync.encryption.isOn)
+        XCTAssertFalse(phone.sync.shown().offersNewLibrary(canStart: true))
+    }
+
     func testBehaviorTheRecoveryKeyCopiesForThisIPhoneOnlyAndExpires() {
         let key = RecoveryKey.generate()
         var copied: [(String, Duration?)] = []
@@ -589,6 +670,16 @@ extension XCTestCase {
         rig.pump(seconds - 1)
         rig.recorder.addBookmark()
         return try await phone.library.fileRecording(try await rig.stop())
+    }
+}
+
+/// Whether the simulated iCloud refuses uploads for lack of storage, read from the engine's threads.
+private final class QuotaRefusal: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    var refusing: Bool {
+        get { lock.withLock { value } }
+        set { lock.withLock { value = newValue } }
     }
 }
 

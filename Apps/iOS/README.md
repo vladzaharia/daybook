@@ -90,13 +90,6 @@ need from sync and the link. All are `@Observable`, so views update as they chan
 | `model.multipoint`, `model.multipointLine` | A recording made with a Mac: "Also recording on Studio Mac" or "Recording with Studio Mac" (`MultipointCoordinator`). |
 | `model.lastFiling` | Where the recording this iPhone stopped last went: `.saved(conversation, when)` (a recording that captured no audio is saved as a conversation of its notes, bookmarks, and photos), or `.failed(sentence)`. |
 | `model.destination`, `.opensDestinations(session)` | Where Daybook was asked to open (`AppDestination`: a conversation, the library, a recorder's page, the recording, a new note): a notification's tap, Open Conversation, New Note. `RootView` applies it to its `ReadingSession`; the status sheet opens a recorder's page and says so with `model.reached(_:)`. |
-||||||| parent of c48b3c48 (Describe PhoneSync's status as it is now in the iPhone README)
-| `model.sync` | `PhoneSync`: `statusLine` ("Up to date", "Syncing 3 changes", "iCloud isn't available, so …"), `detailLine()`, `devices` (presence), `lastReceived`, `synchronize(_:)`. |
-| `model.multipoint`, `model.multipointLine` | A recording made with a Mac: "Also recording on Studio Mac" or "Recording with Studio Mac". |
-=======
-| `model.sync` | `PhoneSync`: `statusLine`, one line in the Mac's words (`ICloudSyncShown.line`: "Up to date", "Syncing 3 changes", "Signed out", "Sync paused"); `shown()`, what Settings › iCloud shows (`ICloudSyncShown`); `needsAttention`; `isStorageFull`; `useCurrentAccount()`, Sync with This Account after the iCloud account changed; `devices` (presence), `lastReceived`, `synchronize(_:)`. |
-| `model.multipoint`, `model.multipointLine` | A recording made with a Mac: "Also recording on Studio Mac" or "Recording with Studio Mac". |
->>>>>>> c48b3c48 (Describe PhoneSync's status as it is now in the iPhone README)
 | `model.devices.handoff` | `RecorderHandoff`: `state(of:)` for a recorder (asking, the Mac finishing an import, waiting through iCloud, refused, connecting, done), `useHere`, `takeOverAnyway`, `give(_:to:)`, `peersToGive`; `RecorderHandoff.Words` has the lines. `PhoneDevices.useHere`/`give`/`handoffState` wrap it for Observation. |
 | `\.statusSheetInset` | Set while the status sheet holds Record at the foot of the pocket library: the room to leave above it. |
 
