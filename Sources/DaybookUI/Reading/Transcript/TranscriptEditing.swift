@@ -65,7 +65,12 @@ struct InlinePassageEditor: View {
                     .padding(.horizontal, -8)
                     .focused($focused)
                     .onSubmit(save)
+                    #if os(macOS)
+                    // The field's own Escape (cancelOperation), which a key handler doesn't see.
+                    .onExitCommand(perform: cancel)
+                    #else
                     .onKeyPress(.escape) { cancel(); return .handled }
+                    #endif
                     .accessibilityLabel("Corrected passage")
                 HStack(spacing: DaybookSpacing.s4) {
                     Button("Cancel", action: cancel)
@@ -176,7 +181,7 @@ public struct HeardInRecordings: View {
     private let segment: TranscriptSegment
     private let recordingName: (RecordingTrack) -> String
     private let play: (PlaybackTarget) -> Void
-    @Environment(\.dismiss) private var dismiss
+    private let dismiss = SheetDismiss()
     @Environment(\.daybookDensity) private var density
 
     public init(meeting: Meeting, segment: TranscriptSegment, recordingName: @escaping (RecordingTrack) -> String,
@@ -228,7 +233,7 @@ public struct HeardInRecordings: View {
 struct RenameSpeakerForm: View {
     let name: String
     let save: (String) -> Void
-    @Environment(\.dismiss) private var dismiss
+    private let dismiss = SheetDismiss()
     @Environment(\.daybookDensity) private var density
     @State private var draft = ""
     @FocusState private var focused: Bool

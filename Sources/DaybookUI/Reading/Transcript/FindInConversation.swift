@@ -86,12 +86,17 @@ struct ConversationFindBar: View {
                 .textFieldStyle(.plain)
                 .focused($focused)
                 .onSubmit { find.next() }
+                #if os(macOS)
+                // The field's own Escape (cancelOperation), which a key handler doesn't see.
+                .onExitCommand { find.close() }
+                #else
                 .onKeyPress(.escape) { find.close(); return .handled }
                 .onKeyPress(.return, phases: .down) { press in
                     guard press.modifiers.contains(.shift) else { return .ignored }
                     find.previous()
                     return .handled
                 }
+                #endif
                 .accessibilityLabel("Find in Conversation")
             if let label = find.label {
                 Text(label)
