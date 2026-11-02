@@ -188,6 +188,15 @@ public enum ModelLabels {
     public static let nonCommercial = "Non-commercial"
     public static let recommended = "Recommended"
 
+    /// What VoiceOver adds to the recommended preset: the device it's recommended for.
+    public static var recommendedHint: String {
+        #if os(iOS)
+        return "Recommended for this iPhone"
+        #else
+        return "Recommended for this Mac"
+        #endif
+    }
+
     public static func of(_ model: CatalogModel) -> [String] {
         var labels: [String] = []
         if model.license?.allowsCommercialUse != true { labels.append(nonCommercial) }

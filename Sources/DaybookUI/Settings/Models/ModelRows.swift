@@ -362,7 +362,7 @@ public struct ModelQualityRow: View {
                 .buttonStyle(.plain)
                 .accessibilityElement(children: .combine)
                 .accessibilityAddTraits(option.isCurrent ? [.isSelected, .isButton] : .isButton)
-                .accessibilityHint(option.isRecommended ? "Recommended for this device" : "")
+                .accessibilityHint(option.isRecommended ? ModelLabels.recommendedHint : "")
         }
     }
 

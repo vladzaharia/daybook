@@ -137,6 +137,11 @@ final class ModelChoicesTests: XCTestCase {
         XCTAssertEqual(ModelQualityOption.ordered(roles, differing: []).last, .transcription, "the model every preset shares goes last")
     }
 
+    /// VoiceOver names the device a preset is recommended for (these tests run on the Mac).
+    func testBehaviorTheRecommendedPresetNamesThisDevice() {
+        XCTAssertEqual(ModelLabels.recommendedHint, "Recommended for this Mac")
+    }
+
     func testBehaviorAMenuItemSaysItsStateAndItsLicense() throws {
         let parakeet = try model("parakeet/ultra")
         XCTAssertEqual(ModelOption.detail(for: parakeet, status: .inUse), "Downloaded")
