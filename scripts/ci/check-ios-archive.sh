@@ -89,7 +89,7 @@ fi
 if [[ -n "$(plist_type "$info" CFBundleIcons)" || -n "$(plist_type "$info" CFBundleIconFiles)" ]]; then
     ok "app icon: $(plist_value "$info" CFBundleIcons.CFBundlePrimaryIcon.CFBundleIconName)"
 else
-    problem "the app has no app icon (no CFBundleIcons in Info.plist), and App Store Connect rejects uploads without one (ITMS-90713, ITMS-90022). Add an AppIcon to DaybookPhone/Resources/Assets.xcassets and set ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon in Apps/iOS/project.yml."
+    problem "the app has no app icon (no CFBundleIcons in Info.plist), and App Store Connect rejects uploads without one (ITMS-90713, ITMS-90022). Apps/iOS/project.yml should list ../../Resources/Daybook.icon among DaybookPhone's sources and set ASSETCATALOG_COMPILER_APPICON_NAME: Daybook."
 fi
 
 check_bundle() {

@@ -84,7 +84,7 @@ A red night isn't a broken build. It names the tests whose timing assumptions do
 
 **Artifacts.** On failure, CI uploads the swift test logs, the iPhone `.xcresult` bundles and Xcode logs, or the Mac build logs. They're kept for 14 days.
 
-**The release check in CI.** The `iphone` job runs `check-ios-archive.sh` on an unsigned archive with `continue-on-error`. Problems that would block a release then show up on every run without failing it. Today it reports the missing app icon (see [Known blockers](#known-blockers)).
+**The release check in CI.** The `iphone` job runs `check-ios-archive.sh` on an unsigned archive with `continue-on-error`. Problems that would block a release then show up on every run without failing it.
 
 ## Signing
 
@@ -449,7 +449,6 @@ What the first builds should be checked for: on the Mac, the library, devices, a
 
 ## Known blockers
 
-- **The iPhone app has no app icon.** `ASSETCATALOG_COMPILER_APPICON_NAME` is empty and the asset catalog has no AppIcon, so App Store Connect would reject the upload (ITMS-90713 / ITMS-90022). The release job stops at the archive check until there is one: add an AppIcon to `DaybookPhone/Resources/Assets.xcassets` and set `ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon` in `Apps/iOS/project.yml`.
 - **Mac provisioning** (step 1 of One-time setup) must be done before the Mac export can get its Developer ID profile with iCloud.
 - **One bundle ID.** The next tagged release fails until the owner's steps in [One bundle ID](#one-bundle-id) are done. With `release.yml` as it is, CI passes, then both signing jobs fail and nothing is released (`draft` and `publish` never run). The `iphone` job fails at **Archive DaybookPhone with its widget extension** if automatic signing can't register `local.daybook` and `local.daybook.widgets` with their capabilities through the API key (unverified whether it can), and otherwise at **Export and upload to App Store Connect**, which finds no app record for `local.daybook`. The `mac` job fails at **Export with Developer ID**, where `asc-profile.sh` finds no Developer ID profile for `local.daybook` (or at **Archive**, for the same reason as the iPhone's). With the `release.yml` changes applied and no record yet, the `iphone` job's first step that asks App Store Connect, **Look for this run's build**, fails first, before anything is archived.
 - **The Mac on TestFlight** also needs the App Sandbox's hardware checks (docs/sandbox.md) before its first upload.
@@ -480,7 +479,7 @@ What the first builds should be checked for: on the Mac, the library, devices, a
 | TestFlight or Developer ID: recordings reach the Mac only at iCloud Drive's pace | The courier is off. Usually the schema isn't deployed to Production (step 7c); also check the entitlements (step 7d) and that the person is signed in to iCloud. `LibrarySyncController.courierStatus.availability` and `lastError` say why. |
 | Notarization `Invalid` | `package-mac.sh` prints Apple's log; it names each file and the problem (unsigned code, missing hardened runtime, no secure timestamp). |
 | "Notarization still in progress" (exit 75) | Apple took longer than the 45-minute wait. Re-run the failed job within 7 days: it resumes that submission (the run summary has its ID). `xcrun notarytool info <id>` shows its status meanwhile. |
-| Upload rejected: ITMS-90713 or ITMS-90022 (icon) | See [Known blockers](#known-blockers). `check-ios-archive.sh` catches this before the upload. |
+| Upload rejected: ITMS-90713 or ITMS-90022 (icon) | The archive has no app icon. Both apps' `project.yml` list `Resources/Daybook.icon` among the app's sources and set `ASSETCATALOG_COMPILER_APPICON_NAME: Daybook`; Xcode 26 or later compiles it. `check-ios-archive.sh` catches this before the upload. |
 | Upload rejected: the bundle version must be higher, or a redundant binary; or `asc-testflight.sh`: "… was uploaded at …, before this run started" | That build number belongs to an older upload: the offset went down, or `release.yml` was recreated. Raise `DAYBOOK_BUILD_NUMBER_OFFSET` above the highest build number in App Store Connect and run the release again. |
 | `no App Store Connect app has the bundle ID local.daybook` (or `local.daybook.phone`) | Create the app record ([One bundle ID](#one-bundle-id), step 3), and check that `release.yml` names `local.daybook`. |
 | `no beta group named …` | The message lists the app's groups. Fix `DAYBOOK_TESTFLIGHT_GROUP` or the `testflight_group` input. |

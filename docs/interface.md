@@ -163,7 +163,7 @@ Tests: `DesignTokenTests` (every ink's contrast on its surface, each chip kind's
   - Speaker inks (six; Tailwind 700s in light, 300s in dark) are used only for speaker names, owner chips (text only once a next step is done), and the inspector dots. An owner chip's text on its speaker's 14% wash is the 800 in light (`DaybookPalette.ownerInk`), which keeps 4.5:1 where the 700 doesn't.
   - `DaybookLinkStyle` (`.buttonStyle(.daybookLink)`) is the text link in content: `Ink.link`, no underline, a little brighter on hover, 45% when disabled.
   - Everything else uses semantic system colours.
-  - The app icon (`scripts/make-icon.swift`) and `DaybookMark` are the same drawing. Change them together.
+  - The app icon and `DaybookMark` are the same drawing. Change them together. The icon is one layered Icon Composer document for both apps, `Resources/Daybook.icon`: the tile's gradient is its background, and `scripts/make-icon.swift` draws its glow, bars, and dot as layers, so the system draws the Default, Dark, Clear, and Tinted appearances and its own edges and shadow (macOS 15 gets a flattened `Daybook.icns` from the same document).
 - **Type:**
   - New York (serif) appears only in titles.
   - Everything else is SF, with monospaced digits for every time.

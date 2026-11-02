@@ -481,7 +481,9 @@ certificate, or review needs work. App Review's first pass on the Mac is the lon
 - *The icon.* The Mac ships `Daybook.icns` (all sizes to 512@2x) through `CFBundleIconFile`, with an asset catalog that
   has no AppIcon. Reports say App Store processing wants the icon in the asset catalog with `CFBundleIconName`
   (ITMS-90546; [example](https://github.com/hjl1045/keyopen/pull/32), [forum 86904](https://developer.apple.com/forums/thread/86904)).
-  Unverified for this bundle. The fix, if needed: a Mac AppIcon set from `scripts/make-icon.swift`.
+  Unverified for this bundle. The fix, if needed: a Mac AppIcon set from `scripts/make-icon.swift`. Since then both
+  apps use one layered icon, `Resources/Daybook.icon`, compiled into `Assets.car` with `CFBundleIconName` (and
+  `Daybook.icns` for macOS 15), so the Mac build has the asset-catalog icon this asks for.
 - *Privacy manifests.* Neither app has a `PrivacyInfo.xcprivacy`, and both use required-reason APIs (`UserDefaults`, file
   timestamps, disk space). App Store Connect has warned iOS uploads since 2024 (ITMS-91053); enforcement for macOS is
   unverified. Worth adding before App Store review.

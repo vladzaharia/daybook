@@ -17,7 +17,6 @@
 <key>NSScreenCaptureUsageDescription</key><string>Daybook records call audio. No screen video is saved.</string>
 <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
 <key>ITSAppUsesNonExemptEncryption</key><false/>
-<key>CFBundleIconFile</key><string>Daybook.icns</string>
 <key>NSAccentColorName</key><string>AccentColor</string>
 <key>NSLocalNetworkUsageDescription</key><string>Daybook finds your iPhone on this network to record together.</string>
 <key>NSBonjourServices</key><array><string>_daybook-link._tcp</string></array>

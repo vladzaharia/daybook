@@ -38,6 +38,7 @@
 #   package-mac.sh        version and build checks, ZIP, DMG (or none without this team's Developer ID identity),
 #                         checksums, notarization waits, pending submissions, and notary-resume.sh, with stand-in
 #                         tools (macOS)
+#   app icon              Resources/Daybook.icon has every layer it names, and both apps build it as their icon
 #   pipelines             no script reads a tool's output with a reader that stops early (head, grep -q, awk exit)
 # Runs on macOS (bash 3.2) and Linux.
 set -euo pipefail
@@ -462,7 +463,7 @@ if macos; then
         plutil -insert CFBundleShortVersionString -string 1.4.0 "$app/Info.plist"
         plutil -insert CFBundleVersion -string 1057 "$app/Info.plist"
         [[ "$2" != none ]] && plutil -insert ITSAppUsesNonExemptEncryption -bool "$2" "$app/Info.plist"
-        [[ "$3" == yes ]] && plutil -insert CFBundleIcons -json '{"CFBundlePrimaryIcon":{"CFBundleIconName":"AppIcon"}}' "$app/Info.plist"
+        [[ "$3" == yes ]] && plutil -insert CFBundleIcons -json '{"CFBundlePrimaryIcon":{"CFBundleIconName":"Daybook"}}' "$app/Info.plist"
         plutil -insert UIDeviceFamily -json "${5:-[1]}" "$app/Info.plist"
         # App Intent metadata as Xcode writes it: people-facing strings under "key", and Apple's own
         # protocol identifiers, which the check must ignore.
@@ -1055,6 +1056,23 @@ if macos; then
 else
     skip "secrets.sh with a .p12 (macOS only)"
 fi
+
+# --- The app icon: one layered Icon Composer document for both apps ----------------------------------------
+echo "app icon"
+icon="$ci/../../Resources/Daybook.icon"
+missing=""
+for image in $(jq -r '.groups[].layers[]."image-name"' "$icon/icon.json"); do
+    [[ -s "$icon/Assets/$image" ]] || missing="$missing $image"
+done
+expect_eq "every layer icon.json names is in Assets (scripts/make-icon.swift)" "" "${missing# }"
+expect_eq "with the tile's gradient as its background, in Dark too" "2 2" \
+    "$(jq -r '[.["fill-specializations"][].value."linear-gradient" | length] | map(tostring) | join(" ")' "$icon/icon.json")"
+for spec in Apps/macOS/project.yml Apps/iOS/project.yml; do
+    expect_ok "$spec builds it as the app icon" grep -q '^ *- path: \.\./\.\./Resources/Daybook\.icon$' "$ci/../../$spec"
+    expect_ok "(named Daybook)" grep -q '^ *ASSETCATALOG_COMPILER_APPICON_NAME: Daybook$' "$ci/../../$spec"
+done
+expect_eq "and no other app icon" "" \
+    "$(find "$ci/../../Apps" "$ci/../../Resources" -name build -prune -o -name '*.appiconset' -print 2>/dev/null)"
 
 # --- Pipelines: no reader that stops early after a pipe ----------------------------------------------------
 # Under pipefail, `tool | grep -q`, `| head -1`, or an awk that exits at its first match can stop reading while the
