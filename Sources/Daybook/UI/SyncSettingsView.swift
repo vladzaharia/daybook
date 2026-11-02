@@ -136,9 +136,19 @@ struct SyncSettingsView: View {
         }
     }
 
-    /// Connected: a paused or failed pass and the warnings, in place; encryption; and this Mac's preference.
+    /// Connected: a paused or failed pass and the warnings, in place, with a removed library's one fix; encryption; and
+    /// this Mac's preference.
     @ViewBuilder private func connectedRows(_ shown: SyncShown) -> some View {
-        if let problem = shown.problem { ProblemLine(text: problem.text, details: problem.details) }
+        if let problem = shown.problem {
+            if shown.offersNewLibrary {
+                ProblemLine(text: problem.text, details: problem.details) {
+                    Button(LibraryWords.startNewLibrary) { startNewLibrary() }
+                        .disabled(shown.isSyncing)
+                }
+            } else {
+                ProblemLine(text: problem.text, details: problem.details)
+            }
+        }
         if let remaining = shown.remainingMigration { Text(remaining).foregroundStyle(.secondary) }
         ForEach(Array(shown.warnings.enumerated()), id: \.offset) { _, warning in
             let words = SyncWarningWords.split(warning)
@@ -172,6 +182,15 @@ struct SyncSettingsView: View {
         Task {
             do { try await sync.rotateEncryptionKey() } catch {
                 problem = AppProblem(title: "Couldn’t Erase", fallback: "Deleted conversations couldn’t be erased from iCloud. Try again once sync is up to date.", error: error)
+            }
+        }
+    }
+
+    private func startNewLibrary() {
+        problem = nil
+        Task {
+            do { try await sync.startNewLibrary() } catch {
+                problem = AppProblem(title: "Couldn’t Start a New Library", fallback: "A new library couldn’t be started in iCloud. Try again.", error: error)
             }
         }
     }
@@ -231,6 +250,7 @@ struct SyncShown {
     var isFolderTransport = false
     var folder: URL?
     var isSyncing = false
+    var pendingUploads = 0
     var pendingDownloads = 0
     var lastSync: Date?
     /// What needs the person, from the controller's status: a paused or failed pass, a move to iCloud that stopped.
@@ -250,6 +270,7 @@ struct SyncShown {
         isFolderTransport = sync.transport == .folder || sync.allowsFolderSync
         folder = sync.folder
         isSyncing = sync.isSyncing
+        pendingUploads = sync.pendingUploads
         pendingDownloads = sync.pendingDownloads
         lastSync = sync.lastSync
         problem = sync.status.problem
@@ -263,6 +284,9 @@ struct SyncShown {
 
     /// Syncing through iCloud or a folder: Turn Off Sync… applies.
     var isConnected: Bool { folder != nil && (isFolderTransport || iCloud == .connected) }
+
+    /// The library in iCloud was removed: its problem line offers Start a New Library in iCloud, as the iPhone does.
+    var offersNewLibrary: Bool { problem == .libraryRemoved }
 
     /// The iCloud row's value: one phrase for where sync stands, in the words the iPhone's sync line uses
     /// (`SyncStatus.shortText`).
@@ -293,11 +317,14 @@ struct SyncShown {
         }
     }
 
-    /// The copy deck's sync states: Up to date · 11:42 AM, Syncing…, Waiting for iCloud to download 3 items…. With a
-    /// problem, the line under the row says what's wrong, so the row says only when sync last finished.
+    /// The copy deck's sync states: Up to date · 11:42 AM, Syncing…, Uploading 2 items to iCloud, Waiting for iCloud to
+    /// download 3 items…. Up to date needs nothing waiting either way. With a problem, the line under the row says what's
+    /// wrong, so the row says only when sync last finished.
     var connectedStatus: String {
         if isSyncing { return SyncStatus.syncing.shortText }
-        if pendingDownloads > 0 { return SyncStatus.exchanged(uploads: 0, downloads: pendingDownloads).shortText }
+        if problem == nil, pendingUploads > 0 || pendingDownloads > 0 {
+            return SyncStatus.exchanged(uploads: pendingUploads, downloads: pendingDownloads).shortText
+        }
         guard let date = lastSync else { return problem == nil ? SyncStatus.preparing.shortText : "Not synced yet" }
         let time = Calendar.current.isDateInToday(date)
             ? date.formatted(date: .omitted, time: .shortened)
@@ -343,7 +370,8 @@ enum EncryptionShown: Equatable {
 #if DEBUG
 /// Debug-only: `--sync-demo <state>` shows Settings › Library's iCloud Sync section in that state, without iCloud, for
 /// screenshots. Its buttons still act on the real (unconnected) controller. States: checking, off, signed-out,
-/// drive-off, unavailable, moving, moving-paused, on, syncing, downloading, paused, warning, damaged, account, folder-lost, folder-missing,
+/// drive-off, unavailable, moving, moving-paused, on, syncing, downloading, uploading, full, removed, paused, warning, damaged, account,
+/// folder-lost, folder-missing,
 /// waiting, waiting-many (two iPhones with long names), encrypted, no-recovery-key, encrypting, dev-folder.
 @MainActor
 enum SyncSettingsDemo {
@@ -379,6 +407,9 @@ enum SyncSettingsDemo {
         case "on": return connected()
         case "syncing": return connected { $0.isSyncing = true }
         case "downloading": return connected { $0.pendingDownloads = 3 }
+        case "uploading": return connected { $0.pendingUploads = 2 }
+        case "full": return connected { $0.pendingUploads = 2; $0.problem = .storageFull }
+        case "removed": return connected { $0.problem = .libraryRemoved; $0.encryption = .on(status: "On", hasRecoveryKey: true) }
         case "paused": return connected { $0.problem = .failure(details: "The operation couldn’t be completed. No space left on device.") }
         case "warning": return connected { $0.warnings = [SyncWarningWords.unsavedChange + ": The file “events-0042.json” couldn’t be saved."] }
         case "damaged":

@@ -49,6 +49,28 @@ final class SyncSettingsWordsTests: XCTestCase {
         XCTAssertNil(connected { $0.problem = SyncStatus.preparing.problem }.problem)
     }
 
+    func testBehaviorUploadsWaitingAreNeverUpToDate() {
+        let now = Date()
+        XCTAssertEqual(connected { $0.lastSync = now; $0.pendingUploads = 1 }.headline, "Uploading 1 item to iCloud")
+        XCTAssertEqual(connected { $0.lastSync = now; $0.pendingUploads = 2; $0.pendingDownloads = 3 }.headline, "Uploading 2 items to iCloud",
+                       "As the iPhone's sync line says it")
+        // iCloud is full: the line under the row says so, and the row keeps when sync last finished.
+        let full = connected { $0.lastSync = now; $0.pendingUploads = 2; $0.problem = SyncStatus.storageFull.problem }
+        XCTAssertEqual(full.problem?.text, "iCloud storage is full.")
+        XCTAssertEqual(full.headline, "Last synced \(now.formatted(date: .omitted, time: .shortened))")
+        XCTAssertFalse(full.offersNewLibrary)
+    }
+
+    func testBehaviorOnlyALibraryRemovedFromICloudOffersANewOne() {
+        let removed = connected { $0.problem = SyncStatus.libraryRemoved.problem }
+        XCTAssertTrue(removed.offersNewLibrary)
+        XCTAssertEqual(removed.problem?.text, "The library in iCloud was removed.")
+        let others: [SyncStatus] = [.libraryNotEncrypted, .storageFull, .accountChanged, .failure(details: "x"), .upToDate(at: Date()),
+                                    .waitingForKey, .exchanged(uploads: 1, downloads: 0)]
+        for status in others { XCTAssertFalse(connected { $0.problem = status.problem }.offersNewLibrary, "\(status)") }
+        XCTAssertEqual(LibraryWords.startNewLibrary, "Start a New Library in iCloud", "The iPhone's button says the same")
+    }
+
     func testAMoveToICloudThatStoppedSaysSoInsteadOfSpinning() {
         var progress = SyncMigrationProgress()
         var paused = SyncShown(iCloud: .migrating(progress))

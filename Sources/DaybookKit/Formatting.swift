@@ -144,6 +144,10 @@ public enum LibraryWords {
     /// Under "Start over with a new key?" (an encrypted library whose key is lost): what's lost and what isn't.
     public static let startOverConsequence = "What’s only in iCloud is lost. Conversations on your devices stay and sync again."
 
+    /// The one action for a library removed from iCloud (`SyncStatus.libraryRemoved`,
+    /// `LibrarySyncController.startNewLibrary()`).
+    public static let startNewLibrary = "Start a New Library in iCloud"
+
     /// Under "Delete the folder “Clients”?": what happens to what's in it.
     public static func folderDeletion(conversations count: Int) -> String {
         switch count {
