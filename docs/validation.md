@@ -97,6 +97,48 @@ room for a preset; iPhone screenshots of every page, dark and at accessibility t
 - **Call detection** through a long call with many windows open: no hitch in Daybook every 2 s, and the call kept
   through a failed look.
 
+## The library list: filing by drag, Share…, search's scopes, and the Trash (2026-11-02)
+
+From the review of the shared library list.
+
+- **Filing by drag.** On macOS 26 and later, rows were dragged through the drag-container API
+  (`draggable(containerItemID:)` with `dragContainer` on the List), which nobody had tried by hand on List rows. If
+  it didn't start a drag from a row, filing by drag would break for everyone. Each row is its own drag source again
+  (`draggable(ConversationTransfer)`), the path List rows have always taken here. A drop on Work, Personal, a folder,
+  or the Trash files the whole selection when the dragged row is one of several selected (`ConversationDrop`), as
+  Finder takes every selected file along. The drag image shows that one row, and out of Daybook (TextEdit, Mail,
+  Finder) it carries that row's Markdown or words.
+- **Share….** The row menu's Share… sent `ConversationTransfer`, whose first type is Daybook's own
+  (`local.daybook.conversation`), so AirDrop or a Mail attachment could have received it. It now sends
+  `ConversationShareItem`: the Markdown file, then the words.
+- **Search's scopes on the open Duo.** The system's scope bar didn't show on two pages. The scopes (All, Work,
+  Personal, the folder being viewed) are now the results' first row on both apps and in every layout
+  (`SearchScopePicker`), as the Mac's already were.
+- **Leaving the Trash while it reads.** The Mac's Trash could select a trashed conversation after the person had
+  already moved to All, Work, or a folder, which left that place with nothing selected. What the Trash reads is now
+  dropped once the person has left it or started a search (`MacTrash.adopt`).
+- **Caption results the iPhone's page can't show.** iPhone search followed the Mac's caption rule (shown until a
+  newer transcript replaces them). The iPhone's transcript page shows saved captions only while there's no
+  transcript, so a conversation with an earlier transcript and newer captions was listed as a caption result and
+  opened at nothing. iPhone search now reads captions only where that page shows them (`LibraryPage.captionCandidates`).
+- **One name for the iPhone's Trash.** `ReadingPlace.trash` was a second case beside `.library(.trash)`; it's now
+  the same value, and every check goes through `isTrash`.
+
+**How it was checked.** `swift build --build-tests` clean, with no new warnings. `swift test` for the library suites:
+`LibraryListTests` (a drag or ⌘C leads with the conversation, while Share… offers only the Markdown and the words),
+`LibraryPlaceTests` (a selection filed whole, a row outside it alone; leaving the Trash or searching keeps the new
+place's selection), `SharedNameTests`, `LibraryTrashAndFilingTests`, `LibrarySearchSuggestionsTests`, and
+`LibraryWordsTests`, all passing. `scripts/build-ios.sh --test` on a clone of the iPhone 18 Pro:
+`LibraryListPhoneTests` and `ReadingTests` (37) passed, including the Trash's one name and caption search leaving
+out an earlier transcript with newer captions. Screenshots from clones of the iPhone 18 Pro and the Daybook Shell Duo
+(open, through `duo-fold.sh`): search with results, with none, and in a folder (its scope too), and the Trash. Mac
+window snapshots (`--snapshot`, a scratch library): search, search in a folder, no results, and the Trash.
+
+**Not checked by hand.** On this Mac: dragging one row and a three-row selection onto a folder, Work, and the Trash;
+dragging a row into TextEdit or Mail; and Share… with AirDrop, Mail, and Messages. The Mac is shared with other
+sessions, and its computer-use helper wasn't running, so nothing drove the pointer. `LibraryListTests` covers the
+types each item offers.
+
 ## Release review for 0.5.0 (2026-11-01)
 
 Window snapshots of the Mac (library, summary, transcript, inspector, the summary countdown, Upgrade, Floating Notes,
