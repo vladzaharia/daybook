@@ -125,12 +125,21 @@ private struct EditCommands: Commands {
 private struct ViewCommands: Commands {
     let state: AppState
     @FocusedValue(\.shownConversation) private var shownID
+    /// Whether the library window's toolbar shows, while that window is key.
+    @FocusedBinding(\.libraryToolbarShown) private var toolbarShown
 
     var body: some Commands {
         let meeting = state.shownMeeting(shownID)
         SidebarCommands()
         InspectorCommands()
-        ToolbarCommands()
+        // Show or Hide Toolbar alone: the toolbar isn't customizable (`DetailToolbar`), so there's no Customize Toolbar….
+        CommandGroup(replacing: .toolbar) {
+            Button(toolbarShown == false ? "Show Toolbar" : "Hide Toolbar") {
+                if let shown = toolbarShown { toolbarShown = !shown }
+            }
+            .keyboardShortcut("t", modifiers: [.command, .option])
+            .disabled(toolbarShown == nil)
+        }
         CommandGroup(before: .sidebar) {
             Button("Summary") { state.pageMode = .summary }
                 .keyboardShortcut("1")

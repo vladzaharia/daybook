@@ -12,6 +12,8 @@ extension FocusedValues {
     /// conversation of the imported recording it shows. Nil with none, or with several selected. For menus and other
     /// windows that act on what the person is looking at.
     @Entry var shownConversation: UUID?
+    /// Whether the library window's toolbar shows, for View › Show/Hide Toolbar.
+    @Entry var libraryToolbarShown: Binding<Bool>?
 }
 
 /// The main window: places, the conversation list, and the page, with an optional inspector.
@@ -39,6 +41,7 @@ struct LibraryView: View {
     @SceneStorage("library.selection") private var storedSelection = ""
     @SceneStorage("library.page") private var storedPage = ""
     @SceneStorage("library.columns") private var storedColumns = ColumnFit.all.rawValue
+    @SceneStorage("library.toolbar") private var toolbarShown = true
     @State private var restored = false
 
     /// The conversation whose controls the toolbar shows; on the device page, an imported recording's conversation.
@@ -96,6 +99,8 @@ struct LibraryView: View {
         .onChange(of: state.visibleMeetings.map(\.id)) { _, _ in reconcileSelection() }
         .environment(\.readingScale, CGFloat(state.readingScale))
         .focusedSceneValue(\.shownConversation, toolbarMeeting?.id)
+        .toolbarVisibility(toolbarShown ? .automatic : .hidden, for: .windowToolbar)
+        .focusedSceneValue(\.libraryToolbarShown, $toolbarShown)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { windowWidth = $0; noteScreen() }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didChangeScreenNotification)) { note in
             if (note.object as? NSWindow) === shareAnchor.window { noteScreen() }
