@@ -1055,7 +1055,9 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertNotNil(state.recordingID)
         state.checkPhoneLead(now: Date().addingTimeInterval(31 * 60))
         try await waitUntil("stopped on its own") { state.recordingID == nil }
-        XCTAssertEqual(state.notice, "\(PhoneLinkRig.phoneName) couldn’t be reached for 30 minutes, so this Mac stopped recording.")
+        XCTAssertEqual(state.noticeLines, ["\(PhoneLinkRig.phoneName) stopped recording, so this Mac stopped too.",
+                                           "\(PhoneLinkRig.phoneName) couldn’t be reached for 30 minutes, so this Mac stopped recording."],
+                       "Added to the notice, after the earlier stop's reason")
     }
 
     func testGoingToSleepGivesThePhoneItsStopFirstButNotForLong() async throws {
