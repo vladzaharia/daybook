@@ -2,13 +2,14 @@ import DaybookKit
 import DaybookLink
 import Foundation
 
-/// Whether a Mac that transcribes is around, for "Waiting for your Mac · last seen 2 h ago"
+/// Whether a Mac that transcribes is around, for "Waiting for your Mac · Last seen today, 3:25 AM"
 /// (docs/iphone.md, "Processing on the Mac"). `PhoneAppModel.macPresence` combines the local link
 /// (a paired Mac connected now) with sync presence (`Devices/` records in the library). The phone
 /// never fakes it: with no Mac seen, it says so.
 ///
 /// For the reading UI: show `waitingLine()` under a conversation whose `ProcessingStatus` is
-/// `.requested(.device)`, and `summary` in Settings. Both are complete sentences.
+/// `.requested(.device)`, a line like a row's; and `summary`, a complete sentence, in Settings. Both date
+/// a Mac's absence as every row does ("Last seen today, 3:25 AM", `RecorderStatusWords.lastSeen`).
 enum MacPresence: Equatable, Sendable {
     /// Sync hasn't connected or listed the library's devices yet.
     case checking
@@ -69,17 +70,16 @@ enum MacPresence: Equatable, Sendable {
         }
     }
 
-    /// The line under a conversation that waits for a Mac: "Waiting for your Mac · Last seen 2 h ago". "Last seen"
-    /// is how every device's absence is dated, on both apps (`RecorderStatusWords.lastSeen`).
+    /// The line under a conversation that waits for a Mac: "Waiting for your Mac · Last seen today, 3:25 AM", dated
+    /// as every device's absence is on both apps (`RecorderStatusWords.lastSeen`).
     func waitingLine(now: Date = Date()) -> String {
         switch self {
         case .checking: return "Waiting for your Mac"
         case .unavailable: return "Waiting for iCloud"
         case .connected(let name): return "Waiting for \(name)"
         case .seen(let name, let date):
-            let age = now.timeIntervalSince(date)
-            if age < Self.recentlySeen { return "Waiting for \(name)" }
-            return "Waiting for your Mac · Last seen \(Self.age(age))"
+            if now.timeIntervalSince(date) < Self.recentlySeen { return "Waiting for \(name)" }
+            return "Waiting for your Mac · \(RecorderStatusWords.lastSeen(date, now: now))"
         case .recording(let name, _): return "Waiting for \(name), which is recording"
         case .notProcessing(let name, _): return "Waiting for \(name) to transcribe"
         case .olderMac: return "Waiting for your Mac"
@@ -94,7 +94,8 @@ enum MacPresence: Equatable, Sendable {
         case .unavailable(let reason): return reason
         case .connected(let name): return "\(name) is connected."
         case .seen(let name, let date):
-            return "\(name) · Last seen \(Self.age(now.timeIntervalSince(date)))"
+            // A sentence like the footer's others, with the date every row gives.
+            return "\(name) was last seen \(DeviceDateFormat.lastSeen(date, now: now))."
         case .recording(let name, _): return "\(name) is recording."
         case .notProcessing(let name, _):
             return "\(name) isn’t set up to transcribe. Finish in Daybook › Settings on \(name)."

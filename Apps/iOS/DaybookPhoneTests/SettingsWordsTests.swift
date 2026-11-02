@@ -21,9 +21,10 @@ final class SettingsWordsTests: XCTestCase {
                      "iCloud's row says why")
 
         // A Mac that syncs the library but isn't paired here has no row, so the footer names it.
+        // A sentence like the footer's others, dated as every row is.
         XCTAssertEqual(MacsSection.footer(.seen(name: "Office iMac", lastSeen: now.addingTimeInterval(-7_200)),
                                           pairedNames: paired, now: now),
-                       "Office iMac · Last seen 2 h ago")
+                       "Office iMac was last seen \(DeviceDateFormat.lastSeen(now.addingTimeInterval(-7_200), now: now)).")
         // Something to do is always said.
         XCTAssertEqual(MacsSection.footer(.noMac, pairedNames: []), "No Mac has synced this library yet. Open Daybook on your Mac.")
         XCTAssertEqual(MacsSection.footer(.notProcessing(name: "Studio Mac", lastSeen: now), pairedNames: paired, now: now),
