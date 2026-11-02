@@ -325,6 +325,16 @@ final class RecorderScreenTests: XCTestCase {
         XCTAssertEqual(AfterStop.lingers, .seconds(10))
     }
 
+    /// Regression: a recording that couldn't be added left the person on the moment after Stop, Open disabled, with
+    /// only Record to leave by. It gives the library back as Saved does, and its notice stays there.
+    func testBehaviorAFailedFilingGivesTheLibraryBack() {
+        XCTAssertEqual(AfterStop.stay(for: .failed(PhoneAppModel.notFiled)), AfterStop.lingers)
+        XCTAssertEqual(AfterStop.stay(for: .failed(PhoneAppModel.notFinished)), AfterStop.lingers)
+        XCTAssertEqual(AfterStop.stay(for: .saved(UUID())), AfterStop.lingers)
+        XCTAssertNil(AfterStop.stay(for: .saving), "never while it's still being added")
+        XCTAssertNil(AfterStop.stay(for: .none), "nothing to show: the library at once, not after a pause")
+    }
+
     func testBehaviorBookmarksAndPhotosAreMarksInTheNotesLane() {
         let mark = Highlight(time: 4, text: "")
         let photo = CapturePhoto(fileName: "photo-a.heic", capturedAt: Date(), time: 6)

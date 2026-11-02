@@ -35,6 +35,16 @@ struct AfterStop: Equatable {
 
     /// How long the Saved moment stays before the library comes back, unless the person is writing.
     static let lingers: Duration = .seconds(10)
+
+    /// How long the moment stays before it gives the library back on its own: `lingers`, once the recording is saved
+    /// or couldn't be added (that notice stays in the library, over Record); nil while it's saving. With nothing to
+    /// show, the library comes back at once.
+    static func stay(for outcome: Outcome) -> Duration? {
+        switch outcome {
+        case .saved, .failed: return lingers
+        case .saving, .none: return nil
+        }
+    }
 }
 
 /// After Stop on the iPhone, as Floating Notes shows it on the Mac: Saved with the conversation's length, its title
@@ -75,8 +85,8 @@ struct PhoneAfterStop: View {
             }
         }
         .task(id: outcome) {
-            guard case .saved = outcome else { return }
-            try? await Task.sleep(for: AfterStop.lingers)
+            guard let stay = AfterStop.stay(for: outcome) else { return }
+            try? await Task.sleep(for: stay)
             guard !Task.isCancelled, !writing else { return }
             done()
         }
@@ -85,7 +95,7 @@ struct PhoneAfterStop: View {
             guard !writing else { return }
             Task { @MainActor in
                 try? await Task.sleep(for: AfterStop.lingers)
-                if !self.writing, case .saved = self.outcome { done() }
+                if !self.writing, AfterStop.stay(for: self.outcome) != nil { done() }
             }
         }
     }
@@ -148,6 +158,8 @@ struct PhoneAfterStop: View {
                 scrolls: true,
                 bottomInset: DaybookSpacing.s3,
                 onFocusChange: { writing = $0 })
+            // Inset as the recording's notes are in the column, so they stay put as Stop lands.
+            .padding(.horizontal, style == .notebook ? 0 : DaybookSpacing.s4)
         } else {
             Color.clear
         }
