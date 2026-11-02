@@ -81,16 +81,12 @@ public enum SettingsWords {
 
     // MARK: Counts
 
-    /// The vocabulary: the terms the person approved, then the suggestions waiting for them: "No terms yet",
-    /// "12 terms", "12 terms · 3 suggested", "3 suggested".
-    public static func vocabulary(_ terms: [GlossaryTerm]) -> String {
-        vocabulary(approved: terms.filter(\.approved).count, suggested: terms.filter { !$0.approved }.count)
-    }
+    /// The vocabulary: every term, wherever it's used (a term from one conversation is used there), as both apps'
+    /// Vocabulary lists them: "No terms yet", "1 term", "12 terms".
+    public static func vocabulary(_ terms: [GlossaryTerm]) -> String { vocabulary(count: terms.count) }
 
-    public static func vocabulary(approved: Int, suggested: Int) -> String {
-        let suggestions = suggested > 0 ? "\(suggested) suggested" : nil
-        guard approved > 0 else { return suggestions ?? "No terms yet" }
-        return [approved == 1 ? "1 term" : "\(approved) terms", suggestions].compactMap { $0 }.joined(separator: " · ")
+    public static func vocabulary(count: Int) -> String {
+        count == 0 ? "No terms yet" : count == 1 ? "1 term" : "\(count) terms"
     }
 
     /// Speaker profiles: "No profiles yet", "1 profile", "4 profiles".
@@ -136,21 +132,142 @@ public enum SettingsWords {
     // MARK: Casing
 
     /// A sentence-case label as a title-case one, as the iPhone's Settings shows labels ("Use the cloud" → "Use the
-    /// Cloud", "15 seconds" → "15 Seconds"). Short words that aren't first stay lowercase; words with capitals of
-    /// their own ("iCloud", "iPhone", "JSON") keep them.
+    /// Cloud", "15 seconds" → "15 Seconds", "Third-party notices" → "Third-Party Notices"). Short words that aren't
+    /// first stay lowercase; words with capitals of their own ("iCloud", "iPhone", "JSON") keep them.
     public static func titleCased(_ text: String) -> String {
         let minor: Set<String> = ["a", "an", "and", "as", "at", "but", "by", "for", "in", "nor", "of", "on", "or", "the", "to", "up", "via", "with"]
         var words = text.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
         for index in words.indices {
             let word = words[index]
-            guard let first = word.first, first.isLowercase else { continue }
             // A word with its own capitals (iCloud) stays as it is.
             if word.dropFirst().contains(where: \.isUppercase) { continue }
             let last = index == words.count - 1
             if index > 0, !last, minor.contains(word.lowercased()) { continue }
-            words[index] = first.uppercased() + word.dropFirst()
+            // Each part of a hyphenated word ("Third-party").
+            words[index] = word.split(separator: "-", omittingEmptySubsequences: false)
+                .map { part in part.first.map { $0.uppercased() + part.dropFirst() } ?? "" }
+                .joined(separator: "-")
         }
         return words.joined(separator: " ")
+    }
+}
+
+/// Summary Templates' words on both apps. Labels in sentence case, as `SettingsWords`; menu and button titles as
+/// both platforms write them.
+public enum TemplateWords {
+    public static let title = "Summary Templates"
+    public static let builtIn = "Built-in"
+    public static let yours = "Yours"
+    /// A template with no name, and the name a new one starts with.
+    public static let untitled = "Untitled Template"
+    public static let newTemplate = "New Template"
+    public static let duplicate = "Duplicate"
+    public static let restoreOriginal = "Restore Original"
+    public static let deleteTemplate = "Delete Template…"
+    public static let more = "More"
+    /// A built-in that differs from its original.
+    public static let edited = "Edited"
+    public static let youEdited = "You edited this template."
+    public static let name = "Name"
+    public static let usedFor = "Used for"
+    public static let usedForHelp = "Chosen automatically for this kind of conversation."
+    public static let instructions = "Instructions"
+    public static let instructionsHelp = "Describe the purpose, the sections you want, and the tone."
+    public static let noneSelected = "No Template Selected"
+    public static let removed = "Template Removed"
+
+    /// Deleting one of your own: "Delete “Board update”?", and what happens to the conversations that used it.
+    public static func deleteTitle(_ template: SummaryTemplate) -> String { "Delete “\(template.displayName)”?" }
+    public static let deleteConsequence = "Conversations that used it switch to Automatic."
+    public static let delete = "Delete"
+}
+
+/// Vocabulary's words on both apps.
+public enum VocabularyWords {
+    public static let title = "Vocabulary"
+    public static let term = "Term"
+    public static let alsoHeardAs = "Also heard as"
+    public static let meaning = "Meaning"
+    public static let usedIn = "Used in"
+    public static let addTerm = "Add Term"
+    public static let editTerm = "Edit Term"
+    public static let searchPrompt = "Search Terms"
+    public static let emptyTitle = "No Terms Yet"
+    public static let emptyMessage = "Add names, products, and words to spell your way."
+    /// The term field's placeholder: how it's spelled.
+    public static let spelledAs = "Spelled as"
+    /// The other spellings field's placeholder, short enough for a page of the open iPhone Duo.
+    public static let otherSpellings = "Other spellings"
+    public static let otherSpellingsFooter = "Spellings the transcript might use, separated by commas, such as “day book” for Daybook."
+    public static let optional = "Optional"
+    /// A new row's prompts in the Mac's table, and a meaning's on hover.
+    public static let newTerm = "New Term"
+    public static let addMeaning = "Add meaning"
+    public static let addSpellings = "Add spellings"
+    public static let showConversation = "Show Conversation"
+
+    public static let allConversations = "All conversations"
+    /// "Only “Weekly product sync”".
+    public static func only(_ title: String) -> String { "Only “\(title)”" }
+    /// A term from a conversation that's gone, in warning ink.
+    public static let noConversations = "No conversations"
+    public static let noConversationsHelp = "Not used in any conversation. Choose All Conversations to use it everywhere."
+
+    /// Delete for a term used everywhere; confirmed (with the ellipsis) for one limited to a conversation.
+    public static let deleteTerm = "Delete Term"
+    public static let deleteTermConfirming = "Delete Term…"
+    public static func deleteTerms(_ count: Int) -> String { count == 1 ? deleteTerm : "Delete \(count) Terms" }
+    public static func deleteTitle(_ terms: [GlossaryTerm]) -> String {
+        terms.count == 1 ? "Delete “\(terms[0].term)”?" : "Delete \(terms.count) Terms?"
+    }
+
+    /// What deleting a term limited to a conversation does there: "“Weekly product sync” won’t use it when it’s
+    /// transcribed again." Nil for a term from a conversation that's gone.
+    public static func deleteConsequence(_ scopes: [TermScope]) -> String? {
+        let titles = scopes.compactMap { scope -> String? in
+            if case .conversation(_, let title) = scope { return title }
+            return nil
+        }
+        guard let first = titles.first else { return nil }
+        let names = Set(titles)
+        if names.count == 1 { return "“\(first)” won’t use it when it’s transcribed again." }
+        return "Their conversations won’t use them when they’re transcribed again."
+    }
+
+    // The undo menu's action names.
+    public static let undoAdd = "Add Term"
+    public static let undoRename = "Rename Term"
+    public static let undoMeaning = "Change Meaning"
+    public static let undoSpellings = "Change Other Spellings"
+    public static let undoScope = "Change Where Term Is Used"
+    public static let undoEdit = "Edit Term"
+    public static func undoDelete(_ count: Int) -> String { count == 1 ? "Delete Term" : "Delete Terms" }
+}
+
+/// The privacy statement, the same on both apps (docs/interface.md, principle 6): Settings › Library on the Mac,
+/// Settings › About on the iPhone.
+public enum PrivacyWords {
+    public static let statement = "Recordings, notes, and transcripts stay on your devices, and in your own iCloud when sync is on. A summary goes to a cloud model only when you choose one."
+}
+
+/// About's words on both apps.
+public enum AboutWords {
+    public static let title = "About"
+    public static let appName = "Daybook"
+    public static let privacy = "Privacy"
+    public static let acknowledgements = "Acknowledgements"
+    public static let models = "Models"
+    public static let software = "Software"
+    public static let thirdPartyNotices = "Third-party notices"
+    public static let license = "License"
+    public static let notice = "Notice"
+    public static let use = "Use"
+
+    /// "Version 0.1.0 (1)", as the Mac's About panel says it; nil for a development build without a version.
+    public static func version(_ info: [String: Any]?) -> String? {
+        guard let short = info?["CFBundleShortVersionString"] as? String, !short.isEmpty else { return nil }
+        guard let build = info?["CFBundleVersion"] as? String, !build.isEmpty, build != short else { return "Version \(short)" }
+        return "Version \(short) (\(build))"
     }
 }
 

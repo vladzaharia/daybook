@@ -42,12 +42,13 @@ final class SettingsWordsTests: XCTestCase {
 
     func testBehaviorCountsCountTheSameThings() {
         let approved = GlossaryTerm(term: "Daybook", approved: true)
-        let suggested = GlossaryTerm(term: "Sortformer", approved: false)
+        // A term from one conversation is used there (GlossaryStore.terms(for:)), so it's counted as a term.
+        let fromAConversation = GlossaryTerm(term: "Sortformer", approved: false, sourceMeetingIDs: [UUID()])
         XCTAssertEqual(SettingsWords.vocabulary([]), "No terms yet")
-        XCTAssertEqual(SettingsWords.vocabulary([suggested, suggested, suggested]), "3 suggested",
-                       "suggestions aren't hidden behind No terms")
+        XCTAssertEqual(SettingsWords.vocabulary([fromAConversation, fromAConversation, fromAConversation]), "3 terms",
+                       "terms from conversations aren't hidden behind No terms")
         XCTAssertEqual(SettingsWords.vocabulary([approved]), "1 term")
-        XCTAssertEqual(SettingsWords.vocabulary([approved, approved, suggested]), "2 terms · 1 suggested")
+        XCTAssertEqual(SettingsWords.vocabulary([approved, approved, fromAConversation]), "3 terms")
         XCTAssertEqual(SettingsWords.profiles(0), "No profiles yet")
         XCTAssertEqual(SettingsWords.profiles(1), "1 profile")
         XCTAssertEqual(SettingsWords.profiles(4), "4 profiles")
@@ -77,5 +78,8 @@ final class SettingsWordsTests: XCTestCase {
         XCTAssertEqual(SettingsWords.titleCased("Voice profiles"), "Voice Profiles")
         XCTAssertEqual(SettingsWords.titleCased("Offer first"), "Offer First")
         XCTAssertEqual(SettingsWords.titleCased("What to sign in to"), "What to Sign in To", "the last word is always capitalized")
+        XCTAssertEqual(SettingsWords.titleCased("Third-party notices"), "Third-Party Notices", "each part of a hyphenated word")
+        XCTAssertEqual(SettingsWords.titleCased("Also heard as"), "Also Heard As")
+        XCTAssertEqual(SettingsWords.titleCased("Wi‑Fi only"), "Wi‑Fi Only", "a non-breaking hyphen's word keeps its capitals")
     }
 }

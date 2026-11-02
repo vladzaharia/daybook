@@ -19,6 +19,9 @@ public struct ModelAcknowledgement: Identifiable, Equatable, Sendable {
 
     /// "Non-commercial" where the terms don't allow commercial use.
     public var label: String? { allowsCommercialUse ? nil : "Non-commercial" }
+
+    /// The models it covers, unless that's only the one its title already names ("Apple Vision").
+    public var otherModels: [String]? { models == [title] ? nil : models }
 }
 
 /// Builds the acknowledgements list from the manifests, so a new model's credit appears with its entry.
@@ -45,6 +48,14 @@ public enum ModelAcknowledgements {
             let order = a.element.title.localizedCaseInsensitiveCompare(b.element.title)
             return order == .orderedSame ? a.offset < b.offset : order == .orderedAscending
         }.map(\.element)
+    }
+
+    /// What a device credits, one rule on both apps: the models it can use (`usable`, variant keys; nil for every
+    /// model in its catalog, as on a Mac, whose model manager offers them all), and those behind the library's
+    /// transcripts, speakers, and summaries, wherever they were made.
+    public static func entries(from catalog: ModelCatalog, usable: Set<String>?, meetings: [Meeting]) -> [ModelAcknowledgement] {
+        guard let usable else { return list(from: catalog) }
+        return list(from: catalog, only: usable.union(catalog.resultModelKeys(in: meetings)))
     }
 
     /// The list as plain text, for an About window or a notices file.
