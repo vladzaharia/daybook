@@ -35,7 +35,12 @@ DeviceHub (@MainActor @Observable)       │  configured devices, persisted as [
 - **Device kind** (`DeviceKind`): identity (`id` such as `soundcore.work`, name, short name,
   vendor, SF Symbol), the connection methods it supports in order of preference, the audio
   source label, whether more than one can be added, and its copy (discovery tips, technical
-  notes).
+  notes). Each kind has a glyph of its own, the same on both apps: Soundcore Work's tape
+  (`recordingtape`), Other Recorder's `waveform.and.mic`, Daybook on iPhone's `iphone`. Copy that names
+  the device it's on is written once for both apps in their own words (`DevicePlatform`: "this Mac", "this
+  iPhone"; `SoundcoreIssue.problem(on:)`, `SoundcoreWorkIntegration.deviceKind(on:)`): on the iPhone the
+  Soundcore app is on the same phone and audio comes in with Import Audio, so its tips and problems say
+  so, and the iPhone only leaves out the actions it has no screen for.
 - **Connection method** (`ConnectionMethodKind`):
   - `direct`: Daybook talks to the recorder (`DirectTransport`: Bluetooth LE, USB, local network).
   - `files`: a watched folder of exports. Implemented once, in `ImportFolderWatcher`, and given

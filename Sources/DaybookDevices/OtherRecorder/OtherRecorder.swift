@@ -14,7 +14,8 @@ public struct OtherRecorderIntegration: DeviceIntegration {
         name: "Other Recorder",
         shortName: "recorder",
         vendor: nil,
-        systemImage: "recordingtape",
+        // Its own glyph, so it isn't taken for Soundcore Work's tape beside it.
+        systemImage: "waveform.and.mic",
         summary: "Any recorder that saves audio files.",
         methods: [
             ConnectionMethod(kind: .files, title: "From a folder",

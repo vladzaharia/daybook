@@ -130,6 +130,46 @@ final class DeviceFrameworkTests: XCTestCase {
         XCTAssertNil(SoundcoreRecording(id: 12, size: 0).date, "Not a plausible start time")
     }
 
+    /// Ending a shared recording's live audio waits for its listening to end, not by looking again and again,
+    /// and never past its limit.
+    @MainActor
+    func testBehaviorWaitingForListeningToEndStopsAtItsLimit() async {
+        let quick = Task<Void, Never> {}
+        let ended = await quick.finished(within: .seconds(30))
+        XCTAssertTrue(ended)
+        let endless = Task<Void, Never> { try? await Task.sleep(for: .seconds(3_600)) }
+        defer { endless.cancel() }
+        let started = ContinuousClock.now
+        let waited = await endless.finished(within: .milliseconds(50))
+        XCTAssertFalse(waited, "the limit came first")
+        XCTAssertLessThan(ContinuousClock.now - started, .seconds(30))
+    }
+
+    /// A device notification says where opening it goes, in words its delegate reads back: a conversation, or
+    /// the recorder's page.
+    func testBehaviorANotificationCarriesWhereItGoes() {
+        let conversation = UUID()
+        for destination in [DeviceNotificationDestination.conversation(conversation), .device("soundcore-1")] {
+            let userInfo: [AnyHashable: Any] = destination.userInfo
+            XCTAssertEqual(DeviceNotificationDestination(userInfo: userInfo), destination)
+        }
+        XCTAssertNil(DeviceNotificationDestination(userInfo: [:]), "not a device notification")
+        XCTAssertNil(DeviceNotificationDestination(userInfo: ["daybook.place": "conversation", "daybook.conversationID": "nope"]))
+        XCTAssertNil(DeviceNotificationDestination(userInfo: ["daybook.place": "device"]))
+    }
+
+    /// A length under a minute counts whole seconds toward zero, as the player's times do: a 41.7-second
+    /// recording reads "41 sec" beside a player that ends at 0:41.
+    func testBehaviorAShortLengthAgreesWithThePlayersTime() {
+        XCTAssertEqual(DurationLabel.format(41.7), "41 sec")
+        XCTAssertEqual(DurationLabel.format(59.9), "59 sec", "never \"60 sec\"")
+        XCTAssertEqual(DurationLabel.format(0.6), "0 sec")
+        XCTAssertEqual(DurationLabel.format(0), "0 sec")
+        XCTAssertEqual(DurationLabel.format(.nan), "0 sec")
+        XCTAssertEqual(DurationLabel.format(2_880), "48 min")
+        XCTAssertEqual(RecordingLength.exact(41.7).label, "41 sec")
+    }
+
     func testFileRecordingsDescribeThemselves() {
         let file = DeviceRecording(id: "file:notes.m4a|2048000", startedAt: nil, length: nil, byteCount: 2_048_000, fileName: "notes.m4a")
         XCTAssertEqual(file.title, "notes.m4a")
@@ -369,6 +409,10 @@ final class DeviceFrameworkTests: XCTestCase {
                 XCTAssertFalse(kind.name.isEmpty || kind.systemImage.isEmpty)
                 XCTAssertFalse(kind.summary.contains("Experimental"))
             }
+            // Each kind has a glyph of its own, so two recorders side by side can be told apart.
+            XCTAssertEqual(Set(DeviceCatalog.kinds.map(\.systemImage)).count, DeviceCatalog.kinds.count)
+            XCTAssertEqual(soundcore?.systemImage, "recordingtape")
+            XCTAssertEqual(other?.systemImage, "waveform.and.mic")
         }
     }
 }

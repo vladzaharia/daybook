@@ -211,11 +211,12 @@ public enum DeviceDateFormat {
 }
 
 /// A length in words: "43 sec", "43 min", "1 hr 12 min". Shared by recorder lengths here and by
-/// conversations in DaybookKit, which re-exports it.
+/// conversations in DaybookKit, which re-exports it. Under a minute it counts whole seconds toward zero, as
+/// the player's times do (`TimeLabel.short`), so a recording reads "41 sec" beside a player that ends at 0:41.
 public enum DurationLabel {
     public static func format(_ seconds: TimeInterval) -> String {
         guard seconds.isFinite, seconds > 0 else { return "0 sec" }
-        if seconds < 60 { return "\(Int(seconds.rounded())) sec" }
+        if seconds < 60 { return "\(Int(seconds)) sec" }
         return Duration.seconds((seconds / 60).rounded() * 60).formatted(.units(allowed: [.hours, .minutes], width: .abbreviated))
     }
 }
