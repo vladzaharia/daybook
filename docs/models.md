@@ -229,22 +229,28 @@ Nothing selected, Apple Intelligence off, a guardrail refusal, or any other fail
 
 ## The model manager
 
-Settings › Models is built from the catalog and the engines this build registers. It has no list of models, engines, or roles of its own, so a new family, variant, engine, or role appears without interface code. `ModelManagerSnapshot` (`Sources/Daybook/App/ModelManager.swift`) turns plain inputs into everything the pane shows: the catalog, the engine descriptors, what's installed, the selections, the download queue, and update results. Tests build it from a synthetic catalog. `ModelManager` keeps what's on disk (inventory, disk use, protected revisions, results per model) and carries out actions through `LocalIntelligenceRuntime` and the app's download queue, so a download from the manager waits for processing and cancels like any other.
+Settings › Models is built from the catalog and the engines this build registers. It has no list of models, engines, or roles of its own, so a new family, variant, engine, or role appears without interface code. `ModelManagerSnapshot` (`Sources/Daybook/App/ModelManager.swift`) turns plain inputs into everything the pane shows: the catalog, the engine descriptors, what's installed, the selections, the download queue, update results, and what's free on the disk. Tests build it from a synthetic catalog. `ModelManager` keeps what's on disk (inventory, disk use, protected revisions, results per model, free space) and carries out actions through `LocalIntelligenceRuntime` and the app's download queue, so a download from the manager waits for processing and cancels like any other.
 
-The pane, top to bottom:
+**One screen on both apps.** The Mac's manager and the iPhone's `PhoneModels` produce the same values (DaybookKit's `Models/ModelChoices.swift`): `ModelStatus` (a model's state and its words, "Downloading · 40%", "Waiting for Wi‑Fi"), `ModelOption` and `ModelRoleChoice` (a role's menu and the line under it, silent while the chosen model is ready), `ModelSpace` (free space, and "Needs 16.5 GB · 12.0 GB free"), `ModelDownloadSummary` (the row that downloads what's chosen), `ModelRemovalWords`, and `ModelQualityOption`. DaybookUI's `Settings/Models` draws them for both: `ModelRoleRow` (in a window, the label with its state, Download or Cancel, and the pop-up in one row; under touch, or where that doesn't fit, the model's name is the menu, its state under it, and what to do beside it), `ModelPicker` (an `NSPopUpButton` whose items carry their state on the Mac, a menu with the same items on the iPhone), `ModelListRow` (a model in the library), `ModelDownloadRow`, `ModelQualityRow`, `ModelLabelChip`, `ModelProcessingSection`, and `ModelLibrarySection`. Sizes are `ByteSize` ("632 MB", "1.6 GB") everywhere. Every Download and Cancel is the same bordered button. A download's bar is the brand gradient; when one finishes, its row shows the accent checkmark for `DaybookMotion.hold` where the bar was (`ModelStatus.finishedDownloading`), with the success haptic on the iPhone.
 
-- **Quality:**
-  - Quick, Balanced, and Detailed from `ModelRecommendations`, each with its models, total download, and suggested memory. The one the catalog recommends for this Mac's tier is marked "Recommended".
+**Room for a download.** A download that wouldn't fit in what's free where the models go (`volumeAvailableCapacityForImportantUsage`) doesn't start: its row says "Needs 632 MB · 300 MB free" in the warning ink and Download waits. A model download that filled the disk would stop recordings and sync too. What it needs is its size less what an unfinished download already fetched. Welcome asks the same of each preset (`ModelPreset.spaceNote(in:)`).
+
+The Mac's pane, top to bottom:
+
+- **Processing:**
+  - Transcribe synced recordings on this Mac (whether this Mac takes other devices' work).
+  - Quick, Balanced, and Detailed from `ModelRecommendations`, each with its models, total download, and suggested memory. The one the catalog recommends for this Mac's tier is marked "Recommended". Each names its models on up to two lines, the ones that set the presets apart first (the summary, then speakers) and the ones every preset shares last, so a row cut short still says how it differs. A preset whose download wouldn't fit says how much it needs.
   - A preset sets every role it names, and its speaker effort. Any other combination reads "Custom".
-  - A row under them speaks only while the chosen models aren't all on this Mac: Download with the size, or progress and Cancel.
+  - A row under them speaks only while the chosen models aren't all on this Mac: what's left with its size and Download, or progress and Cancel.
 - **Role choices:**
   - One pop-up per role. Transcription carries the language rows from `TranscriptionLanguageSettings`. Speakers has the speaker model and, when a model serves it, voice profiles, then the speaker settings, enabled by capabilities, and Speaker profiles (Edit… opens the Speaker Profiles window). Summaries has summaries, plus titles and tags.
   - The roles offered are the `ModelRole.known` roles with a model that can run here, then any other role a registered engine serves. Any further role gets its own section.
   - Each menu item is the model, with its state underneath ("Downloaded", its download size, "Needs a newer Daybook") and "Non-commercial" where it applies.
   - Models that can't run here are listed last, disabled, with the reason. Hiding them would make an entry vanish without explanation, and the library lists them anyway.
   - Choosing a model that isn't downloaded chooses it, and the row shows "Not downloaded · 1.6 GB" with Download. Processing waits for it ("Waiting for models") and never runs another model instead.
+  - Transcription's Other languages row is a role row too, for the model speech goes to in the languages the chosen one doesn't cover.
 - **Model Library:**
-  - Disk use (`diskUsage`) with Show in Finder.
+  - Downloaded models with their disk use (`diskUsage`), and Show in Finder beside it.
   - "Old revisions" with Remove, only when there are some: `ModelInventory.replacedRevisions`, less pinned, leased, and queued revisions, removed with `collectGarbage`.
   - "Old downloads" (`removeLegacyLeftovers`), only when there are some.
   - Updates, with Check for Updates.
@@ -253,7 +259,9 @@ The pane, top to bottom:
   - The likely action is a button (Download, Use, Update). The More menu has Details, Use for a role, Remove, and, for added models, Remove from Daybook.
   - Under the last family: Acknowledgements and Add Model.
 
-**Removing** is confirmed with what it frees and what happens to each role that chose the model, from `ModelSelections.removing`: "Frees 489 MB. Transcription will use Whisper Base." or "Transcription will wait until you download it again." Removing a model the person added from Daybook (`removeAddedModel`) can't be undone by a download, so its roles move to the preset's model, and the confirmation says so.
+**Removing** is confirmed with what it frees and what happens to each role that chose the model, from `ModelSelections.removing`: "Frees 489 MB. Transcription will use Whisper Base." or "Transcription will wait until you download it again." Removing a model the person added from Daybook (`removeAddedModel`) can't be undone by a download, so its roles move to the preset's model, and the confirmation says so. The iPhone says it in the same words (`ModelRemovalWords`); it keeps a role's choice, so each role using the model waits for it.
+
+**The iPhone's Settings › Models** draws the same sections and rows, with only what a phone needs: Processing (Transcribe on This iPhone and the download for transcribing here), a section per processing role, Live with its download and the live roles, Model Library (what the models take on this iPhone, and each downloaded model with Remove), and Download over Cellular. It has no presets, and its library lists only what's here.
 
 **Details** (a sheet) show:
 
@@ -263,6 +271,8 @@ The pane, top to bottom:
 - its capabilities in words ("Word timings", "Up to 4 speakers", "25 languages", "Voice profiles");
 - the license with its link and required attribution, and the source;
 - the revisions on this Mac with publication and download dates, and an update to install.
+
+Done (Return) or Esc closes it.
 
 **Updates are opt-in and manual.** Check for Updates calls `checkForUpdates`. It first confirms Hugging Face can be reached, so being offline reads as a problem rather than "Up to date". Each update shows its size, publication date, and changed files, with Install. `recordUpdate` records the revision in the person's manifest, as `installUpdate` does, and the download (`key@revision`) joins the app's queue. Nothing is checked or installed automatically.
 
@@ -289,7 +299,7 @@ Debug builds take `--model-demo <step,…>` (`ModelDemo`) to show any state agai
 
 **Verified on October 24, 2026:**
 
-- `ModelManagerTests` (15 tests) cover status derivation, presets and Custom, a synthetic catalog with a made-up engine, family, and role, removal confirmations, and fallback through the real runtime on synthetic installs. They also cover old-revision cleanup, and the update and add flows against a scripted Hugging Face, offline included.
+- `ModelManagerTests` (19 tests) cover status derivation, presets and Custom (and the order a preset names its models in), a synthetic catalog with a made-up engine, family, and role, the download row, a download that wouldn't fit, removal confirmations, and fallback through the real runtime on synthetic installs. They also cover old-revision cleanup, and the update and add flows against a scripted Hugging Face, offline included. `ModelChoicesTests` (DaybookKit) cover the words both apps share; the iPhone's `PhoneModelsTests` cover its role choices, its download rows, space, and removal in the same words.
 - The pane, its sheets, and the About panel's credits were rendered in light and dark against synthetic installs.
 
 **Not yet verified:**

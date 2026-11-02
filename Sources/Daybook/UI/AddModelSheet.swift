@@ -96,10 +96,10 @@ struct AddModelSheet: View {
             TextField("Name", text: $name)
             if preview.candidates.count > 1 {
                 Picker("Use for", selection: $candidateID) {
-                    ForEach(preview.candidates) { option in Text("\(option.role.title) · \(option.engine.name)").tag(option.id) }
+                    ForEach(preview.candidates) { option in Text("\(option.role.displayName) · \(option.engine.name)").tag(option.id) }
                 }
             } else {
-                LabeledContent("Use for", value: candidate.role.title)
+                LabeledContent("Use for", value: candidate.role.displayName)
             }
             Picker("Family", selection: $familyID) {
                 Text("New family").tag("")
@@ -118,7 +118,7 @@ struct AddModelSheet: View {
                     } else {
                         Text(preview.license.name)
                     }
-                    if !preview.license.allowsCommercialUse { ModelLabelChip("Non-commercial") }
+                    if !preview.license.allowsCommercialUse { ModelLabelChip(ModelLabels.nonCommercial) }
                 }
             }
             if let memory = candidate.proposal.recommendedMemoryGB {

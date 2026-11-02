@@ -13,71 +13,11 @@ import Observation
 // MARK: - Roles
 
 extension ModelRole {
-    /// What Settings calls the role. A role a newer manifest names reads as its identifier in words.
-    var title: String {
-        switch self {
-        case .transcription: return "Transcription"
-        case .diarization: return "Speakers"
-        case .speakerEmbedding: return "Voice profiles"
-        case .summarization: return "Summaries"
-        case .smallTasks: return "Titles and tags"
-        case .imageDescription: return "Photos"
-        case .liveTranscription: return "Live transcription"
-        case .liveDiarization: return "Live speakers"
-        default: return Self.words(rawValue)
-        }
+    /// The roles in the pipeline's order, then any other role a newer manifest names.
+    static func pipelineOrder(_ a: ModelRole, _ b: ModelRole) -> Bool {
+        let oa = ModelManagerSnapshot.order(a), ob = ModelManagerSnapshot.order(b)
+        return oa == ob ? a.rawValue < b.rawValue : oa < ob
     }
-
-    /// The role as the subject of a sentence: "Speaker detection will use Sortformer 2.1."
-    var subject: String { self == .diarization ? "Speaker detection" : title }
-
-    /// "imageCaptions" or "image_captions" → "Image captions".
-    static func words(_ identifier: String) -> String {
-        var result = ""
-        for character in identifier {
-            if character == "_" || character == "-" { result += " "; continue }
-            if character.isUppercase, !result.isEmpty, result.last != " " { result += " " }
-            result.append(contentsOf: result.isEmpty ? character.uppercased() : character.lowercased())
-        }
-        return result.isEmpty ? identifier : result
-    }
-}
-
-// MARK: - Status
-
-/// A model's state on this Mac, as the library, the role menus, and details show it.
-enum ModelStatus: Equatable {
-    /// This build or this Mac can't run it ("Needs a newer Daybook", "Not available on this Mac").
-    case unavailable(String)
-    case notDownloaded
-    /// Files went missing or changed size since they were checked.
-    case damaged
-    case waiting
-    case downloading(Double)
-    case updateAvailable
-    case downloaded
-    case inUse
-    /// Provided by macOS: nothing to download.
-    case builtIn
-
-    var label: String {
-        switch self {
-        case .unavailable(let reason): return reason
-        case .notDownloaded: return "Not downloaded"
-        case .damaged: return "Needs downloading again"
-        case .waiting: return "Waiting to download"
-        case .downloading(let fraction): return "Downloading · \(Int((min(max(fraction, 0), 1) * 100).rounded(.down)))%"
-        case .updateAvailable: return "Update available"
-        case .downloaded: return "Downloaded"
-        case .inUse: return "In use"
-        case .builtIn: return "Included with macOS"
-        }
-    }
-
-    /// It can run now.
-    var isReady: Bool { [.downloaded, .inUse, .updateAvailable, .builtIn].contains(self) }
-    var isAvailable: Bool { if case .unavailable = self { return false }; return true }
-    var isTransferring: Bool { if case .downloading = self { return true }; return self == .waiting }
 }
 
 // MARK: - Rows
@@ -100,9 +40,9 @@ struct ModelRow: Identifiable, Equatable {
     var isAddedByYou: Bool { model.origin == .addedByYou }
     /// "OpenAI · 487 MB"; system models have no size.
     var subtitle: String {
-        [model.maker, model.isSystemModel ? nil : ModelSize.format(model.approximateBytes)].compactMap { $0 }.joined(separator: " · ")
+        [model.maker, model.isSystemModel ? nil : ByteSize.format(model.approximateBytes)].compactMap { $0 }.joined(separator: " · ")
     }
-    var canDownload: Bool { status == .notDownloaded || status == .damaged }
+    var canDownload: Bool { status.canDownload }
     var canRemove: Bool { !model.isSystemModel && bytesOnDisk > 0 && !status.isTransferring }
     var canUse: Bool { status.isReady && !usableRoles.isEmpty }
 }
@@ -114,39 +54,27 @@ struct ModelFamilyGroup: Identifiable, Equatable {
     let rows: [ModelRow]
 }
 
-/// One choice in a role's menu.
-struct ModelOption: Identifiable, Equatable {
-    let key: String
-    let name: String
-    /// "Downloaded", "1.6 GB", "Needs a newer Daybook", with " · Non-commercial" where it applies.
-    let detail: String
-    let isEnabled: Bool
-    var id: String { key }
-}
-
-/// A role's choice: what's selected, what else it could be, and how the selected model stands.
-struct ModelRoleChoice: Identifiable, Equatable {
-    let role: ModelRole
-    let selection: String?
-    let options: [ModelOption]
-    let selectedModel: CatalogModel?
-    let status: ModelStatus?
-    var id: String { role.rawValue }
-    var title: String { role.title }
-}
-
 /// Quick, Balanced, Detailed, or the person's own mix.
 struct ModelPresetSummary: Identifiable, Equatable {
     /// Nil for Custom.
     let preset: ModelPreset?
     let isRecommended: Bool
     let isCurrent: Bool
+    /// Its models, one per role, the ones that set the presets apart first (`ModelQualityOption.ordered`).
     let keys: [String]
     let names: [String]
     let bytes: Int64
     let memoryGB: Int
+    /// What downloading it still takes on this Mac: its models that aren't here, less what unfinished downloads fetched.
+    let missingBytes: Int64
     var id: String { preset?.rawValue ?? "custom" }
     var title: String { preset?.title ?? "Custom" }
+
+    /// As DaybookUI's quality row draws it.
+    var option: ModelQualityOption {
+        ModelQualityOption(id: id, title: title, isCustom: preset == nil, isRecommended: isRecommended, isCurrent: isCurrent,
+                           names: names, bytes: bytes, memoryGB: memoryGB)
+    }
 }
 
 /// What the library takes on disk, and what can go.
@@ -184,6 +112,8 @@ struct ModelManagerSnapshot {
     /// Revisions nothing may remove: pinned, leased, or frozen by queued and running jobs.
     var protectedRevisions: Set<ModelInstallKey> = []
     var resultCounts: [String: Int] = [:]
+    /// What's free where models go: a download that wouldn't fit says so and waits.
+    var space: ModelSpace = .unknown
 
     /// Roles listed first, in the pipeline's order; any others after.
     static func order(_ role: ModelRole) -> Int { ModelRole.known.firstIndex(of: role) ?? ModelRole.known.count }
@@ -223,12 +153,17 @@ struct ModelManagerSnapshot {
     }
 
     /// "Non-commercial" and "Added by you", from the license and where the entry came from.
-    func labels(_ model: CatalogModel) -> [String] {
-        var labels: [String] = []
-        if let license = model.license, !license.allowsCommercialUse { labels.append("Non-commercial") }
-        if model.license == nil { labels.append("Non-commercial") }
-        if let origin = model.origin.label { labels.append(origin) }
-        return labels
+    func labels(_ model: CatalogModel) -> [String] { ModelLabels.of(model) }
+
+    /// What downloading a model still takes: its size, less what an unfinished download already fetched.
+    func downloadBytes(_ model: CatalogModel) -> Int64 {
+        guard !model.isSystemModel else { return 0 }
+        return max(0, model.approximateBytes - (diskUsage?.partial[model.key] ?? 0))
+    }
+
+    /// What downloading these models still takes: those that aren't here.
+    func missingBytes(_ keys: [String]) -> Int64 {
+        Set(keys).compactMap { catalog.model($0) }.filter { !installed.contains($0.key) }.reduce(0) { $0 + downloadBytes($1) }
     }
 
     // MARK: Role choices
@@ -244,17 +179,19 @@ struct ModelManagerSnapshot {
             let chosen = selections[role] != nil && ModelRole.known.contains(role) && !models.isEmpty
             return runsHere || chosen
         }
-        .sorted { Self.order($0) == Self.order($1) ? $0.title < $1.title : Self.order($0) < Self.order($1) }
+        .sorted { Self.order($0) == Self.order($1) ? $0.displayName < $1.displayName : Self.order($0) < Self.order($1) }
     }
 
-    var roleChoices: [ModelRoleChoice] { choiceRoles.map(choice(for:)) }
+    var roleChoices: [ModelRoleChoice] { choiceRoles.map { choice(for: $0) } }
 
-    func choice(for role: ModelRole) -> ModelRoleChoice {
-        let selection = selections[role]
+    /// `role`'s choice; `selection` for a choice that isn't the role's own (the model for other languages).
+    func choice(for role: ModelRole, selection chosen: String? = nil, among models: [CatalogModel]? = nil) -> ModelRoleChoice {
+        let selection = chosen ?? selections[role]
         var available: [ModelOption] = [], unavailable: [ModelOption] = []
-        for model in catalog.models(for: role) {
+        for model in models ?? catalog.models(for: role) {
             let status = status(of: model)
-            let option = ModelOption(key: model.key, name: model.name, detail: optionDetail(model, status), isEnabled: status.isAvailable)
+            let option = ModelOption(key: model.key, name: model.name, detail: ModelOption.detail(for: model, status: status),
+                                     isEnabled: status.isAvailable)
             if status.isAvailable || model.key == selection { available.append(option) } else { unavailable.append(option) }
         }
         // A choice the catalog no longer lists stays visible, so nothing switches silently.
@@ -263,17 +200,41 @@ struct ModelManagerSnapshot {
         }
         let model = selection.flatMap { catalog.model($0) }
         return ModelRoleChoice(role: role, selection: selection, options: available + unavailable, selectedModel: model,
-                               status: model.map(status(of:)))
+                               status: model.map(status(of:)), downloadBytes: model.map(downloadBytes))
     }
 
-    func optionDetail(_ model: CatalogModel, _ status: ModelStatus) -> String {
-        let state: String
-        switch status {
-        case .downloaded, .inUse, .updateAvailable: state = "Downloaded"
-        case .notDownloaded, .damaged: state = ModelSize.format(model.approximateBytes)
-        default: state = status.label
+    /// The models the choices need that aren't on this Mac and can be downloaded, in the roles' order. Speaker
+    /// detection's only while it's on; live captions' models are optional downloads, offered in their own rows.
+    func missingSelected(detectSpeakers: Bool) -> [String] {
+        var keys: [String] = []
+        for role in choiceRoles where (role != .diarization || detectSpeakers) && !role.isLiveOnly {
+            guard let key = selections[role], let model = catalog.model(key), !keys.contains(model.key) else { continue }
+            if status(of: model).canDownload { keys.append(model.key) }
         }
-        return ([state] + labels(model).filter { $0 == "Non-commercial" }).joined(separator: " · ")
+        return keys
+    }
+
+    /// What the processing choices still need: what to download, or, once all of it is on its way, how far it's got.
+    /// A model fetched on its own doesn't stand for the rest, which can still be started. Nil when it's all here.
+    func downloadSummary(detectSpeakers: Bool) -> ModelDownloadSummary? {
+        let chosen = choiceRoles.filter { ($0 != .diarization || detectSpeakers) && !$0.isLiveOnly }.compactMap { selections[$0] }
+        let downloadable = Set(chosen.compactMap { catalog.model($0) }.filter { !$0.isSystemModel }.map(\.key))
+        let missing = missingSelected(detectSpeakers: detectSpeakers)
+        if !missing.isEmpty {
+            let names = missing.map { key in catalog.model(key).map { ModelSize.shortName($0, in: catalog) } ?? key }
+            return .missing(names: names, bytes: missingBytes(missing), partly: missing.count < downloadable.count)
+        }
+        let models = downloadable.compactMap { catalog.model($0) }
+        guard models.contains(where: { status(of: $0).isTransferring }) else { return nil }
+        let total = models.reduce(Int64(0)) { $0 + $1.approximateBytes }
+        let done = models.reduce(Int64(0)) { sum, model in
+            switch status(of: model) {
+            case .downloading(let fraction): return sum + Int64(Double(model.approximateBytes) * min(max(fraction, 0), 1))
+            case let status where status.isReady: return sum + model.approximateBytes
+            default: return sum
+            }
+        }
+        return .downloading(done: done, total: total)
     }
 
     // MARK: Library
@@ -323,27 +284,34 @@ struct ModelManagerSnapshot {
     /// Quick, Balanced, and Detailed, then Custom when the choices match none of them.
     var presets: [ModelPresetSummary] {
         let recommended = ModelPreset.recommended(tier: tier, catalog: catalog)
-        var summaries = ModelPreset.allCases.map { preset -> ModelPresetSummary in
-            let models = preset.models(catalog: catalog, engines: engines)
-            let keys = ModelPreset.keys(models)
-            return summary(preset, keys: keys, recommended: recommended,
-                           current: preset.matches(selections, speakerQuality: speakerQuality, catalog: catalog, engines: engines))
+        let chosen = ModelPreset.allCases.map { $0.models(catalog: catalog, engines: engines) }
+        // The roles whose model isn't the same in every preset: named first, so a row cut short still says what sets it apart.
+        let roles = Set(chosen.flatMap(\.choices.keys))
+        let differing = Set(roles.filter { role in Set(chosen.map { $0.model(for: role) ?? "" }).count > 1 })
+        var summaries = zip(ModelPreset.allCases, chosen).map { preset, models -> ModelPresetSummary in
+            summary(preset, choices: models.choices.keys.compactMap { role in models.model(for: role).map { (role, $0) } },
+                    differing: differing, recommended: recommended,
+                    current: preset.matches(selections, speakerQuality: speakerQuality, catalog: catalog, engines: engines))
         }
         if !summaries.contains(where: \.isCurrent) {
             // Live captions' models are optional downloads, not part of what processing needs.
-            let keys = choiceRoles.filter { !$0.isLiveOnly }.compactMap { selections[$0] }
-            summaries.append(summary(nil, keys: keys, recommended: recommended, current: true))
+            let choices = choiceRoles.filter { !$0.isLiveOnly }.compactMap { role in selections[role].map { (role, $0) } }
+            summaries.append(summary(nil, choices: choices, differing: differing, recommended: recommended, current: true))
         }
         return summaries
     }
 
-    private func summary(_ preset: ModelPreset?, keys: [String], recommended: ModelPreset, current: Bool) -> ModelPresetSummary {
+    private func summary(_ preset: ModelPreset?, choices: [(ModelRole, String)], differing: Set<ModelRole>, recommended: ModelPreset,
+                         current: Bool) -> ModelPresetSummary {
+        let byRole = Dictionary(choices, uniquingKeysWith: { first, _ in first })
         // A model with two roles (Community-1 finds speakers and makes voice profiles) is listed once.
         var seen = Set<String>()
-        let keys = keys.filter { seen.insert($0).inserted }
+        let keys = ModelQualityOption.ordered(Array(byRole.keys), differing: differing).compactMap { byRole[$0] }
+            .filter { seen.insert($0).inserted }
         return ModelPresetSummary(preset: preset, isRecommended: preset == recommended, isCurrent: current, keys: keys,
                                   names: keys.map { key in catalog.model(key).map { ModelSize.shortName($0, in: catalog) } ?? catalog.name(for: key) },
-                                  bytes: ModelSize.bytes(keys, in: catalog), memoryGB: ModelSize.recommendedMemoryGB(keys, in: catalog))
+                                  bytes: ModelSize.bytes(keys, in: catalog), memoryGB: ModelSize.recommendedMemoryGB(keys, in: catalog),
+                                  missingBytes: missingBytes(keys))
     }
 
     // MARK: Storage
@@ -360,29 +328,28 @@ struct ModelManagerSnapshot {
     /// The confirmation for removing a model's files (or, for one the person added, the model
     /// itself): what it frees, and what happens to each role that chose it.
     func removal(of model: CatalogModel, removesEntry: Bool, preset: ModelRecommendations.Preset) -> ModelRemoval {
-        let bytes = bytesOnDisk(model)
         var result = selections.removing(model.key, preset: preset, installed: installed.subtracting([model.key]))
-        var sentences: [String] = bytes > 0 ? ["Frees \(ModelSize.format(bytes))."] : []
+        var changes: [ModelRemovalWords.Change] = []
         for change in result.changes {
             switch change {
             case .switched(let role, _, let to):
-                sentences.append("\(role.subject) will use \(catalog.name(for: to)).")
+                changes.append(.switched(role, to: catalog.name(for: to), onceDownloaded: false))
             case .needsDownload(let role, _):
-                guard removesEntry else { sentences.append("\(role.subject) will wait until you download it again."); continue }
+                guard removesEntry else { changes.append(.waits(role)); continue }
                 // A model that's no longer listed can't be downloaded again: the preset's model stands in.
                 if let fallback = preset.choices[role]?.first(where: { $0 != model.key }) {
                     result.selections[role] = fallback
-                    sentences.append("\(role.subject) will use \(catalog.name(for: fallback))\(installed.contains(fallback) ? "" : ", once it’s downloaded").")
+                    changes.append(.switched(role, to: catalog.name(for: fallback), onceDownloaded: !installed.contains(fallback)))
                 } else {
                     result.selections[role] = nil
-                    sentences.append("\(role.subject) will need another model.")
+                    changes.append(.needsAnother(role))
                 }
             }
         }
-        if result.changes.isEmpty { sentences.append(removesEntry ? "You can add it again later." : "You can download it again at any time.") }
         return ModelRemoval(key: model.key, name: model.name, removesEntry: removesEntry,
-                            title: removesEntry ? "Remove \(model.name) from Daybook?" : "Remove \(model.name)?",
-                            message: sentences.joined(separator: " "), selections: result.selections)
+                            title: ModelRemovalWords.title(model.name, removesEntry: removesEntry),
+                            message: ModelRemovalWords.message(frees: bytesOnDisk(model), changes: changes, removesEntry: removesEntry),
+                            selections: result.selections)
     }
 }
 
@@ -495,9 +462,13 @@ final class ModelManager {
     private(set) var updates: [ModelUpdate] = []
     private(set) var updateCheck = UpdateCheck.never
     private(set) var resultCounts: [String: Int] = [:]
+    /// What's free where models go, as of the last refresh (`ModelPreset.space`).
+    private(set) var space = ModelSpace.unknown
     /// A problem to show: what couldn't be done, one sentence with its fix, and the system's words behind Details.
     var problem: AppProblem?
     private(set) var isWorking = false
+    /// Reads what's free at a folder; replaced in tests.
+    @ObservationIgnored var readSpace: (URL) -> ModelSpace = ModelSpace.available(at:)
 
     init(state: AppState, hubClient: (any ModelHubClient)? = nil, requestDownload: (([String]) -> Void)? = nil) {
         self.state = state
@@ -511,7 +482,7 @@ final class ModelManager {
                              speakerQuality: state.processingPreferences.speakerOptions.quality,
                              downloading: state.downloadingID, downloadFraction: state.downloadProgress.fraction,
                              pending: state.pendingDownloads, updates: updates, protectedRevisions: protectedRevisions,
-                             resultCounts: resultCounts)
+                             resultCounts: resultCounts, space: space)
     }
 
     /// Removing and old-revision cleanup wait for processing and downloads (the app refuses them meanwhile).
@@ -534,6 +505,7 @@ final class ModelManager {
         }
         protectedRevisions = protected
         resultCounts = state.modelCatalog.resultCounts(in: state.meetings)
+        space = readSpace(modelsFolder)
     }
 
     // MARK: Choosing and downloading
@@ -542,26 +514,35 @@ final class ModelManager {
     /// "Not downloaded" with Download; processing waits for it rather than using another model.
     func use(_ key: String, for role: ModelRole) { state.modelSelections[role] = key }
 
-    func download(_ key: String) { requestDownload([key]) }
+    /// Downloads `key`, when there's room for it; a download that would fill the disk would stop recordings and sync too.
+    func download(_ key: String) {
+        let snapshot = snapshot
+        guard let model = snapshot.catalog.model(key), snapshot.space.fits(snapshot.downloadBytes(model)) else { return }
+        requestDownload([key])
+    }
 
-    /// Downloads whatever the current choices need.
-    func downloadSelected() { requestDownload(missingSelected) }
+    /// Downloads whatever the current choices need, when there's room for all of it.
+    func downloadSelected() {
+        let snapshot = snapshot, missing = snapshot.missingSelected(detectSpeakers: state.detectSpeakers)
+        guard !missing.isEmpty, snapshot.space.fits(snapshot.missingBytes(missing)) else { return }
+        requestDownload(missing)
+    }
 
     /// Selected models that aren't on this Mac yet and can be downloaded.
-    var missingSelected: [String] {
-        let snapshot = snapshot
-        var keys: [String] = []
-        // Live captions' models are optional downloads, offered in their own rows.
-        for role in snapshot.choiceRoles where (role != .diarization || state.detectSpeakers) && !role.isLiveOnly {
-            guard let key = state.modelSelections[role], let model = state.modelCatalog.model(key), !keys.contains(model.key) else { continue }
-            if [.notDownloaded, .damaged].contains(snapshot.status(of: model)) { keys.append(model.key) }
-        }
-        return keys
-    }
+    var missingSelected: [String] { snapshot.missingSelected(detectSpeakers: state.detectSpeakers) }
+
+    /// What the processing choices still need (Settings › Models' Processing).
+    var downloadSummary: ModelDownloadSummary? { snapshot.downloadSummary(detectSpeakers: state.detectSpeakers) }
 
     func cancelDownloads() { state.cancelDownload() }
 
     func cancelWaiting(_ key: String) { state.removePendingDownload(key) }
+
+    /// Cancels `key`'s download: the one under way, or its place in the queue.
+    func cancel(_ key: String) {
+        if state.downloadingID.map({ ModelReference($0).id }) == key { cancelDownloads() } else { cancelWaiting(key) }
+    }
+
 
     // MARK: Updates
 

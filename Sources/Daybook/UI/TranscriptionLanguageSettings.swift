@@ -1,5 +1,6 @@
 import DaybookIntelligence
 import DaybookKit
+import DaybookUI
 import SwiftUI
 
 /// The transcription language rows in Settings › Models, placed under the transcription model:
@@ -7,6 +8,7 @@ import SwiftUI
 /// them in; the model manager places them.
 struct TranscriptionLanguageSettings: View {
     let state: AppState
+    let manager: ModelManager
 
     var body: some View {
         Picker("Language", selection: language) {
@@ -17,21 +19,14 @@ struct TranscriptionLanguageSettings: View {
             }
         }
         if showsOtherLanguages, let other = otherLanguagesModel {
-            // Laid out like the model rows above: what to do, then the pop-up; its state under the label.
-            LabeledContent {
-                HStack(spacing: Space.s2) {
-                    action(other)
-                    Picker("Other languages", selection: otherLanguages) {
-                        ForEach(otherChoices) { model in Text(model.name).tag(model.key) }
-                    }
-                    .labelsHidden()
-                    .fixedSize()
-                }
-            } label: {
-                Text("Other languages")
-                ActivityReader {
-                    if let line = statusLine(other) { Text(line).monospacedDigit() }
-                }
+            // A model row like the ones above (DaybookUI's): its state under the label, what to do, then the pop-up.
+            ActivityReader {
+                let snapshot = manager.snapshot
+                ModelRoleRow(label: "Other languages",
+                             choice: snapshot.choice(for: .transcription, selection: other, among: otherChoices),
+                             space: snapshot.space,
+                             actions: ModelRowActions(select: { otherLanguages.wrappedValue = $0 },
+                                                      download: { manager.download($0) }, cancel: { manager.cancel($0) }))
             }
         }
     }
@@ -81,26 +76,5 @@ struct TranscriptionLanguageSettings: View {
     private var otherLanguages: Binding<String> {
         Binding(get: { otherLanguagesModel ?? "" },
                 set: { state.processingPreferences.otherLanguagesModelID = $0.isEmpty ? nil : $0 })
-    }
-
-    /// Silent when the model is here, as on the model rows.
-    private func statusLine(_ key: String) -> String? {
-        if state.downloadingID == key {
-            return "Downloading · \(Int((min(max(state.downloadProgress.fraction, 0), 1) * 100).rounded(.down)))%"
-        }
-        if state.pendingDownloads.contains(key) { return "Waiting to download" }
-        guard !state.installedModels.contains(key) else { return nil }
-        return "Not downloaded · \(ModelSize.format(catalog.model(key)?.approximateBytes ?? 0))"
-    }
-
-    @ViewBuilder private func action(_ key: String) -> some View {
-        if state.downloadingID == key {
-            Button("Cancel") { state.cancelDownload() }
-        } else if state.pendingDownloads.contains(key) {
-            Button("Cancel") { state.removePendingDownload(key) }
-        } else if !state.installedModels.contains(key) {
-            Button("Download") { state.downloadModels([key]) }
-                .disabled(state.processingID != nil)
-        }
     }
 }

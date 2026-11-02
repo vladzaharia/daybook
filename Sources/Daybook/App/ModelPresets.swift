@@ -44,6 +44,16 @@ enum ModelPreset: String, CaseIterable, Identifiable {
         Self.keys(models(in: state)).filter { state.modelCatalog.model($0)?.isSystemModel != true }
     }
     @MainActor func bytes(in state: AppState) -> Int64 { ModelSize.bytes(Self.keys(models(in: state)), in: state.modelCatalog) }
+    /// What downloading the preset still takes on this Mac: its models that aren't here yet.
+    @MainActor func missingBytes(in state: AppState) -> Int64 {
+        ModelSize.bytes(downloadKeys(in: state).filter { !state.installedModels.contains($0) }, in: state.modelCatalog)
+    }
+    /// When the preset's download wouldn't fit in what's free on this Mac: "Needs 16.5 GB · 12 GB free", in the warning
+    /// ink, and Download waits (Welcome and Settings › Models). Nil when it fits, or the system doesn't say.
+    @MainActor func spaceNote(in state: AppState, space: ModelSpace? = nil) -> ModelLine? {
+        let space = space ?? ModelSize.space(in: state)
+        return space.shortfall(missingBytes(in: state)).map { ModelLine($0, needsAttention: true) }
+    }
     @MainActor func recommendedMemoryGB(in state: AppState) -> Int {
         ModelSize.recommendedMemoryGB(Self.keys(models(in: state)), in: state.modelCatalog)
     }
@@ -113,7 +123,10 @@ enum ModelPreset: String, CaseIterable, Identifiable {
 
 /// Model sizes and download progress, in the units people read ("2.4 GB", "1.2 of 2.4 GB").
 enum ModelSize {
-    static let physicalMemoryGB = Int((Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824).rounded())
+    /// What's free where this Mac keeps its models (`ModelSpace.available(at:)`).
+    @MainActor static func space(in state: AppState) -> ModelSpace {
+        ModelSpace.available(at: state.storageURL.appendingPathComponent("Models", isDirectory: true))
+    }
 
     /// Presets name built-in models; Settings passes the app's catalog, which adds the person's own.
     static func model(_ id: String, in catalog: ModelCatalog = .builtIn) -> CatalogModel? { catalog.model(id) }
@@ -125,15 +138,11 @@ enum ModelSize {
         ids.compactMap { model($0, in: catalog) }.map(\.recommendedMemoryGB).max() ?? 8
     }
 
-    static func format(_ bytes: Int64) -> String {
-        if bytes <= 0 { return "0 MB" }
-        return bytes >= 1_000_000_000 ? String(format: "%.1f GB", Double(bytes) / 1e9) : "\(max(1, Int((Double(bytes) / 1e6).rounded()))) MB"
-    }
+    /// "632 MB", "1.6 GB": one format on both apps (`ByteSize`).
+    static func format(_ bytes: Int64) -> String { ByteSize.format(bytes) }
 
-    static func progress(_ done: Int64, of total: Int64) -> String {
-        guard total >= 1_000_000_000 else { return "\(format(done).replacingOccurrences(of: " MB", with: "")) of \(format(total))" }
-        return String(format: "%.1f of %.1f GB", Double(done) / 1e9, Double(total) / 1e9)
-    }
+    /// "120 of 632 MB", "0.4 of 1.6 GB".
+    static func progress(_ done: Int64, of total: Int64) -> String { ByteSize.progress(done, of: total) }
 
     /// Bytes of these models already on this Mac, counting the current download's progress.
     @MainActor static func downloaded(_ ids: [String], in state: AppState) -> Int64 {

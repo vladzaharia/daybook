@@ -35,8 +35,8 @@ final class LiveTranscriptionTests: XCTestCase {
     }
 
     func testTheLiveRolesHaveTheirOwnSettingsAndStayOutOfCustom() {
-        XCTAssertEqual(ModelRole.liveTranscription.title, "Live transcription")
-        XCTAssertEqual(ModelRole.liveDiarization.title, "Live speakers")
+        XCTAssertEqual(ModelRole.liveTranscription.displayName, "Live transcription")
+        XCTAssertEqual(ModelRole.liveDiarization.displayName, "Live speakers")
         let choices = MacLiveModels.choices(selections: ModelSelections(), catalog: .builtIn,
                                             engines: ModelEngineRegistry.standard.descriptors)
         XCTAssertEqual(choices[.liveTranscription], "nemotron-3.5-asr-streaming/latin-1120ms")

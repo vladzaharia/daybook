@@ -187,9 +187,9 @@ final class ModelManagerTests: XCTestCase {
         unknown.engines = Self.engines.filter { $0.id != "holoEngine" }
         XCTAssertFalse(unknown.choiceRoles.contains("translation"))
         XCTAssertNotNil(unknown.families.first { $0.id == "babel" })
-        XCTAssertEqual(ModelRole("speakerEmbedding").title, "Voice profiles")
-        XCTAssertEqual(ModelRole.words("imageCaptions"), "Image captions")
-        XCTAssertEqual(ModelRole.words("image_captions"), "Image captions")
+        XCTAssertEqual(ModelRole("speakerEmbedding").displayName, "Voice profiles")
+        XCTAssertEqual(SettingsWords.words("imageCaptions"), "Image captions")
+        XCTAssertEqual(SettingsWords.words("image_captions"), "Image captions")
     }
 
     // MARK: Presets
@@ -209,7 +209,7 @@ final class ModelManagerTests: XCTestCase {
         XCTAssertEqual(snapshot.presets.map(\.title), ["Quick", "Balanced", "Detailed"])
         XCTAssertEqual(snapshot.presets.filter(\.isCurrent).map(\.title), ["Quick"])
         XCTAssertEqual(snapshot.presets.filter(\.isRecommended).map(\.title), ["Balanced"], "This tier's recommendation")
-        XCTAssertEqual(snapshot.presets[0].names, ["Whisp Tiny", "System Helper"])
+        XCTAssertEqual(snapshot.presets[0].names, ["System Helper", "Whisp Tiny"], "What sets the presets apart, the speakers and summary before transcription")
         XCTAssertEqual(snapshot.presets[0].bytes, 100_000_000, "System models download nothing")
         XCTAssertEqual(snapshot.presets[1].memoryGB, 16)
 
@@ -219,7 +219,7 @@ final class ModelManagerTests: XCTestCase {
         snapshot.speakerQuality = .fast
         XCTAssertEqual(snapshot.presets.map(\.title), ["Quick", "Balanced", "Detailed", "Custom"])
         XCTAssertEqual(snapshot.presets.last?.isCurrent, true)
-        XCTAssertEqual(snapshot.presets.last?.keys, ["whisp/big", "os/default"])
+        XCTAssertEqual(snapshot.presets.last?.keys, ["os/default", "whisp/big"])
     }
 
     func testAModelWithTwoRolesIsListedOnceInItsPreset() {
@@ -262,6 +262,55 @@ final class ModelManagerTests: XCTestCase {
         XCTAssertEqual(state.processingPreferences.speakerModelID, "sortformer-2.1/compact", "The speaker choice stays in step")
         ModelPreset.quick.apply(to: state)
         XCTAssertEqual(ModelPreset.current(in: state), .quick)
+    }
+
+    /// Processing's download row: everything the choices need, then what's left by name, then how far it's got.
+    func testBehaviorTheDownloadRowSaysWhatsLeftThenHowFarItsGot() {
+        var snapshot = makeSnapshot(selections: [.transcription: "whisp/big", .smallTasks: "os/default"])
+        XCTAssertEqual(snapshot.downloadSummary(detectSpeakers: true), .missing(names: ["Whisp Big"], bytes: 1_600_000_000, partly: false),
+                       "a system model downloads nothing")
+        snapshot.selections["translation"] = "babel/one"
+        snapshot.installed = ["babel/one"]
+        XCTAssertEqual(snapshot.downloadSummary(detectSpeakers: true), .missing(names: ["Whisp Big"], bytes: 1_600_000_000, partly: true))
+        snapshot.diskUsage = ModelDiskUsage(installed: [:], partial: ["whisp/big": 600_000_000], legacy: [:])
+        XCTAssertEqual(snapshot.choice(for: .transcription).downloadBytes, 1_000_000_000, "what an unfinished download still needs")
+        snapshot.downloading = "whisp/big"
+        snapshot.downloadFraction = 0.5
+        XCTAssertEqual(snapshot.downloadSummary(detectSpeakers: true), .downloading(done: 850_000_000, total: 1_650_000_000))
+        snapshot.downloading = nil
+        snapshot.installed.insert("whisp/big")
+        XCTAssertNil(snapshot.downloadSummary(detectSpeakers: true))
+    }
+
+    /// A download that wouldn't fit in what's free on this Mac says how much it needs and doesn't start: Download waits,
+    /// in the role's row, the download row, and a preset that would need more than there is (ux-mac-16).
+    func testBehaviorADownloadThatWouldntFitSaysWhatItNeedsAndWaits() async throws {
+        var snapshot = makeSnapshot(selections: [.transcription: "whisp/big"])
+        snapshot.space = ModelSpace(free: 1_000_000_000)
+        let choice = snapshot.choice(for: .transcription)
+        XCTAssertEqual(choice.line(space: snapshot.space), ModelLine("Needs 1.6 GB · 1.0 GB free", needsAttention: true))
+        XCTAssertFalse(choice.canDownload(space: snapshot.space))
+        let detailed = try XCTUnwrap(snapshot.presets.first { $0.preset == .detailed })
+        XCTAssertEqual(detailed.missingBytes, 1_600_000_000)
+        XCTAssertNotNil(snapshot.space.shortfall(detailed.missingBytes))
+        XCTAssertNil(snapshot.space.shortfall(try XCTUnwrap(snapshot.presets.first).missingBytes), "Quick's 100 MB fits")
+
+        let state = AppState(libraryURL: try library(), defaults: defaults())
+        var requested: [[String]] = []
+        let manager = ModelManager(state: state, hubClient: ScriptedHub(), requestDownload: { requested.append($0) })
+        manager.readSpace = { _ in ModelSpace(free: 1_000_000) }
+        await manager.refresh()
+        XCTAssertEqual(manager.space, ModelSpace(free: 1_000_000))
+        manager.use("whisper/small", for: .transcription)
+        manager.download("whisper/small")
+        manager.downloadSelected()
+        XCTAssertEqual(requested, [], "nothing queued that would fill the disk")
+        XCTAssertNotNil(ModelPreset.balanced.spaceNote(in: state, space: manager.space), "Welcome's note for a preset that won't fit")
+        manager.readSpace = { _ in ModelSpace(free: 900_000_000_000) }
+        await manager.refresh()
+        manager.download("whisper/small")
+        XCTAssertEqual(requested, [["whisper/small"]])
+        XCTAssertNil(ModelPreset.quick.spaceNote(in: state, space: manager.space))
     }
 
     // MARK: Removal

@@ -1,6 +1,7 @@
 import DaybookCore
 import DaybookIntelligence
 import DaybookKit
+import DaybookUI
 import SwiftUI
 
 // MARK: - Models pane
@@ -18,10 +19,11 @@ private final class ModelManagerSlot {
     }
 }
 
-/// Settings › Models: the quality preset; each role's model with the settings that belong to it;
-/// words and templates; then the model library (what's on this Mac, updates, every model by
-/// family, adding a model, and acknowledgements). Rendered from `ModelManagerSnapshot`, so the
-/// catalog decides which roles and models appear.
+/// Settings › Models: processing (synced recordings, the quality preset, and what's left to download); each role's
+/// model with the settings that belong to it; words and templates; then the model library (what's on this Mac,
+/// updates, every model by family, adding a model, and acknowledgements). Rendered from `ModelManagerSnapshot`, so the
+/// catalog decides which roles and models appear. Processing, the role rows, the library's size, and its model rows are
+/// DaybookUI's, drawn as the iPhone draws them.
 struct ModelSettings: View {
     @Bindable var state: AppState
     @State private var slot = ModelManagerSlot()
@@ -47,17 +49,17 @@ struct ModelSettings: View {
         let choices = Dictionary(uniqueKeysWithValues: snapshot.roleChoices.map { ($0.role, $0) })
         ScrollViewReader { proxy in
             Form {
-                qualitySection(snapshot)
-                transcriptionSection(choices[.transcription])
-                speakersSection(choices)
+                processingSection(snapshot)
+                transcriptionSection(choices[.transcription], space: snapshot.space)
+                speakersSection(choices, space: snapshot.space)
                 if choices[.summarization] != nil || choices[.smallTasks] != nil {
                     Section("Summaries") {
-                        if let choice = choices[.summarization] { ModelChoiceRow(manager: manager, choice: choice, label: "Model") }
-                        if let choice = choices[.smallTasks] { ModelChoiceRow(manager: manager, choice: choice, label: choice.title) }
+                        if let choice = choices[.summarization] { roleRow(choice, label: "Model", space: snapshot.space) }
+                        if let choice = choices[.smallTasks] { roleRow(choice, label: choice.title, space: snapshot.space) }
                     }
                 }
                 ForEach(snapshot.roleChoices.filter { !Self.placedRoles.contains($0.role) }) { choice in
-                    Section(choice.title) { ModelChoiceRow(manager: manager, choice: choice, label: "Model") }
+                    Section(choice.title) { roleRow(choice, label: "Model", space: snapshot.space) }
                 }
                 wordsSection
                 librarySection(snapshot)
@@ -106,59 +108,33 @@ struct ModelSettings: View {
         .sheet(item: $problemDetails) { ProblemDetailsSheet(problem: $0) }
     }
 
-    // MARK: Quality
+    // MARK: Processing
 
-    @ViewBuilder private func qualitySection(_ snapshot: ModelManagerSnapshot) -> some View {
-        Section("Quality") {
+    /// Whether this Mac transcribes what other devices sync to it, the quality presets, and the row that downloads what
+    /// the choices still need (DaybookUI's, as the iPhone's). A preset whose download wouldn't fit here says how much it
+    /// needs.
+    private func processingSection(_ snapshot: ModelManagerSnapshot) -> some View {
+        ModelProcessingSection(toggleTitle: "Transcribe synced recordings on this Mac", isOn: $state.processSyncedAudio,
+                               download: snapshot.downloadSummary(detectSpeakers: state.detectSpeakers), space: snapshot.space,
+                               downloadAction: { manager.downloadSelected() }, cancelAction: { manager.cancelDownloads() }) {
             ForEach(snapshot.presets) { summary in
-                ModelPresetRow(summary: summary) { summary.preset?.apply(to: state) }
-            }
-            downloadRow(snapshot)
-        }
-    }
-
-    /// Speaks only when the chosen models aren't all on this Mac: what's left to download, or, once all of it is on its
-    /// way, the download's progress. A model fetched on its own doesn't stand for the rest, which can still be started.
-    @ViewBuilder private func downloadRow(_ snapshot: ModelManagerSnapshot) -> some View {
-        let keys = snapshot.choiceRoles.filter { ($0 != .diarization || state.detectSpeakers) && !$0.isLiveOnly }.compactMap { state.modelSelections[$0] }
-        let downloadable = keys.filter { state.modelCatalog.model($0)?.isSystemModel == false }
-        let missing = manager.missingSelected
-        if !missing.isEmpty {
-            // Every chosen model missing: the preset or Custom row above already names them.
-            let partly = missing.count < Set(downloadable).count
-            LabeledContent {
-                Button("Download \(ModelSize.format(ModelSize.bytes(missing, in: state.modelCatalog)))") { manager.downloadSelected() }
-                    .buttonStyle(.borderedProminent)
-                    .tint(DaybookStyle.prominentFill)
-            } label: {
-                Text(partly ? "Partly downloaded" : "Not downloaded yet")
-                if partly {
-                    Text(missing.map { state.modelCatalog.model($0).map { ModelSize.shortName($0, in: state.modelCatalog) } ?? $0 }
-                        .joined(separator: ", "))
-                }
-            }
-        } else if ModelSize.isDownloading(downloadable, in: state) {
-            let total = ModelSize.bytes(downloadable, in: state.modelCatalog), done = ModelSize.downloaded(downloadable, in: state)
-            HStack(spacing: Space.s3) {
-                ProgressView(value: Double(done), total: Double(max(total, 1)))
-                    .progressViewStyle(.brand(width: nil))
-                    .accessibilityLabel("Downloading models")
-                Text(ModelSize.progress(done, of: total))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .fixedSize()
-                Button("Cancel") { manager.cancelDownloads() }
+                ModelQualityRow(summary.option, note: summary.isCurrent ? nil : snapshot.space.shortfall(summary.missingBytes)
+                    .map { ModelLine($0, needsAttention: true) }) { summary.preset?.apply(to: state) }
             }
         }
     }
 
     // MARK: Roles
 
-    @ViewBuilder private func transcriptionSection(_ choice: ModelRoleChoice?) -> some View {
+    private func roleRow(_ choice: ModelRoleChoice, label: String, space: ModelSpace) -> some View {
+        ModelRoleRow(label: label, choice: choice, space: space, actions: manager.rowActions(for: choice.role))
+    }
+
+    @ViewBuilder private func transcriptionSection(_ choice: ModelRoleChoice?, space: ModelSpace) -> some View {
         if let choice {
             Section(choice.title) {
-                ModelChoiceRow(manager: manager, choice: choice, label: "Model")
-                TranscriptionLanguageSettings(state: state)
+                roleRow(choice, label: "Model", space: space)
+                TranscriptionLanguageSettings(state: state, manager: manager)
             }
         }
     }
@@ -168,13 +144,13 @@ struct ModelSettings: View {
     private var supportsVoiceMatching: Bool { state.makesVoiceProfiles }
     private var supportsSpeakerCount: Bool { ModelRouting.supportsExpectedSpeakerCount(speakerModel, catalog: state.modelCatalog) }
 
-    @ViewBuilder private func speakersSection(_ choices: [ModelRole: ModelRoleChoice]) -> some View {
+    @ViewBuilder private func speakersSection(_ choices: [ModelRole: ModelRoleChoice], space: ModelSpace) -> some View {
         Section("Speakers") {
             Toggle("Tell speakers apart", isOn: $state.detectSpeakers)
                 .controlSize(.regular)
             Group {
-                if let choice = choices[.diarization] { ModelChoiceRow(manager: manager, choice: choice, label: "Model") }
-                if let choice = choices[.speakerEmbedding] { ModelChoiceRow(manager: manager, choice: choice, label: choice.title) }
+                if let choice = choices[.diarization] { roleRow(choice, label: "Model", space: space) }
+                if let choice = choices[.speakerEmbedding] { roleRow(choice, label: choice.title, space: space) }
                 // What the speaker model can't do isn't offered, rather than shown dimmed with an apology.
                 if supportsVoiceMatching {
                     LabeledContent {
@@ -189,7 +165,6 @@ struct ModelSettings: View {
                         }
                     } label: {
                         Text("Match voices across recordings")
-                        Text("Keeps each person’s name when a conversation has more than one recording.")
                     }
                 }
                 LabeledContent("Accuracy") {
@@ -246,33 +221,19 @@ struct ModelSettings: View {
         }
     }
 
-    private var vocabularyCount: String {
-        switch state.glossary.count {
-        case 0: return "No terms yet"
-        case 1: return "1 term"
-        case let count: return "\(count) terms"
-        }
-    }
+    /// "12 terms · 3 suggested", as the iPhone counts them (`SettingsWords`).
+    private var vocabularyCount: String { SettingsWords.vocabulary(state.glossary) }
 
-    private var templateCount: String {
-        let yours = state.templates.filter { !$0.isBuiltIn }.count
-        let builtIn = "\(SummaryTemplate.builtIns.count) built-in"
-        return yours == 0 ? builtIn : "\(builtIn), \(yours) yours"
-    }
+    /// "12 built-in, 2 yours".
+    private var templateCount: String { SettingsWords.templates(state.templates) }
 
     // MARK: Library
 
     @ViewBuilder private func librarySection(_ snapshot: ModelManagerSnapshot) -> some View {
         let storage = snapshot.storage
-        Section("Model Library") {
-            LabeledContent {
-                HStack(spacing: Space.s3) {
-                    Text(ModelSize.format(storage.total)).monospacedDigit().foregroundStyle(.secondary)
-                    Button("Show in Finder") { manager.showModelsFolder() }
-                }
-            } label: {
-                Text("Downloaded models")
-            }
+        ModelLibrarySection(total: storage.total) {
+            Button("Show in Finder") { manager.showModelsFolder() }
+        } rows: {
             if !storage.removableRevisions.isEmpty {
                 LabeledContent {
                     Button("Remove") { Task { await manager.removeOldRevisions() } }
