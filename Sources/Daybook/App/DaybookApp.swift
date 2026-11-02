@@ -35,6 +35,7 @@ enum DaybookEntry {
             Darwin.exit(code)
         }
         if let name = LaunchOptions.deviceName { ProcessingRequest.Device.currentName = name }
+        LaunchOptions.forgetSavedWindowForWindowSize()
         #endif
         // Before anything opens the library, syncs, or listens: one copy at a time. A copy opened to start over after a
         // library move waits for the one that opened it to quit. Nothing from here to `DaybookApp.main()` may suspend:
@@ -63,6 +64,28 @@ enum LaunchOptions {
         guard let index = arguments.firstIndex(of: flag), arguments.indices.contains(index + 1) else { return nil }
         return arguments[index + 1]
     }
+
+    /// Debug builds' `--window-size <W>x<H>`: the size the library window opens at.
+    static let windowSize: CGSize? = {
+        #if DEBUG
+        let parts = value(after: "--window-size")?.split(separator: "x").compactMap { Double($0) } ?? []
+        return parts.count == 2 ? CGSize(width: parts[0], height: parts[1]) : nil
+        #else
+        return nil
+        #endif
+    }()
+
+    #if DEBUG
+    /// With `--window-size`, the library window opens at that size and with its columns as the launch sets them, not as
+    /// the last run left the window: its saved frame and columns are forgotten before the window is made. (Every run of
+    /// `.build/debug/Daybook` shares them, whatever its library.)
+    static func forgetSavedWindowForWindowSize() {
+        guard windowSize != nil else { return }
+        for key in ["NSWindow Frame \(WindowID.library)", "NSSplitView Subview Frames \(WindowID.library), SidebarNavigationSplitView"] {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+    }
+    #endif
 }
 
 enum WindowID {
@@ -94,7 +117,7 @@ struct DaybookApp: App {
                 .debugLaunchActions(state: state)
                 .systemEntryPoints(state: state)
         }
-        .defaultSize(width: 1280, height: 820)
+        .defaultSize(LaunchOptions.windowSize ?? CGSize(width: 1280, height: 820))
         .commands { DaybookCommands(state: state) }
 
         Window("Welcome to Daybook", id: WindowID.welcome) { WelcomeWindow(state: state).defaultAppStorage(LaunchOptions.defaults) }
