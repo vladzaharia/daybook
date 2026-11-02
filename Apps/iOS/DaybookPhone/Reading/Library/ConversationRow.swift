@@ -75,10 +75,10 @@ struct ConversationRow: View {
                 Circle().fill(PhoneStyle.accent).frame(width: 8, height: 8)
                     .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
             case nil:
-                if !meeting.highlights.isEmpty {
+                if !meeting.presentHighlights.isEmpty {
                     HStack(spacing: 2) {
                         Image(systemName: "bookmark.fill").imageScale(.small)
-                        Text("\(meeting.highlights.count)").monospacedDigit()
+                        Text("\(meeting.presentHighlights.count)").monospacedDigit()
                     }
                     .foregroundStyle(PhoneStyle.bookmark)
                 }
@@ -91,7 +91,7 @@ struct ConversationRow: View {
         if let duration = meeting.duration { parts.append(SpokenTime.format(duration)) }
         if isPlaying { parts.append("Playing") }
         parts.append(status?.text ?? RowPreview.text(for: meeting))
-        if !meeting.highlights.isEmpty { parts.append(meeting.highlights.count == 1 ? "1 bookmark" : "\(meeting.highlights.count) bookmarks") }
+        if !meeting.presentHighlights.isEmpty { parts.append(meeting.presentHighlights.count == 1 ? "1 bookmark" : "\(meeting.presentHighlights.count) bookmarks") }
         if let tags = meeting.tags, !tags.isEmpty { parts.append("Tags: " + tags.joined(separator: ", ")) }
         return parts.joined(separator: ", ")
     }

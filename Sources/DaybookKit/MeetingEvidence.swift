@@ -61,7 +61,7 @@ public enum MeetingTimelineItem: Identifiable {
     public static func items(in meeting: Meeting) -> [Self] {
         let speech = meeting.unifiedTranscript.map(Self.speech)
         let notes = (meeting.timedNotes ?? []).filter { $0.time != nil }.map(Self.note)
-        let highlights = meeting.highlights.compactMap { value in meeting.alignedTime(for: value).map { Self.highlight(value, $0) } }
+        let highlights = meeting.presentHighlights.compactMap { value in meeting.alignedTime(for: value).map { Self.highlight(value, $0) } }
         let photos = meeting.visiblePhotos.compactMap { value in meeting.timelineTime(of: value).map { Self.photo(value, $0) } }
         return (speech + notes + highlights + photos).sorted { $0.time == $1.time ? $0.id < $1.id : $0.time < $1.time }
     }

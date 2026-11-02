@@ -20,6 +20,8 @@ extension Meeting {
     public func highlightContexts(before: TimeInterval = 30, after: TimeInterval = 60) -> [HighlightContext] {
         let before = before.isFinite ? max(0, before) : 30
         let after = after.isFinite ? max(0, after) : 60
+        // A recording taken out of the conversation takes its bookmarks, and its words, with it.
+        let highlights = presentHighlights
         // Background audio (a TV, music) stays out of a bookmark's context, as it does the transcript.
         let background = highlights.contains { alignedTime(for: $0) == nil } ? backgroundSegmentKinds() : [:]
         return highlights.compactMap { highlight in

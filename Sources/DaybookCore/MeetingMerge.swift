@@ -98,7 +98,26 @@ public enum MeetingMerge {
             let removed = old.subtracting(a).union(old.subtracting(b))
             result.tags = old.subtracting(removed).union(a.subtracting(old)).union(b.subtracting(old)).sorted()
         }
-        result.tracks = items("track", local.tracks, remote.tracks, base?.tracks ?? [])
+        // A recording taken out of the conversation (`RecordingRemoval`) merges on its own, so a removal on one device
+        // and another device's work on the same recording (its timing, its background audio) both survive.
+        func unmarked(_ tracks: [RecordingTrack]) -> [RecordingTrack] {
+            tracks.map { track in
+                var track = track
+                track.removal = nil
+                return track
+            }
+        }
+        result.tracks = items("track", unmarked(local.tracks), unmarked(remote.tracks), unmarked(base?.tracks ?? []))
+        for index in result.tracks.indices {
+            let id = result.tracks[index].id
+            let a = local.tracks.first { $0.id == id }, b = remote.tracks.first { $0.id == id }, old = base?.tracks.first { $0.id == id }
+            if let a, let b {
+                // In the conversation is the ancestor where there's none: a mark made on one side is that side's.
+                result.tracks[index].removal = choose("track-removal:\(id)", a.removal, b.removal, .some(old?.removal))
+            } else {
+                result.tracks[index].removal = (a ?? b ?? old)?.removal
+            }
+        }
         result.transcripts = items("transcript-run", local.transcripts, remote.transcripts, base?.transcripts ?? [])
         result.speakers = items("speaker", local.speakers, remote.speakers, base?.speakers ?? [])
         result.highlights = items("highlight", local.highlights, remote.highlights, base?.highlights ?? [], allowsRemoval: true)

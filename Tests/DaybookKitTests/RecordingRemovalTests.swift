@@ -42,7 +42,8 @@ final class RecordingRemovalTests: XCTestCase {
     }
 
     /// A conversation of two recordings, the microphone (Alex, then Sam, whom the person named) and a dropped file
-    /// (a stranger), each transcribed and fused; a bookmark on the file, and a correction to its passage.
+    /// (a stranger), each transcribed and fused; a bookmark on each (the microphone's near enough to the file's
+    /// passage that the file's words are around it), and a correction to the file's passage.
     private func twoRecordings(_ library: LibraryController) async throws -> (id: UUID, mic: UUID, file: UUID, corrected: UUID) {
         let id = library.newMeeting(title: "Weekly sync")
         await library.acquireLock()
@@ -65,7 +66,7 @@ final class RecordingRemovalTests: XCTestCase {
             ]
             meeting.speakers = [Speaker(id: "alex", name: "Alex", sourceTrackID: micID), Speaker(id: "sam", name: "Speaker 2", sourceTrackID: micID),
                                 Speaker(id: "guest", name: "Speaker 3", sourceTrackID: fileID)]
-            meeting.highlights = [Highlight(trackID: fileID, time: 12, text: "Pricing")]
+            meeting.highlights = [Highlight(trackID: micID, time: 5, text: "Launch"), Highlight(trackID: fileID, time: 12, text: "Pricing")]
             meeting.renameSpeaker(id: "sam", name: "Sam")
             meeting.renameSpeaker(id: "guest", name: "Dana")
         }
@@ -92,6 +93,14 @@ final class RecordingRemovalTests: XCTestCase {
         XCTAssertFalse(meeting.unifiedTranscript.contains { $0.trackID == dropped }, "its words leave the transcript")
         XCTAssertEqual(meeting.peopleSpeakers.map(\.speaker.name), ["Alex", "Sam"], "nor is its speaker one of the people")
         XCTAssertNil(meeting.peopleLine?.range(of: "Dana"))
+        // Its bookmark goes with it, from the lists and from what the summary written again is given, with its words.
+        XCTAssertEqual(meeting.presentHighlights.map(\.text), ["Launch"])
+        XCTAssertEqual(meeting.highlights.count, 2, "kept, to come back with it")
+        XCTAssertEqual(MeetingTimelineItem.items(in: meeting).filter { if case .highlight = $0 { true } else { false } }.count, 1)
+        let evidence = try XCTUnwrap(MeetingEvidence.highlights(meeting))
+        XCTAssertTrue(evidence.contains("Launch"))
+        XCTAssertFalse(evidence.contains("Pricing"), "its bookmark isn't given to the summary")
+        XCTAssertFalse(evidence.contains("interview"), "nor are its words")
 
         undo.undo()
         await library.realign(id)
@@ -99,6 +108,43 @@ final class RecordingRemovalTests: XCTestCase {
         XCTAssertEqual(Set(meeting.presentTracks.map(\.id)), [mic, dropped])
         XCTAssertTrue(meeting.unifiedTranscript.contains { $0.trackID == dropped }, "putting it back puts its words back")
         XCTAssertEqual(meeting.revisions.last?.newValue, "Put back “Interview.m4a”")
+        XCTAssertEqual(meeting.presentHighlights.map(\.text), ["Launch", "Pricing"], "and its bookmark")
+        let back = try XCTUnwrap(MeetingEvidence.highlights(meeting))
+        XCTAssertTrue(back.contains("Pricing") && back.contains("interview"))
+    }
+
+    func testBehaviorARemovalAndAnotherDevicesWorkOnTheSameRecordingBothSurvive() throws {
+        // Removed on the iPhone while the Mac transcribes it: the Mac writes the recording's timing as it finishes.
+        let track = RecordingTrack(source: .imported, relativePath: "Originals/a.m4a", fileName: "a.m4a")
+        let base = Meeting(title: "Sync", tracks: [track])
+        var phone = base
+        phone.tracks[0].removal = RecordingRemoval(removedAt: Date(timeIntervalSince1970: 1_000))
+        var mac = base
+        mac.tracks[0].duration = 42
+        mac.tracks[0].offset = 3
+        for merged in [MeetingMerge.merge(base: base, local: phone, remote: mac), MeetingMerge.merge(base: base, local: mac, remote: phone)] {
+            XCTAssertEqual(merged.meeting.tracks[0].removal, phone.tracks[0].removal, "the removal survives the Mac's work")
+            XCTAssertEqual(merged.meeting.tracks[0].duration, 42, "and the Mac's work survives the removal")
+            XCTAssertEqual(merged.meeting.tracks[0].offset, 3)
+            XCTAssertTrue(merged.warnings.isEmpty, "nothing conflicted")
+            XCTAssertFalse(merged.meeting.revisions.contains { $0.field.hasPrefix("sync:") })
+        }
+
+        // Put back on one device while the other works on it: it's back, with the work.
+        var removed = base
+        removed.tracks[0].removal = phone.tracks[0].removal
+        var putBack = removed
+        putBack.tracks[0].removal = nil
+        var working = removed
+        working.tracks[0].duration = 42
+        for merged in [MeetingMerge.merge(base: removed, local: putBack, remote: working), MeetingMerge.merge(base: removed, local: working, remote: putBack)] {
+            XCTAssertNil(merged.meeting.tracks[0].removal)
+            XCTAssertEqual(merged.meeting.tracks[0].duration, 42)
+        }
+
+        // Without a common ancestor (two devices made the same conversation), a mark on one side is kept.
+        XCTAssertEqual(MeetingMerge.merge(base: nil, local: phone, remote: base).meeting.tracks[0].removal, phone.tracks[0].removal)
+        XCTAssertEqual(MeetingMerge.merge(base: nil, local: base, remote: phone).meeting.tracks[0].removal, phone.tracks[0].removal)
     }
 
     func testBehaviorARemovalSyncsAndAnotherDevicesUnchangedCopyDoesntBringItBack() throws {
@@ -146,10 +192,20 @@ final class RecordingRemovalTests: XCTestCase {
         XCTAssertTrue(left.removedTracks.isEmpty, "a moved recording isn't one to put back")
         XCTAssertFalse(left.unifiedTranscript.contains { $0.trackID == dropped })
         XCTAssertEqual(left.revisions.last?.newValue, "Moved “Interview.m4a” to “Interview”")
+        // Its bookmark is in its new conversation only, and neither it nor the recording's words stay behind.
+        XCTAssertEqual(moved.presentHighlights.map(\.text), ["Pricing"])
+        XCTAssertEqual(left.presentHighlights.map(\.text), ["Launch"])
+        let evidence = try XCTUnwrap(MeetingEvidence.highlights(left))
+        XCTAssertFalse(evidence.contains("Pricing"))
+        XCTAssertFalse(evidence.contains("interview"))
 
         undo.undo()
         try await waitUntil("the new conversation goes to the Trash") { library.meeting(newID!) == nil }
-        XCTAssertEqual(Set(try XCTUnwrap(library.meeting(id)).presentTracks.map(\.id)), [mic, dropped], "back where it was")
+        let back = try XCTUnwrap(library.meeting(id))
+        XCTAssertEqual(Set(back.presentTracks.map(\.id)), [mic, dropped], "back where it was")
         XCTAssertTrue(library.trashedMeetingIDs().contains(newID!), "the conversation made for it is in the Trash")
+        XCTAssertEqual(back.presentHighlights.map(\.text), ["Launch", "Pricing"], "with its bookmark")
+        let restored = try XCTUnwrap(MeetingEvidence.highlights(back))
+        XCTAssertTrue(restored.contains("Pricing") && restored.contains("interview"))
     }
 }

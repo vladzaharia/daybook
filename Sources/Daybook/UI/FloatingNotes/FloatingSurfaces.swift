@@ -511,7 +511,7 @@ private struct RecentRow: View {
         case .failed?: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(DaybookPalette.Ink.warning)
         case .notTranscribed?: Circle().fill(DaybookPalette.accent).frame(width: 7, height: 7)
         case nil:
-            let count = meeting.highlights.count
+            let count = meeting.presentHighlights.count
             if count > 0 {
                 HStack(spacing: 2) {
                     Image(systemName: "bookmark.fill").imageScale(.small)

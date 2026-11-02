@@ -62,7 +62,7 @@ public struct BookmarkMarks: Equatable, Sendable {
 
     public init(meeting: Meeting) {
         let finder = HolderFinder(meeting.unifiedTranscript)
-        for highlight in meeting.highlights {
+        for highlight in meeting.presentHighlights {
             guard let time = meeting.alignedTime(for: highlight), let holder = finder.holder(at: time) else { continue }
             bookmarksBySegment[holder, default: []].append(highlight)
             let label = highlight.text.trimmingCharacters(in: .whitespaces)
