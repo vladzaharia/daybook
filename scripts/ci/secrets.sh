@@ -30,7 +30,14 @@
 # The directory is mode 700 and every file 600. A .p12 is deleted as soon as it's imported; the
 # keychain's random password exists only in this process and the keychain itself. Passwords reach
 # `security` on its standard input (`security -i`), never on a command line, where `ps` would show them.
+# Under `run`, COMMAND's environment holds only the outputs: the secrets themselves (ASC_KEY_P8_BASE64, and
+# each .p12 with its password) are unset first, so the compilers, package plugins, and macros a build runs
+# can't read an exportable identity from their environment.
 set -euo pipefail
+
+# sec_arg and security_stdin.
+# shellcheck source=lib/asc.sh
+source "$(cd "$(dirname "$0")" && pwd)/lib/asc.sh"
 
 dir="${DAYBOOK_SECRETS_DIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/daybook-secrets}"
 keychain="$dir/daybook-signing.keychain-db"
@@ -62,25 +69,6 @@ export_env() {
     else
         printf 'export %s=%q\n' "$1" "$2"
     fi
-}
-
-# sec_arg VALUE: VALUE quoted as one argument for `security -i`, which splits its input like a shell:
-# inside double quotes, \\ and \" stand for \ and ".
-sec_arg() {
-    [[ "$1" != *$'\n'* ]] || fail "a keychain argument can't contain a line break"
-    printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
-}
-
-# security_stdin COMMAND: runs one `security` command read from standard input. `security -i` exits 0
-# even when the command fails, so its "<command>: returned <status>" line decides.
-security_stdin() {
-    local output
-    if ! output="$(printf '%s\n' "$1" | security -i 2>&1)" \
-        || printf '%s\n' "$output" | grep -qE ': returned -?[0-9]+$'; then
-        printf '%s\n' "$output" >&2
-        return 1
-    fi
-    if [[ -n "$output" ]]; then printf '%s\n' "$output"; fi
 }
 
 decode_to() {
@@ -177,15 +165,15 @@ setup() {
     local identities
     identities=$(security find-identity -v -p codesigning "$keychain")
     if [[ -n "${DEVELOPER_ID_P12_BASE64:-}" ]]; then
-        printf '%s\n' "$identities" | grep -q '"Developer ID Application' \
+        grep -q '"Developer ID Application' <<< "$identities" \
             || fail "the Developer ID .p12 has no valid Developer ID Application identity: $identities"
     fi
-    if (( development )) && ! printf '%s\n' "$identities" | grep -q '"Apple Development'; then
+    if (( development )) && ! grep -q '"Apple Development' <<< "$identities"; then
         warn "the development .p12 has no valid Apple Development identity (expired or revoked? scripts/asc-development-certificate.sh makes a new one); an archive creates a development certificate instead"
     fi
     export_env DAYBOOK_SIGNING_KEYCHAIN "$keychain"
     note "imported into $keychain:"
-    printf '%s\n' "$identities" | grep -E '"(Developer ID Application|Apple Development)' >&2 || true
+    grep -E '"(Developer ID Application|Apple Development)' <<< "$identities" >&2 || true
 }
 
 # intermediate NAME URL SHA256: one of Apple's intermediate certificates into the temporary keychain, when what
@@ -241,6 +229,8 @@ run() {
     trap 'exit 130' INT
     trap 'exit 143' TERM
     setup
+    # The command gets the files setup wrote, never the secrets they came from.
+    unset ASC_KEY_P8_BASE64 DEVELOPER_ID_P12_BASE64 DEVELOPER_ID_P12_PASSWORD DEVELOPMENT_P12_BASE64 DEVELOPMENT_P12_PASSWORD
     local status=0
     "$@" || status=$?
     exit "$status"

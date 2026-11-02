@@ -13,11 +13,15 @@
 #                              CFBundleShortVersionString and CFBundleVersion of the apps it makes
 #   STUB_BUNDLE_ID             their CFBundleIdentifier (default local.daybook)
 #   STUB_IDENTITY=1            security find-identity lists a Developer ID Application identity
+#   STUB_IDENTITY_TEAM, STUB_IDENTITY_SHA
+#                              its team (default 48H7CLBV8Y) and SHA-1 (default 0123…4567)
 #   STUB_DEVELOPMENT_IDENTITY=1  ... and an Apple Development one
 #   STUB_XCODE_VERSION, STUB_XCODE_BUILD
 #                              what `xcodebuild -version` reports (default Xcode 27.1, 27A9275)
 #   STUB_IMPORT_FAILS=1        `security import` fails the way security -i reports it
 #   STUB_ENTITLEMENTS=FILE     `codesign -d --entitlements` prints FILE (default: just the iCloud container)
+#   STUB_SIMULATORS=FILE       `xcrun simctl list -j devices available` prints FILE (default: no devices)
+# `security cms -D -i FILE` prints FILE as it is: the tests' profiles are their plists, unsigned.
 # `security -i` reads commands from standard input: each line goes to $STUB_LOG as "security-stdin
 # <line>", and its arguments, split as security splits them, to $STUB_LOG.args as a JSON array.
 set -euo pipefail
@@ -83,6 +87,9 @@ case "$tool" in
     xcrun)
         case "${1-}" in
             metal) echo "Apple metal version 32023.921" ;;
+            simctl)
+                if [[ -n "${STUB_SIMULATORS:-}" ]]; then cat "$STUB_SIMULATORS"; else echo '{"devices": {}}'; fi
+                ;;
             notarytool)
                 sub="${2-}"
                 mode="${STUB_NOTARY:-accepted}"
@@ -166,9 +173,11 @@ case "$tool" in
                 has -s "$@" || echo '    "/Users/runner/Library/Keychains/login.keychain-db"'
                 ;;
             delete-keychain) rm -f "${*: -1}" ;;
+            cms) cat "$(value_of -i "$@")" ;;
             find-identity)
                 if [[ "${STUB_IDENTITY:-0}" == 1 ]]; then
-                    echo '  1) 0123456789ABCDEF0123456789ABCDEF01234567 "Developer ID Application: Example (48H7CLBV8Y)"'
+                    printf '  1) %s "Developer ID Application: Example (%s)"\n' \
+                        "${STUB_IDENTITY_SHA:-0123456789ABCDEF0123456789ABCDEF01234567}" "${STUB_IDENTITY_TEAM:-48H7CLBV8Y}"
                 fi
                 if [[ "${STUB_DEVELOPMENT_IDENTITY:-0}" == 1 ]]; then
                     echo '  2) 89ABCDEF0123456789ABCDEF0123456789ABCDEF "Apple Development: Created via API (ABCDE12345)"'

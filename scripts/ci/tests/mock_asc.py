@@ -2,13 +2,14 @@
 
     python3 -I mock_asc.py <request-log.jsonl> <port-file>
 
-Serves the requests asc-testflight.sh, asc-certificates.sh, and asc-development-certificate.sh make, records each one (method, path, query, body, and the
-JWT's header and payload) as a JSON line, and reports processing as "not listed", then PROCESSING,
-then VALID, so the script's polling is exercised. Never talks to Apple.
+Serves the requests asc-testflight.sh, asc-certificates.sh, asc-development-certificate.sh, and asc-profile.sh make,
+records each one (method, path, query, body, and the JWT's header and payload) as a JSON line, and reports processing
+as "not listed", then PROCESSING, then VALID, so the script's polling is exercised. Never talks to Apple.
 """
 import base64
 import json
 import os
+import plistlib
 import subprocess
 import sys
 import tempfile
@@ -43,6 +44,33 @@ CERTIFICATES = [
      ("cert-person", "DEVELOPMENT", "Apple Development: Vlad Zaharia", "Vlad Zaharia", expires_in(10))],
     [("cert-old-mac", "MAC_APP_DEVELOPMENT", "Mac Development: Created via API", "Created via API", expires_in(100)),
      ("cert-dist", "DISTRIBUTION", "Apple Distribution: Created via API", "Created via API", expires_in(5))],
+]
+
+
+# Provisioning profiles of local.daybook, for asc-profile.sh. A profile's content is its plist, unsigned: the tests'
+# stand-in `security cms -D` prints it as it is. The Developer ID certificate's SHA-1 is what run-tests.sh gives the
+# stand-in keychain's identity.
+BUNDLE_REF = "bundle-1"
+DEVELOPER_ID_CERTIFICATE = b"Daybook test Developer ID Application certificate"
+
+
+def profile(profile_id, name, profile_type, state, expires, uuid, xcode_managed):
+    content = plistlib.dumps({"Name": name, "UUID": uuid, "IsXcodeManaged": xcode_managed,
+                              "DeveloperCertificates": [DEVELOPER_ID_CERTIFICATE]})
+    return {"type": "profiles", "id": profile_id, "attributes": {
+        "name": name, "profileType": profile_type, "profileState": state, "uuid": uuid, "expirationDate": expires,
+        "profileContent": base64.b64encode(content).decode()}}
+
+
+PROFILES = [
+    profile("profile-manual", "Daybook Developer ID (local.daybook)", "MAC_APP_DIRECT", "ACTIVE",
+            "2027-10-24T00:00:00.000+0000", "01234567-89AB-CDEF-0123-456789ABCDEF", False),
+    profile("profile-xcode", "Mac Team Direct Provisioning Profile: local.daybook", "MAC_APP_DIRECT", "ACTIVE",
+            "2027-11-01T00:00:00.000+0000", "11111111-89AB-CDEF-0123-456789ABCDEF", True),
+    profile("profile-store", "Daybook Mac App Store", "MAC_APP_STORE", "ACTIVE",
+            "2027-12-01T00:00:00.000+0000", "22222222-89AB-CDEF-0123-456789ABCDEF", False),
+    profile("profile-invalid", "Daybook Developer ID (before the courier)", "MAC_APP_DIRECT", "INVALID",
+            "2027-12-24T00:00:00.000+0000", "33333333-89AB-CDEF-0123-456789ABCDEF", False),
 ]
 
 
@@ -125,6 +153,12 @@ class Handler(BaseHTTPRequestHandler):
             if page + 1 < len(CERTIFICATES):
                 body["links"]["next"] = f"http://{self.headers['Host']}/v1/certificates?cursor={page + 1}&limit=200"
             self.reply(200, body)
+        elif path == "/v1/bundleIds":
+            identifier = query["filter[identifier]"][0]
+            known = [{"type": "bundleIds", "id": BUNDLE_REF, "attributes": {"identifier": "local.daybook"}}]
+            self.reply(200, {"data": [b for b in known if b["attributes"]["identifier"] == identifier]})
+        elif path == f"/v1/bundleIds/{BUNDLE_REF}/profiles":
+            self.reply(200, {"data": PROFILES})
         elif path == f"/v1/builds/{BUILD_ID}/betaBuildLocalizations":
             self.reply(200, {"data": []})
         elif path == "/v1/betaGroups":

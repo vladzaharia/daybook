@@ -10,11 +10,14 @@
 #   version.sh            tag, branch, re-run, and rejection vectors
 #   asc-jwt.sh            fixed header and payload vectors; the signature verified by openssl and, on
 #                         macOS, by CryptoKit (an independent implementation)
-#   asc-testflight.sh     the full request sequence against a local mock of the App Store Connect API
+#   asc-testflight.sh     the full request sequence against a local mock of the App Store Connect API, and no
+#                         token left behind
 #   asc-certificates.sh   the dry run and --revoke against the mock (fixture certificates), keeping the
 #                         release pipeline's certificate
 #   asc-development-certificate.sh
 #                         making the pipeline's certificate against the mock, storing it with a fake gh
+#   asc-profile.sh        the manually managed Developer ID profile against the mock, checked against a stand-in
+#                         keychain's identity (macOS)
 #   release-notes.sh      annotated and lightweight tags in a throwaway repository
 #   check-ref.sh          tags on and off main, manual runs, in a throwaway clone
 #   github-release.sh     draft, re-run, publish, and refusal to touch a published release (fake gh)
@@ -23,16 +26,19 @@
 #   check-ios-archive.sh  synthetic archives: export compliance, icon, versions (macOS: needs plutil)
 #   setup-github.sh       the dry run prints the plan and never calls gh
 #   select-xcode.sh       version and exact-build checks, SDKs, and the summary, with stand-in tools
-#   secrets.sh            run/setup/cleanup with the API key; on macOS, the .p12 keychain (Developer ID and
-#                         development) with a stand-in security that checks no password reaches a command line
-#   build-ios.sh          the upload retry, package pinning, and archive calls, with stand-in Xcode tools
-#                         (macOS)
+#   secrets.sh            run/setup/cleanup with the API key, and a command that sees no raw secret; on macOS, the
+#                         .p12 keychain (Developer ID and development) with a stand-in security that checks no
+#                         password reaches a command line
+#   build-ios.sh          the upload retry, package pinning, the API key's guard, archive and export calls, and
+#                         --test's simulator, with stand-in Xcode tools (macOS)
 #   build-app.sh          the xcodebuild calls and export options, with stand-in Xcode tools in a copy of
 #                         the repository (macOS)
 #   check-mac-app.sh      bundle IDs, App Sandbox entitlements, and migration manifests of each kind of build,
 #                         on stand-in apps signed ad hoc with the repository's entitlements files (macOS)
-#   package-mac.sh        version and build checks, ZIP, DMG, checksums, notarization waits, pending
-#                         submissions, and notary-resume.sh, with stand-in tools (macOS)
+#   package-mac.sh        version and build checks, ZIP, DMG (or none without this team's Developer ID identity),
+#                         checksums, notarization waits, pending submissions, and notary-resume.sh, with stand-in
+#                         tools (macOS)
+#   pipelines             no script reads a tool's output with a reader that stops early (head, grep -q, awk exit)
 # Runs on macOS (bash 3.2) and Linux.
 set -euo pipefail
 
@@ -166,11 +172,14 @@ mock_pid=$!
 for _ in $(seq 1 50); do [[ -s "$work/port" ]] && break; sleep 0.1; done
 port="$(cat "$work/port")"
 printf 'Try recording with the phone folded.\nNon-ASCII: café ✓\n' > "$work/notes.txt"
-output="$(ASC_API_BASE="http://127.0.0.1:$port" ASC_POLL_SECONDS=0 \
+# Its own temporary directory, to see that the token's header file doesn't outlive the script.
+mkdir -p "$work/testflight-tmp"
+output="$(TMPDIR="$work/testflight-tmp" ASC_API_BASE="http://127.0.0.1:$port" ASC_POLL_SECONDS=0 \
     DAYBOOK_ASC_KEY_PATH="$key" DAYBOOK_ASC_KEY_ID=ABC123DEFG DAYBOOK_ASC_ISSUER_ID="$issuer" \
     "$ci/asc-testflight.sh" --bundle-id local.daybook --version 1.4.0 --build 1057 \
     --group "External testers" --notes-file "$work/notes.txt" --timeout 60 2>"$work/testflight.err")" || true
 expect_eq "prints the build ID" "build_id=build-1" "$output"
+expect_eq "leaves no token behind" "" "$(ls -A "$work/testflight-tmp")"
 expect_eq "request sequence" "GET /v1/apps
 GET /v1/builds
 GET /v1/builds
@@ -197,9 +206,10 @@ expect_ok "an internal group with every build needs no assignment" env ASC_API_B
 expect_eq "nothing is added or submitted for review" "" \
     "$(jq -r 'select(.method == "POST" and (.path | test("relationships/builds|betaAppReviewSubmissions"))) | .path' "$log")"
 : > "$log"
-expect_fail "unknown group fails" env ASC_API_BASE="http://127.0.0.1:$port" ASC_POLL_SECONDS=0 \
+expect_fail "unknown group fails" env TMPDIR="$work/testflight-tmp" ASC_API_BASE="http://127.0.0.1:$port" ASC_POLL_SECONDS=0 \
     DAYBOOK_ASC_KEY_PATH="$key" DAYBOOK_ASC_KEY_ID=ABC123DEFG DAYBOOK_ASC_ISSUER_ID="$issuer" \
     "$ci/asc-testflight.sh" --bundle-id local.daybook --version 1.4.0 --build 1057 --group "Nobody"
+expect_eq "and leaves no token behind either" "" "$(ls -A "$work/testflight-tmp")"
 expect_fail "missing key fails" env -u DAYBOOK_ASC_KEY_PATH "$ci/asc-testflight.sh" --bundle-id x --version 1.0.0 --build 1
 : > "$log"
 expect_ok "the Mac's build in the same app record" env ASC_API_BASE="http://127.0.0.1:$port" ASC_POLL_SECONDS=0 \
@@ -290,6 +300,40 @@ expect_eq "and nothing revoked" "" "$(jq -r 'select(.method == "DELETE") | .path
 expect_fail "a .p12 macOS can't use fails" development_certificate 0
 expect_eq "and revokes the new certificate" "DELETE /v1/certificates/cert-new" "$(jq -r 'select(.method == "DELETE") | "\(.method) \(.path)"' "$log")"
 expect_ok "storing nothing" test ! -e "$work/devcert-gh/secrets"
+
+# --- asc-profile.sh against the mock and a stand-in security ---------------------------------------------
+echo "asc-profile.sh"
+if macos; then
+    # The mock's profiles hold this certificate; the stand-in keychain's Developer ID identity is its SHA-1.
+    certificate_sha="$(printf 'Daybook test Developer ID Application certificate' | shasum -a 1 | awk '{ print toupper($1) }')"
+    # asc_profile IDENTITY SHA [ARGS...]: IDENTITY 1 puts a Developer ID identity with certificate SHA-1 SHA in the
+    # stand-in keychain, which also prints its count line after it, as security does.
+    asc_profile() {
+        local identity="$1" sha="$2"
+        shift 2
+        : > "$log"
+        rm -rf "$work/profiles"
+        PATH="$work/devcert-bin:$PATH" STUB_LOG="$work/profile-stub.log" STUB_IDENTITY="$identity" STUB_IDENTITY_SHA="$sha" \
+            ASC_API_BASE="http://127.0.0.1:$port" DAYBOOK_ASC_KEY_PATH="$key" DAYBOOK_ASC_KEY_ID=ABC123DEFG \
+            DAYBOOK_ASC_ISSUER_ID="$issuer" "$ci/asc-profile.sh" --type MAC_APP_DIRECT --install-dir "$work/profiles" "$@" \
+            2>"$work/profile.err"
+    }
+    expect_eq "the active, manually managed Developer ID profile, over Xcode's newer one" "01234567-89AB-CDEF-0123-456789ABCDEF" \
+        "$(asc_profile 1 "$certificate_sha" --bundle-id local.daybook --keychain "$work/signing.keychain-db")"
+    expect_ok "installed under its UUID" test -s "$work/profiles/01234567-89AB-CDEF-0123-456789ABCDEF.provisionprofile"
+    expect_eq "only reads" "GET /v1/bundleIds|GET /v1/bundleIds/bundle-1/profiles" \
+        "$(jq -r '"\(.method) \(.path)"' "$log" | paste -sd '|' -)"
+    expect_fail "a profile without the keychain identity's certificate fails" \
+        asc_profile 1 0123456789ABCDEF0123456789ABCDEF01234567 --bundle-id local.daybook --keychain "$work/signing.keychain-db"
+    expect_ok "and says so" grep -q "doesn't contain the certificate of the Developer ID identity" "$work/profile.err"
+    expect_fail "a keychain without a Developer ID identity fails" \
+        asc_profile 0 "" --bundle-id local.daybook --keychain "$work/signing.keychain-db"
+    expect_ok "(none in it)" grep -q "no Developer ID Application identity in" "$work/profile.err"
+    expect_fail "an unknown bundle ID fails" asc_profile 0 "" --bundle-id local.daybook.unknown
+    expect_ok "naming it" grep -q "no bundle ID local.daybook.unknown" "$work/profile.err"
+else
+    skip "asc-profile.sh (macOS only)"
+fi
 
 # --- release-notes.sh -----------------------------------------------------------------------------------
 echo "release-notes.sh"
@@ -502,8 +546,9 @@ fi
 echo "build-app.sh"
 if macos; then
     mac_repo="$work/mac-repo"
-    mkdir -p "$mac_repo/scripts" "$mac_repo/Apps/macOS/Config"
+    mkdir -p "$mac_repo/scripts/lib" "$mac_repo/Apps/macOS/Config"
     cp "$ci/../build-app.sh" "$mac_repo/scripts/"
+    cp "$ci/../lib/build-common.sh" "$mac_repo/scripts/lib/"
     cp "$ci/../../Package.resolved" "$mac_repo/"
     : > "$mac_repo/Apps/macOS/project.yml"
     # build_app [VAR=value...] -- ARGS: build-app.sh with only the given DAYBOOK_* and GitHub workflow variables (a run inside
@@ -698,8 +743,10 @@ fi
 echo "build-ios.sh"
 if macos; then
     ios_repo="$work/ios-repo"
-    mkdir -p "$ios_repo/scripts" "$ios_repo/Apps/iOS/Config"
+    mkdir -p "$ios_repo/scripts/lib" "$ios_repo/scripts/ci" "$ios_repo/Apps/iOS/Config"
     cp "$ci/../build-ios.sh" "$ios_repo/scripts/"
+    cp "$ci/../lib/build-common.sh" "$ios_repo/scripts/lib/"
+    cp "$ci/pick-simulator.sh" "$ios_repo/scripts/ci/"
     cp "$ci/../../Package.resolved" "$ios_repo/"
     : > "$ios_repo/Apps/iOS/project.yml"
     build_ios() {
@@ -724,8 +771,33 @@ if macos; then
     expect_eq "never registers devices" "" "$(grep -- '-allowProvisioningDeviceRegistration' "$work/stub.log" || true)"
     expect_fail "the API key is refused outside the release pipeline" build_ios DAYBOOK_TEAM_ID=48H7CLBV8Y "${no_pipeline[@]}" -- --archive
     expect_eq "before anything runs" "" "$(grep '^xcodebuild' "$work/stub.log" || true)"
+    expect_fail "and in another workflow" build_ios DAYBOOK_TEAM_ID=48H7CLBV8Y "${no_pipeline[@]}" GITHUB_ACTIONS=true \
+        GITHUB_WORKFLOW_REF=example/daybook/.github/workflows/ci.yml@refs/heads/main -- --archive
+    expect_fail "part of the API key is refused" build_ios DAYBOOK_TEAM_ID=48H7CLBV8Y DAYBOOK_ASC_KEY_ID=ABC123DEFG -- --archive
     expect_ok "a device build never passes -allowProvisioningUpdates" build_ios DAYBOOK_TEAM_ID=48H7CLBV8Y -- --device
     expect_eq "(none in the calls)" "" "$(grep -- '-allowProvisioning' "$work/stub.log" || true)"
+    expect_ok "an upload's export options" build_ios DAYBOOK_TEAM_ID=48H7CLBV8Y "${asc_vars[@]}" -- --archive --export upload
+    ios_options="$ios_repo/Apps/iOS/build/ExportOptions.plist"
+    expect_eq "(app-store-connect, upload, automatic, the team, and the pipeline's build number)" \
+        "app-store-connect upload automatic 48H7CLBV8Y false" \
+        "$(plutil -extract method raw "$ios_options") $(plutil -extract destination raw "$ios_options") $(plutil -extract signingStyle raw "$ios_options") $(plutil -extract teamID raw "$ios_options") $(plutil -extract manageAppVersionAndBuildNumber raw "$ios_options")"
+
+    # --test picks its simulator first (scripts/ci/pick-simulator.sh), from a stand-in simctl.
+    printf '%s\n' '{"devices": {' \
+        '"com.apple.CoreSimulator.SimRuntime.iOS-27-0": [' \
+        '  {"name": "iPhone 17", "udid": "AAAAAAAA-0000-0000-0000-000000000017", "isAvailable": true},' \
+        '  {"name": "iPhone 18 Pro", "udid": "AAAAAAAA-0000-0000-0000-000000000018", "isAvailable": true}],' \
+        '"com.apple.CoreSimulator.SimRuntime.watchOS-12-0": [' \
+        '  {"name": "Apple Watch Ultra 3", "udid": "AAAAAAAA-0000-0000-0000-0000000000AA", "isAvailable": true}]}}' \
+        > "$work/simulators.json"
+    expect_ok "--test without an iPhone Duo tests on the iPhone 18 Pro" build_ios STUB_SIMULATORS="$work/simulators.json" -- --test
+    expect_ok "(by its UDID)" grep -q -- '-destination id=AAAAAAAA-0000-0000-0000-000000000018 test' <<< "$(xcb ' test')"
+    echo '{"devices": {}}' > "$work/no-simulators.json"
+    expect_fail "--test with no iPhone simulator fails" build_ios STUB_SIMULATORS="$work/no-simulators.json" -- --test
+    expect_ok "and says so" grep -q "No iPhone simulator is available for --test" "$work/build-ios.out"
+    expect_eq "before anything is built" "" "$(grep -E '^(xcodebuild|xcodegen)' "$work/stub.log" || true)"
+    expect_ok "--simulator needs no choice" build_ios STUB_SIMULATORS="$work/no-simulators.json" -- --test --simulator "iPhone 18 Pro"
+    expect_ok "(by name)" grep -q -- '-destination platform=iOS Simulator,name=iPhone 18 Pro test' <<< "$(xcb ' test')"
 else
     skip "build-ios.sh (macOS only)"
 fi
@@ -828,6 +900,19 @@ if macos; then
     expect_ok "a DMG that isn't notarized in time is left out" notarize STUB_NOTARY=accepted STUB_NOTARY_DMG=slow -- --output "$work/notary-out" --state-dir "$work/state"
     expect_eq "the release ships the ZIP" "Daybook-1.4.0-macOS-arm64.zip SHA256SUMS.txt" "$(files_in "$work/notary-out")"
 
+    # Cloud-managed signing leaves no Developer ID identity in a keychain: the release is the ZIP alone, with its checksums.
+    rm -rf "$work/notary-out" "$work/state"
+    expect_ok "without a Developer ID identity, with the team set" notarize STUB_NOTARY=accepted STUB_IDENTITY=0 -- \
+        --output "$work/notary-out" --state-dir "$work/state"
+    expect_eq "ships the ZIP and its checksums" "Daybook-1.4.0-macOS-arm64.zip SHA256SUMS.txt" "$(files_in "$work/notary-out")"
+    expect_ok "and says why there's no DMG" grep -q "No Developer ID identity in a keychain" "$work/package.out"
+    expect_eq "(nothing but the app went to Apple)" "1" "$(grep -c '^xcrun notarytool submit' "$work/stub.log")"
+    rm -rf "$work/notary-out" "$work/state"
+    expect_ok "another team's identity signs nothing" notarize STUB_NOTARY=accepted STUB_IDENTITY_TEAM=ZZZZZZZZZZ -- \
+        --output "$work/notary-out" --state-dir "$work/state"
+    expect_eq "(the ZIP alone)" "Daybook-1.4.0-macOS-arm64.zip SHA256SUMS.txt" "$(files_in "$work/notary-out")"
+    expect_eq "(no DMG signed)" "" "$(grep -E '^codesign --sign' "$work/stub.log" || true)"
+
     # The App Sandbox: a release is exactly the kind it says (scripts/ci/check-mac-app.sh).
     # shellcheck disable=SC2016 # the entitlements file's own build settings, replaced literally
     sed -e 's/$(DAYBOOK_ICLOUD_CONTAINER)/iCloud.local.daybook/g' -e 's/$(DAYBOOK_APS_ENVIRONMENT)/production/g' \
@@ -889,6 +974,13 @@ expect_eq "run: the command sees the key, mode 600 in a 700 directory" "ABC123DE
 expect_ok "named AuthKey_<id>.p8" grep -q '/daybook-secrets/AuthKey_ABC123DEFG.p8$' "$work/key-path"
 expect_ok "and it's gone afterwards" test ! -e "$(cat "$work/key-path")" -a ! -e "$work/runner-temp/daybook-secrets"
 expect_eq "nothing reaches GITHUB_ENV" "" "$(cat "$work/github-env")"
+# The command gets the files, never the secrets they came from: compilers, plugins, and macros inherit its environment.
+raw_secrets='ASC_KEY_P8_BASE64|DEVELOPER_ID_P12_BASE64|DEVELOPER_ID_P12_PASSWORD|DEVELOPMENT_P12_BASE64|DEVELOPMENT_P12_PASSWORD'
+env "${secrets_env[@]}" "$ci/secrets.sh" run -- env > "$work/child-env" 2>/dev/null
+expect_eq "the command's environment holds no raw secret" "" "$(cut -d= -f1 "$work/child-env" | grep -xE "$raw_secrets" || true)"
+expect_eq "nor the key's text under another name" "0" \
+    "$(grep -cF -- "$(base64 < "$key" | tr -d '\n' | cut -c1-48)" "$work/child-env" || true)"
+expect_ok "only the key's file" grep -q '^DAYBOOK_ASC_KEY_PATH=' "$work/child-env"
 status=0
 env "${secrets_env[@]}" "$ci/secrets.sh" run -- sh -c 'exit 7' 2>/dev/null || status=$?
 expect_eq "the command's exit status comes through" "7" "$status"
@@ -946,6 +1038,12 @@ if macos; then
     expect_ok "both .p12s go into one keychain" env "${p12_env[@]}" "${dev_env[@]}" "$ci/secrets.sh" run -- true
     expect_eq "(one keychain, two imports)" "1 2" \
         "$(jq -r '.[0]' "$work/stub.log.args" | grep -c '^create-keychain$') $(jq -r '.[0]' "$work/stub.log.args" | grep -c '^import$')"
+    env "${p12_env[@]}" "${dev_env[@]}" "$ci/secrets.sh" run -- env > "$work/child-env" 2>/dev/null
+    expect_eq "neither .p12 nor its password reaches the command" "" \
+        "$(cut -d= -f1 "$work/child-env" | grep -xE "$raw_secrets" || true)"
+    expect_eq "(not even by value)" "0" \
+        "$(grep -cF -e "$(printf 'not really a p12' | base64)" -e 'dev "pass" \word' -e 'pa ss"wo\rd' "$work/child-env" || true)"
+    expect_ok "only the keychain they went into" grep -q '^DAYBOOK_SIGNING_KEYCHAIN=' "$work/child-env"
     # A development certificate that's wrong falls back to creating one, as before, with a warning in the summary.
     expect_ok "an expired or revoked development identity only warns" env "${dev_env[@]}" STUB_DEVELOPMENT_IDENTITY=0 "$ci/secrets.sh" run -- true
     expect_ok "so does a wrong development password" env "${dev_env[@]}" STUB_IMPORT_FAILS=1 "$ci/secrets.sh" run -- true
@@ -957,6 +1055,22 @@ if macos; then
 else
     skip "secrets.sh with a .p12 (macOS only)"
 fi
+
+# --- Pipelines: no reader that stops early after a pipe ----------------------------------------------------
+# Under pipefail, `tool | grep -q`, `| head -1`, or an awk that exits at its first match can stop reading while the
+# tool still writes; the tool then dies of SIGPIPE and the pipeline fails though the match was found (57ed5eb). The
+# scripts read a tool's output whole and match it from a here-string instead.
+echo "pipelines"
+early_exit='(^|[^|])\|[[:space:]]*(head([[:space:]]|$)|grep[[:space:]]+(-[[:alnum:]]*[qm]|--quiet|--max-count)|awk[^|]*[^[:alnum:]_]exit([^[:alnum:]_]|$)|sed[[:space:]]+-n[^|]*q)'
+for shape in "security find-identity -v | awk '/x/ { print \$2; exit }'" "swift --version 2>&1 | head -1" \
+             "gh api x --jq y | grep -qxF z" "printf '%s' \"\$x\" | cut -f2 | grep -q y"; do
+    expect_ok "the check catches: $shape" grep -qE "$early_exit" <<< "$shape"
+done
+for shape in "grep -q x <<< \"\$y\" || true" "awk '/x/ { print \$2; exit }' <<< \"\$y\"" "a || head=1" "sed -n 's/^x//p' file | sort"; do
+    expect_fail "and lets this be: $shape" grep -qE "$early_exit" <<< "$shape"
+done
+readers="$(grep -nE "$early_exit" "$ci"/../*.sh "$ci"/../lib/*.sh "$ci"/*.sh "$ci"/lib/*.sh | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' || true)"
+expect_eq "no script has one" "" "$readers"
 
 echo
 echo "$passed passed, $failed failed, $skipped skipped"

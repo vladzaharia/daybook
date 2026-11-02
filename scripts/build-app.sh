@@ -75,6 +75,8 @@ set -euo pipefail
 
 script_path="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 repo_dir="$(cd "$(dirname "$script_path")/.." && pwd)"
+# shellcheck source=lib/build-common.sh
+source "$repo_dir/scripts/lib/build-common.sh"
 spec_dir="$repo_dir/Apps/macOS"
 project="$spec_dir/DaybookMac.xcodeproj"
 work_dir="$repo_dir/build/macOS"
@@ -121,21 +123,8 @@ while (( $# )); do
     shift
 done
 
-# The App Store Connect API key (release pipeline): all three variables or none.
-asc_set=0
-for name in DAYBOOK_ASC_KEY_PATH DAYBOOK_ASC_KEY_ID DAYBOOK_ASC_ISSUER_ID; do
-    if [[ -n "${!name:-}" ]]; then asc_set=$(( asc_set + 1 )); fi
-done
-if (( asc_set > 0 && asc_set < 3 )); then
-    echo "Set all of DAYBOOK_ASC_KEY_PATH, DAYBOOK_ASC_KEY_ID, and DAYBOOK_ASC_ISSUER_ID, or none." >&2
-    exit 2
-fi
-# The key brings -allowProvisioningUpdates, which only the release pipeline may pass (AGENTS.md).
-if (( asc_set == 3 )) && [[ "${GITHUB_ACTIONS:-}" != true || "${GITHUB_WORKFLOW_REF:-}" != */.github/workflows/release.yml@* ]]; then
-    echo "The App Store Connect API key is for the release pipeline only (.github/workflows/release.yml), because it" >&2
-    echo "passes -allowProvisioningUpdates. Use your Xcode account and existing profiles instead (AGENTS.md)." >&2
-    exit 2
-fi
+# The App Store Connect API key, in the release pipeline only (scripts/lib/build-common.sh).
+asc_key_arguments
 
 if (( archive_only + export_only + resolve_only + generate_only > 1 )); then
     echo "Choose one of --generate-only, --resolve-only, --archive-only, and --export-only." >&2
@@ -150,49 +139,25 @@ if (( upload && ! app_store )); then
     exit 2
 fi
 
-pinned=(-onlyUsePackageVersionsFromResolvedFile)
 if (( ! export_only )); then
-    xcodegen_path="${XCODEGEN:-$(command -v xcodegen || echo /opt/homebrew/bin/xcodegen)}"
-    if [[ ! -x "$xcodegen_path" ]]; then
-        echo "XcodeGen is required: brew install xcodegen" >&2
-        exit 1
-    fi
+    xcodegen_path="$(find_xcodegen)"
     if ! xcrun metal --version >/dev/null 2>&1; then
         echo "The Xcode Metal compiler is required. Run: xcodebuild -downloadComponent MetalToolchain" >&2
         exit 1
     fi
-
-    echo "Generating $project"
-    "$xcodegen_path" generate --spec "$spec_dir/project.yml" --project "$spec_dir" --quiet
-    # Pin the package graph to the repository's resolved versions, as `swift build` does.
-    resolved_dir="$project/project.xcworkspace/xcshareddata/swiftpm"
-    mkdir -p "$resolved_dir"
-    /bin/cp -f "$repo_dir/Package.resolved" "$resolved_dir/Package.resolved"
+    generate_project "$xcodegen_path" "$spec_dir" "$project" "$repo_dir"
     if (( generate_only )); then exit 0; fi
-
-    # Fetch the packages, held to Package.resolved, and make sure Xcode didn't pick other versions.
-    xcodebuild -resolvePackageDependencies -project "$project" -scheme Daybook \
-        -clonedSourcePackagesDirPath "$packages_dir" "${pinned[@]}"
-    if ! cmp -s "$repo_dir/Package.resolved" "$resolved_dir/Package.resolved"; then
-        echo "Xcode resolved other package versions than Package.resolved pins:" >&2
-        diff -u "$repo_dir/Package.resolved" "$resolved_dir/Package.resolved" >&2 || true
-        exit 1
-    fi
+    resolve_packages "$project" Daybook "$repo_dir" -clonedSourcePackagesDirPath "$packages_dir"
     if (( resolve_only )); then exit 0; fi
 fi
 
-team="${DAYBOOK_TEAM_ID:-}"
-local_config="$spec_dir/Config/Signing.local.xcconfig"
-if [[ -z "$team" && -f "$local_config" ]]; then
-    team="$(sed -nE 's/^[[:space:]]*DAYBOOK_TEAM_ID[[:space:]]*=[[:space:]]*([A-Z0-9]+).*/\1/p' "$local_config" | tail -1)"
-fi
+team="$(team_id "$spec_dir/Config/Signing.local.xcconfig")"
 if [[ -z "$signing" ]]; then
     if [[ -n "$team" ]]; then signing=signed; else signing=local; fi
 fi
-if (( asc_set == 3 )) && [[ "$signing" == signed ]]; then
+if (( ${#asc_key[@]} )) && [[ "$signing" == signed ]]; then
     if (( ${#provisioning[@]} == 0 )); then provisioning=(-allowProvisioningUpdates); fi
-    provisioning+=(-authenticationKeyPath "$DAYBOOK_ASC_KEY_PATH" -authenticationKeyID "$DAYBOOK_ASC_KEY_ID"
-                   -authenticationKeyIssuerID "$DAYBOOK_ASC_ISSUER_ID")
+    provisioning+=("${asc_key[@]}")
 fi
 if [[ "$signing" == local || "$signing" == rehearsal ]]; then
     if (( ${#provisioning[@]} )); then
@@ -257,16 +222,8 @@ else
         export_dir="$work_dir/AppStore"
         export_options="$work_dir/ExportOptions.plist"
         /bin/rm -rf "${export_dir:?}"
-        /bin/rm -f "${export_options:?}"
-        plutil -create xml1 "$export_options"
-        plutil -insert method -string app-store-connect "$export_options"
         if (( upload )); then destination="upload"; else destination="export"; fi
-        plutil -insert destination -string "$destination" "$export_options"
-        plutil -insert signingStyle -string automatic "$export_options"
-        plutil -insert teamID -string "$team" "$export_options"
-        plutil -insert uploadSymbols -bool YES "$export_options"
-        # The pipeline sets the version and build number; App Store Connect must not change them.
-        plutil -insert manageAppVersionAndBuildNumber -bool NO "$export_options"
+        app_store_export_options "$export_options" "$team" "$destination"
         xcodebuild -exportArchive -archivePath "$archive" -exportPath "$export_dir" \
             -exportOptionsPlist "$export_options" ${provisioning[@]+"${provisioning[@]}"}
         if (( upload )); then echo "Uploaded $archive to App Store Connect."; else echo "App Store export: $export_dir"; fi
@@ -332,4 +289,6 @@ fi
 
 echo "App: $app_dir"
 echo "Archive: $zip_path"
-codesign -dv "$app_dir" 2>&1 | grep -E '^(Authority|TeamIdentifier|Signature)=' | head -3 || true
+# Read in full, then matched: an early-exit reader in a pipe can leave codesign writing to a closed pipe.
+signature="$(codesign -dv "$app_dir" 2>&1 || true)"
+grep -E '^(Authority|TeamIdentifier|Signature)=' <<< "$signature" | sed -n '1,3p' || true

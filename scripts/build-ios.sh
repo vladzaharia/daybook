@@ -23,7 +23,8 @@
 #                                           exports an existing --archive-path.
 #
 # Options:
-#   --simulator <name or UDID>   simulator for --test (default: an iPhone Duo, else the first iPhone)
+#   --simulator <name or UDID>   simulator for --test (default: scripts/ci/pick-simulator.sh's choice, an iPhone
+#                                Duo, then an iPhone 18 Pro, then any iPhone, on the newest runtime with one)
 #   --configuration <Debug|Release>   default Debug (Release for --archive)
 #   --marketing-version <X.Y.Z>  MARKETING_VERSION (CFBundleShortVersionString of app and extension)
 #   --build-number <N>           CURRENT_PROJECT_VERSION (CFBundleVersion of app and extension)
@@ -49,6 +50,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=lib/build-common.sh
+source "$ROOT/scripts/lib/build-common.sh"
 APP="$ROOT/Apps/iOS"
 PROJECT="$APP/Daybook.xcodeproj"
 DERIVED="${DAYBOOK_IOS_DERIVED_DATA:-$APP/build/DerivedData}"
@@ -101,56 +104,32 @@ if [[ -z "$CONFIGURATION" ]]; then
     if [[ "$MODE" == archive || "$MODE" == export ]]; then CONFIGURATION=Release; else CONFIGURATION=Debug; fi
 fi
 
-# The App Store Connect API key, all or nothing (release pipeline only).
+# The App Store Connect API key, in the release pipeline only (scripts/lib/build-common.sh). It brings
+# -allowProvisioningUpdates; nothing else in this script passes it.
+asc_key_arguments
 AUTH=()
-ASC_SET=0
-for name in DAYBOOK_ASC_KEY_PATH DAYBOOK_ASC_KEY_ID DAYBOOK_ASC_ISSUER_ID; do
-    if [[ -n "${!name:-}" ]]; then ASC_SET=$(( ASC_SET + 1 )); fi
-done
-if (( ASC_SET == 3 )); then
-    # The key brings -allowProvisioningUpdates, which only the release pipeline may pass (AGENTS.md).
-    if [[ "${GITHUB_ACTIONS:-}" != true || "${GITHUB_WORKFLOW_REF:-}" != */.github/workflows/release.yml@* ]]; then
-        echo "The App Store Connect API key is for the release pipeline only (.github/workflows/release.yml), because it" >&2
-        echo "passes -allowProvisioningUpdates. Build with existing profiles instead (AGENTS.md, docs/release.md)." >&2
-        exit 2
-    fi
-    AUTH=(-allowProvisioningUpdates -authenticationKeyPath "$DAYBOOK_ASC_KEY_PATH"
-          -authenticationKeyID "$DAYBOOK_ASC_KEY_ID" -authenticationKeyIssuerID "$DAYBOOK_ASC_ISSUER_ID")
-elif (( ASC_SET > 0 )); then
-    echo "Set all of DAYBOOK_ASC_KEY_PATH, DAYBOOK_ASC_KEY_ID, and DAYBOOK_ASC_ISSUER_ID, or none." >&2
-    exit 2
-fi
+if (( ${#asc_key[@]} )); then AUTH=(-allowProvisioningUpdates "${asc_key[@]}"); fi
 
-XCODEGEN="${XCODEGEN:-$(command -v xcodegen || echo /opt/homebrew/bin/xcodegen)}"
-if [[ "$MODE" != export && ! -x "$XCODEGEN" ]]; then
-    echo "XcodeGen is required: brew install xcodegen" >&2
-    exit 1
+# The simulator for --test, chosen before anything is built, so a Mac without one hears it at once.
+if [[ "$RUN_TESTS" == 1 && "$MODE" == simulator && -z "$SIMULATOR" ]]; then
+    SIMULATOR="$("$ROOT/scripts/ci/pick-simulator.sh")" || {
+        echo "No iPhone simulator is available for --test. Add one in Xcode's Devices and Simulators window, or pass --simulator." >&2
+        exit 1
+    }
 fi
 
 if [[ "$MODE" != export ]]; then
-    echo "Generating $PROJECT"
-    "$XCODEGEN" generate --spec "$APP/project.yml" --project "$APP" --quiet
-    # Pin the package graph to the repository's resolved versions, as `swift build` does.
-    RESOLVED_DIR="$PROJECT/project.xcworkspace/xcshareddata/swiftpm"
-    mkdir -p "$RESOLVED_DIR"
-    cp "$ROOT/Package.resolved" "$RESOLVED_DIR/Package.resolved"
+    XCODEGEN="$(find_xcodegen)"
+    generate_project "$XCODEGEN" "$APP" "$PROJECT" "$ROOT"
 fi
-
 [[ "$MODE" == generate ]] && exit 0
 
-PINNED=(-onlyUsePackageVersionsFromResolvedFile)
 if [[ "$MODE" != export ]]; then
-    # Fetch the packages, held to Package.resolved, and make sure Xcode didn't pick other versions.
-    xcodebuild -resolvePackageDependencies -project "$PROJECT" -scheme DaybookPhone -derivedDataPath "$DERIVED" "${PINNED[@]}"
-    if ! cmp -s "$ROOT/Package.resolved" "$RESOLVED_DIR/Package.resolved"; then
-        echo "Xcode resolved other package versions than Package.resolved pins:" >&2
-        diff -u "$ROOT/Package.resolved" "$RESOLVED_DIR/Package.resolved" >&2 || true
-        exit 1
-    fi
+    resolve_packages "$PROJECT" DaybookPhone "$ROOT" -derivedDataPath "$DERIVED"
 fi
 [[ "$MODE" == resolve ]] && exit 0
 
-COMMON=(-project "$PROJECT" -scheme DaybookPhone -configuration "$CONFIGURATION" -derivedDataPath "$DERIVED" "${PINNED[@]}")
+COMMON=(-project "$PROJECT" -scheme DaybookPhone -configuration "$CONFIGURATION" -derivedDataPath "$DERIVED" "${pinned[@]}")
 # The xcconfig's default container yields to the environment (command-line settings win).
 [[ -n "${DAYBOOK_ICLOUD_CONTAINER:-}" ]] && COMMON+=("DAYBOOK_ICLOUD_CONTAINER=$DAYBOOK_ICLOUD_CONTAINER")
 (( ${#VERSION_SETTINGS[@]} )) && COMMON+=("${VERSION_SETTINGS[@]}")
@@ -201,22 +180,10 @@ if [[ "$MODE" == export ]]; then
         exit 2
     fi
     [[ -d "$ARCHIVE_PATH" ]] || { echo "No archive at $ARCHIVE_PATH" >&2; exit 1; }
-    TEAM="${DAYBOOK_TEAM_ID:-}"
-    if [[ -z "$TEAM" && -f "$APP/Config/Signing.local.xcconfig" ]]; then
-        TEAM="$(sed -nE 's/^[[:space:]]*DAYBOOK_TEAM_ID[[:space:]]*=[[:space:]]*([A-Z0-9]+).*/\1/p' "$APP/Config/Signing.local.xcconfig" | tail -1)"
-    fi
+    TEAM="$(team_id "$APP/Config/Signing.local.xcconfig")"
     [[ -n "$TEAM" ]] || { echo "--export needs DAYBOOK_TEAM_ID" >&2; exit 1; }
     OPTIONS="$APP/build/ExportOptions.plist"
-    mkdir -p "$APP/build"
-    rm -f "${OPTIONS:?}"
-    plutil -create xml1 "$OPTIONS"
-    plutil -insert method -string app-store-connect "$OPTIONS"
-    plutil -insert destination -string "$EXPORT" "$OPTIONS"
-    plutil -insert signingStyle -string automatic "$OPTIONS"
-    plutil -insert teamID -string "$TEAM" "$OPTIONS"
-    plutil -insert uploadSymbols -bool YES "$OPTIONS"
-    # The pipeline sets the version and build number; App Store Connect must not change them.
-    plutil -insert manageAppVersionAndBuildNumber -bool NO "$OPTIONS"
+    app_store_export_options "$OPTIONS" "$TEAM" "$EXPORT"
     # An upload that fails on the network (a timeout, a dropped or refused connection) is tried again,
     # up to three times; anything else, such as Apple rejecting the build, fails at once. The wait
     # between tries is 30 s, then 60 s (DAYBOOK_UPLOAD_RETRY_DELAY scales it; the tests set 0).
@@ -246,14 +213,6 @@ xcodebuild "${COMMON[@]}" -destination 'generic/platform=iOS Simulator' build
 echo "Built $DERIVED/Build/Products/$CONFIGURATION-iphonesimulator/DaybookPhone.app"
 
 if [[ "$RUN_TESTS" == 1 ]]; then
-    if [[ -z "$SIMULATOR" ]]; then
-        SIMULATOR=$(xcrun simctl list devices available | grep -E "^\s+iPhone Duo" | head -1 | sed -E 's/.*\(([0-9A-F-]{36})\).*/\1/')
-        [[ -z "$SIMULATOR" ]] && SIMULATOR=$(xcrun simctl list devices available | grep -E "^\s+iPhone" | head -1 | sed -E 's/.*\(([0-9A-F-]{36})\).*/\1/')
-    fi
-    if [[ -z "$SIMULATOR" ]]; then
-        echo "No iPhone simulator is available for --test." >&2
-        exit 1
-    fi
     if [[ "$SIMULATOR" =~ ^[0-9A-F-]{36}$ ]]; then DESTINATION="id=$SIMULATOR"; else DESTINATION="platform=iOS Simulator,name=$SIMULATOR"; fi
     xcodebuild "${COMMON[@]}" -destination "$DESTINATION" test ${TEST_ARGS[@]+"${TEST_ARGS[@]}"}
 fi

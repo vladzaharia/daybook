@@ -36,7 +36,9 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
-api="${ASC_API_BASE:-https://api.appstoreconnect.apple.com}"
+# asc_request, asc_details, and asc_uri.
+# shellcheck source=lib/asc.sh
+source "$script_dir/lib/asc.sh"
 poll_seconds="${ASC_POLL_SECONDS:-30}"
 bundle_id=""
 version=""
@@ -85,53 +87,27 @@ fi
 [[ -z "$notes_file" || -r "$notes_file" ]] || fail "can't read --notes-file $notes_file"
 command -v jq >/dev/null || fail "jq is required"
 
-token=""
-token_time=0
-bearer() {
-    local now
-    now=$(date +%s)
-    # Tokens last 19 minutes; make a new one after 15.
-    if [[ -z "$token" ]] || (( now - token_time > 900 )); then
-        token=$("$script_dir/asc-jwt.sh" --key "$DAYBOOK_ASC_KEY_PATH" --key-id "$DAYBOOK_ASC_KEY_ID" \
-            --issuer-id "$DAYBOOK_ASC_ISSUER_ID")
-        token_time=$now
-    fi
-}
+# The token's header file and the responses, removed however the script ends (a signal included): a header file
+# left behind would hold a live token.
+work="$(mktemp -d)"
+trap '/bin/rm -rf "${work:?}"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+chmod 700 "$work"
+asc_dir="$work"
 
-response_body=""
-response_status=""
-# request METHOD PATH [JSON]: sets response_status and response_body. The token reaches curl through a
-# header file readable only by this user, not the command line, so it never shows up in `ps`. Only GETs
-# are retried on transient errors; a retried POST could act twice.
-request() {
-    local method="$1" path="$2" body="${3-}" out headers
-    bearer
-    out=$(mktemp)
-    headers=$(mktemp)
-    chmod 600 "$headers"
-    printf 'Authorization: Bearer %s\n' "$token" > "$headers"
-    local args=(-sS -X "$method" -H "@$headers" -H 'Accept: application/json' -o "$out" -w '%{http_code}'
-                --connect-timeout 20 --max-time 120)
-    [[ "$method" == GET ]] && args+=(--retry 3 --retry-delay 5)
-    if [[ -n "$body" ]]; then
-        args+=(-H 'Content-Type: application/json' --data-binary "$body")
-    fi
-    response_status=$(curl "${args[@]}" "$api$path") || response_status="000"
-    response_body=$(cat "$out")
-    rm -f "${out:?}" "${headers:?}"
-}
+# request METHOD PATH [JSON]: one call to PATH under the API root; asc_status and asc_body hold the answer.
+request() { asc_request "$1" "$asc_api$2" "${3-}"; }
 
 # expect STATUS... : fails with Apple's error details unless the last status is one of them.
 expect() {
     local ok
-    for ok in "$@"; do [[ "$response_status" == "$ok" ]] && return 0; done
+    for ok in "$@"; do [[ "$asc_status" == "$ok" ]] && return 0; done
     local details
-    details=$(printf '%s' "$response_body" | jq -r '.errors[]? | "  \(.status) \(.code): \(.title) \(.detail // "")"' 2>/dev/null || true)
-    fail "HTTP $response_status from App Store Connect${details:+:
+    details="$(asc_details)"
+    fail "HTTP $asc_status from App Store Connect${details:+:
 $details}"
 }
-
-uri() { jq -rn --arg v "$1" '$v|@uri'; }
 # ISO 8601 (App Store Connect writes offsets such as -07:00, and fractions of a second) to Unix time.
 epoch() {
     jq -rn --arg t "$1" '$t | capture("^(?<dt>[0-9-]+T[0-9:]+)(\\.[0-9]+)?(?<tz>Z|[+-][0-9]{2}:?[0-9]{2})$")
@@ -141,20 +117,20 @@ epoch() {
 }
 
 # 1. The app record.
-request GET "/v1/apps?filter%5BbundleId%5D=$(uri "$bundle_id")&fields%5Bapps%5D=bundleId,name&limit=10"
+request GET "/v1/apps?filter%5BbundleId%5D=$(asc_uri "$bundle_id")&fields%5Bapps%5D=bundleId,name&limit=10"
 expect 200
-app_id=$(printf '%s' "$response_body" | jq -r --arg b "$bundle_id" '[.data[] | select(.attributes.bundleId == $b)][0].id // empty')
+app_id=$(printf '%s' "$asc_body" | jq -r --arg b "$bundle_id" '[.data[] | select(.attributes.bundleId == $b)][0].id // empty')
 [[ -n "$app_id" ]] || fail "no App Store Connect app has the bundle ID $bundle_id. Create the app record first (docs/release.md, One-time setup)."
 note "app $bundle_id is $app_id"
 
 # --find-build: look, report, and stop.
 if [[ -n "$find_builds" ]]; then
-    query="/v1/builds?filter%5Bapp%5D=$app_id&filter%5Bversion%5D=$(uri "${find_builds// /,}")"
-    query+="&filter%5BpreReleaseVersion.version%5D=$(uri "$version")&filter%5BpreReleaseVersion.platform%5D=$platform"
+    query="/v1/builds?filter%5Bapp%5D=$app_id&filter%5Bversion%5D=$(asc_uri "${find_builds// /,}")"
+    query+="&filter%5BpreReleaseVersion.version%5D=$(asc_uri "$version")&filter%5BpreReleaseVersion.platform%5D=$platform"
     query+="&fields%5Bbuilds%5D=version,processingState,uploadedDate,expired&sort=-uploadedDate&limit=50"
     request GET "$query"
     expect 200
-    listed=$(printf '%s' "$response_body" | jq -r '.data[] | [.attributes.version, (.attributes.processingState // "?"), (.attributes.uploadedDate // ""), (.attributes.expired // false)] | @tsv')
+    listed=$(printf '%s' "$asc_body" | jq -r '.data[] | [.attributes.version, (.attributes.processingState // "?"), (.attributes.uploadedDate // ""), (.attributes.expired // false)] | @tsv')
     found=""
     while IFS=$'\t' read -r number state uploaded expired; do
         [[ -n "$number" ]] || continue
@@ -180,16 +156,16 @@ if [[ -n "$find_builds" ]]; then
 fi
 
 # 2. Wait for processing.
-query="/v1/builds?filter%5Bapp%5D=$app_id&filter%5Bversion%5D=$(uri "$build")"
-query+="&filter%5BpreReleaseVersion.version%5D=$(uri "$version")&filter%5BpreReleaseVersion.platform%5D=$platform"
+query="/v1/builds?filter%5Bapp%5D=$app_id&filter%5Bversion%5D=$(asc_uri "$build")"
+query+="&filter%5BpreReleaseVersion.version%5D=$(asc_uri "$version")&filter%5BpreReleaseVersion.platform%5D=$platform"
 query+="&fields%5Bbuilds%5D=version,processingState,usesNonExemptEncryption,expired&limit=1"
 deadline=$(( $(date +%s) + timeout ))
 build_id=""
 while :; do
     request GET "$query"
     expect 200
-    build_id=$(printf '%s' "$response_body" | jq -r '.data[0].id // empty')
-    state=$(printf '%s' "$response_body" | jq -r '.data[0].attributes.processingState // empty')
+    build_id=$(printf '%s' "$asc_body" | jq -r '.data[0].id // empty')
+    state=$(printf '%s' "$asc_body" | jq -r '.data[0].attributes.processingState // empty')
     case "$state" in
         VALID) break ;;
         FAILED|INVALID) fail "App Store Connect marked build $version ($build) $state. Check the email App Store Connect sent and the build's page." ;;
@@ -199,7 +175,7 @@ while :; do
     (( $(date +%s) < deadline )) || fail "build $version ($build) wasn't processed within $timeout seconds; it may still finish, then set notes and groups in App Store Connect."
     sleep "$poll_seconds"
 done
-encryption=$(printf '%s' "$response_body" | jq -r '.data[0].attributes.usesNonExemptEncryption')
+encryption=$(printf '%s' "$asc_body" | jq -r '.data[0].attributes.usesNonExemptEncryption')
 note "build $version ($build) is $build_id, processed; usesNonExemptEncryption=$encryption"
 if [[ "$encryption" == "null" ]]; then
     note "warning: App Store Connect is waiting for the export compliance answer: the archive should have carried ITSAppUsesNonExemptEncryption."
@@ -211,7 +187,7 @@ if [[ -n "$notes_file" ]]; then
     notes=$(jq -Rrs '.[0:4000]' < "$notes_file")
     request GET "/v1/builds/$build_id/betaBuildLocalizations?fields%5BbetaBuildLocalizations%5D=locale,whatsNew&limit=50"
     expect 200
-    localization_id=$(printf '%s' "$response_body" | jq -r --arg l "$locale" '[.data[] | select(.attributes.locale == $l)][0].id // empty')
+    localization_id=$(printf '%s' "$asc_body" | jq -r --arg l "$locale" '[.data[] | select(.attributes.locale == $l)][0].id // empty')
     if [[ -n "$localization_id" ]]; then
         body=$(jq -cn --arg id "$localization_id" --arg notes "$notes" \
             '{data: {type: "betaBuildLocalizations", id: $id, attributes: {whatsNew: $notes}}}')
@@ -229,16 +205,16 @@ fi
 
 # 4. Beta group.
 if [[ -n "$group" ]]; then
-    request GET "/v1/betaGroups?filter%5Bapp%5D=$app_id&filter%5Bname%5D=$(uri "$group")&fields%5BbetaGroups%5D=name,isInternalGroup,hasAccessToAllBuilds&limit=50"
+    request GET "/v1/betaGroups?filter%5Bapp%5D=$app_id&filter%5Bname%5D=$(asc_uri "$group")&fields%5BbetaGroups%5D=name,isInternalGroup,hasAccessToAllBuilds&limit=50"
     expect 200
-    group_id=$(printf '%s' "$response_body" | jq -r --arg g "$group" '[.data[] | select(.attributes.name == $g)][0].id // empty')
+    group_id=$(printf '%s' "$asc_body" | jq -r --arg g "$group" '[.data[] | select(.attributes.name == $g)][0].id // empty')
     if [[ -z "$group_id" ]]; then
         request GET "/v1/betaGroups?filter%5Bapp%5D=$app_id&fields%5BbetaGroups%5D=name&limit=50"
-        known=$(printf '%s' "$response_body" | jq -r '[.data[]?.attributes.name] | join(", ")' 2>/dev/null || true)
+        known=$(printf '%s' "$asc_body" | jq -r '[.data[]?.attributes.name] | join(", ")' 2>/dev/null || true)
         fail "no beta group named '$group' for $bundle_id. Groups: ${known:-none}"
     fi
-    internal=$(printf '%s' "$response_body" | jq -r --arg g "$group" '[.data[] | select(.attributes.name == $g)][0].attributes.isInternalGroup')
-    every_build=$(printf '%s' "$response_body" | jq -r --arg g "$group" '[.data[] | select(.attributes.name == $g)][0].attributes.hasAccessToAllBuilds // false')
+    internal=$(printf '%s' "$asc_body" | jq -r --arg g "$group" '[.data[] | select(.attributes.name == $g)][0].attributes.isInternalGroup')
+    every_build=$(printf '%s' "$asc_body" | jq -r --arg g "$group" '[.data[] | select(.attributes.name == $g)][0].attributes.hasAccessToAllBuilds // false')
     if [[ "$internal" == "true" && "$every_build" == "true" ]]; then
         # An internal group with access to all builds gets each one by itself; App Store Connect
         # refuses to add a build to it (422 "Builds cannot be assigned to this internal group").
@@ -253,7 +229,7 @@ if [[ -n "$group" ]]; then
         body=$(jq -cn --arg build "$build_id" \
             '{data: {type: "betaAppReviewSubmissions", relationships: {build: {data: {type: "builds", id: $build}}}}}')
         request POST "/v1/betaAppReviewSubmissions" "$body"
-        if [[ "$response_status" == 409 ]]; then
+        if [[ "$asc_status" == 409 ]]; then
             note "the build was already submitted for Beta App Review"
         else
             expect 201

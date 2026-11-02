@@ -20,7 +20,9 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
-api="${ASC_API_BASE:-https://api.appstoreconnect.apple.com}"
+# asc_request and asc_details.
+# shellcheck source=ci/lib/asc.sh
+source "$script_dir/ci/lib/asc.sh"
 older_than=30
 revoke=0
 keep=()
@@ -56,27 +58,16 @@ kept() { local id; for id in ${keep[@]+"${keep[@]}"}; do [[ "$id" == "$1" ]] && 
 work="$(mktemp -d)"
 trap '/bin/rm -rf "${work:?}"' EXIT
 chmod 700 "$work"
-token="$("$script_dir/ci/asc-jwt.sh" --key "$DAYBOOK_ASC_KEY_PATH" --key-id "$DAYBOOK_ASC_KEY_ID" --issuer-id "$DAYBOOK_ASC_ISSUER_ID")"
-# The token reaches curl through a header file readable only by this user, not the command line.
-printf 'Authorization: Bearer %s\n' "$token" > "$work/headers"
-chmod 600 "$work/headers"
-
-# request METHOD URL: prints the HTTP status; the body goes to $work/body.
-request() {
-    local args=(-sS -X "$1" -H "@$work/headers" -H 'Accept: application/json' -o "$work/body" -w '%{http_code}'
-                --connect-timeout 20 --max-time 120)
-    [[ "$1" == GET ]] && args+=(--retry 3 --retry-delay 5)
-    curl "${args[@]}" "$2" || echo 000
-}
-details() { jq -r '.errors[]? | "  \(.status) \(.code): \(.title) \(.detail // "")"' "$work/body" 2>/dev/null || true; }
+# The token's header file and the responses.
+asc_dir="$work"
 
 # Every development certificate, following the pages.
-url="$api/v1/certificates?filter%5BcertificateType%5D=DEVELOPMENT,IOS_DEVELOPMENT,MAC_APP_DEVELOPMENT"
+url="$asc_api/v1/certificates?filter%5BcertificateType%5D=DEVELOPMENT,IOS_DEVELOPMENT,MAC_APP_DEVELOPMENT"
 url+="&fields%5Bcertificates%5D=name,displayName,certificateType,serialNumber,expirationDate&limit=200"
 echo '[]' > "$work/all.json"
 while [[ -n "$url" ]]; do
-    status="$(request GET "$url")"
-    [[ "$status" == 200 ]] || fail "HTTP $status listing certificates$(printf '\n%s' "$(details)")"
+    asc_request GET "$url"
+    [[ "$asc_status" == 200 ]] || fail "HTTP $asc_status listing certificates$(printf '\n%s' "$(asc_details)")"
     jq -s '.[0] + .[1].data' "$work/all.json" "$work/body" > "$work/merged.json"
     mv "$work/merged.json" "$work/all.json"
     url="$(jq -r '.links.next // empty' "$work/body")"
@@ -107,13 +98,13 @@ while IFS=$'\t' read -r id type serial expires age; do
         old=$(( old + 1 ))
         action="revoke"
         if (( revoke )); then
-            status="$(request DELETE "$api/v1/certificates/$id")"
-            if [[ "$status" == 204 ]]; then
+            asc_request DELETE "$asc_api/v1/certificates/$id"
+            if [[ "$asc_status" == 204 ]]; then
                 action="revoked"
                 revoked=$(( revoked + 1 ))
             else
-                action="FAILED (HTTP $status)"
-                details >&2
+                action="FAILED (HTTP $asc_status)"
+                asc_details >&2
             fi
         fi
     fi

@@ -12,12 +12,14 @@
 # With --keychain, the profile must contain the certificate of that keychain's Developer ID
 # Application identity, or the script fails before any export is attempted. Prints the profile's name
 # to stderr and its UUID on stdout. Needs DAYBOOK_ASC_KEY_PATH, DAYBOOK_ASC_KEY_ID, and
-# DAYBOOK_ASC_ISSUER_ID (scripts/ci/secrets.sh setup), curl, jq, and security. Read-only: it never
-# creates or changes anything in App Store Connect.
+# DAYBOOK_ASC_ISSUER_ID (scripts/ci/secrets.sh setup), curl, jq, and security; ASC_API_BASE points it at
+# the tests' mock. Read-only: it never creates or changes anything in App Store Connect.
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
-api="https://api.appstoreconnect.apple.com"
+# asc_request, asc_details, and asc_uri.
+# shellcheck source=lib/asc.sh
+source "$script_dir/lib/asc.sh"
 bundle_id=""
 profile_type=""
 keychain=""
@@ -42,38 +44,32 @@ done
 : "${DAYBOOK_ASC_KEY_PATH:?set DAYBOOK_ASC_KEY_PATH}" "${DAYBOOK_ASC_KEY_ID:?set DAYBOOK_ASC_KEY_ID}" "${DAYBOOK_ASC_ISSUER_ID:?set DAYBOOK_ASC_ISSUER_ID}"
 command -v jq >/dev/null || fail "jq is required"
 
-token=$("$script_dir/asc-jwt.sh" --key "$DAYBOOK_ASC_KEY_PATH" --key-id "$DAYBOOK_ASC_KEY_ID" --issuer-id "$DAYBOOK_ASC_ISSUER_ID")
 work=$(mktemp -d)
 trap 'rm -rf "${work:?}"' EXIT
 chmod 700 "$work"
-# The token reaches curl through a header file readable only by this user, not the command line.
-printf 'Authorization: Bearer %s\n' "$token" > "$work/headers"
-chmod 600 "$work/headers"
+# The token's header file and the responses.
+asc_dir="$work"
 
-response_body=""
+# get PATH: a GET that must succeed; the body is in asc_body.
 get() {
-    local status
-    status=$(curl -sS -H "@$work/headers" -H 'Accept: application/json' -o "$work/body" -w '%{http_code}' \
-        --connect-timeout 20 --max-time 120 --retry 3 --retry-delay 5 "$api$1") || status="000"
-    response_body=$(cat "$work/body")
-    if [[ "$status" != 200 ]]; then
+    asc_request GET "$asc_api$1"
+    if [[ "$asc_status" != 200 ]]; then
         local details
-        details=$(printf '%s' "$response_body" | jq -r '.errors[]? | "  \(.status) \(.code): \(.title) \(.detail // "")"' 2>/dev/null || true)
-        fail "HTTP $status from App Store Connect for $1${details:+:
+        details="$(asc_details)"
+        fail "HTTP $asc_status from App Store Connect for $1${details:+:
 $details}"
     fi
 }
-uri() { jq -rn --arg v "$1" '$v|@uri'; }
 
-get "/v1/bundleIds?filter%5Bidentifier%5D=$(uri "$bundle_id")&fields%5BbundleIds%5D=identifier&limit=20"
-bundle_ref=$(printf '%s' "$response_body" | jq -r --arg b "$bundle_id" '[.data[] | select(.attributes.identifier == $b)][0].id // empty')
+get "/v1/bundleIds?filter%5Bidentifier%5D=$(asc_uri "$bundle_id")&fields%5BbundleIds%5D=identifier&limit=20"
+bundle_ref=$(jq -r --arg b "$bundle_id" '[.data[] | select(.attributes.identifier == $b)][0].id // empty' <<< "$asc_body")
 [[ -n "$bundle_ref" ]] || fail "no bundle ID $bundle_id in App Store Connect"
 
 get "/v1/bundleIds/$bundle_ref/profiles?fields%5Bprofiles%5D=name,profileType,profileState,uuid,expirationDate,profileContent&limit=200"
 # Newest first; the first one that isn't Xcode managed wins.
-printf '%s' "$response_body" | jq -c --arg t "$profile_type" \
+jq -c --arg t "$profile_type" \
     '[.data[] | select(.attributes.profileType == $t and .attributes.profileState == "ACTIVE")] | sort_by(.attributes.expirationDate) | reverse | .[]' \
-    > "$work/candidates"
+    <<< "$asc_body" > "$work/candidates"
 profile=""
 while IFS= read -r candidate; do
     printf '%s' "$candidate" | jq -r '.attributes.profileContent' | base64 -D > "$work/profile.provisionprofile"
@@ -88,7 +84,10 @@ uuid=$(printf '%s' "$profile" | jq -r '.attributes.uuid')
 [[ "$uuid" =~ ^[0-9A-Fa-f-]{36}$ ]] || fail "the profile has no UUID"
 
 if [[ -n "$keychain" ]]; then
-    want=$(security find-identity -v -p codesigning "$keychain" | awk '/"Developer ID Application/ { print $2; exit }')
+    # Read in full, then matched: piped into an awk that exits at the first match, security could still be writing
+    # its count line, and pipefail would end the export with SIGPIPE.
+    identities="$(security find-identity -v -p codesigning "$keychain")" || fail "couldn't list the identities in $keychain"
+    want="$(awk '/"Developer ID Application/ { print $2; exit }' <<< "$identities")"
     [[ -n "$want" ]] || fail "no Developer ID Application identity in $keychain"
     found=""
     count=$(plutil -extract DeveloperCertificates raw -o - "$work/profile.plist" 2>/dev/null || echo 0)

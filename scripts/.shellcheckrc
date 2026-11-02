@@ -1,0 +1,3 @@
+# The scripts source scripts/lib/build-common.sh and scripts/ci/lib/asc.sh; follow them, relative to each script.
+external-sources=true
+source-path=SCRIPTDIR

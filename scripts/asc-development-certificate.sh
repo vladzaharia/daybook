@@ -22,7 +22,9 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
-api="${ASC_API_BASE:-https://api.appstoreconnect.apple.com}"
+# asc_request, asc_details, sec_arg, and security_stdin.
+# shellcheck source=ci/lib/asc.sh
+source "$script_dir/ci/lib/asc.sh"
 repo=""
 environment=release
 
@@ -54,7 +56,8 @@ finish() {
     local status=$?
     if [[ -n "$created" ]] && (( ! stored )); then
         echo "asc-development-certificate.sh: revoking $created, which wasn't stored" >&2
-        [[ "$(request DELETE "$api/v1/certificates/$created")" == 204 ]] \
+        asc_request DELETE "$asc_api/v1/certificates/$created" || true
+        [[ "$asc_status" == 204 ]] \
             || echo "asc-development-certificate.sh: couldn't revoke $created; revoke it in Certificates, Identifiers & Profiles" >&2
     fi
     security delete-keychain "$work/check.keychain-db" 2>/dev/null || true
@@ -62,31 +65,8 @@ finish() {
     exit "$status"
 }
 trap finish EXIT
-
-token="$("$script_dir/ci/asc-jwt.sh" --key "$DAYBOOK_ASC_KEY_PATH" --key-id "$DAYBOOK_ASC_KEY_ID" --issuer-id "$DAYBOOK_ASC_ISSUER_ID")"
-# The token reaches curl through a header file readable only by this user, not the command line.
-printf 'Authorization: Bearer %s\n' "$token" > "$work/headers"
-
-# request METHOD URL [JSON_FILE]: prints the HTTP status; the body goes to $work/body.
-request() {
-    local args=(-sS -X "$1" -H "@$work/headers" -H 'Accept: application/json' -o "$work/body" -w '%{http_code}'
-                --connect-timeout 20 --max-time 120)
-    [[ -n "${3-}" ]] && args+=(-H 'Content-Type: application/json' --data-binary "@$3")
-    curl "${args[@]}" "$2" || echo 000
-}
-details() { jq -r '.errors[]? | "  \(.status) \(.code): \(.title) \(.detail // "")"' "$work/body" 2>/dev/null || true; }
-
-# sec_arg VALUE and security_stdin COMMAND, as in scripts/ci/secrets.sh: passwords reach `security` on its
-# standard input, and its "<command>: returned <status>" line decides whether the command worked.
-sec_arg() { printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"; }
-security_stdin() {
-    local output
-    if ! output="$(printf '%s\n' "$1" | security -i 2>&1)" \
-        || printf '%s\n' "$output" | grep -qE ': returned -?[0-9]+$'; then
-        printf '%s\n' "$output" >&2
-        return 1
-    fi
-}
+# The token's header file and the responses.
+asc_dir="$work"
 
 # 1. The key and the request.
 openssl genrsa -out "$work/key.pem" 2048 2>/dev/null || fail "couldn't make a key"
@@ -94,10 +74,9 @@ openssl req -new -key "$work/key.pem" -subj "/CN=Daybook release pipeline" -out 
     || fail "couldn't make a certificate signing request"
 
 # 2. The certificate.
-jq -n --rawfile csr "$work/request.csr" \
-    '{data: {type: "certificates", attributes: {certificateType: "DEVELOPMENT", csrContent: $csr}}}' > "$work/request.json"
-status="$(request POST "$api/v1/certificates" "$work/request.json")"
-[[ "$status" == 201 ]] || fail "HTTP $status making the certificate$(printf '\n%s' "$(details)")"
+asc_request POST "$asc_api/v1/certificates" "$(jq -n --rawfile csr "$work/request.csr" \
+    '{data: {type: "certificates", attributes: {certificateType: "DEVELOPMENT", csrContent: $csr}}}')"
+[[ "$asc_status" == 201 ]] || fail "HTTP $asc_status making the certificate$(printf '\n%s' "$(asc_details)")"
 created="$(jq -r '.data.id // empty' "$work/body")"
 [[ -n "$created" ]] || fail "App Store Connect made a certificate but didn't say its ID"
 serial="$(jq -r '.data.attributes.serialNumber // "?"' "$work/body")"
@@ -116,8 +95,9 @@ openssl pkcs12 -export -inkey "$work/key.pem" -in "$work/certificate.pem" -name 
     || fail "couldn't make the .p12"
 check="$work/check.keychain-db"
 check_password="$(openssl rand -hex 16)"
-security_stdin "create-keychain -p $(sec_arg "$check_password") $(sec_arg "$check")" || fail "couldn't make a keychain to check the .p12"
-security_stdin "import $(sec_arg "$work/development.p12") -k $(sec_arg "$check") -f pkcs12 -P $(sec_arg "$(cat "$work/password")")" \
+security_stdin "create-keychain -p $(sec_arg "$check_password") $(sec_arg "$check")" >/dev/null \
+    || fail "couldn't make a keychain to check the .p12"
+security_stdin "import $(sec_arg "$work/development.p12") -k $(sec_arg "$check") -f pkcs12 -P $(sec_arg "$(cat "$work/password")")" >/dev/null \
     || fail "macOS couldn't import the .p12"
 # Read in full before matching: piped into grep -q, security can still be writing its count line when grep
 # exits, and pipefail then reports SIGPIPE as no identity.
