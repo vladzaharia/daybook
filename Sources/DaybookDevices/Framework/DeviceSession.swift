@@ -31,6 +31,8 @@ public final class DeviceSession: Identifiable {
     /// live audio (DaybookCaptions), replaced in place as it's revised. Never the transcript: not
     /// saved, synced, or summarized. Empty when not listening, or when captions can't run here.
     public var liveCaptions: [LiveCaptionSegment] { listening?.live.captions ?? [] }
+    /// Where Listen Live's captioner stands (`LiveCapture.captionState`); `.off` when not listening.
+    public var liveCaptionState: LiveCaptionState { listening?.live.captionState ?? .off }
     /// The recorder's live audio is arriving on this device (Listen Live).
     public var isListeningLive: Bool { listening?.live.isListening == true }
     /// The connection that listens live, when the kind has one.

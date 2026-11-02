@@ -1484,6 +1484,7 @@ final class PhoneAppModel: RecordingCommandHandling {
                              "We still need legal to sign off on the pricing page before Friday.",
                              "Can someone check the date with the venue"]
                 soundcore.live.isListening = true
+                soundcore.live.captionState = .listening
                 soundcore.live.receivedSeconds = 236
                 for index in lines.indices {
                     // Demo captions: the earlier lines final, the newest still tentative.

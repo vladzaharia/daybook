@@ -946,40 +946,23 @@ private struct ActionTileStyle: ButtonStyle {
     }
 }
 
-/// Live listening captions, while a recorder streams. Tentative; never the transcript.
+/// Live listening captions, while a recorder streams: the shared strip (`.sheet`), drawn as the Mac's
+/// Listen Live draws it. Tentative; never the transcript.
 private struct StatusCaptions: View {
     @Environment(PhoneAppModel.self) private var model
 
     var body: some View {
+        let locale = model.settings.captionLocale
         ForEach(model.devices.sessions.filter(\.isListeningLive)) { session in
             VStack(alignment: .leading, spacing: PhoneStyle.Space.s2) {
                 HStack(spacing: 6) {
                     Circle().fill(PhoneStyle.Ink.record).frame(width: 7, height: 7).accessibilityHidden(true)
                     StatusHeading(text: "Listening to \(session.device.name)")
                 }
-                let segments = Array(session.liveCaptions.suffix(3))
-                if segments.isEmpty {
-                    Text("Waiting for speech…").font(PhoneStyle.Typeface.status).foregroundStyle(PhoneStyle.Ink.meta)
-                } else {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(segments) { segment in
-                            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                // The person live speakers recognized, as the recording screen names them.
-                                if let name = segment.speaker?.name {
-                                    Text(name).font(.callout.weight(.semibold)).foregroundStyle(PhoneStyle.Ink.meta).lineLimit(1).fixedSize()
-                                }
-                                Text(segment.text)
-                                    .font(.callout)
-                                    .foregroundStyle(segment.isTentative ? PhoneStyle.Ink.secondary : PhoneStyle.Ink.body)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                    }
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel("Live captions")
+                let segments = session.liveCaptions, state = session.liveCaptionState
+                if LiveCaptionStrip.shows(segments: segments, state: state, locale: locale) {
+                    LiveCaptionStrip(segments: segments, state: state, locale: locale, style: .sheet)
                 }
-                Text("Live captions · tentative")
-                    .font(PhoneStyle.Typeface.colophon).foregroundStyle(PhoneStyle.Ink.meta)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(PhoneStyle.Space.s3)

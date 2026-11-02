@@ -362,11 +362,13 @@ a second local runtime), which are gone, with their plumbing (`LiveTranscriber`,
   - `liveCaptions: [LiveCaptionSegment]`: oldest first, tentative text replaced in place, then final;
     empty when not listening, or when captions are off or can't run. Read-only; demos set the
     connection's `live.captions`.
+  - `liveCaptionState: LiveCaptionState`: the connection's `LiveCapture.captionState` (getting ready,
+    downloading, listening, unavailable and why, or stopped); `.off` when not listening.
   - `isListeningLive: Bool`: the recorder's live audio is arriving on this device.
 
-  The connection's `LiveCapture` also has `captionState` (`LiveCaptionState`: getting ready,
-  downloading, listening, unavailable and why, or stopped), which the Mac's page uses for its status
-  line. When listening ends the captions go with it and the captioner finishes on its own.
+  Both surfaces draw them with the shared `LiveCaptionStrip` (`.feed` on the Mac's page, `.sheet` on
+  the iPhone's status sheet) and use the state for its status line ("Listening…"). When listening
+  ends the captions go with it and the captioner finishes on its own.
 - **The Mac's page.** Listening shows "Live captions · tentative" and the newest six lines under the
   saved time (`LiveCaptionFeed`): the latest in Body, earlier in Secondary, words still being
   revised in Meta, and the person live speakers recognized named before their words, as Floating

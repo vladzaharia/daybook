@@ -59,7 +59,7 @@ Nothing here does it: the build script never passes `-allowProvisioningUpdates`.
 | `DaybookPhone/Library` | `PhoneLibrary` (DaybookKit's `LibraryController`, filing, imports), `SyncAudioProvider` (audio on demand), `CloudAvailability` |
 | `DaybookPhone/Link` | `PhoneLink`, the DaybookLink client: pairing, connections, live progress, record control; Settings › Macs and pairing |
 | `DaybookPhone/Devices` | `PhoneDevices`, DaybookDevices on iPhone (Soundcore with background Bluetooth and state restoration), the recorder handoff (`handoff`, DaybookKit's `RecorderHandoff`); recorder screens and `RecorderHandoffCard` |
-| `DaybookPhone/Status` | The status sheet (pocket) and panel (notebook): `StatusSheetModel` (the words, tested), `StatusSheet` (the views), and `LiveCaptionsFallback` (delete when `DeviceSession.liveCaptions` lands) |
+| `DaybookPhone/Status` | The status sheet (pocket) and panel (notebook): `StatusSheetModel` (the words, tested) and `StatusSheet` (the views) |
 | `DaybookPhone/Settings` | `SettingsScreen`: iCloud, Macs, recorders, recording, storage, templates, vocabulary, About |
 | `DaybookPhone/Posture` | `DevicePosture` (closed, partly open, open, angle) fed by `onHingeChange` |
 | `DaybookPhone/App` | the app model that ties recorder, library, sync (`PhoneSync`), the link, recorders, Live Activity, and widgets together; `MacPresence`, `LiveProgress`, multipoint; launch options; Siri phrases |
