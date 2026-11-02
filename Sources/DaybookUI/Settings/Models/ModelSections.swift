@@ -34,7 +34,9 @@ public struct ModelProcessingSection<Presets: View>: View {
 
     public var body: some View {
         Section {
+            // The Mac's Settings draw every switch at the regular size; on the iPhone it's the only size.
             Toggle(ModelSettingsText.label(toggleTitle, density), isOn: isOn)
+                .controlSize(.regular)
             presets
             if let download {
                 ModelDownloadRow(download, space: space, download: downloadAction, cancel: cancelAction)
