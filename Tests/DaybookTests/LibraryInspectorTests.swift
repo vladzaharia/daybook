@@ -62,6 +62,24 @@ final class LibraryInspectorTests: XCTestCase {
         XCTAssertEqual(meeting.awaitedRecordings(), [SourceHooks.awaited(link)], "the inspector shows it while the page does")
     }
 
+    /// Regression: while this Mac recorded another conversation, a recording's Play looked available and did nothing.
+    func testBehaviorPlayIsDimmedWhileThisMacRecordsAnotherConversation() async throws {
+        let state = AppState(libraryURL: makeTemporaryFolder("DaybookInspectorPlay"), defaults: makeTestDefaults())
+        await state.initialize()
+        let id = state.newMeeting(title: "Vendor walkthrough")
+        var meeting = try XCTUnwrap(state.meetings.first { $0.id == id })
+        meeting.tracks = [RecordingTrack(source: .imported, relativePath: "Originals/a.m4a", fileName: "a.m4a")]
+        func play() -> ConversationAction.Availability? {
+            ConversationActions.track(meeting.tracks[0], in: meeting, context: MeetingInspector.context(state, meeting))
+                .flatMap(\.actions).first { $0.id == .play }?.availability
+        }
+        XCTAssertEqual(play(), .available)
+        state.recordingID = UUID()
+        defer { state.recordingID = nil }
+        XCTAssertFalse(MeetingInspector.context(state, meeting).isRecording, "another conversation is recording")
+        XCTAssertEqual(play(), .unavailable("Recording now"), "dimmed, with its reason, as the Mac won't play it")
+    }
+
     /// Lets SwiftUI update and its animations run.
     private func settle() async throws { try await Task.sleep(for: .milliseconds(600)) }
 

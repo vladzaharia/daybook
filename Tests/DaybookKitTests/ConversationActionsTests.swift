@@ -105,6 +105,41 @@ final class ConversationActionsTests: XCTestCase {
         XCTAssertEqual(busy[3].actions[0].availability, .unavailable("Processing now"))
     }
 
+    func testBehaviorARecordingStaysWhileAnotherDeviceProcessesIt() throws {
+        var two = meeting()
+        two.tracks.append(RecordingTrack(source: .soundcore, relativePath: "Originals/b.wav", fileName: "b.wav", duration: 60))
+        let track = try XCTUnwrap(two.tracks.last)
+        let mac = ProcessingRequest.Device(id: "mac", name: "Studio Mac")
+        let request = ProcessingRequest(meetingID: two.id, mode: .newAudio, requestedBy: .init(id: "phone", name: "iPhone"))
+        func availability(_ status: ProcessingStatus?, _ id: ConversationAction.ID) -> ConversationAction.Availability? {
+            ConversationActions.track(track, in: two, context: .init(platform: .iPhone, status: status))
+                .flatMap(\.actions).first { $0.id == id }?.availability
+        }
+        // The Mac would write to the recording as it leaves (its timing, its transcript).
+        let processing = ProcessingStatus.processing(.init(stage: .transcribing, fraction: 0.4, device: mac))
+        XCTAssertEqual(availability(processing, .removeRecording), .unavailable("Processing now"))
+        XCTAssertEqual(availability(processing, .moveToNewConversation), .unavailable("Processing now"))
+        XCTAssertEqual(availability(.requested(.device(request)), .removeRecording), .unavailable("Waiting to process"))
+        XCTAssertEqual(availability(.requested(.device(request)), .moveToNewConversation), .unavailable("Waiting to process"))
+        XCTAssertEqual(availability(processing, .play), .available, "it still plays")
+        XCTAssertEqual(availability(.requested(.paused), .removeRecording), .available, "paused waits for the person")
+        XCTAssertEqual(availability(.recorded, .removeRecording), .available)
+        XCTAssertEqual(availability(nil, .moveToNewConversation), .available)
+    }
+
+    func testBehaviorPlayWaitsWhileThisMacRecordsAnotherConversation() throws {
+        var two = meeting()
+        two.tracks.append(RecordingTrack(source: .soundcore, relativePath: "Originals/b.wav", fileName: "b.wav", duration: 60))
+        let track = try XCTUnwrap(two.tracks.first)
+        let elsewhere = ConversationActions.track(track, in: two, context: .init(platform: .mac, isDeviceRecording: true)).flatMap(\.actions)
+        XCTAssertEqual(elsewhere.first { $0.id == .play }?.availability, .unavailable("Recording now"), "the Mac plays nothing while it records")
+        XCTAssertEqual(elsewhere.first { $0.id == .removeRecording }?.availability, .available, "this conversation can still change")
+        let here = ConversationActions.track(track, in: two, context: .init(platform: .mac, isRecording: true, isDeviceRecording: true))
+        XCTAssertEqual(here.flatMap(\.actions).first { $0.id == .play }?.availability, .unavailable("Recording now"))
+        let idle = ConversationActions.track(track, in: two, context: .init(platform: .mac))
+        XCTAssertEqual(idle.flatMap(\.actions).first { $0.id == .play }?.availability, .available)
+    }
+
     func testBehaviorEverySymbolIsOnTheOldestSystemThatShowsIt() throws {
         // SF Symbols' own record: the release each name arrived in, and each release's first system.
         let url = URL(fileURLWithPath: "/System/Library/CoreServices/CoreGlyphs.bundle/Contents/Resources/name_availability.plist")

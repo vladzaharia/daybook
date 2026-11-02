@@ -50,7 +50,7 @@ struct MeetingInspector: View {
     static func context(_ state: AppState, _ meeting: Meeting) -> ConversationActions.Context {
         ConversationActions.Context(platform: .mac, isRecording: state.recordingID == meeting.id,
                                     isProcessingHere: state.processingID == meeting.id || state.queuedIDs.contains(meeting.id),
-                                    status: state.processingStatus(for: meeting))
+                                    status: state.processingStatus(for: meeting), isDeviceRecording: state.isRecording)
     }
 
     static func inputs(_ state: AppState, _ meeting: Meeting) -> ConversationStatusPresentation.Inputs {

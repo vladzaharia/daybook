@@ -101,11 +101,13 @@ public enum ConversationActions {
         public var status: ProcessingStatus?
         /// A camera is here to take a photo.
         public var canTakePhoto: Bool
+        /// This device is recording, this conversation or another, so it plays nothing until it stops.
+        public var isDeviceRecording: Bool
 
         public init(platform: ConversationAction.Platform, isRecording: Bool = false, isProcessingHere: Bool = false,
-                    status: ProcessingStatus? = nil, canTakePhoto: Bool = false) {
+                    status: ProcessingStatus? = nil, canTakePhoto: Bool = false, isDeviceRecording: Bool = false) {
             self.platform = platform; self.isRecording = isRecording; self.isProcessingHere = isProcessingHere
-            self.status = status; self.canTakePhoto = canTakePhoto
+            self.status = status; self.canTakePhoto = canTakePhoto; self.isDeviceRecording = isDeviceRecording
         }
 
         /// Why it can't change now, when it can't.
@@ -113,6 +115,18 @@ public enum ConversationActions {
             if isRecording { return "Recording now" }
             if isProcessingHere { return "Processing now" }
             return nil
+        }
+
+        /// Why a recording can't come out of the conversation now, when it can't: besides `busy`, its processing is
+        /// asked for or under way on another device, which would write to the recording as it leaves. One paused
+        /// here waits for the person, so it can.
+        var recordingBusy: String? {
+            if let busy { return busy }
+            switch status {
+            case .processing?: return "Processing now"
+            case .requested(let waiting)? where waiting != .paused: return "Waiting to process"
+            default: return nil
+            }
         }
     }
 
@@ -226,11 +240,11 @@ public enum ConversationActions {
     /// transcript, move it into a conversation of its own, and remove it.
     public static func track(_ track: RecordingTrack, in meeting: Meeting, context: Context) -> [ConversationActionGroup] {
         let only = meeting.tracks.count < 2
-        let locked = context.busy
+        let locked = context.recordingBusy
         let groups = [
             ConversationActionGroup(id: .playback, actions: [
                 ConversationAction(id: .play, title: "Play", symbol: "play.fill",
-                                   availability: context.isRecording ? .unavailable("Recording now") : .available),
+                                   availability: context.isRecording || context.isDeviceRecording ? .unavailable("Recording now") : .available),
             ]),
             ConversationActionGroup(id: .history, actions: [
                 ConversationAction(id: .adjustTiming, title: "Adjust Timing…", symbol: "slider.horizontal.below.rectangle",
