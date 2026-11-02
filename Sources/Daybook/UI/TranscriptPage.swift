@@ -65,8 +65,38 @@ extension TranscriptHost {
                 }
                 return true
             },
-            showNotes: { state.pageMode = .summary },
+            showNotes: {
+                SummaryJump.window.show(SummaryJump.notes, in: meetingID)
+                state.pageMode = .summary
+            },
             photos: .mac(state: state, play: play))
+    }
+}
+
+/// A block of the summary page to bring into view, asked for from elsewhere: Show in Your Notes on the transcript. The
+/// summary page moves to it once, as the iPhone's does for `ReadingSession.showOnSummary`: it watches `token` and
+/// takes the block with `take(for:)` as it appears and when a request arrives.
+@MainActor @Observable
+final class SummaryJump {
+    /// The library window's: one window, one conversation page.
+    static let window = SummaryJump()
+    /// The "Your notes" heading, under the summary.
+    static let notes = "notes"
+
+    /// Bumped by each request.
+    private(set) var token = 0
+    @ObservationIgnored private var pending: (target: String, meetingID: UUID)?
+
+    func show(_ target: String, in meetingID: UUID) {
+        pending = (target, meetingID)
+        token += 1
+    }
+
+    /// The block for this conversation's summary page, once. Taking clears the request, and a request made for another
+    /// conversation is dropped: the person has moved on from it.
+    func take(for meetingID: UUID) -> String? {
+        defer { pending = nil }
+        return pending?.meetingID == meetingID ? pending?.target : nil
     }
 }
 
