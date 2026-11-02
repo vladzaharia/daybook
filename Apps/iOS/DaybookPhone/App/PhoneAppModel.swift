@@ -1503,7 +1503,9 @@ final class PhoneAppModel: RecordingCommandHandling {
                     recorder.beginAnotherAppsTransfer(recordingID: id &+ 1, slices: 30_000, pace: .milliseconds(60))
                     try? await Task.sleep(for: .milliseconds(300))
                 }
-                session.importRecordings([next], automatic: true, overWiFi: demo == "wifi")
+                // Held where iOS would ask to join the recorder's network, for what the page says meanwhile.
+                if demo == "joining" { self.devices.simulatedHotspot?.answersAfter = .seconds(600) }
+                session.importRecordings([next], automatic: true, overWiFi: demo == "wifi" || demo == "joining")
             }
             guard let state = self.options.handoffDemo else { return }
             let mac = ProcessingRequest.Device(id: "demo-studio-mac", name: "Studio Mac")

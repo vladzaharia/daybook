@@ -155,7 +155,7 @@ final class SoundcoreFastTransferTests: XCTestCase {
         let rig = rig(device)
         // What the page says as iOS asks to join a network called "WiFi-1730…".
         var saidAtThePrompt: [String?] = []
-        rig.hotspot.onJoin = { [weak session = rig.session] in saidAtThePrompt.append(session?.fastTransferStage?.label) }
+        rig.hotspot.onJoin = { [weak session = rig.session] in saidAtThePrompt.append(session?.fastTransferStage?.sentence) }
         try await connect(rig)
         XCTAssertTrue(rig.session.offersFastTransfer)
         let target = rig.session.newRecordings[0]
@@ -164,6 +164,9 @@ final class SoundcoreFastTransferTests: XCTestCase {
         try await waitUntil("the file over Wi‑Fi") { rig.session.fastTransferStage == .transferring && !device.wifiRequests.isEmpty }
         XCTAssertEqual(FastTransferStage.transferring.label, "Over Wi‑Fi")
         XCTAssertEqual(saidAtThePrompt, ["Joining Soundcore Work’s Wi‑Fi…"], "the recorder's own name, before iOS asks")
+        // Beside a title, a figure's few words; the recorder's name gets a line of its own.
+        XCTAssertEqual(FastTransferStage.joining(recorder: "Soundcore Work").label, "Joining Wi‑Fi…")
+        XCTAssertNil(FastTransferStage.transferring.sentence)
         XCTAssertEqual(rig.connection.state, .connected, "the page still reads as connected")
         XCTAssertTrue(rig.connection.fastTransferHoldsBackgroundTime, "a short background task while it runs")
         try await waitUntil("the import") { rig.library.imports.count == 1 && !rig.session.queue.isActive }

@@ -219,6 +219,9 @@ private struct DevicePageContent: View {
                         }
                         if session.fastTransferStage == .transferring {
                             Text("Over Wi‑Fi. Keep Daybook open until it finishes.").font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
+                        } else if let sentence = session.fastTransferStage?.sentence {
+                            // Under iOS's question about a network called "WiFi-…": whose network it is.
+                            Text(sentence).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
                         } else if session.kind.method(.direct)?.transport == .bluetoothLE {
                             Text("Keep it near this iPhone until it finishes.").font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
                         }

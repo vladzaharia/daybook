@@ -437,9 +437,9 @@ that kind, the phone's device ID as serial, and the phone's recording ID.
   recorder that speaks the protocol from generated fixtures. Its devices live in a throwaway
   preferences suite. Add `--autopilot` to walk through Add Device, connect, and import on its own.
 - `--device-demo other-app` shows an import waiting for the Soundcore app's transfer. On iPhone,
-  `--device-simulator --device-autopilot --demo-transfer wifi|other-app` imports the next recording
-  over the simulated recorder's Wi‑Fi (its access point runs on loopback), or has it wait for another
-  app's long transfer.
+  `--device-simulator --device-autopilot --demo-transfer wifi|joining|other-app` imports the next
+  recording over the simulated recorder's Wi‑Fi (its access point runs on loopback; `joining` holds it
+  where iOS would ask to join the network), or has it wait for another app's long transfer.
 - `--device other` opens the Other Recorder in a demo; `--snapshot-appearance light|dark` sets
   the appearance; `--place device` opens the first device; `--device-window 860x700` sets the
   library window's size (a narrow page); `--recorder-name "<name>"` names the demo's recorders (a

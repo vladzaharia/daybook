@@ -39,8 +39,9 @@ import Foundation
 ///     --demo-live-captions       with --device-simulator --device-autopilot: the recorder records and streams scripted captions
 ///     --demo-recorder-only <name>  only that recorder records a shared recording; this iPhone's microphone didn't start
 ///                                (use with --synthetic-audio; nothing is recorded)
-///     --demo-transfer wifi|other-app   with --device-simulator --device-autopilot: the next recording imports over the simulated
-///                                recorder's Wi‑Fi, or waits for another app's transfer, for screenshots
+///     --demo-transfer wifi|joining|other-app   with --device-simulator --device-autopilot: the next recording imports over the
+///                                simulated recorder's Wi‑Fi (joining: held where iOS would ask to join it), or waits for
+///                                another app's transfer, for screenshots
 ///     --placement-demo countdown|waiting|cloud|mac-countdown|colophon   where a summary runs (see `PhonePlacementDemo`)
 ///     --upgrade-demo mac|here|cloud|waiting   with --demo-library: an "Upgrade" offer on Weekly product sync (see `PhoneUpgradeDemo`)
 ///

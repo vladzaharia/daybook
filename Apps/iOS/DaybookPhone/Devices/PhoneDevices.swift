@@ -57,6 +57,8 @@ final class PhoneDevices {
     #if DEBUG
     /// `--device-simulator`'s recorder, for demos.
     @ObservationIgnored private(set) var simulatedRecorder: SimulatedSoundcore?
+    /// `--device-simulator`'s join of the recorder's Wi‑Fi, for demos.
+    var simulatedHotspot: SimulatedSoundcoreHotspot? { hub.environment.soundcoreWiFi.hotspot as? SimulatedSoundcoreHotspot }
     #endif
 
     /// How long the Soundcore connection and the handoff wait for things. The app uses the

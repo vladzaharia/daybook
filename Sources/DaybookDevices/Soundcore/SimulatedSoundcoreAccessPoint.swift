@@ -203,6 +203,8 @@ public final class SimulatedSoundcoreHotspot: SoundcoreHotspot {
     public var dropsAfterJoining = false
     /// Called as a join begins, when iOS would ask the person.
     public var onJoin: (() -> Void)?
+    /// Each join waits this long before it's answered, as it does while the person reads iOS's question (demos).
+    public var answersAfter: Duration?
 
     public init(recorder: SimulatedSoundcore?) {
         self.recorder = recorder
@@ -211,6 +213,7 @@ public final class SimulatedSoundcoreHotspot: SoundcoreHotspot {
     public func join(ssid: String, password: String, recorder host: String) async throws {
         joins.append(ssid)
         onJoin?()
+        if let answersAfter { try await Task.sleep(for: answersAfter) }
         if let failure { throw failure }
         guard let accessPoint = recorder?.accessPoint, accessPoint.ssid == ssid, accessPoint.password == password else {
             throw SoundcoreHotspotError.failed("The network didn’t appear.")

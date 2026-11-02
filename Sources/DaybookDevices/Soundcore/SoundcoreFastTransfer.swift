@@ -15,14 +15,22 @@ public enum FastTransferStage: Equatable, Sendable {
     /// Ending: FINISH, leaving the network, back to Bluetooth, and the access point closed.
     case closing
 
-    /// What the page says: "Starting Wi‑Fi…", "Joining Soundcore Work’s Wi‑Fi…", "Over Wi‑Fi", "Back to Bluetooth…".
+    /// Short, for a figure's place beside a title and in a status line: "Starting Wi‑Fi…", "Joining Wi‑Fi…",
+    /// "Over Wi‑Fi", "Back to Bluetooth…".
     public var label: String {
         switch self {
         case .opening, .starting, .connecting: return "Starting Wi‑Fi…"
-        case .joining(let recorder): return "Joining \(recorder)’s Wi‑Fi…"
+        case .joining: return "Joining Wi‑Fi…"
         case .transferring: return "Over Wi‑Fi"
         case .closing: return "Back to Bluetooth…"
         }
+    }
+
+    /// A line of its own under the import's progress, while iOS asks to join a network called "WiFi-1730…", so the
+    /// question has its context: "Joining Soundcore Work’s Wi‑Fi…". Nil at the other stages.
+    public var sentence: String? {
+        guard case .joining(let recorder) = self else { return nil }
+        return "Joining \(recorder)’s Wi‑Fi…"
     }
 }
 

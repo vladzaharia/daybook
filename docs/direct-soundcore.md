@@ -274,10 +274,11 @@ clears it. While it's set and the recorder isn't connected, the page says "Fast 
 recorder accepts a Bluetooth connection while its access point is open, and whether it closes the
 access point on its own after `FINISH` or a timeout, is unverified.
 
-**What the page says.** The import's line says "Starting Wi‑Fi…" while it sets up, "Joining Soundcore
-Work’s Wi‑Fi…" (the recorder's name) from just before iOS asks to join a network called `WiFi-…`, so the
-question has its context, and "Over Wi‑Fi. Keep Daybook open until it finishes." while it transfers;
-Device Details' "Fast Transfer" row says how the
+**What the page says.** Beside the import's title, where a percent goes, it says "Starting Wi‑Fi…" while it
+sets up and "Joining Wi‑Fi…" while it joins (`FastTransferStage.label`). Under the progress, the line
+says "Joining Soundcore Work’s Wi‑Fi…" (the recorder's name, `FastTransferStage.sentence`) from just
+before iOS asks to join a network called `WiFi-…`, so the question has its context, and "Over Wi‑Fi. Keep
+Daybook open until it finishes." while it transfers; Device Details' "Fast Transfer" row says how the
 last attempt went ("Over Wi‑Fi, Today, 10:02 AM", or "Back to Bluetooth, …" and why), or "Unavailable in
 this build".
 
