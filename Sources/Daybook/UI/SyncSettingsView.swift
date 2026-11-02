@@ -1,27 +1,20 @@
 import AppKit
 import DaybookCore
 import DaybookKit
+import DaybookUI
 import SwiftUI
 
-/// Settings › Library › iCloud Sync (Direction A §5.14). Sync uses Daybook's own iCloud container, so
-/// there's no folder to choose: the section says what iCloud is doing. Development builds without iCloud
-/// can bring back a chosen folder with `LibrarySyncController.developmentFolderSyncKey`.
-///
-/// One row says where sync stands, with its one action ("Up to date · 11:42 AM", Sync Now); a problem follows it in
-/// place, with its fix; then encryption and this Mac's preference. Turning sync off and erasing sit under the group,
-/// as System Settings places such buttons.
+/// Settings › Library › iCloud Sync: DaybookUI's `ICloudSyncSection`, which the iPhone's Settings › iCloud shows too,
+/// filled from this Mac's sync controller and phone link. Sync uses Daybook's own iCloud container, so there's no
+/// folder to choose; development builds without iCloud can bring back a chosen folder with
+/// `LibrarySyncController.developmentFolderSyncKey`. The library's devices and encryption's sheets are 420 pt sheets.
 struct SyncSettingsView: View {
     @Bindable var state: AppState
     /// Followed directly: the window doesn't redraw for every sync status change.
     private let sync: LibrarySyncController
     /// For Get Key from <iPhone> while waiting for the library's key.
     private let phoneLink: PhoneLink
-    @State private var confirmingTurnOff = false
-    @State private var confirmingAccount = false
-    @State private var confirmingSkip = false
-    @State private var confirmingErase = false
-    /// Something the person asked for here that couldn't be done.
-    @State private var problem: AppProblem?
+    @State private var sheet: ICloudSyncSheet?
 
     init(state: AppState) {
         self.state = state
@@ -29,171 +22,88 @@ struct SyncSettingsView: View {
         phoneLink = state.phoneLink
     }
 
-    private var shown: SyncShown {
+    private var shown: ICloudSyncShown {
         #if DEBUG
         if let demo = SyncSettingsDemo.shown { return demo }
         #endif
-        return SyncShown(sync, peers: phoneLink.peers.values.map { SyncShown.KeyPeer(id: $0.deviceID, name: $0.name) })
+        return Self.shown(sync, peers: phoneLink.peers.values.map { ICloudSyncShown.KeyPeer(id: $0.deviceID, name: $0.name) },
+                          devices: state.syncDevices)
+    }
+
+    /// What the section shows, from the controller.
+    @MainActor static func shown(_ sync: LibrarySyncController, peers: [ICloudSyncShown.KeyPeer], devices: [KnownSyncDevice]) -> ICloudSyncShown {
+        var shown = ICloudSyncShown(iCloud: sync.iCloud)
+        shown.isFolderTransport = sync.transport == .folder || sync.allowsFolderSync
+        shown.folder = sync.folder
+        shown.isSyncing = sync.isSyncing
+        shown.pendingUploads = sync.pendingUploads
+        shown.pendingDownloads = sync.pendingDownloads
+        shown.lastSync = sync.lastSync
+        shown.problem = sync.status.problem
+        shown.warnings = sync.warnings
+        shown.otherInstallation = sync.warning == .otherInstallation
+        shown.migration = sync.migrationRecord
+        shown.encryption = LibraryEncryptionShown(sync.encryption)
+        shown.mayStartOverEncryption = sync.mayStartOverEncryption
+        shown.hasRetiredFolderJournal = sync.hasRetiredFolderJournal
+        shown.keyPeers = peers.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        shown.devices = devices
+        return shown
+    }
+
+    private var actions: ICloudSyncActions {
+        let state = state, sync = sync
+        return ICloudSyncActions(
+            syncNow: { Task { await state.synchronizeLibrary() } },
+            tryAgain: { sync.retryContainer() },
+            useCurrentAccount: { sync.useCurrentICloudAccount() },
+            requestKey: { phone in Task { await state.requestLibraryKey(from: phone) } },
+            openSettings: Self.openAccountSettings,
+            // iCloud's storage is managed from the Apple Account's iCloud settings.
+            manageStorage: Self.openAccountSettings,
+            turnOn: { sync.turnOnICloudSync() },
+            turnOff: { sync.disconnect() },
+            choosePreviousFolderAgain: { sync.choosePreviousFolderAgain(near: $0) },
+            continueWithoutPreviousFolder: { sync.continueWithoutPreviousFolder() },
+            deleteRetiredFolderJournal: { try sync.deleteRetiredFolderJournal() })
     }
 
     var body: some View {
         let shown = shown
-        Section {
-            if shown.isFolderTransport {
-                folderRows(shown)
-            } else {
-                iCloudRows(shown)
+        ICloudSyncSection(shown: shown, actions: actions, controller: sync, sheet: $sheet) {
+            Button { sheet = .devices } label: {
+                LibraryDevicesRowLabel(summary: shown.devicesSummary(), chevron: true)
             }
-            if let problem { ProblemLine(problem: problem) }
-        } header: {
-            Text("iCloud Sync")
-        } footer: {
-            footer(shown)
-        }
-        .alert("Stop syncing this Mac?", isPresented: $confirmingTurnOff) {
-            Button("Turn Off", role: .destructive) { sync.disconnect() }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("Your library stays on this Mac and in iCloud. Nothing is deleted.")
-        }
-        .alert("Sync with this iCloud account?", isPresented: $confirmingAccount) {
-            Button("Sync") { sync.useCurrentICloudAccount() }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("Its conversations are added to the iCloud account you’re signed in to.")
-        }
-        .alert("Sync without the previous folder?", isPresented: $confirmingSkip) {
-            Button("Sync Without It") { sync.continueWithoutPreviousFolder() }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("Everything in this Mac’s library still syncs. History and deleted conversations kept only in that folder stay there.")
-        }
-        .alert("Erase deleted conversations from iCloud?", isPresented: $confirmingErase) {
-            Button("Erase", role: .destructive) { erase() }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("This can’t be undone.")
-        }
-    }
-
-    // MARK: iCloud
-
-    @ViewBuilder private func iCloudRows(_ shown: SyncShown) -> some View {
-        LabeledContent("iCloud") {
-            HStack(spacing: Space.s3) {
-                if shown.isBusy { ProgressView().controlSize(.small) }
-                Text(shown.headline).foregroundStyle(.secondary).monospacedDigit()
-                headlineAction(shown)
+            .buttonStyle(.plain)
+        } extras: {
+            if shown.isAttached {
+                Toggle("Transcribe synced recordings on this Mac", isOn: $state.processSyncedAudio)
+                    .controlSize(.regular)
             }
-        }
-        switch shown.iCloud {
-        case .migrating(let progress):
-            if progress.total > 0 {
-                ProgressView(value: Double(progress.completed), total: Double(max(progress.total, 1)))
-                    .progressViewStyle(.brand(width: nil))
-                    .accessibilityLabel("Moving your library to iCloud")
-            }
-            // A move that stopped on an error says so in place; it tries again on its own.
-            if let problem = shown.problem { ProblemLine(text: problem.text, details: problem.details) }
-        case .connected:
-            connectedRows(shown)
-        case .waitingForKey:
-            SyncEncryptionRows(state: state, shown: shown, problem: $problem)
-        case .accountChanged:
-            ProblemLine(text: "This library synced with a different iCloud account.") {
-                Button("Sync with This Account…") { confirmingAccount = true }
-            }
-        case .previousFolderAccessLost(let location):
-            ProblemLine(text: "Can’t open the folder this Mac synced through before.") {
-                Button("Choose Folder Again…") { sync.choosePreviousFolderAgain(near: location) }
-                Button("Sync Without It…") { confirmingSkip = true }
-            }
-        case .previousFolderMissing:
-            ProblemLine(text: "Can’t find the folder this Mac synced through before.") {
-                Button("Try Again") { sync.retryContainer() }
-                Button("Sync Without It…") { confirmingSkip = true }
-            }
-        default:
-            EmptyView()
-        }
-    }
-
-    /// The status row's one action: what moves sync on from where it stands.
-    @ViewBuilder private func headlineAction(_ shown: SyncShown) -> some View {
-        switch shown.iCloud {
-        case .connected, .waitingForKey:
-            Button("Sync Now") { Task { await state.synchronizeLibrary() } }
-                .disabled(shown.isSyncing)
-        case .iCloudDriveOff, .signedOut:
-            Button("Open System Settings…") { Self.openAccountSettings() }
-        case .turnedOff:
-            Button("Turn On") { sync.turnOnICloudSync() }
-        case .containerUnavailable(let reason):
-            if !reason.isEmpty { DetailsButton(details: reason) }
-            Button("Try Again") { sync.retryContainer() }
-        default:
-            EmptyView()
-        }
-    }
-
-    /// Connected: a paused or failed pass and the warnings, in place, with a removed library's one fix; encryption; and
-    /// this Mac's preference.
-    @ViewBuilder private func connectedRows(_ shown: SyncShown) -> some View {
-        if let problem = shown.problem {
-            if shown.offersNewLibrary {
-                ProblemLine(text: problem.text, details: problem.details) {
-                    Button(LibraryWords.startNewLibrary) { startNewLibrary() }
-                        .disabled(shown.isSyncing)
+            if shown.isFolderTransport, shown.folder == nil {
+                LabeledContent {
+                    Button("Choose Folder…") { sync.chooseFolder() }
+                } label: {
+                    Text("Sync through a folder")
+                    Text("Development builds without iCloud only.")
                 }
-            } else {
-                ProblemLine(text: problem.text, details: problem.details)
             }
         }
-        if let remaining = shown.remainingMigration { Text(remaining).foregroundStyle(.secondary) }
-        ForEach(Array(shown.warnings.enumerated()), id: \.offset) { _, warning in
-            let words = SyncWarningWords.split(warning)
-            ProblemLine(text: words.text, details: words.details)
+        .sheet(item: $sheet) { shownSheet in
+            ICloudSyncSheetContent(shownSheet, controller: sync, devices: devicesForSheet, refreshDevices: { await state.refreshSyncDevices() },
+                                   present: { sheet = $0 })
         }
-        // A library removed from iCloud has nothing to encrypt: the new one starts encrypted.
-        if !shown.offersNewLibrary { SyncEncryptionRows(state: state, shown: shown, problem: $problem) }
-        Toggle("Transcribe synced recordings on this Mac", isOn: $state.processSyncedAudio)
-            .controlSize(.regular)
+        #if DEBUG
+        // `--sync-sheet encrypt|recovery-key|enter-key|devices` opens one of the sheets, with `--sync-demo`.
+        .task { sheet = SyncSettingsDemo.sheet }
+        #endif
     }
 
-    /// Under the group: a fix for iCloud Drive, or, while syncing, erasing and turning sync off.
-    @ViewBuilder private func footer(_ shown: SyncShown) -> some View {
-        if let footer = shown.footer {
-            SettingsFooter(footer)
-        } else if shown.isConnected {
-            HStack(spacing: Space.s2) {
-                Spacer()
-                if shown.encryption.isOn, !shown.offersNewLibrary {
-                    Button("Erase Deleted Conversations from iCloud…") { confirmingErase = true }
-                        .disabled(shown.isSyncing)
-                }
-                Button("Turn Off Sync…") { confirmingTurnOff = true }
-                    .disabled(shown.isSyncing)
-            }
-            .padding(.top, Space.s1)
-        }
-    }
-
-    private func erase() {
-        problem = nil
-        Task {
-            do { try await sync.rotateEncryptionKey() } catch {
-                problem = AppProblem(title: "Couldn’t Erase", fallback: "Deleted conversations couldn’t be erased from iCloud. Try again once sync is up to date.", error: error)
-            }
-        }
-    }
-
-    private func startNewLibrary() {
-        problem = nil
-        Task {
-            do { try await sync.startNewLibrary() } catch {
-                problem = AppProblem(title: "Couldn’t Start a New Library", fallback: "A new library couldn’t be started in iCloud. Try again.", error: error)
-            }
-        }
+    private var devicesForSheet: [KnownSyncDevice] {
+        #if DEBUG
+        if SyncSettingsDemo.shown != nil { return SyncSettingsDemo.devices }
+        #endif
+        return state.syncDevices
     }
 
     private static func openAccountSettings() {
@@ -202,168 +112,6 @@ struct SyncSettingsView: View {
             NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/System Settings.app"))
         }
     }
-
-    // MARK: Development folder
-
-    /// The folder transport, for development builds without iCloud (and libraries connected in tests).
-    @ViewBuilder private func folderRows(_ shown: SyncShown) -> some View {
-        if let folder = shown.folder {
-            LabeledContent("Folder") {
-                Text(SettingsPath.display(folder))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .textSelection(.enabled)
-                    .help(folder.path)
-            }
-            LabeledContent("Status") {
-                HStack(spacing: Space.s3) {
-                    if shown.isSyncing { ProgressView().controlSize(.small) }
-                    Text(shown.connectedStatus).foregroundStyle(.secondary).monospacedDigit()
-                    Button("Sync Now") { Task { await state.synchronizeLibrary() } }
-                        .disabled(shown.isSyncing)
-                }
-            }
-            connectedRows(shown)
-        } else {
-            LabeledContent {
-                Button("Choose Folder…") { sync.chooseFolder() }
-            } label: {
-                Text("Sync through a folder")
-                Text("Development builds without iCloud only.")
-            }
-        }
-    }
-}
-
-// MARK: - Words
-
-/// What the iCloud Sync section shows, as plain values: from the sync controller, or from a demo (`--sync-demo`). The
-/// words it makes are tested (`SyncSettingsWordsTests`).
-struct SyncShown {
-    struct KeyPeer: Identifiable, Equatable {
-        var id: UUID
-        var name: String
-    }
-
-    var iCloud: ICloudSyncState
-    /// The development folder transport instead of iCloud.
-    var isFolderTransport = false
-    var folder: URL?
-    var isSyncing = false
-    var pendingUploads = 0
-    var pendingDownloads = 0
-    var lastSync: Date?
-    /// What needs the person, from the controller's status: a paused or failed pass, a move to iCloud that stopped.
-    var problem: SyncProblem?
-    var warnings: [String] = []
-    var migration: SyncMigrationRecord?
-    var encryption: EncryptionShown = .unavailable
-    var mayStartOverEncryption = false
-    var hasRetiredFolderJournal = false
-    /// Devices that can send the library's key.
-    var keyPeers: [KeyPeer] = []
-
-    init(iCloud: ICloudSyncState) { self.iCloud = iCloud }
-
-    @MainActor init(_ sync: LibrarySyncController, peers: [KeyPeer]) {
-        iCloud = sync.iCloud
-        isFolderTransport = sync.transport == .folder || sync.allowsFolderSync
-        folder = sync.folder
-        isSyncing = sync.isSyncing
-        pendingUploads = sync.pendingUploads
-        pendingDownloads = sync.pendingDownloads
-        lastSync = sync.lastSync
-        problem = sync.status.problem
-        warnings = sync.warnings
-        migration = sync.migrationRecord
-        encryption = EncryptionShown(sync.encryption)
-        mayStartOverEncryption = sync.mayStartOverEncryption
-        hasRetiredFolderJournal = sync.hasRetiredFolderJournal
-        keyPeers = peers.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-    }
-
-    /// Syncing through iCloud or a folder: Turn Off Sync… applies.
-    var isConnected: Bool { folder != nil && (isFolderTransport || iCloud == .connected) }
-
-    /// The library in iCloud was removed: its problem line offers Start a New Library in iCloud, as the iPhone does.
-    var offersNewLibrary: Bool { problem == .libraryRemoved }
-
-    /// The iCloud row's value: one phrase for where sync stands, in the words the iPhone's sync line uses
-    /// (`SyncStatus.shortText`).
-    var headline: String {
-        switch iCloud {
-        case .checking: return SyncStatus.connecting.shortText
-        case .connected: return connectedStatus
-        case .waitingForKey: return SyncStatus.waitingForKey.shortText
-        case .iCloudDriveOff: return SyncStatus.iCloudDriveOff.shortText
-        case .signedOut: return SyncStatus.signedOut.shortText
-        case .migrating(let progress): return SyncStatus.migrating(progress).shortText
-        case .accountChanged: return SyncStatus.accountChanged.shortText
-        case .previousFolderMissing: return SyncStatus.previousFolderMissing.shortText
-        case .previousFolderAccessLost: return SyncStatus.previousFolderAccessLost.shortText
-        case .containerUnavailable(let reason): return SyncStatus.iCloudUnavailable(details: reason).shortText
-        case .turnedOff: return SyncStatus.off.shortText
-        case .unavailableInThisBuild: return SyncStatus.unavailableInThisBuild.shortText
-        }
-    }
-
-    /// The spinner, for work without a bar of its own: a move that has counted its files shows its progress instead.
-    var isBusy: Bool {
-        switch iCloud {
-        case .checking: return true
-        case .migrating(let progress): return progress.total == 0 && problem == nil
-        case .connected: return isSyncing
-        default: return false
-        }
-    }
-
-    /// The copy deck's sync states: Up to date · 11:42 AM, Syncing…, Uploading 2 items to iCloud, Waiting for iCloud to
-    /// download 3 items…. Up to date needs nothing waiting either way. With a problem, the line under the row says what's
-    /// wrong, so the row says only when sync last finished.
-    var connectedStatus: String {
-        if isSyncing { return SyncStatus.syncing.shortText }
-        if problem == nil, pendingUploads > 0 || pendingDownloads > 0 {
-            return SyncStatus.exchanged(uploads: pendingUploads, downloads: pendingDownloads).shortText
-        }
-        guard let date = lastSync else { return problem == nil ? SyncStatus.preparing.shortText : "Not synced yet" }
-        let time = Calendar.current.isDateInToday(date)
-            ? date.formatted(date: .omitted, time: .shortened)
-            : date.formatted(.dateTime.day().month(.abbreviated).hour().minute())
-        return problem == nil ? "\(SyncStatus.upToDate(at: date).shortText) · \(time)" : "Last synced \(time)"
-    }
-
-    var remainingMigration: String? {
-        guard let record = migration, record.switchedAt != nil, record.completedAt == nil,
-              !record.abandoned, record.remainingFiles > 0 else { return nil }
-        return "Copying \(record.remainingFiles) more \(record.remainingFiles == 1 ? "file" : "files") from the previous sync folder"
-    }
-
-    /// The fix the status row's button can't give on its own: where iCloud Drive is turned on.
-    var footer: String? {
-        iCloud == .iCloudDriveOff ? "Turn it on in System Settings › Apple Account › iCloud." : nil
-    }
-}
-
-/// Whether the library in iCloud is encrypted, as the section shows it.
-enum EncryptionShown: Equatable {
-    /// This build can't keep library keys: nothing to show.
-    case unavailable
-    case off
-    case waitingForKey
-    /// "On", or how much is left to encrypt; and whether a recovery key was saved.
-    case on(status: String, hasRecoveryKey: Bool)
-
-    init(_ state: LibraryEncryptionState) {
-        switch state {
-        case .unavailable: self = .unavailable
-        case .off: self = .off
-        case .waitingForKey: self = .waitingForKey
-        case .on(let summary): self = .on(status: LibraryWords.encryptionStatus(summary), hasRecoveryKey: summary.hasRecoveryKey)
-        }
-    }
-
-    var isOn: Bool { if case .on = self { return true } else { return false } }
 }
 
 // MARK: - Demos
@@ -371,38 +119,61 @@ enum EncryptionShown: Equatable {
 #if DEBUG
 /// Debug-only: `--sync-demo <state>` shows Settings › Library's iCloud Sync section in that state, without iCloud, for
 /// screenshots. Its buttons still act on the real (unconnected) controller. States: checking, off, signed-out,
-/// drive-off, unavailable, moving, moving-paused, on, syncing, downloading, uploading, full, removed, paused, warning, damaged, account,
-/// folder-lost, folder-missing,
-/// waiting, waiting-many (two iPhones with long names), encrypted, no-recovery-key, encrypting, dev-folder.
+/// drive-off, unavailable, moving, moving-paused, on, syncing, downloading, uploading, full, removed, other-app, paused,
+/// warning, damaged, account, folder-lost, folder-missing, waiting, waiting-many (two iPhones with long names), encrypted,
+/// no-recovery-key, encrypting, dev-folder. `--sync-sheet encrypt|recovery-key|enter-key|devices` opens a sheet over it.
 @MainActor
 enum SyncSettingsDemo {
     static let scenario = LaunchOptions.value(after: "--sync-demo")
 
-    static var shown: SyncShown? {
+    static var sheet: ICloudSyncSheet? {
+        switch LaunchOptions.value(after: "--sync-sheet") {
+        case "encrypt"?: return .encrypt
+        case "recovery-key"?: return .recoveryKey(RecoveryKey.generate())
+        case "enter-key"?: return .enterRecoveryKey
+        case "devices"?: return .devices
+        default: return nil
+        }
+    }
+
+    /// The library's devices in the demos: this Mac, an iPhone, and another Mac that's recording.
+    static var devices: [KnownSyncDevice] {
+        let now = Date()
+        let recording = SyncDeviceActivity(recordingConversationID: UUID(), since: now.addingTimeInterval(-600), expiresAt: now.addingTimeInterval(600))
+        return [
+            KnownSyncDevice(id: "this-mac", deviceClass: .mac, displayName: "Vlad’s MacBook Pro", canProcess: true, lastSeen: now, isCurrentDevice: true),
+            KnownSyncDevice(id: "studio", deviceClass: .mac, displayName: "Studio Mac", canProcess: true, lastSeen: now.addingTimeInterval(-300),
+                            activity: recording),
+            KnownSyncDevice(id: "phone", deviceClass: .phone, displayName: "Alex’s iPhone", lastSeen: now.addingTimeInterval(-7_200)),
+        ]
+    }
+
+    static var shown: ICloudSyncShown? {
         guard let scenario else { return nil }
         let folder = URL(fileURLWithPath: "/Users/demo/Library/Mobile Documents/iCloud~local~daybook/Documents/Daybook")
-        func connected(_ change: (inout SyncShown) -> Void = { _ in }) -> SyncShown {
-            var shown = SyncShown(iCloud: .connected)
+        func connected(_ change: (inout ICloudSyncShown) -> Void = { _ in }) -> ICloudSyncShown {
+            var shown = ICloudSyncShown(iCloud: .connected)
             shown.folder = folder
             shown.lastSync = Calendar.current.date(bySettingHour: 11, minute: 42, second: 0, of: Date())
             shown.encryption = .off
+            shown.devices = devices
             change(&shown)
             return shown
         }
         switch scenario {
-        case "checking": return SyncShown(iCloud: .checking)
-        case "off": return SyncShown(iCloud: .turnedOff)
-        case "signed-out": return SyncShown(iCloud: .signedOut)
-        case "drive-off": return SyncShown(iCloud: .iCloudDriveOff)
-        case "unavailable": return SyncShown(iCloud: .containerUnavailable("The operation couldn’t be completed. (CKErrorDomain error 4.)"))
+        case "checking": return ICloudSyncShown(iCloud: .checking)
+        case "off": return ICloudSyncShown(iCloud: .turnedOff)
+        case "signed-out": return ICloudSyncShown(iCloud: .signedOut)
+        case "drive-off": return ICloudSyncShown(iCloud: .iCloudDriveOff)
+        case "unavailable": return ICloudSyncShown(iCloud: .containerUnavailable("The operation couldn’t be completed. (CKErrorDomain error 4.)"))
         case "moving":
             var progress = SyncMigrationProgress()
             progress.total = 412; progress.completed = 157
-            return SyncShown(iCloud: .migrating(progress))
+            return ICloudSyncShown(iCloud: .migrating(progress))
         case "moving-paused":
             var progress = SyncMigrationProgress()
             progress.total = 412; progress.completed = 157
-            var shown = SyncShown(iCloud: .migrating(progress))
+            var shown = ICloudSyncShown(iCloud: .migrating(progress))
             shown.problem = .migrationPaused(details: "The operation couldn’t be completed. No space left on device.")
             return shown
         case "on": return connected()
@@ -410,7 +181,8 @@ enum SyncSettingsDemo {
         case "downloading": return connected { $0.pendingDownloads = 3 }
         case "uploading": return connected { $0.pendingUploads = 2 }
         case "full": return connected { $0.pendingUploads = 2; $0.problem = .storageFull }
-        case "removed": return connected { $0.problem = .libraryRemoved; $0.encryption = .on(status: "On", hasRecoveryKey: true) }
+        case "removed": return connected { $0.problem = .libraryRemoved; $0.encryption = .on(status: "On", hasRecoveryKey: true, encryptsHere: false) }
+        case "other-app": return connected { $0.otherInstallation = true }
         case "paused": return connected { $0.problem = .failure(details: "The operation couldn’t be completed. No space left on device.") }
         case "warning": return connected { $0.warnings = [SyncWarningWords.unsavedChange + ": The file “events-0042.json” couldn’t be saved."] }
         case "damaged":
@@ -421,27 +193,23 @@ enum SyncSettingsDemo {
                                              details: "The one that was here is kept at ~/Library/Application Support/Daybook/Meetings/…/SyncConflicts/9c1d…-microphone.m4a."),
                 ]
             }
-        case "account": return SyncShown(iCloud: .accountChanged)
-        case "folder-lost": return SyncShown(iCloud: .previousFolderAccessLost(nil))
-        case "folder-missing": return SyncShown(iCloud: .previousFolderMissing)
-        case "waiting":
-            var shown = SyncShown(iCloud: .waitingForKey)
+        case "account": return ICloudSyncShown(iCloud: .accountChanged)
+        case "folder-lost": return ICloudSyncShown(iCloud: .previousFolderAccessLost(nil))
+        case "folder-missing": return ICloudSyncShown(iCloud: .previousFolderMissing)
+        case "waiting", "waiting-many":
+            var shown = ICloudSyncShown(iCloud: .waitingForKey)
             shown.folder = folder
             shown.encryption = .waitingForKey
             shown.mayStartOverEncryption = true
-            shown.keyPeers = [.init(id: UUID(), name: "Alex’s iPhone")]
+            shown.devices = devices
+            shown.keyPeers = scenario == "waiting"
+                ? [.init(id: UUID(), name: "Alex’s iPhone")]
+                : [.init(id: UUID(), name: "Alex’s iPhone 15 Pro Max"), .init(id: UUID(), name: "Jordan’s Work iPhone")]
             return shown
-        case "waiting-many":
-            var shown = SyncShown(iCloud: .waitingForKey)
-            shown.folder = folder
-            shown.encryption = .waitingForKey
-            shown.mayStartOverEncryption = true
-            shown.keyPeers = [.init(id: UUID(), name: "Alex’s iPhone 15 Pro Max"), .init(id: UUID(), name: "Jordan’s Work iPhone")]
-            return shown
-        case "encrypted": return connected { $0.encryption = .on(status: "On", hasRecoveryKey: true) }
+        case "encrypted": return connected { $0.encryption = .on(status: "On", hasRecoveryKey: true, encryptsHere: false) }
         case "no-recovery-key":
-            return connected { $0.encryption = .on(status: "On", hasRecoveryKey: false); $0.hasRetiredFolderJournal = true }
-        case "encrypting": return connected { $0.encryption = .on(status: "Encrypting · 128 left", hasRecoveryKey: true) }
+            return connected { $0.encryption = .on(status: "On", hasRecoveryKey: false, encryptsHere: false); $0.hasRetiredFolderJournal = true }
+        case "encrypting": return connected { $0.encryption = .on(status: "Encrypting · 128 left", hasRecoveryKey: true, encryptsHere: true) }
         case "dev-folder":
             return connected { $0.isFolderTransport = true; $0.folder = URL(fileURLWithPath: NSHomeDirectory() + "/Daybook Sync") }
         default: return nil
