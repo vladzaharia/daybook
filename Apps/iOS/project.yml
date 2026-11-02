@@ -98,11 +98,6 @@ targets:
         # Joining a Soundcore Work's own network for Wi-Fi Fast Transfer (NEHotspotConfiguration;
         # docs/direct-soundcore.md, "Wi-Fi Fast Transfer"). Enabled on the App ID by the account owner.
         com.apple.developer.networking.HotspotConfiguration: true
-        # Access Wi-Fi Information: iOS names the network the iPhone is on (NEHotspotNetwork.fetchCurrent), so
-        # Fast Transfer opens its socket only on the recorder's own network. Goes with DaybookReadsWiFiName below:
-        # add or remove the two together. The account owner enables the capability on the App ID
-        # (docs/direct-soundcore.md, "Owner steps").
-        com.apple.developer.networking.wifi-info: true
     info:
       path: DaybookPhone/Resources/Info.plist
       properties:
@@ -110,10 +105,6 @@ targets:
         DaybookICloudContainerIdentifier: $(DAYBOOK_ICLOUD_CONTAINER)
         # The keychain group above, as signing expands it, for KeychainLibraryKeyStore.
         DaybookKeychainSharedGroup: $(AppIdentifierPrefix)local.daybook.shared
-        # This build has com.apple.developer.networking.wifi-info above, so Fast Transfer checks the recorder's
-        # network by its name too (SystemSoundcoreHotspot.readsNetworkName). Without the entitlement iOS answers
-        # every name with nil, so this goes only with it.
-        DaybookReadsWiFiName: true
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         ITSAppUsesNonExemptEncryption: false

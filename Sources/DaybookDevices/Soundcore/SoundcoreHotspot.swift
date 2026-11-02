@@ -14,9 +14,12 @@ public final class SystemSoundcoreHotspot: SoundcoreHotspot {
     public var addressWait: Duration = .seconds(20)
     /// iOS names the Wi‑Fi this iPhone is on (`NEHotspotNetwork.fetchCurrent`) only to an app with the Access Wi‑Fi
     /// Information entitlement (`com.apple.developer.networking.wifi-info`); without it every answer is nil. So the
-    /// name is checked only in a build that has it, which says so in its Info.plist (`readsNetworkNameKey`, set beside
-    /// the entitlement). Otherwise an address on the recorder's subnet is the check.
+    /// name is checked only in a build that has it, which says so in its Info.plist (`readsNetworkNameKey`, added
+    /// with the entitlement). Otherwise an address on the recorder's subnet is the check, and only where this iPhone
+    /// had none there before joining (`SoundcoreWiFi.canCheckJoin`).
     public let readsNetworkName: Bool
+    /// Whether this iPhone had an address on the recorder's subnet just before joining it, keyed by the SSID joined.
+    private var sharedSubnetBeforeJoining: [String: Bool] = [:]
 
     /// Info.plist's Boolean that this build has the Access Wi‑Fi Information entitlement.
     public static let readsNetworkNameKey = "DaybookReadsWiFiName"
@@ -25,7 +28,18 @@ public final class SystemSoundcoreHotspot: SoundcoreHotspot {
         self.readsNetworkName = readsNetworkName
     }
 
+    public func canCheckJoin(recorder host: String) -> Bool {
+        SoundcoreWiFi.canCheckJoin(readsName: readsNetworkName, sharedSubnetBeforeJoining: Self.sharesSubnet(with: host))
+    }
+
     public func join(ssid: String, password: String, recorder host: String) async throws {
+        // Before iOS asks: on a network with the recorder's addresses already, and no name to tell them apart, a
+        // join couldn't be checked. Nothing is joined, and the transfer stays on Bluetooth.
+        let sharedBefore = Self.sharesSubnet(with: host)
+        sharedSubnetBeforeJoining[ssid] = sharedBefore
+        guard SoundcoreWiFi.canCheckJoin(readsName: readsNetworkName, sharedSubnetBeforeJoining: sharedBefore) else {
+            throw SoundcoreHotspotError.notJoined
+        }
         let configuration = NEHotspotConfiguration(ssid: ssid, passphrase: password, isWEP: false)
         configuration.joinOnce = true
         do {
@@ -48,11 +62,14 @@ public final class SystemSoundcoreHotspot: SoundcoreHotspot {
 
     /// An address on the recorder's subnet and, where this build can read it, iOS naming `ssid` as the Wi‑Fi this
     /// iPhone is on: with the entitlement, `fetchCurrent` names a network the app configured, as the recorder's is.
+    /// Without it, the address counts only if this iPhone had none there before joining; a network it didn't join
+    /// here has no before, so the address alone never counts for it.
     public func isJoined(to ssid: String, recorder host: String) async -> Bool {
         var current: String?
         if readsNetworkName { current = await Self.currentNetworkName() }
         return SoundcoreWiFi.isOnRecorderNetwork(ssid, currentName: current, readsName: readsNetworkName,
-                                                 sharesSubnet: Self.sharesSubnet(with: host))
+                                                 sharesSubnet: Self.sharesSubnet(with: host),
+                                                 sharedSubnetBeforeJoining: sharedSubnetBeforeJoining[ssid] ?? true)
     }
 
     private static func currentNetworkName() async -> String? {
@@ -62,6 +79,7 @@ public final class SystemSoundcoreHotspot: SoundcoreHotspot {
     }
 
     public func leave(ssid: String) {
+        sharedSubnetBeforeJoining[ssid] = nil
         NEHotspotConfigurationManager.shared.removeConfiguration(forSSID: ssid)
     }
 

@@ -71,7 +71,9 @@ public enum SoundcoreFastTransferError: LocalizedError, Equatable {
 /// Wi‑Fi Fast Transfer (iPhone, in the foreground; docs/direct-soundcore.md, "Wi‑Fi Fast Transfer"):
 ///
 /// 1. Over Bluetooth, after the usual key exchange (the Wi‑Fi transfer reuses that key), `1A 05` with an
-///    access point name and password Daybook chooses; the recorder answers with its address and port.
+///    access point name and password Daybook chooses; the recorder answers with its address and port. If
+///    the iPhone couldn't tell the recorder's network from the one it's on (`SoundcoreHotspot.canCheckJoin`),
+///    the access point is closed and the transfer stays on Bluetooth.
 /// 2. Bluetooth is let go on purpose, and the recorder gets `accessPointStartup` to start its network.
 /// 3. The iPhone joins it (`SoundcoreHotspot`; iOS asks each time) and, while it's on the recorder's network
 ///    (`SoundcoreHotspot.isJoined`), opens `wss://` to the recorder, taking its self-signed certificate, with a
@@ -214,6 +216,12 @@ final class SoundcoreFastTransfer {
             throw SoundcoreError.timedOut
         }
         try stillStarting()
+        // A join this device couldn't tell from staying on its own network (`SoundcoreHotspot.canCheckJoin`) isn't
+        // tried: the access point is closed while Bluetooth is still here, and the transfer stays on it.
+        guard hotspot.canCheckJoin(recorder: accessPoint.host) else {
+            try? await bluetooth.closeAccessPoint()
+            throw SoundcoreHotspotError.notJoined
+        }
         host.accessPointMayBeOpen(accessPoint.ssid)
         let key = bluetooth.handOverKey()
         leftBluetooth = true

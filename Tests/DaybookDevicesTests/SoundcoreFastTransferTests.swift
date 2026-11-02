@@ -352,18 +352,72 @@ final class SoundcoreFastTransferTests: XCTestCase {
 
     /// On the recorder's network: an address on its subnet always, and its name only where the build can read names
     /// (the Access Wi‑Fi Information entitlement). Without the entitlement iOS answers every name with nil, which
-    /// mustn't fail every join.
+    /// mustn't fail every join; then the address counts only if this device had none there before joining, since
+    /// a home or café network with the recorder's addresses would pass on the address alone.
     func testBehaviorTheNetworkIsCheckedByNameOnlyWhereTheBuildCanReadIt() {
         let ssid = "WiFi-1730000000000"
-        func check(_ name: String?, readsName: Bool, sharesSubnet: Bool = true) -> Bool {
-            SoundcoreWiFi.isOnRecorderNetwork(ssid, currentName: name, readsName: readsName, sharesSubnet: sharesSubnet)
+        func check(_ name: String?, readsName: Bool, sharesSubnet: Bool = true, sharedBefore: Bool = false) -> Bool {
+            SoundcoreWiFi.isOnRecorderNetwork(ssid, currentName: name, readsName: readsName, sharesSubnet: sharesSubnet,
+                                              sharedSubnetBeforeJoining: sharedBefore)
         }
         XCTAssertTrue(check(ssid, readsName: true))
+        XCTAssertTrue(check(ssid, readsName: true, sharedBefore: true), "the name tells, whatever the addresses")
         XCTAssertFalse(check("Home", readsName: true), "another network with the same addresses")
+        XCTAssertFalse(check("Home", readsName: true, sharedBefore: true))
         XCTAssertFalse(check(nil, readsName: true))
         XCTAssertFalse(check(ssid, readsName: true, sharesSubnet: false), "no address there yet")
         XCTAssertTrue(check(nil, readsName: false), "a build that can't read names: iOS says nil")
         XCTAssertFalse(check(nil, readsName: false, sharesSubnet: false))
+        XCTAssertFalse(check(nil, readsName: false, sharesSubnet: true, sharedBefore: true),
+                       "an address it had before joining proves nothing")
+
+        XCTAssertTrue(SoundcoreWiFi.canCheckJoin(readsName: true, sharedSubnetBeforeJoining: true))
+        XCTAssertTrue(SoundcoreWiFi.canCheckJoin(readsName: false, sharedSubnetBeforeJoining: false))
+        XCTAssertFalse(SoundcoreWiFi.canCheckJoin(readsName: false, sharedSubnetBeforeJoining: true))
+    }
+
+    /// A build that can't read network names, on an iPhone whose Wi‑Fi already uses the recorder's addresses: a
+    /// join couldn't be told from staying there. Fast Transfer stops as soon as the recorder says its address,
+    /// before Bluetooth is let go or iOS asks, and the recording comes over Bluetooth.
+    func testBehaviorAJoinThatCouldntBeCheckedIsntTried() async throws {
+        let device = recorder(count: 1)
+        let rig = rig(device)
+        rig.hotspot.readsNetworkName = false
+        rig.hotspot.sharesRecorderSubnet = true
+        try await connect(rig)
+        rig.session.importRecordings([rig.session.newRecordings[0]])
+        try await waitUntil("the import") { rig.library.imports.count == 1 && !rig.session.queue.isActive }
+        try await waitForBluetooth(rig)
+        XCTAssertTrue(rig.hotspot.joins.isEmpty, "iOS never asked")
+        XCTAssertEqual(count(rig, 0x1a, 0x02), 1, "the access point closed over Bluetooth")
+        XCTAssertEqual(device.connectionLog.count, 1, "Bluetooth was never let go")
+        XCTAssertTrue(try XCTUnwrap(device.lastAccessPoint).handshakes.isEmpty, "no WebSocket was opened")
+        XCTAssertEqual(count(rig, 0x1a, 0x07), 1, "over Bluetooth")
+        XCTAssertEqual(rig.library.imports[0].seconds, 1, accuracy: 0.1)
+        let row = try XCTUnwrap(rig.connection.technicalDetails.first { $0.label == "Fast Transfer" })
+        XCTAssertTrue(row.value.hasSuffix("This iPhone isn’t on the recorder’s Wi‑Fi."), row.value)
+        XCTAssertTrue(rig.connection.usesFastTransfer, "a failure, not the person's No")
+    }
+
+    /// The same, when the iPhone moves to such a network while the recorder's starts: the join is refused before
+    /// iOS asks, nothing is opened, and the recording comes over Bluetooth.
+    func testBehaviorAJoinIsRefusedBeforeIOSAsksWhenItCouldntBeChecked() async throws {
+        let device = recorder(count: 1)
+        let rig = rig(device, configure: { $0.accessPointStartup = .seconds(1) })
+        rig.hotspot.readsNetworkName = false
+        try await connect(rig)
+        rig.session.importRecordings([rig.session.newRecordings[0]])
+        try await waitUntil("the recorder's network starting") { rig.session.fastTransferStage == .starting }
+        rig.hotspot.sharesRecorderSubnet = true
+        try await waitUntil("the import") { rig.library.imports.count == 1 && !rig.session.queue.isActive }
+        try await waitForBluetooth(rig)
+        XCTAssertEqual(device.connectionLog.count, 2, "Bluetooth let go for the join, and back")
+        XCTAssertTrue(rig.hotspot.joins.isEmpty, "iOS never asked")
+        XCTAssertTrue(try XCTUnwrap(device.lastAccessPoint).handshakes.isEmpty, "no WebSocket was opened")
+        XCTAssertTrue(device.wifiRequests.isEmpty)
+        XCTAssertEqual(count(rig, 0x1a, 0x07), 1, "over Bluetooth")
+        XCTAssertEqual(rig.library.imports[0].seconds, 1, accuracy: 0.1)
+        XCTAssertTrue(rig.connection.usesFastTransfer)
     }
 
     // MARK: Falling back to Bluetooth

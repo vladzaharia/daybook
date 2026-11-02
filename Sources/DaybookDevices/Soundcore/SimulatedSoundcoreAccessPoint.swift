@@ -205,12 +205,22 @@ public final class SimulatedSoundcoreHotspot: SoundcoreHotspot {
     public var onJoin: (() -> Void)?
     /// Each join waits this long before it's answered, as it does while the person reads iOS's question (demos).
     public var answersAfter: Duration?
+    /// The build can read the name of the Wi‑Fi it's on (the Access Wi‑Fi Information entitlement).
+    public var readsNetworkName = true
+    /// This device is on a network with the recorder's addresses now (a home or café Wi‑Fi), before any join.
+    public var sharesRecorderSubnet = false
 
     public init(recorder: SimulatedSoundcore?) {
         self.recorder = recorder
     }
 
+    public func canCheckJoin(recorder host: String) -> Bool {
+        SoundcoreWiFi.canCheckJoin(readsName: readsNetworkName, sharedSubnetBeforeJoining: sharesRecorderSubnet)
+    }
+
+    /// Refused before iOS would ask when the join couldn't be checked, as the system's is.
     public func join(ssid: String, password: String, recorder host: String) async throws {
+        guard canCheckJoin(recorder: host) else { throw SoundcoreHotspotError.notJoined }
         joins.append(ssid)
         onJoin?()
         if let answersAfter { try await Task.sleep(for: answersAfter) }
@@ -221,8 +231,7 @@ public final class SimulatedSoundcoreHotspot: SoundcoreHotspot {
         joined = dropsAfterJoining ? nil : ssid
     }
 
-    /// By name, as a build with the Access Wi‑Fi Information entitlement checks: the simulated network is on loopback,
-    /// so there's no subnet to share.
+    /// By name: the simulated network is on loopback, with no subnet of its own.
     public func isJoined(to ssid: String, recorder host: String) async -> Bool { joined == ssid }
 
     public func leave(ssid: String) {

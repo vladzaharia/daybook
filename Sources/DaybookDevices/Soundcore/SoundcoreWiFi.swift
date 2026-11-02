@@ -92,13 +92,23 @@ public enum SoundcoreWiFi {
         return Data(hex: digits)
     }
 
+    /// Whether a join could be told from staying put. Where the build can read the name of the Wi‑Fi it's on
+    /// (`readsName`; on iPhone, the Access Wi‑Fi Information entitlement), the name tells. Otherwise only an
+    /// address on the recorder's subnet does, and that proves nothing when this device had one before joining:
+    /// the Wi‑Fi it's on (a home or café network) uses the recorder's addresses, and a host there would answer for
+    /// the recorder. Then nothing is joined, and the transfer stays on Bluetooth.
+    public static func canCheckJoin(readsName: Bool, sharedSubnetBeforeJoining: Bool) -> Bool {
+        readsName || !sharedSubnetBeforeJoining
+    }
+
     /// This device is on the recorder's network `ssid`: it has an address on the recorder's subnet and, where the
-    /// build can read the name of the Wi‑Fi it's on (`readsName`; on iPhone, the Access Wi‑Fi Information
-    /// entitlement), that name is `ssid`. An address alone isn't proof: a home or café network can use the same
-    /// addresses, and a host there would answer for the recorder. Without the name, the audio still can't be read
-    /// or forged there: it's encrypted and checked with the key exchanged over Bluetooth.
-    public static func isOnRecorderNetwork(_ ssid: String, currentName: String?, readsName: Bool, sharesSubnet: Bool) -> Bool {
-        sharesSubnet && (!readsName || currentName == ssid)
+    /// build can read the name of the Wi‑Fi it's on, that name is `ssid`. Without the name, the address counts only
+    /// if this device had none on that subnet before joining (`canCheckJoin`). Either way, the audio can't be read
+    /// or forged by another host: it's encrypted and checked with the key exchanged over Bluetooth.
+    public static func isOnRecorderNetwork(_ ssid: String, currentName: String?, readsName: Bool, sharesSubnet: Bool,
+                                           sharedSubnetBeforeJoining: Bool) -> Bool {
+        guard sharesSubnet, canCheckJoin(readsName: readsName, sharedSubnetBeforeJoining: sharedSubnetBeforeJoining) else { return false }
+        return !readsName || currentName == ssid
     }
 }
 
@@ -107,11 +117,17 @@ public enum SoundcoreWiFi {
 /// foreground; the simulator has its own.
 @MainActor
 public protocol SoundcoreHotspot: AnyObject {
-    /// Joins the network and returns once this device is on it (`isJoined`).
+    /// Whether, once joined, this device could tell it's on the recorder's network at `host`, from where it is now
+    /// (`SoundcoreWiFi.canCheckJoin`). Fast Transfer asks as soon as the recorder has said its address, before
+    /// Bluetooth is let go; `join` asks again before iOS does.
+    func canCheckJoin(recorder host: String) -> Bool
+    /// Joins the network and returns once this device is on it (`isJoined`). Throws `notJoined` without asking
+    /// iOS when the join couldn't be checked (`canCheckJoin`).
     func join(ssid: String, password: String, recorder host: String) async throws
     /// This device is on the recorder's network `ssid` now, as `SoundcoreWiFi.isOnRecorderNetwork` says: by its
-    /// address and, where the build can read it, its name. Asked again right before each WebSocket attempt, so
-    /// nothing is sent once this device has gone back to another network.
+    /// address and, where the build can read it, its name; without the name, never when it had an address there
+    /// before joining. Asked again right before each WebSocket attempt, so nothing is sent once this device has
+    /// gone back to another network.
     func isJoined(to ssid: String, recorder host: String) async -> Bool
     /// Leaves it and forgets it.
     func leave(ssid: String)
@@ -124,7 +140,8 @@ public enum SoundcoreHotspotError: LocalizedError, Equatable {
     case declined
     /// The network didn't appear, or joining it failed.
     case failed(String)
-    /// This device isn't on the recorder's network (`SoundcoreHotspot.isJoined`), whatever iOS said of the join.
+    /// This device isn't on the recorder's network (`SoundcoreHotspot.isJoined`), whatever iOS said of the join, or
+    /// couldn't tell that it is (`SoundcoreHotspot.canCheckJoin`).
     case notJoined
 
     public var errorDescription: String? {
