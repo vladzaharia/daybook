@@ -79,16 +79,12 @@ public struct ModelPicker: View {
                     }
                 }
             } label: {
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text(name)
-                        .foregroundStyle(DaybookPalette.Ink.title)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(DaybookPalette.Ink.link)
-                        .accessibilityHidden(true)
-                }
+                // The chevrons follow the name's last word, however it wraps.
+                (Text(name + "\u{00A0}").foregroundStyle(DaybookPalette.Ink.title)
+                    + Text(Image(systemName: "chevron.up.chevron.down")).font(.footnote.weight(.semibold))
+                    .foregroundStyle(DaybookPalette.Ink.link))
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .accessibilityLabel(title)
             .accessibilityValue(name)

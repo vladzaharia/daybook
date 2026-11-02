@@ -26,6 +26,8 @@ public struct ModelRoleRow: View {
     private let space: ModelSpace
     private let actions: ModelRowActions
     @Environment(\.daybookDensity) private var density
+    @Environment(\.dynamicTypeSize) private var typeSize
+    private var stack: AnyLayout { ModelRowStack.layout(typeSize) }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var justDownloaded = false
     @State private var downloads = 0
@@ -78,7 +80,7 @@ public struct ModelRoleRow: View {
     }
 
     private var compact: some View {
-        HStack(alignment: .center, spacing: DaybookSpacing.s3) {
+        stack {
             VStack(alignment: .leading, spacing: 2) {
                 if let label, density != .touch { Text(label).font(lineFont).foregroundStyle(.secondary) }
                 picker
@@ -127,6 +129,16 @@ public struct ModelRoleRow: View {
     }
 }
 
+/// A row's words and what it offers side by side; at the accessibility text sizes the actions go under the words, which
+/// beside them would be left a letter a line.
+enum ModelRowStack {
+    static func layout(_ typeSize: DynamicTypeSize) -> AnyLayout {
+        typeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: DaybookSpacing.s2))
+            : AnyLayout(HStackLayout(alignment: .center, spacing: DaybookSpacing.s3))
+    }
+}
+
 /// "✓ Downloaded", for a moment after a download finishes, where its bar was.
 struct ModelDoneLine: View {
     let font: Font
@@ -167,6 +179,8 @@ public struct ModelListRow<Actions: View>: View {
     private let status: ModelStatus
     private let actions: Actions
     @Environment(\.daybookDensity) private var density
+    @Environment(\.dynamicTypeSize) private var typeSize
+    private var stack: AnyLayout { ModelRowStack.layout(typeSize) }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var justDownloaded = false
     @State private var downloads = 0
@@ -181,7 +195,7 @@ public struct ModelListRow<Actions: View>: View {
     }
 
     public var body: some View {
-        HStack(alignment: .center, spacing: DaybookSpacing.s3) {
+        stack {
             VStack(alignment: .leading, spacing: 3) {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 6) { title; chips }
@@ -267,6 +281,8 @@ public struct ModelDownloadRow: View {
     private let download: () -> Void
     private let cancel: () -> Void
     @Environment(\.daybookDensity) private var density
+    @Environment(\.dynamicTypeSize) private var typeSize
+    private var stack: AnyLayout { ModelRowStack.layout(typeSize) }
 
     public init(_ summary: ModelDownloadSummary, space: ModelSpace = .unknown, download: @escaping () -> Void, cancel: @escaping () -> Void) {
         self.summary = summary
@@ -277,7 +293,7 @@ public struct ModelDownloadRow: View {
 
     public var body: some View {
         let line = summary.line(space: space)
-        HStack(alignment: .center, spacing: DaybookSpacing.s3) {
+        stack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(summary.title)
                 Text(line.text)
