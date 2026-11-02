@@ -13,7 +13,7 @@ import Observation
 /// record is kept in the library as `local-queue.json` (never synced: it's this Mac's), and the next launch queues
 /// it again (`resumeOwedWork`). Work Daybook didn't come back from twice (it crashed, or was stopped, mid-run) is left
 /// to the person instead, so work that brings Daybook down doesn't do so at every launch. A request another device
-/// made isn't owed here; it's picked up again from the library.
+/// made isn't owed here, nor is a check of where an iPhone's recording belongs: both are found again in the library.
 @MainActor
 @Observable
 final class ProcessingQueue {
@@ -237,7 +237,9 @@ final class ProcessingQueue {
 extension AppState {
     func enqueue(_ id: UUID, mode: ProcessingRequest.Mode = .newAudio, upgrade: ProcessingRequest.Upgrade? = nil) {
         guard id != recordingID, !queue.isQueued(id), let meeting = meetings.first(where: { $0.id == id }) else { return }
-        queue.owe(id, mode: mode, upgrade: upgrade)
+        // A conversation of an iPhone's own, queued only to check where its recording belongs, isn't owed: its mark
+        // lives only while Daybook runs, and the next sync pass finds it again (`phoneTranscriptsToCheck`).
+        if !checkingPhoneTranscripts.contains(id) { queue.owe(id, mode: mode, upgrade: upgrade) }
         let job = makeJob(meetingID: id, mode: mode, upgrade: upgrade)
         let hasNew = meeting.hasUntranscribedTranscribableAudio
         let missing = job.requiredModelIDs(hasUntranscribedAudio: hasNew).subtracting(installedModels)

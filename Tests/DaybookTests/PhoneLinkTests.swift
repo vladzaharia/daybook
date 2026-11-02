@@ -1586,6 +1586,41 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertEqual(rig.inference.summarized.count, 1, "One summary: the Mac's conversation's, not the iPhone's too")
     }
 
+    func testAPhoneTranscribedRecordingQueuedOnlyToBeCheckedIsntOwedAfterAQuit() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let cloud = try temporaryFolder("Cloud")
+        try rig.connectSync(cloud)
+        let library = try await PhoneLibrarySide.make(in: self, root: try temporaryFolder("Phone"), cloud: cloud, phoneID: UUID())
+        defer { library.tearDown() }
+        state.sources.alignAudio = { _, _, _, _ in nil }
+        // The same pass brings a recording for this Mac to transcribe, which runs first, and one the iPhone transcribed
+        // itself, which waits behind it to be checked.
+        let longAudio = try rig.audio("iphone-long.wav", frequency: 360)
+        let long = try await library.file(longAudio, recordingID: UUID(), start: Date().addingTimeInterval(-7_200), duration: 0.5)
+        try rig.inference.block(longAudio)
+        let ownAudio = try rig.audio("iphone-own.wav", frequency: 530)
+        let own = try await library.file(ownAudio, recordingID: UUID(), start: Date().addingTimeInterval(-60), duration: 0.5)
+        _ = try await transcribeOnThePhone(library, own, text: "Just me, on a walk.")
+        await library.synchronize()
+        await state.synchronizeLibrary()
+        try await waitUntil("the long one to be transcribing", timeout: 20) { rig.inference.isWaiting(on: longAudio) }
+        XCTAssertEqual(state.queuedIDs, [own])
+        XCTAssertTrue(state.checkingPhoneTranscripts.contains(own))
+        XCTAssertTrue(state.queue.isOwed(long))
+        XCTAssertFalse(state.queue.isOwed(own), "A check isn't owed: the next sync pass finds it again")
+
+        // Daybook quits with the check still waiting: the next launch owes the long one, not the check.
+        state.cancelProcessing()
+        try await waitUntil("the job to stop") { state.processingID == nil && state.processingTask == nil }
+        ProcessingQueue.drainWrites()
+        let next = ProcessingQueue(owedURL: rig.root.appendingPathComponent("local-queue.json"))
+        next.loadOwedWork()
+        XCTAssertTrue(next.isOwed(long))
+        XCTAssertFalse(next.isOwed(own), "Not queued again without its mark, as plain work")
+        try rig.inference.unblock(longAudio)
+    }
+
     func testAPhoneTranscribedRecordingThatBelongsNowhereStaysAndIsCheckedOnce() async throws {
         let rig = try await rig()
         let state = rig.state
