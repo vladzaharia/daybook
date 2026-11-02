@@ -66,4 +66,30 @@ final class PhotoReadingTests: XCTestCase {
         try await waitUntil("the retry") { reader.batches.count == 2 && rig.state.readingPhotoID == nil }
         XCTAssertEqual(reader.batches, [2, 1], "Only the failed photo is read again")
     }
+
+    func testBehaviorReadingThatCantRunAtAllIsSaidOnceAndItsPhotosWait() async throws {
+        let rig = try await MultiSourceRig.make(in: self)
+        addTeardownBlock { await rig.tearDown() }
+        let id = rig.state.newMeeting(title: "Photos")
+        let bytes = try XCTUnwrap(PhotoDemo.jpeg(PhotoDemo.board(["LAUNCH PLAN"])))
+        let other = try XCTUnwrap(PhotoDemo.jpeg(PhotoDemo.board(["HIRING"])))
+        await rig.state.library.acquireLock()
+        let first = try await rig.state.library.addPhoto(data: bytes, to: id)
+        let second = try await rig.state.library.addPhoto(data: other, to: id)
+        rig.state.library.releaseLock()
+        struct ModelWontLoad: LocalizedError { var errorDescription: String? { "The photo model couldn’t load." } }
+
+        rig.state.photoReadingFailed(id, ModelWontLoad())
+        XCTAssertEqual(rig.state.photoBackoff.failure(first.id)?.attempts, 1)
+        XCTAssertEqual(rig.state.photoBackoff.failure(second.id)?.attempts, 1)
+        XCTAssertEqual(rig.state.photoBackoff.failure(first.id)?.reason, "The photo model couldn’t load.")
+        XCTAssertEqual(rig.state.noticeLines.filter { $0 == "Photos couldn’t be read: The photo model couldn’t load." }.count, 1)
+        XCTAssertFalse(rig.meeting(id)?.visiblePhotos.contains(where: rig.state.needsPhotoReading) ?? true,
+                       "they wait rather than load the model at every job")
+
+        // Photos still waiting weren't tried, so another failure meanwhile doesn't count against them.
+        rig.state.photoReadingFailed(id, ModelWontLoad())
+        XCTAssertEqual(rig.state.photoBackoff.failure(first.id)?.attempts, 1)
+        XCTAssertEqual(rig.state.noticeLines.filter { $0.hasPrefix("Photos couldn’t be read") }.count, 1)
+    }
 }

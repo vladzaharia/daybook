@@ -235,12 +235,25 @@ extension AppState {
                     return
                 } catch LocalIntelligenceError.busy {
                     try? await Task.sleep(for: .seconds(2 << min(attempt, 4)))
+                } catch is CancellationError {
+                    return
                 } catch {
-                    // A photo that can't be read is a notice; the next job reads it again.
+                    photoReadingFailed(id, error)
                     return
                 }
             }
         }
+    }
+
+    /// Reading a conversation's photos couldn't run at all (its model wouldn't load, say): it's said once, and the
+    /// photos it would have read wait before they're tried again (`photoBackoff`), as a photo that fails on its own
+    /// does, rather than at every job.
+    func photoReadingFailed(_ id: UUID, _ error: Error) {
+        let tried = meetings.first { $0.id == id }?.visiblePhotos.filter(needsPhotoReading) ?? []
+        guard !tried.isEmpty else { return }
+        for photo in tried { photoBackoff.failed(photo.id, reason: error.localizedDescription) }
+        post(["Photos couldn’t be read: \(error.localizedDescription)"])
+        schedulePhotoRetry()
     }
 
     /// Places photos in the current summary without rewriting it. Placement isn't prose, so it isn't
