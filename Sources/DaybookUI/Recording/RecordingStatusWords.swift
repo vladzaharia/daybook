@@ -101,7 +101,7 @@ public struct RecorderChip: Identifiable, Equatable, Sendable {
     public var tone: StatusTone
     /// The red recording dot after the glyph: this device is recording too.
     public var showsDot: Bool
-    /// Work in progress: the gradient line along the chip's foot.
+    /// Work in progress: how far the brand gradient fills the chip, from its leading edge.
     public var progress: Double?
     /// The whole status in a sentence: the menu's first line, the tooltip, and VoiceOver.
     public var detail: String

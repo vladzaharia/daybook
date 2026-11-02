@@ -384,7 +384,7 @@ and a paired iPhone from the levels it sends over the link (`LinkLevels`; docs/l
 
 `CaptureLevelMonitor` updates 15 times a second and changes its levels only by at least 0.5 dB. Only a
 meter reads `microphone` and `call`: a view that read them would redraw 15 times a second, so Floating Notes
-samples them on its own timer (`PanelLevels`) and its status bar reads only the flags, which change rarely.
+samples them on its own timer (DaybookUI's `RecorderLevels`) and its status bar reads only the flags, which change rarely.
 
 ## Live captions
 

@@ -281,7 +281,6 @@ public struct WorkProgressLine: View {
     }
 }
 
-
 /// A compact status: glyph (or the red dot) and a short label in a quiet capsule: the Mac's Floating
 /// Notes status bar, and the recorder's chips on both apps. Work in progress fills the capsule itself from
 /// its leading edge in the brand gradient, and such a chip can span its row (`expands`), so how far the
