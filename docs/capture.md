@@ -587,7 +587,9 @@ notifications (`DeviceNotifications`):
 - **Recording**, when a call starts recording on its own while Floating Notes isn't showing,
   naming the call ("Zoom call"). A click shows Floating Notes. It goes when that recording ends.
 
-Permission is asked the first time someone records or turns on Record calls automatically. Only a
+Permission is asked the first time someone records or turns on Record calls automatically, for
+alerts and sound, as a recorder's first import asks (`DeviceNotifications.authorizationOptions`):
+the system asks once, so whichever comes first, Recording stopped can be heard. Only a
 bundled app posts (`UNUserNotificationCenter` crashes an unbundled binary); tests drive the same
 logic with snapshots and a fake center. The app starts it with its other system entry points
 (`SystemEntryPoints`, docs/sandbox.md).

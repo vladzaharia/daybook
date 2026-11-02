@@ -1,6 +1,8 @@
 import DaybookCore
+import DaybookDevices
 import DaybookTestSupport
 import Foundation
+@preconcurrency import UserNotifications
 import XCTest
 @testable import Daybook
 
@@ -175,6 +177,12 @@ final class SystemEntryPointsTests: XCTestCase {
         notifier.update(to: .init(recordingID: UUID(), automaticRecording: true))
         XCTAssertEqual(center.authorizationRequests, 1)
         await state.flush()
+    }
+
+    /// The system asks once, and a recorder's first import can ask before the first recording does: both ask for sound,
+    /// so "Recording stopped" is heard whichever came first.
+    func testBehaviorEveryPermissionRequestAsksForSound() {
+        XCTAssertEqual(DeviceNotifications.authorizationOptions, [.alert, .sound])
     }
 
     /// The stop's notification opens its conversation; Record Again records a new one.

@@ -197,12 +197,9 @@ final class SystemRecordingNotifications: NSObject, RecordingNotificationPosting
         ])
     }
 
+    /// The same request a recorder's import makes, so whichever comes first, "Recording stopped" can be heard.
     func requestAuthorization() {
-        let center = UNUserNotificationCenter.current()
-        center.getNotificationSettings { settings in
-            guard settings.authorizationStatus == .notDetermined else { return }
-            center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
-        }
+        DeviceNotifications.requestAuthorizationIfNeeded()
     }
 
     func post(_ notification: RecordingNotification) {

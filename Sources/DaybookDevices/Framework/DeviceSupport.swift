@@ -79,13 +79,17 @@ public enum DeviceNotifications {
         #endif
     }
 
-    /// Asks once, when the person first imports. Later calls do nothing.
+    /// What Daybook asks to do: show notifications, and play a sound with one (the Mac's "Recording stopped"). The
+    /// system asks only once, so every request asks for both, whichever comes first.
+    public static let authorizationOptions: UNAuthorizationOptions = [.alert, .sound]
+
+    /// Asks once: when the person first imports, or (on the Mac) first records. Later calls do nothing.
     public static func requestAuthorizationIfNeeded() {
         guard isAvailable else { return }
         Task {
             let center = UNUserNotificationCenter.current()
             guard await center.notificationSettings().authorizationStatus == .notDetermined else { return }
-            _ = try? await center.requestAuthorization(options: [.alert])
+            _ = try? await center.requestAuthorization(options: authorizationOptions)
         }
     }
 
