@@ -238,8 +238,11 @@ and the phone's status sheet, for up to 20 minutes past when it was known. A pho
 by a call is still its recording on the Mac (Paused, and Stop on iPhone ends it).
 
 **This Mac records, and asks the phone.** When this Mac starts recording (by hand or
-automatically), each paired phone that is connected and whose **Record along with this Mac** is on
-(the default) is asked to record the same conversation. The request carries the
+automatically), each paired phone that is connected is asked to record the same conversation; the
+phone's own **Can Start Recording** for this Mac decides, and declines in the words both apps use
+(`PairingWords.notAllowedToStart(asker:)`), which the Mac shows ("Alex’s iPhone didn’t record. It isn’t
+set to let this Mac start recording. …"). A phone that declined isn't recording along: it isn't stopped,
+sent notes, or let stop this Mac's recording on that account. The request carries the
 conversation's title and date (so a phone it hasn't synced to makes the same record), this Mac's
 start, where the conversation's timeline began (earlier than this Mac's start when it records into a
 conversation that already had recordings) and how much of it has passed, and its estimate of the
@@ -275,8 +278,8 @@ start and the clock estimate, rather than asking it back. It refuses with a reas
 recording another conversation (`recordingSomethingElse`, naming it), starting or stopping
 (`busy`), or isn't allowed the microphone (`permissionDenied`; an undecided permission is refused
 too, since nobody may be at the Mac to answer the prompt). A phone that asks on its own (a cascading
-start, below) is declined when this Mac's **Record along with this Mac** for it (Can start recording on
-its page) is off: "It isn’t set to let this iPhone start recording. Turn on Can start recording for this
+start, below) is declined when this Mac's **Can start recording** for it (on its page and in Settings ›
+Devices) is off: "It isn’t set to let this iPhone start recording. Turn on Can start recording for this
 iPhone on the Mac." The phone may stop a recording it asked for, or one it records along with (below), and,
 from its page for this Mac (Stop on Studio Mac, a standalone stop; docs/link.md, "Record control"), any
 recording when it can start recording here; otherwise not one started on the Mac without it (`declined`). It stops each Mac it started when it stops, including
@@ -350,9 +353,10 @@ conversation ID, however many ways it's asked.
 
 **Asked on its own.** The request a starting device sends carries `cascade` (what started it: the
 person, a recorder's button, a detected meeting, or another device), so the receiver joins the same
-conversation, says why, and never takes it for a conversation of its own. The Mac's **Record along
-with this Mac** for the phone decides both ways (on by default): off, a phone's cascading start is
-declined, while a start the person chose for that Mac still records. The phone asks every Mac
+conversation, says why, and never takes it for a conversation of its own. Each device's **Can start
+recording** for the other says one way only, whether the other may start a recording on it (on by
+default): off on the Mac, a phone's cascading start is declined, while a start the person chose for that
+Mac still records; off on the phone, the Mac's start is declined. The phone asks every Mac
 connected when it starts, and one that connects within the next minute (the link can take a moment
 to come back as the app comes forward); "Record on Studio Mac too" still asks one that connects later.
 A Mac that asked the phone isn't asked back, and the phone doesn't ask other Macs then.
@@ -721,7 +725,8 @@ that step; a later, better model may offer again.
 
 | Preference | Default | Where |
 | --- | --- | --- |
-| Record along with this Mac | On, for recorders with record control, Daybook on iPhone included. For an iPhone it decides both ways: off, the phone's cascading starts are declined too | `ConfiguredDevice.alsoRecordsWithMac` (nil = on); Settings › Devices |
+| Record along with this Mac | On, for recorders with record control | `ConfiguredDevice.alsoRecordsWithMac` (nil = on); Settings › Devices |
+| Can start recording (per iPhone, on the Mac) | On: the phone may start a recording on this Mac (its cascading starts) and stop one from its page. One way only: the phone is asked when this Mac starts whatever it says | `ConfiguredDevice.alsoRecordsWithMac` (nil = on); the phone's page and Settings › Devices |
 | Record Along (per recorder, on the iPhone's recorder page) | On, for a recorder with record control the iPhone manages: whether it records along with the phone, its button starts the phone, and the phone holds its link for that | `ConfiguredDevice.alsoRecordsWithMac` (nil = on); the recorder's page |
 | Can Start Recording (per Mac, on the iPhone) | On when the Mac is paired | `PhoneSettings.macMayStartRecording`; Settings › Macs › <Mac> |
 | Add imported files to conversations they overlap | Off | `matchesImportedFilesToConversations`; Settings › General |

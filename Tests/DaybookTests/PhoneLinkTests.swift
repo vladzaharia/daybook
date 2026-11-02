@@ -348,13 +348,20 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertEqual(rig.meeting(id)?.companions?.first?.state, .stopped)
         XCTAssertEqual(rig.state.sources.recorders.status, "\(PhoneLinkRig.phoneName) stopped. Its recording will be added here.")
 
-        // "Record along with this Mac" off: the phone isn't asked.
+        // Can start recording off for the phone here says only whether it may start a recording on this Mac: it's
+        // still asked, and its own Can Start Recording for this Mac answers, in the words both apps use.
         rig.state.devices.session(phone.phoneID.uuidString)?.update { $0.alsoRecordsWithMac = false }
+        phone.recorder.answer = { _ in .refused(LinkRecordRefusal(reason: .declined, message: PairingWords.notAllowedToStart(asker: .mac))) }
         let other = macStartsRecording(rig)
         await rig.state.sources.recorders.settle()
-        XCTAssertNil(rig.meeting(other)?.companions)
-        XCTAssertEqual(phone.recorder.requests.count, 2)
+        XCTAssertEqual(phone.recorder.requests.map(\.action), [.start, .stop, .start])
+        XCTAssertEqual(rig.meeting(other)?.companions?.first?.state, .failed)
+        XCTAssertEqual(rig.state.sources.recorders.status,
+                       "\(PhoneLinkRig.phoneName) didn’t record. \(PairingWords.notAllowedToStart(asker: .mac)) Recording on this Mac only.")
+        XCTAssertFalse(rig.state.isRecording(other, with: phone.phoneID.uuidString), "a phone that declined isn't recording along")
         macStopsRecording(rig, other)
+        await rig.state.sources.recorders.settle()
+        XCTAssertEqual(phone.recorder.requests.count, 3, "it isn't recording, so it isn't stopped")
     }
 
     func testTheMacTellsPhonesWhatItRecordsAsItChangesWhileItRecordsAndAsTheyConnect() async throws {
@@ -484,11 +491,14 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertTrue(state.phoneLink.identity.features.contains(LinkCapabilities.pageStopFeature), "this Mac stops for a phone's page")
         let session = try XCTUnwrap(state.devices.session(phone.phoneID.uuidString))
 
-        // A recording of this Mac's own, the phone not asked to join (Can start recording off).
+        // A recording of this Mac's own, which the phone declined to join (its Can Start Recording off), while
+        // Can start recording is off for it here.
         session.update { $0.alsoRecordsWithMac = false }
+        phone.recorder.answer = { _ in .refused(LinkRecordRefusal(reason: .declined, message: PairingWords.notAllowedToStart(asker: .mac))) }
         let id = macStartsRecording(rig)
         await state.sources.recorders.settle()
-        XCTAssertTrue(phone.recorder.requests.isEmpty)
+        XCTAssertEqual(phone.recorder.requests.map(\.action), [.start])
+        XCTAssertEqual(rig.meeting(id)?.companions?.first?.state, .failed)
 
         // Off: the phone's page can't stop it, and says how to allow it.
         let refused = try await phone.client.request(LinkRecordRequest(action: .stop, conversationID: id, standalone: true), from: phone.macID)
@@ -604,10 +614,11 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertEqual(reason.reason, .permissionDenied)
         XCTAssertNil(state.recordingID)
 
-        // A recording started on the Mac that the phone doesn't record along with can't be stopped from
-        // it (one it records along with can: CascadingRecordingTests).
+        // A recording started on the Mac that the phone doesn't record along with (it declined) can't be
+        // stopped from it (one it records along with can: CascadingRecordingTests).
         state.microphoneAccess = { .authorized }
         state.devices.session(phone.phoneID.uuidString)?.update { $0.alsoRecordsWithMac = false }
+        phone.recorder.answer = { _ in .refused(LinkRecordRefusal(reason: .declined)) }
         let own = macStartsRecording(rig)
         await state.sources.recorders.settle()
         let declined = try await phone.client.request(LinkRecordRequest(action: .stop, conversationID: own), from: phone.macID)

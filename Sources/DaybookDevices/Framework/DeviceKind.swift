@@ -157,7 +157,9 @@ public struct ConfiguredDevice: Codable, Identifiable, Hashable {
     public var automaticImportsSince: Date
     /// "Record along with this Mac" (on an iPhone, the recorder's "Record Along"): when the device
     /// that manages it starts recording, a recorder with record control starts too, and its recording
-    /// joins the same conversation; its button starts that device. Nil (the default) means on.
+    /// joins the same conversation; its button starts that device. Nil (the default) means on. For Daybook
+    /// on iPhone on a Mac it's Can start recording: whether the phone may start a recording on the Mac (and
+    /// stop one from its page), while the phone's own setting decides whether it records when the Mac starts.
     public var alsoRecordsWithMac: Bool?
     public var recordsAlongsideMac: Bool { alsoRecordsWithMac ?? true }
     /// "Fast Transfer" (iPhone): recordings over ten minutes come over the recorder's

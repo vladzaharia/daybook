@@ -152,7 +152,8 @@ from plain facts (`PeerPage`):
   the other device would take it: it lists `pageStopFeature`, or this device records that conversation with it;
 - the recorders it manages ("Soundcore Work · Recording since 10:02");
 - Can start recording (Can Start Recording on the iPhone): whether it may start a recording here, and stop one from
-  its page. On the Mac it's the device's `recordsAlongsideMac`, also in Settings › Devices;
+  its page, the same one way on both. On the Mac it's the device's `recordsAlongsideMac`, also in Settings ›
+  Devices; the Mac still asks the phone when it starts, and the phone's own toggle answers;
 - its facts: Transcribes (once it has said), Daybook (its version), Paired. The clock offset isn't shown;
 - Unpair….
 

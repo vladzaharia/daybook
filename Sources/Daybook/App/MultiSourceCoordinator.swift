@@ -237,10 +237,12 @@ final class CompanionRecorders {
     }
 
     /// Recorders that record alongside this Mac: record control, set up, its direct method on, and
-    /// "Record along with this Mac" on.
+    /// "Record along with this Mac" on. A device that answers (Daybook on iPhone) is asked whatever this
+    /// Mac's switch for it says, which is only whether it may start a recording here (Can start recording):
+    /// its own Can Start Recording for this Mac decides, and it says why when it declines.
     func eligible() -> [(session: DeviceSession, control: any RecordControlConnection)] {
         sessions().compactMap { session in
-            guard session.device.recordsAlongsideMac, session.device.isEnabled(.direct),
+            guard session.direct is any AnsweringRecordControl || session.device.recordsAlongsideMac, session.device.isEnabled(.direct),
                   let control = session.direct as? any RecordControlConnection,
                   control.capabilities.contains(.recordControl), control.isSetUp else { return nil }
             return (session, control)
@@ -395,6 +397,16 @@ final class CompanionRecorders {
         return links(meetingID).contains { link in
             link.deviceID == sessionID && link.macStartedAt >= since && link.macEndedAt == nil
                 && [.recording, .alreadyRecording].contains(link.state)
+        }
+    }
+
+    /// Whether the device behind `link` may be recording along: it's being asked, it said it records, or it
+    /// never answered. One that refused isn't.
+    func mayBeRecording(_ link: CompanionRecording) -> Bool {
+        switch link.state {
+        case .starting, .recording, .alreadyRecording: return true
+        case .failed: return unanswered.contains(link.id)
+        default: return false
         }
     }
 

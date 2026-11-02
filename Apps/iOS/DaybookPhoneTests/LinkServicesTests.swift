@@ -718,7 +718,7 @@ final class LinkServicesTests: XCTestCase {
         let refused = try await mac.service.request(LinkRecordRequest(action: .start, conversationID: UUID()), from: link.deviceID)
         guard case .refused(let refusal) = refused.outcome else { return XCTFail("started after being turned off") }
         XCTAssertEqual(refusal.reason, .declined)
-        XCTAssertEqual(refusal.message, "It hasn’t allowed this Mac to start recording. Allow it in Settings › Macs on the iPhone.")
+        XCTAssertEqual(refusal.message, PairingWords.notAllowedToStart(asker: .mac), "the Mac's own refusal, worded for the Mac")
         XCTAssertFalse(model.recorder.isActive)
 
         model.settings.setMacMayStartRecording(true, for: paired.id, pairedAt: paired.pairedAt)   // on again

@@ -378,17 +378,19 @@ extension AppState {
     }
 
     /// Can start recording for a paired phone, on its page and in Settings › Devices (on by default): it may start
-    /// a recording on this Mac, and stop one from its page.
+    /// a recording on this Mac, and stop one from its page. Only that way: whether the phone records when this Mac
+    /// starts is its own Can Start Recording's to say, as this is for the phone's starts.
     func phoneMayStartRecording(_ phoneID: UUID) -> Bool {
         devices.session(phoneID.uuidString)?.device.recordsAlongsideMac ?? true
     }
 
-    /// Whether a phone records this Mac's recording `id` along with it: its link here says so.
+    /// Whether a phone records this Mac's recording `id` along with it: its link here says so (or it never
+    /// answered, so it may). A phone that declined doesn't.
     func isRecording(_ id: UUID, with phoneSession: String) -> Bool {
         guard let since = recordingStartedAt else { return false }
         return meetings.first { $0.id == id }?.companions?.contains { link in
             link.deviceID == phoneSession && link.deviceKind == DaybookPhoneIntegration.id && link.macEndedAt == nil
-                && link.macStartedAt >= since.addingTimeInterval(-1) && [.starting, .recording, .alreadyRecording, .failed].contains(link.state)
+                && link.macStartedAt >= since.addingTimeInterval(-1) && sources.recorders.mayBeRecording(link)
         } == true
     }
 
