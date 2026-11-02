@@ -46,8 +46,6 @@ public struct ICloudSyncShown: Equatable {
     public var keyPeers: [KeyPeer] = []
     /// Every device known to the library (presence), for the Devices row.
     public var devices: [KnownSyncDevice] = []
-    /// This app can start a new library in iCloud, for a library that was removed there.
-    public var canStartNewLibrary = false
 
     public init(iCloud: ICloudSyncState) { self.iCloud = iCloud }
 
@@ -68,9 +66,9 @@ public struct ICloudSyncShown: Equatable {
     /// Connected to the library, whether or not this device holds its key: the library's devices and encryption apply.
     public var isAttached: Bool { folder != nil && (isFolderTransport || iCloud == .connected || iCloud == .waitingForKey) }
 
-    /// The library in iCloud was removed: its problem line offers Start a New Library in iCloud, and there's nothing
-    /// to encrypt or erase until there's one.
-    public var offersNewLibrary: Bool { isLibraryRemoved && canStartNewLibrary }
+    /// The library in iCloud was removed: its problem line offers Start a New Library in iCloud where the app can
+    /// start one (`ICloudSyncActions.startNewLibrary`).
+    public func offersNewLibrary(canStart: Bool) -> Bool { isLibraryRemoved && canStart }
 
     /// The library this device synced with is gone from iCloud: nothing to encrypt or erase there.
     public var isLibraryRemoved: Bool { problem == .libraryRemoved }

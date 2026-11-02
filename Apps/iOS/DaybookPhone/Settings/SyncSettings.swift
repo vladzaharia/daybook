@@ -8,9 +8,29 @@ struct ICloudRow: View {
     @Environment(PhoneAppModel.self) private var model
 
     var body: some View {
-        let shown = model.sync.shown()
+        let shown = PhoneSyncDemo.shown ?? model.sync.shown()
         SettingsRow(title: "iCloud", detail: shown.line, systemImage: shown.symbol,
                     tone: shown.needsAttention ? .attention : .neutral, detailNeedsAttention: shown.needsAttention)
+    }
+}
+
+/// `--sync-demo <state>` (debug): Settings › iCloud in a state, without iCloud, as the Mac's Settings shows it
+/// (`ICloudSyncDemo`); `--sync-sheet encrypt|recovery-key|enter-key` opens a sheet over it.
+enum PhoneSyncDemo {
+    static var shown: ICloudSyncShown? {
+        #if DEBUG
+        LaunchOptions.value(after: "--sync-demo", in: CommandLine.arguments).flatMap(ICloudSyncDemo.shown)
+        #else
+        nil
+        #endif
+    }
+
+    static var sheet: ICloudSyncSheet? {
+        #if DEBUG
+        ICloudSyncDemo.sheet(LaunchOptions.value(after: "--sync-sheet", in: CommandLine.arguments))
+        #else
+        nil
+        #endif
     }
 }
 
@@ -24,7 +44,7 @@ struct ICloudScreen: View {
     var body: some View {
         @Bindable var settings = model.settings
         let sync = model.sync
-        let shown = sync.shown(keyPeers: model.link.connectedMacs.map { ICloudSyncShown.KeyPeer(id: $0.id, name: $0.name) })
+        let shown = PhoneSyncDemo.shown ?? sync.shown(keyPeers: model.link.connectedMacs.map { ICloudSyncShown.KeyPeer(id: $0.id, name: $0.name) })
         Form {
             ICloudSyncSection(shown: shown, actions: actions, controller: sync.controller, sheet: $sheet,
                               cellular: $settings.encryptsOverCellular) {
@@ -46,7 +66,10 @@ struct ICloudScreen: View {
             // Allowed now: the recordings waiting for Wi‑Fi start downloading.
             if allowed { Task { await model.sync.synchronize(.manual) } }
         }
-        .task { await model.sync.refreshDevices() }
+        .task {
+            if sheet == nil { sheet = PhoneSyncDemo.sheet }
+            await model.sync.refreshDevices()
+        }
     }
 
     private var actions: ICloudSyncActions {

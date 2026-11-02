@@ -83,7 +83,7 @@ public struct EncryptLibraryForm: View {
     }
 
     public var body: some View {
-        SettingsFormSheet(title: "Encrypt Library in iCloud", cancel: .init("Cancel", perform: cancel),
+        SettingsFormSheet(title: "Encrypt Library", cancel: .init("Cancel", perform: cancel),
                           confirm: .init("Encrypt", isEnabled: !working && notReady != nil && controller != nil, perform: encrypt)) {
             if let notReady, !notReady.isEmpty {
                 Section {

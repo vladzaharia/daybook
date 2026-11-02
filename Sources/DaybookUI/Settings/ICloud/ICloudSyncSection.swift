@@ -240,7 +240,7 @@ public struct ICloudSyncSection<DevicesRow: View, Extras: View>: View {
             ProblemLine(text: problem.text, details: problem.details) {
                 Button("Manage Storage…") { actions.manageStorage?() }
             }
-        case .libraryRemoved where shown.offersNewLibrary:
+        case .libraryRemoved where shown.offersNewLibrary(canStart: actions.startNewLibrary != nil):
             ProblemLine(text: problem.text, details: problem.details) {
                 Button(ICloudSyncShown.startNewLibraryTitle) { startNewLibrary() }
                     .disabled(shown.isSyncing)

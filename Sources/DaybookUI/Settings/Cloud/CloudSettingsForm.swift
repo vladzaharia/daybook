@@ -350,21 +350,34 @@ public struct CloudModelPicker: View {
     }
 
     public var body: some View {
-        let recommended = cloud.offers.recommended(cloud.preferences.tier)
+        #if os(macOS)
         LabeledContent {
-            Picker("Model", selection: Binding(get: { cloud.chosenModel }, set: { cloud.chosenModel = $0 })) {
-                Text(Self.recommendedTitle(recommended)).tag(String?.none)
-                Divider()
-                ForEach(cloud.offers(in: cloud.preferences.tier)) { offer in
-                    Text(offer.model.name).tag(Optional(offer.id))
-                }
-            }
-            .labelsHidden()
-            .fixedSize()
+            picker.labelsHidden().fixedSize()
         } label: {
-            Text("Model")
-            if let cost = Self.chosenCost(cloud) { Text(cost) }
+            label
         }
+        #else
+        // The list's own picker row: the choice beside the label, shortened if it must be, never under it.
+        picker
+        #endif
+    }
+
+    private var picker: some View {
+        let recommended = cloud.offers.recommended(cloud.preferences.tier)
+        return Picker(selection: Binding(get: { cloud.chosenModel }, set: { cloud.chosenModel = $0 })) {
+            Text(Self.recommendedTitle(recommended)).tag(String?.none)
+            Divider()
+            ForEach(cloud.offers(in: cloud.preferences.tier)) { offer in
+                Text(offer.model.name).tag(Optional(offer.id))
+            }
+        } label: {
+            label
+        }
+    }
+
+    @ViewBuilder private var label: some View {
+        Text("Model")
+        if let cost = Self.chosenCost(cloud) { Text(cost) }
     }
 }
 

@@ -86,14 +86,13 @@ final class ICloudSyncShownTests: XCTestCase {
     }
 
     func testBehaviorARemovedLibraryOffersANewOneOnlyWhereTheAppCanStartIt() {
-        var removed = connected { $0.problem = .libraryRemoved; $0.encryption = .on(status: "On", hasRecoveryKey: true, encryptsHere: false) }
-        XCTAssertFalse(removed.offersNewLibrary, "nothing offered without the action")
-        removed.canStartNewLibrary = true
-        XCTAssertTrue(removed.offersNewLibrary)
+        let removed = connected { $0.problem = .libraryRemoved; $0.encryption = .on(status: "On", hasRecoveryKey: true, encryptsHere: false) }
+        XCTAssertTrue(removed.isLibraryRemoved, "nothing to encrypt or erase there")
+        XCTAssertFalse(removed.offersNewLibrary(canStart: false), "nothing offered without the action")
+        XCTAssertTrue(removed.offersNewLibrary(canStart: true))
         XCTAssertEqual(ICloudSyncShown.startNewLibraryTitle, "Start a New Library in iCloud")
-        var paused = connected { $0.problem = .failure(details: "x") }
-        paused.canStartNewLibrary = true
-        XCTAssertFalse(paused.offersNewLibrary, "only for a library that was removed")
+        let paused = connected { $0.problem = .failure(details: "x") }
+        XCTAssertFalse(paused.offersNewLibrary(canStart: true), "only for a library that was removed")
     }
 
     func testBehaviorTheOlderAppSyncingBesideThisOneIsSaidWithWhatToDo() {

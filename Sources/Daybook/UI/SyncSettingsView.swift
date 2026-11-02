@@ -118,102 +118,13 @@ struct SyncSettingsView: View {
 
 #if DEBUG
 /// Debug-only: `--sync-demo <state>` shows Settings › Library's iCloud Sync section in that state, without iCloud, for
-/// screenshots. Its buttons still act on the real (unconnected) controller. States: checking, off, signed-out,
-/// drive-off, unavailable, moving, moving-paused, on, syncing, downloading, uploading, full, removed, other-app, paused,
-/// warning, damaged, account, folder-lost, folder-missing, waiting, waiting-many (two iPhones with long names), encrypted,
-/// no-recovery-key, encrypting, dev-folder. `--sync-sheet encrypt|recovery-key|enter-key|devices` opens a sheet over it.
+/// screenshots (`ICloudSyncDemo`, which the iPhone shows too). Its buttons still act on the real (unconnected)
+/// controller. `--sync-sheet encrypt|recovery-key|enter-key|devices` opens a sheet over it.
 @MainActor
 enum SyncSettingsDemo {
     static let scenario = LaunchOptions.value(after: "--sync-demo")
-
-    static var sheet: ICloudSyncSheet? {
-        switch LaunchOptions.value(after: "--sync-sheet") {
-        case "encrypt"?: return .encrypt
-        case "recovery-key"?: return .recoveryKey(RecoveryKey.generate())
-        case "enter-key"?: return .enterRecoveryKey
-        case "devices"?: return .devices
-        default: return nil
-        }
-    }
-
-    /// The library's devices in the demos: this Mac, an iPhone, and another Mac that's recording.
-    static var devices: [KnownSyncDevice] {
-        let now = Date()
-        let recording = SyncDeviceActivity(recordingConversationID: UUID(), since: now.addingTimeInterval(-600), expiresAt: now.addingTimeInterval(600))
-        return [
-            KnownSyncDevice(id: "this-mac", deviceClass: .mac, displayName: "Vlad’s MacBook Pro", canProcess: true, lastSeen: now, isCurrentDevice: true),
-            KnownSyncDevice(id: "studio", deviceClass: .mac, displayName: "Studio Mac", canProcess: true, lastSeen: now.addingTimeInterval(-300),
-                            activity: recording),
-            KnownSyncDevice(id: "phone", deviceClass: .phone, displayName: "Alex’s iPhone", lastSeen: now.addingTimeInterval(-7_200)),
-        ]
-    }
-
-    static var shown: ICloudSyncShown? {
-        guard let scenario else { return nil }
-        let folder = URL(fileURLWithPath: "/Users/demo/Library/Mobile Documents/iCloud~local~daybook/Documents/Daybook")
-        func connected(_ change: (inout ICloudSyncShown) -> Void = { _ in }) -> ICloudSyncShown {
-            var shown = ICloudSyncShown(iCloud: .connected)
-            shown.folder = folder
-            shown.lastSync = Calendar.current.date(bySettingHour: 11, minute: 42, second: 0, of: Date())
-            shown.encryption = .off
-            shown.devices = devices
-            change(&shown)
-            return shown
-        }
-        switch scenario {
-        case "checking": return ICloudSyncShown(iCloud: .checking)
-        case "off": return ICloudSyncShown(iCloud: .turnedOff)
-        case "signed-out": return ICloudSyncShown(iCloud: .signedOut)
-        case "drive-off": return ICloudSyncShown(iCloud: .iCloudDriveOff)
-        case "unavailable": return ICloudSyncShown(iCloud: .containerUnavailable("The operation couldn’t be completed. (CKErrorDomain error 4.)"))
-        case "moving":
-            var progress = SyncMigrationProgress()
-            progress.total = 412; progress.completed = 157
-            return ICloudSyncShown(iCloud: .migrating(progress))
-        case "moving-paused":
-            var progress = SyncMigrationProgress()
-            progress.total = 412; progress.completed = 157
-            var shown = ICloudSyncShown(iCloud: .migrating(progress))
-            shown.problem = .migrationPaused(details: "The operation couldn’t be completed. No space left on device.")
-            return shown
-        case "on": return connected()
-        case "syncing": return connected { $0.isSyncing = true }
-        case "downloading": return connected { $0.pendingDownloads = 3 }
-        case "uploading": return connected { $0.pendingUploads = 2 }
-        case "full": return connected { $0.pendingUploads = 2; $0.problem = .storageFull }
-        case "removed": return connected { $0.problem = .libraryRemoved; $0.encryption = .on(status: "On", hasRecoveryKey: true, encryptsHere: false) }
-        case "other-app": return connected { $0.otherInstallation = true }
-        case "paused": return connected { $0.problem = .failure(details: "The operation couldn’t be completed. No space left on device.") }
-        case "warning": return connected { $0.warnings = [SyncWarningWords.unsavedChange + ": The file “events-0042.json” couldn’t be saved."] }
-        case "damaged":
-            return connected {
-                $0.warnings = [
-                    SyncWarningWords.compose(SyncWarningWords.damagedHistory, details: "A synced change couldn’t be read: 3fa2c09e4b71d85e.json."),
-                    SyncWarningWords.compose(SyncWarningWords.keptBothRecordings,
-                                             details: "The one that was here is kept at ~/Library/Application Support/Daybook/Meetings/…/SyncConflicts/9c1d…-microphone.m4a."),
-                ]
-            }
-        case "account": return ICloudSyncShown(iCloud: .accountChanged)
-        case "folder-lost": return ICloudSyncShown(iCloud: .previousFolderAccessLost(nil))
-        case "folder-missing": return ICloudSyncShown(iCloud: .previousFolderMissing)
-        case "waiting", "waiting-many":
-            var shown = ICloudSyncShown(iCloud: .waitingForKey)
-            shown.folder = folder
-            shown.encryption = .waitingForKey
-            shown.mayStartOverEncryption = true
-            shown.devices = devices
-            shown.keyPeers = scenario == "waiting"
-                ? [.init(id: UUID(), name: "Alex’s iPhone")]
-                : [.init(id: UUID(), name: "Alex’s iPhone 15 Pro Max"), .init(id: UUID(), name: "Jordan’s Work iPhone")]
-            return shown
-        case "encrypted": return connected { $0.encryption = .on(status: "On", hasRecoveryKey: true, encryptsHere: false) }
-        case "no-recovery-key":
-            return connected { $0.encryption = .on(status: "On", hasRecoveryKey: false, encryptsHere: false); $0.hasRetiredFolderJournal = true }
-        case "encrypting": return connected { $0.encryption = .on(status: "Encrypting · 128 left", hasRecoveryKey: true, encryptsHere: true) }
-        case "dev-folder":
-            return connected { $0.isFolderTransport = true; $0.folder = URL(fileURLWithPath: NSHomeDirectory() + "/Daybook Sync") }
-        default: return nil
-        }
-    }
+    static var sheet: ICloudSyncSheet? { ICloudSyncDemo.sheet(LaunchOptions.value(after: "--sync-sheet")) }
+    static var devices: [KnownSyncDevice] { ICloudSyncDemo.devices }
+    static var shown: ICloudSyncShown? { scenario.flatMap(ICloudSyncDemo.shown) }
 }
 #endif
