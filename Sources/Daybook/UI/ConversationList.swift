@@ -202,16 +202,7 @@ private struct SearchResults: View {
         let hits = state.searchHits
         let byID = Dictionary(state.meetings.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         List(selection: Binding(get: { state.selectedID }, set: { id in open(id, in: hits) })) {
-            Picker("Search in", selection: $state.searchScope) {
-                Text("All").tag(SearchScope.all)
-                Text("Work").tag(SearchScope.work)
-                Text("Personal").tag(SearchScope.personal)
-                if case .folder(let id) = state.place, let folder = state.folders.first(where: { $0.id == id }) {
-                    Text(folder.name).tag(SearchScope.folder(id))
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
+            SearchScopePicker(scope: $state.searchScope, folder: viewedFolder)
             .controlSize(.small)
             .frame(maxWidth: .infinity)
             .padding(.bottom, Space.s3)
@@ -242,6 +233,12 @@ private struct SearchResults: View {
             guard !Task.isCancelled else { return }
             captionHits = found
         }
+    }
+
+    /// The folder being viewed, which the scopes offer too.
+    private var viewedFolder: LibraryFolder? {
+        guard case .folder(let id) = state.place else { return nil }
+        return state.folders.first { $0.id == id }
     }
 
     /// Opens a result at what it found: a transcript passage, the notes, or the page.

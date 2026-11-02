@@ -26,6 +26,31 @@ public struct SearchResultRowView: View {
     }
 }
 
+/// Where a search looks, as the results' first row on both apps, in every layout: All, Work, Personal, and the folder
+/// being viewed.
+public struct SearchScopePicker: View {
+    @Binding private var scope: SearchScope
+    private let folder: LibraryFolder?
+
+    public init(scope: Binding<SearchScope>, folder: LibraryFolder?) {
+        _scope = scope
+        self.folder = folder
+    }
+
+    public var body: some View {
+        Picker("Search in", selection: $scope) {
+            Text("All").tag(SearchScope.all)
+            Text("Work").tag(SearchScope.work)
+            Text("Personal").tag(SearchScope.personal)
+            if let folder {
+                Text(folder.name).tag(SearchScope.folder(folder.id))
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+    }
+}
+
 /// A match in a conversation's saved live captions, labelled so it never passes for the transcript.
 public struct CaptionHitRowView: View {
     private let meeting: Meeting

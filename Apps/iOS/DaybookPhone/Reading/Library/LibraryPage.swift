@@ -200,8 +200,13 @@ struct LibraryPage: View {
     }
 
     private var results: some View {
+        @Bindable var session = session
         let hits = LibrarySearch.hits(in: library.meetings, text: session.searchText, tokens: session.searchTokens, scope: session.searchScope)
         return List {
+            // The scopes, on one page and on two, as on the Mac.
+            SearchScopePicker(scope: $session.searchScope, folder: viewedFolder)
+                .listRowSeparator(.hidden)
+                .listRowBackground(PhoneStyle.paper)
             ForEach(hits) { hit in
                 if let meeting = library.meetings.first(where: { $0.id == hit.meetingID }) {
                     Button { session.open(hit) } label: { SearchResultRowView(meeting: meeting, hit: hit) }
@@ -238,6 +243,12 @@ struct LibraryPage: View {
     static func captionCandidates(in meetings: [Meeting], tokens: [SearchToken], scope: SearchScope) -> [Meeting] {
         let scoped = Set(LibrarySearch.hits(in: meetings, text: "", tokens: tokens, scope: scope).map(\.meetingID))
         return meetings.filter { scoped.contains($0.id) && $0.showsLiveCaptions }
+    }
+
+    /// The folder being viewed, which the scopes offer too.
+    private var viewedFolder: LibraryFolder? {
+        guard case .folder(let id) = place else { return nil }
+        return library.folders.first { $0.id == id }
     }
 
     /// A place with nothing in it, in the Mac's words; an empty library that's still arriving from iCloud says so.
@@ -375,7 +386,8 @@ struct LibraryPage: View {
 }
 
 /// The search field, only while search is up: Search beside Record, or on the status sheet, opens it, and the system
-/// keeps it at the thumb above the keyboard with the scopes over the results. It's attached to the page's
+/// keeps it at the thumb above the keyboard. The scopes are the results' first row (`SearchScopePicker`) on one page
+/// and on two, as on the Mac; the system's scope bar doesn't show on two pages. It's attached to the page's
 /// background, so opening and closing it never rebuilds the list or loses its place.
 private struct SearchWhilePresented: ViewModifier {
     let library: LibraryController
@@ -392,14 +404,6 @@ private struct SearchWhilePresented: ViewModifier {
                                 isPresented: $session.isSearchPresented, placement: .navigationBarDrawer(displayMode: .always),
                                 prompt: LibraryWords.searchPrompt) { token in
                         Label(token.text, systemImage: token.symbol)
-                    }
-                    .searchScopes($session.searchScope, activation: .onSearchPresentation) {
-                        Text("All").tag(SearchScope.all)
-                        Text("Work").tag(SearchScope.work)
-                        Text("Personal").tag(SearchScope.personal)
-                        if case .library(.folder(let id)) = session.place, let folder = library.folders.first(where: { $0.id == id }) {
-                            Text(folder.name).tag(SearchScope.folder(id))
-                        }
                     }
             }
         }
