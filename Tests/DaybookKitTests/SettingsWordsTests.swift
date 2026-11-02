@@ -66,6 +66,11 @@ final class SettingsWordsTests: XCTestCase {
         XCTAssertEqual(SettingsWords.thisDeviceSymbol(model: "Mac14,3", name: "Studio"), "desktopcomputer")
         XCTAssertEqual(SettingsWords.thisDeviceSymbol(model: "Mac15,3", name: "Vlad’s MacBook Air"), "laptopcomputer")
         XCTAssertEqual(SettingsWords.thisDeviceSymbol(model: "iPhone17,1"), "iphone")
+        // A MacBook named anything at all is still a laptop: its model says so, whether Apple silicon's product name or an
+        // older identifier.
+        XCTAssertEqual(SettingsWords.thisDeviceSymbol(model: "MacBook Pro (14-inch, M5 Pro)", name: "Work Mac"), "laptopcomputer")
+        XCTAssertEqual(SettingsWords.thisDeviceSymbol(model: "MacBookAir10,1", name: "Vlad’s Laptop"), "laptopcomputer")
+        XCTAssertEqual(SettingsWords.thisDeviceSymbol(model: "Mac Studio (2025)", name: "Work Mac"), "desktopcomputer")
         let device = KnownSyncDevice(id: "d", deviceClass: .mac, displayName: "Vlad’s MacBook Pro", isCurrentDevice: false)
         XCTAssertEqual(device.systemImage, "laptopcomputer")
     }

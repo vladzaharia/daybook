@@ -4,6 +4,7 @@ import DaybookDesign
 import DaybookIntelligence
 import DaybookKit
 import DaybookUI
+import IOKit
 import SwiftUI
 
 // MARK: - Page geometry
@@ -92,10 +93,35 @@ struct MarginTime: View {
 // MARK: - Reading context
 
 extension AppState {
-    /// How this Mac calls itself in a conversation's status and colophon: "this Mac", with its glyph by its name (a
-    /// MacBook's laptop), the rule the iPhone uses for this Mac too (`SettingsWords.deviceSymbol`).
+    /// How this Mac calls itself in a conversation's status and colophon: "this Mac", with its glyph by what it is (a
+    /// MacBook's laptop, whatever it's named), else by its name, the rule the iPhone uses for this Mac too
+    /// (`SettingsWords.deviceSymbol`).
     var statusWords: DeviceWords {
-        DeviceWords.mac(id: library.thisDevice.id, symbol: SettingsWords.thisDeviceSymbol(model: "Mac", name: library.thisDevice.name))
+        DeviceWords.mac(id: library.thisDevice.id, symbol: SettingsWords.thisDeviceSymbol(model: Self.hardwareModel, name: library.thisDevice.name))
+    }
+
+    /// What this Mac is, read once: Apple silicon's product name ("MacBook Pro (14-inch, M5 Pro)"), since its model
+    /// identifiers no longer name the family ("Mac17,9"); else the identifier ("MacBookPro16,1"); "Mac" when neither
+    /// can be read.
+    nonisolated static let hardwareModel: String = productName() ?? modelIdentifier() ?? "Mac"
+
+    private nonisolated static func productName() -> String? {
+        let product = IORegistryEntryFromPath(kIOMainPortDefault, "IODeviceTree:/product")
+        guard product != 0 else { return nil }
+        defer { IOObjectRelease(product) }
+        guard let data = IORegistryEntryCreateCFProperty(product, "product-name" as CFString, kCFAllocatorDefault, 0)?
+            .takeRetainedValue() as? Data else { return nil }
+        let name = String(decoding: data.prefix { $0 != 0 }, as: UTF8.self).trimmingCharacters(in: .whitespaces)
+        return name.isEmpty ? nil : name
+    }
+
+    private nonisolated static func modelIdentifier() -> String? {
+        var size = 0
+        guard sysctlbyname("hw.model", nil, &size, nil, 0) == 0, size > 0 else { return nil }
+        var bytes = [UInt8](repeating: 0, count: size)
+        guard sysctlbyname("hw.model", &bytes, &size, nil, 0) == 0 else { return nil }
+        let model = String(decoding: bytes.prefix { $0 != 0 }, as: UTF8.self)
+        return model.isEmpty ? nil : model
     }
 
     /// Shows a passage in the transcript: the page turns to it and scrolls there.

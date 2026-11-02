@@ -34,7 +34,7 @@ The redesign was planned from UX, platform (macOS 26/27 Human Interface Guidelin
 
    System blue never appears in content: text links use `.buttonStyle(.daybookLink)`.
 5. **Nothing a person reads on paper goes below 4.5:1.** Only placeholders and disabled text (`Ink.faint`) are exempt. Chrome never puts a time, a control, or a preview in `.tertiary`.
-6. **Facts, not slogans.** Privacy and provenance appear where a reader expects them. "Summarized on this Mac · Gemma 4 · E4B · 31 Oct, 10:02" (or "on Studio Mac", "on this iPhone", or "with Claude Sonnet 5.5" with a cloud glyph: where it ran, the model, and when; the glyph is the device's kind) sits at the foot of the page on both apps (DaybookKit's `SummaryColophon`), and the full statement is in Settings › Library.
+6. **Facts, not slogans.** Privacy and provenance appear where a reader expects them. "Summarized on this Mac · Gemma 4 · E4B · 31 Oct, 10:02" (or "on Studio Mac", "on this iPhone", or "with Claude Sonnet 5.5" with a cloud glyph: where it ran, the model, and when; the glyph is the device's kind, this Mac's read from its hardware so a MacBook is a laptop whatever its name) sits at the foot of the page on both apps (DaybookKit's `SummaryColophon`), and the full statement is in Settings › Library.
 7. **Say what's happening, not how it works.** No subtitle, footer, notice, or empty state explains mechanics: sync, iCloud, the Wi‑Fi link, where audio travels, which model runs where, or what Daybook never does. Keep status values, a next step that matters, a problem and its fix in one short sentence, and a destructive action's consequence; prefer a label to a sentence, and explanation belongs only in Welcome.
 
 ## Window structure

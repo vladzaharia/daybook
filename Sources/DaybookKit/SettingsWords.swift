@@ -117,8 +117,8 @@ public enum SettingsWords {
         }
     }
 
-    /// This device's glyph from its model ("MacBookPro18,3", "MacBook Air", "iPhone17,1"): a MacBook's laptop,
-    /// another Mac's desktop, an iPhone.
+    /// This device's glyph from its model ("MacBook Pro (14-inch, M5 Pro)", "MacBookPro18,3", "iPhone17,1"): a MacBook's
+    /// laptop, another Mac's desktop, an iPhone. A model that doesn't say ("Mac17,9") falls back to the name.
     public static func thisDeviceSymbol(model: String, name: String? = nil) -> String {
         if model.hasPrefix("iPhone") || model.hasPrefix("iPad") { return "iphone" }
         return isLaptop(model) || isLaptop(name) ? "laptopcomputer" : "desktopcomputer"
