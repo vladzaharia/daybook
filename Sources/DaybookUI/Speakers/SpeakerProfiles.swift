@@ -172,7 +172,7 @@ public struct SpeakerProfileDetail: View {
                 if voiceprints.contains(where: { !$0.origin.isPersonChosen }) {
                     Button(SpeakerProfileWords.forgetLearned + "…", role: .destructive) { request = .forget(profile) }
                         .foregroundStyle(DaybookPalette.Ink.error)
-                        .buttonStyle(.borderless)
+                        .buttonStyle(.plain)
                 }
             }
             Section("Conversations") {
@@ -372,9 +372,12 @@ struct SpeakerProfileActions: View {
         }
     }
 
-    private var delete: some View {
-        Button(SpeakerProfileWords.deleteProfile + "…", role: .destructive) { request = .delete(profile) }
+    /// Destructive text takes the error ink (red is the recording's); on the Mac a plain text button, as Move to
+    /// Trash… is, since a bordered button keeps its label ink.
+    @ViewBuilder private var delete: some View {
+        let button = Button(SpeakerProfileWords.deleteProfile + "…", role: .destructive) { request = .delete(profile) }
             .foregroundStyle(DaybookPalette.Ink.error)
+        if density == .touch { button } else { button.buttonStyle(.plain) }
     }
 }
 
@@ -401,8 +404,8 @@ enum SpeakerProfileRequest: Identifiable {
 }
 
 extension View {
-    /// Asks before a request in `request` acts: a merge as an alert, the destructive ones as a confirmation that says
-    /// what they cost, each with Cancel the default. `left` reports a profile that went (deleted: `next` nil; merged:
+    /// Asks before a request in `request` acts, in an alert: a merge, and the destructive ones with what they cost,
+    /// each with Cancel the default. `left` reports a profile that went (deleted: `next` nil; merged:
     /// the profile it went into).
     func speakerProfileConfirmations(library: LibraryController, request: Binding<SpeakerProfileRequest?>,
                                      left: @escaping @MainActor (_ profile: UUID, _ next: UUID?) -> Void) -> some View {
@@ -431,9 +434,10 @@ private struct SpeakerProfileConfirmations: ViewModifier {
             } message: { request in
                 if case .merge(let profile, let target) = request { Text(SpeakerProfileWords.mergeMessage(profile.name, into: target.name)) }
             }
-            .confirmationDialog(destructiveTitle, isPresented: Binding(get: { request.map { !$0.isMerge } ?? false },
-                                                                      set: { if !$0 { request = nil } }),
-                                titleVisibility: .visible, presenting: request) { request in
+            // An alert, not a dialog: on the iPhone a dialog is a popover pointing at the whole screen.
+            .alert(destructiveTitle, isPresented: Binding(get: { request.map { !$0.isMerge } ?? false },
+                                                          set: { if !$0 { request = nil } }),
+                   presenting: request) { request in
                 Button(confirmTitle(request), role: .destructive) { perform(request) }
                 Button("Cancel", role: .cancel) { self.request = nil }
                     .keyboardShortcut(.defaultAction)
