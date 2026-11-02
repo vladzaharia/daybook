@@ -149,6 +149,29 @@ final class AppDestinationTests: XCTestCase {
         XCTAssertEqual(refreshed, 3)
     }
 
+    func testBehaviorSpotlightStartsOverOnlyOnceTheLibraryHasLoaded() async throws {
+        let seen = Seen()
+        var environment = try PhoneAppEnvironment.test(self)
+        environment.spotlight = ConversationIndex.Indexer(isActive: true, index: { seen.events += $0.map { "index \($0.title)" } },
+                                                          remove: { seen.events += $0.map { "remove \($0)" } },
+                                                          removeAll: { seen.events.append("remove all") })
+        let rig = RecorderRig()
+        let model = PhoneAppModel(recorder: rig.recorder, library: PhoneLibrary(rootURL: try temporaryDirectory("library"), installation: "INSTALL-1"),
+                                  posture: DevicePosture(), options: DebugLaunch(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]),
+                                  environment: environment)
+
+        // Launched in the background (app refresh, a download's events, a recorder): the library never loads.
+        await model.conversationIndex?.settle()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(model.library.controller.isLoaded)
+        XCTAssertEqual(seen.events, [], "Spotlight keeps what it lists until the library is here to say what that is")
+
+        try await model.library.reload()
+        try await waitUntil("started over", state: { "\(seen.events)" }) { seen.events == ["remove all"] }
+        _ = model.library.controller.newMeeting(title: "Design review")
+        try await waitUntil("listed", state: { "\(seen.events)" }) { seen.events == ["remove all", "index Design review"] }
+    }
+
     func testBehaviorAConversationIsAnEntityByItsTitleAndDate() {
         let date = Date(timeIntervalSince1970: 1_800_000_000)
         let entity = ConversationEntity(ConversationIndex.Entry(id: UUID(), title: "Design review", date: date))

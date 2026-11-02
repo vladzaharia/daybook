@@ -208,12 +208,13 @@ final class PhoneAppModel: RecordingCommandHandling {
         watches.append(ObservationWatch.distinctValues(of: { LiveCaptionStore.transcriptDates(controller.meetings) }, initial: false) { [weak self] _ in
             self?.pruneCaptions()
         })
-        // Spotlight lists the library's conversations, Personal ones never.
+        // Spotlight lists the library's conversations, Personal ones never, from when the library has loaded: a
+        // background launch (app refresh, a download's events, a recorder) never loads it, and leaves the list be.
         if environment.spotlight.isActive {
             let index = ConversationIndex(indexer: environment.spotlight)
             conversationIndex = index
-            watches.append(ObservationWatch.distinctValues(of: { ConversationIndex.entries(controller.meetings) }) { entries in
-                index.update(entries)
+            watches.append(ObservationWatch.distinctValues(of: { controller.isLoaded ? ConversationIndex.entries(controller.meetings) : nil }) { entries in
+                if let entries { index.update(entries) }
             })
         }
         wireProcessing()
