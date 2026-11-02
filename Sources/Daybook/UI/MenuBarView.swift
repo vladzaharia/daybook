@@ -24,21 +24,15 @@ struct MenuBarView: View {
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(!state.isReady || state.isStartingRecording)
         }
-        // While recording, the recording; otherwise the panel's home (status, Record, recent conversations).
-        Button("Show Floating Notes") { state.showFloatingNotes(focus: state.recordingID) }
+        // Where Window › Floating Notes opens it, with the same shortcut: on the recording, else the conversation
+        // the library window shows, else its home.
+        Button("Show Floating Notes") { state.showFloatingNotes(focus: floatingNotesFocus) }
             .keyboardShortcut("n", modifiers: [.command, .option])
         Divider()
         Toggle("Record Calls Automatically", isOn: $state.automaticRecording)
         if state.automaticRecording { DetectionStatusText(monitor: state.monitor) }
-        // The percent follows the job's own progress, not the app's other changes.
-        ActivityReader {
-            if let activity {
-                // Work in progress is an item that opens it, so it reads at full strength, not as a dimmed status line.
-                Divider()
-                Button(activity, action: showActivity)
-            }
-        }
-        DeviceMenuBarItems(state: state)
+        // What's going on, when there's something to say; it reads the job's progress apart from the rest.
+        MenuBarStatusItems(state: state)
         Divider()
         Button("Open Daybook") { open(nil) }
         SettingsLink { Text("Settings…") }.keyboardShortcut(",")
@@ -46,31 +40,242 @@ struct MenuBarView: View {
         Button("Quit Daybook") { NSApp.terminate(nil) }.keyboardShortcut("q")
     }
 
-    private var activity: String? {
-        if let id = state.processingID, let meeting = state.meetings.first(where: { $0.id == id }) {
-            let name = meeting.effectivePlacement == .personal ? "a personal conversation" : "“\(meeting.title)”"
-            return meeting.status == .summarizing ? "Summarizing \(name)" : "Transcribing \(name) · \(Int(state.processingProgress.fraction * 100))%"
-        }
-        if let id = state.downloadingID { return "Downloading \(state.modelCatalog.name(for: id)) · \(Int(state.downloadProgress.fraction * 100))%" }
-        return nil
-    }
-
-    /// Opens the conversation being processed, or Settings › Models for a download.
-    private func showActivity() {
-        if let id = state.processingID, state.meetings.contains(where: { $0.id == id }) {
-            state.showConversation(id)
-            open(nil)
-        } else {
-            LaunchOptions.defaults.set(SettingsPane.models.rawValue, forKey: "settingsPane")
-            openSettings()
-            NSApp.activate()
-        }
+    /// Floating Notes' one rule for where it opens from a menu (Window › Floating Notes, this menu, the Dock): on the
+    /// recording, else the conversation the library window shows (one, not a selection of several), else its home.
+    private var floatingNotesFocus: UUID? {
+        if let id = state.recordingID { return id }
+        guard state.multiSelection.count < 2 else { return nil }
+        return state.place.isDevice ? state.deviceConversationID : state.selectedID
     }
 
     private func open(_ place: LibraryPlace?) {
         if let place { state.place = place }
         openWindow(id: WindowID.library)
         NSApp.activate()
+    }
+}
+
+/// The menu's status: each line an item that opens what it's about, or a heading over the choices it offers, then the
+/// recorder handoffs this Mac can ask for. Nothing when there's nothing to say.
+private struct MenuBarStatusItems: View {
+    let state: AppState
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
+
+    var body: some View {
+        let lines = MenuBarStatus.lines(MenuBarStatus.inputs(state))
+        let managed = state.devices.sessions.filter { $0.managedElsewhere != nil && $0.kind.id != DaybookPhoneIntegration.id }
+        if !lines.isEmpty || !managed.isEmpty {
+            Divider()
+            ForEach(lines) { line in
+                if line.choices.isEmpty {
+                    // An item that opens it reads at full strength, not as a dimmed status line.
+                    Button(line.title) { open(line.opens) }
+                } else {
+                    Section(line.title) {
+                        ForEach(line.choices, id: \.title) { choice in
+                            Button(choice.title) { perform(choice.action) }
+                        }
+                    }
+                }
+            }
+            ForEach(managed) { session in
+                RecorderHandoffMenuItems(state: state, session: session, namesRecorder: true)
+            }
+        }
+    }
+
+    private func open(_ target: MenuBarStatus.Opens) {
+        switch target {
+        case .conversation(let id):
+            state.showConversation(id)
+            showLibrary()
+        case .device(let id):
+            state.showDevice(id)
+            showLibrary()
+        case .modelSettings: showSettings(.models)
+        case .syncSettings: showSettings(.library)
+        }
+    }
+
+    private func perform(_ action: MenuBarStatus.ChoiceAction) {
+        switch action {
+        case .placement(let choice, let id): state.chooseSummaryPlacement(choice, for: id)
+        case .openSyncSettings: showSettings(.library)
+        }
+    }
+
+    private func showLibrary() {
+        openWindow(id: WindowID.library)
+        NSApp.activate()
+    }
+
+    private func showSettings(_ pane: SettingsPane) {
+        LaunchOptions.defaults.set(pane.rawValue, forKey: "settingsPane")
+        openSettings()
+        NSApp.activate()
+    }
+}
+
+/// What the menu bar extra says is going on (docs/interface.md, "Menu bar extra"), from plain facts, so tests read
+/// what each state says. The words are the ones Floating Notes' home and the iPhone's status sheet use
+/// (`RecorderStatusWords`, `PeerStatusWords`, `ProcessingWords`, `SyncStatus`), each naming what it's about, since a
+/// menu has no title column; a Personal conversation is "a personal conversation". It speaks only when there's
+/// something to say: this Mac's work and a summary's countdown with its choices, a model downloading, a recorder
+/// that's moving, importing, listening live, recording, has new recordings, or needs the person, a paired iPhone
+/// that's recording or paused, and iCloud when it's a problem.
+enum MenuBarStatus {
+    /// This Mac's processing, as the menu needs it.
+    struct Work: Equatable {
+        var id: UUID
+        /// Nil for a Personal conversation, which the menu never names.
+        var title: String?
+        var stage: ProcessingRequest.Stage
+        var fraction: Double?
+        var waiting = 0
+        /// Its summary counts down to starting on this Mac until then, with these choices.
+        var countdown: Date?
+        var choices: [SummaryPlacementPlanner.Action] = []
+        /// Its summary runs in the cloud, with this model.
+        var cloudModel: String?
+    }
+
+    struct Inputs: Equatable {
+        var work: Work?
+        var download: Download?
+        var recorders: [RecorderFacts] = []
+        var phones: [PeerFacts] = []
+        var sync: SyncStatus = .off
+    }
+
+    struct Download: Equatable {
+        var name: String
+        var fraction: Double
+    }
+
+    /// What choosing an item opens.
+    enum Opens: Equatable {
+        case conversation(UUID)
+        case device(String)
+        case modelSettings
+        case syncSettings
+    }
+
+    enum ChoiceAction: Equatable {
+        case placement(SummaryPlacementPlanner.Action, UUID)
+        case openSyncSettings
+    }
+
+    struct Choice: Equatable {
+        var title: String
+        var action: ChoiceAction
+    }
+
+    /// One thing going on: an item that opens it, or, with choices, a heading over them.
+    struct Line: Equatable, Identifiable {
+        var id: String
+        var title: String
+        var opens: Opens
+        var choices: [Choice] = []
+    }
+
+    static let here = "this Mac"
+
+    static func lines(_ inputs: Inputs, now: Date = Date()) -> [Line] {
+        var lines: [Line] = []
+        if let work = inputs.work { lines.append(workLine(work, now: now)) }
+        if let download = inputs.download {
+            lines.append(Line(id: "download", title: "Downloading \(download.name) · \(ProcessingWords.percentText(download.fraction))",
+                              opens: .modelSettings))
+        }
+        for facts in inputs.recorders { lines += recorderLines(facts, now: now) }
+        for peer in inputs.phones where peer.activity != .idle {
+            let line = PeerStatusWords.line(peer, now: now)
+            lines.append(Line(id: line.id, title: "\(peer.name) · \(line.text)", opens: .device(peer.id)))
+        }
+        if inputs.sync.problem != nil {
+            let words = inputs.sync.shortText
+            lines.append(Line(id: "sync", title: words.localizedCaseInsensitiveContains("iCloud") ? words : "iCloud · \(words)", opens: .syncSettings,
+                              choices: [Choice(title: "Open Sync Settings…", action: .openSyncSettings)]))
+        }
+        return lines
+    }
+
+    /// "Transcribing “Weekly product sync” · 40% · 2 waiting", "Summarizing a personal conversation in 12 s" over Use
+    /// the Cloud and Start Now, "Summarizing “Roadmap” with Claude Sonnet 5.5".
+    static func workLine(_ work: Work, now: Date = Date()) -> Line {
+        let name = work.title.map { "“\($0)”" } ?? "a personal conversation"
+        let waiting = work.waiting > 0 ? " · \(work.waiting) waiting" : ""
+        if let until = work.countdown {
+            let seconds = max(1, Int(until.timeIntervalSince(now).rounded(.up)))
+            return Line(id: "work", title: "Summarizing \(name) in \(seconds) s", opens: .conversation(work.id),
+                        choices: work.choices.map { Choice(title: $0.title, action: .placement($0, work.id)) })
+        }
+        if let model = work.cloudModel {
+            return Line(id: "work", title: "Summarizing \(name) with \(model)\(waiting)", opens: .conversation(work.id))
+        }
+        let verb = ProcessingWords.verb(work.stage)
+        let figure = work.stage == .summarizing ? "…" : work.fraction.map { " · \(ProcessingWords.percentText($0))" } ?? "…"
+        return Line(id: "work", title: "\(verb) \(name)\(figure)\(waiting)", opens: .conversation(work.id))
+    }
+
+    /// A recorder's items: what it's doing when it's worth saying ("Importing from Soundcore Work · 1 of 3", "Soundcore
+    /// Work · Listening live"), then its new recordings ("Soundcore Work · 2 New Recordings…"). Connected and idle, or
+    /// away, it says nothing here.
+    static func recorderLines(_ facts: RecorderFacts, now: Date = Date()) -> [Line] {
+        var lines: [Line] = []
+        if let item = RecorderStatusWords.menuItem(facts, here: here) {
+            lines.append(Line(id: "recorder-\(facts.id)", title: item, opens: .device(facts.id)))
+        } else {
+            let line = RecorderStatusWords.line(facts, here: here, now: now)
+            if [.working, .recording, .attention].contains(line.tone) {
+                lines.append(Line(id: line.id, title: "\(facts.name) · \(line.text)", opens: .device(facts.id)))
+            }
+        }
+        if let new = RecorderStatusWords.newRecordingsItem(facts) {
+            lines.append(Line(id: "recorder-\(facts.id)-new", title: new, opens: .device(facts.id)))
+        }
+        return lines
+    }
+
+    /// The facts, from the app.
+    @MainActor
+    static func inputs(_ state: AppState) -> Inputs {
+        var inputs = Inputs(sync: state.sync.status)
+        if let id = state.processingID, let meeting = state.meetings.first(where: { $0.id == id }) {
+            var work = Work(id: id, title: meeting.effectivePlacement == .personal ? nil : meeting.title, stage: state.runningStage,
+                            fraction: state.processingProgress.fraction, waiting: state.processingQueue.count)
+            switch state.placements[id]?.phase {
+            case .countingDown(_, let until)?:
+                work.countdown = until
+                work.choices = state.placements[id]?.actions ?? []
+            case .started(.cloud(let model))?:
+                work.cloudModel = model.name
+            default:
+                break
+            }
+            inputs.work = work
+        } else if let id = state.downloadingID {
+            inputs.download = Download(name: state.modelCatalog.name(for: id), fraction: state.downloadProgress.fraction)
+        }
+        for session in state.devices.sessions {
+            if session.kind.id == DaybookPhoneIntegration.id {
+                guard session.direct != nil else { continue }
+                var activity: PeerFacts.Activity = .idle
+                if session.isLinked, let id = UUID(uuidString: session.id), let recording = state.phoneLink.recordingStates[id] {
+                    switch recording.phase {
+                    case .recording, .starting: activity = .recording
+                    case .paused: activity = .paused
+                    default: activity = .idle
+                    }
+                }
+                inputs.phones.append(PeerFacts(id: session.id, name: session.device.name, kind: .iPhone, isConnected: session.isLinked,
+                                               activity: activity, lastSeen: session.direct?.lastConnectedAt))
+            } else {
+                inputs.recorders.append(RecorderFacts(session: session, handoff: state.recorderHandoff.state(of: session)))
+            }
+        }
+        return inputs
     }
 }
 
