@@ -379,7 +379,13 @@ private struct RowMenu: View {
             ShareLink(item: ConversationShareItem(only), preview: SharePreview(ConversationRowView.title(only))) {
                 Label("Share…", systemImage: "square.and.arrow.up")
             }
-            ConversationActionMenuItems(ConversationActions.actions(for: only, context: MacActions.context(state, only)), platform: .mac,
+            // Share… above is the row's share: the More menu's Share ▸ needs the window's picker, so it isn't repeated.
+            let groups = ConversationActions.actions(for: only, context: MacActions.context(state, only)).map { group in
+                var group = group
+                group.actions.removeAll { $0.id == .share }
+                return group
+            }
+            ConversationActionMenuItems(groups, platform: .mac,
                                         perform: { MacActions.perform($0, on: [only.id], state: state, undoManager: undoManager, tag: tag) },
                                         custom: { MacActions.custom($0, ids: [only.id], state: state, undoManager: undoManager) })
         } else if !meetings.isEmpty {
@@ -464,8 +470,8 @@ enum MacActions {
         case .moveToFolder: break // A menu of the folders (`custom`).
         case .showInFinder: state.showInFinder(first.id)
         case .moveToTrash: state.trashRequestIDs = meetings.map(\.id)
-        case .export, .shareAudio, .addRecording, .reprocess, .takePhoto:
-            break // Menus, or the iPhone's.
+        case .export, .share, .shareMarkdown, .shareJSON, .shareAudio, .addRecording, .reprocess, .takePhoto:
+            break // Menus (a row shares through its own Share…; More through the window's picker), or the iPhone's.
         case .play, .adjustTiming, .showOriginalTranscript, .moveToNewConversation, .removeRecording:
             break // A recording's, in the inspector.
         }

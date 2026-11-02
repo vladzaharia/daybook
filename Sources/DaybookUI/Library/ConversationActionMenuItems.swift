@@ -2,13 +2,6 @@ import DaybookDesign
 import DaybookKit
 import SwiftUI
 
-/// Where a search result asks a conversation's page to show it, besides a transcript passage (which goes by the
-/// passage's own ID): the notes, for a match found there.
-public enum PageAnchor {
-    /// "Your notes".
-    public static let notes = UUID(uuidString: "6E6F7465-7300-4000-8000-000000000001")!
-}
-
 /// A conversation's actions (DaybookKit's `ConversationActions`) as menu items, in their one order, a divider
 /// between groups: a row's menu and a selection's on both apps. What doesn't apply now is dimmed on the Mac, with
 /// why as its help, and left out on the iPhone. An action with children is a submenu; `custom` draws one itself

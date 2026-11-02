@@ -680,11 +680,12 @@ final class ReadingTests: XCTestCase {
         await library.controller.flush()
         let moved = try await library.controller.moveToTrash(trashed)
         XCTAssertTrue(moved)
-        let listed = TrashedConversations.load(rootURL: root, ids: library.controller.trashedMeetingIDs())
+        let listed = await library.controller.trashedMeetings()
         XCTAssertEqual(listed.map(\.title), ["Offsite ideas"])
         try await library.controller.restoreFromTrash(trashed)
         XCTAssertEqual(Set(library.controller.meetings.map(\.id)), [kept, trashed])
-        XCTAssertTrue(TrashedConversations.load(rootURL: root, ids: library.controller.trashedMeetingIDs()).isEmpty)
+        let after = await library.controller.trashedMeetings()
+        XCTAssertTrue(after.isEmpty)
     }
 }
 

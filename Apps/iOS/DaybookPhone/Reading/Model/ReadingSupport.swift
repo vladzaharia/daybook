@@ -55,25 +55,6 @@ enum SourceDescription {
     }
 }
 
-/// Conversations in the library's Trash folder. The store keeps their audio and notes; the
-/// controller lists only their IDs, so their saved metadata is read here, for the Trash list.
-enum TrashedConversations {
-    static func load(rootURL: URL, ids: [UUID]) -> [Meeting] {
-        let decoder = JSONDecoder()
-        return ids.compactMap { id in
-            let directory = rootURL.appendingPathComponent("Trash", isDirectory: true).appendingPathComponent(id.uuidString, isDirectory: true)
-            for name in ["meeting.json", "meeting.recovery.json"] {
-                if let data = try? Data(contentsOf: directory.appendingPathComponent(name)),
-                   let meeting = try? decoder.decode(Meeting.self, from: data), meeting.id == id {
-                    return meeting
-                }
-            }
-            return nil
-        }
-        .sorted { $0.date > $1.date }
-    }
-}
-
 // The files the share sheet is handed (`ExportFiles`) are DaybookKit's, shared with the Mac's Share menu.
 
 /// Copy for conversation content: it stays on this iPhone (`.localOnly`) rather than going to

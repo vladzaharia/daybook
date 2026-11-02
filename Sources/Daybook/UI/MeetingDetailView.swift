@@ -23,8 +23,9 @@ struct MeetingDetailView: View {
 
     var body: some View {
         if let meeting {
-            // Saved live captions turn to the Transcript side until the transcript replaces them, as on the iPhone.
-            let mode: PageMode = meeting.unifiedTranscript.isEmpty && !state.savedCaptions.shown(meeting) ? .summary : state.pageMode
+            // Saved live captions turn to the Transcript side until a transcript replaces them, as on the iPhone
+            // (`AppState.hasTranscriptPage`, from the captions read off the main actor).
+            let mode: PageMode = state.hasTranscriptPage(meeting) ? state.pageMode : .summary
             Group {
                 switch mode {
                 case .summary: SummaryPage(state: state, player: state.playback, meeting: meeting, play: play)
@@ -47,7 +48,6 @@ struct MeetingDetailView: View {
             .environment(\.openPhoto) { viewingPhoto = PhotoViewerRequest(id: $0.id) }
             .sheet(item: $viewingPhoto) { request in PhotoViewer(state: state, meetingID: meetingID, photoID: request.id, play: play) }
             .modifier(PhotoDropTarget(state: state, meetingID: meetingID))
-            .task(id: SavedCaptionsProbe.key(meeting, state: state)) { await state.savedCaptions.read(meeting, state: state) }
             // Photos synced from another device, or added before the models were here, are read when seen.
             .task(id: "\(meetingID):\(meeting.visiblePhotos.filter { $0.analysis == nil }.map(\.id)):\(state.photoModel?.description ?? "vision"):\(state.recordingID?.uuidString ?? "idle")") {
                 state.readPhotosWhenIdle(meetingID)
@@ -82,47 +82,6 @@ struct MeetingDetailView: View {
 /// state) adds nothing, so it isn't drawn again: each change of the library draws the page once.
 extension MeetingDetailView: Equatable {
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.meetingID == rhs.meetingID }
-}
-
-/// Whether the conversation on the page has live captions saved that its transcript hasn't replaced, which the
-/// Transcript side shows until it does (as the iPhone's). The page reads the file off the main actor (`read`), again
-/// when the captions are saved, a transcript arrives, or a recording starts or stops; the page and the toolbar's switch
-/// both follow that one answer (`shown`).
-@MainActor
-@Observable
-final class SavedCaptionsProbe {
-    private struct Answer: Equatable {
-        let meetingID: UUID
-        let shown: Bool
-    }
-
-    private var answer: Answer?
-    /// What the answer was read for (`key`). A new read that answers the same (each save while recording) redraws nothing.
-    @ObservationIgnored private var readKey: String?
-
-    static func key(_ meeting: Meeting, state: AppState) -> String {
-        "\(meeting.id)|\(meeting.transcripts.count)|\(state.captions.lastSave?.timeIntervalSince1970 ?? 0)|\(state.recordingID == meeting.id)"
-    }
-
-    /// The last answer for `meeting`, kept while a new one is read; false before the first.
-    func shown(_ meeting: Meeting) -> Bool {
-        answer?.meetingID == meeting.id && answer?.shown == true
-    }
-
-    /// Reads whether `meeting` has captions to show, unless that's been read since anything that changes it.
-    func read(_ meeting: Meeting, state: AppState) async {
-        let key = Self.key(meeting, state: state)
-        guard readKey != key else { return }
-        var captions: LiveCaptions?
-        if state.recordingID != meeting.id, meeting.unifiedTranscript.isEmpty {
-            let url = state.captions.store.url(for: meeting.id)
-            captions = await Task.detached(priority: .userInitiated) { LiveCaptionStore.read(url) }.value
-            guard !Task.isCancelled else { return }
-        }
-        readKey = key
-        let read = Answer(meetingID: meeting.id, shown: LiveCaptionStore.shown(captions, for: meeting) != nil)
-        if answer != read { answer = read }
-    }
 }
 
 // MARK: - Toolbar
@@ -185,8 +144,8 @@ private struct PageSwitch: View {
 
     var body: some View {
         let recording = meeting.map { state.recordingID == $0.id } ?? false
-        // Saved live captions count, as the page has read them (`SavedCaptionsProbe`).
-        let hasTranscript = meeting.map { !$0.unifiedTranscript.isEmpty || state.savedCaptions.shown($0) } ?? false
+        // Saved live captions count, as the page reads them (`AppState.hasTranscriptPage`).
+        let hasTranscript = meeting.map { state.hasTranscriptPage($0) } ?? false
         // Laid out always, so the slot is the switch's width whatever shows in it; Bookmark covers it while recording.
         Picker("View", selection: hasTranscript ? $state.pageMode : .constant(.summary)) {
             ForEach(PageMode.allCases) { mode in Text(mode.title).tag(mode) }

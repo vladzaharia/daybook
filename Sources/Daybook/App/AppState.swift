@@ -237,8 +237,6 @@ final class AppState {
     let recorder: RecordingController
     /// Live captions while this Mac records (You and Call), and their setting and language.
     let captions: LiveCaptionsController
-    /// Whether the conversation on the page has saved captions to show, read once for the page and the toolbar.
-    let savedCaptions = SavedCaptionsProbe()
     /// The input levels iPhones recording along send, for Floating Notes' meters (App/PhoneLevels.swift).
     let phoneLevels = PhoneLevels()
     let captionSettings: LiveCaptionSettings
