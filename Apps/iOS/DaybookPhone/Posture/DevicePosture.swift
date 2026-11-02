@@ -4,7 +4,9 @@ import UIKit
 
 /// How the iPhone Duo is folded, for layouts to follow: closed is the pocket recorder, open is the
 /// two-page notebook, partly open while recording is table mode (docs/iphone.md). Phones without a
-/// hinge report `.none` and get the closed layout, or the open one at regular width.
+/// hinge report `.none` and get the closed layout, or the open one at regular width. Turned on its
+/// side (a compact height), any iPhone that isn't open gets the two pages: one column with the status
+/// sheet would be a sheet over the whole window, which iOS shows at full height there.
 ///
 /// Fed by SwiftUI's `onHingeChange` (iOS 27.1) through `HingeObserver`. A launch argument forces a
 /// posture in the simulator and in screenshots: `--posture closed|open|partial[:degrees]`.
@@ -31,6 +33,9 @@ final class DevicePosture {
     private(set) var fold: Fold
     /// Hinge angle in degrees (180 is flat), when the device reports one.
     private(set) var angle: Double?
+    /// The window's vertical size class, as the root reads it (`HingeObserver`): compact while an iPhone
+    /// is on its side. `layout` follows it.
+    var heightClass: UserInterfaceSizeClass?
     /// Set from a launch argument; hinge reports are then ignored.
     let isForced: Bool
     /// How many hinge reports each API delivered (for the geometry probe).
@@ -65,12 +70,17 @@ final class DevicePosture {
         update(fold: .none, angle: nil)
     }
 
-    func layout(isRecording: Bool, horizontalSizeClass: UserInterfaceSizeClass?) -> Layout {
+    /// The layout for the posture and the window. `verticalSizeClass` is the window's height class; nil reads the
+    /// one the root reported (`heightClass`). A compact height (on its side) is two pages unless the Duo stands
+    /// partly open for table mode: a one-column library would put the status sheet over the whole window.
+    func layout(isRecording: Bool, horizontalSizeClass: UserInterfaceSizeClass?,
+                verticalSizeClass: UserInterfaceSizeClass? = nil) -> Layout {
+        let onItsSide = (verticalSizeClass ?? heightClass) == .compact
         switch fold {
         case .open: return .notebook
         case .partiallyOpen: return isRecording ? .table : .notebook
-        case .closed: return .pocket
-        case .none: return horizontalSizeClass == .regular ? .notebook : .pocket
+        case .closed: return onItsSide ? .notebook : .pocket
+        case .none: return horizontalSizeClass == .regular || onItsSide ? .notebook : .pocket
         }
     }
 
@@ -112,11 +122,28 @@ final class DevicePosture {
     }
 }
 
-/// Feeds `DevicePosture` from the hinge on iOS 27.1 and later; does nothing earlier.
+/// Feeds `DevicePosture` from the hinge on iOS 27.1 and later, and from the window's height class
+/// everywhere (an iPhone on its side).
 struct HingeObserver: ViewModifier {
     let posture: DevicePosture
+    @Environment(\.verticalSizeClass) private var heightClass
 
     func body(content: Content) -> some View {
+        hinge(content)
+            .onChange(of: heightClass, initial: true) { _, heightClass in
+                if posture.heightClass != heightClass { posture.heightClass = heightClass }
+            }
+            .task {
+                // `--interface-orientation landscape` (debug): the library on its side, as the person would
+                // turn it (the simulator has no command to). The scene takes it once it allows landscape.
+                guard let orientation = LaunchOptions.value(after: "--interface-orientation", in: CommandLine.arguments) else { return }
+                try? await Task.sleep(for: .seconds(1.5))
+                InterfaceOrientation.apply(orientation)
+            }
+    }
+
+    @ViewBuilder
+    private func hinge(_ content: Content) -> some View {
         if #available(iOS 27.1, *) {
             content
                 .onHingeChange { _, new in posture.apply(new.hinge, from: "onHingeChange") }

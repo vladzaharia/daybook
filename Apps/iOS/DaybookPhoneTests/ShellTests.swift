@@ -46,6 +46,35 @@ final class ShellTests: XCTestCase {
         XCTAssertEqual(posture.summary, "Partly open · 100°")
     }
 
+    /// hig-ios-01: on its side (a compact height) an iPhone gets the two pages, never one column under a sheet
+    /// that iOS would show over the whole window; and the status sheet never presents there.
+    func testBehaviorOnItsSideAnIPhoneLaysOutAsTwoPagesWithNoSheet() {
+        let posture = DevicePosture()
+        XCTAssertEqual(posture.layout(isRecording: false, horizontalSizeClass: .compact, verticalSizeClass: .compact), .notebook)
+        XCTAssertEqual(posture.layout(isRecording: true, horizontalSizeClass: .compact, verticalSizeClass: .compact), .notebook)
+        XCTAssertEqual(posture.layout(isRecording: false, horizontalSizeClass: .compact, verticalSizeClass: .regular), .pocket)
+        // The root reports the window's height class; the layout the root asks for (with no height class of its own)
+        // follows it.
+        posture.heightClass = .compact
+        XCTAssertEqual(posture.layout(isRecording: false, horizontalSizeClass: .compact), .notebook)
+        posture.update(fold: .closed, angle: 0)
+        XCTAssertEqual(posture.layout(isRecording: false, horizontalSizeClass: .compact), .notebook, "the Duo's cover on its side")
+        posture.update(fold: .partiallyOpen, angle: 100)
+        XCTAssertEqual(posture.layout(isRecording: true, horizontalSizeClass: .regular), .table, "table mode stands on its side")
+        posture.heightClass = .regular
+        posture.update(fold: .closed, angle: 0)
+        XCTAssertEqual(posture.layout(isRecording: false, horizontalSizeClass: .compact), .pocket)
+
+        func shows(_ heightClass: UserInterfaceSizeClass?) -> Bool {
+            StatusSheetHost.shows(enabled: true, reading: false, searching: false, selecting: false, inTrash: false, heightClass: heightClass)
+        }
+        XCTAssertTrue(shows(.regular))
+        XCTAssertTrue(shows(nil))
+        XCTAssertFalse(shows(.compact), "never over the whole window")
+        XCTAssertFalse(StatusSheetHost.shows(enabled: true, reading: true, searching: false, selecting: false, inTrash: false,
+                                             heightClass: .regular))
+    }
+
     func testBookmarksSitBetweenTheParagraphsAroundThem() {
         let anchors = [TimedNote(time: 2, text: "One"), TimedNote(time: 10, text: "Two"), TimedNote(time: nil, text: "Three")]
         let items = NotesTimeline.items(notes: "One\nTwo\n\nThree", anchors: anchors,
