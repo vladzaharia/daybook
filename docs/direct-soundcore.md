@@ -282,9 +282,11 @@ access point on its own after `FINISH` or a timeout, is unverified.
 **What the page says.** Beside the import's title, where a percent goes, it says "Starting Wi‑Fi…" while it
 sets up (`FastTransferStage.label`), and nothing while it joins: then the line under the progress says
 it once, "Joining Soundcore Work’s Wi‑Fi…" (the recorder's name, `FastTransferStage.sentence`), from just
-before iOS asks to join a network called `WiFi-…`, so the question has its context. Status lines say
-"Joining Wi‑Fi…". The line under the progress says "Over Wi‑Fi. Keep Daybook open until it finishes."
-while it transfers; Device Details' "Fast Transfer" row says how the
+before iOS asks to join a network called `WiFi-…`, so the question has its context. The recorder's status line
+wherever it's shown (the status sheet's card, Settings › Recorders; `RecorderStatusWords.fastTransfer`) says
+"Importing · Starting Wi‑Fi…" while it sets up, "Joining Wi‑Fi…" while it joins, and "Importing · 64% · Keep Daybook
+open" while it transfers, "Keep Daybook open" where the line is narrow, since leaving Daybook starts the recording
+again over Bluetooth; Device Details' "Fast Transfer" row says how the
 last attempt went ("Over Wi‑Fi, Today, 10:02 AM", or "Back to Bluetooth, …" and why), or "Unavailable in
 this build".
 

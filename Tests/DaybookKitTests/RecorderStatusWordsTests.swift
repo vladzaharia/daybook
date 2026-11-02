@@ -101,8 +101,9 @@ final class RecorderStatusWordsTests: XCTestCase {
         facts.importing = .init(position: 1, total: 3, fraction: 0.25)
         facts.fastTransfer = .transferring
         let line = RecorderStatusWords.line(facts, here: "this iPhone", now: now)
-        XCTAssertEqual(line.text, "Importing 1 of 3 · Over Wi‑Fi")
-        XCTAssertEqual(line.shortText, "Importing 1 of 3")
+        // Over the recorder's Wi‑Fi, leaving Daybook starts it again over Bluetooth: the line says so, even narrow.
+        XCTAssertEqual(line.text, "Importing 1 of 3 · 25% · Keep Daybook open")
+        XCTAssertEqual(line.shortText, "Keep Daybook open")
         XCTAssertEqual(line.progress, 0.25)
         XCTAssertEqual(RecorderStatusWords.menuItem(facts, here: "this Mac"), "Importing from Soundcore Work · 1 of 3")
         facts.importing = .init(position: 1, total: 2, suspended: true)
