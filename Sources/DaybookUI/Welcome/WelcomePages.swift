@@ -71,22 +71,26 @@ public struct WelcomeStepPage<Content: View, Actions: View>: View {
 
     public var body: some View {
         #if os(iOS)
-        ScrollView {
-            VStack(spacing: 0) {
-                header
-                content
+        // Centred in the room above the buttons, as the Mac's window centres it; scrolling once text sizes need more,
+        // and never under the buttons.
+        VStack(spacing: 0) {
+            GeometryReader { proxy in
+                ScrollView {
+                    VStack(spacing: 0) {
+                        Spacer(minLength: DaybookSpacing.s5)
+                        header
+                        content
+                        Spacer(minLength: DaybookSpacing.s5)
+                    }
+                    .padding(.horizontal, DaybookSpacing.s5)
+                    .frame(maxWidth: WelcomeMetrics.columnWidth)
+                    .frame(maxWidth: .infinity, minHeight: proxy.size.height)
+                }
+                .scrollBounceBehavior(.basedOnSize)
             }
-            .padding(.horizontal, DaybookSpacing.s5)
-            .padding(.top, DaybookSpacing.s7)
-            .padding(.bottom, DaybookSpacing.s5)
-            .frame(maxWidth: WelcomeMetrics.columnWidth)
-            .frame(maxWidth: .infinity)
-        }
-        .scrollBounceBehavior(.basedOnSize)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: DaybookSpacing.s2) { actions }
                 .padding(.horizontal, DaybookSpacing.s5)
-                .padding(.top, DaybookSpacing.s3)
+                .padding(.vertical, DaybookSpacing.s3)
                 .frame(maxWidth: WelcomeMetrics.columnWidth)
                 .frame(maxWidth: .infinity)
         }

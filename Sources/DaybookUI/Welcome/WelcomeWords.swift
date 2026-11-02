@@ -35,6 +35,8 @@ public enum WelcomeWords {
     /// The iPhone's models page.
     public static let phoneModelsTitle = "Transcribe on This iPhone"
     public static let phoneModelsMessage = "Download models so this iPhone transcribes what it records. Without them, your Mac does."
+    /// What the download holds, beside its size.
+    public static let phoneModelsRow = "Transcription and speakers"
     /// A download the disk can't hold: "Needs 16.5 GB · 12 GB free".
     public static func needsSpace(_ needed: String, free: String) -> String { "Needs \(needed) · \(free) free" }
 

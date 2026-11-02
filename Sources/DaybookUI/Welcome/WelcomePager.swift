@@ -1,7 +1,7 @@
 import DaybookDesign
 import SwiftUI
 
-/// Welcome's pages, one at a time, with dots under them: in a window on the Mac, and in a full-screen cover on the
+/// Welcome's pages, one at a time, with dots under them: in a window on the Mac, and over the whole screen on the
 /// iPhone, where a page swipes to the next. Each app lists its own pages (`Page`) and draws them; the pages move
 /// when `selection` changes, forward or back, and fade instead under Reduce Motion.
 public struct WelcomePager<Page: Hashable, Content: View>: View {
