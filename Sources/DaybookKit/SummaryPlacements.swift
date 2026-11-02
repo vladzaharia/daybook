@@ -77,6 +77,18 @@ public final class SummaryPlacements {
         return planner.started
     }
 
+    /// A summary the person asked to run on this device (Summarize on This Mac, after the cloud couldn't): it starts
+    /// here at once, whatever the cloud preferences say. Nil, and nothing placed, when this device can't summarize.
+    @discardableResult
+    public func beginHere(_ id: UUID) -> SummaryPlace? {
+        guard options.thisDeviceCanSummarize else { return nil }
+        let here = SummaryOptions(thisDeviceCanSummarize: true, reachableMacs: [], cloud: nil)
+        let planner = SummaryPlacementPlanner(options: here, preferences: preferences, at: clock(), immediately: true,
+                                              waitsForMacs: waitsForMacs)
+        set(id, planner)
+        return planner.started
+    }
+
     /// Begins placing and waits until it has started somewhere: the place, or nil when it was ended first
     /// (cancelled, paused, or it settled with nowhere to run it). Cancelling the waiting task ends it.
     public func place(_ id: UUID, immediately: Bool = false) async -> SummaryPlace? {

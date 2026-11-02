@@ -15,14 +15,15 @@ public struct FailureWords: Equatable, Sendable {
     public static let saved = "The recording is saved."
 
     /// `failure` as `words` would say it: the device that failed is "this Mac", "this iPhone", or its name ("Studio
-    /// Mac"); one not known is `words.unknown`.
-    public init(_ failure: ProcessingStatus.Failure, words: DeviceWords) {
+    /// Mac"); one not known is `words.unknown`. `cloudModel` is the cloud model this device summarizes with, named
+    /// in the title when the cloud failed here ("Couldn’t summarize with Claude Sonnet 5.5").
+    public init(_ failure: ProcessingStatus.Failure, words: DeviceWords, cloudModel: String? = nil) {
         self.init(kind: failure.kind, reason: failure.reason, hadTranscripts: failure.hadTranscripts,
-                  device: words.name(of: failure.device))
+                  device: words.name(of: failure.device), cloudModel: words.isHere(failure.device) ? cloudModel : nil)
     }
 
     /// The same from its parts: `device` is already "this Mac" or a name.
-    public init(kind: ProcessingRequest.FailureKind, reason: String, hadTranscripts: Bool, device: String) {
+    public init(kind: ProcessingRequest.FailureKind, reason: String, hadTranscripts: Bool, device: String, cloudModel: String? = nil) {
         let reason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
         let plain = reason.isEmpty ? nil : (reason.hasSuffix(".") || reason.hasSuffix("?") || reason.hasSuffix("!") ? reason : reason + ".")
         func ending(_ sentence: String) -> String { sentence + " " + Self.saved }
@@ -40,7 +41,8 @@ public struct FailureWords: Equatable, Sendable {
             title = Self.couldntFinish(hadTranscripts)
             message = ending("The \(hadTranscripts ? "summary" : "speech") model couldn’t start on \(device).")
         case .cloud(let cloud):
-            title = "Couldn’t finish summarizing"
+            // The cloud's own sentence says what happened ("You’re offline."); the title, which model couldn't.
+            title = cloudModel.map { "Couldn’t summarize with \($0)" } ?? "Couldn’t finish summarizing"
             message = ending(plain ?? Self.cloudSentence(cloud))
         case .plainReason:
             title = Self.couldntFinish(hadTranscripts)

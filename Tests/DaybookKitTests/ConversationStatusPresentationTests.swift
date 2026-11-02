@@ -161,12 +161,12 @@ final class ConversationStatusPresentationTests: XCTestCase {
         var inputs = phone
         inputs.mac = .seen(name: "Studio Mac", at: now.addingTimeInterval(-2 * 3600))
         XCTAssertEqual(page(.requested(.device(request)), nil, inputs),
-                       Presentation(kind: .line, symbol: "clock", title: "Waiting for your Mac", detail: "Last seen 2 h ago", actions: [.cancelRequest]))
+                       Presentation(kind: .line, symbol: "clock", title: "Waiting for your Mac", detail: "Last seen 2 h ago", actions: [.cancelRequest(request.id)]))
         inputs.mac = .connected("Studio Mac")
         XCTAssertEqual(page(.requested(.device(request)), nil, inputs)?.title, "Waiting for Studio Mac")
         XCTAssertNil(page(.requested(.device(request)), nil, inputs)?.detail)
         inputs.mac = .noMac
-        XCTAssertEqual(page(.requested(.device(request)), nil, inputs)?.detail, "No Mac has checked in yet. Open Daybook on your Mac.")
+        XCTAssertEqual(page(.requested(.device(request)), nil, inputs)?.detail, "No Mac has synced this library yet. Open Daybook on your Mac.")
         // A Mac that isn't set up says where to finish, as the iPhone's Settings does.
         inputs.mac = .notProcessing("Studio Mac")
         XCTAssertEqual(page(.requested(.device(request)), nil, inputs)?.detail,
@@ -239,7 +239,7 @@ final class ConversationStatusPresentationTests: XCTestCase {
 
         // The cloud: a key's problem goes to Cloud Settings, and the summary can run here or on a Mac instead.
         let key = ProcessingStatus.Failure(reason: "Anthropic didn’t accept this key.", hadTranscripts: true, kind: .cloud(.badKey))
-        XCTAssertEqual(page(.failed(key), recorded(transcribed: true), mac)?.actions, [.cloudSettings, .summarizeHere])
+        XCTAssertEqual(page(.failed(key), recorded(transcribed: true), mac)?.actions, [.cloudSettings, .summarizeHere("This Mac")])
         XCTAssertEqual(page(.failed(key), recorded(transcribed: true), phone)?.actions, [.cloudSettings, .useYourMac])
         let offline = ProcessingStatus.Failure(reason: "You’re offline.", hadTranscripts: true, kind: .cloud(.offline))
         XCTAssertEqual(page(.failed(offline), recorded(transcribed: true), phone)?.actions, [.tryAgain(.summaryOnly), .useYourMac])
@@ -295,7 +295,7 @@ final class ConversationStatusPresentationTests: XCTestCase {
         cloud.placement.cloudOffered = true
         let request = ProcessingRequest(meetingID: UUID(), mode: .summaryOnly, requestedBy: alexPhone, createdAt: now)
         XCTAssertEqual(page(.requested(.device(request)), recorded(transcribed: true), cloud)?.title, "Waiting for a Mac to summarize")
-        XCTAssertEqual(page(.requested(.device(request)), recorded(transcribed: true), cloud)?.actions, [.placement(.useCloud)])
+        XCTAssertEqual(page(.requested(.device(request)), recorded(transcribed: true), cloud)?.actions, [.placement(.useCloud), .cancelRequest(request.id)])
     }
 
     func testBehaviorAMacsLiveProgressOverTheLinkComesBeforeTheSyncedClaim() {
