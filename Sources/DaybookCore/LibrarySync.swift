@@ -988,6 +988,27 @@ public actor LibrarySyncEngine {
     /// publish their libraries again into it once they have its key; nothing of theirs goes before every device has
     /// moved on. Once the resolved manifest is written, the copies iCloud made are deleted, so one marker is left.
     private func resolveManifest(at url: URL, conflicts: [NSFileVersion], copies: [URL]) throws -> SyncManifest {
+        let read = try manifestCandidates(at: url, conflicts: conflicts, copies: copies)
+        let resolved = try Self.resolved(from: read.candidates)
+        if read.current != resolved {
+            try SyncFiles.coordinateWrite(url, below: remoteRoot) { try LocalFiles.atomicWrite(resolved.encoded(), to: $0) }
+        }
+        if !conflicts.isEmpty {
+            for version in conflicts { version.isResolved = true }
+            try? NSFileVersion.removeOtherVersionsOfItem(at: url)
+        }
+        // One marker is left: the copies read here are in the resolved manifest (their libraries superseded, replaced, or
+        // merged into it), and every device resolves them the same way.
+        for copy in read.copies { try? SyncFiles.coordinateDelete(copy, below: remoteRoot) }
+        return resolved
+    }
+
+    /// Every version of the manifest there is to resolve: the file's (`current`), conflict versions, and the copies iCloud
+    /// made that are downloaded (`copies`, which go once the resolved manifest is written; one still in iCloud is asked
+    /// for, and resolved on a later pass). A version a newer Daybook wrote is refused as newer, not taken for damage; a
+    /// conflict version that can't be read yet can't be resolved.
+    private func manifestCandidates(at url: URL, conflicts: [NSFileVersion], copies: [URL]) throws
+        -> (candidates: [SyncManifest], current: SyncManifest?, copies: [URL]) {
         // A version from a newer Daybook is remembered (and refused below), not mistaken for damage.
         var newer: Int?
         func decode(_ data: Data) -> SyncManifest? {
@@ -1026,6 +1047,11 @@ public actor LibrarySyncEngine {
         }
         if let newer { throw LibrarySyncError.unsupportedVersion(newer) }
         for candidate in candidates { _ = try SyncManifest.checked(candidate) }
+        return (candidates, current, readCopies)
+    }
+
+    /// The one manifest `candidates` resolve to, the same on every device whichever it read first.
+    static func resolved(from candidates: [SyncManifest]) throws -> SyncManifest {
         // An encrypted library wins over plaintext ones (whichever ID is smaller): it never becomes plaintext again, and
         // the others' devices carry on in it once they have its key. A library started over (Start Over) gives way to
         // the one that replaced it, and devices that started over from the same library at once resolve like plaintext
@@ -1081,16 +1107,6 @@ public actor LibrarySyncEngine {
             resolved.compaction = shared.compactMap(\.compaction?.since).min().map { .init(since: $0) }
             resolved.schemaVersion = SyncManifest.compactedSchemaVersion
         }
-        if current != resolved {
-            try SyncFiles.coordinateWrite(url, below: remoteRoot) { try LocalFiles.atomicWrite(resolved.encoded(), to: $0) }
-        }
-        if !conflicts.isEmpty {
-            for version in conflicts { version.isResolved = true }
-            try? NSFileVersion.removeOtherVersionsOfItem(at: url)
-        }
-        // One marker is left: the copies read here are in the resolved manifest (their libraries superseded, replaced, or
-        // merged into it), and every device resolves them the same way.
-        for copy in readCopies { try? SyncFiles.coordinateDelete(copy, below: remoteRoot) }
         return resolved
     }
 

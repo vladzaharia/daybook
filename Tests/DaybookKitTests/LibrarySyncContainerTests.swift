@@ -603,6 +603,23 @@ final class LibrarySyncContainerTests: XCTestCase {
         XCTAssertTrue(sync.encryption.isOn)
     }
 
+    func testBehaviorInvalidatingStopsEverythingTheControllerStarted() async throws {
+        let sync = controller(environment())
+        sync.restore()
+        try await waitUntil("the container", state: syncState) { sync.iCloud == .connected }
+        var requested = 0
+        sync.onSyncRequested = { requested += 1 }
+        sync.invalidate()
+        XCTAssertNil(sync.folder); XCTAssertNil(sync.engine); XCTAssertEqual(sync.transport, .none)
+        XCTAssertFalse(sync.hasPendingSyncRequest)
+        // Nothing it started wakes it again: the account notification, a request, the poll.
+        NotificationCenter.default.post(name: .NSUbiquityIdentityDidChange, object: nil)
+        sync.requestSync()
+        for _ in 0..<30 { await Task.yield() }
+        XCTAssertEqual(requested, 0)
+        XCTAssertNil(sync.folder)
+    }
+
     func testBehaviorThePollSkipsAPassThatWouldChangeNothing() async throws {
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
         let sync = controller(environment())
