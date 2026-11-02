@@ -4,48 +4,42 @@ import Foundation
 /// Puts back the text from before one change. The change it makes is itself recorded, so the
 /// text it replaces stays in Version History.
 public enum RevisionRestore {
-    private static func kind(_ revision: MeetingRevision) -> Substring { revision.field.split(separator: ":").first ?? Substring(revision.field) }
-    private static func id(_ revision: MeetingRevision) -> String { String(revision.field.drop { $0 != ":" }.dropFirst()) }
-
     /// True when the change can be undone and the earlier text differs from what's there now.
     public static func canRestore(_ revision: MeetingRevision, in meeting: Meeting) -> Bool {
-        switch kind(revision) {
-        case "notes": return meeting.notes != revision.oldValue
-        case "segment":
-            guard let uuid = UUID(uuidString: id(revision)), let segment = meeting.unifiedTranscript.first(where: { $0.id == uuid }) else { return false }
+        switch revision.kind {
+        case .notes: return meeting.notes != revision.oldValue
+        case .segment(let id):
+            guard let segment = meeting.unifiedTranscript.first(where: { $0.id == id }) else { return false }
             return segment.text != revision.oldValue
-        case "speaker":
-            guard let speaker = meeting.speakers.first(where: { $0.id == id(revision) }) else { return false }
+        case .speaker(let id):
+            guard let speaker = meeting.speakers.first(where: { $0.id == id }) else { return false }
             return speaker.name != revision.oldValue && !revision.oldValue.trimmingCharacters(in: .whitespaces).isEmpty
-        case "summary":
+        case .summary:
             guard let summary = decodedSummary(revision.oldValue) else { return false }
             return summary != meeting.summary
-        case "photo":
+        case .photo(let id):
             // A deleted photo can be put back; adding one isn't undone from here (delete it instead).
-            guard revision.newValue == "removed", let uuid = UUID(uuidString: id(revision)), let photo = meeting.photo(uuid) else { return false }
+            guard revision.newValue == "removed", let photo = meeting.photo(id) else { return false }
             return photo.isRemoved
-        case "bookmark": return meeting.canRestoreBookmark(revision)
-        default: return false
+        case .bookmark: return meeting.canRestoreBookmark(revision)
+        case .photoCaption, .correctionTransfer, .source, .sync, .unknown: return false
         }
     }
 
     public static func apply(_ revision: MeetingRevision, to meeting: inout Meeting) {
         guard canRestore(revision, in: meeting) else { return }
-        switch kind(revision) {
-        case "notes":
+        switch revision.kind {
+        case .notes:
             let previous = meeting.timedNotes ?? NoteTimeline.reconcile(previous: [], text: meeting.notes, captureTime: nil)
             meeting.timedNotes = NoteTimeline.reconcile(previous: previous, text: revision.oldValue, captureTime: nil)
             meeting.setNotes(revision.oldValue)
-        case "segment":
-            if let uuid = UUID(uuidString: id(revision)) { meeting.correctSegment(id: uuid, text: revision.oldValue) }
-        case "speaker":
-            meeting.renameSpeaker(id: id(revision), name: revision.oldValue)
-        case "summary":
+        case .segment(let id): meeting.correctSegment(id: id, text: revision.oldValue)
+        case .speaker(let id): meeting.renameSpeaker(id: id, name: revision.oldValue)
+        case .summary:
             if let summary = decodedSummary(revision.oldValue) { meeting.setSummary(summary) }
-        case "photo":
-            if let uuid = UUID(uuidString: id(revision)) { meeting.restorePhoto(uuid) }
-        case "bookmark": meeting.restoreBookmark(revision)
-        default: break
+        case .photo(let id): meeting.restorePhoto(id)
+        case .bookmark: meeting.restoreBookmark(revision)
+        case .photoCaption, .correctionTransfer, .source, .sync, .unknown: break
         }
     }
 
@@ -56,75 +50,78 @@ public enum RevisionRestore {
 
 /// How Version History describes one change.
 public enum RevisionText {
-    private static func kind(_ revision: MeetingRevision) -> String { revision.field.split(separator: ":").first.map(String.init) ?? revision.field }
-
     public static func title(_ revision: MeetingRevision, in meeting: Meeting) -> String {
-        switch kind(revision) {
-        case "notes": return "Notes edited"
-        case "segment": return "Passage corrected"
-        case "speaker": return "Speaker renamed"
-        case "summary": return hasBefore(revision) ? "Summary replaced" : "Summary written"
-        case "correction-transfer": return "Correction reviewed"
-        case "sync": return "Edited on two Macs"
-        case "source": return revision.newValue
-        case "photo":
+        switch revision.kind {
+        case .notes: return "Notes edited"
+        case .segment: return "Passage corrected"
+        case .speaker: return "Speaker renamed"
+        case .summary: return hasBefore(revision) ? "Summary replaced" : "Summary written"
+        case .correctionTransfer: return "Correction reviewed"
+        case .sync: return "Edited on two devices"
+        case .source: return revision.newValue
+        case .photo:
             switch revision.newValue {
             case "added": return "Photo added"
             case "removed": return "Photo deleted"
             default: return "Photo put back"
             }
-        case "photo-caption": return "Photo caption edited"
-        case "bookmark": return revision.newValue == MeetingRevision.bookmarkRemoved ? "Bookmark deleted" : "Bookmark put back"
-        default: return "Edited"
+        case .photoCaption: return "Photo caption edited"
+        case .bookmark: return revision.newValue == MeetingRevision.bookmarkRemoved ? "Bookmark deleted" : "Bookmark put back"
+        case .unknown: return "Edited"
         }
     }
 
     /// Whether there was text before the change to show. A conversation's first summary was
     /// written, not replaced: it shows on its own, with no empty Before (and nothing to restore).
     public static func hasBefore(_ revision: MeetingRevision) -> Bool {
-        !(kind(revision) == "summary" && revision.oldValue.isEmpty)
+        !(revision.kind == .summary && revision.oldValue.isEmpty)
     }
 
     public static func subject(_ revision: MeetingRevision, in meeting: Meeting) -> String {
-        if kind(revision) == "segment", let id = UUID(uuidString: String(revision.field.dropFirst("segment:".count))),
-           let segment = meeting.unifiedTranscript.first(where: { $0.id == id }) {
-            return "Passage at \(TimeLabel.short(segment.start))" + (meeting.speakerName(segment.speakerID).map { " · \($0)" } ?? "")
-        }
-        if kind(revision) == "speaker" { return "\(revision.oldValue) → \(revision.newValue)" }
-        if let bookmark = revision.bookmark {
-            let time = "Bookmark at \(TimeLabel.short(meeting.alignedTime(for: bookmark) ?? bookmark.time))"
-            return bookmark.text.isEmpty ? time : "\(time) · \(bookmark.text)"
+        switch revision.kind {
+        case .segment(let id):
+            if let segment = meeting.unifiedTranscript.first(where: { $0.id == id }) {
+                return "Passage at \(TimeLabel.short(segment.start))" + (meeting.speakerName(segment.speakerID).map { " · \($0)" } ?? "")
+            }
+        case .speaker: return "\(revision.oldValue) → \(revision.newValue)"
+        case .bookmark:
+            if let bookmark = revision.bookmark {
+                let time = "Bookmark at \(TimeLabel.short(meeting.alignedTime(for: bookmark) ?? bookmark.time))"
+                return bookmark.text.isEmpty ? time : "\(time) · \(bookmark.text)"
+            }
+        default: break
         }
         return title(revision, in: meeting)
     }
 
     /// One outline family, like the search results' location glyphs.
     public static func symbol(_ revision: MeetingRevision) -> String {
-        switch kind(revision) {
-        case "notes": return "note.text"
-        case "segment": return "pencil"
-        case "speaker": return "person"
-        case "summary": return "text.alignleft"
-        case "correction-transfer": return "checkmark.circle"
-        case "source": return "waveform"
-        case "photo": return "photo"
-        case "photo-caption": return "text.below.photo"
-        case "bookmark": return "bookmark"
-        default: return "arrow.triangle.branch"
+        switch revision.kind {
+        case .notes: return "note.text"
+        case .segment: return "pencil"
+        case .speaker: return "person"
+        case .summary: return "text.alignleft"
+        case .correctionTransfer: return "checkmark.circle"
+        case .source: return "waveform"
+        case .photo: return "photo"
+        case .photoCaption: return "text.below.photo"
+        case .bookmark: return "bookmark"
+        case .sync, .unknown: return "arrow.triangle.branch"
         }
     }
 
     /// A change's text, plain. Summaries are stored as JSON: their words show, without Markdown's marks.
     public static func readable(_ value: String, field: String) -> String {
         if let summary = summary(value, field: field) { return String(text(of: summary).characters) }
-        if field.hasPrefix("correction-transfer") {
+        switch RevisionField(rawValue: field) {
+        case .correctionTransfer:
             if value == "dismissed" { return "Kept in Version History only" }
             if value.hasPrefix("applied:") { return "Applied to a passage in the new transcript" }
-        }
-        if case .bookmark = RevisionField(rawValue: field) {
+        case .bookmark:
             // The entry keeps the whole bookmark: its words show, and its time is in the subject.
             if value == MeetingRevision.bookmarkRemoved { return "Deleted" }
             if let bookmark = MeetingRevision.bookmark(from: value) { return bookmark.text }
+        default: break
         }
         return value
     }
@@ -139,7 +136,8 @@ public enum RevisionText {
 
     /// A summary change, or the other version two devices' summaries left in history.
     private static func summary(_ value: String, field: String) -> MeetingSummary? {
-        guard field == "summary" || field == "sync:summary", let data = value.data(using: .utf8) else { return nil }
+        let kind = RevisionField(rawValue: field)
+        guard kind == .summary || kind == .sync(RevisionField.summary.rawValue), let data = value.data(using: .utf8) else { return nil }
         return try? JSONDecoder().decode(MeetingSummary.self, from: data)
     }
 

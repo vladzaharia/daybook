@@ -97,6 +97,35 @@ final class VersionHistoryRestoreTests: XCTestCase {
         XCTAssertFalse(RevisionRestore.canRestore(MeetingRevision(field: "segment:\(UUID().uuidString)", oldValue: "a", newValue: "b"), in: meeting))
     }
 
+    /// Regression: a merge's entry read "Edited on two Macs", though `MeetingMerge` records one for any two
+    /// devices, the iPhone included.
+    func testEachChangeReadsByItsKind() {
+        let meeting = Meeting(title: "Sync")
+        let merged = MeetingRevision(kind: .sync("notes"), oldValue: "Agenda", newValue: "Agenda, beta date")
+        XCTAssertEqual(RevisionText.title(merged, in: meeting), "Edited on two devices")
+        XCTAssertEqual(RevisionText.symbol(merged), "arrow.triangle.branch")
+        XCTAssertFalse(RevisionRestore.canRestore(merged, in: meeting))
+
+        let track = UUID()
+        let added = MeetingRevision(kind: .source(track.uuidString), oldValue: "", newValue: "Added iPhone")
+        XCTAssertEqual(added.field, "source:\(track.uuidString)", "Stored as earlier versions wrote it")
+        XCTAssertEqual(RevisionText.title(added, in: meeting), "Added iPhone")
+        XCTAssertEqual(RevisionText.symbol(added), "waveform")
+
+        let caption = MeetingRevision(kind: .photoCaption(UUID()), oldValue: "", newValue: "Whiteboard")
+        XCTAssertEqual(RevisionText.title(caption, in: meeting), "Photo caption edited")
+        XCTAssertEqual(RevisionText.symbol(caption), "text.below.photo")
+
+        let review = RevisionField.correctionTransfer(UUID()).rawValue
+        XCTAssertEqual(RevisionText.readable("dismissed", field: review), "Kept in Version History only")
+
+        let newer = MeetingRevision(field: "chapter:3", oldValue: "", newValue: "Intro")
+        XCTAssertEqual(newer.kind, .unknown("chapter:3"), "A newer Daybook's kind is kept as written")
+        XCTAssertEqual(RevisionText.title(newer, in: meeting), "Edited")
+        XCTAssertEqual(RevisionText.subject(newer, in: meeting), "Edited")
+        XCTAssertFalse(RevisionRestore.canRestore(newer, in: meeting))
+    }
+
     func testRowPreviewSkipsANoteThatRepeatsTheTitle() {
         let meeting = Meeting(title: "Offsite ideas", notes: "offsite  Ideas\n- Half day on the roadmap")
         XCTAssertEqual(RowPreview.text(for: meeting), "Half day on the roadmap")

@@ -383,7 +383,7 @@ extension AppState {
         let arriving = meeting.tracks.filter { track in
             track.deviceKind != nil && !meeting.transcripts.contains { $0.trackID == track.id }
                 && (track.alignment == nil
-                    || (track.alignment?.isPending == true && !meeting.revisions.contains { $0.field == "source:\(track.id.uuidString)" }))
+                    || (track.alignment?.isPending == true && !meeting.revisions.contains { $0.kind == .source(track.id.uuidString) }))
         }
         guard !arriving.isEmpty else { return false }
         if meeting.tracks.count == 1, let track = arriving.first {

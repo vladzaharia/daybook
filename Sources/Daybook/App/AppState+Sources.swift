@@ -183,7 +183,7 @@ extension AppState {
                 // onto the timeline now if the sound already placed it.
                 meeting.tracks[index].offset = nil
                 meeting.applyPlacements([track.id: alignment])
-                meeting.revisions.append(MeetingRevision(field: "source:\(track.id.uuidString)", oldValue: "", newValue: "Added \(name)"))
+                meeting.revisions.append(MeetingRevision(kind: .source(track.id.uuidString), oldValue: "", newValue: "Added \(name)"))
                 if let carried, let transcript = carried.transcript, !meeting.transcripts.contains(where: { $0.trackID == track.id }) {
                     Self.adopt(transcript, speakers: carried.speakers, for: track.id, into: &meeting, preferences: preferences)
                 }
@@ -371,7 +371,7 @@ extension AppState {
             // Photos taken meanwhile follow the microphone recording too, like bookmarks.
             meeting.movePhotos(onto: lead, except: context.photoIDs)
             meeting.date = context.date
-            meeting.revisions.append(MeetingRevision(field: "source:\(lead.id.uuidString)", oldValue: "", newValue: "Added \(self.sourceName(lead))"))
+            meeting.revisions.append(MeetingRevision(kind: .source(lead.id.uuidString), oldValue: "", newValue: "Added \(self.sourceName(lead))"))
         }
     }
 

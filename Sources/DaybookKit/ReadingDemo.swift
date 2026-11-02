@@ -136,8 +136,8 @@ public enum ReadingDemo {
         weekly.meeting.placement = .work
         weekly.meeting.status = .ready
         let written = (try? JSONEncoder().encode(weekly.meeting.summary)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
-        weekly.meeting.revisions = [MeetingRevision(date: ago(minutes: 98), field: "summary", oldValue: "", newValue: written),
-                                    MeetingRevision(date: ago(minutes: 83), field: "notes", oldValue: "Beta date?", newValue: weekly.meeting.notes)]
+        weekly.meeting.revisions = [MeetingRevision(date: ago(minutes: 98), kind: .summary, oldValue: "", newValue: written),
+                                    MeetingRevision(date: ago(minutes: 83), kind: .notes, oldValue: "Beta date?", newValue: weekly.meeting.notes)]
         // A Soundcore that recorded along, lined up with this recording by sound.
         let soundcore = UUID()
         tone(seconds: 38, to: root.appendingPathComponent("Meetings/\(weekly.meeting.id.uuidString)/Originals/REC0042.wav"))
