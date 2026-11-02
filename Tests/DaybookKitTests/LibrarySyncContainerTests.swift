@@ -21,7 +21,7 @@ final class LibrarySyncContainerTests: XCTestCase {
     private var journal: URL { containerURL.appendingPathComponent("Documents/Daybook", isDirectory: true) }
 
     override func setUp() async throws {
-        root = fm.temporaryDirectory.appendingPathComponent("DaybookContainer-\(UUID().uuidString)", isDirectory: true)
+        root = makeTemporaryFolder("DaybookContainer")
         try fm.createDirectory(at: containerURL, withIntermediateDirectories: true)
         defaults = makeTestDefaults("daybook.sync.container")
         defaults.set("Mac", forKey: "syncDeviceID")
@@ -31,7 +31,6 @@ final class LibrarySyncContainerTests: XCTestCase {
     override func tearDown() async throws {
         for controller in controllers { controller.reportFailure("Test cleanup"); controller.disconnect() }
         controllers = []
-        try? fm.removeItem(at: root)
     }
 
     private func environment(identifier: String? = "iCloud.test.daybook", entitled: Bool = true, cloud: SyncCloudFiles = .system,

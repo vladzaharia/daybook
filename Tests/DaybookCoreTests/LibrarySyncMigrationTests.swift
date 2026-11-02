@@ -1,3 +1,4 @@
+import DaybookTestSupport
 import XCTest
 @testable import DaybookCore
 
@@ -12,12 +13,10 @@ final class LibrarySyncMigrationTests: XCTestCase {
     private let fm = FileManager.default
 
     override func setUpWithError() throws {
-        root = fm.temporaryDirectory.appendingPathComponent("DaybookMigrationTests-\(UUID().uuidString)")
-        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        root = makeTemporaryFolder("DaybookMigrationTests")
         cloud = SimulatedICloud()
         cloud.holdDownloads(true)
     }
-    override func tearDownWithError() throws { try fm.removeItem(at: root) }
 
     private func engine(_ name: String, _ remote: URL) throws -> LibrarySyncEngine {
         try LibrarySyncEngine(localRoot: local(name), remoteRoot: remote, deviceID: name, replica: SyncReplicaConfiguration(cloud: cloud.files))

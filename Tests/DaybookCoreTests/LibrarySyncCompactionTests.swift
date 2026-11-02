@@ -1,3 +1,4 @@
+import DaybookTestSupport
 import XCTest
 @testable import DaybookCore
 
@@ -13,12 +14,10 @@ final class LibrarySyncCompactionTests: XCTestCase {
     private func local(_ name: String) -> URL { root.appendingPathComponent(name) }
 
     override func setUpWithError() throws {
-        root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookCompactionTests-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        root = makeTemporaryFolder("DaybookCompactionTests")
         cloud = SimulatedICloud()
         keychain = MemoryLibraryKeyStore()
     }
-    override func tearDownWithError() throws { try? FileManager.default.removeItem(at: root) }
 
     private func mac(_ name: String = "Mac", compaction: SyncCompactionPolicy? = .eager, sealed: Bool = false) throws -> LibrarySyncEngine {
         try LibrarySyncEngine(localRoot: local(name), remoteRoot: remote, deviceID: name, replica: SyncReplicaConfiguration(

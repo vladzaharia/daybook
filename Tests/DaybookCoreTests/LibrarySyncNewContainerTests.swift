@@ -1,3 +1,4 @@
+import DaybookTestSupport
 import XCTest
 @testable import DaybookCore
 
@@ -11,11 +12,9 @@ final class LibrarySyncNewContainerTests: XCTestCase {
     private func local(_ name: String) -> URL { root.appendingPathComponent(name) }
 
     override func setUpWithError() throws {
-        root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookNewContainerTests-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        root = makeTemporaryFolder("DaybookNewContainerTests")
         keychain = MemoryLibraryKeyStore()
     }
-    override func tearDownWithError() throws { try? FileManager.default.removeItem(at: root) }
 
     /// A device whose view of the container is `remote` (iCloud hasn't brought the other's files yet).
     private func engine(_ name: String, remote: URL, phone: Bool = false) throws -> LibrarySyncEngine {

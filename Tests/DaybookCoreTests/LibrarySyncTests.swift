@@ -1,3 +1,4 @@
+import DaybookTestSupport
 import XCTest
 @testable import DaybookCore
 
@@ -9,10 +10,8 @@ final class LibrarySyncTests: XCTestCase {
         try LibrarySyncEngine(localRoot: local(name), remoteRoot: remote ?? self.remote, deviceID: name)
     }
     override func setUpWithError() throws {
-        root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookSyncTests-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        root = makeTemporaryFolder("DaybookSyncTests")
     }
-    override func tearDownWithError() throws { try FileManager.default.removeItem(at: root) }
     private func apply(_ result: SyncResult, to name: String, using engine: LibrarySyncEngine) async throws {
         let store = try MeetingStore(rootURL: local(name))
         for meeting in result.meetings { try await store.save(meeting) }

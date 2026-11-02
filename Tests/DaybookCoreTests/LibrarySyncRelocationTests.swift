@@ -1,3 +1,4 @@
+import DaybookTestSupport
 import XCTest
 @testable import DaybookCore
 
@@ -12,10 +13,8 @@ final class LibrarySyncRelocationTests: XCTestCase {
     }
 
     override func setUpWithError() throws {
-        root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookRelocationTests-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        root = makeTemporaryFolder("DaybookRelocationTests")
     }
-    override func tearDownWithError() throws { try? FileManager.default.removeItem(at: root) }
 
     func testAnEmptyLibraryUnderAKnownDeviceIDPublishesNoDeletions() async throws {
         let (published, phone) = try await macAndPhoneSharingTwoConversations()

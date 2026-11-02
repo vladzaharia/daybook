@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import DaybookKit
@@ -16,7 +17,7 @@ final class LibrarySyncFolderAccessTests: XCTestCase {
     private var container: URL { root.appendingPathComponent("Container", isDirectory: true) }
 
     override func setUp() async throws {
-        root = fm.temporaryDirectory.appendingPathComponent("DaybookFolderAccess-\(UUID().uuidString)", isDirectory: true)
+        root = makeTemporaryFolder("DaybookFolderAccess")
         try fm.createDirectory(at: container, withIntermediateDirectories: true)
         defaults = UserDefaults(suiteName: root.appendingPathComponent("Preferences").path)
         defaults.set("Mac", forKey: "syncDeviceID")
@@ -25,7 +26,6 @@ final class LibrarySyncFolderAccessTests: XCTestCase {
     override func tearDown() async throws {
         controller?.reportFailure("Test cleanup"); controller?.disconnect()
         try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path)
-        try? fm.removeItem(at: root)
     }
 
     func testAFolderThatCantBeOpenedAsksToBeChosenAgain() async throws {

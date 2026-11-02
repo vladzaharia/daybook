@@ -1,6 +1,7 @@
 import CryptoKit
 import DaybookCore
 import DaybookLink
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import DaybookKit
@@ -26,7 +27,7 @@ final class LibrarySyncEncryptionTests: XCTestCase {
     }
 
     override func setUp() async throws {
-        root = fm.temporaryDirectory.appendingPathComponent("DaybookEncryption-\(UUID().uuidString)", isDirectory: true)
+        root = makeTemporaryFolder("DaybookEncryption")
         try fm.createDirectory(at: container, withIntermediateDirectories: true)
         service = InMemoryCourierService()
     }
@@ -35,7 +36,6 @@ final class LibrarySyncEncryptionTests: XCTestCase {
         for controller in controllers { controller.reportFailure("Test cleanup"); controller.disconnect() }
         controllers = []
         for suite in suites { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
-        try? fm.removeItem(at: root)
     }
 
     /// `automatic`: as the apps do, a new library starts encrypted and a plaintext one encrypts itself. Otherwise a

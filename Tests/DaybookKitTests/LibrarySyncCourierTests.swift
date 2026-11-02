@@ -33,7 +33,7 @@ final class LibrarySyncCourierTests: XCTestCase {
     }
 
     override func setUp() async throws {
-        root = fm.temporaryDirectory.appendingPathComponent("DaybookCourier-\(UUID().uuidString)", isDirectory: true)
+        root = makeTemporaryFolder("DaybookCourier")
         try fm.createDirectory(at: container, withIntermediateDirectories: true)
         service = InMemoryCourierService()
     }
@@ -41,7 +41,6 @@ final class LibrarySyncCourierTests: XCTestCase {
     override func tearDown() async throws {
         for controller in controllers { controller.reportFailure("Test cleanup"); controller.disconnect() }
         controllers = []
-        try? fm.removeItem(at: root)
     }
 
     private func device(_ name: String, phone: Bool, role: CourierRole, clock: Clock = Clock(),

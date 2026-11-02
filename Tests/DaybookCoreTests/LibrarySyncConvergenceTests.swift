@@ -1,3 +1,4 @@
+import DaybookTestSupport
 import XCTest
 @testable import DaybookCore
 
@@ -10,10 +11,8 @@ final class LibrarySyncConvergenceTests: XCTestCase {
     private var remote: URL { root.appendingPathComponent("Remote") }
 
     override func setUpWithError() throws {
-        root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookConvergence-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        root = makeTemporaryFolder("DaybookConvergence")
     }
-    override func tearDownWithError() throws { try FileManager.default.removeItem(at: root) }
 
     func testRandomHistoriesConverge() async throws {
         for seed: UInt64 in [1, 7, 42, 2026] {

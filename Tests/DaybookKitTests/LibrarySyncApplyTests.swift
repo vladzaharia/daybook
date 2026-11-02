@@ -15,14 +15,13 @@ final class LibrarySyncApplyTests: XCTestCase {
     private var container: URL { root.appendingPathComponent("Container", isDirectory: true) }
 
     override func setUp() async throws {
-        root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookSyncApply-\(UUID().uuidString)", isDirectory: true)
+        root = makeTemporaryFolder("DaybookSyncApply")
         try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
     }
 
     override func tearDown() async throws {
         for controller in controllers { controller.reportFailure("Test cleanup"); controller.disconnect() }
         controllers = []
-        try? FileManager.default.removeItem(at: root)
     }
 
     /// A library connected to the shared folder. Passes run only when a test asks.

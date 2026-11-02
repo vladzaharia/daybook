@@ -1,3 +1,4 @@
+import DaybookTestSupport
 import XCTest
 @testable import DaybookCore
 
@@ -13,12 +14,10 @@ final class LibrarySyncStartOverTests: XCTestCase {
     private func local(_ name: String) -> URL { root.appendingPathComponent(name) }
 
     override func setUpWithError() throws {
-        root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookStartOverTests-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        root = makeTemporaryFolder("DaybookStartOverTests")
         cloud = SimulatedICloud()
         keychain = MemoryLibraryKeyStore()
     }
-    override func tearDownWithError() throws { try? FileManager.default.removeItem(at: root) }
 
     private func mac(_ name: String = "Mac") throws -> LibrarySyncEngine {
         try LibrarySyncEngine(localRoot: local(name), remoteRoot: remote, deviceID: name, replica: SyncReplicaConfiguration(

@@ -1,3 +1,4 @@
+import DaybookTestSupport
 import XCTest
 @testable import DaybookCore
 
@@ -25,8 +26,7 @@ final class SyncWarningWordsTests: XCTestCase {
     /// A pass that meets damaged entries and a changed recording says so in plain sentences; the entries' names and where
     /// the recording went are behind Details.
     func testAPassWithDamagedEntriesWarnsInPlainSentences() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookWarningWords-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = makeTemporaryFolder("DaybookWarningWords")
         let remote = root.appendingPathComponent("iCloud")
         let a = try LibrarySyncEngine(localRoot: root.appendingPathComponent("A"), remoteRoot: remote, deviceID: "A")
         _ = try await a.synchronize(meetings: [Meeting(title: "Fine")])

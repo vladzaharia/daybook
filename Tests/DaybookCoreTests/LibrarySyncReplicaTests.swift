@@ -106,11 +106,9 @@ final class LibrarySyncReplicaTests: XCTestCase {
     private let fast = AudioFetchOptions(pollInterval: .milliseconds(5), timeout: .seconds(10))
 
     override func setUpWithError() throws {
-        root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookReplicaTests-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        root = makeTemporaryFolder("DaybookReplicaTests")
         cloud = SimulatedICloud()
     }
-    override func tearDownWithError() throws { try FileManager.default.removeItem(at: root) }
 
     private func mac(_ name: String = "Mac", canProcess: Bool = true) throws -> LibrarySyncEngine {
         try LibrarySyncEngine(localRoot: local(name), remoteRoot: remote, deviceID: name, replica: SyncReplicaConfiguration(

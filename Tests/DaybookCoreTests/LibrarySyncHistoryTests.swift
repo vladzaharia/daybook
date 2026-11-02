@@ -1,3 +1,4 @@
+import DaybookTestSupport
 import XCTest
 @testable import DaybookCore
 
@@ -11,10 +12,8 @@ final class LibrarySyncHistoryTests: XCTestCase {
         try LibrarySyncEngine(localRoot: local(name), remoteRoot: remote, deviceID: name)
     }
     override func setUpWithError() throws {
-        root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookSyncHistory-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        root = makeTemporaryFolder("DaybookSyncHistory")
     }
-    override func tearDownWithError() throws { try FileManager.default.removeItem(at: root) }
 
     /// One pass, saved and acknowledged; returns the conversation as it is now on `name`.
     @discardableResult

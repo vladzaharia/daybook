@@ -1,3 +1,4 @@
+import DaybookTestSupport
 import XCTest
 @testable import DaybookCore
 
@@ -11,10 +12,8 @@ final class LibrarySyncDeletionTests: XCTestCase {
         try LibrarySyncEngine(localRoot: local(name), remoteRoot: remote, deviceID: name, replica: SyncReplicaConfiguration(audioPolicy: policy))
     }
     override func setUpWithError() throws {
-        root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookSyncDeletion-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        root = makeTemporaryFolder("DaybookSyncDeletion")
     }
-    override func tearDownWithError() throws { try FileManager.default.removeItem(at: root) }
 
     @discardableResult
     private func pass(_ engine: LibrarySyncEngine, _ name: String, _ meetings: [Meeting] = [], deleting: Set<UUID> = [],
