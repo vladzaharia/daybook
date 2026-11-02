@@ -31,6 +31,19 @@ final class LibraryControllerTests: XCTestCase {
         return url
     }
 
+    func testBehaviorTagsTypedAnywhereAreTheTagsInfoMakes() async throws {
+        // The iPhone's Tags… sheet saves through setTags; Info saves TagInput's list itself.
+        let library = try await open()
+        let id = library.newMeeting(title: "Pricing call")
+        library.setTags(id, text: "client, beta")
+        XCTAssertEqual(library.meeting(id)?.tags, ["client", "beta"], "two tags, never \"client  beta\"")
+        library.setTags(id, text: "#pricing,  launch   week , Pricing")
+        XCTAssertEqual(library.meeting(id)?.tags, ["pricing", "launch week"])
+        XCTAssertEqual(library.meeting(id)?.tags, TagInput.tags(in: "#pricing,  launch   week , Pricing"))
+        library.setTags(id, text: " , ")
+        XCTAssertEqual(library.meeting(id)?.tags, [])
+    }
+
     func testEditsSaveWithTheirHistoryAndSurviveReopening() async throws {
         let library = try await open()
         let id = library.newMeeting(title: "Untitled")

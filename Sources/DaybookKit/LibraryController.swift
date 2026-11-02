@@ -400,11 +400,10 @@ public final class LibraryController {
         for id in ids { update(id) { $0.placement = placement } }
     }
 
-    /// Tags from comma-separated text: trimmed, without duplicates that differ only in case.
+    /// Tags from comma-separated text, taken as Info takes them (`TagInput`): trimmed, one space between words, no
+    /// leading "#", without duplicates that differ only in case.
     public func setTags(_ id: UUID, text: String) {
-        var seen = Set<String>()
-        let tags = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
+        let tags = TagInput.tags(in: text)
         update(id) { $0.tags = tags }
     }
 
