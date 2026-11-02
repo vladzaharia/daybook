@@ -1,6 +1,7 @@
 import AppKit
 import DaybookCore
 import DaybookKit
+import DaybookUI
 import SwiftUI
 
 /// A photo open in the viewer.

@@ -21,7 +21,7 @@ struct ConversationScreen: View {
             Group {
                 switch mode {
                 case .summary: SummaryPage(library: library, meeting: meeting)
-                case .transcript: TranscriptPage(library: library, player: session.player, meeting: meeting)
+                case .transcript: PhoneTranscriptPage(library: library, player: session.player, meeting: meeting)
                 }
             }
             .transition(.opacity)

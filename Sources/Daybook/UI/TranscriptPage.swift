@@ -1,449 +1,113 @@
 import AppKit
-import DaybookCaptions
 import DaybookCore
-import DaybookDevices
 import DaybookKit
 import DaybookUI
 import SwiftUI
 
-/// The evidence behind the page: who said what, with your notes and bookmarks at their times. Saved
-/// live captions read here too, as on the iPhone: in the transcript's place while there's none, else
-/// after it (`SavedCaptions`), each time playing the recording it was heard from.
-///
-/// The page doesn't read the player, whose position moves ten times a second: it follows it apart
-/// (`ObservationWatch`, on the main queue, so it keeps up while a slider is dragged), keeps the passage
-/// under the playhead in its own state, and redraws when that passage changes. Blocks, bookmark marks,
-/// and the playhead index are worked out once per version of the conversation (`TranscriptLayout`).
-struct TranscriptPage: View {
+// The Mac's transcript is DaybookUI's `TranscriptPage` (docs/interface.md, "Geometry"), the same page the iPhone
+// draws, over this Mac's library, its player, and its sheets. The page doesn't read the player in its body: it follows
+// it apart and redraws when the passage under the playhead changes.
+
+extension TranscriptPage where Header == MacTranscriptHeader, Placeholder == EmptyView {
+    /// The transcript of a conversation on this Mac. A jump asked for elsewhere (a search hit, a photo's moment, a
+    /// summary line's evidence: `AppState.pageScrollTarget`) moves the page once and is then cleared.
+    init(state: AppState, player: AudioPlaybackController, meeting: Meeting, play: @escaping (PlaybackTarget) -> Void) {
+        self.init(meeting: meeting,
+                  host: .mac(state: state, player: player, meetingID: meeting.id, play: play),
+                  findQuery: state.search,
+                  find: ConversationFind.window,
+                  scrollRequest: state.pageScrollTarget.map { TranscriptScrollRequest(target: $0.uuidString, token: $0.hashValue) },
+                  scrolled: { state.pageScrollTarget = nil },
+                  playerInset: 56) {
+            MacTranscriptHeader(state: state, player: player, meeting: meeting, play: play)
+        }
+    }
+}
+
+/// The title and byline, then the same status line as the summary page, so turning the page keeps them in view.
+struct MacTranscriptHeader: View {
     let state: AppState
     let player: AudioPlaybackController
     let meeting: Meeting
     let play: (PlaybackTarget) -> Void
-    @State private var editing: UUID?
-    @State private var draft = ""
-    @State private var lastUserScroll = Date.distantPast
-    @State private var followSuspended = false
-    @State private var playing: UUID?
-    @State private var isPlaying = false
-    @State private var playerShown = false
-    /// The saved caption under the playhead.
-    @State private var playingCaption: UUID?
-    @Environment(\.readingScale) private var scale
+    @Environment(\.readingWidth) private var readingWidth
 
     var body: some View {
-        let layout = TranscriptLayout.cached(for: meeting)
-        let marks = layout.marks
-        let captions = state.savedCaptions(for: meeting)
-        let standsIn = SavedCaptions.standsIn(for: meeting)
-        ScrollViewReader { proxy in
-            PageScroll(lazy: true, bottomInset: playerShown ? 56 : 0) {
-                PageHeader(state: state, player: player, meeting: meeting, play: play)
-                // The same status line as the summary page, so turning the page keeps it in view.
-                ConversationStatus(state: state, meeting: meeting)
-                notices
-                if let captions, standsIn { savedCaptions(captions, spacingAbove: 0) }
-                ForEach(layout.blocks) { block in
-                    switch block {
-                    case .turn(_, let speakerID, let segments):
-                        TurnView(state: state, meeting: meeting, speakerID: speakerID, segments: segments, playingID: playing,
-                                    marks: marks, corrected: layout.correctedSegmentIDs, editing: $editing, draft: $draft, play: play)
-                            .padding(.top, Space.s5)
-                    case .note(let note):
-                        NoteBlock(note: note) { play(.timeline(note.time ?? 0)) } open: { state.pageMode = .summary }
-                            .padding(.top, Space.s3)
-                    case .photo(let photo, let time):
-                        TranscriptPhotoBlock(state: state, meeting: meeting, photo: photo, time: time) { play(.timeline(time)) }
-                            .padding(.top, Space.s3)
-                    }
-                }
-                // After an earlier recording's transcript, which doesn't cover them.
-                if let captions, !standsIn { savedCaptions(captions, spacingAbove: Space.s6 - Space.s4) }
-            }
-            .onScrollPhaseChange { _, phase in
-                if phase == .interacting || phase == .decelerating {
-                    lastUserScroll = Date()
-                    if isPlaying { followSuspended = true }
-                }
-            }
-            .overlay(alignment: .topTrailing) {
-                if followSuspended && isPlaying, let playing {
-                    Button {
-                        lastUserScroll = .distantPast
-                        followSuspended = false
-                        withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(playing, anchor: UnitPoint(x: 0, y: 0.33)) }
-                    } label: {
-                        Label("Back to Playing", systemImage: "arrow.down.to.line")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(Ink.link)
-                            .padding(.horizontal, 10).padding(.vertical, 5)
-                            .background(.regularMaterial, in: Capsule())
-                            .overlay(Capsule().stroke(Color(nsColor: .separatorColor), lineWidth: 0.5))
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.top, Space.s3).padding(.trailing, Space.s4)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-                }
-            }
-            .motion(Motion.state, value: followSuspended)
-            .onAppear { scrollToTarget(proxy) }
-            .onChange(of: state.pageScrollTarget) { _, _ in scrollToTarget(proxy) }
-            .onChange(of: playing) { _, id in
-                // Follow playback only while the person isn't reading elsewhere.
-                guard let id, isPlaying else { return }
-                if Date().timeIntervalSince(lastUserScroll) > 5 { followSuspended = false }
-                guard !followSuspended else { return }
-                withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(id, anchor: UnitPoint(x: 0, y: 0.33)) }
-            }
-            .onChange(of: playingCaption) { _, id in
-                guard let id, isPlaying else { return }
-                if Date().timeIntervalSince(lastUserScroll) > 5 { followSuspended = false }
-                guard !followSuspended else { return }
-                withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(Self.captionID(id), anchor: UnitPoint(x: 0, y: 0.33)) }
-            }
+        Group {
+            PageHeader(state: state, player: player, meeting: meeting, play: play)
+            ConversationStatus(state: state, meeting: meeting)
         }
-        // Again for each version of the conversation, which the playhead's passages come from, and of its captions.
-        .task(id: PlayheadSource(meeting: meeting, captions: captions?.updatedAt)) {
-            followPlayhead(TranscriptLayout.cached(for: meeting), captions: captions)
-            let player = self.player
-            let watch = ObservationWatch({ _ = (player.position, player.isPlaying, player.duration, player.trackID, player.meetingID) }) {
-                followPlayhead(TranscriptLayout.cached(for: meeting), captions: captions)
-            }
-            await watch.followWhileRunning()
-        }
-    }
-
-    /// What the playhead is followed through: the conversation's passages and its saved captions.
-    private struct PlayheadSource: Equatable {
-        var meeting: Meeting
-        var captions: Date?
-    }
-
-    /// Saved live captions, drawn as the iPhone draws them.
-    private func savedCaptions(_ captions: LiveCaptions, spacingAbove: CGFloat) -> some View {
-        SavedCaptionsReading(meeting: meeting, captions: captions, playing: playingCaption, spacingAbove: spacingAbove, play: play)
-    }
-
-    /// A saved caption's scroll ID (`SavedCaptionsView`).
-    static func captionID(_ id: UUID) -> String { "caption:\(id.uuidString)" }
-
-    /// What the transcript needs from the person, in the page's status boxes.
-    @ViewBuilder private var notices: some View {
-        let unaligned = meeting.alignmentReports.filter { $0.method == .unaligned }
-        if let report = unaligned.first {
-            let name = meeting.tracks.first { $0.id == report.trackID }?.source.recordingName ?? "added"
-            notice(.problem, symbol: "exclamationmark.triangle.fill", text: "Couldn’t line up the \(name) recording with the others",
-                   action: "Adjust Timing…") { state.activeSheet = .adjustTiming(report.trackID) }
-        }
-        if let issues = meeting.correctionTransferIssues, !issues.isEmpty {
-            notice(.info, symbol: "pencil.circle.fill",
-                   text: issues.count == 1 ? "An earlier correction needs a look" : "\(issues.count) earlier corrections need a look",
-                   action: "Review…") { state.activeSheet = .reviewCorrections }
-        }
-    }
-
-    private func notice(_ kind: StatusBoxKind, symbol: String, text: String, action: String, perform: @escaping () -> Void) -> some View {
-        MarginRow {
-            StatusBox(kind: kind, symbol: symbol, title: text, message: nil,
-                      actions: Button(action, action: perform).buttonStyle(.daybookLink))
-        }
-        .padding(.top, Space.s5)
-    }
-
-    private func scrollToTarget(_ proxy: ScrollViewProxy) {
-        guard let target = state.pageScrollTarget else { return }
-        // A saved caption found by search scrolls to its row.
-        let caption = state.savedCaptions(for: meeting)?.segments.contains { $0.id == target } == true
-        DispatchQueue.main.async {
-            if caption { proxy.scrollTo(Self.captionID(target), anchor: UnitPoint(x: 0, y: 0.33)) }
-            else { proxy.scrollTo(target, anchor: UnitPoint(x: 0, y: 0.33)) }
-            state.pageScrollTarget = nil
-        }
-    }
-
-    /// The passage, or saved caption, under the playhead, in the recording that is playing; state
-    /// changes only when it does.
-    private func followPlayhead(_ layout: TranscriptLayout, captions: LiveCaptions?) {
-        let here = player.meetingID == meeting.id && player.duration > 0
-        let id = here ? player.trackID.flatMap { layout.playhead.segmentID(at: player.position, trackID: $0) } : nil
-        if id != playing { playing = id }
-        let caption = here ? captions.flatMap {
-            SavedCaptions.playing(at: player.position, trackID: player.trackID, captions: $0, in: meeting)
-        } : nil
-        if caption != playingCaption { playingCaption = caption }
-        if (here && player.isPlaying) != isPlaying { isPlaying = here && player.isPlaying }
-        if here != playerShown { playerShown = here }
+        // The page's own rows fold their times inline on a narrow page; these do too.
+        .environment(\.pageIsNarrow, readingWidth == .narrow)
     }
 }
 
-private struct TurnView: View {
+extension TranscriptHost {
+    /// This Mac's: its library, its player (nothing plays while it records), Audio's names for recordings, and the
+    /// window's sheets. Correct Passage on a narrow page is the page's own sheet.
+    @MainActor
+    static func mac(state: AppState, player: AudioPlaybackController, meetingID: UUID, play: @escaping (PlaybackTarget) -> Void) -> TranscriptHost {
+        TranscriptHost(
+            library: state.library,
+            playhead: {
+                guard player.meetingID == meetingID, player.duration > 0, let trackID = player.trackID else { return nil }
+                return TranscriptPlayhead(trackID: trackID, position: player.position, isPlaying: player.isPlaying)
+            },
+            play: play,
+            canPlay: { !state.isRecording },
+            recordingName: { state.recordingName($0, in: $1) },
+            present: { sheet in
+                switch sheet {
+                case .correct: return false
+                case .reviewCorrections: state.activeSheet = .reviewCorrections
+                case .adjustTiming(let id): state.activeSheet = .adjustTiming(id)
+                case .originalTranscript(let id): state.activeSheet = .originalTranscript(id)
+                }
+                return true
+            },
+            showNotes: { state.pageMode = .summary },
+            photos: .mac(state: state, play: play))
+    }
+}
+
+extension ConversationFind {
+    /// The library window's Find in Conversation: one window, one conversation page, so one find, which the page and
+    /// the Edit menu's items share (`ConversationFindCommands`).
+    @MainActor static let window = ConversationFind()
+}
+
+/// Edit › Find in Conversation… (⌘F), Find Next (⌘G), and Find Previous (⇧⌘G), for the conversation on the page. The
+/// transcript's own keys answer first while it shows; from the summary, Find in Conversation turns to the transcript.
+struct ConversationFindCommands: Commands {
     let state: AppState
-    let meeting: Meeting
-    let speakerID: String?
-    let segments: [TranscriptSegment]
-    let playingID: UUID?
-    let marks: BookmarkMarks
-    /// Passages the person corrected (`TranscriptLayout.correctedSegmentIDs`).
-    let corrected: Set<UUID>
-    @Binding var editing: UUID?
-    @Binding var draft: String
-    let play: (PlaybackTarget) -> Void
-    @State private var renaming = false
-    @Environment(\.readingScale) private var scale
+    @FocusedValue(\.shownConversation) private var shown
 
-    private var name: String { meeting.speakerName(speakerID) ?? "Unknown speaker" }
-    private var ink: Color { DaybookStyle.speakerInk(meeting.speakerIndex(speakerID)) }
+    private var meeting: Meeting? { shown.flatMap { id in state.meetings.first { $0.id == id } } }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            MarginRow {
-                if let first = segments.first { MarginTime(time: first.start) { play(.segment(first)) } }
-            } content: {
-                Button(name) { if speakerID != nil { renaming = true } }
-                    .buttonStyle(.plain)
-                    .font(TypeStyle.speaker(scale))
-                    .foregroundStyle(ink)
-                    .help(speakerID == nil ? "" : "Rename this speaker")
-                    .popover(isPresented: $renaming, arrowEdge: .bottom) {
-                        if let speakerID { RenameSpeakerPopover(name: name) { new in state.update(meeting.id) { $0.renameSpeaker(id: speakerID, name: new) } } }
-                    }
-                    .accessibilityAddTraits(.isHeader)
-                    .padding(.bottom, 2)
-            }
-            ForEach(Array(segments.enumerated()), id: \.element.id) { index, segment in
-                if editing == segment.id {
-                    PassageEditor(text: $draft) {
-                        state.update(meeting.id) { $0.correctSegment(id: segment.id, text: draft) }
-                        editing = nil
-                    } cancel: { editing = nil }
-                } else {
-                    Passage(state: state, meeting: meeting, segment: segment, showsTime: index > 0, isPlaying: playingID == segment.id,
-                            bookmarks: marks.bookmarksBySegment[segment.id] ?? [],
-                            holder: marks.holders.contains(segment.id), corrected: corrected.contains(segment.id),
-                            label: marks.labelSegments[segment.id], play: play,
-                            correct: { draft = segment.text; editing = segment.id },
-                            rename: speakerID == nil ? nil : { renaming = true })
-                }
-            }
-        }
-    }
-}
-
-private struct Passage: View {
-    let state: AppState
-    let meeting: Meeting
-    let segment: TranscriptSegment
-    let showsTime: Bool
-    let isPlaying: Bool
-    let bookmarks: [Highlight]
-    let holder: Bool
-    let corrected: Bool
-    let label: String?
-    let play: (PlaybackTarget) -> Void
-    let correct: () -> Void
-    let rename: (() -> Void)?
-    @State private var hovering = false
-    @State private var showingSources = false
-    @Environment(\.readingScale) private var scale
-    @Environment(\.colorSchemeContrast) private var contrast
-
-    var body: some View {
-        MarginRow(gutterDot: corrected ? DaybookStyle.accent : nil) {
-            if !bookmarks.isEmpty {
-                Image(systemName: "bookmark.fill").font(.system(size: 9 * scale)).foregroundStyle(DaybookStyle.bookmark)
-                    .neonGlow(DaybookStyle.bookmark, radius: 3)
-                    .frame(width: 8)
-                    .help(bookmarks.map { $0.text.isEmpty ? "Bookmark" : $0.text }.joined(separator: "\n"))
-                    .accessibilityLabel("Bookmark")
-            }
-            // A turn's first passage already has its time above it; a bookmark there shows the glyph alone.
-            if showsTime {
-                MarginTime(time: segment.start, alwaysVisible: hovering || !bookmarks.isEmpty) { play(.segment(segment)) }
-            }
-        } content: {
-            VStack(alignment: .leading, spacing: 2) {
-                if let label {
-                    Text(label).font(TypeStyle.speaker(scale)).foregroundStyle(DaybookStyle.bookmark)
-                }
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(highlighted)
-                        .font(TypeStyle.body(scale))
-                        .foregroundStyle(Ink.body)
-                        .lineSpacing(TypeStyle.bodyLineSpacing(scale))
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    if segment.provenance.count > 1 {
-                        // A stack, not two squares, which reads as Copy.
-                        Button { showingSources = true } label: {
-                            Image(systemName: "rectangle.stack").font(.system(size: 11 * scale))
-                                .frame(minWidth: 18, minHeight: 18).contentShape(Rectangle())
-                        }
-                            .buttonStyle(.plain).foregroundStyle(Ink.meta)
-                            .help("Heard in \(segment.provenance.count) recordings")
-                            .accessibilityLabel("Heard in \(segment.provenance.count) recordings")
-                            .popover(isPresented: $showingSources) { HeardInRecordings(meeting: meeting, segment: segment, play: play) }
-                    }
-                }
-            }
-            .padding(.horizontal, 6).padding(.vertical, 4)
-            .background(background, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .overlay(alignment: .leading) {
-                // The playhead and a bookmark share one rule, centred in the gutter between time and text
-                // (x = −4, where a corrected passage's dot sits), so neither touches the time.
-                if isPlaying {
-                    Capsule().fill(DaybookStyle.neonMint).frame(width: 3)
-                        .neonGlow(DaybookStyle.neonMint, radius: 4)
-                        .offset(x: 0.5)
-                        .transition(.opacity)
-                } else if holder {
-                    Capsule().fill(DaybookStyle.bookmark).frame(width: 2).offset(x: 1)
-                }
-            }
-            .padding(.horizontal, -6)
-        }
-        .id(segment.id)
-        .contentShape(Rectangle())
-        .onHover { hovering = $0 }
-        .onTapGesture(count: 2, perform: correct)
-        .animation(.easeOut(duration: 0.2), value: isPlaying)
-        .contextMenu {
-            Button("Play from Here") { play(.segment(segment)) }
-                .disabled(state.isRecording)
-            Button("Copy") { LocalPasteboard.copy(segment.text) }
+    var body: some Commands {
+        CommandGroup(after: .textEditing) {
             Divider()
-            Button("Correct Passage…", action: correct)
-            if let rename { Button("Rename Speaker…", action: rename) }
-            Divider()
-            Button("Add Bookmark Here") {
-                let start = segment.provenance.first { $0.trackID == segment.trackID }?.start ?? segment.start
-                state.addPlaybackHighlight(meeting.id, trackID: segment.trackID, seconds: start)
+            Button("Find in Conversation…") {
+                guard let meeting else { return }
+                state.pageMode = .transcript
+                ConversationFind.window.show(in: meeting.id)
             }
-            if segment.provenance.count > 1 { Button("Heard in Recordings…") { showingSources = true } }
+            .keyboardShortcut("f")
+            .disabled(meeting?.unifiedTranscript.isEmpty != false)
+            Button("Find Next") { find(ConversationFind.window.next) }
+                .keyboardShortcut("g")
+                .disabled(meeting?.unifiedTranscript.isEmpty != false)
+            Button("Find Previous") { find(ConversationFind.window.previous) }
+                .keyboardShortcut("g", modifiers: [.command, .shift])
+                .disabled(meeting?.unifiedTranscript.isEmpty != false)
         }
     }
 
-    private var background: Color {
-        isPlaying && contrast != .increased ? DaybookStyle.neonMint.opacity(0.10) : .clear
-    }
-
-    /// Matches for the current library search, marked with the system find highlight.
-    private var highlighted: AttributedString { FindHighlight.mark(AttributedString(segment.text), query: state.search) }
-}
-
-private struct PassageEditor: View {
-    @Binding var text: String
-    let save: () -> Void
-    let cancel: () -> Void
-    @FocusState private var focused: Bool
-    @Environment(\.readingScale) private var scale
-    var body: some View {
-        MarginRow {
-            VStack(alignment: .leading, spacing: 6) {
-                TextField("Passage", text: $text, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(TypeStyle.body(scale))
-                    .foregroundStyle(Ink.body)
-                    .lineSpacing(TypeStyle.bodyLineSpacing(scale))
-                    .padding(8)
-                    .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 4, style: .continuous).stroke(DaybookStyle.accent, lineWidth: 1.5))
-                    .focused($focused)
-                    .onSubmit(save)
-                    .onExitCommand(perform: cancel)
-                    .accessibilityLabel("Corrected passage")
-                Text("Return to save · Esc to cancel")
-                    .font(TypeStyle.colophon).foregroundStyle(Ink.meta)
-            }
-        }
-        .onAppear { focused = true }
-    }
-}
-
-private struct NoteBlock: View {
-    let note: TimedNote
-    let play: () -> Void
-    let open: () -> Void
-    @Environment(\.readingScale) private var scale
-    @State private var hovering = false
-    var body: some View {
-        MarginRow {
-            MarginTime(time: note.time ?? 0, play: play)
-        } content: {
-            // Built like a passage, so your words start on the transcript's edge and the teal rule
-            // hangs where the playhead and bookmark rules hang.
-            Text(note.text)
-                .font(TypeStyle.body(scale))
-                .foregroundStyle(Ink.body)
-                .lineSpacing(TypeStyle.bodyLineSpacing(scale))
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 6).padding(.vertical, 4)
-                .background(DaybookStyle.accent.opacity(hovering ? 0.06 : 0), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .overlay(alignment: .leading) { Capsule().fill(DaybookStyle.accent).frame(width: 2).offset(x: 1) }
-                .padding(.horizontal, -6)
-                .contentShape(Rectangle())
-            .onHover { hovering = $0 }
-            .animation(Motion.hover, value: hovering)
-            .onTapGesture(perform: open)
-            .help("Show on Summary")
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Your note at \(SpokenTime.format(note.time ?? 0)): \(note.text)")
-            .accessibilityAddTraits(.isButton)
-            .accessibilityAction(named: "Show on Summary", open)
-            .accessibilityAction { open() }
-        }
-    }
-}
-
-private struct HeardInRecordings: View {
-    let meeting: Meeting
-    let segment: TranscriptSegment
-    let play: (PlaybackTarget) -> Void
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Heard in \(segment.provenance.count) recordings").font(.headline)
-            ForEach(Array(segment.provenance.enumerated()), id: \.offset) { _, source in
-                let track = meeting.tracks.first { $0.id == source.trackID }
-                VStack(alignment: .leading, spacing: 3) {
-                    Button {
-                        if let track { play(.source(track, source.start)) }
-                    } label: {
-                        Label("\(track?.source.recordingName ?? "Recording") · \(TimeLabel.short(source.start))", systemImage: "play.fill")
-                    }
-                    .buttonStyle(.daybookLink)
-                    Text("“\(source.text)”").font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                }
-            }
-        }
-        .padding(14)
-        .frame(width: 300, alignment: .leading)
-    }
-}
-
-struct RenameSpeakerPopover: View {
-    let name: String
-    let save: (String) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var draft = ""
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            TextField("Name", text: $draft).textFieldStyle(.roundedBorder).frame(width: 220).onSubmit(commit)
-            Text("Changes every passage by \(name) in this conversation.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Rename", action: commit).keyboardShortcut(.defaultAction)
-                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-        .padding(16)
-        .frame(width: 252)
-        .onAppear { draft = name }
-    }
-    private func commit() {
-        let value = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty else { return }
-        save(value); dismiss()
+    /// Steps when Find shows; otherwise opens it on the transcript, as Find in Conversation does.
+    private func find(_ step: () -> Void) {
+        guard let meeting else { return }
+        if ConversationFind.window.isShown, state.pageMode == .transcript { return step() }
+        state.pageMode = .transcript
+        ConversationFind.window.show(in: meeting.id)
     }
 }

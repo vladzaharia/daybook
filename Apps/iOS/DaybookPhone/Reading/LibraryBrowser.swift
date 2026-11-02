@@ -47,6 +47,8 @@ private struct ReadingLayout: View {
         .environment(\.findQuery, session.isSearching ? session.searchText : "")
         // reading: until the recording work exposes its store on the app model, read the same folder.
         .environment(\.liveCaptionStore, LiveCaptionStore(libraryRoot: rootURL))
+        // The photo views' originals, viewer, and actions on every page (DaybookUI's photos).
+        .modifier(PhonePhotoServices(library: library))
         // One column presents a sheet; two pages show it on the right page instead (`PageSheet`),
         // so nothing sits across the crease. The share sheet is always the system's.
         .sheet(item: Binding(get: { sheetOnPage ? nil : session.sheet }, set: { session.sheet = $0 })) { sheet in
@@ -193,7 +195,7 @@ private struct ReadingLayout: View {
         if let id = session.openID, let meeting = library.meeting(id) {
             if session.reading {
                 NavigationStack {
-                    TranscriptPage(library: library, player: session.player, meeting: meeting, showsHeader: false)
+                    PhoneTranscriptPage(library: library, player: session.player, meeting: meeting, showsHeader: false)
                         .safeAreaInset(edge: .bottom, spacing: 0) { PlayerBar(player: session.player, library: library, meeting: meeting) }
                         .navigationBarTitleDisplayMode(.inline)
                 }

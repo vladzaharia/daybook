@@ -181,6 +181,10 @@ enum ReadingSheet: Identifiable, Equatable {
     case tags([UUID])
     case correct(meetingID: UUID, segmentID: UUID)
     case heardIn(meetingID: UUID, segmentID: UUID)
+    /// The conversation's tools, the Mac's too (DaybookUI's sheets).
+    case reviewCorrections(UUID)
+    case adjustTiming(meetingID: UUID, trackID: UUID?)
+    case originalTranscript(meetingID: UUID, trackID: UUID)
     /// A Mac's own words for a failure.
     case details(String)
     /// The system's words behind an alert or notice on this iPhone.
@@ -197,6 +201,9 @@ enum ReadingSheet: Identifiable, Equatable {
         case .tags(let ids): return "tags:" + ids.map(\.uuidString).joined(separator: ",")
         case .correct(let meeting, let segment): return "correct:\(meeting):\(segment)"
         case .heardIn(let meeting, let segment): return "heard:\(meeting):\(segment)"
+        case .reviewCorrections(let id): return "review-corrections:\(id)"
+        case .adjustTiming(let meeting, let track): return "adjust-timing:\(meeting):\(track?.uuidString ?? "")"
+        case .originalTranscript(let meeting, let track): return "original:\(meeting):\(track)"
         case .details(let text): return "details:" + text
         case .errorDetails(let text): return "error-details:" + text
         }

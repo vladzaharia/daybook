@@ -1,6 +1,7 @@
 import DaybookCaptions
 import DaybookKit
 import DaybookLink
+import DaybookUI
 import ImageIO
 import Observation
 import UIKit

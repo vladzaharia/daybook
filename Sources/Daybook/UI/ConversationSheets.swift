@@ -1,28 +1,33 @@
 import AppKit
 import DaybookCore
 import DaybookKit
+import DaybookUI
 import Foundation
 import SwiftUI
 
-/// Presents the main window's one sheet for the selected conversation.
+/// Presents the main window's one sheet for the selected conversation. Review Earlier Corrections, Adjust Timing, and
+/// Original Transcript are DaybookUI's, the same sheets the iPhone shows.
 struct ConversationSheet: View {
     let state: AppState
     let sheet: ActiveSheet
     var body: some View {
         if let meeting = state.selectedMeeting {
             switch sheet {
-            case .versionHistory: VersionHistorySheet(state: state, meeting: meeting)
-            case .reviewCorrections: ReviewCorrectionsSheet(state: state, meeting: meeting)
-            case .adjustTiming(let id): AdjustTimingSheet(state: state, meeting: meeting, trackID: id ?? defaultTrack(meeting))
-            case .originalTranscript(let id): OriginalTranscriptSheet(meeting: meeting, trackID: id)
+            case .versionHistory:
+                VersionHistorySheet(state: state, meeting: meeting)
+            case .reviewCorrections:
+                ReviewCorrectionsSheet(library: state.library, meetingID: meeting.id)
+            case .adjustTiming(let id):
+                AdjustTimingSheet(library: state.library, meetingID: meeting.id, trackID: id,
+                                  recordingName: { state.recordingName($0, in: $1) },
+                                  play: { MacPlayback.play($0, in: meeting, state: state) })
+            case .originalTranscript(let id):
+                OriginalTranscriptSheet(library: state.library, meetingID: meeting.id, trackID: id,
+                                        recordingName: { state.recordingName($0, in: $1) })
             }
         } else {
             ContentUnavailableView("No Conversation Selected", systemImage: "text.bubble").frame(width: 360, height: 200)
         }
-    }
-
-    private func defaultTrack(_ meeting: Meeting) -> UUID? {
-        meeting.alignmentReports.first { $0.method == .unaligned }?.trackID ?? meeting.tracks.dropFirst().first?.id
     }
 }
 
@@ -32,7 +37,6 @@ struct VersionHistorySheet: View {
     let state: AppState
     let meeting: Meeting
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.colorScheme) private var scheme
     @State private var selection: UUID?
     @State private var confirmingRestore = false
 
@@ -50,6 +54,13 @@ struct VersionHistorySheet: View {
     var body: some View {
         NavigationSplitView {
             List(selection: $selection) {
+                // A sheet has no title bar: the sheet names itself at the top of its list.
+                Text("Version History")
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                    .padding(.top, Space.s5 - Space.s2)
+                    .selectionDisabled()
+                    .accessibilityAddTraits(.isHeader)
                 ForEach(groups, id: \.day) { group in
                     Section(group.day) {
                         ForEach(group.revisions) { revision in
@@ -72,19 +83,11 @@ struct VersionHistorySheet: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: Space.s5) {
                         Text(RevisionText.subject(revision, in: meeting)).font(.headline).foregroundStyle(Ink.title)
-                        let diff = WordDiff.marked(old: RevisionText.styled(revision.oldValue, field: revision.field),
-                                                   new: RevisionText.styled(revision.newValue, field: revision.field),
-                                                   dark: scheme == .dark)
-                        if RevisionText.hasBefore(revision) {
-                            comparison("Before", diff.old)
-                            comparison("After", diff.new)
-                        } else {
-                            comparison(nil, diff.new)
-                        }
+                        RevisionComparison(revision: revision)
                     }
-                    // The headline lines up with the list's first section header.
+                    // The headline lines up with the list's title.
                     .padding(.horizontal, Space.s5)
-                    .padding(.top, Space.s3)
+                    .padding(.top, Space.s5)
                     .padding(.bottom, Space.s5)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -103,7 +106,7 @@ struct VersionHistorySheet: View {
                     }
                 }
                 .alert("Restore the previous version?", isPresented: $confirmingRestore) {
-                    Button("Restore") { state.update(meeting.id) { RevisionRestore.apply(revision, to: &$0) } }
+                    Button("Restore") { state.library.restore(revision, in: meeting.id) }
                     Button("Cancel", role: .cancel) { }
                 } message: {
                     Text("What’s there now stays in Version History.")
@@ -115,29 +118,23 @@ struct VersionHistorySheet: View {
         .toolbar {
             ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
         }
-        .navigationTitle("Version History")
+        .dismissesOnEscape { dismiss() }
         .frame(width: 760, height: 520)
-        .onAppear { selection = revisions.first?.id }
-    }
-
-    private func comparison(_ title: String?, _ text: AttributedString) -> some View {
-        let empty = text.characters.isEmpty
-        return VStack(alignment: .leading, spacing: Space.s2) {
-            if let title { Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(Ink.secondary) }
-            Group {
-                if empty { Text("Empty").italic().foregroundStyle(.secondary) }
-                else { Text(text).foregroundStyle(Ink.body) }
+        .onAppear {
+            selection = revisions.first?.id
+            #if DEBUG
+            // `--history-change "Summary written"` opens the newest change with that title, for snapshots, as on the iPhone.
+            if let title = LaunchOptions.value(after: "--history-change"),
+               let change = revisions.first(where: { RevisionText.title($0, in: meeting) == title }) {
+                selection = change.id
             }
-            .font(.body)
-            .lineSpacing(2)
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
+            #endif
         }
     }
 }
 
-/// Marks what changed between two versions word by word (`WordChanges`): removed words struck through
-/// in magenta, inserted words washed in mint, over the text's own styling.
+/// Marks what changed between two versions word by word (`WordChanges`): removed words struck through in magenta,
+/// inserted words washed in mint, over the text's own styling (`RevisionMarks`, which Version History draws with).
 enum WordDiff {
     static func tokens(_ text: String) -> [Substring] { WordChanges.tokens(text) }
     static func changes(old: [Substring], new: [Substring]) -> (removed: IndexSet, inserted: IndexSet) { WordChanges.changes(old: old, new: new) }
@@ -148,179 +145,6 @@ enum WordDiff {
 
     /// In dark mode the washes are stronger and an inserted word is itself neon mint (over 10:1 on its wash).
     static func marked(old: AttributedString, new: AttributedString, dark: Bool = false) -> (old: AttributedString, new: AttributedString) {
-        var removed = AttributeContainer(), inserted = AttributeContainer()
-        removed.strikethroughStyle = Text.LineStyle(pattern: .solid, color: DaybookStyle.neonMagenta)
-        removed.backgroundColor = DaybookStyle.neonMagenta.opacity(dark ? 0.20 : 0.16)
-        inserted.backgroundColor = DaybookStyle.neonMint.opacity(dark ? 0.22 : 0.16)
-        if dark { inserted.foregroundColor = DaybookStyle.neonMint }
-        return WordChanges.marked(old: old, new: new, removed: removed, inserted: inserted)
-    }
-}
-
-// MARK: - Adjust Timing
-
-struct AdjustTimingSheet: View {
-    let state: AppState
-    let meeting: Meeting
-    let trackID: UUID?
-    @Environment(\.dismiss) private var dismiss
-    @State private var automatic = true
-    @State private var draft = ""
-
-    private var track: RecordingTrack? { meeting.tracks.first { $0.id == trackID } }
-    private var parsed: Double? { TimeField.parse(draft) }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Adjust Timing for “\(track.map { state.recordingName($0, in: meeting) } ?? "Recording")”").font(.headline)
-            Picker("", selection: $automatic) {
-                Text("Automatically").tag(true)
-                HStack(spacing: 8) {
-                    Text("Starts at")
-                    TextField("0:00", text: $draft).textFieldStyle(.roundedBorder).frame(width: 72).disabled(automatic)
-                    Text("into the conversation")
-                }
-                .tag(false)
-            }
-            .pickerStyle(.radioGroup)
-            .labelsHidden()
-            if meeting.alignmentReports.first(where: { $0.trackID == trackID })?.method == .unaligned {
-                Label("Couldn’t line up automatically.", systemImage: "exclamationmark.triangle.fill")
-                    .font(.callout).foregroundStyle(Ink.warning)
-            }
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Apply") {
-                    if let trackID { state.setOffset(meeting.id, trackID: trackID, seconds: automatic ? nil : parsed) }
-                    dismiss()
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(!automatic && parsed == nil)
-            }
-        }
-        .padding(20)
-        .frame(width: 440)
-        .onAppear {
-            automatic = track?.offset == nil
-            draft = track?.offset.map(TimeLabel.short) ?? ""
-        }
-    }
-
-}
-
-enum TimeField {
-    /// Accepts "42", "0:42", "1:02:03", and a leading minus for recordings that began earlier.
-    static func parse(_ text: String) -> Double? {
-        var value = text.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "−", with: "-")
-        let negative = value.hasPrefix("-")
-        if negative { value.removeFirst() }
-        let parts = value.split(separator: ":").map { Double($0) }
-        guard !parts.isEmpty, parts.count <= 3, parts.allSatisfy({ $0 != nil && $0!.isFinite && $0! >= 0 }) else { return nil }
-        let seconds = parts.compactMap { $0 }.reduce(0) { $0 * 60 + $1 }
-        return negative ? -seconds : seconds
-    }
-}
-
-// MARK: - Review Earlier Corrections
-
-struct ReviewCorrectionsSheet: View {
-    let state: AppState
-    let meeting: Meeting
-    @Environment(\.dismiss) private var dismiss
-    @State private var index = 0
-    @State private var target: UUID?
-
-    private var issues: [CorrectionTransferIssue] { meeting.correctionTransferIssues ?? [] }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            if issues.isEmpty {
-                Text("All Corrections Reviewed").font(.headline)
-                HStack { Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.defaultAction) }
-            } else {
-                let issue = issues[min(index, issues.count - 1)]
-                HStack {
-                    Text("Review Earlier Corrections").font(.headline)
-                    Spacer()
-                    Text("\(min(index, issues.count - 1) + 1) of \(issues.count)").foregroundStyle(.secondary)
-                }
-                Text("You corrected this before the audio was transcribed again:").foregroundStyle(.secondary)
-                Text("“\(issue.originalSegment.text)”").padding(10).frame(maxWidth: .infinity, alignment: .leading).quietBox()
-                Text("Apply it to:").foregroundStyle(.secondary)
-                ScrollView {
-                    Picker("", selection: $target) {
-                        ForEach(candidates(issue)) { segment in
-                            Text("\(TimeLabel.short(segment.start))  \(meeting.speakerName(segment.speakerID).map { $0 + "  " } ?? "")\(String(segment.text.prefix(80)))")
-                                .tag(UUID?.some(segment.id))
-                        }
-                    }
-                    .pickerStyle(.radioGroup)
-                    .labelsHidden()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(maxHeight: 180)
-                HStack {
-                    Button("Keep in History Only") { resolve(issue, nil) }
-                    Spacer()
-                    Button("Skip") { index = (index + 1) % max(1, issues.count); target = nil }.disabled(issues.count < 2)
-                    Button("Apply") { resolve(issue, target) }.keyboardShortcut(.defaultAction).disabled(target == nil)
-                }
-            }
-        }
-        .padding(20)
-        .frame(width: 560)
-        .onAppear { target = issues.first.flatMap { candidates($0).first?.id } }
-    }
-
-    private func candidates(_ issue: CorrectionTransferIssue) -> [TranscriptSegment] {
-        let preferred = meeting.unifiedTranscript.filter { issue.candidateSegmentIDs.contains($0.id) }
-        return preferred.isEmpty ? meeting.unifiedTranscript : preferred
-    }
-
-    private func resolve(_ issue: CorrectionTransferIssue, _ segment: UUID?) {
-        state.update(meeting.id) { $0.resolveCorrectionTransfer(id: issue.id, targetSegmentID: segment) }
-        target = nil
-        if (state.selectedMeeting?.correctionTransferIssues ?? []).isEmpty { dismiss() }
-        else { index = min(index, max(0, issues.count - 2)) }
-    }
-}
-
-// MARK: - Original Transcript
-
-struct OriginalTranscriptSheet: View {
-    let meeting: Meeting
-    let trackID: UUID
-    @Environment(\.dismiss) private var dismiss
-
-    private var track: RecordingTrack? { meeting.tracks.first { $0.id == trackID } }
-    private var run: TrackTranscript? { meeting.transcripts.filter { $0.trackID == trackID }.max { $0.createdAt < $1.createdAt } }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Original Transcript: \(track.map { $0.source == .imported ? $0.fileName : $0.source.recordingName } ?? "Recording")").font(.headline)
-                Spacer()
-                Button("Copy") {
-                    LocalPasteboard.copy(run?.segments.map { "[\(TimeLabel.short($0.start))] \($0.text)" }.joined(separator: "\n") ?? "")
-                }
-                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
-            }
-            .padding(16)
-            Divider()
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 8) {
-                    ForEach(run?.segments ?? []) { segment in
-                        HStack(alignment: .firstTextBaseline, spacing: 10) {
-                            Text(TimeLabel.short(segment.start)).font(.caption.monospacedDigit()).foregroundStyle(Ink.meta).frame(width: 44, alignment: .trailing)
-                            Text(segment.text).foregroundStyle(Ink.body).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                }
-                .padding(16)
-            }
-            .background(DaybookStyle.paper)
-        }
-        .frame(width: 640, height: 560)
+        WordChanges.marked(old: old, new: new, removed: RevisionMarks.removed(dark: dark), inserted: RevisionMarks.inserted(dark: dark))
     }
 }

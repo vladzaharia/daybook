@@ -1,6 +1,11 @@
 import DaybookKit
+import DaybookUI
 import SwiftUI
 import UIKit
+
+/// Closes a reading sheet however it shows: presented, or on the notebook's right page (DaybookUI's, which the shared
+/// sheets use too).
+typealias SheetDismiss = DaybookUI.SheetDismiss
 
 /// Version History: every change to the notes, the transcript, speaker names, and the summary,
 /// newest first, each with what it was before and after, and Restore.
@@ -88,9 +93,9 @@ private struct RevisionDetail: View {
     let library: LibraryController
     let meetingID: UUID
     let revision: MeetingRevision
-    @Environment(\.colorScheme) private var scheme
     @State private var confirming = false
     @State private var restored = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         if let meeting = library.meeting(meetingID) {
@@ -104,14 +109,8 @@ private struct RevisionDetail: View {
                         }
                         Text(revision.date.formatted(date: .abbreviated, time: .shortened)).font(.subheadline).foregroundStyle(PhoneStyle.Ink.secondary)
                     }
-                    let diff = WordDiff.marked(old: RevisionText.styled(revision.oldValue, field: revision.field),
-                                               new: RevisionText.styled(revision.newValue, field: revision.field), dark: scheme == .dark)
-                    if RevisionText.hasBefore(revision) {
-                        comparison("Before", diff.old)
-                        comparison("After", diff.new)
-                    } else {
-                        comparison(nil, diff.new)
-                    }
+                    // Drawn as the page draws it: the page's bullets, the changed words marked (shared with the Mac).
+                    RevisionComparison(revision: revision)
                     if restored {
                         Label("Restored", systemImage: "checkmark.circle.fill")
                             .font(.subheadline).foregroundStyle(PhoneStyle.Ink.link)
@@ -139,7 +138,7 @@ private struct RevisionDetail: View {
             .confirmationDialog("Restore the previous version?", isPresented: $confirming, titleVisibility: .visible) {
                 Button("Restore") {
                     library.restore(revision, in: meetingID)
-                    withAnimation { restored = true }
+                    withAnimation(PhoneStyle.Motion.resolved(PhoneStyle.Motion.fade, reduceMotion: reduceMotion)) { restored = true }
                 }
             } message: {
                 Text("What’s there now stays in Version History.")
@@ -152,126 +151,25 @@ private struct RevisionDetail: View {
         if case .processing = ProcessingStatus.phone(meeting) { return true }
         return false
     }
-
-    private func comparison(_ title: String?, _ text: AttributedString) -> some View {
-        VStack(alignment: .leading, spacing: PhoneStyle.Space.s2) {
-            if let title {
-                Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(PhoneStyle.Ink.secondary).accessibilityAddTraits(.isHeader)
-            }
-            Group {
-                if text.characters.isEmpty { Text("Empty").italic().foregroundStyle(PhoneStyle.Ink.meta) }
-                else { Text(text).foregroundStyle(PhoneStyle.Ink.body) }
-            }
-            .font(.body)
-            .lineSpacing(3)
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-    }
 }
 
-/// Correct Passage: the words as heard, editable. The model's original stays in Version History.
-struct PassageCorrectionSheet: View {
+/// Which recordings heard a passage, as a sheet of its own (`--sheet heard`): the transcript shows the same thing as a
+/// popover at the passage, which becomes a sheet in the hand.
+private struct HeardInSheet: View {
     let library: LibraryController
     let meetingID: UUID
     let segmentID: UUID
-    private let dismiss = SheetDismiss()
-    @State private var draft = ""
-    @FocusState private var focused: Bool
-
-    var body: some View {
-        NavigationStack {
-            if let meeting = library.meeting(meetingID), let segment = meeting.unifiedTranscript.first(where: { $0.id == segmentID }) {
-                VStack(alignment: .leading, spacing: PhoneStyle.Space.s3) {
-                    HStack(spacing: 8) {
-                        Text(meeting.speakerName(segment.speakerID) ?? "Unknown speaker")
-                            .font(PhoneStyle.Typeface.speaker)
-                            .foregroundStyle(PhoneStyle.speakerInk(meeting.speakerIndex(segment.speakerID)))
-                        Text(TimeLabel.short(segment.start)).font(PhoneStyle.Typeface.time).foregroundStyle(PhoneStyle.Ink.meta)
-                    }
-                    TextEditor(text: $draft)
-                        .font(.body)
-                        .foregroundStyle(PhoneStyle.Ink.body)
-                        .scrollContentBackground(.hidden)
-                        .padding(10)
-                        .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(PhoneStyle.accent, lineWidth: 1.5))
-                        .focused($focused)
-                        .frame(minHeight: 120)
-                        .accessibilityLabel("Corrected passage")
-                    Spacer(minLength: 0)
-                }
-                .padding(PhoneStyle.Page.gutter)
-                .paperBackground()
-                .navigationTitle("Correct Passage")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Save") {
-                            let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                            if !text.isEmpty, text != segment.text { library.correctPassage(segment.id, text: text, in: meetingID) }
-                            dismiss()
-                        }
-                        .fontWeight(.semibold)
-                        .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    }
-                }
-                .onAppear { draft = segment.text; focused = true }
-            } else {
-                ContentUnavailableView("Passage Not Found", systemImage: "text.quote")
-            }
-        }
-        .presentationDetents([.medium, .large])
-    }
-}
-
-/// Which recordings heard a passage, each with what it heard and a way to play it.
-struct HeardInSheet: View {
-    let library: LibraryController
-    let meetingID: UUID
-    let segmentID: UUID
-    private let dismiss = SheetDismiss()
     @Environment(ReadingSession.self) private var session
     @Environment(\.audioProvider) private var provider
 
     var body: some View {
-        NavigationStack {
-            if let meeting = library.meeting(meetingID), let segment = meeting.unifiedTranscript.first(where: { $0.id == segmentID }) {
-                List {
-                    Section {
-                        ForEach(Array(segment.provenance.enumerated()), id: \.offset) { _, source in
-                            let track = meeting.tracks.first { $0.id == source.trackID }
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack {
-                                    Label(track.map { SourceDescription.name($0, in: meeting) } ?? "Recording",
-                                          systemImage: track.map(SourceDescription.symbol) ?? "waveform")
-                                    Spacer()
-                                    if let track {
-                                        Button {
-                                            session.player.play(.source(track, source.start), in: meeting, provider: provider)
-                                            dismiss()
-                                        } label: {
-                                            Label(TimeLabel.short(source.start), systemImage: "play.fill").monospacedDigit()
-                                        }
-                                        .buttonStyle(.daybookLink)
-                                        .font(.subheadline.weight(.medium))
-                                    }
-                                }
-                                Text("“\(source.text)”").font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                            }
-                            .padding(.vertical, 2)
-                        }
-                    }
-                }
-                .navigationTitle("Heard in \(segment.provenance.count) Recordings")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-            } else {
-                ContentUnavailableView("Passage Not Found", systemImage: "text.quote")
+        if let meeting = library.meeting(meetingID), let segment = meeting.unifiedTranscript.first(where: { $0.id == segmentID }) {
+            HeardInRecordings(meeting: meeting, segment: segment, recordingName: { RecordingWords.name($0, in: meeting) }) { target in
+                session.player.play(target, in: meeting, provider: provider)
             }
+        } else {
+            ContentUnavailableView("Passage Not Found", systemImage: "text.quote")
         }
-        .presentationDetents([.medium, .large])
     }
 }
 
@@ -308,38 +206,36 @@ struct ShareSheet: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }
 
-extension EnvironmentValues {
-    /// Set while a reading sheet shows on the notebook's right page rather than presented: closes it.
-    @Entry var closePageSheet: (() -> Void)? = nil
-}
-
-/// Closes a reading sheet however it shows: presented (dismiss), or on the notebook's right page.
-struct SheetDismiss: DynamicProperty {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.isPresented) private var isPresented
-    @Environment(\.closePageSheet) private var closePageSheet
-
-    func callAsFunction() {
-        if !isPresented, let closePageSheet { closePageSheet() } else { dismiss() }
-    }
-}
-
-/// Presents whichever sheet the reading session asks for.
+/// Presents whichever sheet the reading session asks for. The conversation's tools (Correct Passage, Review Earlier
+/// Corrections, Adjust Timing, Original Transcript, the photo viewer) are DaybookUI's, the same sheets the Mac shows.
 struct ReadingSheetContent: View {
     let sheet: ReadingSheet
     let library: LibraryController
+    @Environment(ReadingSession.self) private var session
+    @Environment(\.audioProvider) private var provider
 
     var body: some View {
+        content.modifier(PhonePhotoServices(library: library))
+    }
+
+    @ViewBuilder private var content: some View {
         switch sheet {
         case .importPhotos(let id): ImportPhotosSheet(library: library, meetingID: id)
-        case .photo(let meeting, let photo): PhotoViewer(library: library, meetingID: meeting, photoID: photo)
+        case .photo(let meeting, let photo):
+            PhotoViewer(meetingID: meeting, photoID: photo, services: .phone(library: library, session: session, provider: provider))
         case .info(let id): ConversationInfo(library: library, meetingID: id)
         case .history(let id): VersionHistoryView(library: library, meetingID: id)
         case .share(let urls): ShareSheet(items: urls).presentationDetents([.medium, .large]).ignoresSafeArea()
         case .move(let ids): MoveSheet(library: library, ids: ids)
         case .tags(let ids): TagsSheet(library: library, ids: ids)
-        case .correct(let meeting, let segment): PassageCorrectionSheet(library: library, meetingID: meeting, segmentID: segment)
+        case .correct(let meeting, let segment): CorrectPassageSheet(library: library, meetingID: meeting, segmentID: segment)
         case .heardIn(let meeting, let segment): HeardInSheet(library: library, meetingID: meeting, segmentID: segment)
+        case .reviewCorrections(let meeting): ReviewCorrectionsSheet(library: library, meetingID: meeting)
+        case .adjustTiming(let meeting, let track):
+            AdjustTimingSheet(library: library, meetingID: meeting, trackID: track) { target in
+                if let value = library.meeting(meeting) { session.player.play(target, in: value, provider: provider) }
+            }
+        case .originalTranscript(let meeting, let track): OriginalTranscriptSheet(library: library, meetingID: meeting, trackID: track)
         case .details(let text): DetailsSheet(text: text)
         case .errorDetails(let text): DetailsSheet(title: "Details", text: text)
         }
