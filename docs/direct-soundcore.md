@@ -280,10 +280,11 @@ recorder accepts a Bluetooth connection while its access point is open, and whet
 access point on its own after `FINISH` or a timeout, is unverified.
 
 **What the page says.** Beside the import's title, where a percent goes, it says "Starting Wi‑Fi…" while it
-sets up and "Joining Wi‑Fi…" while it joins (`FastTransferStage.label`). Under the progress, the line
-says "Joining Soundcore Work’s Wi‑Fi…" (the recorder's name, `FastTransferStage.sentence`) from just
-before iOS asks to join a network called `WiFi-…`, so the question has its context, and "Over Wi‑Fi. Keep
-Daybook open until it finishes." while it transfers; Device Details' "Fast Transfer" row says how the
+sets up (`FastTransferStage.label`), and nothing while it joins: then the line under the progress says
+it once, "Joining Soundcore Work’s Wi‑Fi…" (the recorder's name, `FastTransferStage.sentence`), from just
+before iOS asks to join a network called `WiFi-…`, so the question has its context. Status lines say
+"Joining Wi‑Fi…". The line under the progress says "Over Wi‑Fi. Keep Daybook open until it finishes."
+while it transfers; Device Details' "Fast Transfer" row says how the
 last attempt went ("Over Wi‑Fi, Today, 10:02 AM", or "Back to Bluetooth, …" and why), or "Unavailable in
 this build".
 

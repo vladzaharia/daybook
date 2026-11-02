@@ -209,8 +209,10 @@ private struct DevicePageContent: View {
                             Text("Importing \(current.recording.title)")
                                 .font(.subheadline.weight(.semibold)).foregroundStyle(PhoneStyle.Ink.title)
                             Spacer()
-                            Text(importLabel)
-                                .font(.subheadline.monospacedDigit()).foregroundStyle(PhoneStyle.Ink.secondary)
+                            if let importLabel {
+                                Text(importLabel)
+                                    .font(.subheadline.monospacedDigit()).foregroundStyle(PhoneStyle.Ink.secondary)
+                            }
                         }
                         // Work in progress: the brand gradient.
                         ProgressView(value: session.phase?.fraction ?? 0).progressViewStyle(.brand(width: nil))
@@ -324,10 +326,11 @@ private struct DevicePageContent: View {
         }
     }
 
-    /// "64%", "Starting Wi‑Fi…", or "Waiting…" while another app transfers.
-    private var importLabel: String {
+    /// "64%", "Starting Wi‑Fi…", or "Waiting…" while another app transfers. Nothing while joining: the line under
+    /// the progress says it once, with whose Wi‑Fi (`FastTransferStage.sentence`).
+    private var importLabel: String? {
         if session.isWaitingForOtherApp { return "Waiting…" }
-        if let stage = session.fastTransferStage, stage != .transferring { return stage.label }
+        if let stage = session.fastTransferStage, stage != .transferring { return stage.sentence == nil ? stage.label : nil }
         return session.phase?.label ?? "Waiting…"
     }
 

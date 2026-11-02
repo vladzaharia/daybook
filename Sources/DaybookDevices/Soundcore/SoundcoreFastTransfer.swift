@@ -15,8 +15,8 @@ public enum FastTransferStage: Equatable, Sendable {
     /// Ending: FINISH, leaving the network, back to Bluetooth, and the access point closed.
     case closing
 
-    /// Short, for a figure's place beside a title and in a status line: "Starting Wi‑Fi…", "Joining Wi‑Fi…",
-    /// "Over Wi‑Fi", "Back to Bluetooth…".
+    /// Short, for a status line and a figure's place beside a title: "Starting Wi‑Fi…", "Joining Wi‑Fi…",
+    /// "Over Wi‑Fi", "Back to Bluetooth…". Where `sentence` is shown, it says this instead.
     public var label: String {
         switch self {
         case .opening, .starting, .connecting: return "Starting Wi‑Fi…"
