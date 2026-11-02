@@ -87,17 +87,15 @@ final class LiveCaptionsController {
         session.received(segments, from: source, name: name, offset: offset)
     }
 
-    /// The recording was filed: the captions belong to its phone track.
-    func attach(trackID: UUID, meetingID: UUID) {
-        let store = self.store
-        Task { [weak self] in
-            let filed = try? await store.update(meetingID) { captions in
-                captions.trackID = trackID
-                captions.updatedAt = Date()
-                return true
-            }
-            if let filed { self?.session.savedElsewhere(at: filed.updatedAt) }
+    /// The recording was filed: the captions belong to its phone track. Returns once that's saved, so
+    /// they're waiting for their speakers (`waitingForSpeakers`) as soon as it does.
+    func attach(trackID: UUID, meetingID: UUID) async {
+        let filed = try? await store.update(meetingID) { captions in
+            captions.trackID = trackID
+            captions.updatedAt = Date()
+            return true
         }
+        if let filed { session.savedElsewhere(at: filed.updatedAt) }
     }
 
     // MARK: Speakers afterwards

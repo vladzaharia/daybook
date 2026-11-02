@@ -1225,7 +1225,7 @@ final class PhoneAppModel: RecordingCommandHandling {
             filing = .saved(filed.meeting.id, Date())
             let identity = PhoneDevice.identity(recordingID: recording.recordingID, installation: library.installationID)
             if let track = filed.meeting.tracks.first(where: { $0.device == identity }) {
-                captions.attach(trackID: track.id, meetingID: filed.meeting.id)
+                await captions.attach(trackID: track.id, meetingID: filed.meeting.id)
                 // Speakers the live model missed, from the recording, while the app is in front.
                 labelCaptionSpeakers()
             }

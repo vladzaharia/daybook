@@ -29,6 +29,28 @@ final class LiveCaptionsTests: XCTestCase {
         func finish() async { updatesContinuation.finish(); statesContinuation.finish() }
     }
 
+    /// A captioner whose live speaker model missed what it heard (shed under heat, say): its line waits
+    /// for speakers from the recording.
+    final class SpeakerlessCaptioner: LiveCaptioning, @unchecked Sendable {
+        let updates: AsyncStream<[LiveCaptionSegment]>
+        let states: AsyncStream<LiveCaptionState>
+        private let updatesContinuation: AsyncStream<[LiveCaptionSegment]>.Continuation
+        private let statesContinuation: AsyncStream<LiveCaptionState>.Continuation
+
+        init() {
+            (updates, updatesContinuation) = AsyncStream<[LiveCaptionSegment]>.makeStream()
+            (states, statesContinuation) = AsyncStream<LiveCaptionState>.makeStream()
+        }
+
+        func start(locale: Locale, sourceFormat: AVAudioFormat?) async {
+            statesContinuation.yield(.listening)
+            updatesContinuation.yield([LiveCaptionSegment(start: 0.2, end: 1.4, text: "Nobody knew who said this", isTentative: false,
+                                                          needsSpeaker: true)])
+        }
+        func append(_ buffer: AVAudioPCMBuffer, at time: AVAudioTime?) {}
+        func finish() async { updatesContinuation.finish(); statesContinuation.finish() }
+    }
+
     private func makeModel(rig: RecorderRig, captioner: any LiveCaptioning) throws -> PhoneAppModel {
         let library = PhoneLibrary(rootURL: try temporaryDirectory("library"), installation: UUID().uuidString)
         let settings = PhoneSettings(defaults: makeTestDefaults("LiveCaptionsTests"))
@@ -56,8 +78,8 @@ final class LiveCaptionsTests: XCTestCase {
         try await model.stopRecording()
 
         let track = try XCTUnwrap(model.library.controller.meeting(id)?.tracks.first)
-        try await waitUntil("filed with its recording") { model.captions.store.captions(for: id)?.trackID == track.id }
         let saved = try XCTUnwrap(model.captions.store.captions(for: id))
+        XCTAssertEqual(saved.trackID, track.id, "filed with its recording by the time Stop returns")
         XCTAssertEqual(saved.segments.map(\.text), ["Budget agreed", "Next we"])
         XCTAssertEqual(saved.segments.map(\.isTentative), [false, false], "what stood at Stop is kept as heard")
         let file = try FileManager.default.attributesOfItem(atPath: model.captions.store.url(for: id).path)
@@ -123,6 +145,21 @@ final class LiveCaptionsTests: XCTestCase {
         model.library.controller.add(Meeting(id: unfiled, title: "Recovered"))
         _ = try await model.library.controller.moveToTrash(unfiled)
         try await waitUntil("removed with its conversation") { store.captions(for: unfiled) == nil }
+    }
+
+    func testARecordingFiledWithCaptionsTheSpeakerModelMissedWaitsForItsSpeakersAtOnce() async throws {
+        let rig = RecorderRig()
+        let model = try makeModel(rig: rig, captioner: SpeakerlessCaptioner())
+        try await model.startRecording()
+        try await waitUntil("heard") { model.captions.segments.count == 1 }
+        rig.pump(2)
+        let id = try XCTUnwrap(model.recorder.captureID)
+        try await model.stopRecording()
+
+        // Filing gives them their recording before it returns, so the speaker pass that starts after filing
+        // finds them, with nothing else to set it off.
+        XCTAssertEqual(model.captions.waitingForSpeakers().map(\.meetingID), [id])
+        XCTAssertEqual(model.captions.waitingForSpeakers().first?.trackID, model.library.controller.meeting(id)?.tracks.first?.id)
     }
 
     func testAFailingCaptionerNeverStopsTheRecording() async throws {
