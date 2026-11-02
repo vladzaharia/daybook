@@ -2,13 +2,14 @@ import DaybookDesign
 import SwiftUI
 
 // What's going on, at a glance and then in depth, the same on both apps (docs/interface.md, "Status overview"): the
-// iPhone's status sheet and the open Duo's status panel draw it at each of their sizes, and Floating Notes' home is
-// the same overview at its smallest. One line each for what's there (`StatusLines`); below them, at more depth, a
-// group per kind of thing (`StatusGroup`), each a heading and a card, with the queue as rows (`StatusQueueRow`).
+// iPhone's status sheet and the open Duo's status panel draw it at each of their sizes. Floating Notes' home draws the
+// same `StatusLineView` lines on its own for now, and moves onto the overview at `.lines` later. One line each for
+// what's there (`StatusLines`); below them, at more depth, a group per kind of thing (`StatusGroup`), each a heading
+// and a card, with the queue as rows (`StatusQueueRow`).
 
 /// How deep the overview goes.
 public enum StatusDensity: Int, CaseIterable, Comparable, Hashable, Sendable {
-    /// One line each: the iPhone sheet's compact size, the Duo panel's, Floating Notes' home.
+    /// One line each: the iPhone sheet's compact size and the Duo panel's.
     case lines
     /// The lines, then a card per kind of thing: what each device is doing, its handoff, the queue under the device
     /// doing it, with the choices they offer.
