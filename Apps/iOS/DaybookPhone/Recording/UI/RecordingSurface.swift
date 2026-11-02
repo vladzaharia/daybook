@@ -1,224 +1,225 @@
 import DaybookCore
+import DaybookDesign
+import DaybookKit
+import DaybookUI
 import SwiftUI
+import UIKit
 
-/// The recorder while a recording is active, in each posture (docs/iphone.md, "iPhone Duo"):
+/// The recorder while a recording is under way, in each posture (docs/iphone.md, "iPhone Duo"), and for a moment
+/// after Stop. It's the recorder Floating Notes shows on the Mac (DaybookUI's `RecorderSurface`), filled from the
+/// app model, with what only the iPhone has around it: the camera, the live timeline, and table mode's dimming.
 ///
-/// - **Pocket** (closed, and every other iPhone held upright): one hand. Status and the clock at the
-///   top, the level, the notes, and a large Bookmark and Stop at the thumb.
-/// - **Notebook** (open): notes on the left page; the clock, level, live timeline, bookmarks, and
-///   multipoint status on the right. Split at the crease, never across it.
-/// - **Table** (partly open, standing): glanceable from across a table. A large clock and level on
-///   one page, a large Bookmark target on the other; dims between touches. Write Notes swaps the
-///   clock's page for the notes (and stops dimming) until Done.
+/// - **Pocket** (closed, and every other iPhone held upright): one column, one hand. The phase, what records along,
+///   the clock with the camera beside it, the level, the notes, and a large Bookmark and Stop at the thumb.
+/// - **Notebook** (open): notes on the left page; the recorder on the right. Split at the crease, never across it.
+/// - **Table** (partly open, standing): glanceable from across a table, and dimmed between touches.
 ///
 /// Folding mid-recording only rearranges the same pieces: nothing about the recording restarts.
-/// `RootView` shows it whenever `model.isRecordingActive`.
-struct RecordingSurface: View {
+/// `RootView` shows it while `model.isRecordingActive`, and after Stop while `afterStop` is set.
+struct RecorderScreen: View {
     let style: SurfaceStyle
+    /// After Stop: the conversation it was filed into, for a few seconds (Saved, Open, Keep Recording).
+    var afterStop: AfterStop?
+    /// Hands back to the library.
+    var done: () -> Void = {}
+    @Environment(PhoneAppModel.self) private var model
+    @State private var levels = RecorderLevels()
+    @AccessibilityFocusState private var clockFocused: Bool
 
     var body: some View {
         Group {
-            switch style {
-            case .pocket: PocketRecording()
-            case .notebook: NotebookRecording()
-            case .table: TableRecording()
+            if let afterStop, !model.recorder.isActive {
+                PhoneAfterStop(afterStop: afterStop, style: style, done: done)
+            } else {
+                recorder
             }
         }
         .background(PhoneStyle.paper.ignoresSafeArea())
+        .onAppear {
+            levels.adopt(model.levels, for: .microphone)
+            runLevels()
+            // VoiceOver: the screen changed under the person's finger; it starts on the clock.
+            AccessibilityNotification.ScreenChanged(nil).post()
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(400))
+                clockFocused = true
+            }
+        }
+        .onChange(of: model.recorder.isActive) { runLevels() }
+        .onChange(of: PhoneRecorderStatus.phase(model.recorder.state, isFiling: model.isFiling)) { old, new in
+            let pause = PhoneRecorderStatus.pause(model.recorder.state, message: model.recorder.pauseMessage, canResume: model.recorder.canResume)
+            if let words = PhoneRecorderStatus.announcement(from: old, to: new, pause: pause) {
+                AccessibilityNotification.Announcement(words).post()
+            }
+        }
+        .onChange(of: model.recorder.isMicrophoneSilent) { _, silent in
+            if silent, model.recorder.isCapturing { AccessibilityNotification.Announcement("Microphone silent").post() }
+        }
+        .onDisappear { levels.run(false, readers: readers) }
     }
-}
 
-// MARK: Pocket
+    @ViewBuilder private var recorder: some View {
+        switch style {
+        case .pocket:
+            surface(asleep: false)
+                .daybookSurface(.column, density: .touch)
+        case .notebook:
+            GeometryReader { proxy in
+                surface(asleep: false)
+                    .daybookSurface(.spread(crease: CreaseGeometry.crease(width: proxy.size.width, leadingInset: proxy.safeAreaInsets.leading,
+                                                                          trailingInset: proxy.safeAreaInsets.trailing)), density: .touch)
+            }
+        case .table:
+            TableRecording { asleep, writing in surface(asleep: asleep, writing: writing) }
+        }
+    }
 
-/// Closed: one column, one hand. The controls sit where the thumb is.
-private struct PocketRecording: View {
-    @Environment(PhoneAppModel.self) private var model
-
-    var body: some View {
+    private func surface(asleep: Bool, writing: Binding<Bool> = .constant(false)) -> RecorderSurface {
+        let inputs = PhoneRecorderStatus.inputs(model)
         let recorder = model.recorder
-        VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 10) {
-                RecordingStatusHeader()
-                HStack(alignment: .center) {
-                    RecordingClockText(size: RecordingStyle.Clock.pocket, weight: .medium)
-                    Spacer(minLength: 8)
-                    CameraControl()
-                }
-                if recorder.isPaused {
-                    PausedPanel()
-                } else {
-                    RollingMeter(height: RecordingStyle.Meter.pocketHeight)
-                }
-                MultipointStatus(compact: true)
-            }
-            .padding(.horizontal, PhoneStyle.Space.s5)
-            .padding(.top, PhoneStyle.Space.s3)
-            .padding(.bottom, PhoneStyle.Space.s2)
+        let started = recorder.startedAt ?? Date()
+        let state = RecorderSurfaceState(
+            phase: RecordingStatusWords.phase(inputs),
+            title: recorder.title,
+            byline: ["Today", started.formatted(date: .omitted, time: .shortened)].joined(separator: " · "),
+            chips: RecordingStatusWords.chips(inputs),
+            meters: RecordingStatusWords.meters(inputs),
+            clock: .elapsed(isLive: recorder.state == .recording, frozenAt: recorder.pausedAt, value: { recorder.elapsedTime }),
+            isLive: recorder.state == .recording,
+            bookmarkCount: recorder.bookmarkCount,
+            canBookmark: recorder.isCapturing && recorder.state != .starting,
+            isSaving: recorder.state == .stopping || model.isFiling,
+            pause: PhoneRecorderStatus.pause(recorder.state, message: recorder.pauseMessage, canResume: recorder.canResume),
+            asleep: asleep)
+        let model = self.model
+        let actions = RecorderActions(
+            bookmark: { Task { try? await model.addBookmark() } },
+            stop: { Task { try? await model.stopRecording() } },
+            resume: { Task { try? await model.resumeRecording() } })
+        return RecorderSurface(state: state, levels: levels, actions: actions, slots: slots(writing: writing), writing: writing,
+                               clockFocus: $clockFocused)
+    }
 
-            Divider().padding(.horizontal, PhoneStyle.Space.s5).opacity(0.6)
-
-            RecordingNotesEditor()
-                .frame(maxHeight: .infinity)
-
-            VStack(spacing: PhoneStyle.Space.s3) {
-                LiveCaptionsView(style: .strip)
-                    .padding(.horizontal, PhoneStyle.Space.s2)
-                RecordingNotice()
-                HStack(spacing: PhoneStyle.Space.s3) {
-                    BookmarkControl(height: RecordingStyle.Control.pocketHeight)
-                    StopControl(height: RecordingStyle.Control.pocketHeight)
-                }
-            }
-            .padding(.horizontal, PhoneStyle.Space.s4)
-            .padding(.top, PhoneStyle.Space.s2)
-            .padding(.bottom, PhoneStyle.Space.s3)
+    private func slots(writing: Binding<Bool>) -> RecorderSlots {
+        switch style {
+        case .pocket:
+            // In the hand the notes come first: the captions' strip stops growing at the largest standard size.
+            return RecorderSlots(notes: AnyView(RecordingNotes().padding(.horizontal, DaybookSpacing.s4)),
+                                 captions: AnyView(PhoneCaptions(style: .strip).padding(.horizontal, DaybookSpacing.s2)
+                                    .dynamicTypeSize(...DynamicTypeSize.xxxLarge)),
+                                 accessory: AnyView(CameraControl()), notice: AnyView(RecordingNotice()),
+                                 menu: { AnyView(PhoneChipMenu(chip: $0)) })
+        case .notebook:
+            // Captions take the space when they're on: they're the live sign that the audio is being heard, while
+            // bookmarks already show twice (the notes' lane and the timeline's amber ticks). Without captions, the
+            // bookmark log returns.
+            let captions = model.captions.isShowing
+                ? AnyView(PhoneCaptions(style: .page))
+                : AnyView(ScrollView { BookmarkLog().padding(.top, DaybookSpacing.s1) }.scrollBounceBehavior(.basedOnSize))
+            return RecorderSlots(notes: AnyView(RecordingNotes()), captions: captions, accessory: AnyView(CameraControl()),
+                                 details: AnyView(LiveTimelineBar()), notice: AnyView(RecordingNotice()),
+                                 menu: { AnyView(PhoneChipMenu(chip: $0)) })
+        case .table:
+            return RecorderSlots(notes: AnyView(RecordingNotes(focusOnAppear: writing.wrappedValue)), captions: AnyView(PhoneCaptions(style: .stage)),
+                                 tools: AnyView(TableTools(writing: writing)), menu: { AnyView(PhoneChipMenu(chip: $0)) })
         }
-        .motion(.snappy(duration: 0.3), value: recorder.isPaused)
+    }
+
+    private var readers: RecorderLevels.Readers {
+        let model = self.model
+        return RecorderLevels.Readers(recorder: { id in
+            guard let conversation = model.recorder.captureID else { return nil }
+            return model.devices.hub.session(id)?.liveLevel(into: conversation)
+        })
+    }
+
+    /// Samples the recorders' levels while recording; the microphone's trail is fed by the app as levels arrive.
+    private func runLevels() {
+        levels.run(model.recorder.isActive, readers: readers)
     }
 }
 
-// MARK: Notebook
-
-/// Open: notes on the left page, the recorder on the right.
-private struct NotebookRecording: View {
+/// What a chip's menu offers on the iPhone: a Mac that could record this conversation too.
+private struct PhoneChipMenu: View {
     @Environment(PhoneAppModel.self) private var model
+    let chip: RecorderChip
 
     var body: some View {
-        CreaseSplit {
-            NotesPage()
-        } trailing: {
-            RecorderPage()
+        if case .peer(let id) = chip.target, let mac = model.macsToRecordWith.first(where: { $0.id.uuidString == id }) {
+            Button("Record on \(mac.name) Too") { Task { await model.recordOnMac(mac.id) } }
         }
     }
 }
 
-private struct NotesPage: View {
-    @Environment(PhoneAppModel.self) private var model
+// MARK: - Table
 
-    var body: some View {
-        let recorder = model.recorder
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(recorder.title.isEmpty ? "Untitled Conversation" : recorder.title)
-                    .font(PhoneStyle.Typeface.title(.title2))
-                    .foregroundStyle(PhoneStyle.Ink.title)
-                    .lineLimit(2)
-                Text(byline)
-                    .font(.subheadline)
-                    .foregroundStyle(PhoneStyle.Ink.secondary)
-            }
-            .padding(.horizontal, PhoneStyle.Space.s6)
-            .padding(.top, PhoneStyle.Space.s5)
-            .padding(.bottom, PhoneStyle.Space.s2)
-            RecordingNotesEditor()
-                .padding(.horizontal, PhoneStyle.Space.s3)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
+/// How long table mode keeps the screen on after the last touch: long enough for a meeting read from across the
+/// table, short enough that a phone forgotten on the table locks itself.
+enum TableIdle {
+    static let dimAfter: Duration = RecordingStyle.dimAfter
+    static let awake: TimeInterval = 10 * 60
 
-    /// "Today · 10:15 AM", as a page's byline. The microphone and a Mac recording too are on the
-    /// recorder's page, beside the clock, so they aren't repeated here.
-    private var byline: String {
-        let started = model.recorder.startedAt ?? Date()
-        return ["Today", started.formatted(date: .omitted, time: .shortened)].joined(separator: " · ")
+    /// Whether table mode holds Auto-Lock off: only while Daybook is in front and a touch was recent.
+    static func keepsScreenOn(isActive: Bool, sinceTouch: TimeInterval) -> Bool { isActive && sinceTouch < awake }
+
+    /// How the screen moves between awake and dimmed: a slow, calm dim; a quick wake; a short fade under Reduce
+    /// Motion, never a cut from paper to black.
+    static func animation(dimming: Bool, reduceMotion: Bool) -> Animation {
+        DaybookMotion.resolved(dimming ? DaybookMotion.dim : DaybookMotion.fade, reduceMotion: reduceMotion)
     }
 }
 
-private struct RecorderPage: View {
-    @Environment(PhoneAppModel.self) private var model
-
-    var body: some View {
-        let recorder = model.recorder
-        VStack(alignment: .leading, spacing: PhoneStyle.Space.s4) {
-            HStack(alignment: .top) {
-                RecordingStatusHeader(showsTitle: false)
-                Spacer(minLength: 0)
-                CameraControl()
-            }
-            RecordingClockText(size: RecordingStyle.Clock.notebook, weight: .medium)
-            if recorder.isPaused {
-                PausedPanel()
-            } else {
-                RollingMeter(height: RecordingStyle.Meter.notebookHeight)
-            }
-            LiveTimelineBar()
-            MultipointStatus()
-            // Captions take the space when they're on: they're the live sign that the audio is being
-            // heard, while bookmarks already show twice (the notes' margin lane and the timeline's
-            // amber ticks). Without captions, the bookmark log returns.
-            if model.captions.isShowing {
-                LiveCaptionsView(style: .page)
-                    .frame(maxHeight: .infinity, alignment: .bottom)
-                    .clipped()
-            } else {
-                ScrollView {
-                    BookmarkLog()
-                        .padding(.top, PhoneStyle.Space.s1)
-                }
-                .scrollBounceBehavior(.basedOnSize)
-                .frame(maxHeight: .infinity)
-            }
-            RecordingNotice()
-            HStack(spacing: PhoneStyle.Space.s3) {
-                BookmarkControl(height: RecordingStyle.Control.notebookHeight)
-                StopControl(height: RecordingStyle.Control.notebookHeight)
-            }
-        }
-        .padding(.horizontal, PhoneStyle.Space.s5)
-        .padding(.top, PhoneStyle.Space.s5)
-        .padding(.bottom, PhoneStyle.Space.s3)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .motion(.snappy(duration: 0.3), value: recorder.isPaused)
-    }
-}
-
-// MARK: Table
-
-/// Partly open, standing on a table: readable from across it. A touch anywhere wakes it; the
-/// Bookmark target always works, dimmed or not.
-private struct TableRecording: View {
+/// Partly open, standing on a table: readable from across it. A touch anywhere wakes it; Bookmark always works,
+/// dimmed or not, while Stop and the tools ignore the touch that only wakes the screen. It keeps the screen on while
+/// it's in front (Auto-Lock would otherwise lock a phone nobody touches), until a long stretch without a touch.
+private struct TableRecording<Content: View>: View {
+    @ViewBuilder let content: (_ asleep: Bool, _ writing: Binding<Bool>) -> Content
     @Environment(PhoneAppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.scenePhase) private var scenePhase
     @State private var dimmed = false
     @State private var lastTouch = Date()
     @State private var writing = false
 
     var body: some View {
         GeometryReader { proxy in
-            // Turned a quarter turn like a laptop (flex mode), the hinge runs across: the standing half
-            // is on top. Standing like a book, the hinge runs down the middle.
-            if proxy.size.height > proxy.size.width {
-                FlexTable(writing: $writing, wake: wake)
-            } else if model.options.interfaceOrientation == "preview-portrait" {
-                // Debug: the simulator can't turn the device, so draw flex mode turned within the
-                // landscape window, as the turned display would show it.
+            if model.options.interfaceOrientation == "preview-portrait", proxy.size.width > proxy.size.height {
+                // Debug: the simulator can't turn the device, so draw flex mode turned within the landscape window, as
+                // the turned display would show it.
                 let full = CGSize(width: proxy.size.width + proxy.safeAreaInsets.leading + proxy.safeAreaInsets.trailing,
                                   height: proxy.size.height + proxy.safeAreaInsets.top + proxy.safeAreaInsets.bottom)
-                FlexTable(writing: $writing, wake: wake)
+                stage
                     .frame(width: full.height, height: full.width)
                     .rotationEffect(.degrees(-90))
                     .frame(width: full.width, height: full.height)
                     .offset(x: -proxy.safeAreaInsets.leading, y: -proxy.safeAreaInsets.top)
             } else {
-                BookTable(writing: $writing, wake: wake)
+                stage
             }
         }
-        // Dimmed, it goes dark: black ground (cheap on OLED), the clock and target in their dark
-        // inks at low brightness, still readable from across the table.
+        // Dimmed, it goes dark: black ground (cheap on OLED), the clock and target in their dark inks at low
+        // brightness, still readable from across the table.
         .environment(\.colorScheme, dimmed ? .dark : colorScheme)
         .opacity(dimmed ? RecordingStyle.dimmedOpacity : 1)
         .background((dimmed ? Color.black : PhoneStyle.paper).ignoresSafeArea())
         .contentShape(Rectangle())
         .simultaneousGesture(TapGesture().onEnded { wake() })
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.6), value: dimmed)
+        .animation(TableIdle.animation(dimming: dimmed, reduceMotion: reduceMotion), value: dimmed)
         .task(id: lastTouch) {
-            try? await Task.sleep(for: RecordingStyle.dimAfter)
-            guard !Task.isCancelled, !model.recorder.isPaused, !writing else { return }
-            dimmed = true
+            keepAwake()
+            try? await Task.sleep(for: TableIdle.dimAfter)
+            guard !Task.isCancelled else { return }
+            if !model.recorder.isPaused, !writing { dimmed = true }
+            // After a long stretch with nobody touching it, Auto-Lock may take over again.
+            try? await Task.sleep(for: .seconds(TableIdle.awake) - TableIdle.dimAfter)
+            guard !Task.isCancelled else { return }
+            keepAwake()
         }
         .onChange(of: model.recorder.isPaused) { _, paused in if paused { wake() } }
         .onChange(of: writing) { wake() }
+        .onChange(of: scenePhase) { keepAwake() }
+        .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
         .persistentSystemOverlays(.hidden)
         .onAppear {
             InterfaceOrientation.apply(model.options.interfaceOrientation)
@@ -226,298 +227,55 @@ private struct TableRecording: View {
         }
     }
 
+    private var stage: some View {
+        content(dimmed, $writing).daybookSurface(.stage, density: .touch)
+    }
+
     private func wake() {
         dimmed = false
         lastTouch = Date()
     }
-}
 
-/// Flex mode: the top half stands facing the room (captions, the clock, the level), the bottom half
-/// lies flat under the hand (Bookmark and Stop). Writing, the notes take the standing half and the
-/// keyboard the flat one, like a laptop; Bookmark and Done move up beside the clock, where the
-/// keyboard can't cover them.
-private struct FlexTable: View {
-    @Environment(PhoneAppModel.self) private var model
-    @Binding var writing: Bool
-    var wake: () -> Void
-
-    var body: some View {
-        let recorder = model.recorder
-        HorizontalCreaseSplit {
-            VStack(alignment: .leading, spacing: PhoneStyle.Space.s3) {
-                HStack(alignment: .center, spacing: PhoneStyle.Space.s3) {
-                    if writing {
-                        // The clock, Bookmark, and Done stay whole; beside them, the microphone's name
-                        // goes first, then the Mac's words (its glyph stays).
-                        ViewThatFits(in: .horizontal) {
-                            HStack(spacing: PhoneStyle.Space.s3) {
-                                RecordingStatusHeader(showsTitle: false).fixedSize()
-                                MultipointStatus(compact: true)
-                            }
-                            HStack(spacing: PhoneStyle.Space.s3) {
-                                RecordingStatusHeader(showsTitle: false, showsRoute: false).fixedSize()
-                                MultipointStatus(compact: true)
-                            }
-                            HStack(spacing: PhoneStyle.Space.s3) {
-                                RecordingStatusHeader(showsTitle: false, showsRoute: false).fixedSize()
-                                MultipointStatus(compact: true, iconOnly: true)
-                            }
-                            RecordingStatusHeader(showsTitle: false, showsRoute: false).fixedSize()
-                        }
-                        Spacer(minLength: 0)
-                        RecordingClockText(size: 34, weight: .medium)
-                            .fixedSize()
-                        WritingControls(writing: $writing, touched: wake)
-                            .fixedSize()
-                    } else {
-                        RecordingStatusHeader(showsTitle: false)
-                        MultipointStatus(compact: true)
-                    }
-                }
-                if writing {
-                    RecordingNotesEditor()
-                        .padding(.horizontal, -PhoneStyle.Space.s4)
-                        .frame(maxHeight: .infinity)
-                } else {
-                    HStack(alignment: .center, spacing: PhoneStyle.Space.s5) {
-                        RecordingClockText(size: 92, weight: .light)
-                            .fixedSize()
-                        RollingMeter(height: RecordingStyle.Meter.tableHeight)
-                    }
-                    LiveCaptionsView(style: .stage)
-                        .frame(maxHeight: .infinity, alignment: .bottom)
-                }
-            }
-            .padding(.horizontal, PhoneStyle.Space.s6)
-            .padding(.top, PhoneStyle.Space.s5)
-            .padding(.bottom, PhoneStyle.Space.s4)
-        } bottom: {
-            HStack(spacing: PhoneStyle.Space.s4) {
-                if recorder.isPaused {
-                    PausedPanel(large: true)
-                } else {
-                    FlexBookmarkTarget(touched: wake)
-                }
-                VStack(spacing: PhoneStyle.Space.s3) {
-                    StopControl(height: 84)
-                    TableTools(writing: $writing, size: 48)
-                }
-                .frame(maxWidth: 170)
-            }
-            .padding(.horizontal, PhoneStyle.Space.s6)
-            .padding(.vertical, PhoneStyle.Space.s5)
-            .frame(maxHeight: .infinity)
-        }
-        // The keyboard covers the flat half instead of squeezing both.
-        .ignoresSafeArea(.keyboard)
+    private func keepAwake() {
+        UIApplication.shared.isIdleTimerDisabled = TableIdle.keepsScreenOn(isActive: scenePhase == .active,
+                                                                          sinceTouch: Date().timeIntervalSince(lastTouch))
     }
 }
 
-/// Standing like a book: the clock and level on one page, the Bookmark target on the other.
-/// Writing, the notes take the clock's page.
-private struct BookTable: View {
-    @Environment(PhoneAppModel.self) private var model
-    @Binding var writing: Bool
-    var wake: () -> Void
-
-    var body: some View {
-        let recorder = model.recorder
-        CreaseSplit {
-            if writing {
-                VStack(alignment: .leading, spacing: PhoneStyle.Space.s3) {
-                    HStack(alignment: .center) {
-                        RecordingStatusHeader(showsTitle: false)
-                        Spacer(minLength: 0)
-                        RecordingClockText(size: 34, weight: .medium)
-                    }
-                    .padding(.horizontal, PhoneStyle.Space.s6)
-                    RecordingNotesEditor()
-                        .padding(.horizontal, PhoneStyle.Space.s2)
-                        .frame(maxHeight: .infinity)
-                }
-                .padding(.top, PhoneStyle.Space.s4)
-            } else {
-                VStack(spacing: PhoneStyle.Space.s4) {
-                    Spacer(minLength: 0)
-                    RecordingStatusHeader(showsTitle: false, alignment: .center)
-                    RecordingClockText(size: RecordingStyle.Clock.table, weight: .light)
-                    RollingMeter(height: RecordingStyle.Meter.tableHeight)
-                        .frame(maxWidth: 360)
-                    MultipointStatus(compact: true)
-                    LiveCaptionsView(style: .strip)
-                        .frame(maxWidth: 380)
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, PhoneStyle.Space.s6)
-            }
-        } trailing: {
-            VStack(spacing: PhoneStyle.Space.s5) {
-                Spacer(minLength: 0)
-                if recorder.isPaused {
-                    PausedPanel(large: true).frame(maxWidth: 340)
-                } else {
-                    TableBookmarkTarget(touched: wake)
-                }
-                Spacer(minLength: 0)
-                HStack(spacing: PhoneStyle.Space.s3) {
-                    TableTools(writing: $writing, size: 52, showsLabels: true)
-                    StopControl(height: 52).frame(maxWidth: 220)
-                }
-            }
-            .padding(.horizontal, PhoneStyle.Space.s5)
-            .padding(.vertical, PhoneStyle.Space.s4)
-        }
-    }
-}
-
-/// Write Notes (Done while writing) and Take Photo, beside Stop: labelled where there's room, like
-/// the controls around them.
+/// Write Notes (Done while writing) and Take Photo, beside Stop, labelled like the controls around them.
 private struct TableTools: View {
     @Binding var writing: Bool
-    var size: CGFloat
-    var showsLabels = false
+    private let size: CGFloat = 52
 
     var body: some View {
-        HStack(alignment: .top, spacing: PhoneStyle.Space.s3) {
-            VStack(spacing: PhoneStyle.Space.s1) {
+        HStack(alignment: .top, spacing: DaybookSpacing.s3) {
+            VStack(spacing: DaybookSpacing.s1) {
                 Button { writing.toggle() } label: {
                     Image(systemName: writing ? "keyboard.chevron.compact.down" : "square.and.pencil")
                         .font(.system(size: size * 0.4, weight: .medium))
-                        .foregroundStyle(PhoneStyle.Ink.title)
+                        .foregroundStyle(DaybookPalette.Ink.title)
                         .frame(width: size, height: size)
                         .contentShape(Circle())
                 }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
+                .daybookControl(.standard, shape: .circle)
                 .accessibilityLabel(writing ? "Done Writing" : "Write Notes")
-                if showsLabels { label(writing ? "Done" : "Notes") }
+                label(writing ? "Done" : "Notes")
             }
             if CameraPicker.isAvailable {
-                VStack(spacing: PhoneStyle.Space.s1) {
+                VStack(spacing: DaybookSpacing.s1) {
                     CameraControl(size: size)
-                    if showsLabels { label("Photo") }
+                    label("Photo")
                 }
             }
         }
+        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
     }
 
     private func label(_ text: String) -> some View {
         Text(text)
             .font(.caption.weight(.medium))
-            .foregroundStyle(PhoneStyle.Ink.secondary)
+            .foregroundStyle(DaybookPalette.Ink.secondary)
             .lineLimit(1)
             .accessibilityHidden(true)
-    }
-}
-
-/// While writing in flex mode, beside the clock on the standing half: Bookmark, and Done to put the
-/// keyboard away and bring Stop back.
-private struct WritingControls: View {
-    @Environment(PhoneAppModel.self) private var model
-    @Binding var writing: Bool
-    var touched: () -> Void
-
-    var body: some View {
-        let count = model.recorder.bookmarkCount
-        HStack(spacing: PhoneStyle.Space.s2) {
-            Button {
-                touched()
-                Task { try? await model.addBookmark() }
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "bookmark.fill").symbolEffect(.bounce, value: count)
-                    if count > 0 { Text("\(count)").monospacedDigit().contentTransition(.numericText()) }
-                }
-                .font(.headline)
-                .foregroundStyle(PhoneStyle.bookmark)
-                .frame(minWidth: 44, minHeight: 44)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.glass)
-            .disabled(!model.recorder.isCapturing || model.recorder.state == .starting)
-            .sensoryFeedback(.impact(weight: .medium), trigger: count)
-            .accessibilityLabel(count > 0 ? "Bookmark, \(count) so far" : "Bookmark")
-            Button { writing = false } label: {
-                Text("Done")
-                    .font(.headline)
-                    .foregroundStyle(PhoneStyle.Ink.title)
-                    .frame(minHeight: 44)
-                    .padding(.horizontal, PhoneStyle.Space.s1)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.glass)
-            .accessibilityHint("Puts the keyboard away")
-        }
-    }
-}
-
-/// Flex mode's Bookmark: a wide amber target on the flat half, where the hand rests.
-private struct FlexBookmarkTarget: View {
-    @Environment(PhoneAppModel.self) private var model
-    var touched: () -> Void
-
-    var body: some View {
-        let count = model.recorder.bookmarkCount
-        Button {
-            touched()
-            Task { try? await model.addBookmark() }
-        } label: {
-            HStack(spacing: 14) {
-                Image(systemName: "bookmark.fill")
-                    .font(.system(size: 44, weight: .semibold))
-                    .symbolEffect(.bounce, value: count)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Bookmark").font(.title2.weight(.semibold))
-                    if count > 0 {
-                        Text(count == 1 ? "1 so far" : "\(count) so far")
-                            .font(.subheadline.monospacedDigit())
-                            .opacity(0.8)
-                            .contentTransition(.numericText())
-                    }
-                }
-            }
-            .foregroundStyle(PhoneStyle.bookmark)
-            .frame(maxWidth: .infinity, minHeight: 140)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.glass)
-        .buttonBorderShape(.roundedRectangle(radius: 28))
-        .sensoryFeedback(.impact(weight: .heavy), trigger: count)
-        .accessibilityLabel(count > 0 ? "Bookmark, \(count) so far" : "Bookmark")
-    }
-}
-
-/// The table's Bookmark: a large amber target meant to be hit without looking.
-private struct TableBookmarkTarget: View {
-    @Environment(PhoneAppModel.self) private var model
-    var touched: () -> Void
-
-    var body: some View {
-        let count = model.recorder.bookmarkCount
-        Button {
-            touched()
-            Task { try? await model.addBookmark() }
-        } label: {
-            VStack(spacing: 10) {
-                Image(systemName: "bookmark.fill")
-                    .font(.system(size: 64, weight: .semibold))
-                    .symbolEffect(.bounce, value: count)
-                Text("Bookmark")
-                    .font(.title2.weight(.semibold))
-                if count > 0 {
-                    Text(count == 1 ? "1 so far" : "\(count) so far")
-                        .font(.subheadline.monospacedDigit())
-                        .opacity(0.8)
-                        .contentTransition(.numericText())
-                }
-            }
-            .foregroundStyle(PhoneStyle.bookmark)
-            .frame(width: RecordingStyle.Control.tableTarget, height: RecordingStyle.Control.tableTarget)
-            .contentShape(Circle())
-        }
-        .buttonStyle(.glass)
-        .buttonBorderShape(.circle)
-        .sensoryFeedback(.impact(weight: .heavy), trigger: count)
-        .accessibilityLabel(count > 0 ? "Bookmark, \(count) so far" : "Bookmark")
     }
 }

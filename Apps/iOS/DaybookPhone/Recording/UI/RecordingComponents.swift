@@ -1,200 +1,167 @@
 import DaybookCaptions
 import DaybookCore
+import DaybookDesign
+import DaybookKit
 import DaybookLink
+import DaybookUI
 import SwiftUI
 import UIKit
 
-// The pieces the recording surfaces are built from. Each reads the app model itself, so a posture
-// change only rearranges them; nothing about the recording restarts.
+// What the iPhone puts into the recorder both apps share (DaybookUI's `RecorderSurface`): its recording's status in
+// the shared words, its captions, and the pieces only the iPhone has (the camera, the live timeline, the bookmark
+// log, its notices). Each reads the app model itself, so a posture change only rearranges them; nothing about the
+// recording restarts.
 
-/// The elapsed time: red while recording, ink while paused (frozen at the pause).
-struct RecordingClockText: View {
-    @Environment(PhoneAppModel.self) private var model
-    var size: CGFloat
-    var weight: Font.Weight = .medium
+// MARK: - The recording, in the shared words
 
-    var body: some View {
+/// The iPhone's recording as the shared recorder reads it: the phase, the recorders and Macs recording along, the
+/// meters, and a pause.
+@MainActor
+enum PhoneRecorderStatus {
+    static func inputs(_ model: PhoneAppModel, afterStop: Bool = false) -> RecordingStatusInputs {
         let recorder = model.recorder
-        TimelineView(.periodic(from: .now, by: 0.5)) { _ in
-            let seconds = recorder.pausedAt ?? recorder.elapsedTime
-            Text(TimeLabel.short(seconds))
-                .font(.system(size: size, weight: weight).monospacedDigit())
-                .foregroundStyle(recorder.state == .recording ? PhoneStyle.Ink.record : PhoneStyle.Ink.title)
-                .contentTransition(.numericText())
-                .lineLimit(1)
-                .minimumScaleFactor(0.5)
-                .accessibilityLabel(recorder.isPaused ? "Paused at \(TimeLabel.short(seconds))" : "Recording, \(TimeLabel.short(seconds))")
+        var inputs = RecordingStatusInputs()
+        inputs.here = "this iPhone"
+        inputs.phase = phase(recorder.state, isFiling: model.isFiling)
+        inputs.inputDevice = recorder.isCapturing ? recorder.inputRoute?.name : nil
+        inputs.microphoneSilent = recorder.isCapturing && recorder.isMicrophoneSilent
+        let conversation = recorder.captureID
+        if recorder.isActive {
+            let cascade = model.devices.cascade
+            inputs.recorders = model.devices.sessions.filter { $0.direct != nil || cascade.member($0.id) != nil }.map { session in
+                RecorderFacts(session: session, handoff: model.devices.handoffState(session),
+                              along: cascade.conversation?.id == conversation ? cascade.member(session.id).map { along($0.state, role: $0.role) } : nil)
+            }
+            inputs.peers = peers(multipoint: model.multipoint, connected: model.link.connectedMacs, conversation: conversation)
+        }
+        return inputs
+    }
+
+    /// The recorder's state in the phase both recorders say.
+    static func phase(_ state: PhoneRecorder.State, isFiling: Bool) -> RecordingStatusInputs.Phase {
+        switch state {
+        case .starting: return .starting
+        case .recording: return .recording
+        case .paused: return .paused
+        case .stopping: return .saving
+        case .idle: return isFiling ? .saving : .idle
+        }
+    }
+
+    /// A recorder's part in this recording, as the conversation's links say it on the Mac.
+    static func along(_ state: RecorderCascade.State, role: RecorderCascade.Role) -> CompanionRecording.State {
+        switch state {
+        case .starting: return .starting
+        case .recording: return role == .alreadyRecording ? .alreadyRecording : .recording
+        case .stopping: return .stopping
+        case .stopped: return .stopped
+        case .unavailable: return .unavailable
+        case .stopFailed: return .stopFailed
+        }
+    }
+
+    /// The Macs around this recording: each one asked or recording along, each one recording the same conversation
+    /// on its own, then each connected one that could.
+    static func peers(multipoint: MultipointSession?, connected: [PhoneLink.Mac], conversation: UUID?) -> [RecordingStatusInputs.Peer] {
+        let connectedIDs = Set(connected.map(\.id))
+        var peers = (multipoint?.macs ?? []).map { mac in
+            let along = Self.along(mac.state)
+            return RecordingStatusInputs.Peer(id: mac.id.uuidString, name: mac.name, kind: .mac, isConnected: connectedIDs.contains(mac.id),
+                                              activity: along == .recording ? .recording : .idle, along: along, hasMeter: false)
+        }
+        let involved = Set(multipoint?.macs.map(\.id) ?? [])
+        for mac in connected where !involved.contains(mac.id) {
+            let recordsThis = mac.isRecording && conversation != nil && mac.recording?.conversationID == conversation
+            peers.append(RecordingStatusInputs.Peer(id: mac.id.uuidString, name: mac.name, kind: .mac, isConnected: true,
+                                                    activity: mac.isRecording ? .recording : .idle,
+                                                    along: recordsThis ? .alreadyRecording : nil, lastConnected: mac.lastConnectedAt, hasMeter: false))
+        }
+        return peers
+    }
+
+    static func along(_ state: MultipointSession.Mac.State) -> CompanionRecording.State {
+        switch state {
+        case .asking: return .starting
+        case .recording: return .recording
+        case .stopped: return .stopped
+        case .failed: return .failed
+        case .noAnswer: return .unavailable
+        }
+    }
+
+    /// Why the recording is paused and whether it can go on. iOS doesn't say what interrupted; without a reason (a
+    /// muted or unplugged microphone gives one) it's almost always a call.
+    static func pause(_ state: PhoneRecorder.State, message: String?, canResume: Bool) -> RecorderPause? {
+        guard case .paused(let reason) = state else { return nil }
+        let isCall = reason == .interruption && message == PhoneRecorder.unspecifiedInterruption
+        let title: String
+        switch reason {
+        case .interruption: title = isCall ? "Paused for a call" : "Paused"
+        case .inputFailed: title = "The microphone stopped"
+        }
+        // Resume is right below once it can: the words don't ask for it.
+        let words = canResume
+            ? (isCall ? "The call has ended. Everything so far is saved." : (message ?? "Everything so far is saved."))
+            : (isCall ? "Everything so far is saved. Recording can continue when the call ends." : (message ?? "Everything so far is saved."))
+        return RecorderPause(title: title, message: words, canResume: canResume)
+    }
+
+    /// What VoiceOver hears as the recording changes on its own: a pause, a resume, a silent microphone.
+    static func announcement(from old: RecordingStatusInputs.Phase, to new: RecordingStatusInputs.Phase, pause: RecorderPause?) -> String? {
+        switch (old, new) {
+        case (.recording, .paused): return pause.map { "Recording paused. \($0.title)." } ?? "Recording paused"
+        case (.paused, .recording): return "Recording resumed"
+        default: return nil
         }
     }
 }
 
-/// The last few seconds of input as mirrored teal bars, newest on the right. Flat while paused.
-struct RollingMeter: View {
+// MARK: - Captions
+
+/// Live captions in a layout's style, from this iPhone's captions: the newest lines, the person live speakers
+/// recognized (or the recorder that heard it) before the words, and why there are none yet.
+struct PhoneCaptions: View {
     @Environment(PhoneAppModel.self) private var model
-    var height: CGFloat = RecordingStyle.Meter.pocketHeight
+    let style: CaptionStripStyle
 
     var body: some View {
-        let values = model.levels.values
-        let live = model.recorder.state == .recording
-        Canvas { context, size in
-            let step = RecordingStyle.Meter.barWidth + RecordingStyle.Meter.gap
-            let count = max(1, Int(size.width / step))
-            let shown = values.suffix(count)
-            let start = size.width - CGFloat(shown.count) * step
-            for (index, value) in shown.enumerated() {
-                let shaped = pow(value, 1.6)
-                let bar = max(RecordingStyle.Meter.barWidth, CGFloat(shaped) * size.height)
-                let rect = CGRect(x: start + CGFloat(index) * step, y: (size.height - bar) / 2, width: RecordingStyle.Meter.barWidth, height: bar)
-                // Older bars fade a little, so the eye goes to now.
-                let age = Double(index) / Double(max(1, shown.count - 1))
-                let color = live ? PhoneStyle.accent.opacity(0.35 + 0.65 * age) : Color(uiColor: .tertiaryLabel).opacity(0.5)
-                context.fill(Path(roundedRect: rect, cornerRadius: RecordingStyle.Meter.barWidth / 2), with: .color(color))
-            }
+        let captions = model.captions
+        if captions.isShowing {
+            let segments = captions.state == .listening ? captions.recent(style.lines) : []
+            LiveCaptionStrip(lines: segments.map { segment in
+                                 CaptionLine(id: segment.id, text: segment.text, isTentative: segment.isTentative,
+                                             speaker: LiveCaptionsController.name(of: segment, names: captions.sourceNames))
+                             },
+                             status: status(captions.state),
+                             style: style)
         }
-        .frame(height: height)
-        .accessibilityElement()
-        .accessibilityLabel("Input level")
-        .accessibilityValue(live ? "\(Int((values.last ?? 0) * 100)) percent" : "Paused")
-    }
-}
-
-/// "● Recording" with the conversation's title, or "Paused". The dot is the screen's one red mark
-/// besides the clock and Stop.
-struct RecordingStatusHeader: View {
-    @Environment(PhoneAppModel.self) private var model
-    var showsTitle = true
-    /// The microphone's name beside the phase; without it, only "Microphone silent" still shows.
-    var showsRoute = true
-    var alignment: HorizontalAlignment = .leading
-
-    var body: some View {
-        let recorder = model.recorder
-        VStack(alignment: alignment, spacing: 2) {
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(recorder.state == .recording ? PhoneStyle.Ink.record : Color(uiColor: .tertiaryLabel))
-                    .frame(width: 9, height: 9)
-                Text(phaseTitle)
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(recorder.state == .recording ? PhoneStyle.Ink.record : PhoneStyle.Ink.secondary)
-                    .textCase(.uppercase)
-                    .tracking(0.6)
-                    .fixedSize()
-                if let route = recorder.inputRoute, recorder.isCapturing, showsRoute || recorder.isMicrophoneSilent {
-                    Text("· \(recorder.isMicrophoneSilent ? "Microphone silent" : route.name)")
-                        .font(.footnote)
-                        .foregroundStyle(recorder.isMicrophoneSilent ? PhoneStyle.Ink.warning : PhoneStyle.Ink.meta)
-                        .lineLimit(1)
-                }
-            }
-            if showsTitle {
-                Text(recorder.title.isEmpty ? "Untitled Conversation" : recorder.title)
-                    .font(PhoneStyle.Typeface.title(.title3))
-                    .foregroundStyle(PhoneStyle.Ink.title)
-                    .lineLimit(1)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: alignment == .center ? .center : .leading)
-        .accessibilityElement(children: .combine)
     }
 
-    private var phaseTitle: String {
-        switch model.recorder.state {
-        case .starting: return "Starting"
-        case .recording: return "Recording"
-        case .paused: return "Paused"
-        case .stopping: return "Saving…"
-        case .idle: return "Saved"
+    private func status(_ state: LiveCaptionState) -> String? {
+        switch state {
+        case .listening: return "Listening…"
+        case .preparing: return "Getting captions ready…"
+        case .downloading(let fraction):
+            let percent = fraction.map { " · \(ProcessingWords.percentText($0))" } ?? ""
+            return "Downloading captions for \(LiveCaptionAvailability.name(model.settings.captionLocale))\(percent)"
+        case .unavailable(let reason): return reason
+        case .failed: return "Captions stopped"
+        case .off, .finished: return nil
         }
     }
 }
 
-/// While a Mac records this conversation too: "Also recording on Studio Mac". Otherwise, when a
-/// paired Mac is connected and free, the offer to record there too.
-struct MultipointStatus: View {
-    @Environment(PhoneAppModel.self) private var model
-    var compact = false
-    /// Only the glyphs, where there's no room for the words (and no offer).
-    var iconOnly = false
+// MARK: - The iPhone's own pieces
 
-    var body: some View {
-        if let line = model.multipointLine {
-            HStack(spacing: 6) {
-                Image(systemName: "macbook.and.iphone")
-                    .imageScale(.small)
-                    .foregroundStyle(PhoneStyle.Ink.secondary)
-                if model.multipoint?.recordingMacs.isEmpty == false || model.multipoint?.isMacLed == true {
-                    Circle().fill(PhoneStyle.Ink.record).frame(width: 6, height: 6)
-                }
-                if !iconOnly {
-                    Text(line)
-                        .font(.footnote.weight(.medium))
-                        .foregroundStyle(PhoneStyle.Ink.secondary)
-                        .lineLimit(1)
-                }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(RecordingStyle.quietFill, in: Capsule())
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(line)
-        } else if !iconOnly, let mac = model.macsToRecordWith.first {
-            Button {
-                Task { await model.recordOnMac(mac.id) }
-            } label: {
-                Label(compact ? "Also record on \(mac.name)" : "Record on \(mac.name) too", systemImage: "macbook.and.iphone")
-                    .font(.footnote.weight(.semibold))
-                    .lineLimit(1)
-            }
-            .buttonStyle(.glass)
-            .foregroundStyle(PhoneStyle.Ink.link)
-            .accessibilityHint("Asks \(mac.name) to record this conversation as well")
-        }
-    }
-}
-
-/// Bookmark: amber, with the count. Bounces when it lands, so it's felt without looking.
-struct BookmarkControl: View {
-    @Environment(PhoneAppModel.self) private var model
-    var height: CGFloat = RecordingStyle.Control.pocketHeight
-
-    var body: some View {
-        let count = model.recorder.bookmarkCount
-        Button {
-            Task { try? await model.addBookmark() }
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "bookmark.fill")
-                    .symbolEffect(.bounce, value: count)
-                Text("Bookmark")
-                if count > 0 {
-                    Text("\(count)")
-                        .font(.subheadline.weight(.bold).monospacedDigit())
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 1)
-                        .background(PhoneStyle.bookmark.opacity(0.2), in: Capsule())
-                        .contentTransition(.numericText())
-                }
-            }
-            .font(.headline)
-            .foregroundStyle(PhoneStyle.bookmark)
-            .frame(maxWidth: .infinity, minHeight: height)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.glass)
-        .buttonBorderShape(.roundedRectangle(radius: RecordingStyle.Control.corner))
-        .disabled(!model.recorder.isCapturing || model.recorder.state == .starting)
-        .sensoryFeedback(.impact(weight: .medium), trigger: count)
-        .accessibilityLabel(count > 0 ? "Bookmark, \(count) so far" : "Bookmark")
-    }
-}
-
-/// Take Photo while recording: the photo joins the recording at its shutter moment, like a bookmark,
-/// and the count shows on it as Bookmark's does.
+/// Take Photo while recording: the photo joins the recording at its shutter moment, like a bookmark, and the count
+/// shows on it as Bookmark's does. The hand feels the camera's own shutter; nothing else taps it.
 struct CameraControl: View {
     @Environment(PhoneAppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var size: CGFloat = 44
     @State private var showingCamera = false
+    /// Photos the person took, for the tap that says one landed (a new recording's count going back isn't one).
+    @State private var taken = 0
     /// The recording the camera was opened for: a photo that arrives after it ends still joins it.
     @State private var recordingID: UUID?
 
@@ -208,7 +175,7 @@ struct CameraControl: View {
             } label: {
                 Image(systemName: "camera")
                     .font(.system(size: size * 0.4, weight: .medium))
-                    .foregroundStyle(PhoneStyle.Ink.title)
+                    .foregroundStyle(DaybookPalette.Ink.title)
                     .frame(width: size, height: size)
                     .contentShape(Circle())
             }
@@ -216,19 +183,20 @@ struct CameraControl: View {
                 if count > 0 {
                     Text("\(count)")
                         .font(.caption2.weight(.bold).monospacedDigit())
-                        .foregroundStyle(PhoneStyle.Ink.title)
+                        .foregroundStyle(DaybookPalette.Ink.title)
                         .padding(.horizontal, 5)
                         .frame(minWidth: 18, minHeight: 18)
                         .background(.regularMaterial, in: Capsule())
                         .offset(x: 4, y: -4)
-                        .contentTransition(.numericText())
+                        .contentTransition(reduceMotion ? .opacity : .numericText(value: Double(count)))
+                        .animation(DaybookMotion.resolved(DaybookMotion.tick, reduceMotion: reduceMotion), value: count)
                         .accessibilityHidden(true)
                 }
             }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.circle)
+            .daybookControl(.standard, shape: .circle)
             .disabled(!model.recorder.isCapturing || model.recorder.state == .starting)
-            .sensoryFeedback(.success, trigger: count)
+            .onChange(of: count) { old, new in if new > old { taken += 1 } }
+            .sensoryFeedback(.success, trigger: taken)
             .accessibilityLabel(count > 0 ? "Take Photo, \(count) so far" : "Take Photo")
             .cameraCover(isPresented: $showingCamera, capture: { [recordingID] photo in Task { await model.addPhoto(photo, recording: recordingID) } },
                          failed: { model.say(PhoneAppModel.photoNotSaved) })
@@ -236,105 +204,8 @@ struct CameraControl: View {
     }
 }
 
-/// Stop: the red control. Its own colours, so it reads as Stop in either appearance.
-struct StopControl: View {
-    @Environment(PhoneAppModel.self) private var model
-    var height: CGFloat = RecordingStyle.Control.pocketHeight
-
-    var body: some View {
-        Button {
-            Task { try? await model.stopRecording() }
-        } label: {
-            HStack(spacing: 8) {
-                if model.recorder.state == .stopping || model.isFiling {
-                    ProgressView().tint(.white)
-                    Text("Saving…")
-                } else {
-                    Image(systemName: "stop.fill")
-                    Text("Stop")
-                }
-            }
-            .font(.headline)
-            .foregroundStyle(.white)
-            .frame(maxWidth: .infinity, minHeight: height)
-            .contentShape(Rectangle())
-        }
-        // Red glass with its own colours, so it reads as Stop in either appearance and matches Bookmark's shape.
-        .buttonStyle(.glassProminent)
-        .buttonBorderShape(.roundedRectangle(radius: RecordingStyle.Control.corner))
-        .tint(PhoneStyle.Ink.recordFill)
-        .disabled(model.recorder.state == .stopping || model.isFiling)
-        .sensoryFeedback(.success, trigger: model.isFiling)
-        .accessibilityLabel("Stop recording")
-    }
-}
-
-/// The recording is paused: what happened, and Resume. One quiet box; Stop stays where it was.
-struct PausedPanel: View {
-    @Environment(PhoneAppModel.self) private var model
-    var large = false
-
-    var body: some View {
-        let recorder = model.recorder
-        VStack(alignment: .leading, spacing: large ? 14 : 10) {
-            Label(headline, systemImage: "pause.circle.fill")
-                .font(large ? .title3.weight(.semibold) : .headline)
-                .foregroundStyle(PhoneStyle.Ink.warning)
-            Text(message)
-                .font(large ? .body : .subheadline)
-                .foregroundStyle(PhoneStyle.Ink.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            // Resume only once it can: during a call the message says when it will.
-            if recorder.canResume {
-                Button {
-                    Task { try? await model.resumeRecording() }
-                } label: {
-                    HStack(spacing: 8) {
-                        Circle().fill(PhoneStyle.Ink.record).frame(width: 12, height: 12)
-                        Text("Resume Recording")
-                    }
-                    .font(.headline)
-                    .foregroundStyle(PhoneStyle.Ink.title)
-                    .frame(maxWidth: .infinity, minHeight: large ? 56 : 50)
-                }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.roundedRectangle(radius: 16))
-            }
-        }
-        .padding(large ? 20 : 16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RecordingStyle.attentionFill, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .accessibilityElement(children: .contain)
-    }
-
-    /// iOS doesn't say what interrupted; without a reason (a muted or unplugged microphone gives
-    /// one) it's almost always a call.
-    private var isCall: Bool {
-        model.recorder.state == .paused(.interruption) && model.recorder.pauseMessage == PhoneRecorder.unspecifiedInterruption
-    }
-
-    private var headline: String {
-        switch model.recorder.state {
-        case .paused(.interruption): return isCall ? "Paused for a call" : "Paused"
-        case .paused(.inputFailed): return "The microphone stopped"
-        default: return "Paused"
-        }
-    }
-
-    private var message: String {
-        let recorder = model.recorder
-        if recorder.canResume {
-            // Resume is right below: the words don't ask for it.
-            return isCall ? "The call has ended. Everything so far is saved."
-                : (recorder.pauseMessage ?? "Everything so far is saved.")
-        }
-        return isCall ? "Everything so far is saved. Recording can continue when the call ends."
-            : (recorder.pauseMessage ?? "Everything so far is saved.")
-    }
-}
-
-/// The conversation so far on one line: bookmarks in amber and notes in ink at their times, with
-/// "now" at the right edge. No labels: the clock above has the time, Bookmark has the count.
+/// The conversation so far on one line: bookmarks in amber and notes in ink at their times, with "now" at the
+/// right edge. No labels: the clock above has the time, Bookmark has the count.
 struct LiveTimelineBar: View {
     @Environment(PhoneAppModel.self) private var model
 
@@ -344,35 +215,33 @@ struct LiveTimelineBar: View {
             // The conversation's timeline keeps running through a pause, so the bar runs to now.
             let elapsed = max(1, recorder.elapsedTime)
             let notes = NoteTimeline.paragraphTimes(anchors: recorder.timedNotes, text: recorder.notes).compactMap { $0 }
-            VStack(spacing: 0) {
-                GeometryReader { proxy in
-                    let width = proxy.size.width
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(RecordingStyle.quietFill)
-                        if let paused = recorder.pausedAt {
-                            // The pause so far, in the colour of what needs you.
-                            UnevenRoundedRectangle(topLeadingRadius: 2, bottomLeadingRadius: 2, bottomTrailingRadius: 7, topTrailingRadius: 7)
-                                .fill(PhoneStyle.Ink.warning.opacity(0.35))
-                                .frame(width: max(6, width * (1 - min(1, paused / elapsed))))
-                                .frame(maxWidth: .infinity, alignment: .trailing)
-                        }
-                        ForEach(Array(notes.enumerated()), id: \.offset) { _, time in
-                            Capsule().fill(PhoneStyle.Ink.meta)
-                                .frame(width: 2, height: proxy.size.height * 0.45)
-                                .offset(x: min(width - 2, width * time / elapsed))
-                        }
-                        ForEach(recorder.highlights) { mark in
-                            Capsule().fill(PhoneStyle.bookmark)
-                                .frame(width: 3, height: proxy.size.height)
-                                .offset(x: min(width - 3, width * mark.time / elapsed))
-                        }
-                        Circle().fill(recorder.state == .recording ? PhoneStyle.Ink.record : PhoneStyle.Ink.faint)
-                            .frame(width: 8, height: 8)
-                            .offset(x: width - 8)
+            GeometryReader { proxy in
+                let width = proxy.size.width
+                ZStack(alignment: .leading) {
+                    Capsule().fill(RecordingStyle.quietFill)
+                    if let paused = recorder.pausedAt {
+                        // The pause so far, in the colour of what needs you.
+                        UnevenRoundedRectangle(topLeadingRadius: 2, bottomLeadingRadius: 2, bottomTrailingRadius: 7, topTrailingRadius: 7)
+                            .fill(DaybookPalette.Ink.warning.opacity(0.35))
+                            .frame(width: max(6, width * (1 - min(1, paused / elapsed))))
+                            .frame(maxWidth: .infinity, alignment: .trailing)
                     }
+                    ForEach(Array(notes.enumerated()), id: \.offset) { _, time in
+                        Capsule().fill(DaybookPalette.Ink.meta)
+                            .frame(width: 2, height: proxy.size.height * 0.45)
+                            .offset(x: min(width - 2, width * time / elapsed))
+                    }
+                    ForEach(recorder.highlights) { mark in
+                        Capsule().fill(DaybookPalette.bookmark)
+                            .frame(width: 3, height: proxy.size.height)
+                            .offset(x: min(width - 3, width * mark.time / elapsed))
+                    }
+                    Circle().fill(recorder.state == .recording ? DaybookPalette.Ink.record : DaybookPalette.Ink.faint)
+                        .frame(width: 8, height: 8)
+                        .offset(x: width - 8)
                 }
-                .frame(height: 14)
             }
+            .frame(height: 14)
             .accessibilityElement()
             .accessibilityLabel("Timeline")
             .accessibilityValue("\(recorder.bookmarkCount) bookmarks, \(notes.count) notes, \(TimeLabel.short(recorder.elapsedTime)) recorded")
@@ -380,11 +249,10 @@ struct LiveTimelineBar: View {
     }
 }
 
-/// This recording's bookmarks, newest first, each with the note written just before it. Nothing
-/// until the first one: Bookmark below says what it does, and carries the count.
+/// This recording's bookmarks, newest first, each with the note written just before it. Nothing until the first
+/// one: Bookmark below says what it does, and carries the count.
 struct BookmarkLog: View {
     @Environment(PhoneAppModel.self) private var model
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let recorder = model.recorder
@@ -393,67 +261,56 @@ struct BookmarkLog: View {
             if !marks.isEmpty {
                 Text("Bookmarks")
                     .font(.footnote.weight(.semibold))
-                    .foregroundStyle(PhoneStyle.Ink.meta)
-                    .textCase(.uppercase)
-                    .tracking(0.6)
+                    .foregroundStyle(DaybookPalette.Ink.meta)
                     .accessibilityAddTraits(.isHeader)
                 ForEach(marks) { mark in
                     HStack(alignment: .firstTextBaseline, spacing: 10) {
-                        Image(systemName: "bookmark.fill").foregroundStyle(PhoneStyle.bookmark).imageScale(.small)
+                        Image(systemName: "bookmark.fill").foregroundStyle(DaybookPalette.bookmark).imageScale(.small)
                         Text(TimeLabel.short(mark.time))
                             .font(.subheadline.weight(.semibold).monospacedDigit())
-                            .foregroundStyle(PhoneStyle.Ink.body)
+                            .foregroundStyle(DaybookPalette.Ink.body)
                             .frame(minWidth: 40, alignment: .leading)
-                        Text(context(for: mark) ?? "")
+                        Text(NotesTimeline.paragraph(before: mark.time, notes: recorder.notes, anchors: recorder.timedNotes) ?? "")
                             .font(.subheadline)
-                            .foregroundStyle(PhoneStyle.Ink.secondary)
+                            .foregroundStyle(DaybookPalette.Ink.secondary)
                             .lineLimit(1)
                     }
-                    .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
+                    .daybookTransition(.move(edge: .top).combined(with: .opacity))
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .motion(.snappy, value: marks.count)
-    }
-
-    /// The paragraph written last before the bookmark.
-    private func context(for mark: Highlight) -> String? {
-        let recorder = model.recorder
-        let paragraphs = NotesTimeline.paragraphs(recorder.notes)
-        let times = NoteTimeline.paragraphTimes(anchors: recorder.timedNotes, text: recorder.notes)
-        var best: (TimeInterval, String)?
-        for (index, text) in paragraphs.enumerated() {
-            guard times.indices.contains(index), let time = times[index], time <= mark.time else { continue }
-            if best == nil || time >= best!.0 { best = (time, text) }
-        }
-        return best?.1
+        .daybookMotion(DaybookMotion.land, value: marks.count)
     }
 }
 
-/// One line when something needs saying (a recovered recording, a Mac that declined, a problem the
-/// recorder reports while it keeps recording): what happened, the fix when there is one, and the
-/// system's own words only behind Details.
+/// One line when something needs saying (a recovered recording, a Mac that declined, a problem the recorder
+/// reports while it keeps recording): what happened, the fix when there is one, and the system's own words only
+/// behind Details. VoiceOver hears each as it appears.
 struct RecordingNotice: View {
     @Environment(PhoneAppModel.self) private var model
     @State private var details: NoticeDetails?
 
     var body: some View {
         let warning = model.recorder.isCapturing ? PhoneAppModel.recorderWarning(model.recorder.lastError) : nil
-        // Nothing at all when there's nothing to say, so the stack around it keeps its spacing.
-        if warning != nil || model.notice != nil {
-            VStack(alignment: .leading, spacing: PhoneStyle.Space.s2) {
-                if let warning {
-                    NoticeRow(message: warning.message, details: warning.details, showDetails: show)
+        Group {
+            // Nothing at all when there's nothing to say, so the stack around it keeps its spacing.
+            if warning != nil || model.notice != nil {
+                VStack(alignment: .leading, spacing: DaybookSpacing.s2) {
+                    if let warning {
+                        NoticeRow(message: warning.message, details: warning.details, showDetails: show)
+                    }
+                    if let notice = model.notice {
+                        NoticeRow(message: notice, details: model.noticeDetails, fix: model.noticeFix,
+                                  dismiss: { model.dismissNotice() }, showDetails: show)
+                    }
                 }
-                if let notice = model.notice {
-                    NoticeRow(message: notice, details: model.noticeDetails, fix: model.noticeFix,
-                              dismiss: { model.dismissNotice() }, showDetails: show)
-                }
+                .transition(.opacity)
+                .sheet(item: $details) { DetailsSheet(title: "Details", text: $0.text) }
             }
-            .transition(.opacity)
-            .sheet(item: $details) { DetailsSheet(title: "Details", text: $0.text) }
         }
+        .onChange(of: model.notice) { _, notice in if let notice { AccessibilityNotification.Announcement(notice).post() } }
+        .onChange(of: warning?.message) { _, message in if let message { AccessibilityNotification.Announcement(message).post() } }
     }
 
     private func show(_ text: String) { details = NoticeDetails(text: text) }
@@ -475,12 +332,12 @@ private struct NoticeRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "exclamationmark.circle").foregroundStyle(PhoneStyle.Ink.warning).accessibilityHidden(true)
+            Image(systemName: "exclamationmark.circle").foregroundStyle(DaybookPalette.Ink.warning).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
-                Text(message).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
+                Text(message).font(.footnote).foregroundStyle(DaybookPalette.Ink.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if fix != nil || details != nil {
-                    HStack(spacing: PhoneStyle.Space.s4) {
+                    HStack(spacing: DaybookSpacing.s4) {
                         if fix == .openSettings, let url = URL(string: UIApplication.openSettingsURLString) {
                             Button("Open Settings") { openURL(url) }
                         }
@@ -499,7 +356,7 @@ private struct NoticeRow: View {
                         .frame(minWidth: 44, minHeight: 44)
                         .contentShape(Rectangle())
                 }
-                .foregroundStyle(PhoneStyle.Ink.meta)
+                .foregroundStyle(DaybookPalette.Ink.meta)
                 .padding(.vertical, -13)
                 .padding(.trailing, -12)
                 .accessibilityLabel("Dismiss")
@@ -508,10 +365,20 @@ private struct NoticeRow: View {
     }
 }
 
-/// The notes editor while recording. One place to swap in the reading work's margin-time editor at
-/// merge; until then the shell's `TimedNotesView` (margin times, bookmarks in the lane).
-struct RecordingNotesEditor: View {
+/// The notes while recording: the editor the conversation's page uses, with each paragraph's time in the lane and
+/// this recording's bookmarks and photos as ticks beside the paragraphs written after them.
+struct RecordingNotes: View {
+    @Environment(PhoneAppModel.self) private var model
+    var focusOnAppear = false
+
     var body: some View {
-        TimedNotesView()
+        let recorder = model.recorder
+        MarginNotesEditor(
+            text: Binding(get: { recorder.notes }, set: { model.editNotes($0) }),
+            times: NoteTimeline.paragraphTimes(anchors: recorder.timedNotes, text: recorder.notes),
+            marks: NotesTimeline.marks(bookmarks: recorder.highlights, photos: recorder.photos),
+            scrolls: true,
+            focusOnAppear: focusOnAppear,
+            bottomInset: DaybookSpacing.s3)
     }
 }

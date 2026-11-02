@@ -87,6 +87,17 @@ final class RecorderSurfaceTests: XCTestCase {
         XCTAssertEqual(plain.at(start.addingTimeInterval(4)), plain, "a chip without a countdown never changes")
     }
 
+    /// The owner's ask: work in progress fills its own pill across the row, and VoiceOver hears how far it's gone.
+    func testBehaviorWorkInProgressSpansItsRowAndSaysItsPercent() {
+        let working = RecorderChip(target: .processing, symbol: "quote.bubble", label: "Transcribing · 40%", tone: .working, progress: 0.4,
+                                   detail: "Transcribing · 40%")
+        let still = RecorderChip(target: .call, symbol: "waveform", label: "Call", tone: .linked, detail: "Call audio detected")
+        XCTAssertTrue(working.expands)
+        XCTAssertFalse(still.expands)
+        XCTAssertEqual(StatusChip.accessibilityValue(progress: working.progress), "40 percent")
+        XCTAssertNil(StatusChip.accessibilityValue(progress: still.progress))
+    }
+
     // MARK: Levels
 
     /// The iPhone feeds its microphone's trail itself, at its recorder's pace: the meters draw that trail, it counts

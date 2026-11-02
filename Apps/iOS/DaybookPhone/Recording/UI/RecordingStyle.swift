@@ -25,41 +25,15 @@ extension PhoneStyle {
     }
 }
 
-/// Recording-only tokens, on top of `PhoneStyle` (docs/interface.md). Red is only for recording
-/// right now (the dot, the clock, Stop); amber only for bookmarks; teal for the meter and for
-/// what can be acted on.
+/// Recording-only tokens, on top of `PhoneStyle` (docs/interface.md). The recorder's sizes are the shared
+/// recorder's (DaybookUI's `RecorderSurface`); these are what only the iPhone has: table mode's dimming and the
+/// live timeline's track.
 enum RecordingStyle {
-    /// Elapsed-time sizes per posture.
-    enum Clock {
-        static let pocket: CGFloat = 64
-        static let notebook: CGFloat = 76
-        static let table: CGFloat = 148
-    }
-
-    /// Thumb-zone controls in the hand; the table's target is meant to be hit without looking.
-    enum Control {
-        static let pocketHeight: CGFloat = 64
-        static let notebookHeight: CGFloat = 56
-        static let tableTarget: CGFloat = 248
-        static let corner = DaybookRadius.control
-    }
-
     /// Table mode dims after this long without a touch, to save battery.
     static let dimAfter: Duration = .seconds(8)
     static let dimmedOpacity: Double = 0.5
 
-    /// The rolling meter.
-    enum Meter {
-        static let pocketHeight: CGFloat = 44
-        static let notebookHeight: CGFloat = 56
-        static let tableHeight: CGFloat = 64
-        static let barWidth = RollingLevelMeter.Metrics.phone.barWidth
-        static let gap = RollingLevelMeter.Metrics.phone.gap
-    }
-
-    /// A recording's pause, and anything else that needs the person: Ink.warning on a 9% wash.
-    static let attentionFill = DaybookPalette.attentionFill
-    /// Quiet fills for chips and the timeline's track.
+    /// The live timeline's track.
     static let quietFill = DaybookPalette.quietFill
 }
 

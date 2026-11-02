@@ -1,12 +1,18 @@
+import DaybookDesign
 import SwiftUI
 import UniformTypeIdentifiers
 
 /// Starting a recording from the library: the Record control at the thumb, Import Audio beside it,
-/// and one line when something needs saying. `LibraryBrowser` places it.
+/// and one line when something needs saying. `LibraryBrowser` places it. When a recording is saved while it's
+/// on screen, it says so for a moment (the accent checkmark drawn on, "Saved"), then reads Record again.
 struct RecordStartButton: View {
     @Environment(PhoneAppModel.self) private var model
     @State private var importing = false
     @State private var showingDebugSettings = false
+    /// The person's own presses of Record, for the tap that answers them.
+    @State private var presses = 0
+    /// A recording was saved just now: the checkmark and "Saved" stand in for the dot and "Record".
+    @State private var savedBeat = false
 
     var body: some View {
         VStack(spacing: PhoneStyle.Space.s2) {
@@ -28,41 +34,61 @@ struct RecordStartButton: View {
             }
             HStack(spacing: PhoneStyle.Space.s3) {
                 Button {
+                    presses += 1
                     // While only a recorder records the shared recording, this iPhone joins it.
                     if model.recorderOnly != nil { Task { await model.recordAlongWithRecorder() } }
                     else { Task { try? await model.startRecording() } }
                 } label: {
                     HStack(spacing: 10) {
-                        Circle().fill(PhoneStyle.Ink.record).frame(width: 16, height: 16)
-                        Text(model.isFiling ? "Saving…" : "Record").font(.title3.weight(.semibold))
+                        if savedBeat {
+                            DoneMark(size: 18).accessibilityHidden(true)
+                        } else {
+                            Circle().fill(PhoneStyle.Ink.record).frame(width: 16, height: 16)
+                                .daybookGlow(PhoneStyle.Ink.record, radius: 3)
+                        }
+                        Text(model.isFiling ? "Saving…" : savedBeat ? "Saved" : "Record")
+                            .font(.title3.weight(.semibold))
+                            .contentTransition(.interpolate)
                     }
                     .foregroundStyle(PhoneStyle.Ink.title)
                     .frame(maxWidth: .infinity, minHeight: 60)
                     .contentShape(Capsule())
                 }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.capsule)
+                .daybookControl(.standard, shape: .capsule)
                 .disabled(model.recorder.state != .idle || model.isFiling)
+                .sensoryFeedback(.impact(weight: .medium), trigger: presses)
+                .accessibilityLabel(savedBeat ? "Record. Saved." : "Record")
                 .accessibilityHint(model.recorderOnly != nil ? "Records on this iPhone too" : "Starts recording with the microphone")
                 // The row stops growing at the status sheet's largest size; past it, a long press shows the label large.
-                .accessibilityShowsLargeContentViewer()
+                .accessibilityShowsLargeContentViewer { Label("Record", systemImage: "record.circle") }
 
                 Button { importing = true } label: {
                     Image(systemName: "square.and.arrow.down")
                         .font(.title3.weight(.medium))
-                        .foregroundStyle(PhoneStyle.Ink.link)
+                        .foregroundStyle(PhoneStyle.Ink.title)
                         .frame(width: 60, height: 60)
                         .contentShape(Circle())
                 }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
+                .daybookControl(.standard, shape: .circle)
                 .accessibilityLabel("Import Audio")
                 .accessibilityHint("Adds a recording from Files, such as a voice memo")
                 .accessibilityShowsLargeContentViewer()
             }
         }
-        .animation(.snappy, value: model.importing)
-        .animation(.snappy, value: model.recorderOnly)
+        .daybookMotion(DaybookMotion.state, value: model.importing)
+        .daybookMotion(DaybookMotion.state, value: model.recorderOnly)
+        .daybookMotion(DaybookMotion.fade, value: savedBeat)
+        .onChange(of: model.lastFiling) { _, filing in
+            // Saved while this is on screen: one short beat, then Record again.
+            guard case .saved? = filing else { return }
+            savedBeat = true
+        }
+        .sensoryFeedback(.success, trigger: savedBeat) { _, saved in saved }
+        .task(id: savedBeat) {
+            guard savedBeat else { return }
+            try? await Task.sleep(for: DaybookMotion.hold)
+            savedBeat = false
+        }
         .fileImporter(isPresented: $importing, allowedContentTypes: Self.audioTypes, allowsMultipleSelection: true) { result in
             guard case .success(let urls) = result else { return }
             Task { await model.importFiles(urls) }

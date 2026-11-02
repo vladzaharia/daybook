@@ -1,11 +1,13 @@
+import DaybookDesign
 import SwiftUI
 
 /// The surface for the posture and the moment: the library and reading (`LibraryBrowser`) while
-/// nothing is being recorded, and the recorder (`RecordingSurface`) while something is, laid out
-/// for pocket (closed), notebook (open), or table (partly open while recording).
+/// nothing is being recorded, and the recorder (`RecorderScreen`) while something is, laid out
+/// for pocket (closed), notebook (open), or table (partly open while recording). After a Stop seen on the recorder,
+/// the recorder stays for a moment to say Saved, with Open and Keep Recording (`AfterStop`).
 ///
 /// Ownership (docs/iphone.md, phase 2): `LibraryBrowser` and this routing belong to the library and
-/// reading work; `RecordingSurface`, `RecordStartButton`, and `SettingsScreen` to the recording,
+/// reading work; `RecorderScreen`, `RecordStartButton`, and `SettingsScreen` to the recording,
 /// devices, and settings work.
 ///
 /// It owns the `ReadingSession` (where the person is in the library, what's playing), so reading
@@ -16,14 +18,18 @@ struct RootView: View {
     @Environment(DevicePosture.self) private var posture
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.audioProvider) private var audioProvider
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var reading = ReadingSession()
+    /// The recording under way, as it began: what an after-Stop moment is about.
+    @State private var recording: AfterStop?
+    @State private var afterStop: AfterStop?
+
+    private var showsRecorder: Bool { model.isRecordingActive || afterStop != nil }
 
     var body: some View {
         let layout = posture.layout(isRecording: model.recorder.isCapturing, horizontalSizeClass: sizeClass)
         Group {
-            if model.isRecordingActive {
-                RecordingSurface(style: SurfaceStyle(layout))
+            if showsRecorder {
+                RecorderScreen(style: SurfaceStyle(layout), afterStop: model.isRecordingActive ? nil : afterStop) { afterStop = nil }
             } else {
                 LibraryBrowser(style: layout == .pocket ? .pocket : .notebook)
             }
@@ -31,11 +37,20 @@ struct RootView: View {
         .environment(reading)
         .environment(\.surfaceStyle, SurfaceStyle(layout))
         .environment(\.audioProvider, boundAudioProvider)
-        .animation(reduceMotion ? .easeOut(duration: 0.15) : .easeInOut(duration: 0.3), value: layout)
-        .animation(reduceMotion ? .easeOut(duration: 0.15) : .easeInOut(duration: 0.3), value: model.isRecordingActive)
-        .onChange(of: model.isRecordingActive) { _, recording in
-            // Playback stops for a recording, so the microphone doesn't record it.
-            if recording { reading.player.pause() }
+        .daybookMotion(DaybookMotion.page, value: layout)
+        .daybookMotion(DaybookMotion.page, value: showsRecorder)
+        .onChange(of: model.isRecordingActive, initial: true) { _, active in
+            if active {
+                // Playback stops for a recording, so the microphone doesn't record it.
+                reading.player.pause()
+                afterStop = nil
+                recording = model.recorder.captureID.map { AfterStop(conversationID: $0, title: model.recorder.title,
+                                                                      startedAt: model.recorder.startedAt, before: model.lastFiling) }
+            } else {
+                // Seen stopping (in front, on the recorder): it stays a moment to say what became of it.
+                if model.isForeground, let recording { afterStop = recording }
+                recording = nil
+            }
         }
         // Leaving a conversation: edits to it held back for a burst go now.
         .onChange(of: reading.openID) { left, _ in
@@ -44,6 +59,11 @@ struct RootView: View {
         .onChange(of: reading.reading) { _, isReading in
             if !isReading, let id = reading.openID { model.sync.publishHeldEdits(of: id) }
         }
+        .onChange(of: model.recorder.captureID) { _, id in
+            guard model.isRecordingActive, let id, recording?.conversationID != id else { return }
+            recording = AfterStop(conversationID: id, title: model.recorder.title, startedAt: model.recorder.startedAt, before: model.lastFiling)
+        }
+        .onChange(of: model.recorder.title) { _, title in recording?.title = title }
         .modifier(HingeObserver(posture: posture))
         .modifier(GeometryProbe(enabled: model.options.logGeometry, posture: posture))
         .overlay(alignment: .top) {

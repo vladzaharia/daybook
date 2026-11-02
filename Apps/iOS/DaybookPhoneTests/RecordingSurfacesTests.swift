@@ -1,3 +1,10 @@
+import DaybookCore
+import DaybookDesign
+import DaybookKit
+import DaybookLink
+import DaybookUI
+import SwiftUI
+import UIKit
 import XCTest
 @testable import DaybookPhone
 
@@ -213,5 +220,209 @@ final class RecordingSurfacesTests: XCTestCase {
             }
         }
         XCTAssertEqual(PhoneStyle.ActivityButton.all.count, 3)
+    }
+}
+
+/// The recorder on the iPhone, as the recorder both apps share draws it: what it says about the recording and the
+/// devices recording along, the pause, what VoiceOver hears, table mode's screen, the moment after Stop, and the
+/// notes editor at the largest text sizes. Values and views in isolation: nothing is recorded.
+@MainActor
+final class RecorderScreenTests: XCTestCase {
+    private func mac(_ name: String = "Studio Mac", recording conversation: UUID? = nil) -> PhoneLink.Mac {
+        var mac = PhoneLink.Mac(id: UUID(), name: name, pairedAt: Date(timeIntervalSince1970: 0))
+        mac.state = .connected
+        if let conversation { mac.recording = LinkRecordingState(phase: .recording, conversationID: conversation) }
+        return mac
+    }
+
+    func testBehaviorThePhaseIsTheRecordersAndSavingLastsUntilItsFiled() {
+        XCTAssertEqual(PhoneRecorderStatus.phase(.starting, isFiling: false), .starting)
+        XCTAssertEqual(PhoneRecorderStatus.phase(.recording, isFiling: false), .recording)
+        XCTAssertEqual(PhoneRecorderStatus.phase(.paused(.interruption), isFiling: false), .paused)
+        XCTAssertEqual(PhoneRecorderStatus.phase(.stopping, isFiling: true), .saving)
+        XCTAssertEqual(PhoneRecorderStatus.phase(.idle, isFiling: true), .saving, "Saving until it's in the library")
+        XCTAssertEqual(PhoneRecorderStatus.phase(.idle, isFiling: false), .idle)
+    }
+
+    /// Regression: the iPhone named only Macs ("Also recording on Studio Mac"); a recorder that didn't start said
+    /// nothing until the transcript lacked its audio. Each now has the chip Floating Notes shows for it.
+    func testBehaviorTheIPhoneShowsEachMacAndRecorderAlongAsFloatingNotesDoes() throws {
+        let conversation = UUID()
+        let asked = mac("Studio Mac"), onItsOwn = mac("Alex’s MacBook", recording: conversation), free = mac("Desk Mac")
+        let session = MultipointSession(conversationID: conversation, role: .phoneLed,
+                                        macs: [.init(id: asked.id, name: asked.name, state: .recording, startedByPhone: true)])
+        var inputs = RecordingStatusInputs()
+        inputs.phase = .recording
+        inputs.here = "this iPhone"
+        inputs.peers = PhoneRecorderStatus.peers(multipoint: session, connected: [asked, onItsOwn, free], conversation: conversation)
+        var soundcore = RecorderFacts(id: "sc", name: "Soundcore Work", shortName: "Soundcore", symbol: "recordingtape", isDirect: true,
+                                      state: .connected, isLinked: true)
+        soundcore.along = PhoneRecorderStatus.along(.unavailable("It's in its case."), role: .started)
+        inputs.recorders = [soundcore]
+
+        let chips = RecordingStatusWords.chips(inputs)
+        XCTAssertEqual(chips.map(\.label), ["Not recording", "Studio Mac", "Alex’s MacBook", "Desk Mac"])
+        XCTAssertEqual(chips[0].tone, .attention, "a recorder that didn't start says so during the call")
+        XCTAssertEqual(chips.map(\.showsDot), [false, true, true, false], "the red dot on each Mac recording too")
+        XCTAssertEqual(chips[3].detail, "Desk Mac · Connected", "a Mac that could record too, with the offer in its menu")
+        XCTAssertEqual(RecordingStatusWords.meters(inputs).map(\.source), [.microphone], "a Mac's levels never reach the iPhone")
+
+        soundcore.along = PhoneRecorderStatus.along(.recording, role: .started)
+        inputs.recorders = [soundcore]
+        XCTAssertEqual(RecordingStatusWords.meters(inputs).map(\.source), [.microphone, .recorder("sc")], "a recorder along gets its meter")
+        XCTAssertEqual(PhoneRecorderStatus.along(.recording, role: .alreadyRecording), .alreadyRecording)
+        XCTAssertEqual(PhoneRecorderStatus.along(.asking), .starting)
+        XCTAssertEqual(PhoneRecorderStatus.along(.noAnswer("No answer")), .unavailable)
+    }
+
+    func testBehaviorAPauseSaysWhyAndWhenItCanGoOn() throws {
+        let call = try XCTUnwrap(PhoneRecorderStatus.pause(.paused(.interruption), message: PhoneRecorder.unspecifiedInterruption, canResume: false))
+        XCTAssertEqual(call.title, "Paused for a call")
+        XCTAssertEqual(call.message, "Everything so far is saved. Recording can continue when the call ends.")
+        XCTAssertFalse(call.canResume)
+        let ended = try XCTUnwrap(PhoneRecorderStatus.pause(.paused(.interruption), message: PhoneRecorder.unspecifiedInterruption, canResume: true))
+        XCTAssertEqual(ended.message, "The call has ended. Everything so far is saved.")
+        XCTAssertEqual(PhoneRecorderStatus.pause(.paused(.inputFailed), message: nil, canResume: true)?.title, "The microphone stopped")
+        XCTAssertNil(PhoneRecorderStatus.pause(.recording, message: nil, canResume: false))
+    }
+
+    /// Regression: VoiceOver was told nothing as a recording paused for a call or went on again.
+    func testBehaviorVoiceOverHearsAPauseAndAResume() {
+        let pause = PhoneRecorderStatus.pause(.paused(.interruption), message: PhoneRecorder.unspecifiedInterruption, canResume: false)
+        XCTAssertEqual(PhoneRecorderStatus.announcement(from: .recording, to: .paused, pause: pause), "Recording paused. Paused for a call.")
+        XCTAssertEqual(PhoneRecorderStatus.announcement(from: .paused, to: .recording, pause: nil), "Recording resumed")
+        XCTAssertNil(PhoneRecorderStatus.announcement(from: .starting, to: .recording, pause: nil), "the screen changing says that")
+    }
+
+    /// Regression: table mode never held Auto-Lock off, so a phone standing on the table locked partway through a
+    /// meeting. It keeps the screen on while it's in front and was touched in the last ten minutes.
+    func testBehaviorTableModeKeepsTheScreenOnOnlyWhileItsInFrontAndRecentlyTouched() {
+        XCTAssertTrue(TableIdle.keepsScreenOn(isActive: true, sinceTouch: 0))
+        XCTAssertTrue(TableIdle.keepsScreenOn(isActive: true, sinceTouch: 9 * 60))
+        XCTAssertFalse(TableIdle.keepsScreenOn(isActive: true, sinceTouch: 10 * 60), "a phone forgotten on the table locks itself")
+        XCTAssertFalse(TableIdle.keepsScreenOn(isActive: false, sinceTouch: 0), "never when Daybook isn't in front")
+    }
+
+    /// Regression: under Reduce Motion the table cut from paper to black, and waking took as long as dimming.
+    func testBehaviorTableModeDimsSlowlyWakesQuicklyAndFadesUnderReduceMotion() {
+        XCTAssertEqual(TableIdle.animation(dimming: true, reduceMotion: false), DaybookMotion.dim)
+        XCTAssertEqual(TableIdle.animation(dimming: false, reduceMotion: false), DaybookMotion.fade)
+        XCTAssertEqual(TableIdle.animation(dimming: true, reduceMotion: true), DaybookMotion.reduced, "a fade, never a cut")
+        XCTAssertEqual(TableIdle.animation(dimming: false, reduceMotion: true), DaybookMotion.reduced)
+    }
+
+    /// After Stop the recorder says what became of this recording, not an earlier one.
+    func testBehaviorAfterStopSaysWhatBecameOfThisRecording() {
+        let earlier = PhoneAppModel.Filing.saved(UUID(), Date(timeIntervalSince1970: 1))
+        let id = UUID()
+        let now = PhoneAppModel.Filing.saved(id, Date(timeIntervalSince1970: 2))
+        XCTAssertEqual(AfterStop.outcome(isActive: true, isFiling: false, filing: earlier, since: earlier), .saving)
+        XCTAssertEqual(AfterStop.outcome(isActive: false, isFiling: true, filing: earlier, since: earlier), .saving)
+        XCTAssertEqual(AfterStop.outcome(isActive: false, isFiling: false, filing: now, since: earlier), .saved(id))
+        XCTAssertEqual(AfterStop.outcome(isActive: false, isFiling: false, filing: .failed("Not added."), since: earlier), .failed("Not added."))
+        XCTAssertEqual(AfterStop.outcome(isActive: false, isFiling: false, filing: earlier, since: earlier), .none,
+                       "nothing new filed (nothing was recorded): back to the library")
+        XCTAssertEqual(AfterStop.lingers, .seconds(10))
+    }
+
+    func testBehaviorBookmarksAndPhotosAreMarksInTheNotesLane() {
+        let mark = Highlight(time: 4, text: "")
+        let photo = CapturePhoto(fileName: "photo-a.heic", capturedAt: Date(), time: 6)
+        let marks = NotesTimeline.marks(bookmarks: [mark], photos: [photo])
+        XCTAssertEqual(marks.map(\.kind), [.bookmark, .photo])
+        XCTAssertEqual(marks.map(\.time), [4, 6])
+        let anchors = [TimedNote(time: 2, text: "One"), TimedNote(time: 10, text: "Two")]
+        XCTAssertEqual(NotesTimeline.paragraph(before: 5, notes: "One\nTwo", anchors: anchors), "One", "what a bookmark was about")
+        XCTAssertNil(NotesTimeline.paragraph(before: 1, notes: "One\nTwo", anchors: anchors))
+    }
+
+    // MARK: The notes editor
+
+    /// Regression: at the largest text sizes the lane of times grew to half the width and notes wrapped a word a
+    /// line. There the times move above their paragraphs and the notes keep the whole width.
+    func testBehaviorAtTheAccessibilitySizesTimesSitAboveTheirParagraphs() throws {
+        let view = DaybookUI.MarginTextView()
+        view.frame = CGRect(x: 0, y: 0, width: 360, height: 600)
+        view.traitOverrides.preferredContentSizeCategory = .large
+        view.updateTraitsIfNeeded()
+        view.times = [2, 75]
+        view.setText("First thought\nA second paragraph")
+        view.layoutIfNeeded()
+        XCTAssertGreaterThan(view.lane, 0, "at the default size, a lane")
+        XCTAssertLessThanOrEqual(view.lane, ReadingGeometry.lane * ReadingGeometry.laneGrowth)
+        let beside = view.laneTimes
+
+        view.traitOverrides.preferredContentSizeCategory = .accessibilityExtraExtraExtraLarge
+        view.updateTraitsIfNeeded()
+        view.applyStyle()
+        view.layoutIfNeeded()
+        XCTAssertEqual(view.lane, 0, "no lane: the notes start at the edge")
+        XCTAssertEqual(view.textContainerInset.left, 0)
+        XCTAssertGreaterThan(view.textContainerInset.top, 0, "room above the first paragraph for its time")
+        let above = view.laneTimes
+        XCTAssertEqual(above.map(\.text), ["0:02", "1:15"])
+        XCTAssertEqual(beside.map(\.text), above.map(\.text))
+        XCTAssertLessThan(above[0].baseline, view.textContainerInset.top, "the first time sits above its paragraph")
+    }
+
+    /// The times are buttons VoiceOver hears ("Play from 1 minute 15 seconds") where they play, and the marks say
+    /// themselves; both are reachable beside the text, which VoiceOver reads as one field.
+    func testBehaviorVoiceOverReachesTheTimesAndMarksBesideTheNotes() throws {
+        var played: [TimeInterval] = []
+        let editor = DaybookUI.MarginNotesEditor(text: .constant("First\nSecond"), times: [2, 75], marks: [NoteMark(id: "b", kind: .bookmark, time: 30)],
+                                       playTime: { played.append($0) })
+        let host = UIHostingController(rootView: editor.frame(width: 360, height: 400))
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow()
+        window.frame = CGRect(x: 0, y: 0, width: 360, height: 400)
+        window.rootViewController = host
+        window.isHidden = false
+        defer { window.isHidden = true }
+        host.view.layoutIfNeeded()
+        let container = try XCTUnwrap(Self.find(NotesContainerView.self, in: host.view))
+        container.textView.layoutIfNeeded()
+        let items = try XCTUnwrap(container.accessibilityElements)
+        XCTAssertTrue(items.first as AnyObject === container.textView, "the notes first")
+        let labels = items.dropFirst().compactMap { ($0 as? NSObject)?.accessibilityLabel }
+        XCTAssertEqual(labels, ["Play from \(SpokenTime.format(2))", "Bookmark at \(SpokenTime.format(30))", "Play from \(SpokenTime.format(75))"])
+        XCTAssertEqual(container.textView.accessibilityCustomActions?.map(\.name), [DaybookUI.MarginNotesEditor.playFromHere])
+        container.textView.selectedRange = NSRange(location: 8, length: 0)
+        XCTAssertEqual(container.textView.playableTime(), 75)
+    }
+
+    /// Regression: a Stop pressed by mistake left Record to start a second conversation. Keep Recording records into
+    /// the one just saved, after what was saved, and the moment after Stop says what became of this recording.
+    func testBehaviorKeepRecordingRecordsIntoTheConversationJustSaved() async throws {
+        let library = PhoneLibrary(rootURL: try temporaryDirectory(), installation: "INSTALL-1")
+        let rig = RecorderRig()
+        let model = PhoneAppModel(recorder: rig.recorder, library: library, posture: DevicePosture(),
+                                  options: LaunchOptions(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]))
+        try await model.startRecording()
+        let before = model.lastFiling
+        rig.pump(2)
+        try await model.stopRecording()
+        let outcome = AfterStop.outcome(isActive: model.recorder.isActive, isFiling: model.isFiling, filing: model.lastFiling, since: before)
+        guard case .saved(let id) = outcome else { return XCTFail("\(outcome)") }
+        let first = try XCTUnwrap(library.controller.meeting(id))
+        XCTAssertEqual(first.tracks.count, 1)
+
+        // Keep Recording, as the after-Stop moment does it.
+        try await model.startRecording(into: id, title: first.title, multipoint: nil)
+        XCTAssertEqual(model.recorder.captureID, id, "the same conversation")
+        // Longer than the first, as a real second recording is: identical bytes would be the same recording.
+        rig.pump(3)
+        try await model.stopRecording()
+        let kept = try XCTUnwrap(library.controller.meeting(id))
+        XCTAssertEqual(kept.tracks.count, 2, "a second recording in the same conversation")
+        XCTAssertEqual(kept.title, first.title)
+        XCTAssertEqual(library.controller.meetings.count, 1, "no second conversation")
+        guard case .saved(let again, _)? = model.lastFiling else { return XCTFail() }
+        XCTAssertEqual(again, id)
+    }
+
+    private static func find<T: UIView>(_ type: T.Type, in view: UIView) -> T? {
+        if let found = view as? T { return found }
+        for subview in view.subviews { if let found = find(type, in: subview) { return found } }
+        return nil
     }
 }

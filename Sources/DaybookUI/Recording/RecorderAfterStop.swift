@@ -204,13 +204,12 @@ public struct RecorderAfterStop: View {
                     if let size = metrics.size {
                         RecordControlLabel(title: state.isStartingRecording ? "Starting…" : state.recordTitle, size: size)
                     } else {
-                        // Under touch the words wrap rather than cut ("Keep Recording" at the largest sizes).
+                        // Under touch the words keep one line, a little smaller if they must; at the accessibility
+                        // sizes they wrap rather than cut ("Keep Recording").
                         HStack(spacing: 8) {
                             Circle().fill(DaybookPalette.Ink.record).frame(width: 12, height: 12)
                                 .daybookGlow(DaybookPalette.Ink.record, radius: 3)
-                            Text(state.isStartingRecording ? "Starting…" : state.recordTitle)
-                                .multilineTextAlignment(.center)
-                                .fixedSize(horizontal: false, vertical: true)
+                            TouchControlWords(state.isStartingRecording ? "Starting…" : state.recordTitle)
                         }
                         .font(.headline)
                         .foregroundStyle(DaybookPalette.Ink.title)
@@ -240,14 +239,34 @@ public struct OpenControlLabel: View {
 
     public var body: some View {
         HStack(spacing: 6) {
-            Text(title)
-                .lineLimit(size == nil ? 3 : 1)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: size == nil)
+            if size == nil {
+                TouchControlWords(title)
+            } else {
+                Text(title).lineLimit(1)
+            }
             Image(systemName: "arrow.up.forward").font(size.map { .system(size: $0 * 0.75, weight: .semibold) } ?? .subheadline.weight(.semibold))
         }
         .font(size.map { .system(size: $0, weight: .semibold) } ?? .headline)
         .foregroundStyle(DaybookPalette.Ink.link)
         .padding(.vertical, size == nil ? 6 : 0)
+    }
+}
+
+/// A large control's words under touch: one line (a little smaller if the tile is narrow), wrapping at the
+/// accessibility sizes rather than cutting.
+struct TouchControlWords: View {
+    private let words: String
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    init(_ words: String) { self.words = words }
+
+    var body: some View {
+        if typeSize.isAccessibilitySize {
+            Text(words)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            Text(words).lineLimit(1).minimumScaleFactor(0.8)
+        }
     }
 }
