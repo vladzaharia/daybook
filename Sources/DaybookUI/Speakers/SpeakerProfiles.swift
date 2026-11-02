@@ -205,6 +205,8 @@ public struct SpeakerProfileDetail: View {
         }
         #if DEBUG
         .task {
+            // Only the profile `--speaker-profile` names: the Mac's window shows the first profile before it.
+            guard SpeakerProfileDemo.selectedProfile.map({ $0 == profile.name }) ?? true else { return }
             if let typed = SpeakerProfileDemo.typedName { draft = typed; rename(profile) }
             if let target = SpeakerProfileDemo.mergeTarget, let other = library.speakerProfiles.first(where: { $0.name == target && $0.id != profile.id }) {
                 if SpeakerProfileDemo.confirmsMerge {
