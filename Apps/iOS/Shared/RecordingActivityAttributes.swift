@@ -4,15 +4,19 @@ import Foundation
 /// The Live Activity and Dynamic Island for a recording in progress.
 ///
 /// The clock counts itself from `timerStart` (`Text(timerInterval:)`), so the app updates the
-/// activity only when something changes: pause, resume, a bookmark, or the coarse input level.
+/// activity only when something the person needs changes: pause, resume, a bookmark, the microphone
+/// going silent, a caption, or the recording ending.
 struct RecordingActivityAttributes: ActivityAttributes {
     struct ContentState: Codable, Hashable {
         enum Phase: String, Codable, Hashable {
             case recording
-            /// Interrupted (a call, Siri, an alarm). Resume or Stop.
+            /// Interrupted (a call, Siri, an alarm). Resume (once the call is over) or Stop.
             case paused
             /// Stopped; the recording is being saved to the library.
             case saved
+            /// It stopped by itself (storage couldn't keep up, the encoder failed): everything up to
+            /// the frozen time is saved, and nothing records any more.
+            case stopped
         }
 
         var phase: Phase
@@ -21,7 +25,9 @@ struct RecordingActivityAttributes: ActivityAttributes {
         var timerStart: Date
         /// Seconds into the conversation when it paused or stopped; the clock shows this frozen.
         var frozenElapsed: TimeInterval?
-        /// Input level, 0…1, in coarse steps so updates stay rare.
+        /// Whether the microphone hears anything: 1, or 0 once it has heard nothing for a few seconds
+        /// (muted, unplugged, blocked) or while paused. It changes only then, never with the voice, so
+        /// it costs no updates while people talk.
         var level: Double
         var bookmarkCount: Int
         /// Multipoint: "Also on Studio Mac" or "With Studio Mac" while a Mac records this conversation
@@ -31,6 +37,9 @@ struct RecordingActivityAttributes: ActivityAttributes {
         /// nil otherwise. What was said is private: hidden while the iPhone is locked. Optional, so
         /// activities started by an earlier build still decode.
         var caption: String? = nil
+        /// Paused, whether recording can continue now: false during the call, when only Stop is
+        /// offered. Nil from an earlier build, which offered Resume.
+        var canResume: Bool? = nil
     }
 
     var conversationID: UUID
@@ -42,29 +51,37 @@ extension RecordingActivityAttributes.ContentState {
     /// its stale date keeps rolling forward.
     static let refreshInterval: TimeInterval = 60
     /// Without a refresh for this long the activity is stale: the app may have been stopped (a
-    /// crash, the system ending it), and it shows "Not confirmed" rather than a clock that runs on.
+    /// crash, the system ending it), and it asks to open Daybook rather than show a clock that runs on.
     static let staleAfter: TimeInterval = 90
     /// A pause changes nothing until the person acts, and the app may be suspended through a call.
     static let pausedStaleAfter: TimeInterval = 2 * 3_600
 
-    /// The stale date for content sent at `now`. A saved recording never goes stale.
+    /// The stale date for content sent at `now`. A recording that ended never goes stale.
     func staleDate(from now: Date) -> Date? {
         switch phase {
         case .recording: return now.addingTimeInterval(Self.staleAfter)
         case .paused: return now.addingTimeInterval(Self.pausedStaleAfter)
-        case .saved: return nil
+        case .saved, .stopped: return nil
         }
     }
 
-    /// "Recording", "Paused", "Saved", or "Not confirmed" once the system marks it stale.
+    /// "Recording", "Paused", "Saved", "Recording stopped", or "Open Daybook to check" once the system
+    /// marks it stale.
     func title(isStale: Bool) -> String {
         switch phase {
         case .saved: return "Saved"
-        case _ where isStale: return "Not confirmed"
+        case .stopped: return "Recording stopped"
+        case _ where isStale: return SharedRecordingState.unconfirmedLine
         case .recording: return "Recording"
         case .paused: return "Paused"
         }
     }
+
+    /// The recording has ended, by Stop or by itself: no buttons, the time frozen.
+    var hasEnded: Bool { phase == .saved || phase == .stopped }
+
+    /// Paused, with Resume offered: only once recording can continue.
+    var offersResume: Bool { phase == .paused && canResume != false }
 
     /// A new caption alone updates the activity at most this often: the system budgets Live Activity
     /// updates, and a line that changes faster can't be read at a glance anyway.
@@ -89,13 +106,16 @@ extension RecordingActivityAttributes.ContentState {
         return line.count > captionLength ? "…" + String(last.suffix(captionLength - 1)) : line
     }
 
-    /// Steps the input level into four buckets (silent, quiet, speech, loud).
-    static func levelBucket(_ meter: Double) -> Double {
-        switch meter {
-        case ..<0.15: return 0
-        case ..<0.4: return 0.33
-        case ..<0.7: return 0.66
-        default: return 1
+    /// The activity's `level`: whether the microphone hears anything.
+    static func level(hearing: Bool) -> Double { hearing ? 1 : 0 }
+
+    /// What the Lock Screen says once a recording has ended: "Saved to Daybook", or that everything up
+    /// to the frozen time is.
+    var endLine: String? {
+        switch phase {
+        case .saved: return "Saved to Daybook"
+        case .stopped: return (frozenElapsed ?? 0) > 0 ? "Everything up to then is saved" : "No audio was recorded"
+        case .recording, .paused: return nil
         }
     }
 }

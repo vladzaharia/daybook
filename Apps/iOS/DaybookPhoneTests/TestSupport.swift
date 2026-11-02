@@ -41,6 +41,8 @@ struct RecorderRig {
         self.session = session
         self.clock = clock
         self.inputs = inputs
+        // Every test that builds an app model builds a rig: the test host's scratch goes when the tests end.
+        TestHostCleanup.register()
     }
 
     /// Delivers audio to the current input, advancing the clock with it.
@@ -177,6 +179,36 @@ extension XCTestCase {
         let name = makeTestSuite(prefix)
         guard let defaults = UserDefaults(suiteName: name) else { preconditionFailure("UserDefaults refused the suite \(name)") }
         return defaults
+    }
+}
+
+extension PhoneAppEnvironment {
+    /// For one test: nothing real (`.inert`), with its preferences in a suite and its models in a folder of
+    /// its own, both removed when the test ends.
+    @MainActor
+    static func test(_ testCase: XCTestCase, _ name: String = #function) throws -> PhoneAppEnvironment {
+        var environment = PhoneAppEnvironment.inert
+        environment.defaults = testCase.makeTestDefaults("PhoneAppEnvironment")
+        let models = try testCase.temporaryDirectory(name)
+        environment.modelRoot = { models.appendingPathComponent(UUID().uuidString, isDirectory: true) }
+        return environment
+    }
+}
+
+/// Removes the test host's scratch (`InertScratch`: the preferences and models of models built without
+/// an environment, and the host app's own library) once the test bundle has finished.
+final class TestHostCleanup: NSObject, XCTestObservation {
+    @MainActor private static var registered = false
+
+    @MainActor
+    static func register() {
+        guard !registered else { return }
+        registered = true
+        XCTestObservationCenter.shared.addTestObserver(TestHostCleanup())
+    }
+
+    func testBundleDidFinish(_ testBundle: Bundle) {
+        InertScratch.removeAll()
     }
 }
 

@@ -41,6 +41,9 @@ final class PhoneSettings {
     /// iPhone encrypts it). Off: it waits for Wi‑Fi, as model downloads do unless allowed.
     var encryptsOverCellular: Bool { didSet { defaults.set(encryptsOverCellular, forKey: Keys.encryptsOverCellular) } }
 
+    /// `encryptsOverCellular` as stored, for sync's sealing, which asks from its own queue.
+    nonisolated var encryptsOverCellularNow: Bool { defaults.bool(forKey: Keys.encryptsOverCellular) }
+
     var captionLocale: Locale { captionLocaleIdentifier.map(Locale.init(identifier:)) ?? .current }
 
     /// Whether each paired Mac may start recording here: on when a Mac is paired (recording on one
@@ -50,8 +53,6 @@ final class PhoneSettings {
     private var macRecordDecisions: [String: MacRecordDecision] {
         didSet { defaults.set(try? JSONEncoder().encode(macRecordDecisions), forKey: Keys.macRecordDecisions) }
     }
-    /// When this iPhone first kept these choices (earlier builds asked after pairing).
-    @ObservationIgnored let macRecordDecisionsSince: Date
 
     struct MacRecordDecision: Codable, Equatable {
         var allowed: Bool
@@ -90,7 +91,8 @@ final class PhoneSettings {
         setMacMayStartRecording(false, for: macID, pairedAt: pairedAt)
     }
 
-    @ObservationIgnored private let defaults: UserDefaults
+    /// Thread-safe, as `UserDefaults` is: read from any queue (`encryptsOverCellularNow`).
+    @ObservationIgnored nonisolated(unsafe) private let defaults: UserDefaults
 
     /// Choices offered in Settings › Storage.
     static let budgetChoices: [UInt64] = [250_000_000, 500_000_000, 1_000_000_000, 2_000_000_000, 5_000_000_000]
@@ -112,14 +114,13 @@ final class PhoneSettings {
         macRecordDecisions = defaults.data(forKey: Keys.macRecordDecisions)
             .flatMap { try? JSONDecoder().decode([String: MacRecordDecision].self, from: $0) } ?? [:]
         takenMacOffs = defaults.data(forKey: Keys.takenMacOffs).flatMap { try? JSONDecoder().decode([String: Date].self, from: $0) } ?? [:]
-        if let since = defaults.object(forKey: Keys.macRecordDecisionsSince) as? Date {
-            macRecordDecisionsSince = since
-        } else {
-            let now = Date()
-            defaults.set(now, forKey: Keys.macRecordDecisionsSince)
-            macRecordDecisionsSince = now
-        }
+        // Earlier builds noted when these choices began; nothing reads it now that Macs may start recording
+        // from the moment they're paired.
+        defaults.removeObject(forKey: Self.retiredDecisionsSinceKey)
     }
+
+    /// The key earlier builds kept that date under.
+    static let retiredDecisionsSinceKey = "phone.macRecordDecisionsSince"
 
     enum Keys {
         static let requestsTranscription = "phone.requestsTranscription"
@@ -134,7 +135,6 @@ final class PhoneSettings {
         static let includesEncryptedLibraryInBackups = "phone.includesEncryptedLibraryInBackups"
         static let encryptsOverCellular = "phone.encryptsOverCellular"
         static let macRecordDecisions = "phone.macRecordDecisions"
-        static let macRecordDecisionsSince = "phone.macRecordDecisionsSince"
         static let takenMacOffs = "phone.takenMacOffs"
     }
 }

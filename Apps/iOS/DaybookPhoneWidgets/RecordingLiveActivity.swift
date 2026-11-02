@@ -4,8 +4,10 @@ import DaybookDesign
 import SwiftUI
 import WidgetKit
 
-/// The recording on the Lock Screen and in the Dynamic Island: the clock, a level dot, and
-/// Bookmark and Stop (or Resume and Stop while paused). Red means recording; amber means bookmarks.
+/// The recording on the Lock Screen and in the Dynamic Island: the clock, and Bookmark and Stop (Resume
+/// and Stop once a pause can end, Stop alone during a call). The compact and minimal presentations are
+/// Daybook's waveform, so they never pass for the system's microphone dot. Red means recording; amber
+/// means bookmarks; the warning ink, a recording that stopped by itself.
 struct RecordingLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: RecordingActivityAttributes.self) { context in
@@ -16,8 +18,9 @@ struct RecordingLiveActivity: Widget {
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
                     HStack(spacing: 6) {
-                        LevelDot(state: context.state, isStale: context.isStale, size: 12)
+                        HearingDot(state: context.state, isStale: context.isStale, size: 12)
                         Text(context.state.title(isStale: context.isStale)).font(.subheadline.weight(.semibold))
+                            .foregroundStyle(titleInk(context))
                     }
                     .padding(.leading, 4)
                 }
@@ -29,44 +32,70 @@ struct RecordingLiveActivity: Widget {
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(spacing: 6) {
-                        if let multipoint = context.state.multipoint, !context.isStale {
+                        if let multipoint = context.state.multipoint, !context.isStale, !context.state.hasEnded {
                             Label(multipoint, systemImage: "macbook.and.iphone")
                                 .font(.caption.weight(.medium))
                                 .foregroundStyle(.secondary)
                         }
                         ActivityCaption(state: context.state, isStale: context.isStale, lines: 1)
-                        ActivityButtons(state: context.state, isStale: context.isStale)
+                        if let line = context.state.endLine {
+                            Text(line).font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            ActivityButtons(state: context.state, isStale: context.isStale)
+                        }
                     }
                     .padding(.top, 4)
                 }
             } compactLeading: {
-                LevelDot(state: context.state, isStale: context.isStale, size: 10)
+                RecordingGlyph(context: context)
             } compactTrailing: {
                 ActivityClock(state: context.state, isStale: context.isStale)
                     .font(.caption.weight(.semibold).monospacedDigit())
                     .foregroundStyle(isLive(context) ? PhoneStyle.Ink.record : .white)
                     .frame(maxWidth: 52)
             } minimal: {
-                LevelDot(state: context.state, isStale: context.isStale, size: 10)
+                RecordingGlyph(context: context)
             }
-            .keylineTint(PhoneStyle.Ink.record)
+            .keylineTint(glyphInk(context))
         }
     }
 }
 
-/// Recording, and confirmed recently: the clock and dot are red only then.
+/// Recording, and confirmed recently: the clock and glyph are red only then.
 private func isLive(_ context: ActivityViewContext<RecordingActivityAttributes>) -> Bool {
     context.state.phase == .recording && !context.isStale
 }
 
-/// Counts itself while recording; frozen when paused or saved; a dash once it's stale, because the
-/// app hasn't confirmed the recording is still going.
+/// The glyph's ink: red while recording, the warning ink once it stopped by itself, grey otherwise.
+private func glyphInk(_ context: ActivityViewContext<RecordingActivityAttributes>) -> Color {
+    if context.state.phase == .stopped { return PhoneStyle.Ink.warning }
+    return isLive(context) ? PhoneStyle.Ink.record : .gray
+}
+
+/// The title's ink: the warning ink once it stopped by itself, else the system's.
+private func titleInk(_ context: ActivityViewContext<RecordingActivityAttributes>) -> Color {
+    context.state.phase == .stopped ? PhoneStyle.Ink.warning : .primary
+}
+
+/// Daybook's waveform, for the compact and minimal presentations.
+private struct RecordingGlyph: View {
+    let context: ActivityViewContext<RecordingActivityAttributes>
+
+    var body: some View {
+        Image(systemName: context.state.phase == .stopped ? "exclamationmark.triangle.fill" : "waveform")
+            .foregroundStyle(glyphInk(context))
+            .accessibilityLabel(context.state.title(isStale: context.isStale))
+    }
+}
+
+/// Counts itself while recording; frozen when paused, saved, or stopped; a dash once it's stale,
+/// because the app hasn't confirmed the recording is still going.
 struct ActivityClock: View {
     let state: RecordingActivityAttributes.ContentState
     var isStale = false
 
     var body: some View {
-        if isStale, state.phase != .saved {
+        if isStale, !state.hasEnded {
             Text("–")
         } else if state.phase == .recording {
             Text(timerInterval: state.timerStart...Date.distantFuture, countsDown: false, showsHours: true)
@@ -77,36 +106,33 @@ struct ActivityClock: View {
     }
 }
 
-/// Red while recording, brighter with more input; grey when paused or not confirmed.
-struct LevelDot: View {
+/// Red while recording and the microphone hears something; dimmed when it has heard nothing for a few
+/// seconds; grey when paused or not confirmed; the warning ink once it stopped by itself.
+struct HearingDot: View {
     let state: RecordingActivityAttributes.ContentState
     var isStale = false
     var size: CGFloat
 
     var body: some View {
         let recording = state.phase == .recording && !isStale
-        ZStack {
-            if recording {
-                Circle().fill(PhoneStyle.Ink.record.opacity(0.25 + 0.35 * state.level))
-                    .frame(width: size * (1 + 0.6 * state.level), height: size * (1 + 0.6 * state.level))
-            }
-            Circle().fill(recording ? PhoneStyle.Ink.record : Color.gray).frame(width: size, height: size)
-        }
-        .frame(width: size * 1.6, height: size * 1.6)
-        .accessibilityLabel(state.title(isStale: isStale))
+        let ink = state.phase == .stopped ? PhoneStyle.Ink.warning : recording ? PhoneStyle.Ink.record : Color.gray
+        Circle().fill(ink.opacity(recording && state.level == 0 ? 0.45 : 1))
+            .frame(width: size, height: size)
+            .frame(width: size * 1.6, height: size * 1.6)
+            .accessibilityLabel(state.title(isStale: isStale))
     }
 }
 
-/// Bookmark and Stop, or Resume and Stop. Each label has its own ink on its fill (4.5:1 in both
-/// appearances); a filled button's default white label vanished on Resume's white and Bookmark's amber.
+/// Bookmark and Stop while recording; Resume and Stop once a pause can end; Stop alone during the call
+/// and when it's stale. Each label has its own ink on its fill (4.5:1 in both appearances); a filled
+/// button's default white label vanished on Resume's white and Bookmark's amber.
 struct ActivityButtons: View {
     let state: RecordingActivityAttributes.ContentState
     var isStale = false
 
     var body: some View {
         HStack(spacing: 10) {
-            switch state.phase {
-            case .recording where !isStale:
+            if state.phase == .recording, !isStale {
                 Button(intent: AddBookmarkIntent()) {
                     Label(state.bookmarkCount > 0 ? "Bookmark · \(state.bookmarkCount)" : "Bookmark", systemImage: "bookmark.fill")
                         .font(.subheadline.weight(.semibold))
@@ -114,7 +140,7 @@ struct ActivityButtons: View {
                         .frame(maxWidth: .infinity)
                 }
                 .tint(PhoneStyle.ActivityButton.bookmark.fillColor)
-            case .paused where !isStale:
+            } else if state.offersResume, !isStale {
                 Button(intent: ResumeRecordingIntent()) {
                     Label("Resume", systemImage: "record.circle")
                         .font(.subheadline.weight(.semibold))
@@ -122,10 +148,8 @@ struct ActivityButtons: View {
                         .frame(maxWidth: .infinity)
                 }
                 .tint(PhoneStyle.ActivityButton.resume.fillColor)
-            default:
-                EmptyView()
             }
-            if state.phase != .saved {
+            if !state.hasEnded {
                 Button(intent: StopRecordingIntent()) {
                     Label("Stop", systemImage: "stop.fill")
                         .font(.subheadline.weight(.semibold))
@@ -150,7 +174,7 @@ struct ActivityCaption: View {
     @Environment(\.isLuminanceReduced) private var isLuminanceReduced
 
     var body: some View {
-        if let caption = state.caption, state.phase == .recording, !isStale, !isLuminanceReduced {
+        if Self.shows(state, isStale: isStale), let caption = state.caption, !isLuminanceReduced {
             Text(caption)
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -161,21 +185,31 @@ struct ActivityCaption: View {
                 .accessibilityLabel("Live caption: \(caption)")
         }
     }
+
+    static func shows(_ state: RecordingActivityAttributes.ContentState, isStale: Bool) -> Bool {
+        state.caption != nil && state.phase == .recording && !isStale
+    }
 }
 
+/// The Lock Screen presentation, inside its 160 pt: the header (with the multipoint line only while no
+/// caption shows), the caption (one line at the larger text sizes), and the buttons, with Dynamic Type
+/// capped where three rows would no longer fit.
 struct LockScreenRecording: View {
     let context: ActivityViewContext<RecordingActivityAttributes>
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         let state = context.state
-        VStack(alignment: .leading, spacing: 10) {
+        let captioned = ActivityCaption.shows(state, isStale: context.isStale)
+        VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .center, spacing: 10) {
-                LevelDot(state: state, isStale: context.isStale, size: 12)
+                HearingDot(state: state, isStale: context.isStale, size: 12)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(state.title(isStale: context.isStale)).font(.subheadline.weight(.semibold))
+                        .foregroundStyle(titleInk(context))
                     // A conversation's title is private: hidden while the iPhone is locked.
                     Text(context.attributes.title).font(.caption).foregroundStyle(.secondary).lineLimit(1).privacySensitive()
-                    if let multipoint = state.multipoint, state.phase != .saved, !context.isStale {
+                    if let multipoint = state.multipoint, !state.hasEnded, !context.isStale, !captioned {
                         Label(multipoint, systemImage: "macbook.and.iphone")
                             .font(.caption2.weight(.medium))
                             .foregroundStyle(.secondary)
@@ -188,15 +222,15 @@ struct LockScreenRecording: View {
                     .foregroundStyle(isLive(context) ? PhoneStyle.Ink.record : .primary)
                     .frame(maxWidth: 120, alignment: .trailing)
             }
-            ActivityCaption(state: state, isStale: context.isStale, lines: 2)
-            if state.phase == .saved {
-                Text("Saved to Daybook")
-                    .font(.caption).foregroundStyle(.secondary)
+            ActivityCaption(state: state, isStale: context.isStale, lines: typeSize > .xLarge ? 1 : 2)
+            if let line = state.endLine {
+                Text(line).font(.caption).foregroundStyle(.secondary)
             } else {
                 ActivityButtons(state: state, isStale: context.isStale)
             }
         }
-        .padding(16)
+        .padding(14)
+        .dynamicTypeSize(...DynamicTypeSize.xxLarge)
     }
 }
 
@@ -204,9 +238,17 @@ struct LockScreenRecording: View {
 #Preview("Recording, with a caption", as: .content, using: RecordingActivityAttributes(conversationID: UUID(), title: "Design review")) {
     RecordingLiveActivity()
 } contentStates: {
-    RecordingActivityAttributes.ContentState(phase: .recording, timerStart: Date().addingTimeInterval(-754), level: 0.66, bookmarkCount: 2,
+    RecordingActivityAttributes.ContentState(phase: .recording, timerStart: Date().addingTimeInterval(-754), level: 1, bookmarkCount: 2,
+                                             multipoint: "Also on Studio Mac",
                                              caption: RecordingActivityAttributes.ContentState.captionLine(
                                                 "So the first screen asks for the name of the team, then we skip straight to inviting people"))
-    RecordingActivityAttributes.ContentState(phase: .recording, timerStart: Date().addingTimeInterval(-754), level: 0.33, bookmarkCount: 2)
+    RecordingActivityAttributes.ContentState(phase: .recording, timerStart: Date().addingTimeInterval(-754), level: 1, bookmarkCount: 2,
+                                             multipoint: "Also on Studio Mac")
+    RecordingActivityAttributes.ContentState(phase: .paused, timerStart: Date().addingTimeInterval(-754), frozenElapsed: 754, level: 0,
+                                             bookmarkCount: 2, canResume: false)
+    RecordingActivityAttributes.ContentState(phase: .paused, timerStart: Date().addingTimeInterval(-754), frozenElapsed: 754, level: 0,
+                                             bookmarkCount: 2, canResume: true)
+    RecordingActivityAttributes.ContentState(phase: .stopped, timerStart: Date().addingTimeInterval(-3_734), frozenElapsed: 3_734, level: 0,
+                                             bookmarkCount: 2)
 }
 #endif

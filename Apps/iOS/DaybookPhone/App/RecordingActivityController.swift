@@ -8,42 +8,33 @@ import WidgetKit
 /// recording from the background, and it's how Stop and Bookmark stay one touch away. Updates are
 /// sent when what it shows changes, and at least once a minute while recording, so its stale date
 /// (`ContentState.staleAfter`) keeps rolling: if the app stops (a crash, the system ending it), the
-/// activity goes stale and says "Not confirmed" instead of counting on. The clock counts itself.
+/// activity goes stale and asks to open Daybook instead of counting on. The clock counts itself.
+/// Updates and the end go out in the order made (`LiveActivityRunner`).
 @MainActor
 final class RecordingActivityController {
-    private var activity: Activity<RecordingActivityAttributes>?
+    private let runner = LiveActivityRunner<RecordingActivityAttributes>()
     private var current: RecordingActivityAttributes.ContentState?
     private var lastSent = Date.distantPast
     private var lastLevelUpdate = Date.distantPast
     private var lastCaptionUpdate = Date.distantPast
-    /// The last ActivityKit call made: each waits for the one before, so an end never overtakes an update still on its
-    /// way, and a quick pause and resume land in that order.
-    private var sending: Task<Void, Never>?
-    /// Level-only changes at most this often, to stay inside the system's update budget.
+    /// Hearing-or-not changes at most this often, to stay inside the system's update budget.
     static let levelInterval: TimeInterval = 2
 
-    var isRunning: Bool { activity != nil }
+    var isRunning: Bool { runner.isRunning }
 
     func start(conversationID: UUID, title: String, state: RecordingActivityAttributes.ContentState) {
-        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
-        // A previous run's activity (the app was killed mid-recording) no longer means anything.
-        for stale in Activity<RecordingActivityAttributes>.activities where stale.attributes.conversationID != conversationID {
-            Task { await stale.end(nil, dismissalPolicy: .immediate) }
-        }
         let now = Date()
-        do {
-            activity = try Activity.request(attributes: RecordingActivityAttributes(conversationID: conversationID, title: title),
-                                            content: ActivityContent(state: state, staleDate: state.staleDate(from: now), relevanceScore: 100),
-                                            pushType: nil)
-            current = state
-            lastSent = now
-        } catch {
-            activity = nil
-        }
+        // A previous run's activity (the app was killed mid-recording) no longer means anything.
+        let started = runner.request(RecordingActivityAttributes(conversationID: conversationID, title: title),
+                                     content: ActivityContent(state: state, staleDate: state.staleDate(from: now), relevanceScore: 100),
+                                     endingLeftovers: { $0.conversationID != conversationID })
+        guard started else { return }
+        current = state
+        lastSent = now
     }
 
     func update(_ state: RecordingActivityAttributes.ContentState) {
-        guard let activity else { return }
+        guard runner.isRunning else { return }
         let now = Date()
         let state = Self.paced(state, current: current, captionSentAt: lastCaptionUpdate, now: now)
         guard Self.shouldSend(state, current: current, sentAt: lastSent, levelSentAt: lastLevelUpdate, now: now) else { return }
@@ -51,25 +42,16 @@ final class RecordingActivityController {
         if state.caption != current?.caption { lastCaptionUpdate = now }
         current = state
         lastSent = now
-        enqueue { await activity.update(ActivityContent(state: state, staleDate: state.staleDate(from: now))) }
+        runner.update(ActivityContent(state: state, staleDate: state.staleDate(from: now)))
     }
 
-    /// Runs `call` once the ActivityKit calls made before it are done.
-    private func enqueue(_ call: @escaping () async -> Void) {
-        let previous = sending
-        sending = Task {
-            await previous?.value
-            await call()
-        }
-    }
-
-    /// Whether an update goes now: a change at once (a level-only change at most every
+    /// Whether an update goes now: a change at once (a hearing-or-not change at most every
     /// `levelInterval`), and the same content again once `refreshInterval` has passed, to keep the
     /// stale date ahead.
     static func shouldSend(_ state: RecordingActivityAttributes.ContentState, current: RecordingActivityAttributes.ContentState?,
                            sentAt: Date, levelSentAt: Date, now: Date) -> Bool {
         guard let current else { return true }
-        if state.phase != .saved, now.timeIntervalSince(sentAt) >= RecordingActivityAttributes.ContentState.refreshInterval { return true }
+        if !state.hasEnded, now.timeIntervalSince(sentAt) >= RecordingActivityAttributes.ContentState.refreshInterval { return true }
         if state == current { return false }
         if differsOnlyInLevel(state, current) { return now.timeIntervalSince(levelSentAt) >= levelInterval }
         return true
@@ -93,19 +75,24 @@ final class RecordingActivityController {
         return withoutLevel == state
     }
 
+    /// Ends the activity on `state`, after any update still on its way: Saved goes in a few seconds;
+    /// Recording stopped stays on the Lock Screen until the person has seen it.
     func end(_ state: RecordingActivityAttributes.ContentState) {
-        guard let activity else { return }
-        self.activity = nil
+        guard runner.isRunning else { return }
         current = nil
-        enqueue { await activity.end(ActivityContent(state: state, staleDate: nil), dismissalPolicy: .after(Date().addingTimeInterval(8))) }
+        runner.end(ActivityContent(state: state, staleDate: nil), dismissalPolicy: Self.dismissal(for: state))
+    }
+
+    /// How long an ended activity stays: Saved briefly; a recording that stopped by itself until the
+    /// system takes it away (up to four hours), so a glance at the Lock Screen still tells.
+    static func dismissal(for state: RecordingActivityAttributes.ContentState, now: Date = Date()) -> ActivityUIDismissalPolicy {
+        state.phase == .stopped ? .default : .after(now.addingTimeInterval(8))
     }
 
     /// Ends activities left from a run that didn't finish (called at launch, before recovery).
     func endOrphans() {
-        guard activity == nil else { return }
-        for stale in Activity<RecordingActivityAttributes>.activities {
-            Task { await stale.end(nil, dismissalPolicy: .immediate) }
-        }
+        guard !runner.isRunning else { return }
+        LiveActivityRunner<RecordingActivityAttributes>.endAll()
     }
 
     /// Every launch, however the app was started (the first scene, an intent, or iOS relaunching it
@@ -118,16 +105,14 @@ final class RecordingActivityController {
             WidgetCenter.shared.reloadTimelines(ofKind: SharedRecordingState.widgetKind)
             ControlCenter.shared.reloadControls(ofKind: SharedRecordingState.controlKind)
         }
-        for stale in Activity<RecordingActivityAttributes>.activities {
-            Task { await stale.end(nil, dismissalPolicy: .immediate) }
-        }
+        LiveActivityRunner<RecordingActivityAttributes>.endAll()
         RecorderActivityController.endLeftovers()
     }
 }
 
 /// Writes what the widgets and the control read (`SharedRecordingState`) and asks them to refresh:
 /// on every change, and at least once a minute while recording, so a recording the app can no
-/// longer confirm reads as not confirmed rather than "Recording" forever.
+/// longer confirm reads as unconfirmed rather than "Recording" forever.
 @MainActor
 final class SharedStatePublisher {
     private(set) var published: SharedRecordingState?

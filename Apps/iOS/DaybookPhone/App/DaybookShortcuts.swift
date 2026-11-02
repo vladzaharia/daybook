@@ -18,6 +18,14 @@ struct DaybookShortcuts: AppShortcutsProvider {
                               "Add a bookmark in \(.applicationName)",
                               "Mark this moment in \(.applicationName)"],
                     shortTitle: "Add Bookmark", systemImageName: "bookmark")
+        AppShortcut(intent: NewNoteIntent(),
+                    phrases: ["New note in \(.applicationName)",
+                              "Start a note in \(.applicationName)"],
+                    shortTitle: "New Note", systemImageName: "square.and.pencil")
+        AppShortcut(intent: OpenConversationIntent(),
+                    phrases: ["Open \(\.$target) in \(.applicationName)",
+                              "Open a conversation in \(.applicationName)"],
+                    shortTitle: "Open Conversation", systemImageName: "text.page")
     }
 
     static let shortcutTileColor: ShortcutTileColor = .red

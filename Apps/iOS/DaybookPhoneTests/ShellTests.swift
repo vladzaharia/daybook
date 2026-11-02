@@ -119,10 +119,9 @@ final class ShellTests: XCTestCase {
     }
 
     func testActivityLevelIsCoarse() {
-        XCTAssertEqual(RecordingActivityAttributes.ContentState.levelBucket(0.05), 0)
-        XCTAssertEqual(RecordingActivityAttributes.ContentState.levelBucket(0.3), 0.33)
-        XCTAssertEqual(RecordingActivityAttributes.ContentState.levelBucket(0.5), 0.66)
-        XCTAssertEqual(RecordingActivityAttributes.ContentState.levelBucket(0.9), 1)
+        // Only whether the microphone hears anything, which changes rarely: never with the voice.
+        XCTAssertEqual(RecordingActivityAttributes.ContentState.level(hearing: true), 1)
+        XCTAssertEqual(RecordingActivityAttributes.ContentState.level(hearing: false), 0)
     }
 }
 

@@ -19,6 +19,9 @@ struct SharedRecordingState: Codable, Equatable, Sendable {
     /// Seconds into the conversation when it paused: the clock shows this, frozen. Optional, so a
     /// state written by an earlier build decodes.
     var pausedElapsed: TimeInterval?
+    /// Paused, recording can continue now (the call is over): the widgets offer Resume. False during
+    /// the call, when they offer Stop. Nil from an earlier build, which offered Resume.
+    var canResume: Bool?
     /// When the app last confirmed this. It writes at least once a minute while recording, so a
     /// recording it hasn't confirmed for a while is shown as not confirmed (the app may have been
     /// stopped by the system) instead of "Recording" forever. Optional, so earlier states decode;
@@ -108,27 +111,36 @@ extension SharedRecordingState {
         return state
     }
 
-    /// "1 bookmark", "3 bookmarks".
-    static func bookmarks(_ count: Int) -> String { count == 1 ? "1 bookmark" : "\(count) bookmarks" }
+    /// Paused, whether Resume can work now; during a call it can't, and Stop is offered instead.
+    var offersResume: Bool { phase == .paused && canResume != false }
 
-    /// One line for the inline widget: "Paused · 12:03", "Not confirmed", "Daybook ready". Recording
-    /// is drawn with a live clock instead.
+    /// "1 bookmark", "3 bookmarks", in the language's own plural.
+    static func bookmarks(_ count: Int) -> String {
+        String(AttributedString(localized: "^[\(count) bookmark](inflect: true)").characters)
+    }
+
+    /// What a recording the app hasn't confirmed for a while says: nobody can vouch that it's still
+    /// going (the app may have been stopped), and opening Daybook settles it.
+    static let unconfirmedLine = "Open Daybook to check"
+
+    /// One line for the inline widget: "Paused · 12:03", "Open Daybook to check", "Daybook ready".
+    /// Recording is drawn with a live clock instead.
     static func inlineLine(_ display: Display) -> String {
         switch display {
         case .idle: return "Daybook ready"
         case .recording: return "Recording"
         case .paused(let elapsed): return "Paused · \(TimeLabel.short(elapsed))"
-        case .unconfirmed: return "Not confirmed"
+        case .unconfirmed: return unconfirmedLine
         }
     }
 
-    /// The headline: "Recording", "Paused", "Not confirmed", or "Daybook".
+    /// The headline: "Recording", "Paused", "Open Daybook to check", or "Daybook".
     static func headline(_ display: Display) -> String {
         switch display {
         case .idle: return "Daybook"
         case .recording: return "Recording"
         case .paused: return "Paused"
-        case .unconfirmed: return "Not confirmed"
+        case .unconfirmed: return unconfirmedLine
         }
     }
 }

@@ -55,11 +55,11 @@ extension RecorderActivityAttributes.ContentState {
         }
     }
 
-    /// "Listening live", "Recording", "Recording · as of 10:07 AM", or "Not confirmed" once stale.
+    /// "Listening live", "Recording", "Recording · as of 10:07 AM", or "Open Daybook to check" once stale.
     func title(isStale: Bool) -> String {
         switch phase {
         case .ended: return "Stopped"
-        case _ where isStale: return "Not confirmed"
+        case _ where isStale: return SharedRecordingState.unconfirmedLine
         case .listening: return "Listening live"
         case .recording:
             guard let asOf else { return "Recording" }

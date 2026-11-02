@@ -1,6 +1,5 @@
 import DaybookCaptions
 import ActivityKit
-import CryptoKit
 import DaybookDevices
 import DaybookKit
 import DaybookLink
@@ -11,21 +10,28 @@ import SwiftUI
 import UIKit
 import WidgetKit
 
-/// The phone app's coordinator: the recorder, the library and its sync, the local link to Macs,
-/// recorders, the Live Activity, and the state the widgets read. Intents, the Live Activity's
-/// buttons, a Mac's record requests, and the interface all go through it.
+/// The phone app's coordinator: the recorder, the library and its sync, recorders, the Live Activity,
+/// and the state the widgets read. Intents, the Live Activity's buttons, a Mac's record requests, and the
+/// interface all go through it. Two parts have types of their own: recording with Macs and recorders
+/// (`MultipointCoordinator`: record requests, owed stops, the cascade) and what goes to the Macs over the
+/// local link while recording (`LinkSharing`: captions, levels, notes, the recording state). Filing and
+/// recovery are in `PhoneAppModel+Filing.swift`, the debug launch scripts in `PhoneAppModel+Demos.swift`.
+/// What it reaches in the system comes from its `PhoneAppEnvironment`.
 ///
 /// For the reading UI (docs in Apps/iOS/README.md, "Services for the interface"):
 /// - `macPresence`: whether a Mac that transcribes is around ("Waiting for your Mac · last seen 2 h ago").
 /// - `liveProgress[meetingID]`: a Mac's live progress over the link ("Transcribing on Studio Mac · 40%").
 /// - `audio`: the sync-backed `AudioProviding`, also injected as `\.audioProvider`.
+/// - `destination`: where Daybook was asked to open (a notification, Open Conversation, New Note).
 @MainActor
 @Observable
 final class PhoneAppModel: RecordingCommandHandling {
     let recorder: PhoneRecorder
     let library: PhoneLibrary
     let posture: DevicePosture
-    let options: LaunchOptions
+    let options: DebugLaunch
+    /// What the model reaches in the system (`.live` in the app, inert in tests).
+    @ObservationIgnored let environment: PhoneAppEnvironment
     let settings: PhoneSettings
     let sync: PhoneSync
     let link: PhoneLink
@@ -39,13 +45,12 @@ final class PhoneAppModel: RecordingCommandHandling {
     /// downloaded (Settings › Models).
     let models: PhoneModels
     /// Cloud summaries' keys, models, and this iPhone's preferences (Settings › Cloud; docs/cloud.md): the one place the
-    /// summary placement reads them (`placement.cloud`, set at launch). Tests keep keys in memory.
+    /// summary placement reads them (`placement.cloud`, set at launch).
     @ObservationIgnored lazy var cloudSummaries: CloudSetup = {
         #if DEBUG
         if let demo = PhoneCloudDemo.setup(defaults: .standard) { return demo }
         #endif
-        if LaunchOptions.isTestHost { return CloudSetup(keys: MemoryCloudKeyStore(), defaults: Self.testDefaults()) }
-        return CloudSetup(keys: KeychainCloudKeyStore.system, defaults: .standard)
+        return CloudSetup(keys: environment.cloudKeys(), defaults: environment.defaults)
     }()
     /// Processing this iPhone's own recordings with those models (docs/iphone.md, "Processing on this iPhone").
     let processor: PhoneProcessor
@@ -53,6 +58,10 @@ final class PhoneAppModel: RecordingCommandHandling {
     let placement: PhoneSummaryPlacement
     /// "Upgrade" offers on the conversation page (docs/multipoint.md, "Upgrade").
     let upgrades: PhoneUpgrades
+    /// Recording with Macs and the recorders this iPhone manages.
+    @ObservationIgnored private(set) lazy var multipoints = MultipointCoordinator(app: self, sharing: sharing)
+    /// What goes to the Macs over the local link while recording.
+    @ObservationIgnored private(set) lazy var sharing = LinkSharing(recorder: recorder, link: link, devices: devices, captions: captions)
     /// One line for the person, when something needs saying: what happened, in plain words.
     private(set) var notice: String? {
         didSet { noticeDetails = nil; noticeFix = nil }
@@ -70,6 +79,10 @@ final class PhoneAppModel: RecordingCommandHandling {
     /// How the recording this iPhone stopped last was filed, set as Stop (or a recording that stopped on its own)
     /// finishes: saved into a conversation, or why it couldn't be.
     private(set) var lastFiling: Filing?
+    /// What the last Stop came to, for what Siri and Shortcuts say.
+    private(set) var lastStopResult: RecordingStopResult = .saved
+    /// Where Daybook was asked to open, until the interface has gone there (`reached`).
+    private(set) var destination: DestinationRequest?
 
     /// Where a stopped recording went (`lastFiling`).
     enum Filing: Equatable {
@@ -82,93 +95,52 @@ final class PhoneAppModel: RecordingCommandHandling {
     private(set) var importing = 0
     /// The conversation imported last.
     private(set) var lastImportedID: UUID?
-    /// While a Mac records this conversation too, or asked this iPhone to. Kept in the recording's
-    /// journal, so a recording recovered after Daybook was killed still joins and stops its Macs.
-    var multipoint: MultipointSession? {
-        didSet { if multipoint != oldValue { recorder.setMultipoint(multipoint?.journaled) } }
-    }
-    /// The Mac whose device page started this recording (a conversation of this iPhone's own).
-    @ObservationIgnored private var startedFromMac: UUID?
-    /// A shared recording this iPhone takes part in only through its recorder: its button started it
-    /// while Daybook was in the background, where iOS doesn't let this iPhone start its microphone.
-    var recorderOnly: RecorderOnlyRecording?
-    /// Notes and bookmarks of the shared recording, kept in step with the Macs recording it too.
-    @ObservationIgnored let sharedNotes = SharedNotesTracker()
-    @ObservationIgnored var notesShare: Task<Void, Never>?
-    /// Until when a Mac that connects is asked to join this iPhone's recording on its own (the link can
-    /// take a few seconds to come back as the app comes forward or wakes in the background).
-    @ObservationIgnored var cascadeAsksUntil: Date?
-    /// The stop under way came from a Mac (it asked, or this iPhone followed it): that Mac isn't asked
-    /// to stop in turn.
-    @ObservationIgnored var stopIsFromMac = false
-    /// Notifications for a recorder recording while this iPhone can't (the app's own; none in tests).
-    @ObservationIgnored var cascadeNotices = CascadeNotices.silent
-    /// Recording here asks the connected Macs on its own (a cascading start). Tests of the person's own
-    /// "Record on Studio Mac too" turn it off.
-    @ObservationIgnored var cascadesToMacs = true
-    /// A recorder's button is starting a recording here.
-    @ObservationIgnored var startingFromRecorder = false
-    /// Stops this iPhone owes Macs it started, by Mac: the conversation to stop. Kept in a file in the
-    /// library's folder that never syncs (`owedStops`), so a relaunch still sends them as the Mac connects.
-    @ObservationIgnored private(set) var pendingStops: [UUID: UUID] = [:] {
-        didSet { if pendingStops != oldValue { saveOwedStops() } }
-    }
-    /// When each of `pendingStops` was first owed.
-    @ObservationIgnored private var owedSince: [UUID: Date] = [:]
-    @ObservationIgnored private let owedStops: OwedStopsStore<OwedMacStop>
-    @ObservationIgnored private var stopsInFlight: Set<UUID> = []
     private(set) var isForeground = true
+    /// The notifications Daybook posts (none in tests).
+    @ObservationIgnored var notices: PhoneNotices
 
-    @ObservationIgnored private let activities = RecordingActivityController()
-    @ObservationIgnored private var demo: Task<Void, Never>?
+    @ObservationIgnored let activities = RecordingActivityController()
     @ObservationIgnored private var launched = false
     @ObservationIgnored private let sharedState = SharedStatePublisher()
-    @ObservationIgnored private var lastStateSent = Date.distantPast
-    /// The recorders this iPhone manages, as last sent to Macs.
-    @ObservationIgnored var lastRecorders: [LinkRecorderState]?
     /// The audio session synthetic demos use, so a script can interrupt the recording.
     @ObservationIgnored var demoAudioSession: ScriptedAudioSession?
+    #if DEBUG
+    /// The scripted recording `--demo-notes` and `--stop-after` run.
+    @ObservationIgnored var demo: Task<Void, Never>?
+    #endif
     /// What the model follows in the library, the recorders, and sync (`ObservationWatch`).
     @ObservationIgnored private var watches: [ObservationWatch] = []
     /// Labelling saved captions' speakers from their recordings (`labelCaptionSpeakers`).
     @ObservationIgnored private var speakerPass: (id: UUID, task: Task<Void, Never>)?
     /// Recorders recording along: their live audio's captions join this iPhone's.
     @ObservationIgnored let recorderCaptions = LiveCaptureCaptions()
-    /// This iPhone's captions going to each Mac recording the same conversation (`shareCaptions`).
-    @ObservationIgnored private var captionShares: [UUID: CaptionShare] = [:]
-    @ObservationIgnored private var captionSharing: Task<Void, Never>?
-    /// This iPhone's level readings on their way to the Macs recording with it that draw them (`shareLevel`).
-    @ObservationIgnored private var levelShare = LevelShare()
     /// Heat, power, and battery changes the processor backs off for.
     @ObservationIgnored private var processingObservers: [NSObjectProtocol] = []
+    /// Each recording being filed, by conversation: a photo taken as it ended waits for it (`whileFiling`).
+    @ObservationIgnored var filings: [UUID: Task<Void, Never>] = [:]
+    /// What Spotlight lists of the library.
+    @ObservationIgnored private(set) var conversationIndex: ConversationIndex?
 
-    init(recorder: PhoneRecorder, library: PhoneLibrary, posture: DevicePosture, options: LaunchOptions,
-         settings: PhoneSettings? = nil, link: PhoneLink? = nil, devices: PhoneDevices? = nil) {
-        let settings = settings ?? PhoneSettings(defaults: LaunchOptions.isTestHost ? Self.testDefaults() : .standard)
+    init(recorder: PhoneRecorder, library: PhoneLibrary, posture: DevicePosture, options: DebugLaunch,
+         environment: PhoneAppEnvironment? = nil, settings: PhoneSettings? = nil, link: PhoneLink? = nil, devices: PhoneDevices? = nil) {
+        // Built without one (tests that don't say), nothing real.
+        let environment = environment ?? .inert
+        let settings = settings ?? PhoneSettings(defaults: environment.defaults)
         self.recorder = recorder
         self.library = library
         self.posture = posture
         self.options = options
+        self.environment = environment
         self.settings = settings
+        notices = environment.notices
         sync = PhoneSync(library: library.controller)
         self.link = link ?? PhoneLink(identity: PhoneLink.identity(installation: library.installationID, name: ProcessingRequest.Device.currentName,
                                                                    libraryID: nil, syncDeviceID: library.controller.thisDevice.id),
-                                      keyStore: LaunchOptions.isTestHost ? MemoryLinkKeyStore() : KeychainLinkKeyStore())
-        self.devices = devices ?? PhoneDevices(library: library, settings: settings,
-                                               mode: LaunchOptions.isTestHost ? .inert : (options.deviceSimulator ? .simulator : .live),
-                                               defaults: LaunchOptions.isTestHost ? Self.testDefaults() : .standard)
+                                      keyStore: environment.linkKeys())
+        self.devices = devices ?? PhoneDevices(library: library, settings: settings, mode: environment.deviceMode, defaults: environment.defaults)
         audio = SyncAudioProvider(library: library, sync: sync, budget: settings.audioCacheBudget)
-        // Stops a previous run owed, sent as each Mac connects.
-        let owedStops = OwedStopsStore<OwedMacStop>(file: library.rootURL.appendingPathComponent(Self.owedStopsFile))
-        let owed = owedStops.load()
-        self.owedStops = owedStops
-        owedSince = Dictionary(owed.map { ($0.macID, $0.owedAt) }, uniquingKeysWith: { _, later in later })
-        pendingStops = Dictionary(owed.map { ($0.macID, $0.conversationID) }, uniquingKeysWith: { _, later in later })
-        let models = PhoneModels(root: LaunchOptions.isTestHost ? FileManager.default.temporaryDirectory
-                                    .appendingPathComponent("DaybookPhoneModels-\(UUID().uuidString)", isDirectory: true) : PhoneModels.defaultRoot,
-                                 defaults: LaunchOptions.isTestHost ? Self.testDefaults() : .standard,
-                                 // Tests never download, nor reach the system's background sessions.
-                                 fetcher: LaunchOptions.isTestHost ? HubSnapshotFetcher() : PhoneModels.downloads)
+        let models = PhoneModels(root: environment.modelRoot(), defaults: environment.defaults,
+                                 fetcher: environment.modelFetcher(), network: environment.network)
         self.models = models
         let audio = self.audio
         processor = PhoneProcessor(library: library.controller, services: PhoneProcessor.Services(
@@ -183,12 +155,13 @@ final class PhoneAppModel: RecordingCommandHandling {
             audio: { track, id in try await audio.localAudio(for: track, in: id, progress: { _ in }) },
             release: { [weak models] in await models?.releaseProcessingModels() }),
             // The system's continued-processing task, never in tests.
-            continued: ContinuedProcessing(scheduler: LaunchOptions.isTestHost || options.isRunningTests ? nil : SystemContinuedProcessingScheduler()))
+            continued: ContinuedProcessing(scheduler: options.isRunningTests ? nil : environment.continuedProcessing()))
         let sync = self.sync, link = self.link
         placement = PhoneSummaryPlacement(library: library.controller, link: link, presence: { sync.devices })
         upgrades = PhoneUpgrades(library: library.controller, placement: placement, link: link, presence: { sync.devices })
         captions = LiveCaptionsController(store: LiveCaptionStore(libraryRoot: library.rootURL),
-                                          makeCaptioner: Self.captioner(settings: settings, options: options, models: models))
+                                          makeCaptioner: Self.captioner(settings: settings, options: options, models: models,
+                                                                        makesCaptioners: environment.makesCaptioners))
         models.voices.metadata = { [weak library] in library?.controller.metadata ?? LibraryMetadata() }
         // Live recognizers are biased toward the library's approved vocabulary, as it changes.
         let controller = library.controller
@@ -196,50 +169,27 @@ final class PhoneAppModel: RecordingCommandHandling {
             models?.vocabulary.update(terms)
         })
         // A recorder's Listen Live is captioned like recordings: the live models when downloaded.
-        self.devices.hub.environment.liveCaptions.makeCaptioner = Self.listenLiveCaptioner(settings: settings, options: options, models: models)
+        self.devices.hub.environment.liveCaptions.makeCaptioner = Self.listenLiveCaptioner(settings: settings, options: options, models: models,
+                                                                                         makesCaptioners: environment.makesCaptioners)
         self.devices.hub.environment.liveCaptions.locale = { [weak settings] in settings?.captionLocale ?? .current }
-        recorder.onChange = { [weak self] in self?.recorderChanged() }
-        recorder.onLevel = { [weak self] level in self?.levelChanged(level) }
-        recorder.onUnexpectedStop = { [weak self] recording in
-            Task { await self?.finishUnexpectedly(recording) }
-        }
-        sync.protectedConversation = { [weak self] in self?.recorder.captureID }
-        sync.onApplied = { [weak self] _ in
-            self?.publish()
-            // What a Mac did may stop a summary here, or end a countdown it has taken.
-            self?.placement.syncApplied()
-            // A pass may have made a folder an encrypted library keeps out of backups.
-            self?.applyBackupExclusion()
-            // Work another device took over stops here; new work starts.
-            self?.processor.reconcileClaims()
-        }
-        self.link.recordRequestHandler = { [weak self] mac, request in
-            await self?.answer(mac, request) ?? .refused(LinkRecordRefusal(reason: .unsupported))
-        }
+        wireRecorder()
+        wireSync()
+        multipoints.wire()
+        sharing.multipoints = multipoints
+        // A Mac's note or bookmark changes what the Live Activity shows.
+        sharing.changed = { [weak self] in self?.updateActivity() }
+        wireRecorderHandoff()
+        self.link.onLibraryKeyMessage = { [weak self] message, mac in self?.libraryKeyMessage(message, from: mac) }
         self.link.onProcessingFinished = { [weak self] _ in
             Task { await self?.sync.synchronize(.linkFinished) }
         }
-        self.link.onMacRecordingState = { [weak self] mac, state in self?.macReported(state, from: mac) }
-        self.link.onMacConnected = { [weak self] mac in self?.macConnected(mac) }
-        self.link.onSharedNotes = { [weak self] message, mac in self?.macSharedNotes(message, from: mac) }
-        self.devices.hub.onRecorderButton = { [weak self] session, on in self?.recorderButton(session, on) }
-        self.devices.cascade.onChange = { [weak self] in self?.sendRecordingState(force: true) }
-        if !LaunchOptions.isTestHost { cascadeNotices = .app }
-        self.link.onLibraryKeyMessage = { [weak self] message, mac in self?.libraryKeyMessage(message, from: mac) }
-        self.link.onRecordPermission = { [weak self] mac, permission in self?.macSaidRecordPermission(permission, from: mac) }
-        // Each connected Mac hears whether it may start recording here as that changes (its Can Start Recording, or
-        // Recording with Your Mac).
-        watches.append(ObservationWatch.distinctValues(of: { [weak self] in
-            self.map { model in Dictionary(model.link.macs.map { ($0.id, model.letsMacStartRecording($0)) }, uniquingKeysWith: { a, _ in a }) } ?? [:]
-        }, initial: false) { [weak self] _ in self?.sendRecordPermissions() })
         self.devices.onImported = { [weak self] filed in self?.filedElsewhere(filed) }
-        wireRecorderHandoff()
         // Macs hear what the recorders this iPhone manages are doing, when that changes.
         watches.append(self.devices.hub.watchRecorders { [weak self] in
             guard let self else { return }
             let cascade = self.devices.cascade
-            guard self.devices.hub.recorderStates(conversation: { cascade.sharedConversation(of: $0) }) != self.lastRecorders else { return }
-            self.sendRecordingState(force: true)
+            guard self.devices.hub.recorderStates(conversation: { cascade.sharedConversation(of: $0) }) != self.sharing.lastRecorders else { return }
+            self.sharing.sendRecordingState(force: true)
         })
         // An encrypted library keeps its conversations out of backups (`BackupExclusion`).
         watches.append(ObservationWatch.distinctValues(of: { controller.sync?.encryption }, initial: false) { [weak self] _ in
@@ -253,18 +203,51 @@ final class PhoneAppModel: RecordingCommandHandling {
         watches.append(ObservationWatch.distinctValues(of: { LiveCaptionStore.transcriptDates(controller.meetings) }, initial: false) { [weak self] _ in
             self?.pruneCaptions()
         })
+        // Spotlight lists the library's conversations, Personal ones never.
+        if environment.spotlight.isActive {
+            let index = ConversationIndex(indexer: environment.spotlight)
+            conversationIndex = index
+            watches.append(ObservationWatch.distinctValues(of: { ConversationIndex.entries(controller.meetings) }) { entries in
+                index.update(entries)
+            })
+        }
         wireProcessing()
+    }
+
+    /// The recorder's news reaches the Live Activity, the widgets, the Macs, and the person.
+    private func wireRecorder() {
+        recorder.onChange = { [weak self] in self?.recorderChanged() }
+        recorder.onLevel = { [weak self] level in self?.levelChanged(level) }
+        recorder.onUnexpectedStop = { [weak self] recording in
+            Task { await self?.finishUnexpectedly(recording) }
+        }
+        // The interruption ended and iOS asked to continue, but recording couldn't: the person hears why.
+        recorder.onResumeFailed = { [weak self] error in self?.sayResumeFailed(error) }
+    }
+
+    private func wireSync() {
+        sync.protectedConversation = { [weak self] in self?.recorder.captureID }
+        sync.onApplied = { [weak self] _ in
+            self?.publish()
+            // What a Mac did may stop a summary here, or end a countdown it has taken.
+            self?.placement.syncApplied()
+            // A pass may have made a folder an encrypted library keeps out of backups.
+            self?.applyBackupExclusion()
+            // Work another device took over stops here; new work starts.
+            self?.processor.reconcileClaims()
+        }
     }
 
     /// Which captioner a recording gets: the live models when they're downloaded (`PhoneModels`:
     /// local transcription, speakers, and names), else the Speech framework (downloading its
     /// language only for a real recording, never in simulator demos); a script for
     /// `--demo-captions`; none in tests (they inject one) or when the setting is off.
-    static func captioner(settings: PhoneSettings, options: LaunchOptions, models: PhoneModels? = nil) -> () -> (any LiveCaptioning)? {
+    static func captioner(settings: PhoneSettings, options: DebugLaunch, models: PhoneModels? = nil,
+                          makesCaptioners: Bool = false) -> () -> (any LiveCaptioning)? {
         { [weak settings, weak models] in
             guard let settings, settings.liveCaptions else { return nil }
             if options.demoCaptions { return ScriptedCaptioner.demo() }
-            if LaunchOptions.isTestHost { return nil }
+            guard makesCaptioners else { return nil }
             // A real recording may download the language and, if the analyzer needs it, ask once for
             // speech-recognition permission; simulator demos with synthetic audio never do either.
             let speech = { SpeechCaptioner(allowsDownload: !options.syntheticAudio, asksForAuthorization: !options.syntheticAudio) as any LiveCaptioning }
@@ -274,10 +257,11 @@ final class PhoneAppModel: RecordingCommandHandling {
     }
 
     /// Listen Live's captioner: the same choice as recordings, with the recorder's longer backlog.
-    static func listenLiveCaptioner(settings: PhoneSettings, options: LaunchOptions, models: PhoneModels) -> () -> (any LiveCaptioning)? {
+    static func listenLiveCaptioner(settings: PhoneSettings, options: DebugLaunch, models: PhoneModels,
+                                    makesCaptioners: Bool = false) -> () -> (any LiveCaptioning)? {
         { [weak settings, weak models] in
             // Tests inject their own; the device simulator's demos never load models or download a language.
-            guard !LaunchOptions.isTestHost, let settings, settings.liveCaptions else { return nil }
+            guard makesCaptioners, let settings, settings.liveCaptions else { return nil }
             let speech = { LiveCaptionHooks.speechCaptioner(allowsDownload: false) }
             guard let models, !options.syntheticAudio, !options.deviceSimulator else { return speech() }
             return models.captioner(locale: settings.captionLocale, backlog: LiveCaptionHooks.backlog, fallback: speech)
@@ -296,7 +280,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         handoff.handsBackAutomatically = settings.handsRecorderBackToMac
         link.onHandoffMessage = { message, mac in handoff.receive(message, from: mac) }
         link.onMacsChanged = { [weak self] in
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 handoff.peersChanged()
                 // A Mac that comes or goes changes where a summary can go.
                 self?.placement.refresh()
@@ -342,11 +326,10 @@ final class PhoneAppModel: RecordingCommandHandling {
         try await link.send(.libraryKeyRequest(request), to: macID)
     }
 
-    private static func testDefaults() -> UserDefaults {
-        UserDefaults(suiteName: "DaybookPhoneTests-\(ProcessInfo.processInfo.processIdentifier)") ?? .standard
-    }
-
     var isRecordingActive: Bool { recorder.isActive }
+
+    /// Never asked about the microphone: a start from the background continues in front first.
+    var microphoneNeedsAsking: Bool { recorder.microphonePermission == .notAsked }
 
     /// Whether the library's iCloud container is reachable, for the interface to say so plainly.
     var cloud: CloudAvailability {
@@ -375,52 +358,6 @@ final class PhoneAppModel: RecordingCommandHandling {
     /// A Mac's live processing progress by conversation, finer than what sync carries.
     var liveProgress: [UUID: LiveProgress] { link.liveProgress }
 
-    /// The one honest line for a conversation's processing on the phone, or nil when there's
-    /// nothing to say (done, or nothing asked): live progress over the link first, then what sync
-    /// says (a Mac's claim with its coarse progress, a request waiting, a failure).
-    ///
-    /// A Mac claims a request only when the job starts, so "Waiting" can last while it's busy; the
-    /// line says so when the link knows ("Waiting for Studio Mac, which is transcribing another
-    /// conversation").
-    func processingLine(for meeting: Meeting, now: Date = Date()) -> String? {
-        if let live = liveProgress[meeting.id] { return live.line }
-        switch ProcessingStatus.phone(meeting, now: now) {
-        case .processing(let progress):
-            let verb: String
-            switch progress.stage {
-            case .summarizing: verb = "Summarizing"
-            case .identifyingSpeakers: verb = "Identifying speakers"
-            case .transcribing: verb = "Transcribing"
-            }
-            let percent = progress.fraction.map { " · \(Int(($0 * 100).rounded(.down)))%" } ?? ""
-            // No device: this iPhone's own work (`ProcessingStatus.phone`).
-            return "\(verb) on \(progress.device?.name ?? "this iPhone")\(percent)"
-        case .requested(.device):
-            let presence = macPresence
-            if case .connected(let name) = presence, let mac = link.connectedMacs.first(where: { $0.name == name }) {
-                if mac.isRecording { return "Waiting for \(name), which is recording" }
-                if liveProgress.values.contains(where: { $0.macName == name && !$0.isFinished && $0.meetingID != meeting.id }) {
-                    return "Waiting for \(name), which is transcribing another conversation"
-                }
-            }
-            return presence.waitingLine(now: now)
-        case .recorded:
-            return "Not transcribed yet"
-        case .transcribed:
-            return "Not summarized yet"
-        case .failed(let failure):
-            return failure.device.map { "\($0.name) couldn’t finish" } ?? "Couldn’t finish"
-        case .awaitingRecordings(let recordings):
-            return ProcessingStatus.awaitingLine(recordings)
-        case .requested(.queued):
-            return "Waiting on this iPhone"
-        case .requested(.paused):
-            return processor.pause.map(StatusPresentation.pausedLine) ?? "Paused"
-        case .requested, .done:
-            return nil
-        }
-    }
-
     /// First appearance: load the library, file anything a previous run left behind, connect sync
     /// and the link, and run any debug launch script.
     func launch() async {
@@ -436,7 +373,9 @@ final class PhoneAppModel: RecordingCommandHandling {
         if libraryFailedToOpen { libraryFailedToOpen = false }
         if let folder = options.syncFolder {
             try? sync.connect(toFolder: URL(fileURLWithPath: folder, isDirectory: true), monitor: true)
+            #if DEBUG
             if let mac = options.demoMac { Self.writeDemoPresence(name: mac.name, hoursAgo: mac.hoursAgo, in: URL(fileURLWithPath: folder)) }
+            #endif
         } else if !options.isRunningTests {
             await sync.connect()
         }
@@ -447,8 +386,12 @@ final class PhoneAppModel: RecordingCommandHandling {
         if let probe = options.captionProbe { Task { await CaptionProbe.run(file: probe.isEmpty ? nil : probe, locale: settings.captionLocale) } }
         publish()
         devices.start()
-        if !LaunchOptions.isTestHost {
+        if environment.startsLink {
+            #if DEBUG
             if options.demoLink || options.demoMultipointMac != nil { applyLinkDemo() } else { await link.start() }
+            #else
+            await link.start()
+            #endif
         }
         await sync.synchronize(.launch)
         // Settings › Cloud: whether a summary can go to the cloud, and which model.
@@ -462,22 +405,9 @@ final class PhoneAppModel: RecordingCommandHandling {
         await link.updateLibrary(libraryID)
         await audio.setBudget(settings.audioCacheBudget)
         if let path = options.importFile { await importFiles([URL(fileURLWithPath: path)]) }
-        if options.deviceAutopilot { runDeviceAutopilot() }
-        if options.handoffDemo != nil || options.demoLiveCaptions || options.demoTransfer != nil { runStatusDemo() }
         #if DEBUG
-        if PhonePlacementDemo.scenario != nil { Task { await PhonePlacementDemo.apply(to: self) } }
-        if PhoneUpgradeDemo.scenario != nil { Task { await PhoneUpgradeDemo.apply(to: self) } }
+        runLaunchDemos()
         #endif
-        if options.startRecording, !recorder.isActive {
-            try? await startRecording()
-            runDemoScript()
-        }
-        if let name = options.demoRecorderOnly, !recorder.isActive {
-            // After the scene has come forward, which would otherwise record along at once.
-            try? await Task.sleep(for: .seconds(1))
-            recorderOnly = RecorderOnlyRecording(conversationID: UUID(), title: "Conversation at \(Date().formatted(date: .omitted, time: .shortened))",
-                                                 startedAt: Date(), recorderID: "demo", recorderName: name)
-        }
     }
 
     // MARK: Scene phase
@@ -491,7 +421,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         DeviceNotifications.isInForeground = { [weak self] in self?.isForeground ?? false }
         switch phase {
         case .active:
-            if recorderOnly != nil, !recorder.isActive { Task { await recordAlongWithRecorder() } }
+            if multipoints.recorderOnly != nil, !recorder.isActive { Task { await multipoints.recordAlongWithRecorder() } }
             labelCaptionSpeakers()
             // A courier that's off only because the account couldn't be checked (woken in the background soon after the
             // iPhone started) tries again now.
@@ -512,11 +442,15 @@ final class PhoneAppModel: RecordingCommandHandling {
             speakerPass = nil
             sync.scheduleBackgroundRefresh()
             sync.finishOnLeavingForeground()
-            Task { await link.setActivity(recorder.isActive || recorderOnly != nil ? .backgroundRecording : .background) }
+            Task { await link.setActivity(recorder.isActive || multipoints.recorderOnly != nil ? .backgroundRecording : .background) }
         default:
             break
         }
     }
+
+    /// Daybook is in front: its scene is active, and iOS says so (a background relaunch for the recorder
+    /// has no scene to say otherwise).
+    var isInFront: Bool { isForeground && UIApplication.shared.applicationState == .active }
 
     /// Captions saved while the live speaker model missed part of the recording (speakers shed under
     /// heat, Low Power Mode, or a low battery, or the model failed) get their speakers from the
@@ -541,6 +475,19 @@ final class PhoneAppModel: RecordingCommandHandling {
             if self?.speakerPass?.id == id { self?.speakerPass = nil }
         }
         speakerPass = (id, task)
+    }
+
+    // MARK: Opening somewhere
+
+    /// Opens Daybook at `destination` (a notification, Open Conversation, New Note): the interface goes
+    /// there (`OpensDestinations`) and says it has (`reached`).
+    func open(_ destination: AppDestination) {
+        self.destination = DestinationRequest(destination: destination)
+    }
+
+    /// The interface went where `request` asked.
+    func reached(_ request: DestinationRequest) {
+        if destination == request { destination = nil }
     }
 
     // MARK: Processing this iPhone's recordings
@@ -617,75 +564,6 @@ final class PhoneAppModel: RecordingCommandHandling {
         captions.received(update.segments, from: .device(update.recorderID), name: update.name, offset: began.timeIntervalSince(start))
     }
 
-    /// While recording, this iPhone's captions (and its recorder's) go to the Macs recording the same
-    /// conversation that show them, a second at a time, over the local link: the Mac's captions then
-    /// have every device's lines (`LinkCaptions`).
-    private func startSharingCaptions() {
-        captionShares = [:]
-        captionSharing?.cancel()
-        captionSharing = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: Self.captionShareInterval)
-                guard !Task.isCancelled else { return }
-                self?.shareCaptions()
-            }
-        }
-    }
-
-    private func stopSharingCaptions() {
-        shareCaptions()
-        captionSharing?.cancel()
-        captionSharing = nil
-        captionShares = [:]
-    }
-
-    static let captionShareInterval: Duration = .seconds(1)
-
-    /// Sends each Mac the lines that changed since it last heard.
-    func shareCaptions() {
-        guard let id = recorder.captureID, let start = recorder.startedAt, captions.activeMeetingID == id else { return }
-        for mac in macsShowingCaptions(id) {
-            var share = captionShares[mac] ?? CaptionShare()
-            let lines = share.changes(captions.segments, names: captions.sourceNames)
-            captionShares[mac] = share
-            guard !lines.isEmpty else { continue }
-            link.sendShared([.captions(LinkCaptions(conversationID: id, startedAt: start, lines: lines))], to: [mac])
-        }
-    }
-
-    /// The connected Macs recording this conversation too that show other devices' captions.
-    func macsShowingCaptions(_ id: UUID) -> [UUID] {
-        macsRecording(id) { $0.showsCaptions }
-    }
-
-    /// The connected Macs recording this conversation too that draw this iPhone's level.
-    func macsShowingLevels(_ id: UUID) -> [UUID] {
-        macsRecording(id) { $0.showsLevels }
-    }
-
-    private func macsRecording(_ id: UUID, where shows: (PhoneLink.Mac) -> Bool) -> [UUID] {
-        link.connectedMacs.filter { mac in
-            shows(mac) && (mac.recording?.takesPart(in: id) == true
-                || multipoint.map { $0.conversationID == id && $0.macs.contains { $0.id == mac.id && $0.state == .recording } } == true)
-        }.map(\.id)
-    }
-
-    // MARK: Levels for the Macs recording along
-
-    /// While this iPhone records a conversation with Macs that draw its level, its meter's readings go to
-    /// them over the local link, a few at a time about five times a second (`LinkLevels`), so the Mac
-    /// meters every source. Paused, none go: the Mac's meter for this iPhone rests.
-    func shareLevel(_ level: AudioLevel, at now: Date = Date()) {
-        guard recorder.state == .recording, let id = recorder.captureID else {
-            levelShare = LevelShare()
-            return
-        }
-        guard let values = levelShare.add(level.meterValue, at: now) else { return }
-        let macs = macsShowingLevels(id)
-        guard !macs.isEmpty else { return }
-        link.sendLevels(LinkLevels(conversationID: id, values: values, interval: PhoneRecorder.levelInterval, sentAt: now), to: macs)
-    }
-
     // MARK: RecordingCommandHandling
 
     func startRecording() async throws {
@@ -711,18 +589,18 @@ final class PhoneAppModel: RecordingCommandHandling {
         let recordingID = UUID()
         // Processing pauses first: a recording never waits for it, or shares the iPhone with it.
         processor.conditions.isRecording = true
-        let title = requestedTitle ?? "Conversation at \(Date().formatted(date: .omitted, time: .shortened))"
+        let title = requestedTitle ?? Meeting.defaultTitle()
         // Staged by the recording's own ID: the conversation may hold an earlier one still being filed.
         let directory = library.stagingURL.appendingPathComponent(recordingID.uuidString, isDirectory: true)
         notice = nil
         levels.reset()
-        multipoint = session
+        multipoints.session = session
         recorder.audioTap = captions.prepare(meetingID: id)
         do {
             try await recorder.start(in: directory, id: id, recordingID: recordingID, title: title)
-            recorder.setMultipoint(multipoint?.journaled)
+            recorder.setMultipoint(multipoints.session?.journaled)
         } catch {
-            multipoint = nil
+            multipoints.session = nil
             recorder.audioTap = nil
             processor.conditions.isRecording = recorder.isActive
             await captions.finish()
@@ -734,7 +612,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         // Captions start beside the recording, never in its way.
         let locale = settings.captionLocale
         Task { await self.captions.start(locale: locale) }
-        startSharingCaptions()
+        sharing.startSharingCaptions()
         link.sampleClocks()
         // The system requires a Live Activity for a recording started in the background (an intent,
         // a Mac's request); otherwise the setting decides.
@@ -742,78 +620,86 @@ final class PhoneAppModel: RecordingCommandHandling {
         if !options.isRunningTests, settings.showsLiveActivity || background {
             activities.start(conversationID: id, title: title, state: activityState())
         }
+        // A recording that stops by itself in a pocket says so with a notification: asked about now,
+        // with Daybook in front and recording. Not in simulator demos, whose prompt would cover their screenshots.
+        if !background, !options.syntheticAudio { notices.askPermission() }
         if !isForeground { Task { await link.setActivity(.backgroundRecording) } }
-        sendRecordingState(force: true)
+        sharing.sendRecordingState(force: true)
         publish()
-        beginCascade(id, title: session?.title ?? title, date: session?.date ?? Date(), session: session, trigger: trigger,
-                     leadRecorder: leadRecorder, asksMacs: asksMacs)
+        multipoints.beginCascade(id, title: session?.title ?? title, date: session?.date ?? Date(), session: session, trigger: trigger,
+                                 leadRecorder: leadRecorder, asksMacs: asksMacs)
     }
 
     func stopRecording() async throws {
         guard recorder.isActive else { throw RecordingCommandError.notRecording }
         // A stop from a Mac (it asked, or this iPhone follows it) doesn't go back to that Mac.
-        let cascadesUp = !stopIsFromMac
-        stopIsFromMac = false
+        let cascadesUp = !multipoints.stopIsFromMac
+        multipoints.stopIsFromMac = false
         let stopping = recorder.captureID
-        flushSharedNotes()
-        stopSharingCaptions()
+        sharing.flushSharedNotes()
+        sharing.stopSharingCaptions()
         var final = activityState()
         final.phase = .saved
         final.frozenElapsed = recorder.pausedAt ?? recorder.elapsedTime
         activities.end(final)
         isFiling = true
         defer { isFiling = false }
-        let session = multipoint
+        let session = multipoints.session
         let clocks = link.peerClocks { mac in session?.macs.first(where: { $0.id == mac.id })?.startedAt ?? mac.recording?.startedAt }
         // Finishing and filing must complete even if the caller is cancelled (an intent that timed
         // out, a view that went away): an unstructured task doesn't inherit cancellation.
-        let filing = await Task { @MainActor () -> Filing? in
+        let filing = Task { @MainActor () -> StopOutcome in
             guard var recording = await self.recorder.stop() else {
-                var filing: Filing?
-                if let reason = self.recorder.lastError {
-                    self.say(Self.notFinished, details: reason)
-                    filing = .failed(Self.notFinished)
-                }
+                self.recorder.audioTap = nil
+                await self.captions.finish()
+                let outcome = await self.fileUnfinished(self.recorder.unfinishedFolder, failure: self.recorder.lastFailure,
+                                                        reason: self.recorder.lastError)
                 self.publish()
-                return filing
+                return outcome
             }
             if !clocks.isEmpty { recording.capture.peerClocks = clocks }
             self.recorder.audioTap = nil
             await self.captions.finish()
-            return await self.file(recording, session: session)
-        }.value
-        if let filing { lastFiling = filing }
-        stopMacsStartedHere(session)
-        endCascade(stopping, session: session, cascadesUp: cascadesUp)
-        multipoint = nil
+            let filed = await self.file(recording, session: session)
+            return StopOutcome(filing: filed)
+        }
+        noteStopped(await whileFiling(stopping, filing))
+        multipoints.stopMacsStartedHere(session)
+        multipoints.endCascade(stopping, session: session, cascadesUp: cascadesUp)
+        multipoints.session = nil
         sync.controller?.publishActivity(recording: nil)
-
-        startedFromMac = nil
-        sendRecordingState(force: true)
+        multipoints.recordingEnded()
+        sharing.sendRecordingState(force: true)
         if !isForeground { Task { await link.setActivity(.background) } }
+    }
+
+    /// Filing put a conversation in the library (`PhoneAppModel+Filing.swift`).
+    func noteFiled(_ id: UUID) { lastFiledID = id }
+
+    /// A stop (by the person, a Mac, or the recording itself) came to `outcome`: where it went, and what
+    /// Siri says.
+    func noteStopped(_ outcome: StopOutcome) {
+        if let filing = outcome.filing { lastFiling = filing }
+        lastStopResult = outcome.result
     }
 
     func resumeRecording() async throws {
         guard recorder.isPaused else { throw RecordingCommandError.notRecording }
-        do { try await recorder.resume() } catch { throw Self.commandFailure(error, starting: false) }
+        do { try await recorder.resume() } catch {
+            sayResumeFailed(error)
+            throw Self.commandFailure(error, starting: false)
+        }
     }
 
     @discardableResult
     func addBookmark() async throws -> TimeInterval {
         guard let mark = recorder.addBookmark() else { throw RecordingCommandError.notRecording }
-        if let id = recorder.captureID, multipoint != nil {
-            // The same ID as the phone's own bookmark, so the Mac's copy and the synced one are one bookmark.
-            link.sendBookmark(LinkBookmark(id: mark.id, conversationID: id, recordingTime: mark.time))
-            sharedNotes.bookmarkShared(mark)
-        }
+        sharing.bookmarkAdded(mark)
         return mark.time
     }
 
     func editNotes(_ text: String) {
-        // A paragraph a Mac wrote a moment ago that the editor hadn't shown yet isn't deleted by it.
-        let text = sharedNotes.isActive ? sharedNotes.keepingArrivals(text, anchors: recorder.timedNotes) : text
-        recorder.editNotes(text)
-        scheduleNotesShare()
+        sharing.editNotes(text)
     }
 
     /// A photo from the camera opened during recording `id`. While that recording runs, the photo
@@ -823,8 +709,8 @@ final class PhoneAppModel: RecordingCommandHandling {
         do {
             if recorder.captureID == id, try await recorder.addPhoto(photo) != nil { return }
             guard let id else { return }
-            let deadline = Date().addingTimeInterval(Self.lateFilingWait)
-            while library.controller.meeting(id) == nil, Date() < deadline { try await Task.sleep(for: .milliseconds(100)) }
+            // Still being filed: the photo waits for it.
+            if let filing = filings[id] { await filing.value }
             guard library.controller.meeting(id) != nil else {
                 say(Self.photoNotSaved)
                 publish()
@@ -836,9 +722,6 @@ final class PhoneAppModel: RecordingCommandHandling {
             publish()
         }
     }
-
-    /// How long a photo taken as the recording ended waits for it to be filed.
-    static let lateFilingWait: TimeInterval = 60
 
     func dismissNotice() { notice = nil }
 
@@ -859,17 +742,32 @@ final class PhoneAppModel: RecordingCommandHandling {
     /// else (an audio session error) gets one, with its words behind Details.
     private func sayStartFailed(_ error: Error) {
         switch error as? PhoneRecorderError {
-        case .microphoneDenied?: say("Allow Daybook to use the microphone in Settings.", fix: .openSettings)
+        case .microphoneDenied?: say(Self.allowMicrophone, fix: .openSettings)
         case let known?: say(known.localizedDescription, details: known.details)
         case nil: say("Couldn’t start recording. Try again.", details: error.localizedDescription)
         }
     }
 
+    /// A paused recording that couldn't continue (Resume, or iOS asking to continue after a call): it stays
+    /// paused with Resume, and the notice says so, with the system's words behind Details.
+    func sayResumeFailed(_ error: Error) {
+        switch error as? PhoneRecorderError {
+        case .microphoneDenied?: say(Self.allowMicrophone, fix: .openSettings)
+        case .notRecording?: break
+        case let known?: say(known.localizedDescription, details: known.details)
+        case nil: say(Self.couldNotResume, details: error.localizedDescription)
+        }
+        publish()
+    }
+
+    static let allowMicrophone = "Allow Daybook to use the microphone in Settings."
+    static let couldNotResume = "Couldn’t resume recording. Try again."
+
     /// What a Shortcut, the control, or a Live Activity button says when recording couldn't start or resume: Daybook's
     /// own sentence, never the system's words (those are in the app's notice).
     static func commandFailure(_ error: Error, starting: Bool) -> RecordingCommandError {
         switch error as? PhoneRecorderError {
-        case .microphoneDenied?: return .failed("Allow Daybook to use the microphone in Settings.")
+        case .microphoneDenied?: return .failed(allowMicrophone)
         case let known? where known.details == nil: return .failed(known.localizedDescription)
         default: return .failed(starting ? "Couldn’t start recording. Open Daybook to try again." : "Couldn’t resume recording. Open Daybook to try again.")
         }
@@ -912,321 +810,54 @@ final class PhoneAppModel: RecordingCommandHandling {
         recorder.prepareForTermination()
     }
 
-    // MARK: Multipoint
+    // MARK: Multipoint, as the interface and tests ask it (`MultipointCoordinator`)
 
+    /// Where the stops this iPhone owes Macs are kept, in the library's folder.
+    static let owedStopsFile = MultipointCoordinator.owedStopsFile
+
+    /// While a Mac records this conversation too, or asked this iPhone to. Kept in the recording's
+    /// journal, so a recording recovered after Daybook was killed still joins and stops its Macs.
+    var multipoint: MultipointSession? {
+        get { multipoints.session }
+        set { multipoints.session = newValue }
+    }
+    /// A shared recording this iPhone takes part in only through its recorder.
+    var recorderOnly: RecorderOnlyRecording? {
+        get { multipoints.recorderOnly }
+        set { multipoints.recorderOnly = newValue }
+    }
+    /// Recording here asks the connected Macs on its own (a cascading start). Tests of the person's own
+    /// "Record on Studio Mac too" turn it off.
+    var cascadesToMacs: Bool {
+        get { multipoints.cascadesToMacs }
+        set { multipoints.cascadesToMacs = newValue }
+    }
+    /// Stops this iPhone owes Macs it started, by Mac: the conversation to stop.
+    var pendingStops: [UUID: UUID] { multipoints.pendingStops }
     /// Macs connected now that could record this conversation too.
-    var macsToRecordWith: [PhoneLink.Mac] {
-        guard recorder.isCapturing, multipoint?.isMacLed != true else { return [] }
-        // A Mac that said no, or never answered, can be asked again.
-        let involved = Set(multipoint?.macs.filter { [.asking, .recording, .stopped].contains($0.state) }.map(\.id) ?? [])
-        return link.connectedMacs.filter { !involved.contains($0.id) && !$0.isRecording }
-    }
+    var macsToRecordWith: [PhoneLink.Mac] { multipoints.macsToRecordWith }
+    /// The multipoint line for the recording screen.
+    var multipointLine: String? { multipoints.line }
 
-    /// The multipoint line for the recording screen: the session, plus any Mac that reports
-    /// recording this conversation on its own.
-    var multipointLine: String? {
-        if let line = multipoint?.line { return line }
-        guard let id = recorder.captureID else { return nil }
-        let names = link.connectedMacs.filter { $0.recording?.conversationID == id && $0.isRecording }.map(\.name)
-        return names.isEmpty ? nil : "Also recording on \(ListFormatter.localizedString(byJoining: names))"
-    }
-
-    /// "Record on Studio Mac too": asks a connected Mac to record this conversation, with this
-    /// iPhone's timing so it can be placed at once.
-    ///
-    /// An answer that doesn't come (a reconnect, a microphone prompt on the Mac) is asked for again
-    /// with the same request, for up to `startRetryWindow`; the Mac answers a repeat with its first
-    /// answer, so whether it started because of this iPhone is never lost. A Mac whose start comes
-    /// back after this iPhone stopped, or that never answered, is stopped with it.
+    /// "Record on Studio Mac too".
     func recordOnMac(_ macID: UUID, cascade: LinkCascade? = nil) async {
-        guard let mac = link.macs.first(where: { $0.id == macID }) else { return }
-        // This iPhone's own recording, or (in the background) only its recorder's.
-        let own = recorder.isCapturing ? recorder.captureID : nil
-        guard let id = own ?? recorderOnly?.conversationID else { return }
-        // Only Macs that understand it are asked to record along with a recorder alone: an older one
-        // would expect a recording from this iPhone.
-        if own == nil, !mac.cascades { return }
-        var session = multipoint ?? MultipointSession(conversationID: id, role: .phoneLed)
-        // A Mac asked already (on its own as recording began, or by the person) isn't asked twice.
-        if let asked = session.macs.first(where: { $0.id == macID }), asked.state == .asking || asked.state == .recording { return }
-        // A Mac that didn't answer before is asked the same request again.
-        let requestID = session.macs.first(where: { $0.id == macID && $0.state.isUnanswered })?.startRequestID ?? UUID()
-        session.macs.removeAll { $0.id == macID }
-        session.macs.append(MultipointSession.Mac(id: macID, name: mac.name, state: .asking, startedAt: nil, startedByPhone: true,
-                                                  startRequestID: requestID))
-        multipoint = session
-        // This iPhone's recording (or its recorder's) sets its conversation's timeline.
-        let start = own != nil ? recorder.startedAt : recorderOnly?.startedAt
-        let timing = LinkTiming(startedAt: start, elapsed: start.map { max(0, Date().timeIntervalSince($0)) },
-                                clockOffset: mac.clock?.offset, clockUncertainty: mac.clock?.uncertainty, timelineStart: start)
-        // The conversation as this iPhone will file it, so a Mac that creates it makes the same one.
-        let (title, date) = own != nil ? (recorder.title, recorder.startedAt) : (recorderOnly?.title ?? recorder.title, start)
-        let stillAsking = { [weak self] in self?.multipoint?.conversationID == id && self?.multipoint?.macs.first { $0.id == macID }?.state == .asking }
-        let deadline = Date().addingTimeInterval(Self.startRetryWindow)
-        var result = await link.request(.start, id: requestID, conversationID: id, timing: timing, title: title, date: date,
-                                        cascade: cascade, from: macID)
-        while case .failure(.unreachable) = result, stillAsking(), Date() < deadline {
-            try? await Task.sleep(for: .milliseconds(250))
-            guard link.macs.first(where: { $0.id == macID })?.isConnected == true else { continue }
-            result = await link.request(.start, id: requestID, conversationID: id, timing: timing, title: title, date: date,
-                                        cascade: cascade, from: macID)
-        }
-        guard stillAsking() else {
-            // This iPhone stopped meanwhile (and asked it to stop then); a start it made anyway is stopped too.
-            if case .success(let ack) = result, !ack.wasAlreadyRecording { queueStop(of: macID, conversation: id) }
-            return
-        }
-        switch result {
-        case .success(let ack):
-            multipoint?.update(macID) { entry in
-                entry.state = .recording
-                entry.startedAt = ack.startedAt
-                entry.startedByPhone = !ack.wasAlreadyRecording
-            }
-        case .failure(.refused(let refusal)) where cascade != nil && refusal.reason == .declined:
-            // Asked on its own, it said no as the person set it to (its Can start recording for this iPhone): their
-            // choice, so nothing is said, as for a Mac known not to take it.
-            multipoint?.macs.removeAll { $0.id == macID }
-        case .failure(let failure):
-            let message = failure.message(mac: mac.name)
-            multipoint?.update(macID) { $0.state = failure == .unreachable ? .noAnswer(message) : .failed(message) }
-            notice = message
-        }
-        updateActivity()
-        publish()
+        await multipoints.recordOnMac(macID, cascade: cascade)
     }
 
-    /// How long a start that gets no answer is asked again.
-    static let startRetryWindow: TimeInterval = 30
+    /// While recording for a Mac, one unreachable for too long won't stop it, so this iPhone does.
+    func checkLead(now: Date = Date()) { multipoints.checkLead(now: now) }
 
-    /// A Mac said what it's recording. One this iPhone records with that has stopped, or moved on to
-    /// another conversation, is marked so on the recording screen. When it's the Mac that asked this
-    /// iPhone to record, this iPhone stops too, and says so: its stop may never have arrived.
-    private func macReported(_ state: LinkRecordingState, from macID: UUID) {
-        guard let session = multipoint, let mac = session.macs.first(where: { $0.id == macID }) else { return }
-        let recordsThis = state.conversationID == session.conversationID && state.phase != .idle
-        guard !recordsThis else { return }
-        if mac.state == .recording { multipoint?.update(macID) { $0.state = .stopped } }
-        if case .macLed(let lead) = session.role, lead == macID {
-            stopFollowing(lead: mac.name, conversation: session.conversationID, because: "\(mac.name) stopped recording, so this iPhone stopped too.")
-            return
-        }
-        updateActivity()
-        publish()
-    }
+    /// Daybook came forward while only the recorder records: this iPhone records the same conversation now.
+    func recordAlongWithRecorder() async { await multipoints.recordAlongWithRecorder() }
 
-    /// Recording because a Mac asked, and that Mac has stopped (or can't be reached any more): stop too.
-    private func stopFollowing(lead name: String, conversation: UUID, because message: String) {
-        guard recorder.isActive, recorder.captureID == conversation, !isFiling else { return }
-        stopIsFromMac = true
-        Task {
-            try? await self.stopRecording()
-            self.notice = message
-            self.publish()
-        }
-    }
+    /// The connected Macs recording this conversation too that show other devices' captions.
+    func macsShowingCaptions(_ id: UUID) -> [UUID] { sharing.macsShowingCaptions(id) }
 
-    /// A Mac this iPhone records for, not heard from for this long, is taken to have stopped.
-    static let leaderSilenceLimit: TimeInterval = 30 * 60
+    /// The connected Macs recording this conversation too that draw this iPhone's level.
+    func macsShowingLevels(_ id: UUID) -> [UUID] { sharing.macsShowingLevels(id) }
 
-    /// While recording for a Mac: one that has been unreachable for `leaderSilenceLimit` won't stop
-    /// this recording itself, so this iPhone does.
-    func checkLead(now: Date = Date()) {
-        guard let session = multipoint, case .macLed(let lead) = session.role,
-              let mac = link.macs.first(where: { $0.id == lead }), !mac.isConnected,
-              let last = mac.lastConnectedAt, now.timeIntervalSince(last) > Self.leaderSilenceLimit else { return }
-        stopFollowing(lead: mac.name, conversation: session.conversationID,
-                      because: "\(mac.name) couldn’t be reached for \(Int(Self.leaderSilenceLimit / 60)) minutes, so this iPhone stopped recording.")
-    }
-
-    /// Whether a Mac may stop this iPhone's recording: the one that started it, or one this iPhone
-    /// asked to record along. The person can always stop it here.
-    func mayStop(_ macID: UUID) -> Bool {
-        startedFromMac == macID || multipoint?.macs.contains(where: { $0.id == macID }) == true
-    }
-
-    /// A Mac connected: it hears this iPhone's recording state and whether it may start recording here at
-    /// once, and a stop that didn't reach it before goes now.
-    private func macConnected(_ macID: UUID) {
-        sendRecordPermission(to: macID)
-        sendRecordingState(force: true)
-        sendPendingStop(to: macID)
-        macConnectedDuringCascade(macID)
-    }
-
-    /// Stopping here stops the Macs this iPhone started, those still being asked, and those that never
-    /// answered; a Mac that was already recording keeps going.
-    func stopMacsStartedHere(_ session: MultipointSession?) {
-        guard let session, !session.isMacLed else { return }
-        for mac in session.macs where mac.needsStop {
-            multipoint?.update(mac.id) { $0.state = .stopped }
-            queueStop(of: mac.id, conversation: session.conversationID)
-        }
-    }
-
-    /// A stop for a Mac this iPhone started: sent now, and again whenever it connects, until it answers,
-    /// even after a relaunch.
-    func queueStop(of macID: UUID, conversation: UUID) {
-        if pendingStops[macID] != conversation { owedSince[macID] = Date() }
-        pendingStops[macID] = conversation
-        sendPendingStop(to: macID)
-    }
-
-    /// Where the stops this iPhone owes are kept, in the library's folder.
-    static let owedStopsFile = "owed-stops.json"
-
-    private func saveOwedStops() {
-        owedSince = owedSince.filter { pendingStops[$0.key] != nil }
-        owedStops.save(pendingStops.map { OwedMacStop(macID: $0.key, conversationID: $0.value, owedAt: owedSince[$0.key] ?? Date()) })
-    }
-
-    private func sendPendingStop(to macID: UUID) {
-        guard let conversation = pendingStops[macID], link.macs.first(where: { $0.id == macID })?.isConnected == true,
-              !stopsInFlight.contains(macID) else { return }
-        stopsInFlight.insert(macID)
-        Task {
-            let result = await link.request(.stop, conversationID: conversation, timing: nil, from: macID)
-            stopsInFlight.remove(macID)
-            // Stopped, or it says it isn't recording that (or won't stop it): either way, done.
-            if case .failure(.unreachable) = result { return }
-            if pendingStops[macID] == conversation { pendingStops[macID] = nil }
-        }
-    }
-
-    // MARK: Can Start Recording, both ways
-
-    /// Whether a Mac may start a recording here (and stop one from its page): Recording with Your Mac, and its own
-    /// Can Start Recording.
-    func letsMacStartRecording(_ mac: PhoneLink.Mac) -> Bool {
-        settings.acceptsMacRecordRequests && settings.macMayStartRecording(mac.id, pairedAt: mac.pairedAt)
-    }
-
-    /// Tells a connected Mac that takes it whether it may start recording here; `turnedOff` answers its ask to keep an
-    /// off it had (`LinkRecordPermission.asksReceiverOff`).
-    func sendRecordPermission(to macID: UUID, turnedOff: Bool = false) {
-        guard let mac = link.macs.first(where: { $0.id == macID }) else { return }
-        link.sendRecordPermission(LinkRecordPermission(allowed: letsMacStartRecording(mac), turnedOff: turnedOff ? true : nil), to: macID)
-    }
-
-    private func sendRecordPermissions() {
-        for mac in link.connectedMacs { sendRecordPermission(to: mac.id) }
-    }
-
-    /// A Mac said whether this iPhone may start a recording there (`PhoneLink.Mac.takesStartsFromHere` keeps it). One
-    /// that had Record along with this Mac off for this iPhone in an earlier build asks it to keep that off: Can Start
-    /// Recording for it goes off here (once for this pairing), and the Mac hears it's taken.
-    private func macSaidRecordPermission(_ permission: LinkRecordPermission, from macID: UUID) {
-        guard permission.asksReceiverOff == true, let mac = link.macs.first(where: { $0.id == macID }) else { return }
-        settings.takeMacOff(mac.id, pairedAt: mac.pairedAt)
-        sendRecordPermission(to: macID, turnedOff: true)
-    }
-
-    /// A Mac's record request: start recording its conversation here (with its timing), or stop.
-    func answer(_ mac: PhoneLink.Mac, _ request: LinkRecordRequest) async -> LinkRecordReply.Outcome {
-        // A recorder this iPhone manages, which the Mac records along with through it. A stop names the
-        // recording it means, so it never pauses one the person started since.
-        if let target = request.recorder {
-            guard settings.acceptsMacRecordRequests else {
-                return .refused(LinkRecordRefusal(reason: .declined, message: "Recording with a Mac is turned off on this iPhone."))
-            }
-            let answer = await RecorderRemoteControl.answer(request, target: target, sessions: devices.sessions, cascade: devices.cascade)
-            if request.action == .stop { recorderStoppedRemotely(request.conversationID) }
-            return answer
-        }
-        // The recording's own ID, which its track carries, so the Mac's link finds it when it syncs.
-        var recordingID: String? { recorder.recordingID?.uuidString }
-        switch request.action {
-        case .start:
-            guard settings.acceptsMacRecordRequests else {
-                return .refused(LinkRecordRefusal(reason: .declined, message: "Recording with a Mac is turned off on this iPhone."))
-            }
-            // Can Start Recording for that Mac: the one thing that decides whether it records here when it starts, as
-            // the Mac's own does for this iPhone's starts.
-            guard settings.macMayStartRecording(mac.id, pairedAt: mac.pairedAt) else {
-                return .refused(LinkRecordRefusal(reason: .declined, message: PairingWords.notAllowedToStart(asker: .mac)))
-            }
-            if recorder.isActive {
-                if recorder.captureID == request.conversationID {
-                    return .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: recorder.startedAt,
-                                                   recordingID: recordingID, wasAlreadyRecording: true))
-                }
-                return .refused(LinkRecordRefusal(reason: .recordingSomethingElse, conversationID: recorder.captureID))
-            }
-            // Only its recorder records another conversation (the iPhone was in the background): it can't
-            // join this one as well.
-            if let only = recorderOnly, only.conversationID != request.conversationID {
-                return .refused(LinkRecordRefusal(reason: .recordingSomethingElse, conversationID: only.conversationID))
-            }
-            // A device page's Start Recording on iPhone: a conversation of this iPhone's own, which that
-            // Mac may stop. Otherwise this iPhone records the Mac's conversation alongside it.
-            let session = request.isStandalone ? nil : MultipointSession(
-                conversationID: request.conversationID, role: .macLed(macID: mac.id),
-                macs: [MultipointSession.Mac(id: mac.id, name: mac.name, state: .recording, startedAt: request.timing?.startedAt, startedByPhone: false)],
-                leadStartedAt: request.timing?.startedAt, timelineStart: request.timing?.timelineStart,
-                leadClockOffset: mac.clock?.offset ?? request.timing?.clockOffset.map { -$0 },
-                title: request.title, date: request.date)
-            // The title shown while recording; filing never writes it on the Mac's conversation.
-            let title = library.controller.meeting(request.conversationID)?.title ?? request.title
-            do {
-                // A Mac asked: this iPhone's recorders record along; Macs aren't asked (the one that asked leads).
-                try await startRecording(into: request.conversationID, title: title, multipoint: session, trigger: .device, asksMacs: false)
-                if session == nil { startedFromMac = mac.id }
-            } catch {
-                if recorder.isActive, recorder.captureID != request.conversationID {
-                    return .refused(LinkRecordRefusal(reason: .recordingSomethingElse, conversationID: recorder.captureID))
-                }
-                let denied = recorder.lastError == PhoneRecorderError.microphoneDenied.localizedDescription
-                return .refused(LinkRecordRefusal(reason: denied ? .permissionDenied : .microphoneUnavailable, message: recorder.lastError))
-            }
-            // The first sample fixes the recording's start; it arrives within a few buffers.
-            for _ in 0..<30 where recorder.startedAt == nil {
-                try? await Task.sleep(for: .milliseconds(50))
-                recorder.updateLevels()
-            }
-            return .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: recorder.startedAt ?? Date(),
-                                           recordingID: recordingID, wasAlreadyRecording: false))
-        case .stop:
-            // The Mac this recording is with (the one that started it, or one this iPhone asked to record), or that
-            // Mac's page (Stop on iPhone, a standalone stop) when it can start recording here, as on the Mac.
-            let shared = mayStop(mac.id)
-            let fromPage = request.isStandalone && letsMacStartRecording(mac)
-            if !recorder.isActive, let only = recorderOnly, only.conversationID == request.conversationID, shared || fromPage {
-                // Only its recorder records this conversation: it stops with the Mac.
-                Task { await self.endRecorderOnly(because: nil) }
-                return .accepted(LinkRecordAck(conversationID: request.conversationID, stoppedAt: Date()))
-            }
-            guard recorder.isActive, recorder.captureID == request.conversationID else {
-                return .refused(LinkRecordRefusal(reason: .notRecording, conversationID: recorder.captureID))
-            }
-            guard shared || fromPage else {
-                return .refused(LinkRecordRefusal(reason: .declined, message: request.isStandalone
-                    ? PairingWords.notAllowedToStop(asker: .mac) : "This recording was started on the iPhone. Stop it there."))
-            }
-            let stoppedAt = Date(), stopped = recordingID
-            // Answer now; finishing and filing a long recording can outlast the request's timeout. A stop from the Mac
-            // it records with doesn't go back to it; one from another Mac's page goes on to the Mac this recording is with.
-            stopIsFromMac = shared
-            Task { try? await self.stopRecording() }
-            return .accepted(LinkRecordAck(conversationID: request.conversationID, stoppedAt: stoppedAt, recordingID: stopped))
-        default:
-            return .refused(LinkRecordRefusal(reason: .unsupported))
-        }
-    }
-
-    /// How a recording made with a Mac joins its conversation: always when a Mac leads it, and when
-    /// this iPhone led, once a Mac recorded it too (or may have). Its notes and bookmarks then stay
-    /// with its track until the Mac places it. Nil files it as a conversation of its own.
-    func join(for recording: PhoneRecording, session: MultipointSession?) -> PhoneLibrary.Join? {
-        guard let session, session.conversationID == recording.id else { return nil }
-        guard session.isMacLed else {
-            return session.macs.contains(where: \.mayHaveRecorded) ? PhoneLibrary.Join() : nil
-        }
-        // Where the phone's recording probably starts on the Mac's timeline, by the link's clocks. A
-        // Mac that didn't say where its timeline began (an older one) began it with its own recording.
-        let offset = session.leadClockOffset
-        let zero = (session.timelineStart ?? session.leadStartedAt).map { start in offset.map { start.addingTimeInterval(-$0) } ?? start }
-        return PhoneLibrary.Join(estimatedOffset: zero.map { recording.startedAt.timeIntervalSince($0) }, title: session.title, date: session.date)
-    }
+    /// This iPhone's level to the Macs recording along that draw it.
+    func shareLevel(_ level: AudioLevel, at now: Date = Date()) { sharing.shareLevel(level, at: now) }
 
     // MARK: Importing
 
@@ -1246,12 +877,17 @@ final class PhoneAppModel: RecordingCommandHandling {
             }
         }
         if !failures.isEmpty {
-            say(failures.count == 1 ? "Couldn’t import “\(failures[0].name)”." : "Couldn’t import \(failures.count) files.",
+            say(failures.count == 1 ? "Couldn’t import “\(failures[0].name)”." : Self.importFailures(failures.count),
                 details: failures.map { "\($0.name): \($0.reason)" }.joined(separator: "\n"))
         }
         sync.synchronizeFinishing(.filed)
         processor.pickUp()
         publish()
+    }
+
+    /// "Couldn’t import 3 files.", in the language's own plural.
+    static func importFailures(_ count: Int) -> String {
+        String(AttributedString(localized: "Couldn’t import ^[\(count) file](inflect: true).").characters)
     }
 
     /// A recorder's recording was filed: upload it now and tell a connected Mac.
@@ -1262,82 +898,6 @@ final class PhoneAppModel: RecordingCommandHandling {
         publish()
     }
 
-    // MARK: Filing and recovery
-
-    @discardableResult
-    private func file(_ recording: PhoneRecording, session: MultipointSession? = nil) async -> Filing {
-        let join = join(for: recording, session: session)
-        let filing: Filing
-        // A Mac's conversation that hasn't synced here yet: one pass first, so this files into its copy.
-        if join != nil, library.controller.meeting(recording.id) == nil, sync.isConnected { await sync.synchronize(.filed) }
-        do {
-            let filed = try await library.fileRecording(recording, join: join, requestTranscription: settings.requestsTranscription)
-            lastFiledID = filed.meeting.id
-            filing = .saved(filed.meeting.id, Date())
-            let identity = PhoneDevice.identity(recordingID: recording.recordingID, installation: library.installationID)
-            if let track = filed.meeting.tracks.first(where: { $0.device == identity }) {
-                await captions.attach(trackID: track.id, meetingID: filed.meeting.id)
-                // Speakers the live model missed, from the recording, while the app is in front.
-                labelCaptionSpeakers()
-            }
-            if recording.recovered { notice = "Recovered a recording Daybook was making when it quit." }
-            if let request = filed.request { link.nudge(request) }
-            if !options.isRunningTests { sync.synchronizeFinishing(.filed) }
-            // Transcribed here when this iPhone has the models (it claimed the request as it filed it).
-            processor.pickUp()
-        } catch {
-            say(Self.notFiled, details: error.localizedDescription)
-            filing = .failed(Self.notFiled)
-        }
-        publish()
-        return filing
-    }
-
-    static let notFinished = "Couldn’t finish the recording. It’s kept, and Daybook tries again the next time it opens."
-    static let notFiled = "Couldn’t add the recording to your library. It’s saved and will be added next time Daybook opens."
-
-    private func finishUnexpectedly(_ recording: PhoneRecording?) async {
-        var final = activityState()
-        final.phase = .saved
-        activities.end(final)
-        let session = multipoint
-        stopMacsStartedHere(session)
-        endCascade(recording?.id ?? session?.conversationID ?? devices.cascade.conversation?.id, session: session, cascadesUp: false)
-        multipoint = nil
-        startedFromMac = nil
-        stopSharingCaptions()
-        recorder.audioTap = nil
-        await captions.finish()
-        if let recording {
-            lastFiling = await Task { @MainActor in await self.file(recording, session: session) }.value
-        } else {
-            lastFiling = .failed(Self.notFinished)
-        }
-        say("Recording stopped. Everything up to then is saved.", details: recorder.lastError)
-        publish()
-    }
-
-    /// Files recordings a killed or crashed run left in staging.
-    private func recoverLeftovers() async {
-        for folder in PhoneRecorder.pendingCaptures(in: library.stagingURL) where folder.standardizedFileURL != recorder.stagingDirectory?.standardizedFileURL {
-            do {
-                let recording = try await PhoneRecorder.recover(in: folder)
-                // Made with Macs: it joins their conversation, and the ones this iPhone started are stopped.
-                let session = MultipointSession(conversationID: recording.id, journaled: recording.multipoint)
-                await file(recording, session: session)
-                for mac in session?.macsToStop ?? [] { queueStop(of: mac.id, conversation: recording.id) }
-            } catch PhoneRecorderError.nothingRecorded {
-                // No audio at all. Keep the folder only if it holds notes worth saving.
-                let journal = try? PhoneCaptureJournal.load(from: folder)
-                if journal?.notes.isEmpty != false, journal?.highlights.isEmpty != false, journal?.photos?.isEmpty != false {
-                    try? FileManager.default.removeItem(at: folder)
-                }
-            } catch {
-                say("Couldn’t recover a recording. Daybook tries again the next time it opens.", details: error.localizedDescription)
-            }
-        }
-    }
-
     // MARK: Live Activity, widgets, and the link's recording state
 
     private func recorderChanged() {
@@ -1345,52 +905,34 @@ final class PhoneAppModel: RecordingCommandHandling {
         // Processing never runs beside a recording.
         processor.conditions.isRecording = recorder.isActive
         updateActivity()
-        sendRecordingState(force: true)
+        sharing.sendRecordingState(force: true)
         publish()
     }
 
     private func levelChanged(_ level: AudioLevel) {
         levels.append(recorder.state == .recording ? level.meterValue : 0)
-        shareLevel(level)
+        sharing.shareLevel(level)
         updateActivity()
-        sendRecordingState(force: false)
+        sharing.sendRecordingState(force: false)
         // The widgets' confirmation that it's still recording, once a minute.
         if sharedState.isDue() { publish() }
-
-        checkLead()
+        multipoints.checkLead()
     }
 
-    /// The recorder's state to connected Macs: on every change, and every 15 s while recording.
-    func sendRecordingState(force: Bool) {
-        guard !link.connectedMacs.isEmpty, force || Date().timeIntervalSince(lastStateSent) >= 15 else { return }
-        lastStateSent = Date()
-        let phase: LinkRecordingState.Phase
-        switch recorder.state {
-        case .idle: phase = .idle
-        case .starting: phase = .starting
-        case .recording: phase = .recording
-        case .paused: phase = .paused
-        case .stopping: phase = .stopping
-        }
-        let cascade = devices.cascade
-        let recorders = devices.hub.recorderStates(conversation: { cascade.sharedConversation(of: $0) })
-        lastRecorders = recorders
-        link.sendRecordingState(LinkRecordingState(phase: phase, conversationID: recorder.captureID, startedAt: recorder.startedAt,
-                                                   elapsed: recorder.isActive ? recorder.elapsedTime : 0, recorders: recorders,
-                                                   sharedConversationID: recorder.isActive ? nil : recorderOnly?.conversationID))
-    }
-
-    private func activityState() -> RecordingActivityAttributes.ContentState {
+    /// What the Live Activity shows now.
+    func activityState() -> RecordingActivityAttributes.ContentState {
         RecordingActivityAttributes.ContentState(
             phase: recorder.isPaused ? .paused : .recording,
             timerStart: recorder.startedAt ?? Date(),
             frozenElapsed: recorder.isPaused ? recorder.pausedAt : nil,
-            level: recorder.isPaused ? 0 : RecordingActivityAttributes.ContentState.levelBucket(recorder.level.meterValue),
+            // Whether the microphone hears anything: it changes rarely, never with the voice.
+            level: RecordingActivityAttributes.ContentState.level(hearing: !recorder.isPaused && !recorder.isMicrophoneSilent),
             bookmarkCount: recorder.bookmarkCount,
-            multipoint: multipoint?.shortLine,
+            multipoint: multipoints.session?.shortLine,
             caption: Self.activityCaption(captionsOn: settings.liveCaptions, showing: captions.isShowing,
                                           forThisRecording: recorder.captureID != nil && captions.activeMeetingID == recorder.captureID,
-                                          paused: recorder.isPaused, newest: captions.segments.last?.text))
+                                          paused: recorder.isPaused, newest: captions.segments.last?.text),
+            canResume: recorder.isPaused ? recorder.canResume : nil)
     }
 
     /// The newest live caption for the Live Activity: only while captions are on and showing for this
@@ -1414,8 +956,9 @@ final class PhoneAppModel: RecordingCommandHandling {
             state.startedAt = recorder.startedAt
             state.title = recorder.title
             state.bookmarkCount = recorder.bookmarkCount
-            state.multipoint = multipoint?.shortLine
+            state.multipoint = multipoints.session?.shortLine
             state.pausedElapsed = recorder.isPaused ? recorder.pausedAt : nil
+            state.canResume = recorder.isPaused ? recorder.canResume : nil
         }
         if let latest = library.conversations.first {
             state.lastRecordingTitle = latest.title
@@ -1425,186 +968,9 @@ final class PhoneAppModel: RecordingCommandHandling {
         sharedState.writes = !options.isRunningTests
         sharedState.publish(state)
     }
-
-    // MARK: Debug scripts
-
-    /// `--demo-notes`, `--simulate-interruption`, and `--stop-after`: a scripted recording for
-    /// screenshots, with synthetic audio.
-    private func runDemoScript() {
-        let notes = options.demoNotes
-        let stopAfter = options.stopAfter
-        let interruptAfter = options.interruptAfter
-        if let mac = options.demoMultipointMac, let id = recorder.captureID {
-            multipoint = MultipointSession(conversationID: id, role: .phoneLed,
-                                           macs: [MultipointSession.Mac(id: UUID(), name: mac, state: .recording, startedAt: Date(), startedByPhone: true)])
-            updateActivity()
-        }
-        demo = Task { [weak self] in
-            if notes {
-                let script: [(TimeInterval, String?)] = [
-                    (2, "Agenda: what the phone app records, and what waits for the Mac."),
-                    (2.5, nil),
-                    (3, "Recording keeps going with the screen locked; calls pause it."),
-                    (2.5, "Next: measure both iPhone Duo displays before fixing layout constants."),
-                    (1.5, nil),
-                ]
-                var text = ""
-                for (delay, line) in script {
-                    try? await Task.sleep(for: .seconds(delay))
-                    guard let self, !Task.isCancelled, self.recorder.isActive else { return }
-                    if let line {
-                        text += (text.isEmpty ? "" : "\n") + line
-                        self.editNotes(text)
-                    } else {
-                        _ = try? await self.addBookmark()
-                    }
-                }
-            }
-            if let interruptAfter {
-                try? await Task.sleep(for: .seconds(max(0, interruptAfter - (notes ? 11.5 : 0))))
-                guard let self, !Task.isCancelled, self.recorder.isActive else { return }
-                self.demoAudioSession?.send(.interruptionBegan(reason: nil))
-                // The call ends four seconds later; iOS doesn't ask to resume, so Resume is offered.
-                try? await Task.sleep(for: .seconds(4))
-                guard !Task.isCancelled else { return }
-                self.demoAudioSession?.send(.interruptionEnded(shouldResume: false))
-            }
-            if let stopAfter {
-                try? await Task.sleep(for: .seconds(max(0, stopAfter - (notes ? 11.5 : 0))))
-                guard let self, !Task.isCancelled, self.recorder.isActive else { return }
-                try? await self.stopRecording()
-            }
-        }
-    }
-
-    /// `--demo-link`: paired Macs and a Mac to pair with, with nothing on the network.
-    private func applyLinkDemo() {
-        #if DEBUG
-        var studio = PhoneLink.Mac(id: UUID(), name: options.demoMultipointMac ?? "Studio Mac", pairedAt: Date().addingTimeInterval(-86_400 * 12),
-                                   state: .connected, canProcess: true, appVersion: "1.0",
-                                   clock: LinkClockEstimate(offset: 0.012, roundTrip: 0.008, sampleCount: 6, measuredAt: Date()),
-                                   lastConnectedAt: Date())
-        studio.handsOffRecorders = true
-        let laptop = PhoneLink.Mac(id: UUID(), name: "MacBook Air", pairedAt: Date().addingTimeInterval(-86_400 * 40),
-                                   state: .idle, canProcess: false, lastConnectedAt: Date().addingTimeInterval(-3 * 86_400))
-        let progress = library.conversations.first.map {
-            LiveProgress(LinkProcessingProgress(meetingID: $0.id, phase: .transcribing, fraction: 0.4, macName: studio.name))
-        }
-        let office = PhoneLink.PairingCandidate(id: "Office iMac", name: "Office iMac", endpoint: LinkEndpoint(host: "192.0.2.10", port: 7000),
-                                                isPairing: true, isPaired: false, sharesLibrary: true)
-        link.applyDemo(macs: options.demoMultipointMac != nil ? [studio] : [studio, laptop],
-                       candidates: [office], progress: progress.map { [$0] } ?? [])
-        #endif
-    }
-
-    /// `--device-autopilot`: Add Device › Soundcore Work against the simulated recorder, connect,
-    /// and import what it holds, as a person would.
-    private func runDeviceAutopilot() {
-        Task { [weak self] in
-            guard let self, let kind = DeviceCatalog.kind(SoundcoreWorkIntegration.id) else { return }
-            guard self.devices.sessions.isEmpty, let session = self.devices.beginSetup(kind),
-                  let soundcore = session.direct as? SoundcoreConnection else { return }
-            soundcore.search()
-            for _ in 0..<100 where soundcore.discovered.isEmpty { try? await Task.sleep(for: .milliseconds(100)) }
-            guard let recorder = soundcore.discovered.first else { return }
-            soundcore.connect(to: recorder)
-            for _ in 0..<100 where !soundcore.state.isConnected { try? await Task.sleep(for: .milliseconds(100)) }
-            guard soundcore.state.isConnected else { return }
-            self.devices.commitSetup()
-            for _ in 0..<50 where session.newRecordings.isEmpty { try? await Task.sleep(for: .milliseconds(100)) }
-            session.importRecordings(Array(session.newRecordings.prefix(1)), automatic: true)
-        }
-    }
-
-    /// `--handoff-demo <state>` and `--demo-live-captions` (debug), after the device autopilot has set up
-    /// the simulated recorder: a recorder handoff state, or the recorder recording and streaming
-    /// scripted captions, for screenshots. Nothing reaches the network.
-    private func runStatusDemo() {
-        #if DEBUG
-        Task { [weak self] in
-            guard let self else { return }
-            for _ in 0..<300 {
-                if let session = self.devices.sessions.first, session.isLinked, session.recorderSerial != nil, !session.links.recent.isEmpty { break }
-                try? await Task.sleep(for: .milliseconds(100))
-            }
-            guard let session = self.devices.sessions.first, let serial = session.recorderSerial else { return }
-            if self.options.demoLiveCaptions, let soundcore = session.direct as? SoundcoreConnection {
-                soundcore.startRecording()
-                for _ in 0..<50 where session.status?.isRecording != true { try? await Task.sleep(for: .milliseconds(100)) }
-                let lines = ["So the launch moves to the 14th, and Priya owns the checklist.",
-                             "We still need legal to sign off on the pricing page before Friday.",
-                             "Can someone check the date with the venue"]
-                soundcore.live.isListening = true
-                soundcore.live.captionState = .listening
-                soundcore.live.receivedSeconds = 236
-                for index in lines.indices {
-                    // Demo captions: the earlier lines final, the newest still tentative.
-                    soundcore.live.captions = lines.prefix(index + 1).enumerated().map { offset, line in
-                        LiveCaptionSegment(start: Double(offset) * 4, end: Double(offset) * 4 + 3.5, text: line,
-                                           isTentative: offset == index)
-                    }
-                    try? await Task.sleep(for: .seconds(1.5))
-                }
-            }
-            if let demo = self.options.demoTransfer, let recorder = self.devices.simulatedRecorder,
-               let next = session.newRecordings.first, let id = UInt32(next.id) {
-                // Slow enough to see: the import over Wi‑Fi, or another app's long transfer it waits for.
-                recorder.pace = .milliseconds(400)
-                if demo == "other-app" {
-                    recorder.beginAnotherAppsTransfer(recordingID: id &+ 1, slices: 30_000, pace: .milliseconds(60))
-                    try? await Task.sleep(for: .milliseconds(300))
-                }
-                // Held where iOS would ask to join the recorder's network, for what the page says meanwhile.
-                if demo == "joining" { self.devices.simulatedHotspot?.answersAfter = .seconds(600) }
-                session.importRecordings([next], automatic: true, overWiFi: demo == "wifi" || demo == "joining")
-            }
-            guard let state = self.options.handoffDemo else { return }
-            let mac = ProcessingRequest.Device(id: "demo-studio-mac", name: "Studio Mac")
-            if ["managed", "asking", "finishing", "waiting", "overdue", "refused"].contains(state) {
-                self.library.controller.claimRecorder(kind: session.kind.id, serial: serial, deviceClass: .mac, by: mac)
-                self.devices.applyOwnership()
-                // This iPhone lets go first (it was taken over); the demo state goes on top of that.
-                for _ in 0..<60 where session.isLinked || session.isHandingOff { try? await Task.sleep(for: .milliseconds(100)) }
-                try? await Task.sleep(for: .milliseconds(600))
-            }
-            let now = Date()
-            let demo: RecorderHandoff.State
-            switch state {
-            case "asking": demo = .asking(owner: mac.name)
-            case "finishing": demo = .ownerFinishing(owner: mac.name, finishing: .importing(title: "Today, 10:02 AM", secondsLeft: 140))
-            case "waiting": demo = .waitingForSync(owner: mac.name, since: now.addingTimeInterval(-20))
-            case "overdue": demo = .waitingForSync(owner: mac.name, since: now.addingTimeInterval(-14 * 60))
-            case "refused": demo = .refused(by: mac.name, message: "Studio Mac is already handing Soundcore Work to another device.")
-            case "connecting": demo = .connecting(from: mac.name)
-            case "done": demo = .done(at: now)
-            case "handing": demo = .handingOver(to: mac.name, finishing: .importing(title: "Today, 10:02 AM", secondsLeft: 140))
-            default: demo = .idle
-            }
-            try? await Task.sleep(for: .milliseconds(400))
-            self.devices.handoff.applyDemo(demo, for: session)
-        }
-        #endif
-    }
-
-    /// `--demo-mac`: a Mac's presence record in the sync folder, in the documented format
-    /// (docs/icloud-sync.md, "Devices and presence"), as if it last synced `hoursAgo` hours ago.
-    static func writeDemoPresence(name: String, hoursAgo: Double, in folder: URL) {
-        let deviceID = "demo-mac-" + name.lowercased().filter { $0.isLetter || $0.isNumber }
-        let digest = SHA256.hash(data: Data(deviceID.utf8)).map { String(format: "%02x", $0) }.joined()
-        let record: [String: Any] = [
-            "format": "DaybookDevice", "schemaVersion": 1, "deviceID": deviceID, "deviceClass": "mac", "displayName": name,
-            "canProcess": true, "audioPolicy": "eager",
-            "lastSeen": ISO8601DateFormatter().string(from: Date().addingTimeInterval(-hoursAgo * 3_600)),
-        ]
-        let directory = folder.appendingPathComponent("Devices", isDirectory: true)
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        if let data = try? JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]) {
-            try? data.write(to: directory.appendingPathComponent(digest + ".json"), options: .atomic)
-        }
-    }
 }
 
-/// A stop this iPhone owes a Mac it started (`PhoneAppModel.pendingStops`), as kept across relaunches.
+/// A stop this iPhone owes a Mac it started (`MultipointCoordinator.pendingStops`), as kept across relaunches.
 struct OwedMacStop: OwedStop {
     var macID: UUID
     /// The conversation the Mac is to stop recording.

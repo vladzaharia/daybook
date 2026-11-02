@@ -251,7 +251,7 @@ final class CascadingRecordingTests: XCTestCase {
         let recorder = Recorder()
         let model = try makeModel(link: link, rig: rig, recorder: recorder)
         var posted: [String] = [], removed: [String] = []
-        model.cascadeNotices = CascadeNotices(post: { _, title, _ in posted.append(title) }, remove: { removed.append($0) })
+        model.notices = PhoneNotices(post: { posted.append($0.title) }, remove: { removed.append($0) }, askPermission: {})
         let session = try await setUpRecorder(model)
         try await pair(link, with: mac)
         model.scenePhaseChanged(.background)
@@ -275,7 +275,7 @@ final class CascadingRecordingTests: XCTestCase {
         model.scenePhaseChanged(.active)
         try await waitUntil("recording here too") { model.recorder.captureID == only.conversationID }
         XCTAssertNil(model.recorderOnly)
-        XCTAssertEqual(removed, [CascadeNotices.recorderRecording])
+        XCTAssertEqual(removed, [PhoneNotices.recorderRecordingID])
         rig.pump(1)
         try await model.stopRecording()
         try await eventually("the Mac stops") { await macRecorder.recording == nil }
@@ -291,7 +291,7 @@ final class CascadingRecordingTests: XCTestCase {
         let recorder = Recorder()
         let model = try makeModel(link: link, rig: rig, recorder: recorder)
         var removed: [String] = []
-        model.cascadeNotices = CascadeNotices(post: { _, _, _ in }, remove: { removed.append($0) })
+        model.notices = PhoneNotices(post: { _ in }, remove: { removed.append($0) }, askPermission: {})
         let session = try await setUpRecorder(model)
         try await pair(link, with: mac)
         rig.session.activationError = NSError(domain: NSOSStatusErrorDomain, code: Int(AVAudioSession.ErrorCode.cannotStartRecording.rawValue))
@@ -304,7 +304,7 @@ final class CascadingRecordingTests: XCTestCase {
         recorder.device.pressButton()
         try await waitUntil("it ends") { model.recorderOnly == nil }
         try await eventually("the Mac stops") { await macRecorder.recording == nil }
-        XCTAssertEqual(removed, [CascadeNotices.recorderRecording])
+        XCTAssertEqual(removed, [PhoneNotices.recorderRecordingID])
         try await waitUntil("the recorder's audio is in the conversation", timeout: 10) {
             model.library.controller.meeting(only.conversationID)?.tracks.contains { $0.deviceKind == SoundcoreWorkIntegration.id } == true
         }

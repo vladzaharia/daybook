@@ -39,7 +39,7 @@ struct RecorderTimeline: TimelineProvider {
     func getTimeline(in context: Context, completion: @escaping (Timeline<RecorderEntry>) -> Void) {
         // The app reloads this whenever recording starts, stops, or bookmarks change, and once a
         // minute while it records; clocks count themselves. A second entry turns a recording the app
-        // stopped confirming into "Not confirmed" on its own.
+        // stopped confirming into "Open Daybook to check" on its own.
         let state = SharedRecordingState.load()
         let entries = state.timelineDates(from: .now).map { RecorderEntry(date: $0, state: state) }
         completion(Timeline(entries: entries, policy: .never))
@@ -70,13 +70,10 @@ struct RecorderWidgetView: View {
         switch family {
         case .accessoryCircular:
             if active {
-                Button(intent: AddBookmarkIntent()) {
-                    VStack(spacing: 0) {
-                        Image(systemName: "bookmark.fill")
-                        WidgetClock(display: display).font(.caption2.monospacedDigit()).multilineTextAlignment(.center)
-                    }
+                // Recording: Bookmark. Paused: Resume once it can, Stop during the call.
+                CircularAction(action: WidgetAction(display: display, state: state)) {
+                    WidgetClock(display: display).font(.caption2.monospacedDigit()).multilineTextAlignment(.center)
                 }
-                .buttonStyle(.plain)
             } else {
                 Button(intent: StartRecordingIntent()) {
                     ZStack {
@@ -140,14 +137,7 @@ private struct SmallRecorder: View {
                     .font(.title.weight(.semibold).monospacedDigit())
                     .foregroundStyle(recording ? PhoneStyle.Ink.record : PhoneStyle.Ink.title)
                 Spacer(minLength: 0)
-                Button(intent: AddBookmarkIntent()) {
-                    Label(state.bookmarkCount > 0 ? "\(state.bookmarkCount)" : "Bookmark", systemImage: "bookmark.fill")
-                        .font(.caption.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                }
-                .tint(PhoneStyle.bookmark)
-                .foregroundStyle(PhoneStyle.bookmark)
-                .accessibilityLabel(state.bookmarkCount > 0 ? "Bookmark, \(SharedRecordingState.bookmarks(state.bookmarkCount))" : "Bookmark")
+                SmallAction(action: WidgetAction(display: display, state: state), bookmarkCount: state.bookmarkCount)
             case .unconfirmed, .idle:
                 if display == .unconfirmed {
                     HStack(spacing: 6) {
@@ -179,5 +169,88 @@ private struct SmallRecorder: View {
         }
         .buttonStyle(.bordered)
         .buttonBorderShape(.capsule)
+    }
+}
+
+/// The one thing a widget offers while a recording runs: Bookmark while recording; while paused, Resume
+/// once recording can continue, and Stop during the call, when Resume couldn't work.
+enum WidgetAction: Equatable {
+    case bookmark, resume, stop
+
+    init(display: SharedRecordingState.Display, state: SharedRecordingState) {
+        if case .paused = display { self = state.offersResume ? .resume : .stop } else { self = .bookmark }
+    }
+
+    var title: String {
+        switch self {
+        case .bookmark: return "Bookmark"
+        case .resume: return "Resume"
+        case .stop: return "Stop"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .bookmark: return "bookmark.fill"
+        case .resume: return "record.circle"
+        case .stop: return "stop.fill"
+        }
+    }
+
+    var ink: Color {
+        switch self {
+        case .bookmark: return PhoneStyle.bookmark
+        case .resume: return PhoneStyle.Ink.record
+        case .stop: return PhoneStyle.Ink.title
+        }
+    }
+}
+
+/// The small widget's button for `action`; its intent runs in the app.
+private struct SmallAction: View {
+    let action: WidgetAction
+    let bookmarkCount: Int
+
+    var body: some View {
+        switch action {
+        case .bookmark:
+            Button(intent: AddBookmarkIntent()) { label(bookmarkCount > 0 ? "\(bookmarkCount)" : action.title) }
+                .tint(action.ink)
+                .accessibilityLabel(bookmarkCount > 0 ? "Bookmark, \(SharedRecordingState.bookmarks(bookmarkCount))" : "Bookmark")
+        case .resume:
+            Button(intent: ResumeRecordingIntent()) { label(action.title) }.tint(action.ink)
+        case .stop:
+            Button(intent: StopRecordingIntent()) { label(action.title) }.tint(action.ink)
+        }
+    }
+
+    private func label(_ title: String) -> some View {
+        Label(title, systemImage: action.systemImage)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(action.ink)
+            .frame(maxWidth: .infinity)
+    }
+}
+
+/// The circular Lock Screen widget's button for `action`, its glyph above the clock.
+private struct CircularAction<Clock: View>: View {
+    let action: WidgetAction
+    @ViewBuilder let clock: Clock
+
+    var body: some View {
+        switch action {
+        case .bookmark: Button(intent: AddBookmarkIntent()) { content }.buttonStyle(.plain)
+        case .resume: Button(intent: ResumeRecordingIntent()) { content }.buttonStyle(.plain)
+        case .stop: Button(intent: StopRecordingIntent()) { content }.buttonStyle(.plain)
+        }
+    }
+
+    private var content: some View {
+        VStack(spacing: 0) {
+            Image(systemName: action.systemImage)
+            clock
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(action.title)
     }
 }

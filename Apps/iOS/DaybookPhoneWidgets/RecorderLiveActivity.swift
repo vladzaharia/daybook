@@ -33,13 +33,15 @@ struct RecorderLiveActivity: Widget {
                     .padding(.top, 4)
                 }
             } compactLeading: {
-                Image(systemName: "waveform").foregroundStyle(recorderTint(context))
+                RecorderGlyph(context: context)
             } compactTrailing: {
                 RecorderClock(context: context)
                     .font(.caption.weight(.semibold).monospacedDigit())
                     .frame(maxWidth: 52)
             } minimal: {
-                RecorderDot(context: context, size: 10)
+                // Daybook's waveform, as the recording's own activity shows: never a dot that passes for
+                // the system's microphone indicator.
+                RecorderGlyph(context: context)
             }
             .keylineTint(recorderTint(context))
         }
@@ -53,6 +55,15 @@ private func recorderTint(_ context: ActivityViewContext<RecorderActivityAttribu
     case .recording: return PhoneStyle.Ink.record
     case .listening: return PhoneStyle.neonCyan
     case .ended: return .gray
+    }
+}
+
+private struct RecorderGlyph: View {
+    let context: ActivityViewContext<RecorderActivityAttributes>
+
+    var body: some View {
+        Image(systemName: "waveform").foregroundStyle(recorderTint(context))
+            .accessibilityLabel(context.state.title(isStale: context.isStale))
     }
 }
 

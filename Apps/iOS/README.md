@@ -62,7 +62,7 @@ Nothing here does it: the build script never passes `-allowProvisioningUpdates`.
 | `DaybookPhone/Status` | The status sheet (pocket) and panel (notebook): `StatusSheetModel` (the words, tested) and `StatusSheet` (the views) |
 | `DaybookPhone/Settings` | `SettingsScreen`: iCloud, Macs, recorders, recording, storage, templates, vocabulary, About |
 | `DaybookPhone/Posture` | `DevicePosture` (closed, partly open, open, angle) fed by `onHingeChange` |
-| `DaybookPhone/App` | the app model that ties recorder, library, sync (`PhoneSync`), the link, recorders, Live Activity, and widgets together; `MacPresence`, `LiveProgress`, multipoint; launch options; Siri phrases |
+| `DaybookPhone/App` | the app model (`PhoneAppModel`) that ties recorder, library, sync (`PhoneSync`), the link, recorders, Live Activity, and widgets together, with what it reaches in the system injected (`PhoneAppEnvironment`: `.live` in the app, inert in tests); recording with Macs and recorders (`MultipointCoordinator`), what goes to the Macs while recording (`LinkSharing`), filing (`PhoneAppModel+Filing`), and the debug scripts (`PhoneAppModel+Demos`, debug builds only); `MacPresence`, `LiveProgress`; the debug launch arguments (`DebugLaunch`); notifications (`PhoneNotices`) and where opening one goes (`AppDestination`); Siri phrases, Open Conversation, New Note, and Spotlight (`ConversationEntity`) |
 | `DaybookPhone/UI` | the shell's interface |
 | `DaybookPhoneWidgets` | the Live Activity and Dynamic Island, the Control Center control, the Recorder widget |
 | `Shared` | compiled into both app and extension: App Intents, Live Activity attributes, the app-group state, design tokens |
@@ -84,11 +84,12 @@ need from sync and the link. All are `@Observable`, so views update as they chan
 | `model.macPresence` | `MacPresence`: `.connected(name:)` (a paired Mac that transcribes is on the link now), `.seen(name:lastSeen:)` (its last sync, from presence records), `.olderMac`, `.noMac`, `.unavailable(reason)`, `.checking`. `waitingLine()` is the line under a conversation whose `ProcessingStatus` is `.requested(.device)`: "Waiting for Studio Mac", "Waiting for your Mac · last seen 2 h ago", "No Mac has synced this library yet". `summary()` is a sentence for Settings. |
 | `model.liveProgress[meetingID]` | `LiveProgress` from a connected Mac (`processing.progress`): `phase`, `fraction`, `macName`, `detail`, and `line` ("Transcribing on Studio Mac · 40%"). Prefer it over a claim's coarse synced progress while present. Entries clear when the Mac finishes (a sync pass then brings the result) or after two minutes without word. |
 | `\.audioProvider` (and `model.audio`) | `SyncAudioProvider`, the sync-backed `AudioProviding`: `localAudio(for:in:progress:)` makes a track local (downloading from iCloud with progress; cancel the task to stop; nothing partial is left), `availability(of:in:)` says `.local`, `.inCloud`, or `.unavailable(reason)`. `downloads[trackID]` holds the fraction of downloads in flight; call `notePlayed(_:in:)` while playing so eviction keeps it. Settings › Storage sets the budget and clears downloads. |
-| `model.processingLine(for: meeting)` | The one honest processing line for a conversation, or nil: live progress, else work on this iPhone ("Transcribing on this iPhone · 40%", "Waiting on this iPhone", why it's paused), else the synced claim ("Transcribing on Studio Mac · 40%"), a waiting request with the Mac's presence and, when the link knows, why it's busy ("Waiting for Studio Mac, which is recording"), "Not transcribed yet", "Not summarized yet", or the Mac's failure. |
 | `ProcessingStatus.phone(meeting)` | A conversation's `ProcessingStatus` with this iPhone's own queue (`PhoneProcessor.current`): running, waiting its turn, or paused here. Every status line on the phone reads it. |
 | `model.processor`, `model.processingCapabilities` | `PhoneProcessor`, processing this iPhone's own recordings (docs/iphone.md, "Processing on this iPhone"): `running` (conversation, stage, fraction), `pause` (why work waits), `pickUp()`. `processingCapabilities` is what its models can do now (`ProcessingCapabilities`, with `models`). |
 | `model.sync` | `PhoneSync`: `statusLine` ("Up to date", "Syncing 3 changes", "iCloud isn't available, so …"), `detailLine()`, `devices` (presence), `lastReceived`, `synchronize(_:)`. |
-| `model.multipoint`, `model.multipointLine` | A recording made with a Mac: "Also recording on Studio Mac" or "Recording with Studio Mac". |
+| `model.multipoint`, `model.multipointLine` | A recording made with a Mac: "Also recording on Studio Mac" or "Recording with Studio Mac" (`MultipointCoordinator`). |
+| `model.lastFiling` | Where the recording this iPhone stopped last went: `.saved(conversation, when)` (a recording that captured no audio is saved as a conversation of its notes, bookmarks, and photos), or `.failed(sentence)`. |
+| `model.destination`, `.opensDestinations(session)` | Where Daybook was asked to open (`AppDestination`: a conversation, the library, a recorder's page, the recording, a new note): a notification's tap, Open Conversation, New Note. `RootView` applies it to its `ReadingSession`; the status sheet opens a recorder's page and says so with `model.reached(_:)`. |
 | `model.devices.handoff` | `RecorderHandoff`: `state(of:)` for a recorder (asking, the Mac finishing an import, waiting through iCloud, refused, connecting, done), `useHere`, `takeOverAnyway`, `give(_:to:)`, `peersToGive`; `RecorderHandoff.Words` has the lines. `PhoneDevices.useHere`/`give`/`handoffState` wrap it for Observation. |
 | `\.statusSheetInset` | Set while the status sheet holds Record at the foot of the pocket library: the room to leave above it. |
 
@@ -125,7 +126,7 @@ landscape window for screenshots.
 
 ## Checking it in the simulator without a microphone
 
-Debug builds accept launch arguments (see `DaybookPhone/App/LaunchOptions.swift`). With
+Debug builds accept launch arguments, every one listed and parsed in `DaybookPhone/App/DebugLaunch.swift`. With
 `--synthetic-audio` the recorder records generated speech and never opens an audio session, so the
 simulator never routes the Mac's microphone:
 

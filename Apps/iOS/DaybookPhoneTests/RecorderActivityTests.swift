@@ -29,7 +29,7 @@ final class RecorderActivityTests: XCTestCase {
         XCTAssertEqual(remembered.asOf, earlier)
         XCTAssertEqual(remembered.title(isStale: false), "Recording · as of \(earlier.formatted(date: .omitted, time: .shortened))")
         XCTAssertEqual(remembered.staleDate(from: now), earlier.addingTimeInterval(1_200), "stale when the device page stops saying so")
-        XCTAssertEqual(remembered.title(isStale: true), "Not confirmed")
+        XCTAssertEqual(remembered.title(isStale: true), "Open Daybook to check")
 
         let listening = try XCTUnwrap(Content.make(isListening: true, isRecording: true, startedHere: false, startedAt: start, isLive: true, asOf: now))
         XCTAssertEqual(listening.phase, .listening)

@@ -45,10 +45,10 @@ final class RecordingSurfacesTests: XCTestCase {
         XCTAssertEqual(paused.display(at: now.addingTimeInterval(3_000)), .paused(elapsed: 723), "the app may sleep through a call")
         XCTAssertEqual(paused.display(at: now.addingTimeInterval(2 * 3_600)), .unconfirmed)
         XCTAssertEqual(SharedRecordingState.inlineLine(.paused(elapsed: 723)), "Paused · 12:03")
-        XCTAssertEqual(SharedRecordingState.inlineLine(.unconfirmed), "Not confirmed")
+        XCTAssertEqual(SharedRecordingState.inlineLine(.unconfirmed), "Open Daybook to check")
         XCTAssertEqual(SharedRecordingState.inlineLine(.idle), "Daybook ready")
         XCTAssertEqual(SharedRecordingState.headline(.paused(elapsed: 1)), "Paused")
-        XCTAssertEqual(SharedRecordingState.headline(.unconfirmed), "Not confirmed")
+        XCTAssertEqual(SharedRecordingState.headline(.unconfirmed), "Open Daybook to check")
     }
 
     func testBookmarksAreCountedInWords() {
@@ -109,7 +109,7 @@ final class RecordingSurfacesTests: XCTestCase {
         let recording = RecordingActivityAttributes.ContentState(phase: .recording, timerStart: now, level: 0.33, bookmarkCount: 1)
         XCTAssertEqual(recording.staleDate(from: now), now.addingTimeInterval(90))
         XCTAssertEqual(recording.title(isStale: false), "Recording")
-        XCTAssertEqual(recording.title(isStale: true), "Not confirmed")
+        XCTAssertEqual(recording.title(isStale: true), "Open Daybook to check")
         var paused = recording
         paused.phase = .paused
         XCTAssertEqual(paused.staleDate(from: now), now.addingTimeInterval(2 * 3_600))
