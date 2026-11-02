@@ -279,8 +279,6 @@ enum SpeechEvaluation {
         var notices: [String] = []
         var hypothesis = ""
         var hypothesisRTTM: String?
-
-        var werRate: Double? { wer?.rate }
     }
 
     struct ConfigurationResult: Codable {

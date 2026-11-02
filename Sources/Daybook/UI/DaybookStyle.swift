@@ -99,8 +99,6 @@ enum TypeStyle {
     static let colophon = DaybookFont.colophon.font(.window)
     static let rowTitle = DaybookFont.rowTitle.font(.window)
     static let rowDetail = DaybookFont.rowDetail.font(.window)
-    static let panelTitle = DaybookFont.docTitle.font(.panel)
-    static let panelTime = Font.system(size: 13, weight: .medium).monospacedDigit()
     /// Line spacing that brings 14 pt body text to a 22 pt line.
     static func bodyLineSpacing(_ scale: CGFloat = 1) -> CGFloat { DaybookFont.bodyLineSpacing(.window, scale: scale) }
 }

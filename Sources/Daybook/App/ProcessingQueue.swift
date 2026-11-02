@@ -160,7 +160,7 @@ final class ProcessingQueue {
     }
 
     /// Writes happen in order, off the main actor.
-    private static let writes = DispatchQueue(label: "local.daybook.processing.owed", qos: .utility)
+    private nonisolated static let writes = DispatchQueue(label: "local.daybook.processing.owed", qos: .utility)
 
     /// For tests: returns once every write asked for so far is on disk.
     nonisolated static func drainWrites() { writes.sync {} }

@@ -46,7 +46,7 @@ enum PlacementDemo {
             guard let id else { return }
             state.update(id) { $0.status = .summarizing }
             state.processingID = id
-            state.processingProgress = IntelligenceProgress(scenario == .cloud ? 0.35 : 0, "Summarizing")
+            state.processingProgress = IntelligenceProgress(scenario == .cloud ? 0.35 : 0, "Summarizing", stage: .summarizing)
             state.placements.begin(id)
             if scenario == .cloud { state.placements.perform(.useCloud, for: id) }
         case .colophon, .colophonMac:

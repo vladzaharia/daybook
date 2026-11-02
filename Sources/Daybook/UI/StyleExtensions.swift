@@ -31,19 +31,6 @@ extension MeetingKind {
         case .lecture: return "graduationcap"
         }
     }
-    /// Plain words for the Automatic template's guess: "looks like a 1:1".
-    var looksLike: String {
-        switch self {
-        case .auto: return "Automatic"
-        case .general: return "a meeting"
-        case .oneOnOne: return "a 1:1"
-        case .scrum: return "a standup"
-        case .therapy: return "a therapy session"
-        case .personal: return "a personal conversation"
-        case .interview: return "an interview"
-        case .lecture: return "a lecture"
-        }
-    }
 }
 
 extension AudioSource {

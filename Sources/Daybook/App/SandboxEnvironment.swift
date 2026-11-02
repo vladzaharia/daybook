@@ -1,22 +1,17 @@
+import DaybookKit
 import Foundation
-import Security
 
 /// Whether this process runs in the App Sandbox, and where it can reach outside its container. Read from the running
-/// app's own code signature, so it answers for this build (docs/sandbox.md).
+/// app's own code signature (`Entitlements`), so it answers for this build (docs/sandbox.md).
 enum SandboxEnvironment {
-    static let isSandboxed: Bool = entitlement("com.apple.security.app-sandbox") as? Bool == true
+    static let isSandboxed: Bool = Entitlements.bool("com.apple.security.app-sandbox")
 
     /// Folders a temporary exception opens for reading and writing: `/private/tmp/daybook/` in ad hoc builds, for the
     /// debug flags' scratch files. Signed builds have none.
-    static let exceptionPaths: [String] = entitlement("com.apple.security.temporary-exception.files.absolute-path.read-write") as? [String] ?? []
+    static let exceptionPaths: [String] = Entitlements.strings("com.apple.security.temporary-exception.files.absolute-path.read-write")
 
     /// Where a sandboxed run can read and write: its container (which holds its temporary folder) and the exceptions.
     static var reachableRoots: [String] { [NSHomeDirectory()] + exceptionPaths }
-
-    private static func entitlement(_ key: String) -> Any? {
-        guard let task = SecTaskCreateFromSelf(nil) else { return nil }
-        return SecTaskCopyValueForEntitlement(task, key as CFString, nil)
-    }
 }
 
 /// The launch flags that take a path (`--library`, the diagnostics' `--models`, `--output`, and so on). In the App
