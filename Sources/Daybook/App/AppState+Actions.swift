@@ -1,6 +1,7 @@
 import AppKit
 import DaybookCore
 import DaybookKit
+import DaybookUI
 import SwiftUI
 
 /// Actions people take from menus, toolbars, and context menus.
@@ -73,9 +74,11 @@ extension AppState {
         NSWorkspace.shared.activateFileViewerSelecting([folder])
     }
 
-    func copySummary(_ id: UUID) {
+    /// Copies the summary for this Mac only, and says "Copied" over the page, from the toolbar's More, Edit, or a row.
+    func copySummary(_ id: UUID, to pasteboard: some LocalPasteboardWriting = NSPasteboard.general) {
         guard let meeting = meetings.first(where: { $0.id == id }) else { return }
-        LocalPasteboard.copy(MeetingExport.summaryMarkdown(meeting))
+        LocalPasteboard.copy(MeetingExport.summaryMarkdown(meeting), to: pasteboard)
+        confirmation = .copied
     }
 
     func focusSearch() { searchFocusRequest += 1 }

@@ -116,8 +116,8 @@ struct DetailToolbar: ToolbarContent {
     let inspectorShown: Bool
     /// Shows or hides it (a narrow window widens for it).
     let toggleInspector: () -> Void
-    /// What the window does for an action of More's that needs it: share (the sharing picker hangs from it), Copy
-    /// Summary (its "Copied"), Tags… (the inspector).
+    /// What the window does for an action of More's that needs it: share (the sharing picker hangs from it) and Tags…
+    /// (the inspector).
     let windowAction: (ConversationAction.ID, Meeting) -> Void
 
     /// The device whose page shows, when no conversation does: its items fill More.
@@ -255,11 +255,10 @@ enum MoreMenuActions {
                                            status: state.processingStatus(for: meeting))
     }
 
-    /// Actions the window answers itself: sharing hangs its picker from it, Copy Summary says "Copied" over it, and
-    /// Tags… opens its inspector.
+    /// Actions the window answers itself: sharing hangs its picker from it, and Tags… opens its inspector.
     static func needsWindow(_ id: ConversationAction.ID) -> Bool {
         switch id {
-        case .shareMarkdown, .shareAudio, .copySummary, .tags: return true
+        case .shareMarkdown, .shareAudio, .tags: return true
         default: return false
         }
     }

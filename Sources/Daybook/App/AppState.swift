@@ -5,6 +5,7 @@ import DaybookDevices
 import DaybookIntelligence
 import DaybookKit
 import DaybookLink
+import DaybookUI
 import Foundation
 import Observation
 import os
@@ -66,6 +67,9 @@ final class AppState {
     /// Incremented to ask the main window for the inspector (Tags…, the byline's people), which a window too narrow
     /// for it widens to show (`LibraryView`).
     var inspectorRequest = 0
+    /// A moment's word over the page after something that leaves nothing else to see: Copy Summary's "Copied", from
+    /// whichever menu it came (`ConfirmationBeat`).
+    var confirmation: ConfirmationBeat?
     /// View › Make Text Bigger scales only the reading surface.
     var readingScale: Double { didSet { preferences.set(readingScale, forKey: Preference.readingScale) } }
     /// App-owned so menu commands can drive it. Only what shows the playhead reads its position, which

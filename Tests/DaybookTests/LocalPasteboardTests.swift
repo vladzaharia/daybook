@@ -28,6 +28,30 @@ final class LocalPasteboardTests: XCTestCase {
         XCTAssertEqual(recorder.objects, 1)
     }
 
+    /// Copy Summary says "Copied" over the page whichever menu it came from (More, Edit, a row), since the state holds
+    /// the word rather than one menu's window.
+    @MainActor
+    func testBehaviorCopySummarySaysCopiedFromEveryMenu() async {
+        let state = AppState(libraryURL: makeTemporaryFolder("DaybookCopySummary"), defaults: makeTestDefaults())
+        await state.initialize()
+        let id = state.newMeeting(title: "Weekly product sync")
+        state.update(id) { $0.summary = MeetingSummary(overview: "We ship on Friday.") }
+        XCTAssertNil(state.confirmation)
+
+        let recorder = Recorder()
+        state.copySummary(id, to: recorder)
+        XCTAssertEqual(recorder.options, [.currentHostOnly])
+        XCTAssertTrue(recorder.strings.first?.contains("We ship on Friday.") == true)
+        let first = state.confirmation
+        XCTAssertEqual(first?.words, "Copied")
+
+        state.copySummary(id, to: recorder)
+        XCTAssertNotEqual(state.confirmation?.id, first?.id, "copying again says it again")
+        state.confirmation = nil
+        state.copySummary(UUID(), to: recorder)
+        XCTAssertNil(state.confirmation, "nothing copied, nothing said")
+    }
+
     func testTheTextArrivesOnAPasteboard() {
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }

@@ -29,7 +29,6 @@ struct LibraryView: View {
     @State private var screenWidth: CGFloat?
     @State private var problemDetails: AppProblem?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var confirmation: ConfirmationBeat?
     @State private var shareAnchor = SharingAnchor.Holder()
     @FocusState private var searchFocused: Bool
     /// The window's: Edit › Undo takes a Move to Trash back.
@@ -71,7 +70,7 @@ struct LibraryView: View {
             // Teal is content's: the page's checkboxes, links, and fills. The toolbar, the inspector, the list, and the
             // sidebar follow the accent the person chose in System Settings (the AccentColor asset under Multicolor).
             ZStack { detail.tint(DaybookStyle.accent) }
-                .confirmationBeat($confirmation)
+                .confirmationBeat($state.confirmation)
                 .overlay(alignment: .topTrailing) {
                     SharingAnchor(holder: shareAnchor).frame(width: 1, height: 1).padding(.trailing, 72).accessibilityHidden(true)
                 }
@@ -286,12 +285,9 @@ struct LibraryView: View {
         if let page = PageMode(rawValue: storedPage) { state.pageMode = page }
     }
 
-    /// Share, Copy Summary, and Tags… from More: what needs the window.
+    /// Share and Tags… from More: what needs the window.
     private func windowAction(_ id: ConversationAction.ID, _ meeting: Meeting) {
         switch id {
-        case .copySummary:
-            state.copySummary(meeting.id)
-            confirmation = .copied
         case .tags:
             state.showInspector()
         default:
