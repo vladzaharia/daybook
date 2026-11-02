@@ -245,12 +245,12 @@ private struct CircularAction<Clock: View>: View {
         }
     }
 
+    /// Read as one: what it does, then the clock ("Resume, 12:03").
     private var content: some View {
         VStack(spacing: 0) {
-            Image(systemName: action.systemImage)
+            Image(systemName: action.systemImage).accessibilityLabel(action.title)
             clock
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(action.title)
     }
 }
