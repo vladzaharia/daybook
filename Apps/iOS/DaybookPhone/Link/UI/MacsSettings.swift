@@ -64,12 +64,14 @@ extension PhoneLink.Mac {
 }
 
 /// One paired Mac: the page both apps show for a paired Daybook (`PeerDevicePage`), as the Mac's page for this
-/// iPhone does. Its header, what keeps it from connecting with Pair Again…, what it's recording with Stop on it,
+/// iPhone does. Its header, what keeps it from connecting with its fix (Pair Again…, or Open Settings for Local
+/// Network), what it's recording with Stop on it,
 /// the recorders it manages, whether it can start recording here, its facts, and Unpair.
 struct MacDetailScreen: View {
     @Environment(PhoneAppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @Environment(\.settingsPages) private var pages
+    @Environment(\.openURL) private var openURL
     let macID: UUID
     @State private var pairingAgain = false
     /// Why the last Stop on it didn't stop it.
@@ -133,6 +135,10 @@ struct MacDetailScreen: View {
             },
             stopPending: model.link.stopsInFlight.contains(mac.id),
             pairAgain: { pairingAgain = true },
+            // Local Network off: where to allow it.
+            problemAction: mac.needsLocalNetwork ? (title: PairingWords.openSettings, perform: {
+                if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+            }) : nil,
             canStartRecording: mac.isDamaged ? nil : Binding(
                 get: { model.settings.macMayStartRecording(mac.id, pairedAt: mac.pairedAt) },
                 set: { model.settings.setMacMayStartRecording($0, for: mac.id, pairedAt: mac.pairedAt) }),

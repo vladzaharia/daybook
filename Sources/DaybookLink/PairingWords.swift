@@ -72,6 +72,8 @@ public enum PairingWords {
 
     /// The iPhone can't look for Macs: Local Network is off for Daybook. With Open Settings.
     public static let allowLocalNetwork = "Allow Daybook to find your Mac on this network."
+    /// A paired Mac's row then, while it isn't connected; its page says `allowLocalNetwork`.
+    public static let localNetworkOff = "Local Network is off"
     public static let openSettings = "Open Settings"
     /// Nothing found after a while of looking.
     public static let noMacFound = "No Mac found. Open Daybook › Settings › Devices on your Mac, on this Wi‑Fi."

@@ -147,7 +147,8 @@ from plain facts (`PeerPage`):
   device no longer knows ("Studio Mac doesn’t recognize this iPhone anymore. Pair again to connect.") with Pair
   Again…, which opens pairing with that device chosen once it's found; a version mismatch saying which side to
   update when its versions tell ("Update Daybook on Studio Mac to connect."); on the Mac, sync that's off, with
-  Library Settings…;
+  Library Settings…; on the iPhone, Local Network turned off for Daybook while the Mac isn't connected ("Allow
+  Daybook to find your Mac on this network.", the row saying "Local Network is off"), with Open Settings;
 - "Recording now · since 10:02 AM" with the conversation (a link on the Mac) and Stop on Studio Mac, offered when
   the other device would take it: it lists `pageStopFeature`, or this device records that conversation with it;
 - the recorders it manages ("Soundcore Work · Recording since 10:02");

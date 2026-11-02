@@ -889,6 +889,35 @@ final class LinkServicesTests: XCTestCase {
         XCTAssertTrue(link.candidates.isEmpty)
     }
 
+    func testBehaviorAPairedMacSaysWhenLocalNetworkIsOffAndWhereToAllowIt() throws {
+        let link = makeLink()
+        let now = Date()
+        let studio = PhoneLink.Mac(id: UUID(), name: "Studio Mac", pairedAt: now, state: .searching)
+        let office = PhoneLink.Mac(id: UUID(), name: "Office iMac", pairedAt: now, state: .connected)
+        link.applyDemo(macs: [studio, office])
+        XCTAssertEqual(link.macs.first?.stateLine, "Looking for it on this network…")
+        XCTAssertNil(link.macs.first?.problem)
+
+        // The link, looking for a paired Mac it has no address for, finds Local Network refused.
+        link.applyDemo(discovery: .localNetworkDenied)
+        let denied = try XCTUnwrap(link.macs.first)
+        XCTAssertEqual(denied.rowLine(recordingBySync: false), PairingWords.localNetworkOff, "its row in Settings › Macs and the status sheet")
+        XCTAssertEqual(denied.problem, .other(PairingWords.allowLocalNetwork))
+        let page = PeerPage(PeerPage.Facts(id: denied.id.uuidString, name: denied.name, kind: .mac, isConnected: false, problem: denied.problem),
+                            here: PairingWords.here(.iPhone))
+        XCTAssertEqual(page.problem, PairingWords.allowLocalNetwork, "its page, with Open Settings")
+        XCTAssertFalse(page.offersPairAgain)
+        XCTAssertEqual(link.macs.last?.stateLine, "Connected", "a Mac that's connected says nothing of it")
+        XCTAssertNil(link.macs.last?.problem)
+        var damaged = denied
+        damaged.isDamaged = true
+        XCTAssertEqual(damaged.problem, .damaged, "a pairing to make again comes first: pairing says where to allow it")
+
+        link.applyDemo(discovery: .searching)
+        XCTAssertEqual(link.macs.first?.stateLine, "Looking for it on this network…", "allowed again")
+        XCTAssertNil(link.macs.first?.problem)
+    }
+
     func testBehaviorAFailedCodeKeepsItsReasonUntilThePersonTypesAgain() {
         var attempt = PairingAttempt(code: "482913")
         let reason = PhoneLink.message(for: LinkPairingError.codeRejected)

@@ -55,41 +55,49 @@ final class PhoneLink {
         var stopsForPages = false
         /// Its pairing is here but can't be read: it can't connect until it's paired again.
         var isDamaged = false
+        /// Local Network is off for Daybook (`LinkDiscoveryState.localNetworkDenied`), as the link last found
+        /// looking for it; `PhoneLink` keeps it.
+        var localNetworkDenied = false
 
         var isConnected: Bool { state == .connected }
         var isRecording: Bool { recording?.phase == .recording || recording?.phase == .paused || recording?.phase == .starting }
 
-        /// What keeps it from connecting, for its page: a pairing to make again, or a Daybook to update.
+        /// What keeps it from connecting, for its page: a pairing to make again, a Daybook to update, or Local
+        /// Network to allow (with Open Settings).
         var problem: PeerPage.Problem? {
             if isDamaged { return .damaged }
-            guard case .failed(let reason) = state else { return nil }
-            switch reason {
-            case .authenticationFailed, .notPaired: return .notRecognized
-            case .incompatibleVersion(let versions): return .incompatible(peerVersions: versions)
-            default: return nil
+            if case .failed(let reason) = state {
+                switch reason {
+                case .authenticationFailed, .notPaired: return .notRecognized
+                case .incompatibleVersion(let versions): return .incompatible(peerVersions: versions)
+                default: break
+                }
             }
+            return needsLocalNetwork ? .other(PairingWords.allowLocalNetwork) : nil
         }
 
-        /// "Connected", "Looking for it…", "Last seen today, 3:25 AM", "Needs pairing again".
+        /// It isn't connected and can't be until Local Network is allowed for Daybook.
+        var needsLocalNetwork: Bool { localNetworkDenied && !isConnected }
+
+        /// "Connected", "Looking for it…", "Last seen today, 3:25 AM", "Needs pairing again", "Local Network is off".
         var stateLine: String { stateLine(now: Date()) }
 
         func stateLine(now: Date) -> String {
             if isDamaged { return PairingWords.needsPairingAgain }
             switch state {
             case .connected: return "Connected"
+            case .failed(.authenticationFailed), .failed(.notPaired): return PairingWords.needsPairingAgain
+            case .failed(.incompatibleVersion(let versions)):
+                return PairingWords.update(name, here: PairingWords.here(.iPhone), peerVersions: versions)
+            // Nothing on the network can be reached until it's allowed.
+            case _ where needsLocalNetwork: return PairingWords.localNetworkOff
             case .connecting: return "Connecting…"
             case .searching: return "Looking for it on this network…"
             case .waitingToRetry: return "Not reachable right now · trying again"
             case .waitingForNetwork: return "Waiting for Wi‑Fi"
             case .suspended, .idle:
                 return lastConnectedAt.map { "Not connected · \(RecorderStatusWords.lastSeen($0, now: now))" } ?? "Not connected"
-            case .failed(let reason):
-                switch reason {
-                case .authenticationFailed, .notPaired: return PairingWords.needsPairingAgain
-                case .incompatibleVersion(let versions):
-                    return PairingWords.update(name, here: PairingWords.here(.iPhone), peerVersions: versions)
-                default: return "Couldn’t connect"
-                }
+            case .failed: return "Couldn’t connect"
             }
         }
     }
@@ -97,8 +105,11 @@ final class PhoneLink {
     private(set) var macs: [Mac] = []
     /// Macs on this network, while the pairing screen browses.
     private(set) var discovered: [LinkDiscoveredMac] = []
-    /// Whether Macs can be found: browsing, not, or refused the Local Network permission.
-    private(set) var discovery: LinkDiscoveryState = .idle
+    /// Whether Macs can be found: browsing, not, or refused the Local Network permission. The link browses for
+    /// paired Macs it has no address for too, so a refusal reaches their rows and pages, not just pairing.
+    private(set) var discovery: LinkDiscoveryState = .idle {
+        didSet { if discovery != oldValue { markLocalNetwork() } }
+    }
     @ObservationIgnored private var demoCandidates: [PairingCandidate]?
 
     /// A Mac the pairing screen lists.
@@ -487,7 +498,7 @@ final class PhoneLink {
         started = true
     }
 
-    /// Debug demos: finding Macs in a state (Local Network refused).
+    /// Debug demos: finding Macs in a state (Local Network refused, which paired Macs' rows and pages say too).
     func applyDemo(discovery: LinkDiscoveryState) {
         self.discovery = discovery
         demoCandidates = []
@@ -620,8 +631,15 @@ final class PhoneLink {
             var mac = previous[device.deviceID] ?? Mac(id: device.deviceID, name: name, pairedAt: device.pairedAt)
             mac.name = previous[device.deviceID]?.name ?? name
             mac.isDamaged = device.isDamaged
+            mac.localNetworkDenied = discovery == .localNetworkDenied
             return mac
         }
+    }
+
+    /// Each paired Mac's `localNetworkDenied`, from `discovery`.
+    private func markLocalNetwork() {
+        let denied = discovery == .localNetworkDenied
+        for index in macs.indices where macs[index].localNetworkDenied != denied { macs[index].localNetworkDenied = denied }
     }
 
     /// The last read of the paired Macs failed (the keychain didn't allow it).
