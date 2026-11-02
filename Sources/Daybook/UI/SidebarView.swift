@@ -5,8 +5,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// Places, the person's folders, the Trash once something is in it, and the recorder once it's set up. Nothing else.
-/// Conversations dropped on a place are filed there (and on the Trash, asked about first); Edit › Undo takes a
-/// filing back.
+/// Conversations dropped on a place are filed there, a dragged row's whole selection with it (and on the Trash,
+/// asked about first); Edit › Undo takes a filing back.
 struct SidebarView: View {
     let state: AppState
     @State private var folderToDelete: LibraryFolder?
@@ -108,9 +108,10 @@ struct SidebarView: View {
         state.renamingFolderID = state.library.createFolder(named: name, moving: ids, undoManager: undoManager)
     }
 
-    /// Files dropped conversations in a place, one step for Edit › Undo; the Trash asks first.
+    /// Files dropped conversations in a place, one step for Edit › Undo; the Trash asks first. A row dragged from a
+    /// selection of several brings the selection along.
     private func drop(_ items: [ConversationTransfer], on place: LibraryPlace) -> Bool {
-        let meetings = items.map(\.id).filter { id in state.meetings.contains { $0.id == id } }
+        let meetings = ConversationDrop.filed(items.map(\.id), selection: state.multiSelection, in: state.meetings)
         guard !meetings.isEmpty else { return false }
         switch place {
         case .section(.work): state.library.setPlacement(meetings, .work, undoManager: undoManager)

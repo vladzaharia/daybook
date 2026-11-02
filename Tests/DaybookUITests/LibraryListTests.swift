@@ -72,6 +72,24 @@ final class LibraryListTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), MeetingExport.markdown(meeting))
     }
 
+    func testBehaviorShareSendsTheMarkdownOrTheWordsNeverTheInAppType() async throws {
+        guard #available(macOS 15.2, iOS 18.2, *) else { throw XCTSkip("Content types are listed from macOS 15.2") }
+        let meeting = ready()
+        let dragged = ConversationTransfer(meeting).exportedContentTypes()
+        XCTAssertEqual(dragged.first?.identifier, UTType.daybookConversation.identifier, "inside Daybook a drag or ⌘C leads with the conversation")
+
+        let shared = ConversationShareItem(meeting)
+        let types = shared.exportedContentTypes()
+        XCTAssertFalse(types.contains { $0.identifier == UTType.daybookConversation.identifier },
+                       "AirDrop or Mail could pick it, and no one could read it")
+        XCTAssertEqual(types.first, UTType.daybookMarkdown, "the Markdown file first")
+        XCTAssertTrue(types.contains { $0.conforms(to: .plainText) && $0 != UTType.daybookMarkdown }, "then the words")
+        let markdown = try await shared.exported(as: UTType.daybookMarkdown)
+        XCTAssertEqual(String(decoding: markdown, as: UTF8.self), MeetingExport.markdown(meeting))
+        let text = String(decoding: try await shared.exported(as: .utf8PlainText), as: UTF8.self)
+        XCTAssertTrue(text.contains("Weekly product sync") && text.contains("The team kept the beta date."), "words anyone can read: \(text)")
+    }
+
     func testBehaviorCaptionSearchFindsSavedCaptionsUntilATranscriptReplacesThem() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookCaptionSearch-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }

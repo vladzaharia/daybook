@@ -12,10 +12,10 @@ extension UTType {
     static let daybookMarkdown = UTType("net.daringfireball.markdown") ?? UTType(filenameExtension: "md", conformingTo: .plainText) ?? .plainText
 }
 
-/// A conversation as it travels out of a list: dragged, copied (⌘C), or shared. Inside Daybook it's the
-/// conversation itself (its ID, `daybookConversation`), which a sidebar place files; to another app it's the
-/// conversation's Markdown as a file named after it (Mail, Finder, Messages), or its title and gist as text (a text
-/// field, Notes).
+/// A conversation as it travels out of a list: dragged, or copied (⌘C). Inside Daybook it's the conversation itself
+/// (its ID, `daybookConversation`), which a sidebar place files; to another app it's the conversation's Markdown as
+/// a file named after it (Mail, Finder, Messages), or its title and gist as text (a text field, Notes). Share…
+/// sends `ConversationShareItem`, without the in-app type.
 public struct ConversationTransfer: Codable, Identifiable, Sendable, Transferable {
     public let id: UUID
     public let title: String
@@ -71,5 +71,24 @@ public struct ConversationTransfer: Codable, Identifiable, Sendable, Transferabl
         let url = folder.appendingPathComponent((fileName.isEmpty ? "Conversation" : fileName) + ".md")
         try Data(markdown.utf8).write(to: url, options: .atomic)
         return url
+    }
+}
+
+/// A conversation as Share… sends it: its Markdown as a file named after it, or its title and gist as text. Never
+/// the in-app type `ConversationTransfer` leads with, which AirDrop or a Mail attachment could pick and no one could
+/// read.
+public struct ConversationShareItem: Sendable, Transferable {
+    let conversation: ConversationTransfer
+
+    public init(_ meeting: Meeting) {
+        conversation = ConversationTransfer(meeting)
+    }
+
+    public static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(exportedContentType: .daybookMarkdown) { item in
+            SentTransferredFile(try item.conversation.writeMarkdown())
+        }
+        .suggestedFileName { $0.conversation.fileName + ".md" }
+        ProxyRepresentation(exporting: \.conversation.text)
     }
 }

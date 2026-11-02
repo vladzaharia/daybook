@@ -88,6 +88,18 @@ final class LibraryPlaceTests: XCTestCase {
         XCTAssertNotNil(state.meetings.first { $0.id == kept })
     }
 
+    func testBehaviorARowDraggedFromASelectionOfSeveralFilesTheWholeSelection() {
+        let meetings = (1...4).map { Meeting(title: "Conversation \($0)") }
+        let ids = meetings.map(\.id)
+        XCTAssertEqual(ConversationDrop.filed([ids[2]], selection: [ids[0], ids[2], ids[3]], in: meetings), [ids[0], ids[2], ids[3]],
+                       "one of the selected rows brings the rest, in the library's order")
+        XCTAssertEqual(ConversationDrop.filed([ids[1]], selection: [ids[0], ids[2]], in: meetings), [ids[1]],
+                       "a row outside the selection travels alone")
+        XCTAssertEqual(ConversationDrop.filed([ids[3]], selection: [ids[3]], in: meetings), [ids[3]])
+        XCTAssertEqual(ConversationDrop.filed([ids[0], ids[1]], selection: [], in: meetings), [ids[0], ids[1]])
+        XCTAssertEqual(ConversationDrop.filed([UUID()], selection: [], in: meetings), [], "one no longer in the library files nothing")
+    }
+
     func testBehaviorARowSaysWhatThisMacIsDoingWithItInTheWordsTheIPhoneUses() async throws {
         let (state, root, defaults) = try await makeState()
         defer { cleanUp(root, defaults) }

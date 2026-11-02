@@ -64,7 +64,7 @@ struct ConversationList: View {
                                                 isSelected: selected.contains(meeting.id))
                         }
                         .tag(meeting.id)
-                        .modifier(RowDrag(state: state, meeting: meeting))
+                        .modifier(RowDrag(meeting: meeting))
                         .listRowSeparator(.hidden)
                     }
                 }
@@ -73,7 +73,6 @@ struct ConversationList: View {
         }
         .listStyle(.inset)
         .softTopScrollEdge()
-        .modifier(SelectionDrag(state: state, selection: Array(selected)))
         // ⌘C copies the selection: inside Daybook the conversations, elsewhere their Markdown or their words.
         .copyable(state.meetings.filter { selection.wrappedValue.contains($0.id) }.map(ConversationTransfer.init))
         .motion(state.isReady ? Motion.state : .linear(duration: 0), value: meetings.map(\.id))
@@ -165,35 +164,23 @@ private struct ListSubtitle: ViewModifier {
 // MARK: - Dragging
 
 /// A row travels as its conversation (`ConversationTransfer`): onto a place in the sidebar, or out of Daybook as
-/// its Markdown. From macOS 26 the list's selection travels whole (`SelectionDrag`).
+/// its Markdown. Each row is a drag source of its own, the path List rows have always taken; a place the row is
+/// dropped on files the whole selection when the row is part of it (`ConversationDrop`).
 private struct RowDrag: ViewModifier {
-    let state: AppState
     let meeting: Meeting
 
     func body(content: Content) -> some View {
-        if #available(macOS 26, *) {
-            content.draggable(containerItemID: meeting.id)
-        } else {
-            content.draggable(ConversationTransfer(meeting))
-        }
+        content.draggable(ConversationTransfer(meeting))
     }
 }
 
-/// From macOS 26: dragging a selected row takes every selected conversation along.
-private struct SelectionDrag: ViewModifier {
-    let state: AppState
-    let selection: [UUID]
-
-    func body(content: Content) -> some View {
-        if #available(macOS 26, *) {
-            content
-                .dragContainer(for: ConversationTransfer.self) { ids in
-                    ids.compactMap { id in state.meetings.first { $0.id == id }.map(ConversationTransfer.init) }
-                }
-                .dragContainerSelection(selection)
-        } else {
-            content
-        }
+/// What a drop on a sidebar place files.
+enum ConversationDrop {
+    /// The conversations dropped; and when one of them is part of a selection of several, the whole selection, as
+    /// Finder takes every selected file along. In the library's order.
+    static func filed(_ dropped: [UUID], selection: Set<UUID>, in meetings: [Meeting]) -> [UUID] {
+        let carried = selection.count > 1 && dropped.contains(where: selection.contains) ? selection.union(dropped) : Set(dropped)
+        return meetings.map(\.id).filter(carried.contains)
     }
 }
 
@@ -376,7 +363,7 @@ private struct RowMenu: View {
     var body: some View {
         let meetings = state.meetings.filter { ids.contains($0.id) }
         if let only = meetings.first, meetings.count == 1 {
-            ShareLink(item: ConversationTransfer(only), preview: SharePreview(ConversationRowView.title(only))) {
+            ShareLink(item: ConversationShareItem(only), preview: SharePreview(ConversationRowView.title(only))) {
                 Label("Share…", systemImage: "square.and.arrow.up")
             }
             ConversationActionMenuItems(ConversationActions.actions(for: only, context: MacActions.context(state, only)), platform: .mac,
