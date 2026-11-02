@@ -1,5 +1,156 @@
 # Validation record
 
+## Audit and fixes (2026-11-01)
+
+A whole-app audit of the Mac and iPhone apps found 340 issues (21 high, 105 medium, 214 low) across 17 review areas:
+UX, HIG, UI, and Swift quality on each platform, Swift in the shared core and platform code, cross-device consistency
+(reading, recording, settings, and system surfaces), iCloud sync, motion, and security. They were planned as 23
+packages, each fixed on its own branch and reviewed: 3 in wave 1 (`audit/2026-11-01/wave1`) and 20 in wave 2, all
+integrated on `audit/2026-11-01/wave2`.
+
+**What each area found and changed.**
+
+Wave 1, the shared ground wave 2 builds on:
+
+- **Design system (30).** Each app had its own palette, type, spacing, and time labels. Both now draw from
+  DaybookDesign, and the new DaybookUI module holds the screens they share. Chip and box words keep 4.5:1 on their
+  washes, `MotionAuditTests` finds a curve anywhere in an animation's arguments, and CI runs the design and
+  shared-screen tests.
+- **Shared words (13).** Statuses, failures, recorder states, Settings, and a conversation's actions were worded per
+  app. DaybookKit words them once: one processing presentation for the page and the row, typed stages and failure
+  kinds stored where each queue catches the error, one action list in one order, one export name, one demo library.
+- **Observation (10).** State was forwarded between models by hand. Both apps use Observation, sync status is a typed
+  `SyncStatus`, and the library notice carries an action and keeps why a recording stopped.
+
+Wave 2:
+
+- **Sync (26).** An encrypted library took in new plaintext, a library key could be granted unasked, libraries that
+  met weren't resolved, a full iCloud stalled sealing, and the account token was unarchived. Plaintext comes in only
+  when something sealed vouches for it, and a retirement or an encrypted start holds once seen; a key is kept only
+  when it answers a request to the device asked and the manifest lists it; rivals resolve, and a library gone from
+  iCloud offers a new one; full storage is said, and sealing and retiring go a backlog at a time; the account is
+  kept as a digest; another app syncing as this iPhone is noticed; a burst of edits to a large conversation publishes
+  once. The controller is split by concern, with the courier in a bridge of its own.
+- **Core data (12).** A cloud key could reach the other provider, settings edits were ordered by the clock, and saves
+  were keyed loosely. Keys are checked before they leave and replaced in place, a settings edit is stamped after the
+  value it replaces, saves are keyed by what they write, a deleted bookmark stays in Version History, a large
+  library's search stops for a newer query, and shared state is in `Mutex` and `Atomic`. The core and the kit build
+  clean under complete concurrency checking in Swift 5 mode.
+- **Engines and live captions (10).** A live model that loaded after its capture stopped was kept, and each app drew,
+  saved, and read captions its own way. Leases are counted and given back. Captions are drawn, saved, and read the
+  same way on both apps, by one rule (`SavedCaptions`): a conversation's own, until a transcript made after they began
+  replaces them; in the transcript's place while there's none, after it otherwise; found by search on both apps.
+- **Link and pairing (13).** A pairing that couldn't be read broke the rest, Can start recording meant different
+  things on each device, and failed sends lost notes. An unreadable pairing is kept apart and can be unpaired;
+  pairing and a paired device's page are one set of views; Can start recording means one thing both ways, and an
+  earlier Record along off is kept; owed notes go again in order; Get Key says when it can't reach the other device.
+- **Devices core (10).** Recorder abilities were reached by casts, devices of an unknown kind were dropped, and Fast
+  Transfer could take the wrong network for the recorder's. Abilities are protocols, one table words a recorder for
+  this Mac or this iPhone, unknown devices are kept, notifications say where they lead, and Fast Transfer stays on
+  Bluetooth where an address can't tell the recorder's network apart. It says "Joining Wi‑Fi…", and whose.
+- **Device screens (15).** A recorder's page, recordings, Listen Live, and handoff were drawn twice. They're drawn once
+  for both apps; a handoff can be called off from either side; Add Device's steps follow one rule.
+- **Mac app (18).** The copy a library move opens could give way to the old one, a quit could cut a recording short,
+  interrupted work was lost, and Move to Trash had no Undo. The new copy waits for the old one; quitting while
+  recording asks first; interrupted work is queued again at launch from a `ProcessingQueue` of its own; Move to Trash
+  can be undone; the menu bar is split per menu and acts on the conversation the window shows; preferences are read
+  by typed keys.
+- **Mac capture and Welcome (8).** Call detection ran on the main thread and a failed look ended a call. Calls are
+  looked for off the main thread and outlast a failed look; the microphone records alone when computer audio can't
+  start; a recording that stops or a call that starts recording is notified; Shortcuts and Spotlight reach Daybook;
+  both apps share one Welcome.
+- **Recorder surface (24).** Floating Notes and the iPhone's recorder were separate designs. They're one recorder: its
+  chips, meters, and notes editor, with marks in their lane and times VoiceOver can play. Bookmark and Stop stay whole
+  at every text size.
+- **Status sheet (12).** The iPhone's status sheet, the Duo's panel, and the Mac's menu bar extra each worded status
+  their own way. One shared overview draws them; the menu bar extra says what the iPhone says; a sideways iPhone lays
+  out as two pages.
+- **Library list (21).** Rows, results, and empty places were drawn per app, and the Mac had no Trash. They're drawn
+  once in DaybookUI; the Mac has a Trash; filing can be undone; a dragged selection is filed whole; search's scopes are
+  the results' first row; a caption result opens where its captions are.
+- **Conversation chrome (18).** The player, menus, sharing, and toolbar differed. One `PlaybackEngine` plays on both
+  apps; Share offers Markdown and Audio on both (and full data on the iPhone); the Mac's toolbar and inspector keep
+  their place; every Copy Summary says Copied.
+- **Summary page (22).** The header, status, summary, notes, and colophon were drawn per app. They're drawn once; a
+  device can take back a request it made and stop waiting for a recording; a status offers what helps; a bookmark, a
+  next step, or Don't Wait is undone on its own.
+- **Transcript page (16).** The transcript, its sheets, and photos are drawn once for both apps, from one layout in
+  DaybookKit; a passage jumped to is washed once.
+- **Inspector and people (15).** Info is one form on both apps, Speaker Profiles one screen, and a recording can come
+  out of a conversation, or into one of its own, without being deleted, and be put back.
+- **Settings and library (8).** Summary Templates, Vocabulary, and Acknowledgements are shared; saving only what the
+  person changed keeps a synced edit; Open at login is offered.
+- **Settings, sync, and cloud (9).** iCloud Sync, Cloud, and Storage are drawn once; Storage measures the library's own
+  files; the Mac has a Storage row.
+- **Models and processing (9).** Settings › Models is drawn once; the iPhone's download time ends once; the iPhone can
+  add a file to a conversation and keeps what it brought in durably.
+- **Phone recording (15).** The iPhone's app model is split; a recording's notes are kept when no audio came; the Live
+  Activity updates in order and says Saved only with a recording; Spotlight and Siri follow the library.
+- **Scripts and release (6).** The build command no longer inherits the raw secrets, tool output is read whole before
+  matching, the build and App Store Connect helpers are shared, a release with no matching identity ships its ZIP,
+  and both apps have one layered icon drawn from DaybookMark.
+
+**Integration.** The 20 wave 2 branches were picked onto wave 1 in the plan's order, with no package left out.
+Conflicts kept both sides: the split Mac menus with the chrome's toolbar and inspector commands, the iPhone app
+model's split with link pairing's record permissions, the shared transcript page with saved captions in place or
+after, the shared iCloud settings with Get Key's error, the iPhone's brought-in record written in order, and the
+Fast Transfer stage that names the recorder. Integration fixes on top: saved captions on the Mac's transcript page and
+in both apps' search by the one rule, a caption result opening the transcript and a notes result Your Notes, the
+library key request noted before it's sent, typed preference keys in every remaining file, the iPhone row's Share
+menu, Info's Don't Wait on both apps, the iPhone's Adjust Timing and Original Transcript from Info, a Mac's Can
+Start Recording dimmed while Recording with Your Mac is off, the Mac's Storage row in Settings › Library, the iPhone
+app's third-party notices, and the docs merged to describe all of it.
+
+**How it was verified.**
+
+Each package ran its own focused suites and was reviewed on its branch. On the integrated branch, after the last code
+change:
+
+- `swift build --build-tests`: clean.
+- Full `swift test`: exit 0, 2,168 tests, 0 failures, 3 skipped (live audio's cost, measured only when asked; the
+  motion audit's report-only check; the gibibyte sealing budget). By bundle: DaybookKitTests 569, DaybookTests 488,
+  DaybookCoreTests 452, DaybookIntelligenceTests 200, DaybookDevicesTests 146, DaybookUITests 117, DaybookLinkTests
+  93, DaybookLiveTests 43, DaybookDesignTests 36, DaybookCaptionsTests 24. It left no new Daybook preference files.
+  The first full run hung in `WelcomeTests`: Record's wait now ends when the page says the library can't open
+  (`libraryProblem`), and the test reported an ordinary problem instead. The test was fixed and the whole suite ran
+  again.
+- `scripts/build-ios.sh --test` on a clone of iPhone 18 Pro (iOS 27): TEST SUCCEEDED, 374 tests, 0 failures. The
+  built app carries `ThirdPartyNotices.md` and 18 package licenses.
+- `./scripts/build-app.sh --debug --ad-hoc`: BUILD SUCCEEDED; `dist/Daybook.app` was valid on disk, signed ad hoc,
+  with its notices, licenses, and the compiled icon. `dist/` and `build/` were removed afterwards.
+- `bash scripts/ci/tests/run-tests.sh --require-all`: 399 passed, 0 failed, 0 skipped.
+
+**Needs the owner.**
+
+- **Product decisions** from the audit, none changed here: SNR weighting and the stored alignment pipeline
+  (MSCQ-09: wire it in or delete it; meanwhile the docs describe more than ships); whether Use the cloud: Always
+  applies to Personal conversations (ux-mac-10); whether a fresh install starts on the recommended models preset
+  (ux-mac-14); which search entry stays in the pocket library (ui-iphone-23); one Settings structure on both apps
+  (xdev-settings-03); and speaker and language settings on the iPhone (xdev-settings-08).
+- **On a signed build:** the iCloud account token is now kept as a digest (`syncICloudAccount`); confirm a signed
+  Mac and iPhone keep syncing without "the iCloud account changed" after upgrading (MSCQ-25 asked to check the
+  token's class first).
+- **Capabilities, in the portal:** Time Sensitive notifications for "the recorder is recording, this iPhone isn't"
+  (hig-ios-14), and Access Wi‑Fi Information, which lets Fast Transfer check the recorder's network by name
+  ([direct Soundcore](direct-soundcore.md), "Owner steps"). Neither entitlement was added, so builds sign as before.
+- **The layered icon:** open `Resources/Daybook.icon` in Icon Composer once to check its Default, Dark, Clear, and
+  Tinted appearances on a device.
+- `.github/workflows/release.yml` needs no change for any of this.
+
+**Still needs hardware.**
+
+- **iCloud:** a full iCloud quota on a Mac and an iPhone (per-object retirement, the sealer's pacing); iCloud.com's
+  Delete Data, then Start a New Library; rivals with real conflict copies; a fresh install offline; Optimize Mac
+  Storage with an evicted conversation; the courier reconnecting after a reboot; the old iPhone app beside the new one.
+- **Recorders:** Fast Transfer's join prompt, leaving Daybook during a transfer, and its background grace on a real
+  iPhone and Soundcore Work; handoff call-offs between two devices.
+- **Pairing:** Can start recording both ways between a Mac and an iPhone, and Stop from a peer's page.
+- **iPhone:** the Live Activity's updates in order and its Saved end; the Lock Screen and Control Center player
+  standing aside for a recording; the third-party notices in Settings › About › Acknowledgements on a device build;
+  VoiceOver on the shared recorder's note times; the Duo on hardware, not only its simulator.
+- **Mac:** a library move in a bundled build, a logout with a recording under way, call detection on real calls, and
+  intents, Spotlight, notifications, and Welcome's Allow on a real system (see the sections below).
+
 ## The Mac app's lifecycle: the copy a library move opens, and quitting (2026-11-02)
 
 Review fixes to the wave 2 Mac app work (MSQ-01, MSQ-23, MSQ-21, HIG-24).
