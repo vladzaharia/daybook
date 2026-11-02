@@ -384,6 +384,37 @@ final class RecorderScreenTests: XCTestCase {
         }
     }
 
+    /// Regression: on the open Duo at the accessibility sizes, a page of live captions pushed Bookmark and Stop off the
+    /// recorder's page. The captions give way first: the page fits, controls and all.
+    func testBehaviorOnTheOpenDuoCaptionsGiveWayBeforeBookmarkAndStop() throws {
+        let size = CGSize(width: 867, height: 635)  // the inner display inside its safe area
+        let state = RecorderSurfaceState(phase: RecorderPhase(phase: .recording, title: "Recording"), title: "Conversation at 4:07 AM",
+                                         clock: .since(Date()), isLive: true, bookmarkCount: 2)
+        let lines = ["Okay, let's start with what the phone app records on its own.",
+                     "It keeps recording with the screen locked, and a call pauses it.",
+                     "Then everything waits for the Mac to transcribe.",
+                     "Can we measure both displays on the Duo before fixing layout constants?"]
+            .map { CaptionLine(id: UUID(), text: $0, isTentative: false) }
+        let captions = LiveCaptionStrip(lines: lines, status: nil, style: .page)
+        let slots = RecorderSlots(notes: AnyView(Color.clear), captions: AnyView(captions),
+                                  accessory: AnyView(Circle().frame(width: 44, height: 44)),
+                                  details: AnyView(Capsule().frame(height: 24)))
+        let surface = RecorderSurface(state: state, levels: RecorderLevels(), actions: RecorderSurfaceActions(bookmark: {}, stop: {}), slots: slots)
+            .daybookSurface(.spread(crease: 475.5), density: .touch)
+            .dynamicTypeSize(.accessibility5)
+        let host = UIHostingController(rootView: surface)
+        host.safeAreaRegions = []
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow()
+        window.frame = CGRect(origin: .zero, size: size)
+        window.rootViewController = host
+        window.isHidden = false
+        defer { window.isHidden = true }
+        host.view.frame = CGRect(origin: .zero, size: size)
+        host.view.layoutIfNeeded()
+        XCTAssertLessThanOrEqual(host.sizeThatFits(in: size).height, size.height + 0.5, "nothing pushed off the page")
+    }
+
     // MARK: The notes editor
 
     /// Regression: at the largest text sizes the lane of times grew to half the width and notes wrapped a word a

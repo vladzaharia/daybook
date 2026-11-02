@@ -385,11 +385,17 @@ private struct SpreadRecorderPage: View {
             parts.clock(76)
             parts.pauseOrMeters(.page, metrics: .page)
             parts.slots.details
+            // The captions take what's left and give way first, newest lines kept: Bookmark and Stop always fit.
             parts.slots.captions
-                .frame(maxHeight: .infinity, alignment: .bottom)
+                .frame(minHeight: 0, maxHeight: .infinity, alignment: .bottom)
                 .clipped()
+                .layoutPriority(-1)
             parts.slots.notice
+                .fixedSize(horizontal: false, vertical: true)
+                .layoutPriority(1)
             parts.controls(.page)
+                .fixedSize(horizontal: false, vertical: true)
+                .layoutPriority(1)
         }
         .dynamicTypeSize(...DynamicTypeSize.accessibility3)
         .padding(.horizontal, DaybookSpacing.s5)
@@ -542,10 +548,12 @@ private struct BookStage: View {
     @ViewBuilder private var clockPage: some View {
         if writing {
             VStack(alignment: .leading, spacing: DaybookSpacing.s3) {
-                HStack(alignment: .center) {
+                // Bookmark moves up beside the clock, so Stop and Done stay above the keyboard on the other page.
+                HStack(alignment: .center, spacing: DaybookSpacing.s3) {
                     parts.phase()
                     Spacer(minLength: 0)
                     parts.clock(34)
+                    parts.bookmark(.glyph).fixedSize()
                 }
                 .padding(.horizontal, DaybookSpacing.s6)
                 parts.slots.notes
@@ -572,7 +580,7 @@ private struct BookStage: View {
             Spacer(minLength: 0)
             if let pause = parts.state.pause {
                 RecorderPauseBox(pause, metrics: .pocket, resume: parts.actions.resume).frame(maxWidth: 340)
-            } else {
+            } else if !writing {
                 parts.bookmark(.round)
             }
             Spacer(minLength: 0)
@@ -581,6 +589,8 @@ private struct BookStage: View {
                 parts.stop(RecorderControlMetrics(height: 52, radius: DaybookRadius.control, size: nil, spacing: DaybookSpacing.s3))
                     .frame(maxWidth: 220)
             }
+            .fixedSize(horizontal: false, vertical: true)
+            .layoutPriority(1)
         }
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
         .padding(.horizontal, DaybookSpacing.s5)

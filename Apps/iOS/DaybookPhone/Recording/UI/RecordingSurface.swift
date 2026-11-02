@@ -115,9 +115,10 @@ struct RecorderScreen: View {
         case .notebook:
             // Captions take the space when they're on: they're the live sign that the audio is being heard, while
             // bookmarks already show twice (the notes' lane and the timeline's amber ticks). Without captions, the
-            // bookmark log returns.
+            // bookmark log returns. At the accessibility sizes, as in the hand, only the newest line.
             let captions = model.captions.isShowing
-                ? AnyView(PhoneCaptions(style: .page))
+                ? AnyView(PhoneCaptions(style: typeSize.isAccessibilitySize ? .stripNewest : .page)
+                    .dynamicTypeSize(...DynamicTypeSize.xxxLarge))
                 : AnyView(ScrollView { BookmarkLog().padding(.top, DaybookSpacing.s1) }.scrollBounceBehavior(.basedOnSize))
             return RecorderSlots(notes: AnyView(RecordingNotes()), captions: captions, accessory: AnyView(CameraControl()),
                                  details: AnyView(LiveTimelineBar()), notice: AnyView(RecordingNotice()),
