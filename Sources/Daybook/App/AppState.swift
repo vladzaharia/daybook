@@ -1417,7 +1417,8 @@ extension AppState {
         do {
             try await ingestCapture(result, meetingID: id)
             sourcesAfterCapture(id, startedAt: result.startedAt, captureID: result.id)
-            if !result.warnings.isEmpty { notice = result.warnings.joined(separator: "\n") }
+            // Added to the notice: it may already say why the recording stopped.
+            if !result.warnings.isEmpty { post(result.warnings) }
             enqueue(id)
         } catch {
             update(id) { $0.status = .failed; $0.errorMessage = "Recording is preserved in the recovery folder: \(error.localizedDescription)" }

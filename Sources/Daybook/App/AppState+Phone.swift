@@ -254,7 +254,7 @@ extension AppState {
         stopCause = phoneLeads[id]?.sessionID
         Task {
             if let stop = phoneCapture.stop { await stop(id) } else { await stopRecording(manual: false) }
-            notice = message
+            post([message])
         }
     }
 

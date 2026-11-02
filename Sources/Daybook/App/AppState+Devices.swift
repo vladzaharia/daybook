@@ -136,7 +136,7 @@ extension AppState {
             }
         } else {
             guard let id = recordingID, !isStoppingRecording, sources.recorders.records(session.id, in: id) else { return }
-            notice = "\(session.device.name) stopped recording, so this Mac stopped too."
+            post(["\(session.device.name) stopped recording, so this Mac stopped too."])
             Task { if let stop = phoneCapture.stop { await stop(id) } else { await stopRecording(manual: true) } }
         }
     }

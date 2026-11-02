@@ -161,8 +161,11 @@ final class CascadingRecordingTests: XCTestCase {
         let (next, _) = try await phoneStarts(phone, recordsItself: false, trigger: .recorder)
         try await phone.client.send(.recordingState(LinkRecordingState(phase: .idle)))
         try await waitUntil("this Mac stops too") { rig.state.recordingID == nil }
-        // Said once the recording is filed, which goes on after it stops.
-        try await waitUntil("and says why") { rig.state.notice == "\(PhoneLinkRig.phoneName) stopped recording, so this Mac stopped too." }
+        // Said once the recording is filed, which goes on after it stops, beside anything the recording itself says.
+        try await waitUntil("and says why") {
+            !rig.state.isStoppingRecording
+                && rig.state.noticeLines.contains("\(PhoneLinkRig.phoneName) stopped recording, so this Mac stopped too.")
+        }
         await rig.state.sources.recorders.settle()
         XCTAssertFalse(phone.recorder.requests.contains { $0.action == .stop && $0.conversationID == next }, "it stopped first")
     }
@@ -333,7 +336,9 @@ final class CascadingRecordingTests: XCTestCase {
         try await waitUntil("its audio") { session.liveCaptureConversation == next }
         device.pressButton()
         try await waitUntil("its button stops this Mac") { rig.state.recordingID == nil }
-        try await waitUntil("and says why") { rig.state.notice == "\(session.device.name) stopped recording, so this Mac stopped too." }
+        try await waitUntil("the recording to be filed") { !rig.state.isStoppingRecording }
+        XCTAssertTrue(rig.state.noticeLines.contains("\(session.device.name) stopped recording, so this Mac stopped too."),
+                      "Says why, beside anything the recording itself says: \(rig.state.noticeLines)")
         await rig.state.sources.recorders.settle()
     }
 }
