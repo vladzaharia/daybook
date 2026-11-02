@@ -74,6 +74,8 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
     /// for leaving TV, radio, and music out of the transcript (`BackgroundAudio`). Nil until it's
     /// processed, and for recordings processed before Daybook measured it.
     public var backgroundAudio: BackgroundAudioAnalysis?
+    /// Set once the recording is taken out of its conversation (RecordingRemoval.swift); nil while it's in it.
+    public var removal: RecordingRemoval?
     /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
     public var unknownFields = UnknownFields()
     public init(id: UUID = UUID(), source: AudioSource = .imported, relativePath: String,
@@ -99,7 +101,7 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case id, source, relativePath, fileName, createdAt, duration, offset, sha256, deviceKind, deviceSerial,
-            deviceRecordingID, derivedFrom, processing, startedAt, alignment, capture, backgroundAudio
+            deviceRecordingID, derivedFrom, processing, startedAt, alignment, capture, backgroundAudio, removal
     }
     private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
 
@@ -123,6 +125,7 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
         capture = try values.decodeIfPresent(TrackCaptureDetails.self, forKey: .capture)
         // A newer analysis this version can't read is measured again, never a reason to reject the meeting.
         backgroundAudio = (try? values.decodeIfPresent(BackgroundAudioAnalysis.self, forKey: .backgroundAudio)) ?? nil
+        removal = try values.decodeIfPresent(RecordingRemoval.self, forKey: .removal)
         unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
     }
 
@@ -145,6 +148,7 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
         try values.encodeIfPresent(alignment, forKey: .alignment)
         try values.encodeIfPresent(capture, forKey: .capture)
         try values.encodeIfPresent(backgroundAudio, forKey: .backgroundAudio)
+        try values.encodeIfPresent(removal, forKey: .removal)
         try unknownFields.encode(to: encoder)
     }
 }

@@ -82,6 +82,28 @@ public enum RecordingWords {
         track.alignment?.method == .unaligned || meeting.alignmentReports.contains { $0.trackID == track.id && $0.method == .unaligned }
     }
 
+    /// A recording in a sentence, as Version History says what happened to it: "the Soundcore Work recording",
+    /// "“Interview.m4a”".
+    public static func inSentence(_ track: RecordingTrack, in meeting: Meeting, phoneName: String? = nil) -> String {
+        if track.source == .imported, track.deviceKind == nil { return "“\(track.fileName)”" }
+        return "the \(baseName(track, phoneName: phoneName)) recording"
+    }
+
+    /// The title of the conversation a recording moves into: a file's name, or what made it and when ("Soundcore
+    /// Work at 3:50 PM").
+    public static func conversationTitle(_ track: RecordingTrack, phoneName: String? = nil) -> String {
+        if track.source == .imported, track.deviceKind == nil { return (track.fileName as NSString).deletingPathExtension }
+        let start = track.startedAt ?? track.createdAt
+        return "\(baseName(track, phoneName: phoneName)) at \(start.formatted(date: .omitted, time: .shortened))"
+    }
+
+    /// What made a recording, without what was done to it: "Microphone", "Soundcore Work", "Alex’s iPhone".
+    static func baseName(_ track: RecordingTrack, phoneName: String?) -> String {
+        if track.deviceKind == DaybookPhoneIntegration.id { return phoneName ?? "iPhone" }
+        if let kind = track.deviceKind, let device = DeviceCatalog.kind(kind)?.name { return device }
+        return track.source.recordingName
+    }
+
     /// The glyph beside a recording, the same on both apps: the device it came from when one did ("iphone" for an
     /// iPhone's microphone, the recorder's own glyph), otherwise what it is ("mic", "desktopcomputer" for computer
     /// audio, "doc" for a file).

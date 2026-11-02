@@ -108,8 +108,12 @@ final class MultiSourceFusion {
     private var columns: [Column] = []
 
     init(transcripts: [TrackTranscript], tracks: [RecordingTrack], inputs: FusionInputs) {
-        self.transcripts = transcripts; self.tracks = tracks; self.inputs = inputs
-        trackByID = Dictionary(tracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        // A recording taken out of the conversation (RecordingRemoval.swift) and its transcript are left out.
+        let removed = Set(tracks.filter(\.isRemoved).map(\.id))
+        self.transcripts = transcripts.filter { !removed.contains($0.trackID) }
+        self.tracks = tracks.filter { !$0.isRemoved }
+        self.inputs = inputs
+        trackByID = Dictionary(self.tracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
     func run() -> FusionResult {

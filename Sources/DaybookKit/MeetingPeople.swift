@@ -21,14 +21,19 @@ extension Meeting {
     }
 
     /// The people in the conversation, in the speakers' order. A TV's presenter, left out as background audio, isn't
-    /// one of them (`backgroundOnlySpeakerIDs`), and shares are of the talking the people shown did.
+    /// one of them (`backgroundOnlySpeakerIDs`), nor is a speaker heard only in a recording taken out of the
+    /// conversation; shares are of the talking the people shown did.
     public var peopleSpeakers: [MeetingPerson] {
         let background = backgroundOnlySpeakerIDs
-        let shown = speakers.enumerated().filter { !background.contains($0.element.id) }
-        let times = shown.map { talkTime(of: $0.element.id) }
-        let total = max(1, times.reduce(0, +))
-        return zip(shown, times).map { pair, time in
-            MeetingPerson(speaker: pair.element, index: pair.offset, talkTime: time, share: time / total)
+        let removed = Set(tracks.filter(\.isRemoved).map(\.id))
+        let timed = speakers.enumerated().map { (pair: $0, time: talkTime(of: $0.element.id)) }
+        let shown = timed.filter { item in
+            !background.contains(item.pair.element.id)
+                && !(item.time == 0 && item.pair.element.sourceTrackID.map(removed.contains) == true)
+        }
+        let total = max(1, shown.map(\.time).reduce(0, +))
+        return shown.map { item in
+            MeetingPerson(speaker: item.pair.element, index: item.pair.offset, talkTime: item.time, share: item.time / total)
         }
     }
 

@@ -89,7 +89,8 @@ public extension Meeting {
     /// is here too is replaced by that file (LivePortions.swift).
     var transcribableTracks: [RecordingTrack] {
         let superseded = Set(tracks.compactMap(\.derivedFrom)).union(supersededLivePortions.keys)
-        return tracks.filter { !superseded.contains($0.id) }
+        // A recording taken out of the conversation isn't (RecordingRemoval.swift).
+        return tracks.filter { !superseded.contains($0.id) && $0.removal == nil }
     }
 
     /// True when a transcribable track has no transcript yet.

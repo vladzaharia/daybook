@@ -1,0 +1,155 @@
+import DaybookCore
+import DaybookTestSupport
+import Foundation
+import XCTest
+@testable import DaybookKit
+
+/// Taking a recording out of a conversation (Info › Audio on both apps): Remove Recording… marks it, so it leaves
+/// the transcript and processing but stays in the library to put back, and the mark syncs; Move to New Conversation
+/// gives it a conversation of its own with its transcript, names, corrections, and bookmarks. Synthetic files in a
+/// temporary library; nothing is transcribed.
+@MainActor
+final class RecordingRemovalTests: XCTestCase {
+    private var root: URL!
+
+    override func setUp() async throws {
+        root = makeTemporaryFolder("DaybookRecordingRemoval")
+    }
+
+    private func open() async throws -> LibraryController {
+        let library = LibraryController(rootURL: root.appendingPathComponent("Library"), sync: nil)
+        try await library.load()
+        return library
+    }
+
+    private func undoManager() -> UndoManager {
+        let undo = UndoManager()
+        undo.groupsByEvent = false
+        return undo
+    }
+
+    private func grouped(_ undo: UndoManager, _ action: () async throws -> Void) async rethrows {
+        undo.beginUndoGrouping()
+        try await action()
+        undo.endUndoGrouping()
+    }
+
+    /// A file of distinct bytes; nothing reads it as audio.
+    private func file(_ name: String) throws -> URL {
+        let url = root.appendingPathComponent(name)
+        try Data((name + UUID().uuidString).utf8).write(to: url)
+        return url
+    }
+
+    /// A conversation of two recordings, the microphone (Alex, then Sam, whom the person named) and a dropped file
+    /// (a stranger), each transcribed and fused; a bookmark on the file, and a correction to its passage.
+    private func twoRecordings(_ library: LibraryController) async throws -> (id: UUID, mic: UUID, file: UUID, corrected: UUID) {
+        let id = library.newMeeting(title: "Weekly sync")
+        await library.acquireLock()
+        let mic = try await library.ingest(try file("mic.wav"), into: id, provenance: .file(source: .microphone))
+        let dropped = try await library.ingest(try file("Interview.m4a"), into: id, provenance: .file(source: .imported))
+        library.releaseLock()
+        let micID = try XCTUnwrap(mic.track?.id), fileID = try XCTUnwrap(dropped.track?.id)
+        let micRun = UUID(), fileRun = UUID()
+        library.update(id) { meeting in
+            // Placed one after the other, as their start times would.
+            for index in meeting.tracks.indices { meeting.tracks[index].offset = meeting.tracks[index].id == micID ? 0 : 60 }
+            meeting.transcripts = [
+                TrackTranscript(id: micRun, trackID: micID, segments: [
+                    TranscriptSegment(trackID: micID, start: 0, end: 30, text: "Shall we start with the launch?", speakerID: "alex"),
+                    TranscriptSegment(trackID: micID, start: 30, end: 50, text: "The dates hold for now.", speakerID: "sam"),
+                ]),
+                TrackTranscript(id: fileRun, trackID: fileID, segments: [
+                    TranscriptSegment(trackID: fileID, start: 0, end: 40, text: "Welcome to the interview about pricing.", speakerID: "guest"),
+                ]),
+            ]
+            meeting.speakers = [Speaker(id: "alex", name: "Alex", sourceTrackID: micID), Speaker(id: "sam", name: "Speaker 2", sourceTrackID: micID),
+                                Speaker(id: "guest", name: "Speaker 3", sourceTrackID: fileID)]
+            meeting.highlights = [Highlight(trackID: fileID, time: 12, text: "Pricing")]
+            meeting.renameSpeaker(id: "sam", name: "Sam")
+            meeting.renameSpeaker(id: "guest", name: "Dana")
+        }
+        await library.realign(id)
+        let passage = try XCTUnwrap(library.meeting(id)?.unifiedTranscript.first { $0.text.contains("interview") })
+        library.correctPassage(passage.id, text: "Welcome to the interview about prices.", in: id)
+        return (id, micID, fileID, passage.id)
+    }
+
+    func testBehaviorRemovingARecordingTakesItOutOfTheTranscriptButKeepsItToPutBack() async throws {
+        let library = try await open()
+        let (id, mic, dropped, _) = try await twoRecordings(library)
+        let undo = undoManager()
+
+        await grouped(undo) { XCTAssertTrue(library.removeRecording(dropped, from: id, undoManager: undo)) }
+        var meeting = try XCTUnwrap(library.meeting(id))
+        XCTAssertEqual(meeting.tracks.count, 2, "the original stays in the conversation")
+        XCTAssertEqual(meeting.presentTracks.map(\.id), [mic])
+        XCTAssertEqual(meeting.removedTracks.map(\.id), [dropped])
+        XCTAssertFalse(meeting.transcribableTracks.contains { $0.id == dropped }, "it isn't transcribed again")
+        XCTAssertEqual(meeting.revisions.last?.newValue, "Removed “Interview.m4a”")
+        await library.realign(id)
+        meeting = try XCTUnwrap(library.meeting(id))
+        XCTAssertFalse(meeting.unifiedTranscript.contains { $0.trackID == dropped }, "its words leave the transcript")
+        XCTAssertEqual(meeting.peopleSpeakers.map(\.speaker.name), ["Alex", "Sam"], "nor is its speaker one of the people")
+        XCTAssertNil(meeting.peopleLine?.range(of: "Dana"))
+
+        undo.undo()
+        await library.realign(id)
+        meeting = try XCTUnwrap(library.meeting(id))
+        XCTAssertEqual(Set(meeting.presentTracks.map(\.id)), [mic, dropped])
+        XCTAssertTrue(meeting.unifiedTranscript.contains { $0.trackID == dropped }, "putting it back puts its words back")
+        XCTAssertEqual(meeting.revisions.last?.newValue, "Put back “Interview.m4a”")
+    }
+
+    func testBehaviorARemovalSyncsAndAnotherDevicesUnchangedCopyDoesntBringItBack() throws {
+        let track = RecordingTrack(source: .imported, relativePath: "Originals/a.m4a", fileName: "a.m4a")
+        let base = Meeting(title: "Sync", tracks: [track])
+        var local = base
+        local.tracks[0].removal = RecordingRemoval(removedAt: Date())
+        let merged = MeetingMerge.merge(base: base, local: local, remote: base).meeting
+        XCTAssertEqual(merged.tracks.count, 1)
+        XCTAssertNotNil(merged.tracks[0].removal, "an unchanged copy elsewhere doesn't undo the removal")
+        XCTAssertNotNil(MeetingMerge.merge(base: base, local: base, remote: local).meeting.tracks[0].removal)
+
+        // The mark round-trips through the conversation's file.
+        let data = try JSONEncoder().encode(local)
+        XCTAssertEqual(try JSONDecoder().decode(Meeting.self, from: data).tracks[0].removal, local.tracks[0].removal)
+    }
+
+    func testBehaviorMovingARecordingGivesItAConversationWithItsWordsNamesAndBookmarks() async throws {
+        let library = try await open()
+        let (id, mic, dropped, corrected) = try await twoRecordings(library)
+        let source = try XCTUnwrap(library.meeting(id))
+        let undo = undoManager()
+        var newID: UUID?
+        try await grouped(undo) {
+            newID = try await library.moveRecordingToNewConversation(dropped, from: id, audio: { track in
+                try await library.audioURL(for: track, in: id)
+            }, undoManager: undo)
+        }
+        let moved = try XCTUnwrap(newID.flatMap(library.meeting))
+        XCTAssertEqual(moved.title, "Interview")
+        XCTAssertEqual(moved.tracks.count, 1)
+        let copy = try XCTUnwrap(moved.tracks.first)
+        XCTAssertEqual(copy.sha256, source.tracks.first { $0.id == dropped }?.sha256, "the same recording")
+        XCTAssertEqual(moved.transcripts.map(\.trackID), [copy.id], "its transcript came along, so it isn't transcribed again")
+        XCTAssertFalse(moved.hasUntranscribedAudio)
+        XCTAssertEqual(moved.peopleSpeakers.map(\.speaker.name), ["Dana"], "with the name the person gave")
+        XCTAssertTrue(moved.revisions.contains { $0.field == "speaker:guest" }, "a name the person gave, as Version History keeps it")
+        XCTAssertEqual(moved.highlights.map(\.trackID), [copy.id])
+        XCTAssertEqual(moved.unifiedTranscript.first { $0.id == corrected }?.text, "Welcome to the interview about prices.",
+                       "the correction made to its passage carries over")
+
+        let left = try XCTUnwrap(library.meeting(id))
+        XCTAssertEqual(left.presentTracks.map(\.id), [mic])
+        XCTAssertEqual(left.tracks.first { $0.id == dropped }?.removal?.movedTo, newID)
+        XCTAssertTrue(left.removedTracks.isEmpty, "a moved recording isn't one to put back")
+        XCTAssertFalse(left.unifiedTranscript.contains { $0.trackID == dropped })
+        XCTAssertEqual(left.revisions.last?.newValue, "Moved “Interview.m4a” to “Interview”")
+
+        undo.undo()
+        try await waitUntil("the new conversation goes to the Trash") { library.meeting(newID!) == nil }
+        XCTAssertEqual(Set(try XCTUnwrap(library.meeting(id)).presentTracks.map(\.id)), [mic, dropped], "back where it was")
+        XCTAssertTrue(library.trashedMeetingIDs().contains(newID!), "the conversation made for it is in the Trash")
+    }
+}
