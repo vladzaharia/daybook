@@ -164,52 +164,6 @@ struct AddRecordingFromDeviceItems: View {
     }
 }
 
-/// The menu bar extra's device lines: "Importing from Soundcore Work · 2 of 3", or
-/// "Soundcore Work · 3 New Recordings…" which opens the device. Nothing when there's nothing to say.
-struct DeviceMenuBarItems: View {
-    let state: AppState
-    let hub: DeviceHub
-
-    init(state: AppState) {
-        self.state = state
-        self.hub = state.devices
-    }
-
-    var body: some View {
-        ForEach(hub.sessions) { session in
-            DeviceMenuBarLine(state: state, session: session)
-        }
-    }
-}
-
-private struct DeviceMenuBarLine: View {
-    let state: AppState
-    let session: DeviceSession
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some View {
-        let queue = session.queue
-        if let line = state.handoffLine(for: session) {
-            // A handoff under way (or just finished) says so, in the recorder's words.
-            Text(line)
-        } else if queue.isActive, !queue.isSuspended {
-            Text("Importing from \(session.device.name) · \(queue.position) of \(queue.total)")
-        } else {
-            let count = session.importableCount
-            if count > 0 {
-                Button(count == 1 ? "\(session.device.name) · 1 New Recording…" : "\(session.device.name) · \(count) New Recordings…") {
-                    state.showDevice(session.id)
-                    openWindow(id: WindowID.library)
-                    NSApp.activate()
-                }
-            }
-            if session.managedElsewhere != nil {
-                RecorderHandoffMenuItems(state: state, session: session, namesRecorder: true)
-            }
-        }
-    }
-}
-
 /// The sidebar's import progress: a teal arc on a quiet track. AppKit's mini determinate indicator
 /// draws a pie on a white disc, which reads as a blank badge, and greys out in an inactive window.
 private struct ImportRing: View {
