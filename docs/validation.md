@@ -67,7 +67,8 @@ From the November audit ([capture](capture.md), [sandbox](sandbox.md#capabilitie
 - **Welcome**, one paged Welcome for both apps (`DaybookUI/Welcome`): Allow Recording (the Mac's microphone and
   computer audio, the iPhone's microphone), Record and Import that wait for the library, the Mac's presets with the room
   each needs, and the iPhone's Pair with Your Mac and its own models. The iPhone's opens on a first launch only, never for
-  someone with conversations or a paired Mac (read from the stored pairings, before the link starts).
+  someone with conversations or a paired Mac (read from the stored pairings, before the link starts). A library that
+  can't open shows the app and its notice, and Welcome waits for the next launch.
 - **Recorders recording along** start at once, in a task group, with their links written in the recorders' order first.
 
 **How it was checked.** `swift build --build-tests` clean. Focused suites: `CaptureTests`, `CallCaptureTests` (a look off

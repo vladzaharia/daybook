@@ -61,6 +61,8 @@ final class PhoneAppModel: RecordingCommandHandling {
     private(set) var noticeDetails: String?
     /// What the notice's button does, when there's a fix.
     private(set) var noticeFix: NoticeFix?
+    /// The library couldn't be opened at launch: the notice says so, and Welcome stops waiting for it.
+    private(set) var libraryFailedToOpen = false
     /// The recording is being saved to the library.
     private(set) var isFiling = false
     /// The conversation filed last, for the interface to point at.
@@ -427,9 +429,11 @@ final class PhoneAppModel: RecordingCommandHandling {
         do { try await library.reload() }
         catch {
             launched = false
+            libraryFailedToOpen = true
             say(Self.libraryUnavailable, details: error.localizedDescription)
             return
         }
+        if libraryFailedToOpen { libraryFailedToOpen = false }
         if let folder = options.syncFolder {
             try? sync.connect(toFolder: URL(fileURLWithPath: folder, isDirectory: true), monitor: true)
             if let mac = options.demoMac { Self.writeDemoPresence(name: mac.name, hoursAgo: mac.hoursAgo, in: URL(fileURLWithPath: folder)) }

@@ -150,13 +150,24 @@ struct PhoneWelcome: View {
 
     /// Whether Welcome opens once the library has loaded, and whether this person is at home here already, so it never
     /// opens for them. A paired Mac counts from the stored pairings: the link lists them only once it starts, after
-    /// the library and sync.
+    /// the library and sync. A library that didn't open decides nothing: the app shows, with why, and Welcome is
+    /// offered on the next launch.
     static func presentation(completed: Bool, arguments: [String], isTestHost: Bool,
                              library: LibraryController, link: PhoneLink) -> (show: Bool, atHome: Bool) {
+        guard library.isLoaded else { return (false, false) }
         let conversations = !library.meetings.isEmpty, paired = link.hasPairedMac
         let show = shouldPresent(completed: completed, arguments: arguments, isTestHost: isTestHost,
                                  hasConversations: conversations, hasPairedMac: paired)
         return (show, !show && (conversations || paired))
+    }
+
+    /// Waits for launch to open the library, or to fail to, then decides (`presentation`).
+    static func decision(for model: PhoneAppModel, completed: Bool, arguments: [String],
+                         isTestHost: Bool) async -> (show: Bool, atHome: Bool) {
+        let controller = model.library.controller
+        await ObservationWatch.until { controller.isLoaded || model.libraryFailedToOpen }
+        return presentation(completed: completed, arguments: arguments, isTestHost: isTestHost,
+                            library: controller, link: model.link)
     }
 }
 
@@ -173,8 +184,8 @@ private struct PhoneWelcomePresentation: ViewModifier {
     @Environment(PhoneAppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(PhoneWelcome.completedKey) private var completed = false
-    /// Whether Welcome shows; nil while that waits for the library. Known at once when it can't show (Welcome done, a
-    /// test host, a debug launch with options), so the app appears without a pause.
+    /// Whether Welcome shows; nil while that waits for the library to open, or to fail to. Known at once when it can't
+    /// show (Welcome done, a test host, a debug launch with options), so the app appears without a pause.
     @State private var showing: Bool? = PhoneWelcomePresentation.knownAtLaunch()
 
     func body(content: Content) -> some View {
@@ -192,10 +203,8 @@ private struct PhoneWelcomePresentation: ViewModifier {
         }
         .task {
             guard showing == nil, !completed else { return }
-            let controller = model.library.controller
-            await ObservationWatch.until { controller.isLoaded }
-            let decision = PhoneWelcome.presentation(completed: completed, arguments: CommandLine.arguments,
-                                                     isTestHost: LaunchOptions.isTestHost, library: controller, link: model.link)
+            let decision = await PhoneWelcome.decision(for: model, completed: completed, arguments: CommandLine.arguments,
+                                                       isTestHost: LaunchOptions.isTestHost)
             // Someone already at home here: nothing to welcome them to, now or later.
             if decision.atHome { completed = true }
             showing = decision.show

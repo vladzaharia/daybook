@@ -57,6 +57,35 @@ final class PhoneWelcomeTests: XCTestCase {
         XCTAssertFalse(first.atHome)
     }
 
+    /// A library that can't open at launch: Welcome stops waiting, so the app shows and says why, and Welcome isn't
+    /// counted done, so it's offered on the next launch, a paired Mac or not.
+    func testBehaviorALibraryThatCantOpenShowsTheAppAndKeepsWelcomeForNextTime() async throws {
+        let blocked = try temporaryDirectory("library").appendingPathComponent("Daybook")
+        try Data().write(to: blocked)   // a file where the library's folder should be
+        let mac = LinkPairingRecord(deviceID: UUID(), name: "Studio Mac", deviceClass: .mac, pairedAt: Date(),
+                                    linkKey: Data(repeating: 7, count: 32), pskIdentity: Data(repeating: 9, count: 16))
+        let link = PhoneLink(identity: PhoneLink.identity(installation: "INSTALL-1", name: "Test iPhone", libraryID: nil),
+                             keyStore: MemoryLinkKeyStore([mac]), configuration: .loopback())
+        let model = PhoneAppModel(recorder: RecorderRig().recorder, library: PhoneLibrary(rootURL: blocked, installation: "INSTALL-1"),
+                                  posture: DevicePosture(),
+                                  options: LaunchOptions(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]), link: link)
+        let decided = Decided()
+        Task { decided.value = await PhoneWelcome.decision(for: model, completed: false, arguments: ["DaybookPhone"], isTestHost: false) }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertNil(decided.value, "Waits while the library hasn't opened")
+
+        await model.launch()
+        XCTAssertTrue(model.libraryFailedToOpen)
+        XCTAssertEqual(model.notice, PhoneAppModel.libraryUnavailable)
+        let decision = try await waitFor("Welcome to stop waiting for the library") { decided.value }
+        XCTAssertFalse(decision.show, "The app shows, with its notice")
+        XCTAssertFalse(decision.atHome, "Welcome is offered on the next launch")
+    }
+
+    @MainActor private final class Decided {
+        var value: (show: Bool, atHome: Bool)?
+    }
+
     /// The Ready page says a Mac transcribes only when one that transcribes this library is known, paired or not.
     func testBehaviorTheReadyPageCountsOnlyAMacKnownToTranscribe() {
         XCTAssertTrue(PhoneWelcome.macTranscribes(.connected(name: "Studio Mac")))
