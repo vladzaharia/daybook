@@ -97,8 +97,15 @@ final class LibrarySettingsItemsTests: XCTestCase {
                        "“Weekly product sync” won’t use it when it’s transcribed again.")
         XCTAssertNil(VocabularyWords.deleteConsequence([.all]))
         XCTAssertNil(VocabularyWords.deleteConsequence([.none]), "nothing to lose where the conversation is gone")
+        XCTAssertEqual(VocabularyWords.deleteConsequence([.conversation(sync.id, title: sync.title), .conversation(sync.id, title: sync.title),
+                                                          .conversation(sync.id, title: sync.title)]),
+                       "“Weekly product sync” won’t use them when it’s transcribed again.", "three terms from one conversation")
+        XCTAssertEqual(VocabularyWords.deleteConsequence([.conversation(sync.id, title: sync.title), .all]),
+                       "“Weekly product sync” won’t use it when it’s transcribed again.", "only the limited term is lost there")
         XCTAssertEqual(VocabularyWords.deleteConsequence([.conversation(sync.id, title: "A"), .conversation(UUID(), title: "B")]),
                        "Their conversations won’t use them when they’re transcribed again.")
+        XCTAssertEqual(VocabularyWords.deleteConsequence([.conversation(sync.id, title: "Standup"), .conversation(UUID(), title: "Standup")]),
+                       "Their conversations won’t use them when they’re transcribed again.", "two conversations that share a title")
         XCTAssertEqual(VocabularyWords.deleteTitle([GlossaryTerm(term: "Kubernetes")]), "Delete “Kubernetes”?")
         XCTAssertEqual(VocabularyWords.deleteTerms(3), "Delete 3 Terms")
     }

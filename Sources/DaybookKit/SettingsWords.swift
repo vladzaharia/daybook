@@ -221,16 +221,15 @@ public enum VocabularyWords {
         terms.count == 1 ? "Delete “\(terms[0].term)”?" : "Delete \(terms.count) Terms?"
     }
 
-    /// What deleting a term limited to a conversation does there: "“Weekly product sync” won’t use it when it’s
-    /// transcribed again." Nil for a term from a conversation that's gone.
+    /// What deleting terms limited to a conversation does there: "“Weekly product sync” won’t use it when it’s
+    /// transcribed again.", "them" for several terms from that conversation. Nil for terms from conversations
+    /// that are gone.
     public static func deleteConsequence(_ scopes: [TermScope]) -> String? {
-        let titles = scopes.compactMap { scope -> String? in
-            if case .conversation(_, let title) = scope { return title }
-            return nil
+        let limited = scopes.filter { $0.conversationID != nil }
+        guard case .conversation(_, let title)? = limited.first else { return nil }
+        if Set(limited.compactMap(\.conversationID)).count == 1 {
+            return "“\(title)” won’t use \(limited.count == 1 ? "it" : "them") when it’s transcribed again."
         }
-        guard let first = titles.first else { return nil }
-        let names = Set(titles)
-        if names.count == 1 { return "“\(first)” won’t use it when it’s transcribed again." }
         return "Their conversations won’t use them when they’re transcribed again."
     }
 
