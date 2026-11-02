@@ -92,6 +92,24 @@ final class StatusSheetModelTests: XCTestCase {
         XCTAssertEqual(waiting.shortText, "Waiting…")
     }
 
+    /// Over the recorder's Wi‑Fi, leaving Daybook starts the transfer again over Bluetooth: the compact line says to
+    /// keep Daybook open, also where it's narrow.
+    func testBehaviorTheRecorderLineSaysToKeepDaybookOpenDuringFastTransfer() {
+        let starting = line(recorder {
+            $0.importing = .init(position: 1, total: 1, fraction: 0)
+            $0.fastTransfer = .joining
+        })
+        XCTAssertEqual(starting.text, "Importing · Starting Wi‑Fi…")
+        XCTAssertEqual(starting.shortText, "Starting Wi‑Fi…")
+        let transferring = line(recorder {
+            $0.importing = .init(position: 1, total: 1, fraction: 0.64)
+            $0.fastTransfer = .transferring
+        })
+        XCTAssertEqual(transferring.text, "Importing · 64% · Keep Daybook open")
+        XCTAssertEqual(transferring.shortText, "Keep Daybook open")
+        XCTAssertEqual(transferring.progress, 0.64)
+    }
+
     func testRecorderLineForOwnershipAndHandoff() {
         let managed = line(recorder { $0.managedBy = "Studio Mac"; $0.isLinked = false; $0.state = .notConnected })
         XCTAssertEqual(managed.text, "Managed by Studio Mac")

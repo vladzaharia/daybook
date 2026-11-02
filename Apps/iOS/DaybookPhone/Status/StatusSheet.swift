@@ -393,7 +393,8 @@ enum StatusSheetInputs {
             canConnect: !session.isLinked && !session.state.isBusy && session.direct?.isSetUp == true,
             importRunning: session.queue.current != nil,
             notListed: session.managedElsewhere == nil && session.listingState == .notListed,
-            otherAppWait: session.otherAppWait)
+            otherAppWait: session.otherAppWait,
+            fastTransfer: session.fastTransferStage)
     }
 
     /// A recorder that isn't live here: what the Mac managing it last said, or its last state here.

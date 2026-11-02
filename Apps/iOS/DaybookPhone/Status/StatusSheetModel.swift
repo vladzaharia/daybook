@@ -186,6 +186,8 @@ struct StatusInputs: Equatable {
         var notListed = false
         /// An import or a Start waits for another app's transfer: "Waiting for the Soundcore app to finish".
         var otherAppWait: String?
+        /// A recording coming over the recorder's own Wi‑Fi, which leaving Daybook starts again over Bluetooth.
+        var fastTransfer: FastTransferStage?
     }
 
     /// A Mac paired over Wi‑Fi.
@@ -334,6 +336,12 @@ enum StatusSheetModel {
         if let importing = recorder.importing {
             if importing.suspended {
                 return line(importing.total == 1 ? "1 recording waits to import" : "\(importing.total) recordings wait to import", .calm)
+            }
+            if let stage = recorder.fastTransfer {
+                // In the words the recorder's status line uses everywhere: "Importing · 64% · Keep Daybook open".
+                let words = RecorderStatusWords.fastTransfer(stage, importing: .init(position: importing.position, total: importing.total,
+                                                                                      fraction: importing.fraction))
+                return line(words.text, .working, progress: importing.fraction, short: words.short)
             }
             return line("Importing \(importing.position) of \(importing.total)", .working, progress: importing.fraction)
         }
