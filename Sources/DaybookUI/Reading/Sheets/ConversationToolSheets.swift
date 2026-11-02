@@ -123,7 +123,8 @@ public struct ReviewCorrectionsSheet: View {
     }
 
     private func keepButton(_ issue: CorrectionTransferIssue) -> some View {
-        Button("Keep in History Only") { resolve(issue, nil) }
+        // Wrapped at large text, it starts at the margin under Apply and Skip.
+        Button { resolve(issue, nil) } label: { Text("Keep in History Only").multilineTextAlignment(.leading) }
     }
 
     @ViewBuilder private var skipButton: some View {
