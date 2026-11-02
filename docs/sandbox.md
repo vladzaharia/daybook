@@ -82,10 +82,15 @@ Store build takes a Developer ID release from after it.
 | iCloud Drive, CloudKit, push | sync, the courier | already entitled in signed builds |
 | Keychain (link keys, sync identity) | `LinkKeyStore`, `SyncDeviceIdentityStore` | unchanged: the data-protection keychain's default access group is the app's identifier |
 | Open and save panels, drops, paste | imports, Add Photo, export, the import folder, the development sync folder | `com.apple.security.files.user-selected.read-write`, `files.bookmarks.app-scope` |
-| Metal, MLX, Core ML, Speech, Foundation Models, Vision, notifications, menu bar | | none |
+| Metal, MLX, Core ML, Speech, Foundation Models, Vision, menu bar | | none |
+| Notifications (a recording that stopped, an automatic start; a recorder's imports) | `RecordingNotifications`, `DeviceNotifications` | none |
+| App Intents: Shortcuts, Siri, Spotlight's actions (Start and Stop Recording, Add Bookmark, New Note, Show Floating Notes, Open Conversation) | `DaybookIntents`, `ConversationEntity` | none; they run in the app's process, which the system launches when needed |
+| Spotlight: conversations' titles, dates, and gists, never a Personal one's | `ConversationSpotlight` (Core Spotlight through `IndexedEntity`) | none; the index is this Mac's |
 | `Process` | the smoke test's `/usr/bin/say` | inherits the sandbox; its output goes to the container's temporary folder |
 
-No login item, App Intents, Apple Events, XPC services, or helpers.
+No login item, Apple Events, XPC services, or helpers. The intents, Spotlight, and the recording's notifications
+start with the library window (`SystemEntryPoints`). Notifications and Spotlight need a bundled app, and Spotlight
+the app's own library, so a `--library` run never indexes its conversations.
 
 ## Release N+1: the switch
 

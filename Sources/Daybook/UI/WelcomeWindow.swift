@@ -88,7 +88,7 @@ struct WelcomeWindow: View {
     private func record() {
         openLibrary()
         Task { @MainActor in
-            guard await WelcomeRecording.libraryOpens(state) else { return }
+            guard await LibraryOpening.opens(state) else { return }
             await state.startRecording()
         }
     }
@@ -96,7 +96,7 @@ struct WelcomeWindow: View {
     private func importAudio() {
         openLibrary()
         Task { @MainActor in
-            guard await WelcomeRecording.libraryOpens(state) else { return }
+            guard await LibraryOpening.opens(state) else { return }
             state.chooseImport()
         }
     }
@@ -104,19 +104,6 @@ struct WelcomeWindow: View {
     private func addDevice() {
         state.requestAddDevice()
         openLibrary()
-    }
-}
-
-/// What Welcome's Record and Import wait for: the library to open.
-@MainActor
-enum WelcomeRecording {
-    /// Returns once the library is open (true), or once it won't open by itself (false): a library move holds it until
-    /// the person answers, or it couldn't open (the window says so). It never gives up on a slow first launch.
-    static func libraryOpens(_ state: AppState) async -> Bool {
-        await ObservationWatch.until {
-            state.isReady || state.libraryMoveOffer?.holdsLibrary == true || state.problem != nil
-        }
-        return state.isReady
     }
 }
 

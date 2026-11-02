@@ -83,9 +83,10 @@ The path used is saved in two places:
 Call audio starts before the microphone, so any prompt comes before your voice is being recorded.
 Screen & System Audio Recording can't be granted in its prompt: the person allows it in System
 Settings, often with a relaunch. So the first recording without a call app goes on with the
-microphone alone (above) rather than failing, and Welcome's Allow step asks for both permissions
-ahead of time, with the same Allow… buttons as Settings › General › Permissions
-(`CapturePermissionControl`).
+microphone alone (above) rather than failing, and Welcome's Allow Recording page asks for both
+permissions ahead of time, with the same Allow… buttons as Settings › General › Permissions
+(`CapturePermissions`, which shares Settings' record that macOS has asked once). Coming back from
+System Settings, the page reads both again.
 
 macOS has no public API to check or request the System Audio Recording permission. When it's
 denied, a tap still runs but delivers digital silence. So `ProcessTapSource` keeps a watchdog: if
@@ -572,6 +573,25 @@ candidate becomes the process-tap target.
   says "The call ended, so recording stopped." or, for a recording someone started themselves,
   "The call ended.", until another call shows up.
 
+## Notifications
+
+While Daybook isn't in front, `RecordingNotifications` (Sources/Daybook/App/MacNotifications.swift)
+says two things a person would otherwise miss, by the same background-only rule as a recorder's
+notifications (`DeviceNotifications`):
+
+- **Recording stopped**, when a recording ends without Stop (`AppState.unexpectedStops`: a
+  microphone that went, sleep, a disk that couldn't keep up). It names the conversation, unless
+  it's Personal, as the menu bar extra never does, says the recorder's one sentence for why, and
+  offers Record Again. A click opens the conversation. It goes once the stop has been seen in the
+  app (`dismissUnexpectedStop`) or the next recording starts.
+- **Recording**, when a call starts recording on its own while Floating Notes isn't showing,
+  naming the call ("Zoom call"). A click shows Floating Notes. It goes when that recording ends.
+
+Permission is asked the first time someone records or turns on Record calls automatically. Only a
+bundled app posts (`UNUserNotificationCenter` crashes an unbundled binary); tests drive the same
+logic with snapshots and a fake center. The app starts it with its other system entry points
+(`SystemEntryPoints`, docs/sandbox.md).
+
 ## Known limits
 
 - **Browser calls.** A browser tap records every tab of that browser. Safari's WebKit GPU process
@@ -671,6 +691,24 @@ the same fake sources:
 - a failing Call captioner that leaves the recording and You untouched;
 - the Mac-local store, kept until a later transcript replaces it, and pruned with the Trash;
 - no captioner, tap, file, or warning when the system can't make captions (macOS 15).
+
+**`Tests/DaybookTests/SystemEntryPointsTests.swift`** covers, with a fake notification center and
+Spotlight index:
+
+- a recording that stops on its own said once while Daybook is behind, its conversation named
+  unless Personal, nothing while it's in front, and taken back once seen;
+- an automatic start said only while Floating Notes is hidden, taken back when it ends, and an
+  earlier stop taken back by the next recording; permission asked once, at the first recording or
+  Record calls automatically;
+- a click opening the conversation, and Record Again recording with a fake microphone;
+- the intents waiting for the app and its library, and Start, Bookmark, Stop, New Note, and Open
+  Conversation on the app's state;
+- Spotlight and Shortcuts' suggestions without Personal conversations, following renames, moves to
+  Personal, and the Trash.
+
+**`Tests/DaybookTests/WelcomeTests.swift`** covers Welcome's Record waiting for the library (and
+stopping for a library move or a library that can't open), the free-space check, and the Allow
+page's permissions against a scripted system.
 
 Live checks still needed are listed in `docs/validation.md` under "Call capture and echo
 removal".

@@ -299,8 +299,8 @@ extension CallAppTarget {
     }
 }
 
-private extension MeetingCandidate {
-    /// How status lines name the call: "Zoom call", "Slack huddle", "call in Chrome".
+extension MeetingCandidate {
+    /// How status lines and notifications name the call: "Zoom call", "Slack huddle", "call in Chrome".
     var callName: String {
         if isBrowser { return "call in \(appName)" }
         return appName == "Slack" ? "Slack huddle" : "\(appName) call"

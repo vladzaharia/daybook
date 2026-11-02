@@ -21,7 +21,7 @@ final class WelcomeTests: XCTestCase {
 
     private func waitForLibrary(_ state: AppState) -> (Answer, Task<Void, Never>) {
         let answer = Answer()
-        return (answer, Task { answer.value = await WelcomeRecording.libraryOpens(state) })
+        return (answer, Task { answer.value = await LibraryOpening.opens(state) })
     }
 
     /// A slow first launch: Record waits for the library however long it takes, then records (MSQ-24).
@@ -34,7 +34,7 @@ final class WelcomeTests: XCTestCase {
         await waiting.value
         XCTAssertEqual(answer.value, true)
         // Open already: at once.
-        let again = await WelcomeRecording.libraryOpens(state)
+        let again = await LibraryOpening.opens(state)
         XCTAssertTrue(again)
         await state.flush()
     }
