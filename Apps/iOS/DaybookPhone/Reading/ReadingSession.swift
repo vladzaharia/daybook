@@ -95,9 +95,6 @@ final class ReadingSession {
         reading = true
     }
 
-    /// A conversation that's only your notes (photos can join it), in the place being viewed, open
-    /// with the keyboard on its notes.
-    @discardableResult
     /// Add Recording…: Files opens to pick recordings for this conversation.
     func addRecording(to id: UUID) {
         addingRecordingTo = id
@@ -112,6 +109,9 @@ final class ReadingSession {
         return (urls, id)
     }
 
+    /// A conversation that's only your notes (photos can join it), in the place being viewed, open
+    /// with the keyboard on its notes.
+    @discardableResult
     func newNote(in library: LibraryController, now: Date = Date()) -> UUID {
         var folder: UUID?, placement: LibraryPlacement?
         switch place {
