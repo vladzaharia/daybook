@@ -92,13 +92,12 @@ struct LibraryPage: View {
     private var list: some View {
         let meetings = meetings
         let now = Date()
-        let context = PhoneRowStatus.context(model: model, library: library, player: session.player)
         return List(selection: selectionBinding) {
             ForEach(DateGroup.groups(for: meetings, now: now)) { group in
                 Section {
                     ForEach(group.meetings) { meeting in
-                        ConversationRowView(meeting: meeting, status: PhoneRowStatus.make(meeting, context: context, now: now),
-                                            timeLabel: RowDate.format(meeting.date, group: group.title, now: now))
+                        PhoneConversationRow(library: library, meeting: meeting,
+                                             timeLabel: RowDate.format(meeting.date, group: group.title, now: now))
                             .tag(meeting.id)
                             .listRowInsets(.leading, rowInset(.leading))
                             .listRowInsets(.trailing, rowInset(.trailing))
@@ -160,7 +159,8 @@ struct LibraryPage: View {
     /// A row's swipes, from its actions: Move to Trash and Move to Folder to the trailing edge, Work or Personal to
     /// the leading.
     @ViewBuilder private func swipes(_ meeting: Meeting, edge: HorizontalEdge) -> some View {
-        let groups = PhoneActions.groups(for: [meeting.id], library: library)
+        // Only what can be done now, as the row's menu.
+        let groups = ConversationActionMenuItems.shown(PhoneActions.groups(for: [meeting.id], library: library), on: .iPhone)
         if edge == .trailing {
             if let trash = ConversationActionMenuItems.action(.moveToTrash, in: groups) {
                 Button(role: .destructive) { session.confirmingTrash = [meeting.id] } label: {

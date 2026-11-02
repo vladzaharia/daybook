@@ -60,6 +60,21 @@ enum PhoneRowStatus {
     }
 }
 
+/// One row of the library, in a view of its own: it reads what its status follows (a Mac's live progress, where
+/// summaries run, playback), so a progress report redraws the rows and never rebuilds the list around them.
+struct PhoneConversationRow: View {
+    let library: LibraryController
+    let meeting: Meeting
+    let timeLabel: String
+    @Environment(ReadingSession.self) private var session
+    @Environment(PhoneAppModel.self) private var model
+
+    var body: some View {
+        let context = PhoneRowStatus.context(model: model, library: library, player: session.player)
+        ConversationRowView(meeting: meeting, status: PhoneRowStatus.make(meeting, context: context, now: Date()), timeLabel: timeLabel)
+    }
+}
+
 /// The library row, for the screens that still hand it the reading status's `RowStatus` (the recent list behind the
 /// recorder). The library draws `ConversationRowView` with `PhoneRowStatus` itself.
 struct ConversationRow: View {
