@@ -44,4 +44,32 @@ final class PlayerBarTests: XCTestCase {
         XCTAssertEqual(first.words, "Copied")
         XCTAssertNotEqual(first.id, second.id, "copying again holds the word again")
     }
+
+    /// Where the app keeps its beat (`AppState`, `ReadingSession`).
+    @MainActor private final class Holder {
+        var beat: ConfirmationBeat? = .copied
+    }
+
+    func testBehaviorCopiedGoesWithThePageThatShowedIt() async {
+        let holder = Holder()
+        let shown = holder.beat!
+        // The iPhone's conversation leaves within the hold: its overlay's task is cancelled.
+        let hold = Task { @MainActor in
+            await ConfirmationBeat.hold(shown, for: .seconds(60), current: { holder.beat }, clear: { holder.beat = nil })
+        }
+        hold.cancel()
+        await hold.value
+        XCTAssertNil(holder.beat, "the next conversation opened doesn't say Copied again")
+    }
+
+    func testBehaviorANewerBeatOutlastsTheOneItReplaced() async {
+        var beat: ConfirmationBeat? = .copied
+        let shown = beat!
+        let newer = ConfirmationBeat.copied
+        beat = newer
+        await ConfirmationBeat.hold(shown, for: .zero, current: { beat }, clear: { beat = nil })
+        XCTAssertEqual(beat?.id, newer.id, "the newer beat holds for its own time")
+        await ConfirmationBeat.hold(newer, for: .zero, current: { beat }, clear: { beat = nil })
+        XCTAssertNil(beat)
+    }
 }

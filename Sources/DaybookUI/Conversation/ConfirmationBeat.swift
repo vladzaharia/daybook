@@ -14,11 +14,21 @@ public struct ConfirmationBeat: Equatable, Identifiable, Sendable {
 
     /// Copy Summary's, on both apps.
     public static var copied: ConfirmationBeat { ConfirmationBeat("Copied") }
+
+    /// Holds `shown` for `duration`, then clears it unless a newer beat has taken its place. A hold cut short (the
+    /// page showing it went away) clears it too, so the next page doesn't show or say it again.
+    @MainActor
+    static func hold(_ shown: ConfirmationBeat, for duration: Duration = DaybookMotion.hold,
+                     current: () -> ConfirmationBeat?, clear: () -> Void) async {
+        try? await Task.sleep(for: duration)
+        guard current()?.id == shown.id else { return }
+        clear()
+    }
 }
 
 extension View {
-    /// Shows `beat` over the top of this view while it's set, and clears it after `DaybookMotion.hold`. A new beat
-    /// replaces the one showing and holds again.
+    /// Shows `beat` over the top of this view while it's set, and clears it after `DaybookMotion.hold`, or as soon as
+    /// this view goes. A new beat replaces the one showing and holds again.
     public func confirmationBeat(_ beat: Binding<ConfirmationBeat?>) -> some View {
         modifier(ConfirmationBeatOverlay(beat: beat))
     }
@@ -52,9 +62,7 @@ private struct ConfirmationBeatOverlay: ViewModifier {
             .task(id: beat?.id) {
                 guard let shown = beat else { return }
                 AccessibilityNotification.Announcement(shown.words).post()
-                try? await Task.sleep(for: DaybookMotion.hold)
-                guard !Task.isCancelled, beat?.id == shown.id else { return }
-                beat = nil
+                await ConfirmationBeat.hold(shown, current: { beat }, clear: { beat = nil })
             }
     }
 }
