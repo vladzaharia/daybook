@@ -1,7 +1,9 @@
 import AppKit
 import DaybookCore
+import DaybookDesign
 import DaybookIntelligence
 import DaybookKit
+import DaybookUI
 import SwiftUI
 
 // MARK: - Page geometry
@@ -15,34 +17,18 @@ extension EnvironmentValues {
     }
 }
 
-/// A scrolling, centred page: a 56 pt time margin hanging left of a 640 pt text measure.
+/// A scrolling, centred page: DaybookUI's `ReadingPage` (a 56 pt time margin hanging left of a 640 pt text measure,
+/// `readingWidth` for the shared rows), which also says when it's narrow for the Mac's own rows (`pageIsNarrow`).
 struct PageScroll<Content: View>: View {
     var lazy = false
     var bottomInset: CGFloat = 0
     @ViewBuilder var content: Content
     @State private var width: CGFloat = 1000
 
-    private var narrow: Bool { width < DaybookStyle.narrowWidth }
-    /// The measure is centred in the column; the time margin hangs into the space on its left.
-    private var leading: CGFloat {
-        narrow ? Space.s5 : max(Space.s5, (width - DaybookStyle.measure) / 2 - DaybookStyle.margin)
-    }
-
     var body: some View {
-        ScrollView {
-            Group {
-                if lazy { LazyVStack(alignment: .leading, spacing: 0) { content } }
-                else { VStack(alignment: .leading, spacing: 0) { content } }
-            }
-            .frame(maxWidth: narrow ? .infinity : DaybookStyle.margin + DaybookStyle.measure, alignment: .leading)
-            .padding(.leading, leading)
-            .padding(.trailing, narrow ? Space.s5 : Space.s6)
-            .padding(.top, Space.s6)
-            .padding(.bottom, Space.s8 + bottomInset)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .environment(\.pageIsNarrow, narrow)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        ReadingPage(lazy: lazy, bottomInset: bottomInset) { content }
+            .environment(\.pageIsNarrow, ReadingWidth(width: width) == .narrow)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
 }
 
@@ -97,146 +83,86 @@ struct MarginTime: View {
         .buttonStyle(.plain)
         .opacity(alwaysVisible || hovering ? 1 : 0)
         .onHover { hovering = $0 }
-        .animation(Motion.hover, value: hovering)
+        .motion(Motion.hover, value: hovering)
         .help("Play from here")
         .accessibilityLabel("Play from \(SpokenTime.format(time))")
     }
 }
 
+// MARK: - Reading context
+
+extension AppState {
+    /// How this Mac calls itself in a conversation's status and colophon: "this Mac", with its glyph by its name (a
+    /// MacBook's laptop), the rule the iPhone uses for this Mac too (`SettingsWords.deviceSymbol`).
+    var statusWords: DeviceWords {
+        DeviceWords.mac(id: library.thisDevice.id, symbol: SettingsWords.thisDeviceSymbol(model: "Mac", name: library.thisDevice.name))
+    }
+
+    /// Shows a passage in the transcript: the page turns to it and scrolls there.
+    func showPassage(_ segmentID: UUID) {
+        pageScrollTarget = segmentID
+        pageMode = .transcript
+    }
+}
+
+/// Where the page's shared views go on this Mac: the inspector for Info, the transcript for a passage.
+private struct MacReadingContext: ViewModifier {
+    let state: AppState
+    @AppStorage("isInspectorPresented") private var inspectorPresented = false
+
+    func body(content: Content) -> some View {
+        content.readingContext(ReadingContext(
+            thisDevice: AppState.thisDeviceWords, macPlace: "This Mac", audio: { _ in .local }, player: nil,
+            navigator: ReadingNavigator(open: { state.selectedID = $0 },
+                                        showInfo: { _ in inspectorPresented = true },
+                                        search: { state.search = $0 },
+                                        showTranscript: { _, _ in state.pageMode = .transcript })))
+    }
+}
+
+extension View {
+    /// The page's shared views reach this Mac's inspector and transcript.
+    func macReadingContext(_ state: AppState) -> some View { modifier(MacReadingContext(state: state)) }
+}
+
 // MARK: - Header
 
-/// Title and one byline: the same on Summary and Transcript, so switching feels like turning the page.
+/// Title and one byline: the same on Summary and Transcript, so switching feels like turning the page. DaybookUI's
+/// `ConversationHeader`, with this Mac's player in its play pill.
 struct PageHeader: View {
     let state: AppState
     let player: AudioPlaybackController
     let meeting: Meeting
     let play: (PlaybackTarget) -> Void
-    @AppStorage("isInspectorPresented") private var inspectorPresented = false
-    @Environment(\.readingScale) private var scale
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @FocusState private var titleFocused: Bool
-
-    private var isRecording: Bool { state.recordingID == meeting.id }
-    private var isPlayingHere: Bool { player.meetingID == meeting.id && player.duration > 0 }
 
     var body: some View {
         MarginRow {
-            VStack(alignment: .leading, spacing: 6) {
-                TextField("Untitled Conversation", text: Binding(get: { meeting.title }, set: { title in state.update(meeting.id) { $0.title = title } }), axis: .vertical)
-                    .font(TypeStyle.docTitle(scale))
-                    .foregroundStyle(Ink.title)
-                    .textFieldStyle(.plain)
-                    // A long title wraps rather than being cut off mid-sentence.
-                    .lineLimit(1...4)
-                    .focused($titleFocused)
-                    .accessibilityLabel("Title")
-                    .onAppear { focusTitleIfRequested() }
-                    .onChange(of: state.titleFocusRequest) { _, _ in focusTitleIfRequested() }
-                byline
-            }
-        }
-    }
-
-    private func focusTitleIfRequested() {
-        guard state.titleFocusRequest == meeting.id else { return }
-        DispatchQueue.main.async { titleFocused = true; state.titleFocusRequest = nil }
-    }
-
-    /// In a narrow column the byline gives up the month's full name, then the people, rather than
-    /// cutting the date short.
-    private var byline: some View {
-        ViewThatFits(in: .horizontal) {
-            bylineRow(month: .wide, people: true)
-            bylineRow(month: .abbreviated, people: true)
-            bylineRow(month: .abbreviated, people: false)
-        }
-        .font(TypeStyle.byline(scale))
-        .foregroundStyle(Ink.secondary)
-        .lineLimit(1)
-    }
-
-    private func bylineRow(month: Date.FormatStyle.Symbol.Month, people showsPeople: Bool) -> some View {
-        HStack(spacing: 0) {
-            if isRecording {
-                Image(systemName: "circle.fill").font(.system(size: 7)).foregroundStyle(Ink.record)
-                    .symbolEffect(.breathe, options: reduceMotion ? .nonRepeating : .repeating)
-                    .neonGlow(Ink.record, radius: 4)
-                    .padding(.trailing, 5)
-                Text("Recording")
-                separator
-            } else if let duration = meeting.duration {
-                PlayPill(state: state, player: player, duration: duration, isPlayingHere: isPlayingHere) { play(.timeline(0)) }
-                separator
-            } else if meeting.tracks.isEmpty {
-                Text("Notes only")
-                separator
-            }
-            Text(meeting.date.formatted(.dateTime.weekday(.abbreviated).day().month(month).hour().minute()))
-            if showsPeople, let people = meeting.peopleLine, !isRecording {
-                separator
-                Button { inspectorPresented = true } label: { HoverLink(rest: Ink.secondary) { Text(people) } }
-                    .buttonStyle(.plain)
-                    .help("Show the people in this conversation")
-            }
-        }
-    }
-
-    private var separator: some View { Text(" · ").foregroundStyle(Ink.meta).padding(.horizontal, 4) }
-}
-
-/// The byline's play control: a teal pill that shows a live waveform while this conversation plays.
-private struct PlayPill: View {
-    let state: AppState
-    let player: AudioPlaybackController
-    let duration: TimeInterval
-    let isPlayingHere: Bool
-    let start: () -> Void
-    @State private var hovering = false
-    @Environment(\.readingScale) private var scale
-    @Environment(\.colorScheme) private var scheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private var playing: Bool { isPlayingHere && player.isPlaying }
-    private var ink: Color { playing && scheme == .dark ? DaybookStyle.neonMint : Ink.link }
-
-    var body: some View {
-        Button {
-            if isPlayingHere { state.playback.toggle() } else { start() }
-        } label: {
-            HStack(spacing: 5) {
-                Group {
-                    if playing && !hovering {
-                        Image(systemName: "waveform")
-                            .symbolEffect(.variableColor.iterative.dimInactiveLayers.nonReversing, isActive: !reduceMotion)
-                    } else {
-                        Image(systemName: playing ? "pause.fill" : "play.fill").font(.system(size: 9 * scale, weight: .bold))
-                    }
+            ConversationHeader(meeting: meeting, library: state.library,
+                               recording: state.recordingID == meeting.id ? "Recording" : nil,
+                               focusTitle: state.titleFocusRequest == meeting.id,
+                               titleFocused: { state.titleFocusRequest = nil }) {
+                if let duration = meeting.duration {
+                    ConversationPlayPill(duration: duration, player: pillPlayer, unavailable: state.isRecording ? "Playback is off while recording" : nil)
                 }
-                .contentTransition(.symbolEffect(.replace))
-                .frame(minWidth: 12 * scale)
-                Text(isPlayingHere ? TimeLabel.short(player.position) : DurationLabel.format(duration))
-                    .monospacedDigit()
             }
-            .font(TypeStyle.byline(scale).weight(.medium))
-            .foregroundStyle(ink)
-            .padding(.horizontal, 8).padding(.vertical, 2)
-            .background(DaybookStyle.accent.opacity(hovering ? 0.22 : 0.14), in: Capsule())
-            .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
-        // The capsule's edge, not its glyph, lines up with the title.
-        .opacity(state.isRecording ? 0.4 : 1)
-        .disabled(state.isRecording)
-        .onHover { hovering = $0 }
-        .animation(Motion.hover, value: hovering)
-        .help(state.isRecording ? "Playback is off while recording" : playing ? "Pause" : "Play the conversation")
-        .accessibilityLabel(playing ? "Pause" : "Play conversation, \(DurationLabel.format(duration))")
+        .macReadingContext(state)
+    }
+
+    private var pillPlayer: ConversationPlayPill.Player {
+        let id = meeting.id
+        return ConversationPlayPill.Player(isHere: { player.meetingID == id && player.duration > 0 },
+                                           isPlaying: { player.isPlaying },
+                                           position: { player.position },
+                                           toggle: { state.playback.toggle() },
+                                           start: { play(.timeline(0)) })
     }
 }
 
 // MARK: - Status line
 
-/// The one line that speaks when something is working or needs the person, and is absent otherwise.
+/// The one line that speaks when something is working or needs the person, and is absent otherwise: DaybookUI's
+/// `StatusBlock` drawing DaybookKit's `ConversationStatusPresentation`, as the iPhone does, from this Mac's queue.
 struct ConversationStatus: View {
     let state: AppState
     let meeting: Meeting
@@ -246,7 +172,7 @@ struct ConversationStatus: View {
     private let placements: SummaryPlacements
     @AppStorage(SettingsPaneKey.storageKey) private var settingsPane = "general"
     @Environment(\.openSettings) private var openSettings
-    @State private var showingDetails = false
+    @Environment(\.undoManager) private var undoManager
 
     init(state: AppState, meeting: Meeting) {
         self.state = state
@@ -258,210 +184,102 @@ struct ConversationStatus: View {
     var body: some View {
         // Progress redraws only this line, at its own pace.
         ActivityReader { content }
-            .transition(.opacity.combined(with: .move(edge: .top)))
-            .animation(.easeOut(duration: 0.2), value: state.processingID)
             // Settings › Cloud, when the cloud could upgrade this summary.
             .task(id: meeting.id) { await state.prepareUpgradeOffer(for: meeting) }
     }
 
-    /// Recording is this Mac's own state; everything else reads from `ProcessingStatus`, which the
-    /// conversation list and the iPhone share.
     @ViewBuilder private var content: some View {
+        let shown = presentation(at: Date())
+        VStack(alignment: .leading, spacing: 0) {
+            if let shown {
+                // A countdown's seconds tick in the block's own words; nothing else here redraws for them.
+                MarginRow { StatusBlock(shown, perform: perform) }
+                .padding(.top, Space.s5)
+                .daybookTransition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .daybookMotion(Motion.state, value: StatusBlockLayout.motionKey(shown))
+    }
+
+    /// Recording is this Mac's own state; everything else is the shared presentation of `ProcessingStatus`.
+    private func presentation(at now: Date) -> ConversationStatusPresentation? {
         if state.recordingID == meeting.id {
-            if let status = state.sources.recorders.status { line(symbol: "dot.radiowaves.left.and.right") { Text(status) } }
-        } else if let planner = placements[meeting.id], planner.line(at: Date(), thisDevice: AppState.thisDeviceWords) != nil {
-            // Where the summary runs: the countdown, or the cloud at work (SummaryPlacementViews.swift).
-            line(symbol: nil) { PlacementStatusLine(state: state, meetingID: meeting.id, planner: planner) }
-        } else {
-            switch state.processingStatus(for: meeting) {
-            case .failed(let failure) where !failure.reason.isEmpty:
-                failed(failure)
-            case .processing(let progress) where progress.device == nil:
-                line(symbol: nil) {
-                    if meeting.status == .transcribing && progress.stage != .identifyingSpeakers {
-                        Text(state.sourceActivity(meeting.id) ?? "Transcribing")
-                        ProgressView(value: state.processingProgress.fraction).progressViewStyle(.brand(width: 140))
-                        // Not animated: a new percent every moment would keep the window drawing frames.
-                        Text("\(Int(state.processingProgress.fraction * 100))%").monospacedDigit()
-                    } else {
-                        ProgressView().controlSize(.small)
-                        Text(stageText(progress.stage))
-                    }
-                    if let origin = state.requestOrigin(for: meeting) { Text("· \(origin)").foregroundStyle(Ink.meta) }
-                    if !progress.awaiting.isEmpty { Text("· \(ProcessingStatus.awaitingLine(progress.awaiting))").foregroundStyle(Ink.meta) }
-                    Spacer(minLength: Space.s2)
-                    Button(meeting.status == .summarizing ? "Stop" : "Pause") { state.pauseProcessing(meeting.id) }
-                        .buttonStyle(.daybookLink)
-                }
-            case .processing(let progress):
-                // Another device's work reads like this Mac's: its bar and percent once it reports one.
-                line(symbol: nil) {
-                    let verb = progress.stage == .summarizing ? "Summarizing" : "Transcribing"
-                    let device = progress.device?.name ?? "another device"
-                    if let fraction = progress.fraction {
-                        Text("\(verb) on \(device)")
-                        ProgressView(value: fraction).progressViewStyle(.brand(width: 140))
-                        Text("\(Int(fraction * 100))%").monospacedDigit()
-                    } else {
-                        ProgressView().controlSize(.small)
-                        Text("\(verb) on \(device)…")
-                    }
-                }
-            case .requested(.queued(let position, _)):
-                line(symbol: "clock") {
-                    Text((position == 0 ? waitingText : "Waiting · \(position + 1) in line")
-                         + (state.requestOrigin(for: meeting).map { " · \($0)" } ?? ""))
-                    Spacer(minLength: Space.s2)
-                    Button("Cancel") { state.cancelQueued(meeting.id) }.buttonStyle(.daybookLink)
-                }
-            case .requested(.models):
-                waitingForModels
-            case .requested(.paused):
-                line(symbol: "pause.circle") {
-                    Text("Paused")
-                    Spacer(minLength: Space.s2)
-                    Button("Resume") { state.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting)) }.buttonStyle(.daybookLink)
-                }
-            case .requested(.device(let request)):
-                // Asked for on another device and waiting for a Mac: this one can take it. A recording
-                // still on its way says so, whatever this Mac transcribes. An upgrade waits for the Mac it named.
-                if let upgrade = request.upgrade, !meeting.hasUntranscribedAudio {
-                    line(symbol: "clock") { Text(upgrade.waitingLine) }
-                    info
-                } else if meeting.hasUntranscribedAudio { transcribe(title: "Requested from \(request.requestedBy.name)") }
-                else if !meeting.awaitedRecordings().isEmpty {
-                    line(symbol: "clock") { Text(ProcessingStatus.awaitingDetail(meeting.awaitedRecordings())) }
-                    info
-                } else { info }
-            case .recorded, .failed:
-                if meeting.hasUntranscribedAudio { transcribe() } else { info }
-            case .awaitingRecordings(let recordings):
-                line(symbol: "clock") { Text(ProcessingStatus.awaitingDetail(recordings)) }
-                info
-            case .transcribed:
-                // A transcript without a summary offers Summarize in the colophon, with its template.
-                info
-            case .done:
-                if let offer = state.upgradeOffer(for: meeting) { upgrade(offer) }
-                info
+            return state.sources.recorders.status.map {
+                ConversationStatusPresentation(kind: .line, symbol: "dot.radiowaves.left.and.right", title: $0)
             }
         }
+        let status = state.processingStatus(for: meeting)
+        var presentation = ConversationStatusPresentation.page(status, meeting: meeting, inputs: inputs(for: status), now: now)
+        // Adding a recording to a transcript: which one, under the step.
+        if case .processing(let progress) = status, progress.device == nil, presentation?.detail == nil,
+           let adding = state.sourceActivity(meeting.id) {
+            presentation?.detail = adding
+        }
+        return presentation
     }
 
-    /// The last attempt failed. Trying again can't find speech that isn't there, so a silent
-    /// recording offers only the details.
-    private func failed(_ failure: ProcessingStatus.Failure) -> some View {
-        let error = failure.reason
-        let silent = FriendlyError.isNoSpeech(error)
-        return box(.problem, symbol: "exclamationmark.triangle.fill",
-            title: silent ? "No speech in this recording" : "Couldn’t finish \(failure.hadTranscripts ? "summarizing" : "transcribing")",
-            message: silent ? "The audio is saved." : FriendlyError.message(for: error)) {
-            Button("Details…") { showingDetails = true }
-                .buttonStyle(.daybookLink)
-                .popover(isPresented: $showingDetails) {
-                    Text(error).font(.callout).textSelection(.enabled).padding(14).frame(width: 320, alignment: .leading)
-                }
-            if !silent && !meeting.tracks.isEmpty { primary("Try Again") { state.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting)) } }
+    private func inputs(for status: ProcessingStatus) -> ConversationStatusPresentation.Inputs {
+        let download = state.downloadingID.map {
+            ConversationStatusPresentation.LocalCapabilities.Download(name: state.modelCatalog.name(for: $0),
+                                                                      fraction: state.downloadProgress.fraction)
+        }
+        let missing = state.missingSelectedModels.compactMap { state.modelCatalog.model($0)?.approximateBytes }.reduce(0, +)
+        var inputs = ConversationStatusPresentation.Inputs(words: state.statusWords, local: .mac(missingModelBytes: missing, download: download))
+        inputs.placement = .init(planner: placements[meeting.id])
+        inputs.runningTitle = state.processingID.flatMap { id in state.meetings.first { $0.id == id }?.title }
+        inputs.queueWaitsForDownload = state.downloadingID != nil && state.processingID == nil
+        inputs.queuedMode = state.processingQueue.first { $0.meetingID == meeting.id }?.mode
+        if status == .done { inputs.upgrade = state.upgradeOffer(for: meeting) }
+        if case .failed(let failure) = status, case .cloud = failure.kind, state.hasCloudSetup {
+            inputs.cloudModel = state.cloud.resolved?.model.name
+        }
+        return inputs
+    }
+
+    private func perform(_ action: ConversationStatusPresentation.Action) {
+        let id = meeting.id
+        switch action {
+        case .transcribe: state.enqueue(id, mode: .newAudio)
+        case .summarize, .useYourMac: state.enqueue(id, mode: .summaryOnly)
+        case .tryAgain(let mode): state.enqueue(id, mode: mode)
+        case .details: break
+        case .pause, .stopSummary: state.pauseProcessing(id)
+        case .resume: state.enqueue(id, mode: state.defaultProcessingMode(for: meeting))
+        case .cancel: state.cancelQueued(id)
+        case .cancelRequest(let request):
+            let device = state.library.thisDevice
+            state.library.update(id) { $0.withdrawProcessingRequest(request, by: device, at: Date()) }
+        case .dontWait:
+            state.library.update(id, actionName: "Don’t Wait", undoManager: undoManager) { $0.stopWaitingForRecordings() }
+        case .cancelDownload: state.cancelDownload()
+        case .downloadModels:
+            state.enqueue(id)
+            state.downloadModels(state.missingSelectedModels)
+        case .chooseModels: openSettingsPane("models")
+        case .cloudSettings: openSettingsPane("cloud")
+        case .summarizeHere:
+            // This summary runs here whatever the cloud preferences say.
+            state.placements.beginHere(id)
+            state.enqueue(id, mode: .summaryOnly)
+        case .placement(let choice): state.chooseSummaryPlacement(choice, for: id)
+        case .upgrade(let offer): state.acceptUpgrade(offer, for: id)
+        case .dismissUpgrade(let offer): state.dismissUpgrade(offer, for: id)
+        case .dismiss: state.update(id) { $0.errorMessage = nil }
         }
     }
 
-    /// A clearly better model is within reach (docs/multipoint.md, "Upgrade"): one quiet line naming what improves
-    /// and where, with Upgrade and Dismiss.
-    private func upgrade(_ offer: UpgradeOffer) -> some View {
-        line(symbol: "arrow.up.circle") {
-            Text(offer.line)
-            Spacer(minLength: Space.s2)
-            HStack(spacing: Space.s3) {
-                Button("Upgrade") { state.acceptUpgrade(offer, for: meeting.id) }.buttonStyle(.daybookLink)
-                Button("Dismiss") { state.dismissUpgrade(offer, for: meeting.id) }.buttonStyle(.daybookLink)
-            }
-        }
-    }
-
-    @ViewBuilder private var waitingForModels: some View {
-        if let id = state.downloadingID {
-            line(symbol: "arrow.down.circle") {
-                Text("Downloading \(state.modelCatalog.name(for: id))")
-                ProgressView(value: state.downloadProgress.fraction).progressViewStyle(.brand(width: 120))
-                Text("\(Int(state.downloadProgress.fraction * 100))%").monospacedDigit()
-                Spacer(minLength: Space.s2)
-                Button("Cancel") { state.cancelDownload() }.buttonStyle(.daybookLink)
-            }
-        } else {
-            box(.accent, symbol: "arrow.down.circle.fill", title: "Download models to transcribe this conversation",
-                message: missingBytes > 0 ? ByteCountFormatter.string(fromByteCount: missingBytes, countStyle: .file) : nil) {
-                Button("Choose Models…") { settingsPane = "models"; openSettings() }.buttonStyle(.daybookLink)
-                primary("Download") { state.enqueue(meeting.id); state.downloadModels(state.missingSelectedModels) }
-            }
-        }
-    }
-
-    private func transcribe(title: String? = nil) -> some View {
-        box(.accent, symbol: "waveform.circle.fill",
-            title: title ?? (meeting.transcripts.isEmpty ? "Not transcribed yet" : "A new recording isn’t transcribed yet"),
-            message: nil) {
-            primary(meeting.transcripts.isEmpty ? "Transcribe" : "Transcribe New Audio") { state.enqueue(meeting.id, mode: .newAudio) }
-        }
-    }
-
-    @ViewBuilder private var info: some View {
-        if let message = meeting.errorMessage {
-            box(.info, symbol: "info.circle.fill", title: message, message: nil) {
-                Button("Dismiss") { state.update(meeting.id) { $0.errorMessage = nil } }.buttonStyle(.daybookLink)
-            }
-        }
-    }
-
-    private func stageText(_ stage: ProcessingRequest.Stage) -> String {
-        switch stage {
-        case .summarizing: return "Summarizing…"
-        case .identifyingSpeakers: return "Identifying speakers…"
-        case .transcribing: return "Transcribing · \(Int(state.processingProgress.fraction * 100))%"
-        }
-    }
-    private var waitingText: String {
-        guard let current = state.processingID, let title = state.meetings.first(where: { $0.id == current })?.title else { return "Waiting" }
-        return "Waiting · after “\(title)”"
-    }
-    private var missingBytes: Int64 {
-        state.missingSelectedModels.compactMap { state.modelCatalog.model($0)?.approximateBytes }.reduce(0, +)
-    }
-
-    /// A working state: one bare line.
-    private func line(symbol: String?, @ViewBuilder _ content: () -> some View) -> some View {
-        MarginRow {
-            HStack(spacing: Space.s2) {
-                if let symbol { Image(systemName: symbol).foregroundStyle(Ink.secondary) }
-                content()
-            }
-            .font(TypeStyle.status)
-            .foregroundStyle(Ink.secondary)
-            .controlSize(.small)
-        }
-        .padding(.top, Space.s5)
-    }
-
-    /// The one primary action in a status box.
-    private func primary(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(title, action: action)
-            .buttonStyle(.borderedProminent)
-            .tint(DaybookStyle.prominentFill)
-    }
-
-    private func box(_ kind: StatusBoxKind, symbol: String, title: String, message: String?,
-                     @ViewBuilder actions: () -> some View) -> some View {
-        MarginRow {
-            StatusBox(kind: kind, symbol: symbol, title: title, message: message, actions: actions())
-        }
-        .padding(.top, Space.s5)
+    private func openSettingsPane(_ pane: String) {
+        settingsPane = pane
+        openSettings()
     }
 }
 
 /// What a status box is about: something went wrong, something to do, or something to know.
 enum StatusBoxKind { case problem, accent, info }
 
-/// A state that needs the person: a box tinted by what kind of state it is, with at most two actions.
-/// In a narrow measure the actions move under the message, on the text's edge, so it never wraps to an orphan.
+/// A state that needs the person, on a device's page and in the transcript's notices: the same box as a
+/// conversation's status (`StatusBlock`), with one radius and padding from the tokens, its glyph on the title's
+/// first baseline, and its actions beside the words, or under them in a narrow measure.
 struct StatusBox<Actions: View>: View {
     let kind: StatusBoxKind
     let symbol: String
@@ -469,9 +287,16 @@ struct StatusBox<Actions: View>: View {
     let message: String?
     let actions: Actions
     @State private var width: CGFloat = DaybookStyle.measure
-    @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
 
-    private var stacked: Bool { width < 520 }
+    private var attention: AttentionKind {
+        switch kind {
+        case .problem: return .problem
+        case .accent: return .accent
+        case .info: return .info
+        }
+    }
+    private var stacked: Bool { StatusBlockLayout.stacksActions(width: width, density: .window) }
     private var tint: Color {
         switch kind {
         case .problem: return Ink.warning
@@ -479,28 +304,22 @@ struct StatusBox<Actions: View>: View {
         case .info: return Ink.secondary
         }
     }
-    private var fill: Color {
-        switch kind {
-        case .problem: return Ink.warning.opacity(scheme == .dark ? 0.12 : 0.08)
-        case .accent: return DaybookStyle.accent.opacity(0.08)
-        case .info: return DaybookStyle.quietFill
-        }
-    }
 
     var body: some View {
-        HStack(alignment: stacked ? .firstTextBaseline : .center, spacing: Space.s3) {
+        HStack(alignment: .firstTextBaseline, spacing: Space.s3) {
             Image(systemName: symbol)
-                .font(.system(size: 15))
+                .font(.system(size: 14))
                 .symbolRenderingMode(kind == .problem ? .monochrome : .hierarchical)
                 .foregroundStyle(tint)
                 .frame(width: 18)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: Space.s2) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(title).font(TypeStyle.statusLead).foregroundStyle(kind == .problem ? Ink.warning : Ink.body)
+                    Text(title).font(TypeStyle.statusLead).foregroundStyle(AttentionBoxLayout.title(for: attention).ink.color)
                         .fixedSize(horizontal: false, vertical: true)
                     if let message {
-                        Text(message).font(TypeStyle.status).foregroundStyle(Ink.secondary).fixedSize(horizontal: false, vertical: true)
+                        Text(message).font(TypeStyle.status).foregroundStyle(AttentionBoxLayout.message(for: attention).ink.color)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 if stacked { actionRow }
@@ -514,7 +333,12 @@ struct StatusBox<Actions: View>: View {
         .padding(Space.s3)
         // Stacked or not, the box spans the measure, so boxes and lines share both edges.
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(fill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(AttentionBoxLayout.wash(for: attention).color, in: DaybookRadius.shape(DaybookRadius.box))
+        .overlay {
+            if contrast == .increased {
+                DaybookRadius.shape(DaybookRadius.box).strokeBorder(kind == .problem ? Ink.warning : Ink.meta, lineWidth: 1)
+            }
+        }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
 
@@ -527,98 +351,17 @@ struct StatusBox<Actions: View>: View {
 
 enum SettingsPaneKey { static let storageKey = "settingsPane" }
 
-/// Plain-language reasons for processing failures. The technical message stays one click away.
+/// Plain-language reasons for processing failures, for Floating Notes' box, which has only the conversation's message.
+/// The page words a failure from its stored kind (`FailureWords`). The technical message stays one click away.
 enum FriendlyError {
     /// The recording worked but holds no speech; trying again can't help.
     static func isNoSpeech(_ error: String) -> Bool { error.lowercased().contains("no speech") }
 
     static func message(for error: String) -> String {
         let lower = error.lowercased()
-        if lower.contains("no speech") { return "No speech was found. The recording is saved." }
-        if lower.contains("download") || lower.contains("not installed") { return "Its models aren’t downloaded yet. The recording is saved." }
+        if lower.contains("no speech") { return "No speech was found. \(FailureWords.saved)" }
+        if lower.contains("download") || lower.contains("not installed") { return "Its models aren’t downloaded yet. \(FailureWords.saved)" }
         if lower.contains("memory") || lower.contains("language model") { return "The summary model couldn’t start. Choose Quick in Settings › Models, or close other apps and try again." }
-        return "Something went wrong. The recording is saved."
-    }
-}
-
-// MARK: - Colophon
-
-/// How the page was made, at its foot: a fact that doubles as the privacy line. A transcript that
-/// has no summary yet keeps the template and Summarize here.
-struct Colophon: View {
-    let state: AppState
-    let meeting: Meeting
-
-    var body: some View {
-        MarginRow {
-            VStack(alignment: .leading, spacing: Space.s2) {
-                Rectangle().fill(Ink.faint).frame(width: 24, height: 1).padding(.bottom, Space.s1)
-                if let summary = meeting.summary {
-                    HStack(spacing: 5) {
-                        Image(systemName: summary.origin.cloudModel == nil ? "laptopcomputer" : "cloud").font(.system(size: 10))
-                            .symbolEffect(.bounce, value: summary.createdAt)
-                        Text(colophonLine(summary))
-                    }
-                }
-                HStack(spacing: 4) {
-                    Text("Template:")
-                    Menu {
-                        TemplateMenuItems(state: state, meetingID: meeting.id)
-                    } label: {
-                        HoverLink {
-                            HStack(spacing: 3) {
-                                Text(templateTitle).fontWeight(.medium)
-                                Image(systemName: "chevron.up.chevron.down").font(.system(size: 7, weight: .semibold))
-                            }
-                        }
-                    }
-                    .menuStyle(.button)
-                    .buttonStyle(.plain)
-                    .menuIndicator(.hidden)
-                    .fixedSize()
-                    if !meeting.unifiedTranscript.isEmpty {
-                        Text("·")
-                        Button { state.enqueue(meeting.id, mode: .summaryOnly) } label: {
-                            HoverLink { Text(meeting.summary == nil ? "Summarize" : "Summarize Again").fontWeight(.medium) }
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(state.processingID == meeting.id || state.queuedIDs.contains(meeting.id) || state.recordingID == meeting.id)
-                    }
-                }
-            }
-            .font(TypeStyle.colophon)
-            .foregroundStyle(Ink.meta)
-        }
-        .padding(.top, Space.s7)
-    }
-
-    /// "Summarized on this Mac · Gemma 4 E4B · 31 Oct, 10:02", "Summarized on Studio Mac · …", or
-    /// "Summarized with Claude Sonnet 5.5 · 31 Oct, 10:02".
-    private func colophonLine(_ summary: MeetingSummary) -> String {
-        let origin = summary.origin
-        let place = origin.colophon(thisDeviceID: state.library.thisDevice.id, thisDevice: AppState.thisDeviceWords, unknown: AppState.thisDeviceWords)
-        let date = summary.createdAt.formatted(.dateTime.day().month(.abbreviated).hour().minute())
-        if origin.cloudModel != nil { return "\(place) · \(date)" }
-        return "\(place) · \(state.modelCatalog.name(for: summary.modelID, provenance: summary.processingSettings?.model)) · \(date)"
-    }
-
-    private var templateTitle: String {
-        if let template = state.resolvedTemplate(for: meeting) { return template.name }
-        // The inspector's words for the same choice.
-        if let kind = meeting.summary?.kind, kind != .auto { return "Automatic (\(kind.title))" }
-        return "Automatic"
-    }
-}
-
-/// Quiet text that is also a control: secondary ink at rest, link ink while the pointer is over it.
-struct HoverLink<Label: View>: View {
-    var rest: Color = Ink.secondary
-    @ViewBuilder var label: Label
-    @State private var hovering = false
-    var body: some View {
-        label
-            .foregroundStyle(hovering ? Ink.link : rest)
-            .onHover { hovering = $0 }
-            .animation(Motion.hover, value: hovering)
+        return "Something went wrong. \(FailureWords.saved)"
     }
 }

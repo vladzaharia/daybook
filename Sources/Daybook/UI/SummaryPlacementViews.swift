@@ -2,49 +2,28 @@ import DaybookKit
 import SwiftUI
 
 // A summary's countdown, and where it runs, wherever processing status shows (docs/interface.md, "Where
-// summaries run"): the page's status line, the list row, the inspector, and Floating Notes. The words come
-// from `SummaryPlacementPlanner`, shared with the iPhone; only the views that show a countdown read
-// `AppState.placements`, and only a countdown ticks, once a second.
+// summaries run"): the list row, the inspector, and Floating Notes. The page's status line is the shared
+// `StatusBlock`. The words come from `SummaryPlacementPlanner`, shared with the iPhone; only the views that show
+// a countdown read `AppState.placements`, and only a countdown ticks, once a second.
 
-/// Text that follows a countdown, a second at a time; static otherwise.
+/// Text that follows a countdown, a second at a time, its digits rolling down (a fade under Reduce Motion); static
+/// otherwise.
 struct PlacementText: View {
     let planner: SummaryPlacementPlanner
     let words: (Date) -> String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         if planner.deadline != nil {
             TimelineView(.periodic(from: .now, by: 1)) { context in
-                Text(words(context.date) ?? "").monospacedDigit().contentTransition(.numericText(countsDown: true))
+                Text(words(context.date) ?? "")
+                    .monospacedDigit()
+                    .contentTransition(reduceMotion ? .opacity : .numericText(countsDown: true))
+                    .animation(Motion.resolved(Motion.tick, reduceMotion: reduceMotion),
+                               value: planner.secondsLeft(at: context.date))
             }
         } else {
             Text(words(Date()) ?? "")
-        }
-    }
-}
-
-/// The page's status line while a summary is placed: "Summarizing on this Mac in 12 s", then Use the Cloud
-/// and Start Now; "Summarizing with Claude Sonnet 5.5" with Stop while the cloud works.
-struct PlacementStatusLine: View {
-    let state: AppState
-    let meetingID: UUID
-    let planner: SummaryPlacementPlanner
-
-    var body: some View {
-        HStack(spacing: Space.s2) {
-            if case .started(.cloud) = planner.phase {
-                if state.processingProgress.fraction > 0 {
-                    PlacementText(planner: planner) { planner.line(at: $0, thisDevice: AppState.thisDeviceWords) }
-                    ProgressView(value: state.processingProgress.fraction).progressViewStyle(.brand(width: 140))
-                } else {
-                    ProgressView().controlSize(.small)
-                    PlacementText(planner: planner) { planner.line(at: $0, thisDevice: AppState.thisDeviceWords) }
-                }
-            } else {
-                Image(systemName: "clock").foregroundStyle(Ink.secondary)
-                PlacementText(planner: planner) { planner.line(at: $0, thisDevice: AppState.thisDeviceWords) }
-            }
-            Spacer(minLength: Space.s2)
-            PlacementActions(state: state, meetingID: meetingID, planner: planner)
         }
     }
 }
