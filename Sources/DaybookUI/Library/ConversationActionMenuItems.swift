@@ -3,10 +3,12 @@ import DaybookKit
 import SwiftUI
 
 /// Where a search result asks a conversation's page to show it, besides a transcript passage (which goes by the
-/// passage's own ID): the notes, for a match found there.
+/// passage's own ID): the notes, or the saved live captions, for a match found there. Both are on the summary page.
 public enum PageAnchor {
     /// "Your notes".
     public static let notes = UUID(uuidString: "6E6F7465-7300-4000-8000-000000000001")!
+    /// "Live captions · tentative", which the Mac's summary page shows until a newer transcript replaces them.
+    public static let captions = UUID(uuidString: "63617074-696F-4000-8000-000000000002")!
 }
 
 /// A conversation's actions (DaybookKit's `ConversationActions`) as menu items, in their one order, a divider

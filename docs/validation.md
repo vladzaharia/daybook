@@ -121,6 +121,11 @@ From the review of the shared library list.
   newer transcript replaces them). The iPhone's transcript page shows saved captions only while there's no
   transcript, so a conversation with an earlier transcript and newer captions was listed as a caption result and
   opened at nothing. iPhone search now reads captions only where that page shows them (`LibraryPage.captionCandidates`).
+- **Caption results on the Mac.** A Mac caption result opened the Transcript page, which never shows captions: the
+  Mac shows them on the summary page until a newer transcript replaces them. A conversation with an earlier
+  transcript and newer captions opened where the caption wasn't, and the next conversation opened on Transcript too.
+  A caption result now opens the summary page at its captions (`MacSearch.open`, `PageAnchor.captions`), and a title
+  or summary result clears an earlier result's place. `LibraryPlaceTests` covers where each kind of result opens.
 - **One name for the iPhone's Trash.** `ReadingPlace.trash` was a second case beside `.library(.trash)`; it's now
   the same value, and every check goes through `isTrash`.
 

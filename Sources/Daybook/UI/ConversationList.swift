@@ -201,7 +201,7 @@ private struct SearchResults: View {
     var body: some View {
         let hits = state.searchHits
         let byID = Dictionary(state.meetings.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        List(selection: Binding(get: { state.selectedID }, set: { id in open(id, in: hits) })) {
+        List(selection: Binding(get: { state.selectedID }, set: { id in MacSearch.open(id, hits: hits, captionHits: captionHits, state: state) })) {
             SearchScopePicker(scope: $state.searchScope, folder: viewedFolder)
             .controlSize(.small)
             .frame(maxWidth: .infinity)
@@ -240,15 +240,20 @@ private struct SearchResults: View {
         guard case .folder(let id) = state.place else { return nil }
         return state.folders.first { $0.id == id }
     }
+}
 
-    /// Opens a result at what it found: a transcript passage, the notes, or the page.
-    private func open(_ id: UUID?, in hits: [SearchHit]) {
+/// Where a search result opens its conversation's page on this Mac.
+@MainActor
+enum MacSearch {
+    /// Opens a result at what it found: a transcript passage on the transcript; a note at Your notes, and saved live
+    /// captions at theirs, on the summary page, where this Mac shows them until a newer transcript replaces them; the
+    /// page's top for a title or a summary.
+    static func open(_ id: UUID?, hits: [SearchHit], captionHits: [LibraryCaptionSearch.Hit], state: AppState) {
         state.multiSelection = []
         state.selectedID = id
-        if let caption = captionHits.first(where: { $0.meeting.id == id }) {
-            // Saved captions read on the transcript's page.
-            state.pageMode = .transcript
-            state.pageScrollTarget = caption.segment.id
+        if captionHits.contains(where: { $0.meeting.id == id }) {
+            state.pageMode = .summary
+            state.pageScrollTarget = PageAnchor.captions
             return
         }
         guard let hit = hits.first(where: { $0.meetingID == id }) else { return }
@@ -257,7 +262,7 @@ private struct SearchResults: View {
             state.pageScrollTarget = segment
         } else {
             state.pageMode = .summary
-            if hit.field == .notes { state.pageScrollTarget = PageAnchor.notes }
+            state.pageScrollTarget = hit.field == .notes ? PageAnchor.notes : nil
         }
     }
 }

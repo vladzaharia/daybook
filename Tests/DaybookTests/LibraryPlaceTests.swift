@@ -1,7 +1,9 @@
 import AVFoundation
+import DaybookCaptions
 import DaybookCore
 @testable import DaybookKit
 import DaybookTestSupport
+import DaybookUI
 import Foundation
 import XCTest
 @testable import Daybook
@@ -141,6 +143,48 @@ final class LibraryPlaceTests: XCTestCase {
         XCTAssertEqual(MacRowStatus.make(state, meeting)?.kind, .recording)
         XCTAssertEqual(MacRowStatus.make(state, meeting)?.text, "Recording now")
         state.recordingID = nil
+    }
+
+    func testBehaviorASearchResultOpensWhereThisMacShowsWhatItFound() async throws {
+        let (state, root, defaults) = try await makeState()
+        defer { cleanUp(root, defaults) }
+        // This Mac transcribed it, then an iPhone's recording joined it: an earlier transcript and newer captions, which
+        // this Mac's summary page shows until a newer transcript replaces them. Its transcript page never shows them.
+        let joined = state.newMeeting(title: "Roadmap review")
+        state.update(joined) { meeting in
+            meeting.transcripts = [TrackTranscript(trackID: UUID(), segments: [], modelID: "m", createdAt: Date().addingTimeInterval(-3_600))]
+            meeting.unifiedTranscript = [TranscriptSegment(trackID: UUID(), start: 0, end: 1, text: "We ship the beta on Friday.")]
+            meeting.notes = "Ask Priya about pricing."
+        }
+        let folder = LibraryCaptionSearch.directory(libraryRoot: state.library.rootURL)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let captions = LiveCaptions(meetingID: joined, localeIdentifier: "en_US",
+                                    segments: [LiveCaptionSegment(start: 12, end: 14, text: "The onboarding checklist.", isTentative: false)])
+        try JSONEncoder().encode(captions).write(to: folder.appendingPathComponent("\(joined.uuidString).json"))
+        let captionHits = await LibraryCaptionSearch.hits(in: state.meetings, query: "checklist", excluding: [], libraryRoot: state.library.rootURL)
+        XCTAssertEqual(captionHits.map(\.meeting.id), [joined])
+
+        state.pageMode = .transcript
+        MacSearch.open(joined, hits: [], captionHits: captionHits, state: state)
+        XCTAssertEqual(state.selectedID, joined)
+        XCTAssertEqual(state.pageMode, .summary, "saved captions show on the summary page, never the transcript")
+        XCTAssertEqual(state.pageScrollTarget, PageAnchor.captions)
+
+        let passage = try XCTUnwrap(LibrarySearch.hits(in: state.meetings, text: "beta", tokens: [], scope: .all).first)
+        MacSearch.open(joined, hits: [passage], captionHits: [], state: state)
+        XCTAssertEqual(state.pageMode, .transcript)
+        XCTAssertEqual(state.pageScrollTarget, state.meetings.first { $0.id == joined }?.unifiedTranscript.first?.id,
+                       "a passage opens the transcript there")
+
+        let note = try XCTUnwrap(LibrarySearch.hits(in: state.meetings, text: "pricing", tokens: [], scope: .all).first)
+        MacSearch.open(joined, hits: [note], captionHits: [], state: state)
+        XCTAssertEqual(state.pageMode, .summary)
+        XCTAssertEqual(state.pageScrollTarget, PageAnchor.notes)
+
+        let title = try XCTUnwrap(LibrarySearch.hits(in: state.meetings, text: "roadmap", tokens: [], scope: .all).first)
+        MacSearch.open(joined, hits: [title], captionHits: [], state: state)
+        XCTAssertEqual(state.pageMode, .summary)
+        XCTAssertNil(state.pageScrollTarget, "a title opens the page's top, with no earlier result's place left over")
     }
 
     private func makeState() async throws -> (AppState, URL, UserDefaults) {
