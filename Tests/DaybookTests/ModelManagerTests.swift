@@ -267,11 +267,11 @@ final class ModelManagerTests: XCTestCase {
     /// Processing's download row: everything the choices need, then what's left by name, then how far it's got.
     func testBehaviorTheDownloadRowSaysWhatsLeftThenHowFarItsGot() {
         var snapshot = makeSnapshot(selections: [.transcription: "whisp/big", .smallTasks: "os/default"])
-        XCTAssertEqual(snapshot.downloadSummary(detectSpeakers: true), .missing(names: ["Whisp Big"], bytes: 1_600_000_000, partly: false),
+        XCTAssertEqual(snapshot.downloadSummary(detectSpeakers: true), .missing(names: ["Whisp Big"], bytes: 1_600_000_000, rest: .nothing),
                        "a system model downloads nothing")
         snapshot.selections["translation"] = "babel/one"
         snapshot.installed = ["babel/one"]
-        XCTAssertEqual(snapshot.downloadSummary(detectSpeakers: true), .missing(names: ["Whisp Big"], bytes: 1_600_000_000, partly: true))
+        XCTAssertEqual(snapshot.downloadSummary(detectSpeakers: true), .missing(names: ["Whisp Big"], bytes: 1_600_000_000, rest: .here))
         snapshot.diskUsage = ModelDiskUsage(installed: [:], partial: ["whisp/big": 600_000_000], legacy: [:])
         XCTAssertEqual(snapshot.choice(for: .transcription).downloadBytes, 1_000_000_000, "what an unfinished download still needs")
         snapshot.downloading = "whisp/big"
@@ -280,6 +280,49 @@ final class ModelManagerTests: XCTestCase {
         snapshot.downloading = nil
         snapshot.installed.insert("whisp/big")
         XCTAssertNil(snapshot.downloadSummary(detectSpeakers: true))
+    }
+
+    /// One choice on its way and none here yet: the row names what's left without calling any of it downloaded. Queued
+    /// behind another model's download, the choices wait their turn, with no bar.
+    func testBehaviorTheDownloadRowNamesWhatsLeftAndWhatWaits() {
+        var snapshot = makeSnapshot(selections: [.transcription: "whisp/big", "translation": "babel/one"])
+        snapshot.downloading = "whisp/big"
+        snapshot.downloadFraction = 0.4
+        let beside = snapshot.downloadSummary(detectSpeakers: true)
+        XCTAssertEqual(beside, .missing(names: ["Babel One"], bytes: 50_000_000, rest: .onItsWay))
+        XCTAssertEqual(beside?.title, "Not downloaded yet")
+        XCTAssertEqual(beside?.line(), ModelLine("Babel One · 50 MB"))
+
+        snapshot.downloading = "whisp/tiny"
+        snapshot.pending = ["whisp/big", "babel/one"]
+        let waiting = snapshot.downloadSummary(detectSpeakers: true)
+        XCTAssertEqual(waiting, .waiting(bytes: 1_650_000_000, forWiFi: false))
+        XCTAssertEqual(waiting?.title, "Waiting to download")
+        XCTAssertEqual(snapshot.transferringSelected(detectSpeakers: true), ["whisp/big", "babel/one"])
+    }
+
+    /// Processing's Cancel, while the choices only wait behind another model's download, takes them off the queue and
+    /// leaves that download going.
+    func testProcessingsCancelLeavesAnotherModelsDownloadGoing() throws {
+        let state = AppState(libraryURL: try library(), defaults: defaults())
+        ModelPreset.quick.apply(to: state)
+        let manager = ModelManager(state: state, hubClient: ScriptedHub(), requestDownload: { _ in })
+        let chosen = manager.missingSelected
+        XCTAssertFalse(chosen.isEmpty)
+        let other = try XCTUnwrap(state.modelCatalog.models.first { model in
+            !model.isSystemModel && !chosen.contains(model.key) && !state.installedModels.contains(model.key)
+                && manager.snapshot.status(of: model) == .notDownloaded
+        })
+        state.downloadingID = other.key
+        state.downloadModels(chosen)
+        XCTAssertEqual(state.pendingDownloads, chosen, "queued behind it")
+        XCTAssertEqual(manager.downloadSummary?.title, "Waiting to download")
+
+        manager.cancelSelected()
+        XCTAssertTrue(state.pendingDownloads.isEmpty)
+        XCTAssertEqual(state.downloadingID, other.key, "the other model's download carries on")
+        guard case .missing? = manager.downloadSummary else { return XCTFail("the choices are still to download") }
+        state.downloadingID = nil
     }
 
     /// A download that wouldn't fit in what's free on this Mac says how much it needs and doesn't start: Download waits,

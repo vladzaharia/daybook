@@ -274,25 +274,16 @@ final class PhoneModels {
     /// The same for live captions' models.
     var liveDownload: ModelDownloadSummary? { downloadSummary(for: roles) }
 
-    /// What `roles`' chosen models still need: what to download (the names when some are here already), or, once all of
-    /// it is on its way, how much has arrived. Nil when everything that can run here is downloaded.
+    /// What `roles`' chosen models still need: what to download (the names when some are here or on their way), or, once
+    /// all of it is asked for, how much has arrived, or that it waits for Wi‑Fi (DaybookKit's `ModelDownloadSummary`, as
+    /// the Mac's). Nil when everything that can run here is downloaded.
     func downloadSummary(for roles: [ModelRole]) -> ModelDownloadSummary? {
         var seen = Set<String>()
-        let chosen = roles.compactMap(choice(for:)).filter { seen.insert($0.key).inserted && status(of: $0).isAvailable }
-        let missing = missing(in: roles)
-        if !missing.isEmpty {
-            return .missing(names: missing.map(\.name), bytes: missing.reduce(0) { $0 + downloadBytes($1) }, partly: missing.count < chosen.count)
-        }
-        guard chosen.contains(where: { status(of: $0).isTransferring }) else { return nil }
-        let total = chosen.reduce(Int64(0)) { $0 + $1.approximateBytes }
-        let done = chosen.reduce(Int64(0)) { sum, model in
-            switch status(of: model) {
-            case .downloaded: return sum + model.approximateBytes
-            case .downloading(let fraction): return sum + Int64(Double(model.approximateBytes) * min(max(fraction, 0), 1))
-            default: return sum
-            }
-        }
-        return .downloading(done: done, total: total)
+        let chosen = roles.compactMap(choice(for:)).filter { seen.insert($0.key).inserted }
+        return ModelDownloadSummary(chosen: chosen.map { model in
+            ModelDownloadSummary.Item(name: model.name, status: status(of: model), bytes: model.approximateBytes,
+                                      stillToFetch: downloadBytes(model))
+        })
     }
 
     /// Downloads what `roles`' choices still need, when there's room for all of it.

@@ -103,18 +103,72 @@ final class ModelChoicesTests: XCTestCase {
     }
 
     func testBehaviorTheDownloadRowSaysWhatsLeftThenHowFarItsGot() {
-        let all = ModelDownloadSummary.missing(names: ["Parakeet Ultra", "Community-1"], bytes: 654_000_000, partly: false)
+        let all = ModelDownloadSummary.missing(names: ["Parakeet Ultra", "Community-1"], bytes: 654_000_000, rest: .nothing)
         XCTAssertEqual(all.title, "Not downloaded yet")
         XCTAssertEqual(all.line(), ModelLine("654 MB"))
-        let some = ModelDownloadSummary.missing(names: ["Community-1"], bytes: 22_000_000, partly: true)
+        let some = ModelDownloadSummary.missing(names: ["Community-1"], bytes: 22_000_000, rest: .here)
         XCTAssertEqual(some.title, "Partly downloaded")
         XCTAssertEqual(some.line(), ModelLine("Community-1 · 22 MB"))
+        let beside = ModelDownloadSummary.missing(names: ["Community-1"], bytes: 22_000_000, rest: .onItsWay)
+        XCTAssertEqual(beside.title, "Not downloaded yet", "nothing is here yet")
+        XCTAssertEqual(beside.line(), ModelLine("Community-1 · 22 MB"), "what's left, by name")
         XCTAssertEqual(all.line(space: ModelSpace(free: 100_000_000)), ModelLine("Needs 654 MB · 100 MB free", needsAttention: true))
         XCTAssertFalse(all.canDownload(space: ModelSpace(free: 100_000_000)))
         let going = ModelDownloadSummary.downloading(done: 400_000_000, total: 1_600_000_000)
+        XCTAssertEqual(going.title, "Downloading")
         XCTAssertEqual(going.line(), ModelLine("0.4 of 1.6 GB"))
         XCTAssertEqual(going.fraction, 0.25, accuracy: 1e-9)
         XCTAssertFalse(going.canDownload())
+    }
+
+    /// Asked for, with none of it arriving yet: the row says what it waits for, as each role's row does, with what it
+    /// will download and no bar.
+    func testBehaviorTheDownloadRowSaysWhatItWaitsFor() {
+        let wifi = ModelDownloadSummary.waiting(bytes: 853_000_000, forWiFi: true)
+        XCTAssertEqual(wifi.title, "Waiting for Wi‑Fi")
+        XCTAssertEqual(wifi.title, ModelStatus.waitingForWiFi.label)
+        XCTAssertEqual(wifi.line(), ModelLine("853 MB"))
+        XCTAssertEqual(wifi.fraction, 0)
+        XCTAssertFalse(wifi.canDownload())
+        let queued = ModelDownloadSummary.waiting(bytes: 1_600_000_000, forWiFi: false)
+        XCTAssertEqual(queued.title, "Waiting to download")
+        XCTAssertEqual(queued.line(space: ModelSpace(free: 0)), ModelLine("1.6 GB"), "already asked for: nothing to say about room")
+    }
+
+    /// Both apps add their chosen models up the same way: what's left first, then how far it's got, or what it waits
+    /// for while none of it is arriving. "Partly downloaded" only once something is here.
+    func testBehaviorTheDownloadRowAddsUpTheChosenModels() {
+        typealias Item = ModelDownloadSummary.Item
+        func items(_ statuses: ModelStatus...) -> [Item] {
+            zip(["Parakeet Ultra", "Community-1", "Gemma"], statuses).map { Item(name: $0, status: $1, bytes: 600_000_000) }
+        }
+        XCTAssertEqual(ModelDownloadSummary(chosen: items(.notDownloaded, .notDownloaded, .failed("offline"))),
+                       .missing(names: ["Parakeet Ultra", "Community-1", "Gemma"], bytes: 1_800_000_000, rest: .nothing))
+        let beside = ModelDownloadSummary(chosen: items(.downloading(0.4), .notDownloaded, .notDownloaded))
+        XCTAssertEqual(beside, .missing(names: ["Community-1", "Gemma"], bytes: 1_200_000_000, rest: .onItsWay),
+                       "one on its way and none here: not partly downloaded")
+        XCTAssertEqual(beside?.title, "Not downloaded yet")
+        XCTAssertEqual(beside?.line(), ModelLine("Community-1, Gemma · 1.2 GB"))
+        XCTAssertEqual(ModelDownloadSummary(chosen: items(.waitingForWiFi, .damaged, .notDownloaded)),
+                       .missing(names: ["Community-1", "Gemma"], bytes: 1_200_000_000, rest: .onItsWay))
+        XCTAssertEqual(ModelDownloadSummary(chosen: items(.downloading(0.4), .inUse, .notDownloaded))?.title, "Partly downloaded")
+        XCTAssertEqual(ModelDownloadSummary(chosen: items(.unavailable("Needs a newer Daybook"), .notDownloaded)),
+                       .missing(names: ["Community-1"], bytes: 600_000_000, rest: .nothing), "a model that can't run here isn't counted")
+
+        XCTAssertEqual(ModelDownloadSummary(chosen: items(.waitingForWiFi, .waitingForWiFi, .waitingForWiFi)),
+                       .waiting(bytes: 1_800_000_000, forWiFi: true))
+        XCTAssertEqual(ModelDownloadSummary(chosen: [Item(name: "Parakeet Ultra", status: .downloaded, bytes: 600_000_000),
+                                                     Item(name: "Community-1", status: .waitingForWiFi, bytes: 600_000_000, stillToFetch: 250_000_000)]),
+                       .waiting(bytes: 250_000_000, forWiFi: true), "what's still to come, not how much is here")
+        XCTAssertEqual(ModelDownloadSummary(chosen: items(.waiting, .waiting))?.title, "Waiting to download",
+                       "the Mac's: behind another model's download")
+        XCTAssertEqual(ModelDownloadSummary(chosen: items(.waiting, .waitingForWiFi))?.title, "Waiting to download")
+
+        XCTAssertEqual(ModelDownloadSummary(chosen: items(.downloading(0.5), .waiting, .downloaded)),
+                       .downloading(done: 900_000_000, total: 1_800_000_000))
+        XCTAssertEqual(ModelDownloadSummary(chosen: items(.downloading(.nan), .waiting)), .downloading(done: 0, total: 1_200_000_000))
+        XCTAssertNil(ModelDownloadSummary(chosen: items(.downloaded, .inUse, .builtIn)))
+        XCTAssertNil(ModelDownloadSummary(chosen: []))
     }
 
     func testBehaviorRemovingSaysWhatItFreesAndWhatEachRoleDoes() {

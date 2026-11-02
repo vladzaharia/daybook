@@ -116,7 +116,7 @@ struct ModelSettings: View {
     private func processingSection(_ snapshot: ModelManagerSnapshot) -> some View {
         ModelProcessingSection(toggleTitle: "Transcribe synced recordings on this Mac", isOn: $state.processSyncedAudio,
                                download: snapshot.downloadSummary(detectSpeakers: state.detectSpeakers), space: snapshot.space,
-                               downloadAction: { manager.downloadSelected() }, cancelAction: { manager.cancelDownloads() }) {
+                               downloadAction: { manager.downloadSelected() }, cancelAction: { manager.cancelSelected() }) {
             ForEach(snapshot.presets) { summary in
                 ModelQualityRow(summary.option, note: summary.isCurrent ? nil : snapshot.space.shortfall(summary.missingBytes)
                     .map { ModelLine($0, needsAttention: true) }) { summary.preset?.apply(to: state) }

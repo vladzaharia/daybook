@@ -291,7 +291,8 @@ public struct ModelListRow<Actions: View>: View {
 }
 
 /// Downloads what a section's choices still need: "Not downloaded yet · 852 MB" with Download, then the bar with what's
-/// arrived and Cancel. Where there isn't room, it says how much is needed and Download waits.
+/// arrived and Cancel, or, while none of it is arriving, what it waits for and Cancel, with no bar. Where there isn't
+/// room, it says how much is needed and Download waits.
 public struct ModelDownloadRow: View {
     private let summary: ModelDownloadSummary
     private let space: ModelSpace
@@ -330,7 +331,7 @@ public struct ModelDownloadRow: View {
             case .missing:
                 ModelActionButton("Download", action: download)
                     .disabled(!summary.canDownload(space: space))
-            case .downloading:
+            case .waiting, .downloading:
                 ModelActionButton("Cancel", action: cancel)
             }
         }

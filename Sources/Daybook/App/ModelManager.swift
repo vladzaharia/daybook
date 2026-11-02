@@ -225,38 +225,35 @@ struct ModelManagerSnapshot {
                                status: model.map(status(of:)), downloadBytes: model.map(downloadBytes))
     }
 
-    /// The models the choices need that aren't on this Mac and can be downloaded, in the roles' order. Speaker
-    /// detection's only while it's on; live captions' models are optional downloads, offered in their own rows.
-    func missingSelected(detectSpeakers: Bool) -> [String] {
-        var keys: [String] = []
+    /// The models the processing choices download, each once, in the roles' order. Speaker detection's only while it's
+    /// on; live captions' models are optional downloads, offered in their own rows; the system's own download nothing.
+    func selectedModels(detectSpeakers: Bool) -> [CatalogModel] {
+        var models: [CatalogModel] = []
         for role in choiceRoles where (role != .diarization || detectSpeakers) && !role.isLiveOnly {
-            guard let key = selections[role], let model = catalog.model(key), !keys.contains(model.key) else { continue }
-            if status(of: model).canDownload { keys.append(model.key) }
+            guard let key = selections[role], let model = catalog.model(key), !model.isSystemModel,
+                  !models.contains(where: { $0.key == model.key }) else { continue }
+            models.append(model)
         }
-        return keys
+        return models
     }
 
-    /// What the processing choices still need: what to download, or, once all of it is on its way, how far it's got.
-    /// A model fetched on its own doesn't stand for the rest, which can still be started. Nil when it's all here.
+    /// The models the choices need that aren't on this Mac and can be downloaded, in the roles' order.
+    func missingSelected(detectSpeakers: Bool) -> [String] {
+        selectedModels(detectSpeakers: detectSpeakers).filter { status(of: $0).canDownload }.map(\.key)
+    }
+
+    /// The models the choices need that are downloading or waiting their turn: what Processing's Cancel stops.
+    func transferringSelected(detectSpeakers: Bool) -> [String] {
+        selectedModels(detectSpeakers: detectSpeakers).filter { status(of: $0).isTransferring }.map(\.key)
+    }
+
+    /// What the processing choices still need: what to download, or, once all of it is asked for, how far it's got or
+    /// that it waits its turn (DaybookKit's `ModelDownloadSummary`, as the iPhone's). Nil when it's all here.
     func downloadSummary(detectSpeakers: Bool) -> ModelDownloadSummary? {
-        let chosen = choiceRoles.filter { ($0 != .diarization || detectSpeakers) && !$0.isLiveOnly }.compactMap { selections[$0] }
-        let downloadable = Set(chosen.compactMap { catalog.model($0) }.filter { !$0.isSystemModel }.map(\.key))
-        let missing = missingSelected(detectSpeakers: detectSpeakers)
-        if !missing.isEmpty {
-            let names = missing.map { key in catalog.model(key).map { ModelSize.shortName($0, in: catalog) } ?? key }
-            return .missing(names: names, bytes: missingBytes(missing), partly: missing.count < downloadable.count)
-        }
-        let models = downloadable.compactMap { catalog.model($0) }
-        guard models.contains(where: { status(of: $0).isTransferring }) else { return nil }
-        let total = models.reduce(Int64(0)) { $0 + $1.approximateBytes }
-        let done = models.reduce(Int64(0)) { sum, model in
-            switch status(of: model) {
-            case .downloading(let fraction): return sum + Int64(Double(model.approximateBytes) * min(max(fraction, 0), 1))
-            case let status where status.isReady: return sum + model.approximateBytes
-            default: return sum
-            }
-        }
-        return .downloading(done: done, total: total)
+        ModelDownloadSummary(chosen: selectedModels(detectSpeakers: detectSpeakers).map { model in
+            ModelDownloadSummary.Item(name: ModelSize.shortName(model, in: catalog), status: status(of: model),
+                                      bytes: model.approximateBytes, stillToFetch: downloadBytes(model))
+        })
     }
 
     // MARK: Library
@@ -563,6 +560,14 @@ final class ModelManager {
     var downloadSummary: ModelDownloadSummary? { snapshot.downloadSummary(detectSpeakers: state.detectSpeakers) }
 
     func cancelDownloads() { state.cancelDownload() }
+
+    /// Processing's Cancel: stops what the choices are downloading. While they only wait their turn, they leave the
+    /// queue, and another model's download carries on.
+    func cancelSelected() {
+        let keys = snapshot.transferringSelected(detectSpeakers: state.detectSpeakers)
+        if let current = state.downloadingID.map({ ModelReference($0).id }), keys.contains(current) { cancelDownloads() }
+        else { keys.forEach(cancelWaiting) }
+    }
 
     func cancelWaiting(_ key: String) { state.removePendingDownload(key) }
 

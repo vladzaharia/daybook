@@ -220,19 +220,42 @@ final class PhoneModelsTests: XCTestCase {
         XCTAssertEqual(ModelsSettingsScreen.size(632_200_000), "632 MB")
     }
 
-    /// One Download for what transcribing here needs: all of it, then what's left by name once some is here, then
-    /// nothing; Cancel takes back every one.
+    /// One Download for what transcribing here needs: all of it, then, off Wi‑Fi, that it waits for Wi‑Fi (no bar, the
+    /// way each role's row says it); Cancel takes back every one.
     func testBehaviorProcessingsDownloadSaysWhatsLeft() async throws {
         let scripted = ScriptedNetwork(), fetcher = HeldFetcher()
         let models = makeModels(network: scripted.network, fetcher: fetcher)
-        guard case .missing(let names, let bytes, let partly)? = models.processingDownload else { return XCTFail("everything is missing") }
-        XCTAssertFalse(partly)
+        guard case .missing(let names, let bytes, let rest)? = models.processingDownload else { return XCTFail("everything is missing") }
+        XCTAssertEqual(rest, .nothing)
         XCTAssertEqual(names.count, 3, "transcription, speakers, and voice profiles")
         XCTAssertEqual(bytes, models.processingMissingBytes)
         models.downloadMissing(in: PhoneModels.transcribingRoles)
-        XCTAssertEqual(models.processingDownload, .downloading(done: 0, total: bytes), "all of it waiting for Wi‑Fi")
+        let waiting = try XCTUnwrap(models.processingDownload)
+        XCTAssertEqual(waiting, .waiting(bytes: bytes, forWiFi: true), "all of it waiting for Wi‑Fi")
+        XCTAssertEqual(waiting.title, "Waiting for Wi‑Fi")
+        XCTAssertEqual(waiting.line(), ModelLine(ByteSize.format(bytes)))
+        XCTAssertEqual(models.roleChoice(for: .transcription)?.line()?.text, waiting.title, "the role's row says the same")
         models.cancelDownloads(in: PhoneModels.transcribingRoles)
-        XCTAssertEqual(models.processingDownload, .missing(names: names, bytes: bytes, partly: false))
+        XCTAssertEqual(models.processingDownload, .missing(names: names, bytes: bytes, rest: .nothing))
+    }
+
+    /// One model on its way and none here yet: the row names what's left without saying any of it is downloaded.
+    func testBehaviorProcessingsDownloadNamesWhatsLeftBesideOneOnItsWay() async throws {
+        let scripted = ScriptedNetwork(), fetcher = HeldFetcher()
+        scripted.set(.unrestricted)
+        let models = makeModels(network: scripted.network, fetcher: fetcher)
+        let voices = try XCTUnwrap(models.choice(for: .speakerEmbedding))
+        models.download(voices)
+        XCTAssertEqual(models.status(of: voices), .downloading(0))
+        let rest = models.processingMissing
+        XCTAssertEqual(rest.count, 2, "transcription and speakers")
+        let summary = try XCTUnwrap(models.processingDownload)
+        XCTAssertEqual(summary, .missing(names: rest.map(\.name), bytes: models.processingMissingBytes, rest: .onItsWay))
+        XCTAssertEqual(summary.title, "Not downloaded yet")
+        XCTAssertEqual(summary.line(), ModelLine(rest.map(\.name).joined(separator: ", ") + " · " + ByteSize.format(models.processingMissingBytes)))
+        try await waitUntil("the fetch held") { fetcher.isHolding }
+        fetcher.release()
+        try await waitUntil("the failure") { if case .failed = models.status(of: voices) { return true } else { return false } }
     }
 
     /// A download that wouldn't fit says how much it needs, and waits.

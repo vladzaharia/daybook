@@ -251,16 +251,75 @@ public struct ModelSpace: Equatable, Sendable {
 // MARK: - Downloading what's chosen
 
 /// The row that downloads everything a section's choices still need: "Not downloaded yet · 852 MB" with Download, then
-/// its progress with Cancel.
+/// its progress with Cancel, or, while none of it is arriving yet, what it waits for ("Waiting for Wi‑Fi") with Cancel.
 public enum ModelDownloadSummary: Equatable, Sendable {
-    /// Models still to download. `partly`: some of what's chosen is here already, so the names say which aren't.
-    case missing(names: [String], bytes: Int64, partly: Bool)
+    /// Models still to download, and how the rest of what's chosen stands. The names say which are left whenever
+    /// there's a rest.
+    case missing(names: [String], bytes: Int64, rest: Rest)
+    /// All of it is asked for and none of it is arriving yet: it waits for Wi‑Fi (`forWiFi`), or for its turn behind
+    /// another download. `bytes`: what it will download.
+    case waiting(bytes: Int64, forWiFi: Bool)
     /// All of it is on its way: so much of the total is here.
     case downloading(done: Int64, total: Int64)
 
+    /// How the rest of what's chosen stands beside the models still to download.
+    public enum Rest: Equatable, Sendable {
+        /// There's no rest: all of it is still to download.
+        case nothing
+        /// The rest is on its way, and none of it is here yet.
+        case onItsWay
+        /// Some of it is here already.
+        case here
+    }
+
+    /// One chosen model, as the row adds them up.
+    public struct Item: Equatable, Sendable {
+        public let name: String
+        public let status: ModelStatus
+        /// Its whole download.
+        public let bytes: Int64
+        /// What downloading it still takes: `bytes`, less what an unfinished download already fetched.
+        public let stillToFetch: Int64
+
+        public init(name: String, status: ModelStatus, bytes: Int64, stillToFetch: Int64? = nil) {
+            self.name = name; self.status = status; self.bytes = bytes; self.stillToFetch = stillToFetch ?? bytes
+        }
+    }
+
+    /// The row for a section's chosen models, each once, in the roles' order (the Mac leaves out the system's own,
+    /// which download nothing). What's still to download comes first, since a model fetched on its own doesn't stand for
+    /// the rest, which can still be started. Once all of it is asked for: how far it's got, or what it waits for while
+    /// none of it is arriving. Nil when it's all here. A model this device can't run isn't counted.
+    public init?(chosen: [Item]) {
+        let models = chosen.filter { $0.status.isAvailable }
+        let missing = models.filter { $0.status.canDownload }
+        if !missing.isEmpty {
+            let rest: Rest = models.contains { $0.status.isReady } ? .here : missing.count < models.count ? .onItsWay : .nothing
+            self = .missing(names: missing.map(\.name), bytes: missing.reduce(0) { $0 + $1.stillToFetch }, rest: rest)
+            return
+        }
+        let coming = models.filter { $0.status.isTransferring }
+        guard !coming.isEmpty else { return nil }
+        let arriving = coming.contains { if case .downloading = $0.status { return true } else { return false } }
+        guard arriving else {
+            self = .waiting(bytes: coming.reduce(0) { $0 + $1.stillToFetch }, forWiFi: coming.allSatisfy { $0.status == .waitingForWiFi })
+            return
+        }
+        let done = models.reduce(Int64(0)) { sum, model in
+            switch model.status {
+            case .downloading(let fraction):
+                return sum + Int64(Double(model.bytes) * (fraction.isFinite ? min(max(fraction, 0), 1) : 0))
+            case let status where status.isReady: return sum + model.bytes
+            default: return sum
+            }
+        }
+        self = .downloading(done: done, total: models.reduce(0) { $0 + $1.bytes })
+    }
+
     public var title: String {
         switch self {
-        case .missing(_, _, let partly): return partly ? "Partly downloaded" : "Not downloaded yet"
+        case .missing(_, _, let rest): return rest == .here ? "Partly downloaded" : "Not downloaded yet"
+        case .waiting(_, let forWiFi): return (forWiFi ? ModelStatus.waitingForWiFi : .waiting).label
         case .downloading: return "Downloading"
         }
     }
@@ -268,14 +327,17 @@ public enum ModelDownloadSummary: Equatable, Sendable {
     /// "852 MB", "Parakeet Ultra, Community-1 · 654 MB", "0.4 of 1.6 GB", or what it needs when there isn't room.
     public func line(space: ModelSpace = .unknown) -> ModelLine {
         switch self {
-        case .missing(let names, let bytes, let partly):
+        case .missing(let names, let bytes, let rest):
             if let shortfall = space.shortfall(bytes) { return ModelLine(shortfall, needsAttention: true) }
-            return ModelLine(((partly ? [names.joined(separator: ", ")] : []) + [ByteSize.format(bytes)]).joined(separator: " · "))
+            return ModelLine(((rest == .nothing ? [] : [names.joined(separator: ", ")]) + [ByteSize.format(bytes)]).joined(separator: " · "))
+        case .waiting(let bytes, _):
+            return ModelLine(ByteSize.format(bytes))
         case .downloading(let done, let total):
             return ModelLine(ByteSize.progress(done, of: total))
         }
     }
 
+    /// How far the bar has got; there's a bar only while something is arriving.
     public var fraction: Double {
         guard case .downloading(let done, let total) = self, total > 0 else { return 0 }
         return min(1, max(0, Double(done) / Double(total)))
