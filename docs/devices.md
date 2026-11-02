@@ -400,8 +400,9 @@ pushes, Settings).
   problem there offers only what setup can do about it (Open Settings, Try Again). On the Mac a direct method's card
   is the pre-permission screen; on the iPhone, Search. A recorder already set up opens its page; one a Mac manages
   offers Use on This iPhone instead of a search. Settings › Devices on the Mac offers Pair with iPhone… beside Add Device….
-- **Settings › Devices** (Mac): per recorder, its methods (Connect directly over Bluetooth, Managed by, Recorder
-  with Forget…, the folder with Choose…), then the same Options section as the page.
+- **Settings › Devices** (Mac): per recorder, its methods (Connect directly over Bluetooth, with the page's Import
+  automatically and Record along with this Mac indented under it, Managed by, Recorder with Forget…, the folder with
+  Choose…), then the page's Name with Rename… and Remove from This Mac….
 - **Menus** (Mac): File › Add Device… and Import from <device>…; Add Recording › From <device>…;
   the menu bar extra's per-device line (a handoff under way, or Use <recorder> on This Mac).
 - **Handoff** (`RecorderHandoffView`, the same rules on both): at rest, "Use on This Mac" (with this Mac's own glyph)

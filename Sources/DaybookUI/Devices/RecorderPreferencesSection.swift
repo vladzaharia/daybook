@@ -5,9 +5,20 @@ import SwiftUI
 /// A recorder's options, in one set of words on both devices (`RecorderStatusWords.Option`): Import automatically,
 /// Record along with this device, and on the iPhone Fast transfer and Hand back to your Mac; its name with
 /// Rename…; and Remove from This Mac…, which says what it does first. On a recorder's page (`.page`), a card of
-/// rows on paper; in the Mac's Settings › Devices (`.form`), rows of the form's group.
+/// rows on paper; in the Mac's Settings › Devices (`.form`), rows of the form's group, a part at a time.
 public struct RecorderPreferencesSection: View {
-    public enum Style: Sendable { case page, form }
+    public enum Style: Sendable {
+        case page
+        /// Rows of a form's group, a part at a time, so each part sits with the rows it belongs with.
+        case form(FormPart)
+    }
+
+    public enum FormPart: Sendable {
+        /// The switches, indented under the direct link they work through.
+        case options
+        /// The name with Rename…, and Remove….
+        case nameAndRemove
+    }
 
     private let session: DeviceSession
     private let style: Style
@@ -38,7 +49,8 @@ public struct RecorderPreferencesSection: View {
             // Several rows (each its own row in an iPhone list): the prompts hang on the buttons that ask for them.
             switch style {
             case .page: page(options, services: services)
-            case .form: form(options, services: services)
+            case .form(.options): formOptions(options, services: services)
+            case .form(.nameAndRemove): formNameAndRemove(services: services)
             }
         }
     }
@@ -118,12 +130,19 @@ public struct RecorderPreferencesSection: View {
 
     // MARK: In a form
 
-    @ViewBuilder
-    private func form(_ options: [RecorderStatusWords.Option], services: RecorderServices) -> some View {
+    private func formOptions(_ options: [RecorderStatusWords.Option], services: RecorderServices) -> some View {
         ForEach(options, id: \.self) { option in
             Toggle(option.title(on: services.place), isOn: binding(option, services: services))
+                #if os(macOS)
+                .controlSize(.regular)
+                #endif
+                .padding(.leading, DaybookSpacing.s5)
                 .disabled(!enabled(option))
         }
+    }
+
+    @ViewBuilder
+    private func formNameAndRemove(services: RecorderServices) -> some View {
         LabeledContent("Name") {
             HStack(spacing: DaybookSpacing.s2) {
                 Text(session.device.name).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)

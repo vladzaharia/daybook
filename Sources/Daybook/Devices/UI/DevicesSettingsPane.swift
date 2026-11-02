@@ -103,7 +103,7 @@ private struct DeviceSettingsSection: View {
                 if let files = session.files, let method = kind.method(.files) {
                     FolderRows(state: state, session: session, files: files, method: method)
                 }
-                RecorderPreferencesSection(session: session, style: .form)
+                RecorderPreferencesSection(session: session, style: .form(.nameAndRemove))
             }
         } header: {
             HStack(spacing: Space.s2) {
@@ -139,6 +139,8 @@ private struct DeviceSettingsSection: View {
         Toggle("Connect \(method.title.prefix(1).lowercased() + method.title.dropFirst())", isOn: enabled)
             .controlSize(.regular)
             .disabled(!direct.isSetUp)
+        // Import automatically and Record along work through the direct link, so they sit under it.
+        RecorderPreferencesSection(session: session, style: .form(.options))
         RecorderOwnershipRow(state: state, session: session)
         LabeledContent("Recorder") {
             if let snapshot = (direct as? SoundcoreConnection)?.remembered {
