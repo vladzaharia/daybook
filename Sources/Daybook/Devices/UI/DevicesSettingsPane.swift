@@ -1,6 +1,7 @@
 import AppKit
 import DaybookCore
 import DaybookKit
+import DaybookLink
 import SwiftUI
 
 /// Settings › Devices: each recorder's set-and-forget preferences and its methods. Everything
@@ -30,6 +31,8 @@ struct DevicesSettingsPane: View {
                                 .font(TypeStyle.status).foregroundStyle(.secondary)
                         }
                         Spacer()
+                        // The iPhone's pairing screen sends people here for this button.
+                        AddDeviceButton(state: state, kind: DaybookPhoneIntegration.id, title: PairingWords.pairWithIPhone)
                         AddDeviceButton(state: state)
                     }
                     .padding(.vertical, Space.s1)
@@ -44,7 +47,7 @@ struct DevicesSettingsPane: View {
                 } footer: {
                     HStack(alignment: .firstTextBaseline, spacing: Space.s4) {
                         Spacer()
-                        AddDeviceButton(state: state, kind: DaybookPhoneIntegration.id, title: "Add iPhone…")
+                        AddDeviceButton(state: state, kind: DaybookPhoneIntegration.id, title: PairingWords.pairWithIPhone)
                         AddDeviceButton(state: state)
                     }
                 }
@@ -87,7 +90,7 @@ private struct DeviceSettingsSection: View {
             if kind.id == DaybookPhoneIntegration.id {
                 PhoneSettingsRows(state: state, session: session)
                 LabeledContent("Pairing") {
-                    Button("Unpair…") { confirmingRemove = true }
+                    Button(PairingWords.unpair) { confirmingRemove = true }
                 }
             } else {
                 if let direct = session.direct, let method = kind.method(.direct) {
@@ -116,7 +119,7 @@ private struct DeviceSettingsSection: View {
         } message: {
             Text("Daybook stops connecting to it. Recordings you already imported stay.")
         }
-        .alert(kind.id == DaybookPhoneIntegration.id ? "Unpair \(session.device.name)?" : "Remove \(session.device.name) from Daybook?",
+        .alert(kind.id == DaybookPhoneIntegration.id ? PairingWords.unpairQuestion(session.device.name) : "Remove \(session.device.name) from Daybook?",
                isPresented: $confirmingRemove) {
             if kind.id == DaybookPhoneIntegration.id {
                 Button("Unpair", role: .destructive) {
@@ -129,7 +132,7 @@ private struct DeviceSettingsSection: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(kind.id == DaybookPhoneIntegration.id
-                 ? "This Mac and the iPhone stop recording together. Its recordings stay in your library."
+                 ? PairingWords.unpairConsequence
                  : "Daybook stops importing from it. Recordings you already imported stay in your library.")
         }
     }
@@ -231,9 +234,9 @@ private struct FolderRows: View {
     }
 }
 
-/// Settings › Devices for Daybook on iPhone: the link, recording along with this Mac, and how its
-/// recordings arrive.
-private struct PhoneSettingsRows: View {
+/// Settings › Devices for Daybook on iPhone: the link, Can start recording, and how its recordings arrive, in the
+/// words of its page and of the iPhone's row for a Mac.
+struct PhoneSettingsRows: View {
     let state: AppState
     let session: DeviceSession
     let link: PhoneLink
@@ -248,16 +251,20 @@ private struct PhoneSettingsRows: View {
 
     var body: some View {
         let direct = session.direct
+        let phone = direct as? PhoneLinkConnection
         LabeledContent("Over Wi‑Fi") {
             HStack(spacing: Space.s2) {
                 DeviceStatusDot(state: direct?.state ?? .notSetUp)
-                Text(linkStatus(direct)).foregroundStyle(.secondary)
+                Text(Self.overWiFi(isSetUp: direct?.isSetUp == true, isConnected: direct?.state.isConnected == true,
+                                   recording: phone?.recordingPhase, lastSeen: direct?.lastConnectedAt))
+                    .foregroundStyle(.secondary)
                 if direct?.isSetUp == false {
-                    Button("Pair Again…") { state.requestAddDevice(kind: DaybookPhoneIntegration.id) }
+                    Button(PairingWords.pairAgain) { state.requestAddDevice(kind: DaybookPhoneIntegration.id) }
                 }
             }
         }
-        Toggle("Record along with this Mac",
+        // One way, as on the iPhone: whether the phone may start a recording here.
+        Toggle(PairingWords.canStartRecording,
                isOn: Binding(get: { session.device.recordsAlongsideMac }, set: { on in session.update { $0.alsoRecordsWithMac = on } }))
             .controlSize(.regular)
             .padding(.leading, Space.s5)
@@ -272,10 +279,18 @@ private struct PhoneSettingsRows: View {
         }
     }
 
-    private func linkStatus(_ direct: (any DeviceConnection)?) -> String {
-        guard let direct, direct.isSetUp else { return "Not paired" }
-        if direct.state.isConnected { return direct.status?.isRecording == true ? "Connected · Recording" : "Connected" }
-        if let last = direct.lastConnectedAt { return "Not connected · Last connected \(DeviceDateFormat.lastSeen(last))" }
-        return "Not connected"
+    /// The Over Wi‑Fi line, as the iPhone's row for a Mac reads: "Recording now", "Connected", "Not connected · Last
+    /// seen today, 9:12 AM", or "Needs pairing again" (with Pair Again…) for a pairing that's gone or can't be read.
+    static func overWiFi(isSetUp: Bool, isConnected: Bool, recording: LinkRecordingState.Phase?, lastSeen: Date?,
+                         now: Date = Date()) -> String {
+        guard isSetUp else { return PairingWords.needsPairingAgain }
+        if isConnected {
+            switch recording {
+            case nil: return "Connected"
+            case .paused?: return "Paused recording"
+            default: return "Recording now"
+            }
+        }
+        return lastSeen.map { "Not connected · \(RecorderStatusWords.lastSeen($0, now: now))" } ?? "Not connected"
     }
 }

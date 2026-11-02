@@ -289,6 +289,19 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertEqual(page(.other("Turn on sync to get your iPhone’s recordings.")).problem, "Turn on sync to get your iPhone’s recordings.")
     }
 
+    func testBehaviorSettingsSaysAPhonesLinkAsTheIPhoneSaysAMacs() {
+        let now = Date(), seen = now.addingTimeInterval(-3_600)
+        func line(setUp: Bool = true, connected: Bool = false, recording: LinkRecordingState.Phase? = nil, lastSeen: Date? = seen) -> String {
+            PhoneSettingsRows.overWiFi(isSetUp: setUp, isConnected: connected, recording: recording, lastSeen: lastSeen, now: now)
+        }
+        XCTAssertEqual(line(setUp: false), PairingWords.needsPairingAgain, "beside Pair Again…")
+        XCTAssertEqual(line(), "Not connected · \(RecorderStatusWords.lastSeen(seen, now: now))")
+        XCTAssertEqual(line(lastSeen: nil), "Not connected")
+        XCTAssertEqual(line(connected: true), "Connected")
+        XCTAssertEqual(line(connected: true, recording: .recording), "Recording now")
+        XCTAssertEqual(line(connected: true, recording: .paused), "Paused recording")
+    }
+
     // MARK: Notes owed to a phone
 
     func testBehaviorChangesOwedToADeviceKeepTheirOrderAndAParagraphsNewestText() {
