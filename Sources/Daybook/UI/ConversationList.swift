@@ -302,9 +302,10 @@ private struct MacTrashList: View {
         }
         // Moving to the Trash and restoring change the library's conversations, so its revision.
         .task(id: state.libraryRevision) {
-            trashed = await state.library.trashedMeetings()
+            let read = await state.library.trashedMeetings()
+            guard !Task.isCancelled, MacTrash.adopt(read, state: state) else { return }
+            trashed = read
             loaded = true
-            if !trashed.contains(where: { $0.id == state.selectedID }) { state.selectedID = trashed.first?.id }
         }
     }
 }
@@ -331,6 +332,15 @@ struct TrashDetail: View {
 
 @MainActor
 enum MacTrash {
+    /// Takes what the Trash read, selecting the first when the one selected isn't in it. Not once the person has
+    /// left the Trash, or is searching, while it read: the selection belongs to what they're looking at now.
+    /// Whether it took it.
+    static func adopt(_ read: [Meeting], state: AppState) -> Bool {
+        guard state.place.isTrash, !state.isSearching else { return false }
+        if !read.contains(where: { $0.id == state.selectedID }) { state.selectedID = read.first?.id }
+        return true
+    }
+
     /// Puts conversations back from the Trash, each saying so with Show, which opens it.
     static func restore(_ ids: [UUID], state: AppState) {
         Task {

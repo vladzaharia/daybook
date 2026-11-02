@@ -100,6 +100,30 @@ final class LibraryPlaceTests: XCTestCase {
         XCTAssertEqual(ConversationDrop.filed([UUID()], selection: [], in: meetings), [], "one no longer in the library files nothing")
     }
 
+    func testBehaviorLeavingTheTrashWhileItReadsKeepsTheNewPlacesSelection() async throws {
+        let (state, root, defaults) = try await makeState()
+        defer { cleanUp(root, defaults) }
+        let kept = state.newMeeting(title: "Kept")
+        let gone = state.newMeeting(title: "Old standup")
+        _ = try await state.library.moveToTrash(gone)
+        state.place = .trash
+        let read = await state.library.trashedMeetings()
+
+        // The person opened the Trash, then All, before its list came back.
+        state.place = .section(.all)
+        state.selectedID = kept
+        XCTAssertFalse(MacTrash.adopt(read, state: state))
+        XCTAssertEqual(state.selectedID, kept, "All keeps its selection, never a conversation in the Trash")
+
+        state.place = .trash
+        state.search = "standup"
+        XCTAssertFalse(MacTrash.adopt(read, state: state), "searching: the results own the selection")
+        state.search = ""
+
+        XCTAssertTrue(MacTrash.adopt(read, state: state))
+        XCTAssertEqual(state.selectedID, gone, "still in the Trash: its first is selected")
+    }
+
     func testBehaviorARowSaysWhatThisMacIsDoingWithItInTheWordsTheIPhoneUses() async throws {
         let (state, root, defaults) = try await makeState()
         defer { cleanUp(root, defaults) }
