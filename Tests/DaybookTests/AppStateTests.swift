@@ -112,9 +112,64 @@ final class AppStateTests: XCTestCase {
                        "Logging out or shutting down stops the recording without asking")
         XCTAssertEqual(QuitDecision.decide(quitting: false, hasState: true, recording: false, poweringOff: false), .finishThenQuit)
         XCTAssertEqual(QuitDecision.decide(quitting: false, hasState: false, recording: false, poweringOff: false), .now)
-        // A second ⌘Q, the Dock's Quit, or a logout while the first stops and saves is turned down, never quits at once.
+        // A second ⌘Q or the Dock's Quit while the first stops and saves is turned down, never quits at once; a logout
+        // waits for it.
         XCTAssertEqual(QuitDecision.decide(quitting: true, hasState: true, recording: true, poweringOff: false), .alreadyQuitting)
-        XCTAssertEqual(QuitDecision.decide(quitting: true, hasState: true, recording: false, poweringOff: true), .alreadyQuitting)
+        XCTAssertEqual(QuitDecision.decide(quitting: true, hasState: true, recording: false, poweringOff: true), .waitForQuit)
+        XCTAssertEqual(QuitDecision.decide(finished: true, quitting: true, hasState: true, recording: false, poweringOff: false), .now,
+                       "The work done, the quit it asks for goes ahead")
+    }
+
+    /// AppKit doesn't ask again on a second quit while an answer is pending (`.terminateLater`): it quits at once. So an
+    /// ordinary quit is turned down while its work runs and asked again once it's done, and a quit meanwhile is turned
+    /// down too. A logout, restart, or shutdown is answered later instead, since turning it down would stop it.
+    func testBehaviorAQuitIsTurnedDownWhileItsWorkRunsThenAskedAgainAndALogoutWaitsForIt() async throws {
+        let (state, _, _) = try await makeState()
+        let delegate = DaybookDelegate()
+        delegate.state = state
+        var replies = 0, askedAgain = 0
+        let reply = { replies += 1 }, quitAgain = { askedAgain += 1 }
+        XCTAssertEqual(delegate.shouldTerminate(poweringOff: false, reply: reply, quitAgain: quitAgain), .terminateCancel)
+        XCTAssertEqual(delegate.shouldTerminate(poweringOff: false, reply: reply, quitAgain: quitAgain), .terminateCancel,
+                       "A second ⌘Q while the first stops and saves")
+        XCTAssertEqual(delegate.shouldTerminate(poweringOff: true, reply: reply, quitAgain: quitAgain), .terminateLater,
+                       "A logout meanwhile waits for that work")
+        try await waitUntil("the work to finish, the logout's answer, and the quit asked again") { replies == 1 && askedAgain == 1 }
+        XCTAssertEqual(delegate.shouldTerminate(poweringOff: false, reply: reply, quitAgain: quitAgain), .terminateNow)
+
+        let (other, _, _) = try await makeState()
+        let shuttingDown = DaybookDelegate()
+        shuttingDown.state = other
+        XCTAssertEqual(shuttingDown.shouldTerminate(poweringOff: true, reply: reply, quitAgain: quitAgain), .terminateLater)
+        try await waitUntil("answered once its work is done") { replies == 2 }
+        XCTAssertEqual(askedAgain, 1, "Answered, it isn't asked again")
+    }
+
+    /// Logging out, restarting, and shutting down are told apart by the reason the quit event carries, read for each
+    /// request: a logout another app called off leaves nothing behind for the next Quit.
+    func testBehaviorOnlyTheMacsOwnQuitEventsCountAsPoweringOff() {
+        func quit(reason: OSType?, asParameter: Bool = false) -> NSAppleEventDescriptor {
+            let event = NSAppleEventDescriptor(eventClass: AEEventClass(kCoreEventClass), eventID: AEEventID(kAEQuitApplication),
+                                               targetDescriptor: nil, returnID: AEReturnID(kAutoGenerateReturnID),
+                                               transactionID: AETransactionID(kAnyTransactionID))
+            if let reason {
+                let value = NSAppleEventDescriptor(typeCode: reason)
+                if asParameter { event.setParam(value, forKeyword: AEKeyword(kAEQuitReason)) }
+                else { event.setAttribute(value, forKeyword: AEKeyword(kAEQuitReason)) }
+            }
+            return event
+        }
+        XCTAssertTrue(QuitDecision.isPowerOff(quit(reason: OSType(kAEShutDown))))
+        XCTAssertTrue(QuitDecision.isPowerOff(quit(reason: OSType(kAERestart))))
+        XCTAssertTrue(QuitDecision.isPowerOff(quit(reason: OSType(kAEReallyLogOut))))
+        XCTAssertTrue(QuitDecision.isPowerOff(quit(reason: OSType(kAEShutDown), asParameter: true)))
+        XCTAssertFalse(QuitDecision.isPowerOff(quit(reason: nil)), "The Dock's Quit")
+        XCTAssertFalse(QuitDecision.isPowerOff(nil), "⌘Q, or the menu")
+        let open = NSAppleEventDescriptor(eventClass: AEEventClass(kCoreEventClass), eventID: AEEventID(kAEOpenDocuments),
+                                          targetDescriptor: nil, returnID: AEReturnID(kAutoGenerateReturnID),
+                                          transactionID: AETransactionID(kAnyTransactionID))
+        open.setAttribute(NSAppleEventDescriptor(typeCode: OSType(kAEShutDown)), forKeyword: AEKeyword(kAEQuitReason))
+        XCTAssertFalse(QuitDecision.isPowerOff(open), "Only a quit event")
     }
 
     // MARK: The Trash, with Undo

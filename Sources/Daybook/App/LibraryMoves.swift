@@ -239,7 +239,7 @@ enum AppRelaunch {
         NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { _, error in
             Task { @MainActor in
                 switch outcome(launchError: error) {
-                case .quit: NSApp.terminate(nil)
+                case .quit: NSApp.terminateFromRunLoop()
                 case .askToReopen: askToReopen()
                 }
             }
@@ -254,6 +254,6 @@ enum AppRelaunch {
         alert.informativeText = "Your library is in its new place. Quit Daybook and open it again."
         alert.addButton(withTitle: "Quit Daybook")
         alert.runModal()
-        NSApp.terminate(nil)
+        NSApp.terminateFromRunLoop()
     }
 }

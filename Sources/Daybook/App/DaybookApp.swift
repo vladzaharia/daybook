@@ -149,55 +149,108 @@ private struct MenuBarLabel: View {
 
 /// What a request to quit does (`DaybookDelegate.applicationShouldTerminate`).
 enum QuitDecision: Equatable {
-    /// Nothing to finish (the library never opened): quit now.
+    /// Nothing to finish (the library never opened), or the work an earlier request started is done: quit now.
     case now
-    /// Quitting already: this request is turned down, and the first one quits once its work is done. A second ⌘Q, the
-    /// Dock's Quit, or a logout during a slow stop never cuts the stop and save short.
+    /// Quitting already: this request is turned down. The quit under way asks again once its work is done, so a second
+    /// ⌘Q or the Dock's Quit never cuts the stop and save short.
     case alreadyQuitting
+    /// Logging out, restarting, or shutting down while quitting already: the Mac waits for that work, then Daybook quits.
+    case waitForQuit
     /// A recording is under way: ask before stopping it.
     case askToStopRecording
     /// Stop what's running, save, then quit.
     case finishThenQuit
 
-    static func decide(quitting: Bool, hasState: Bool, recording: Bool, poweringOff: Bool) -> QuitDecision {
-        if quitting { return .alreadyQuitting }
+    static func decide(finished: Bool = false, quitting: Bool, hasState: Bool, recording: Bool, poweringOff: Bool) -> QuitDecision {
+        if finished { return .now }
+        if quitting { return poweringOff ? .waitForQuit : .alreadyQuitting }
         guard hasState else { return .now }
         // Logging out, restarting, or shutting down stops the recording without asking: nobody is there to answer.
         return recording && !poweringOff ? .askToStopRecording : .finishThenQuit
+    }
+
+    /// The reasons a quit event carries (`kAEQuitReason`) when the Mac quits apps itself: logging out, restarting,
+    /// shutting down, or quitting every app. A quit the person chose (the menu, ⌘Q, the Dock) carries none.
+    static let powerOffReasons = Set([kAEReallyLogOut, kAELogOut, kAERestart, kAEShutDown, kAEQuitAll].map { OSType($0) })
+
+    /// Whether `event`, the Apple event being handled, is the quit the Mac sends as it logs out, restarts, or shuts down.
+    /// Read for each request, so a logout another app called off leaves nothing behind.
+    static func isPowerOff(_ event: NSAppleEventDescriptor?) -> Bool {
+        guard let event, event.eventClass == AEEventClass(kCoreEventClass), event.eventID == AEEventID(kAEQuitApplication) else { return false }
+        let key = AEKeyword(kAEQuitReason)
+        guard let reason = (event.attributeDescriptor(forKeyword: key) ?? event.paramDescriptor(forKeyword: key))?.typeCodeValue else { return false }
+        return powerOffReasons.contains(reason)
+    }
+}
+
+extension NSApplication {
+    /// Quits as the Quit menu item does, from the run loop. Called from a main-actor task, which runs as a main-queue
+    /// job, `terminate(_:)` would hold the main queue, and a quit that waits for work there (`DaybookDelegate`) would
+    /// never finish.
+    func terminateFromRunLoop() {
+        perform(#selector(terminate(_:)), with: nil, afterDelay: 0, inModes: [.common])
     }
 }
 
 @MainActor
 final class DaybookDelegate: NSObject, NSApplicationDelegate {
     weak var state: AppState?
-    private var terminating = false
-    /// The Mac is logging out, restarting, or shutting down.
-    private var poweringOff = false
-    private var powerOffObserver: NSObjectProtocol?
+    /// The quit's work under way (`finish`).
+    private var quitWork: Task<Void, Never>?
+    /// That work is done: the quit it asks for goes ahead.
+    private var readyToQuit = false
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        shouldTerminate(poweringOff: QuitDecision.isPowerOff(NSAppleEventManager.shared().currentAppleEvent),
+                        reply: { sender.reply(toApplicationShouldTerminate: true) }, quitAgain: { sender.terminateFromRunLoop() })
+    }
+
+    /// `applicationShouldTerminate`, with what it calls on the app passed in: `reply` answers a pending `.terminateLater`,
+    /// and `quitAgain` asks to quit once more.
+    func shouldTerminate(poweringOff: Bool, reply: @escaping @MainActor () -> Void,
+                         quitAgain: @escaping @MainActor () -> Void) -> NSApplication.TerminateReply {
         let recording = state.map { $0.isRecording || $0.isStartingRecording } ?? false
-        switch QuitDecision.decide(quitting: terminating, hasState: state != nil, recording: recording, poweringOff: poweringOff) {
+        switch QuitDecision.decide(finished: readyToQuit, quitting: quitWork != nil, hasState: state != nil, recording: recording,
+                                   poweringOff: poweringOff) {
         case .now: return .terminateNow
         case .alreadyQuitting: return .terminateCancel
+        case .waitForQuit:
+            let work = quitWork
+            Task { await work?.value; reply() }
+            return .terminateLater
         case .askToStopRecording: guard askToStopRecording() else { return .terminateCancel }
         case .finishThenQuit: break
         }
         guard let state else { return .terminateNow }
-        terminating = true
-        Task {
-            // Cancelling gives back requests this Mac held, so another Mac can take them over once
-            // this one syncs again, or when their lease runs out if it never does.
-            state.cancelDownload(); state.cancelProcessing()
-            if state.isRecording || state.isStartingRecording { await state.stopRecording() }
-            // Recorders and phones that recorded along hear the stop before the link goes (briefly).
-            await state.sources.recorders.settle(within: .seconds(5))
-            await state.flush()
-            state.recordReplicaIdentity()
-            await state.phoneLink.shutDown()
-            sender.reply(toApplicationShouldTerminate: true)
+        let work = Task { await Self.finish(state) }
+        quitWork = work
+        if poweringOff {
+            // The Mac waits for the answer; turned down, the logout, restart, or shutdown would stop. (While an answer
+            // is pending, AppKit quits at once on another request, without asking here.)
+            Task { await work.value; reply() }
+            return .terminateLater
         }
-        return .terminateLater
+        // Turned down for now and asked again once the work is done, so a quit asked meanwhile comes here and is
+        // turned down too.
+        Task {
+            await work.value
+            readyToQuit = true
+            quitAgain()
+        }
+        return .terminateCancel
+    }
+
+    /// Before quitting: what runs stops, recorders and phones that recorded along hear it, and everything is saved.
+    private static func finish(_ state: AppState) async {
+        // Cancelling gives back requests this Mac held, so another Mac can take them over once
+        // this one syncs again, or when their lease runs out if it never does.
+        state.cancelDownload(); state.cancelProcessing()
+        if state.isRecording || state.isStartingRecording { await state.stopRecording() }
+        // Recorders and phones that recorded along hear the stop before the link goes (briefly).
+        await state.sources.recorders.settle(within: .seconds(5))
+        await state.flush()
+        state.recordReplicaIdentity()
+        await state.phoneLink.shutDown()
     }
 
     /// QuickTime's question, before a quit ends a recording: the rest of the call wouldn't be recorded.
@@ -225,10 +278,6 @@ final class DaybookDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        powerOffObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willPowerOffNotification,
-                                                                             object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.poweringOff = true }
-        }
         #if DEBUG
         PerfProbe.start()
         switch LaunchOptions.value(after: "--appearance") {

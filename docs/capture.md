@@ -328,10 +328,20 @@ track and `capture-result.json` fail together. `AppState` keeps the sentence for
 (`unexpectedStops`) until the person has seen it (`dismissUnexpectedStop`).
 
 Quitting while recording asks first, as QuickTime does: "Stop recording and quit?" with Stop and Quit
-or Cancel. Logging out, restarting, or shutting down (`NSWorkspace.willPowerOffNotification`) stops it
-without asking. Quit then stops the recording, waits up to 5 s for recorders and iPhones that recorded
-along, saves, and only then quits; another quit meanwhile (a second ⌘Q, the Dock, a logout) is turned
-down rather than cutting that short (`QuitDecision`).
+or Cancel. Logging out, restarting, or shutting down stops it without asking; the quit event says which
+(its `kAEQuitReason`, read for each request, so a logout another app called off leaves nothing behind).
+Quit then stops the recording, waits up to 5 s for recorders and iPhones that recorded along, saves, and
+only then quits (`DaybookDelegate`, `QuitDecision`):
+
+- An ordinary quit (the menu, ⌘Q, the Dock) is turned down (`.terminateCancel`) while that work runs, and
+  asked again from the run loop once it's done, when it goes ahead. A second ⌘Q or the Dock's Quit
+  meanwhile reaches the delegate and is turned down too. AppKit doesn't ask the delegate again while an
+  answer is pending (`.terminateLater`): it quits at once, so a pending answer would let a second quit cut
+  the stop and save short.
+- A logout, restart, or shutdown is answered later (`.terminateLater`), since turning it down would stop
+  it; one that comes during an ordinary quit's work waits for that work.
+- Code that quits from a main-actor task calls `NSApp.terminateFromRunLoop()`. A task runs as a main-queue
+  job, and `terminate(_:)` called there holds the main queue while the quit's work waits to run on it.
 
 `CaptureEnvironment` injects the following:
 

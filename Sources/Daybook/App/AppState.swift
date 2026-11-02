@@ -594,7 +594,7 @@ final class AppState {
         case .returnFromContainer(let plan): LegacyLibraryReturn.decline(plan, defaults: preferences)
         case .moveIntoContainer(let plan):
             // With a library at the old place, nothing opens without it; with none there, start a new one.
-            guard !plan.legacyExists else { NSApp.terminate(nil); return }
+            guard !plan.legacyExists else { NSApp.terminateFromRunLoop(); return }
             preferences.set(true, forKey: SandboxMigration.startedFreshKey)
         case .oldCopyRemains(let legacy):
             keepOldLibraryCopy(legacy)
