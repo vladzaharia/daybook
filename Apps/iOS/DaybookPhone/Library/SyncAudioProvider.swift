@@ -39,6 +39,14 @@ final class SyncAudioProvider: AudioProviding {
     /// Measures again when the library's recordings change: one filed or imported, a conversation moved to the Trash.
     @ObservationIgnored private var recordingsWatch: ObservationWatch?
     @ObservationIgnored private var measuring: Task<Void, Never>?
+    /// Walks can overlap (a play, eviction, Clear Downloaded Audio): each is numbered as it starts, and one that
+    /// started before the figure shown never replaces it.
+    @ObservationIgnored private var measuresStarted = 0
+    @ObservationIgnored private var measureShown = 0
+    /// Walks the library folder, off the main actor (tests hold it to see what waits for it).
+    @ObservationIgnored var measure: @Sendable (_ libraryRoot: URL, _ downloaded: Set<String>?) -> LibraryStorageReport = {
+        LibraryStorageReport.measure(libraryRoot: $0, downloaded: $1)
+    }
 
     private static let log = Logger(subsystem: "local.daybook.phone", category: "Audio")
 
@@ -86,7 +94,10 @@ final class SyncAudioProvider: AudioProviding {
         }
         downloads[track.id] = 0
         defer { downloads[track.id] = nil }
+        // Anything before "installed" means it wasn't here yet: a download, maybe making room for it.
+        let fetched = OSAllocatedUnfairLock(initialState: false)
         let url = try await engine.fetchAudio(for: track, in: meetingID, options: options) { [weak self] fetch in
+            if fetch.phase != .installed { fetched.withLock { $0 = true } }
             Task { @MainActor [weak self] in
                 guard let self, self.downloads[track.id] != nil else { return }
                 self.downloads[track.id] = Self.fraction(fetch)
@@ -94,7 +105,8 @@ final class SyncAudioProvider: AudioProviding {
             }
         }
         await engine.noteAudioPlayed(trackID: track.id, in: meetingID)
-        await refreshUsage()
+        // Playback, sharing and processing don't wait for the library to be measured.
+        if fetched.withLock({ $0 }) { measureSoon() }
         return url
     }
 
@@ -150,6 +162,8 @@ final class SyncAudioProvider: AudioProviding {
     /// Measures the audio on this iPhone from the library's files, telling downloads apart while sync tracks them.
     /// Reads the disk off the main actor.
     func refreshUsage() async {
+        measuresStarted += 1
+        let started = measuresStarted
         let root = library.rootURL
         var downloaded: Set<String>?
         var items = 0
@@ -159,9 +173,11 @@ final class SyncAudioProvider: AudioProviding {
             downloaded = LibraryStorageReport.downloadedKeys(cached)
             items = cached.count
         }
-        let measured = await Task.detached(priority: .utility) {
-            LibraryStorageReport.measure(libraryRoot: root, downloaded: downloaded)
-        }.value
+        let measure = self.measure
+        let measured = await Task.detached(priority: .utility) { measure(root, downloaded) }.value
+        // A newer walk already finished: this one may count what's gone since, like downloads just cleared.
+        guard started > measureShown else { return }
+        measureShown = started
         report = measured
         let next = CacheUsage(bytes: UInt64(max(0, measured.audio)), downloadedBytes: UInt64(max(0, measured.downloadedAudio ?? 0)),
                               budget: budget, items: items)

@@ -255,7 +255,8 @@ final class SyncServicesTests: XCTestCase {
         XCTAssertEqual(fractions, fractions.sorted(), "progress only moves forward")
         XCTAssertEqual(try AudioDigest.sha256(fileURL: url), track.sha256)
         do { let availability = await reader.audio.availability(of: track, in: filed.meeting.id); XCTAssertEqual(availability, .local) }
-        XCTAssertEqual(reader.audio.usage.downloadedBytes, UInt64((try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0))
+        let size = UInt64((try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0)
+        try await waitUntil("the download is counted", state: { "\(reader.audio.usage)" }) { reader.audio.usage.downloadedBytes == size }
     }
 
     func testDownloadedAudioStaysWithinTheBudgetAndCanBeCleared() async throws {
@@ -276,7 +277,9 @@ final class SyncServicesTests: XCTestCase {
         // The least recently played went back to iCloud to make room for the one just played.
         do { let availability = await reader.audio.availability(of: first.meeting.tracks[0], in: first.meeting.id); XCTAssertEqual(availability, .downloadable(bytes: nil)) }
         do { let availability = await reader.audio.availability(of: second.meeting.tracks[0], in: second.meeting.id); XCTAssertEqual(availability, .local) }
-        XCTAssertLessThanOrEqual(reader.audio.usage.bytes, size + size / 2)
+        try await waitUntil("what's here is counted within the budget", state: { "\(reader.audio.usage)" }) {
+            reader.audio.usage.bytes > 0 && reader.audio.usage.bytes <= size + size / 2
+        }
 
         // Clear Downloaded Audio removes downloads only; the recording phone keeps what it recorded.
         let freed = await reader.audio.clearDownloaded()
@@ -285,6 +288,52 @@ final class SyncServicesTests: XCTestCase {
         XCTAssertEqual(reader.audio.usage.bytes, 0)
         _ = await recorder.audio.clearDownloaded()
         do { let availability = await recorder.audio.availability(of: first.meeting.tracks[0], in: first.meeting.id); XCTAssertEqual(availability, .local) }
+    }
+
+    func testBehaviorPlayingDoesNotWaitForStorageToBeMeasuredAndAnOlderMeasureNeverReplacesANewer() async throws {
+        let container = try temporaryDirectory("container")
+        let recorder = try await makePhone(container, name: "Recording iPhone")
+        let filed = try await record(into: recorder)
+        await recorder.sync.synchronize(.filed)
+        let reader = try await makePhone(container, name: "Reading iPhone")
+        reader.audio.keepWindow = 0
+        reader.audio.playingWindow = 0
+        // The first walk of the library is held once it has measured: the one for the conversation that arrives.
+        let arrival = PassGate()
+        reader.audio.measure = { root, downloaded in
+            let report = LibraryStorageReport.measure(libraryRoot: root, downloaded: downloaded)
+            arrival.hold()
+            return report
+        }
+        await reader.sync.synchronize(.launch)
+        try await waitUntil("the arrival is being measured") { arrival.entered }
+
+        // Playing downloads and returns while the library is still being measured; the download is counted shortly after.
+        let track = filed.meeting.tracks[0]
+        let url = try await reader.audio.localAudio(for: track, in: filed.meeting.id) { _ in }
+        XCTAssertEqual(reader.audio.usage.downloadedBytes, 0, "playing didn't wait for a measure")
+        let size = UInt64((try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0)
+        XCTAssertGreaterThan(size, 0)
+        try await waitUntil("the download is counted", state: { "\(reader.audio.usage)" }) { reader.audio.usage.downloadedBytes == size }
+        arrival.release()
+
+        // A measure started before Clear Downloaded Audio and finished after it doesn't bring the downloads back.
+        let stale = PassGate()
+        reader.audio.measure = { root, downloaded in
+            let report = LibraryStorageReport.measure(libraryRoot: root, downloaded: downloaded)
+            stale.hold()
+            return report
+        }
+        let earlier = Task { await reader.audio.refreshUsage() }
+        try await waitUntil("the earlier measure has counted the download") { stale.entered }
+        let freed = await reader.audio.clearDownloaded()
+        XCTAssertEqual(freed, size)
+        XCTAssertEqual(reader.audio.usage.downloadedBytes, 0)
+        stale.release()
+        await earlier.value
+        XCTAssertEqual(reader.audio.usage.downloadedBytes, 0, "the earlier measure counted downloads that are gone")
+        XCTAssertEqual(reader.audio.usage.bytes, 0)
+        XCTAssertEqual(reader.audio.report?.downloadedAudio, 0)
     }
 
     func testAFiledRecordingGoesToTheCourierAndAStuckSendIsShown() async throws {
