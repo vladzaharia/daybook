@@ -302,6 +302,12 @@ private struct MacTrashList: View {
                 Label(TrashWords.restore, systemImage: TrashWords.restoreSymbol)
             }
         }
+        // ⌘⌫ puts the selected one back, as Put Back does in Finder's Trash.
+        .onKeyPress(.delete, phases: .down) { press in
+            guard press.modifiers.contains(.command), let id = state.selectedID, trashed.contains(where: { $0.id == id }) else { return .ignored }
+            MacTrash.restore([id], state: state)
+            return .handled
+        }
         .overlay {
             if loaded && trashed.isEmpty, let words = LibraryWords.emptyPlace(.trash, libraryIsEmpty: state.meetings.isEmpty, platform: .mac) {
                 LibraryEmptyPlaceView(words)

@@ -1,4 +1,5 @@
 import DaybookKit
+import DaybookLink
 import DaybookUI
 import SwiftUI
 
@@ -24,18 +25,24 @@ enum PhoneRowStatus {
         var thisDeviceID: String
         /// Conversations a connected Mac is recording now.
         var recordingOnMac: Set<UUID>
-        var live: [UUID: LiveProgress]
-        var placement: PhoneSummaryPlacement
+        var live: [UUID: LiveProgress] = [:]
+        /// Where summaries run: this iPhone's countdowns and waits, and summaries running here or in the cloud.
+        var planners: [UUID: SummaryPlacementPlanner] = [:]
+        var runs: [UUID: SummaryPlace] = [:]
         var playing: UUID?
     }
 
     static func context(model: PhoneAppModel, library: LibraryController, player: PlaybackController) -> Context {
-        let recording = Set(model.link.connectedMacs.compactMap { mac -> UUID? in
-            guard let state = mac.recording, [.starting, .recording, .paused].contains(state.phase) else { return nil }
-            return state.conversationID
+        Context(thisDeviceID: library.thisDevice.id, recordingOnMac: recording(model.link.connectedMacs.compactMap(\.recording)),
+                live: model.liveProgress, planners: model.placement.planners, runs: model.placement.runs,
+                playing: player.isPlaying ? player.meetingID : nil)
+    }
+
+    /// The conversations connected Macs say they're recording (starting, recording, or paused; not saving).
+    static func recording(_ states: [LinkRecordingState]) -> Set<UUID> {
+        Set(states.compactMap { state in
+            [.starting, .recording, .paused].contains(state.phase) ? state.conversationID : nil
         })
-        return Context(thisDeviceID: library.thisDevice.id, recordingOnMac: recording, live: model.liveProgress,
-                       placement: model.placement, playing: player.isPlaying ? player.meetingID : nil)
     }
 
     static func make(_ meeting: Meeting, context: Context, now: Date) -> ConversationRowStatus? {
@@ -47,7 +54,7 @@ enum PhoneRowStatus {
         let inputs = ConversationStatusPresentation.Inputs(
             words: .iPhone(id: context.thisDeviceID), local: .iPhone(),
             isRecording: context.recordingOnMac.contains(meeting.id), link: link,
-            placement: .init(planner: context.placement.planners[meeting.id], run: context.placement.runs[meeting.id]),
+            placement: .init(planner: context.planners[meeting.id], run: context.runs[meeting.id]),
             isPlaying: context.playing == meeting.id)
         return ConversationStatusPresentation.row(ProcessingStatus.phone(meeting, now: now), meeting: meeting, inputs: inputs, now: now)
     }
