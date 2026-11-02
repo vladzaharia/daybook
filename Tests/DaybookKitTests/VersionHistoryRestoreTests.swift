@@ -18,6 +18,23 @@ final class VersionHistoryRestoreTests: XCTestCase {
         XCTAssertFalse(RevisionRestore.canRestore(change, in: meeting), "Nothing left to restore once the text matches")
     }
 
+    /// A photo added, deleted, or put back, and a recording removed or moved, keep only a mark of what happened: the title
+    /// says it, with no Before and After of stored words ("added", "present", "removed").
+    func testAPhotoOrRecordingChangeIsSaidByItsTitleAlone() {
+        var meeting = Meeting(title: "Whiteboard")
+        let photo = MeetingPhoto(relativePath: "Originals/Photos/a.jpg", fileName: "a.jpg", sha256: "", capturedAt: Date())
+        meeting.addPhoto(photo)
+        meeting.removePhoto(photo.id)
+        meeting.restorePhoto(photo.id)
+        XCTAssertEqual(meeting.revisions.map { RevisionText.title($0, in: meeting) }, ["Photo added", "Photo deleted", "Photo put back"])
+        for revision in meeting.revisions { XCTAssertFalse(RevisionText.showsComparison(revision), revision.newValue) }
+        let removed = MeetingRevision(field: "source:\(UUID().uuidString):removed", oldValue: "", newValue: "Removed the recorder’s recording")
+        XCTAssertFalse(RevisionText.showsComparison(removed))
+        XCTAssertTrue(RevisionText.showsComparison(MeetingRevision(field: "notes", oldValue: "", newValue: "Agenda")))
+        XCTAssertTrue(RevisionText.showsComparison(MeetingRevision(field: "photo-caption:\(photo.id.uuidString)", oldValue: "", newValue: "Board")),
+                      "a caption's words are compared")
+    }
+
     func testRestoringNotesKeepsTheirTimesForUnchangedParagraphs() {
         var meeting = Meeting(title: "Sync", notes: "Beta date\nExport", timedNotes: [TimedNote(time: 2, text: "Beta date"), TimedNote(time: 24, text: "Export")])
         meeting.setNotes("Beta date\nExport\nKenji joining?")

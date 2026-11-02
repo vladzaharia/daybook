@@ -13,16 +13,19 @@ public struct RevisionComparison: View {
     public init(revision: MeetingRevision) { self.revision = revision }
 
     public var body: some View {
-        let marked = RevisionLayout.marked(old: RevisionLayout(revision.oldValue, field: revision.field),
-                                           new: RevisionLayout(revision.newValue, field: revision.field),
-                                           removed: RevisionMarks.removed(dark: scheme == .dark),
-                                           inserted: RevisionMarks.inserted(dark: scheme == .dark))
-        VStack(alignment: .leading, spacing: DaybookSpacing.s5) {
-            if RevisionText.hasBefore(revision) {
-                version("Before", marked.old)
-                version("After", marked.new)
-            } else {
-                version(nil, marked.new)
+        // A change that keeps only a mark of what happened (a photo added) is said by its title alone.
+        if RevisionText.showsComparison(revision) {
+            let marked = RevisionLayout.marked(old: RevisionLayout(revision.oldValue, field: revision.field),
+                                               new: RevisionLayout(revision.newValue, field: revision.field),
+                                               removed: RevisionMarks.removed(dark: scheme == .dark),
+                                               inserted: RevisionMarks.inserted(dark: scheme == .dark))
+            VStack(alignment: .leading, spacing: DaybookSpacing.s5) {
+                if RevisionText.hasBefore(revision) {
+                    version("Before", marked.old)
+                    version("After", marked.new)
+                } else {
+                    version(nil, marked.new)
+                }
             }
         }
     }

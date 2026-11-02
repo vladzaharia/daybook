@@ -77,6 +77,15 @@ public enum RevisionText {
         !(revision.kind == .summary && revision.oldValue.isEmpty)
     }
 
+    /// Whether the change has words to show before and after. A photo added, deleted, or put back, and a recording
+    /// removed, moved, or put back, keep only a mark of what happened, which the title already says.
+    public static func showsComparison(_ revision: MeetingRevision) -> Bool {
+        switch revision.kind {
+        case .photo, .source: return false
+        default: return true
+        }
+    }
+
     public static func subject(_ revision: MeetingRevision, in meeting: Meeting) -> String {
         switch revision.kind {
         case .segment(let id):
