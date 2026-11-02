@@ -118,13 +118,13 @@ public enum ConversationActions {
         }
 
         /// Why a recording can't come out of the conversation now, when it can't: besides `busy`, its processing is
-        /// asked for or under way on another device, which would write to the recording as it leaves. One paused
-        /// here waits for the person, so it can.
+        /// asked for or under way on another device, which would write to the recording as it leaves. One that waits
+        /// here for the person (paused) or for models can: nothing works on it until then.
         var recordingBusy: String? {
             if let busy { return busy }
             switch status {
             case .processing?: return "Processing now"
-            case .requested(let waiting)? where waiting != .paused: return "Waiting to process"
+            case .requested(.device)?, .requested(.queued)?: return "Waiting to process"
             default: return nil
             }
         }

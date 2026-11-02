@@ -29,6 +29,29 @@ final class InfoScreenTests: XCTestCase {
         XCTAssertFalse(offered.contains(.showInFinder), "the Mac's own")
     }
 
+    /// Regression: the iPhone offered Remove and Move while a Mac transcribed the conversation, whose work on the
+    /// recording could then undo the removal. While a Mac has it, or it waits for one, neither is offered.
+    func testBehaviorARecordingStaysWhileAMacProcessesIt() {
+        let mic = RecordingTrack(source: .microphone, relativePath: "Originals/a.m4a", fileName: "a.m4a")
+        let dropped = RecordingTrack(source: .imported, relativePath: "Originals/b.m4a", fileName: "b.m4a")
+        var meeting = Meeting(title: "Call", tracks: [mic, dropped])
+        let now = Date()
+        var request = ProcessingRequest(meetingID: meeting.id, mode: .newAudio, requestedBy: .init(id: "phone", name: "iPhone"))
+        meeting.processingRequests = [request]
+        func offered() -> [ConversationAction] {
+            ConversationActions.track(dropped, in: meeting, context: ConversationInfo.context(meeting))
+                .flatMap(\.actions).filter(\.isAvailable)
+        }
+        XCTAssertFalse(offered().contains { $0.id == .removeRecording || $0.id == .moveToNewConversation }, "waiting for a Mac")
+        request.claim = .init(device: .init(id: "mac", name: "Studio Mac"), claimedAt: now, heartbeat: now,
+                              expiresAt: now.addingTimeInterval(600), stage: .transcribing)
+        meeting.processingRequests = [request]
+        XCTAssertFalse(offered().contains { $0.id == .removeRecording || $0.id == .moveToNewConversation }, "the Mac is transcribing it")
+        XCTAssertTrue(offered().contains { $0.id == .play })
+        meeting.processingRequests = []
+        XCTAssertTrue(offered().contains { $0.id == .removeRecording }, "nothing asked for: it can come out")
+    }
+
     func testBehaviorSpeakerProfilesRowSaysWhatTheMacsSays() {
         XCTAssertEqual(SpeakerProfilesScreen.summary(0), "No profiles yet")
         XCTAssertEqual(SpeakerProfilesScreen.summary(1), "1 profile")

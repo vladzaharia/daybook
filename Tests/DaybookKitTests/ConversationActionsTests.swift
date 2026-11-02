@@ -122,7 +122,9 @@ final class ConversationActionsTests: XCTestCase {
         XCTAssertEqual(availability(.requested(.device(request)), .removeRecording), .unavailable("Waiting to process"))
         XCTAssertEqual(availability(.requested(.device(request)), .moveToNewConversation), .unavailable("Waiting to process"))
         XCTAssertEqual(availability(processing, .play), .available, "it still plays")
+        XCTAssertEqual(availability(.requested(.queued(position: 0, after: nil)), .removeRecording), .unavailable("Waiting to process"))
         XCTAssertEqual(availability(.requested(.paused), .removeRecording), .available, "paused waits for the person")
+        XCTAssertEqual(availability(.requested(.models), .moveToNewConversation), .available, "nothing works on it until the models are here")
         XCTAssertEqual(availability(.recorded, .removeRecording), .available)
         XCTAssertEqual(availability(nil, .moveToNewConversation), .available)
     }
