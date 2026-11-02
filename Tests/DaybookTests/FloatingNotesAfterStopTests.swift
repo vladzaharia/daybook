@@ -52,7 +52,9 @@ final class FloatingNotesAfterStopTests: XCTestCase {
         XCTAssertEqual(inputs.phase, .stopped, "not a calm Saved")
         XCTAssertEqual(FloatingStatus.phase(inputs)?.phase, .stopped)
         XCTAssertTrue(FloatingStatusInputs.stoppedShort(meeting, state: state))
-        XCTAssertEqual(state.unexpectedStops[id], RecordingController.unexpectedStopSentence, "the box says why, in the recorder's words")
+        XCTAssertEqual(state.unexpectedStops[id], RecordingController.unexpectedStopSentence, "the reason, in the recorder's words")
+        XCTAssertEqual(FloatingStatus.stoppedMessage(state.unexpectedStops[id]), "What was recorded is saved.",
+                       "under \"Recording stopped\", the box doesn't say it stopped again")
 
         // Pressed at once, while the first part is still being added.
         await state.recordAgain(into: id)
@@ -63,6 +65,48 @@ final class FloatingNotesAfterStopTests: XCTestCase {
         await state.stopRecording()
         try await waitUntil("the second capture to finish") { state.recordingID == nil }
         await state.flush()
+    }
+
+    /// Regression: the stop was cleared only by Record Again, so a conversation recorded into again another way (the
+    /// inspector's Record on This Mac) and stopped normally still said Stopped, with Record Again.
+    func testBehaviorALaterRecordingIntoTheSameConversationIsSavedNotStopped() async throws {
+        let microphone = FakeCaptureSource(method: "microphone")
+        let state = await state(microphone)
+        await state.startRecording()
+        let id = try XCTUnwrap(state.recordingID)
+        speak(microphone)
+        microphone.send(.failed(FakeError(message: "kAudioHardwareNotRunningError")))
+        try await waitUntil("the first part to be added") {
+            state.recordingID == nil && state.meetings.first { $0.id == id }?.tracks.isEmpty == false
+        }
+        XCTAssertNotNil(state.unexpectedStops[id])
+
+        // As the inspector's Record on This Mac does, once the conversation's processing lets go of it.
+        if state.processingID == id { state.pauseProcessing(id) } else if state.queuedIDs.contains(id) { state.cancelQueued(id) }
+        let staging = state.storageURL.appendingPathComponent("Staging").appendingPathComponent(id.uuidString)
+        try await waitUntil("the conversation to be free") {
+            state.canRecordInto(id) && !["capture-session.json", "microphone.caf"].contains {
+                FileManager.default.fileExists(atPath: staging.appendingPathComponent($0).path)
+            }
+        }
+        await state.startRecording(into: id)
+        XCTAssertEqual(state.recordingID, id, String(describing: state.problem))
+        XCTAssertNil(state.unexpectedStops[id], "recording into it again clears the stop")
+        speak(microphone)
+        await state.stopRecording()
+        try await waitUntil("the second capture to finish") { state.recordingID == nil }
+
+        let meeting = try XCTUnwrap(state.meetings.first { $0.id == id })
+        XCTAssertFalse(FloatingStatusInputs.stoppedShort(meeting, state: state))
+        XCTAssertEqual(FloatingStatusInputs.make(state, meeting: meeting, afterStop: true, inputDevice: nil).phase, .saved)
+        await state.flush()
+    }
+
+    func testBehaviorAStopMessageSaysWhyOnlyWhenItKnows() {
+        XCTAssertEqual(FloatingStatus.stoppedMessage(RecordingController.unexpectedStopSentence), "What was recorded is saved.")
+        XCTAssertEqual(FloatingStatus.stoppedMessage("The microphone was disconnected."), "The microphone was disconnected.",
+                       "a reason of the recorder's own stays")
+        XCTAssertEqual(FloatingStatus.stoppedMessage(nil), "Everything up to then is saved.")
     }
 
     func testBehaviorANormalStopIsSaved() async throws {

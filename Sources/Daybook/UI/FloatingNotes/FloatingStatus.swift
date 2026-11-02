@@ -67,6 +67,14 @@ enum FloatingStatus {
 
     static func phase(_ inputs: FloatingStatusInputs) -> RecorderPhase? { RecordingStatusWords.phase(inputs.recording) }
 
+    /// The words under "Recording stopped": why, when the recorder knows a reason of its own; otherwise only what's
+    /// left, since the title already says it stopped. `reason` is `AppState.unexpectedStops`' sentence; none means
+    /// nothing reached the conversation.
+    static func stoppedMessage(_ reason: String?) -> String {
+        guard let reason else { return "Everything up to then is saved." }
+        return reason == RecordingController.unexpectedStopSentence ? "What was recorded is saved." : reason
+    }
+
     // MARK: Chips
 
     /// What a status bar includes. The home's full layout lists devices and the queue as lines, so its bar leaves

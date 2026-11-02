@@ -137,8 +137,8 @@ struct FloatingAfterStop: View {
 
     private var problem: RecorderProblem? {
         if stoppedShort {
-            // Why it stopped, in the recorder's one sentence; the system's words stay in the tooltip.
-            return RecorderProblem(title: "Recording stopped", message: state.unexpectedStops[meeting.id] ?? "Everything up to then is saved.",
+            // Why it stopped, when the recorder knows; the system's words stay in the tooltip.
+            return RecorderProblem(title: "Recording stopped", message: FloatingStatus.stoppedMessage(state.unexpectedStops[meeting.id]),
                                    help: meeting.errorMessage)
         }
         guard case .failed(let words)? = inputs.work else { return nil }

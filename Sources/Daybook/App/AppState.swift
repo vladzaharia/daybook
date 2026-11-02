@@ -1373,6 +1373,8 @@ extension AppState {
             try await recorder.start(in: directory, includeSystemAudio: includeComputerAudio, callApp: callApp)
             startCaptions()
             recordingID = id
+            // A conversation recorded into again, however it was started, is no longer one that stopped short.
+            unexpectedStops[id] = nil
             recordingStartedAt = recorder.startedAt ?? Date()
             update(id) { $0.status = .recording; $0.date = recordingStartedAt ?? Date() }
             recordingDidStart(id)
