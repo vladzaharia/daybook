@@ -51,7 +51,7 @@ struct TranscriptPage: View {
                         }
                     }
                     ForEach(TranscriptRow.rows(from: layout.blocks)) { row in
-                        rowView(row, playing: playing, marks: marks)
+                        rowView(row, playing: playing, marks: marks, corrected: layout.correctedSegmentIDs)
                     }
                 }
                 .scrollTargetLayout()
@@ -127,7 +127,7 @@ struct TranscriptPage: View {
     }
 
     @ViewBuilder
-    private func rowView(_ row: TranscriptRow, playing: UUID?, marks: BookmarkMarks) -> some View {
+    private func rowView(_ row: TranscriptRow, playing: UUID?, marks: BookmarkMarks, corrected: Set<UUID>) -> some View {
         switch row {
         case .turn(let speakerID, let first):
             TurnHeader(meeting: meeting, speakerID: speakerID, first: first, play: play) {
@@ -143,6 +143,7 @@ struct TranscriptPage: View {
                        isPlaying: playing == segment.id,
                        flashed: session.flashedSegment == segment.id,
                        holder: marks.holders.contains(segment.id),
+                       corrected: corrected.contains(segment.id),
                        label: marks.labelSegments[segment.id],
                        play: play,
                        rename: segment.speakerID.flatMap { id in meeting.speakers.first { $0.id == id } }.map { speaker in
@@ -283,14 +284,13 @@ private struct PassageRow: View {
     let isPlaying: Bool
     let flashed: Bool
     let holder: Bool
+    let corrected: Bool
     let label: String?
     let play: (PlaybackTarget) -> Void
     let rename: (() -> Void)?
     @Environment(ReadingSession.self) private var session
     @Environment(\.findQuery) private var query
     @Environment(\.colorSchemeContrast) private var contrast
-
-    private var corrected: Bool { meeting.revisions.contains { $0.field == "segment:\(segment.id.uuidString)" } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {

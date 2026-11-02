@@ -37,7 +37,7 @@ struct TranscriptPage: View {
                     switch block {
                     case .turn(_, let speakerID, let segments):
                         TurnView(state: state, meeting: meeting, speakerID: speakerID, segments: segments, playingID: playing,
-                                    marks: marks, editing: $editing, draft: $draft, play: play)
+                                    marks: marks, corrected: layout.correctedSegmentIDs, editing: $editing, draft: $draft, play: play)
                             .padding(.top, Space.s5)
                     case .note(let note):
                         NoteBlock(note: note) { play(.timeline(note.time ?? 0)) } open: { state.pageMode = .summary }
@@ -143,6 +143,8 @@ private struct TurnView: View {
     let segments: [TranscriptSegment]
     let playingID: UUID?
     let marks: BookmarkMarks
+    /// Passages the person corrected (`TranscriptLayout.correctedSegmentIDs`).
+    let corrected: Set<UUID>
     @Binding var editing: UUID?
     @Binding var draft: String
     let play: (PlaybackTarget) -> Void
@@ -177,7 +179,7 @@ private struct TurnView: View {
                 } else {
                     Passage(state: state, meeting: meeting, segment: segment, showsTime: index > 0, isPlaying: playingID == segment.id,
                             bookmarks: marks.bookmarksBySegment[segment.id] ?? [],
-                            holder: marks.holders.contains(segment.id),
+                            holder: marks.holders.contains(segment.id), corrected: corrected.contains(segment.id),
                             label: marks.labelSegments[segment.id], play: play,
                             correct: { draft = segment.text; editing = segment.id },
                             rename: speakerID == nil ? nil : { renaming = true })
@@ -195,6 +197,7 @@ private struct Passage: View {
     let isPlaying: Bool
     let bookmarks: [Highlight]
     let holder: Bool
+    let corrected: Bool
     let label: String?
     let play: (PlaybackTarget) -> Void
     let correct: () -> Void
@@ -203,8 +206,6 @@ private struct Passage: View {
     @State private var showingSources = false
     @Environment(\.readingScale) private var scale
     @Environment(\.colorSchemeContrast) private var contrast
-
-    private var corrected: Bool { meeting.revisions.contains { $0.field == "segment:\(segment.id.uuidString)" } }
 
     var body: some View {
         MarginRow(gutterDot: corrected ? DaybookStyle.accent : nil) {
