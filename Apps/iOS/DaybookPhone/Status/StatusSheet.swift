@@ -37,7 +37,7 @@ extension PresentationDetent {
 
 /// Tall enough for the Record row and the lines at the person's text size, measured from the fonts they
 /// use, so nothing is cut off. At the accessibility sizes compact holds the Record row and one line, its
-/// title and its words each on up to two lines (`StatusSheetModel.compactLines`), so the list above stays
+/// title and its words sharing four rows (`StatusSheetModel.compactLines`), so the list above stays
 /// usable; the rest are a tap away. At most 55% of the screen; past that, the line scrolls.
 struct StatusCompactDetent: CustomPresentationDetent {
     /// Room above Record, so the sheet's grabber sits clearly above it.
@@ -60,12 +60,12 @@ struct StatusCompactDetent: CustomPresentationDetent {
     }
 
     /// The lines' height at a text size: one row each, or at the accessibility sizes one line with its title
-    /// and its words each on up to two lines (`StatusLineView`, stacked); the room between them, and a
-    /// progress line's under the last.
+    /// and its words sharing four rows (`StatusLineView`, stacked); the room between them, and a progress
+    /// line's under the last.
     static func linesHeight(for size: DynamicTypeSize, lines: Int = lineCount) -> CGFloat {
         let line = lineHeight(.subheadline, at: size)
         if size.isAccessibilitySize {
-            return 2 * CGFloat(StatusMetrics.stackedLineLimit) * line + 2 + 6
+            return CGFloat(StatusMetrics.stackedRows) * line + 2 + 6
         }
         return CGFloat(lines) * line + CGFloat(max(0, lines - 1)) * PhoneStyle.Space.s2 + 6
     }

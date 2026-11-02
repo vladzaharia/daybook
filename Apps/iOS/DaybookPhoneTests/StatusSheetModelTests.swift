@@ -492,13 +492,13 @@ final class StatusSheetModelTests: XCTestCase {
     }
 
     /// ui-iphone-02, hig-ios-05: at the accessibility sizes a line's title wraps as its words do ("Vlad’s / MacBook Pro"
-    /// over "Last seen / today, 2:29 AM"), so compact makes room for both on two lines each and the progress line,
-    /// on the iPhone's sheet and the Duo's panel alike, short of the cap.
+    /// over "Last seen / today, 2:29 AM"), so compact makes room for the four rows they share (a one-line title leaves
+    /// its words three) and the progress line, on the iPhone's sheet and the Duo's panel alike, short of the cap.
     func testCompactDetentHoldsAWrappedTitleAndItsWordsAtTheAccessibilitySizes() {
         for size in DynamicTypeSize.allCases.filter(\.isAccessibilitySize) {
             let line = StatusCompactDetent.lineHeight(.subheadline, at: size)
-            let rows = 2 * CGFloat(StatusMetrics.stackedLineLimit)
-            XCTAssertEqual(rows, 4, "a title and its words, two lines each")
+            let rows = CGFloat(StatusMetrics.stackedRows)
+            XCTAssertEqual(rows, 4, "a title and its words, four rows between them")
             let lines = StatusCompactDetent.linesHeight(for: size)
             // The title's two lines, 2 pt, the words' two lines, then 4 pt and the 2 pt progress line.
             XCTAssertGreaterThanOrEqual(lines, rows * line + 2 + 4 + 2, "\(size)")

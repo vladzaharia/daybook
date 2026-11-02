@@ -24,12 +24,33 @@ final class StatusLineTests: XCTestCase {
     }
 
     /// ui-iphone-02: under touch a line's glyph column grows with the text but stops where a large glyph still fits,
-    /// and the glyph stops growing before it; the words go under the title on two lines at the accessibility sizes.
+    /// and the glyph stops growing before it; at the accessibility sizes the title and its words share four rows.
     func testBehaviorALinesGlyphColumnHasALimit() {
         XCTAssertEqual(StatusMetrics.glyphColumnLimit, 44)
         XCTAssertGreaterThan(StatusMetrics.glyphColumnLimit, StatusMetrics.phone.glyphColumn)
         XCTAssertEqual(StatusMetrics.largestGlyphSize, .accessibility2)
-        XCTAssertEqual(StatusMetrics.stackedLineLimit, 2)
+        XCTAssertEqual(StatusMetrics.stackedRows, 4)
+        XCTAssertEqual(StatusMetrics.stackedTitleLimit, 2)
+        XCTAssertEqual(StatusMetrics.stackedWordsLimit(titleLines: 1), 3, "a one-line title leaves its words three rows")
+        XCTAssertEqual(StatusMetrics.stackedWordsLimit(titleLines: 2), 2)
         XCTAssertFalse(StatusMetrics.mac.usesTextStyles, "the Mac's lines keep their fixed column")
+    }
+
+    /// ui-iphone-02: at the accessibility sizes a short title ("iCloud") takes one row, and its words the three it leaves,
+    /// so "Waiting for this library's key" isn't cut off with a row to spare; a title on two rows leaves its words two.
+    /// Either way the line stays within the four rows the compact detent makes room for.
+    @MainActor
+    func testBehaviorAStackedLinesWordsTakeTheRowsItsTitleLeaves() {
+        func height(_ title: String, _ text: String) -> CGFloat {
+            let line = StatusLineItem(id: "sync", symbol: "icloud", title: title, text: text, tone: .attention)
+            let view = StatusLineView(line, metrics: .phone).environment(\.dynamicTypeSize, .accessibility5)
+            return NSHostingController(rootView: view).sizeThatFits(in: CGSize(width: 150, height: 10_000)).height
+        }
+        let words = String(repeating: "Waiting for this library’s key ", count: 6)
+        let one = height("iCloud", "Key"), shortTitle = height("iCloud", words), longTitle = height("Alex’s Studio MacBook Pro in the Office", words)
+        let row = (one - 2) / 2
+        XCTAssertGreaterThan(row, 0)
+        XCTAssertEqual(shortTitle, 4 * row + 2, accuracy: row / 3, "a one-row title, then its words on three rows, cut after them")
+        XCTAssertEqual(longTitle, 4 * row + 2, accuracy: row / 3, "a two-row title, then its words on two")
     }
 }

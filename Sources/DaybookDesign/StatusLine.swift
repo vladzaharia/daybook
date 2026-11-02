@@ -93,8 +93,15 @@ public struct StatusMetrics: Equatable, Sendable {
     public static let glyphColumnLimit: CGFloat = 44
     /// The largest text size a line's glyph follows.
     public static let largestGlyphSize = DynamicTypeSize.accessibility2
-    /// The most lines a line's words take when they sit under the title, at the accessibility sizes.
-    public static let stackedLineLimit = 2
+    /// The rows a line's title and words share when the words go under the title, at the accessibility sizes.
+    public static let stackedRows = 4
+    /// The most of them the title takes; the words take the rest, so a one-line title leaves them three.
+    public static let stackedTitleLimit = 2
+
+    /// The lines the words take under a title on this many lines.
+    public static func stackedWordsLimit(titleLines: Int) -> Int {
+        stackedRows - min(max(1, titleLines), stackedTitleLimit)
+    }
 
     var titleFont: Font { usesTextStyles ? .subheadline.weight(.medium) : .system(size: titleSize, weight: .medium) }
     var textFont: Font { usesTextStyles ? .subheadline : .system(size: textSize) }
@@ -103,9 +110,10 @@ public struct StatusMetrics: Equatable, Sendable {
 
 /// A status line: glyph, title, and what's happening, in one row; the gradient line under it while
 /// work runs. Recording swaps the glyph for the red dot. Under touch the glyph column grows with
-/// Dynamic Type, and at the accessibility sizes the words go under the title, on up to two lines, so
-/// nothing is drawn over or cut to a letter. A countdown's words count down a second at a time, the
-/// digits rolling (fading under Reduce Motion), and only they redraw.
+/// Dynamic Type, and at the accessibility sizes the words go under the title, the two sharing four
+/// rows (the title on one or two, the words on the rest), so nothing is drawn over or cut to a letter.
+/// A countdown's words count down a second at a time, the digits rolling (fading under Reduce Motion),
+/// and only they redraw.
 public struct StatusLineView: View {
     private let line: StatusLineItem
     private let override: StatusMetrics?
@@ -135,20 +143,18 @@ public struct StatusLineView: View {
     public var body: some View {
         let metrics = metrics, column = glyphColumn
         VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .firstTextBaseline, spacing: metrics.spacing) {
-                StatusGlyph(symbol: line.symbol, tone: line.tone, animates: line.tone == .working && line.progress == nil && !reduceMotion,
-                            font: metrics.glyphFont, dot: metrics.glyphSize * 0.62)
-                    .dynamicTypeSize(...StatusMetrics.largestGlyphSize)
-                    .frame(width: column)
-                if stacks {
-                    VStack(alignment: .leading, spacing: 2) {
-                        title.lineLimit(StatusMetrics.stackedLineLimit)
-                        words
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
+            if stacks {
+                // The title on one line when it fits there, so its words get the row it leaves; else on two.
+                // Only the title's width decides: the words ask for none of their own.
+                ViewThatFits(in: .horizontal) {
+                    stacked(titleLines: 1, metrics: metrics, column: column)
+                    stacked(titleLines: StatusMetrics.stackedTitleLimit, metrics: metrics, column: column)
+                }
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: metrics.spacing) {
+                    glyph(metrics, column: column)
                     title.lineLimit(1).layoutPriority(1)
-                    words
+                    words(limit: 1)
                     Spacer(minLength: 0)
                 }
             }
@@ -161,6 +167,26 @@ public struct StatusLineView: View {
         .accessibilityLabel(line.accessibilityLabel)
     }
 
+    private func glyph(_ metrics: StatusMetrics, column: CGFloat) -> some View {
+        StatusGlyph(symbol: line.symbol, tone: line.tone, animates: line.tone == .working && line.progress == nil && !reduceMotion,
+                    font: metrics.glyphFont, dot: metrics.glyphSize * 0.62)
+            .dynamicTypeSize(...StatusMetrics.largestGlyphSize)
+            .frame(width: column)
+    }
+
+    /// The glyph beside the title on up to `titleLines` lines, and the words under the title on the rows it leaves.
+    private func stacked(titleLines: Int, metrics: StatusMetrics, column: CGFloat) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: metrics.spacing) {
+            glyph(metrics, column: column)
+            VStack(alignment: .leading, spacing: 2) {
+                title.lineLimit(titleLines)
+                words(limit: StatusMetrics.stackedWordsLimit(titleLines: titleLines))
+                    .frame(minWidth: 0, idealWidth: 0, maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
     private var title: some View {
         Text(line.title)
             .font(metrics.titleFont)
@@ -168,25 +194,25 @@ public struct StatusLineView: View {
     }
 
     /// What's happening: the whole of it when it fits, else the short form, else cut at the end; under
-    /// the title, up to two lines. A countdown ticks inside its own timeline.
-    @ViewBuilder private var words: some View {
+    /// the title, on up to `limit` lines. A countdown ticks inside its own timeline.
+    @ViewBuilder private func words(limit: Int) -> some View {
         if line.countdownUntil != nil {
             TimelineView(.periodic(from: .now, by: 1)) { context in
-                fitted(line.text(at: context.date), short: line.shortText(at: context.date))
+                fitted(line.text(at: context.date), short: line.shortText(at: context.date), limit: limit)
                     .contentTransition(reduceMotion ? .opacity : .numericText(countsDown: true))
                     .daybookMotion(DaybookMotion.tick, value: line.secondsLeft(at: context.date))
             }
         } else {
-            fitted(line.text, short: line.shortText)
+            fitted(line.text, short: line.shortText, limit: limit)
                 .contentTransition(.numericText())
         }
     }
 
-    @ViewBuilder private func fitted(_ text: String, short: String?) -> some View {
+    @ViewBuilder private func fitted(_ text: String, short: String?, limit: Int) -> some View {
         if stacks {
             // A separator stays with the words before it, so a line never starts "· 40%".
             lineText(text.replacingOccurrences(of: " · ", with: "\u{00A0}· "))
-                .lineLimit(StatusMetrics.stackedLineLimit).truncationMode(.tail)
+                .lineLimit(limit).truncationMode(.tail)
                 .fixedSize(horizontal: false, vertical: true)
         } else {
             ViewThatFits(in: .horizontal) {
