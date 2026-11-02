@@ -75,9 +75,13 @@ final class RecordingActivityController {
         return withoutLevel == state
     }
 
+    /// What the last recording's activity ended on, whether or not one was showing (tests read it).
+    private(set) var endedOn: RecordingActivityAttributes.ContentState?
+
     /// Ends the activity on `state`, after any update still on its way: Saved goes in a few seconds;
     /// Recording stopped stays on the Lock Screen until the person has seen it.
     func end(_ state: RecordingActivityAttributes.ContentState) {
+        endedOn = state
         guard runner.isRunning else { return }
         current = nil
         runner.end(ActivityContent(state: state, staleDate: nil), dismissalPolicy: Self.dismissal(for: state))

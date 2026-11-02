@@ -638,10 +638,9 @@ final class PhoneAppModel: RecordingCommandHandling {
         let stopping = recorder.captureID
         sharing.flushSharedNotes()
         sharing.stopSharingCaptions()
+        // What the Live Activity ends on, its clock frozen where it stopped: read now, before the recorder resets.
         var final = activityState()
-        final.phase = .saved
         final.frozenElapsed = recorder.pausedAt ?? recorder.elapsedTime
-        activities.end(final)
         isFiling = true
         defer { isFiling = false }
         let session = multipoints.session
@@ -649,7 +648,11 @@ final class PhoneAppModel: RecordingCommandHandling {
         // Finishing and filing must complete even if the caller is cancelled (an intent that timed
         // out, a view that went away): an unstructured task doesn't inherit cancellation.
         let filing = Task { @MainActor () -> StopOutcome in
-            guard var recording = await self.recorder.stop() else {
+            let stopped = await self.recorder.stop()
+            // Saved only once there's a recording to save.
+            self.activities.end(Self.endedActivity(final, recorded: stopped != nil, failure: self.recorder.lastFailure,
+                                                   kept: self.recorder.unfinishedFolder != nil))
+            guard var recording = stopped else {
                 self.recorder.audioTap = nil
                 await self.captions.finish()
                 let outcome = await self.fileUnfinished(self.recorder.unfinishedFolder, failure: self.recorder.lastFailure,

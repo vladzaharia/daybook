@@ -38,6 +38,9 @@ final class UnrecordedCaptureTests: XCTestCase {
         XCTAssertEqual(meeting.visiblePhotos.count, 1)
         XCTAssertEqual(model.lastFiledID, id)
         XCTAssertTrue(PhoneRecorder.pendingCaptures(in: model.library.stagingURL).isEmpty, "nothing left in staging")
+        let ended = try XCTUnwrap(model.activities.endedOn)
+        XCTAssertEqual(ended.title(isStale: false), "Recording stopped", "never Saved on the Lock Screen")
+        XCTAssertEqual(ended.endLine, "No audio was recorded")
     }
 
     func testBehaviorStopWithNoAudioAndNothingElseSaysSoAndKeepsNothing() async throws {
@@ -53,6 +56,36 @@ final class UnrecordedCaptureTests: XCTestCase {
         XCTAssertFalse(model.notice?.contains("tries again") ?? true, "never a retry that can't succeed")
         XCTAssertTrue(model.library.conversations.isEmpty)
         XCTAssertTrue(PhoneRecorder.pendingCaptures(in: model.library.stagingURL).isEmpty)
+        let ended = try XCTUnwrap(model.activities.endedOn)
+        XCTAssertEqual(ended.phase, .stopped)
+        XCTAssertEqual(ended.title(isStale: false), "Recording stopped", "never Saved on the Lock Screen")
+        XCTAssertEqual(ended.endLine, "No audio was recorded")
+    }
+
+    func testBehaviorTheLiveActivityEndsAsSavedOnlyWithARecording() {
+        let started = Date(timeIntervalSince1970: 1_800_000_000)
+        let final = RecordingActivityAttributes.ContentState(phase: .recording, timerStart: started, frozenElapsed: 754, level: 1,
+                                                             bookmarkCount: 1)
+        let saved = PhoneAppModel.endedActivity(final, recorded: true, failure: nil, kept: true)
+        XCTAssertEqual(saved.title(isStale: false), "Saved")
+        XCTAssertEqual(saved.endLine, "Saved to Daybook")
+        XCTAssertEqual(saved.frozenElapsed, 754)
+
+        // No audio, or a start that never got any.
+        let silent: [(PhoneRecorderError?, Bool)] = [(.nothingRecorded, true), (nil, false)]
+        for (failure, kept) in silent {
+            let nothing = PhoneAppModel.endedActivity(final, recorded: false, failure: failure, kept: kept)
+            XCTAssertEqual(nothing.phase, .stopped, "\(String(describing: failure))")
+            XCTAssertEqual(nothing.title(isStale: false), "Recording stopped")
+            XCTAssertEqual(nothing.endLine, "No audio was recorded")
+            XCTAssertTrue(nothing.hasEnded)
+        }
+
+        // Audio Daybook couldn't finish is kept for the next launch: everything up to then is saved.
+        let unfinished = PhoneAppModel.endedActivity(final, recorded: false, failure: .encoderUnavailable("finish"), kept: true)
+        XCTAssertEqual(unfinished.title(isStale: false), "Recording stopped")
+        XCTAssertEqual(unfinished.endLine, "Everything up to then is saved")
+        XCTAssertEqual(unfinished.frozenElapsed, 754)
     }
 
     func testBehaviorALaunchFilesTheNotesAnEarlierRunLeftWithoutAudio() async throws {

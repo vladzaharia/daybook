@@ -154,6 +154,24 @@ extension PhoneAppModel {
                                                  frozenElapsed: recording?.duration ?? 0, level: 0, bookmarkCount: bookmarks)
     }
 
+    /// The Live Activity's end once Stop has finished the recording (`final`: what it showed, its clock
+    /// frozen where it stopped). Saved when there's a recording; never without one. A capture with no
+    /// audio (or a start that never got any) ends as stopped, "No audio was recorded"; one Daybook
+    /// couldn't finish, kept for the next launch, as stopped with everything up to then saved.
+    static func endedActivity(_ final: RecordingActivityAttributes.ContentState, recorded: Bool, failure: PhoneRecorderError?,
+                              kept: Bool) -> RecordingActivityAttributes.ContentState {
+        var ended = final
+        ended.canResume = nil
+        guard !recorded else {
+            ended.phase = .saved
+            return ended
+        }
+        ended.phase = .stopped
+        ended.level = 0
+        if failure == .nothingRecorded || !kept { ended.frozenElapsed = 0 }
+        return ended
+    }
+
     /// Files recordings a killed or crashed run left in staging.
     func recoverLeftovers() async {
         for folder in PhoneRecorder.pendingCaptures(in: library.stagingURL) where folder.standardizedFileURL != recorder.stagingDirectory?.standardizedFileURL {

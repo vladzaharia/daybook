@@ -137,6 +137,7 @@ final class AppDestinationTests: XCTestCase {
         rig.pump(2)
         try await model.stopRecording()
         XCTAssertEqual(model.lastStopResult, .saved)
+        XCTAssertEqual(model.activities.endedOn?.endLine, "Saved to Daybook", "the Lock Screen agrees")
     }
 
     func testBehaviorAStartFromTheBackgroundContinuesInFrontOnlyWhenTheMicrophoneWasNeverAsked() throws {
