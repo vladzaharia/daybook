@@ -23,7 +23,7 @@ struct EncryptionRows: View {
                     .disabled(model.sync.isSyncing)
             case .waitingForKey:
                 ForEach(model.link.connectedMacs) { mac in
-                    Button("Get Key from \(mac.name)") { Task { await model.requestLibraryKey(from: mac.id) } }
+                    Button("Get Key from \(mac.name)") { getKey(from: mac) }
                 }
                 Button("Enter Recovery Key…") { enteringKey = true }
                 if model.sync.mayStartOver {
@@ -63,6 +63,16 @@ struct EncryptionRows: View {
             Button("Start Over", role: .destructive) { startOver() }
         } message: {
             Text(LibraryWords.startOverConsequence)
+        }
+    }
+
+    /// Asks a Mac for the key; one that can't be reached is said here.
+    private func getKey(from mac: PhoneLink.Mac) {
+        problem = nil
+        Task {
+            do { try await model.requestLibraryKey(from: mac.id) } catch {
+                problem = ReadingAlert(title: "Couldn’t Reach \(mac.name)", message: "Make sure both are on the same Wi‑Fi, then try again.")
+            }
         }
     }
 

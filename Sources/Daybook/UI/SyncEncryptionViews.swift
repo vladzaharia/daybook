@@ -35,7 +35,7 @@ struct SyncEncryptionRows: View {
             case .waitingForKey:
                 ProblemLine(text: "Turn on iCloud Keychain, or get the key from another device.", symbol: "lock.icloud.fill") {
                     ForEach(shown.keyPeers) { phone in
-                        Button("Get Key from \(phone.name)") { Task { await state.requestLibraryKey(from: phone.id) } }
+                        Button("Get Key from \(phone.name)") { getKey(from: phone) }
                     }
                     Button("Enter Recovery Key…") { enteringKey = true }
                     if shown.mayStartOverEncryption {
@@ -92,6 +92,16 @@ struct SyncEncryptionRows: View {
             Button("Cancel", role: .cancel) { }
         } message: {
             Text("This can’t be undone.")
+        }
+    }
+
+    /// Asks an iPhone for the key; one that can't be reached is said in the section's problem line.
+    private func getKey(from phone: SyncShown.KeyPeer) {
+        problem = nil
+        Task {
+            do { try await state.requestLibraryKey(from: phone.id) } catch {
+                problem = AppProblem(title: "Couldn’t Reach \(phone.name)", message: "Make sure both are on the same Wi‑Fi, then try again.")
+            }
         }
     }
 

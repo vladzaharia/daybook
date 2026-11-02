@@ -324,12 +324,14 @@ final class PhoneAppModel: RecordingCommandHandling {
         }
     }
 
-    /// Asks a connected Mac for the encrypted library's key this iPhone is waiting for. Only that Mac's answer is kept.
-    func requestLibraryKey(from macID: UUID) async {
+    /// Asks a connected Mac for the encrypted library's key this iPhone is waiting for. Only that Mac's answer is
+    /// kept. Throws when the Mac can't be reached, so Settings can say so.
+    func requestLibraryKey(from macID: UUID) async throws {
+        guard link.macs.first(where: { $0.id == macID })?.isConnected == true else { throw LinkError.notConnected }
         guard let controller = sync.controller, let request = await controller.libraryKeyRequest() else { return }
         // Noted before sending, so an answer that comes back at once already finds it.
         controller.noteKeyRequested(from: macID)
-        try? await link.send(.libraryKeyRequest(request), to: macID)
+        try await link.send(.libraryKeyRequest(request), to: macID)
     }
 
     private static func testDefaults() -> UserDefaults {

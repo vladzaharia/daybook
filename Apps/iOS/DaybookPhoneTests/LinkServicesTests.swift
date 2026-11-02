@@ -827,6 +827,17 @@ final class LinkServicesTests: XCTestCase {
         XCTAssertEqual(inbox.states.map(\.phase), phases, "a stop's stopping never arrives after its idle")
     }
 
+    func testBehaviorAskingAMacThatIsntConnectedForTheKeySaysSo() async throws {
+        let link = makeLink()
+        let model = try makeModel(link: link, rig: RecorderRig())
+        do {
+            try await model.requestLibraryKey(from: UUID())
+            XCTFail("a Mac that isn't connected can't be asked")
+        } catch {
+            XCTAssertEqual(error as? LinkError, .notConnected)
+        }
+    }
+
     func testBehaviorStopOnAMacStopsItWhenItStopsForPages() async throws {
         let id = UUID()
         let store = MemoryLinkKeyStore()

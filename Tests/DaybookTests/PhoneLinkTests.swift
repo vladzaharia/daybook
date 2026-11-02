@@ -986,6 +986,18 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertNil(SourceHooks.companionLine(closed, recordingNow: false, now: Date().addingTimeInterval(3 * 86_400)))
     }
 
+    // MARK: Library keys
+
+    func testBehaviorAskingAPhoneThatIsntConnectedForTheKeySaysSo() async throws {
+        let rig = try await rig()
+        do {
+            try await rig.state.requestLibraryKey(from: UUID())
+            XCTFail("an iPhone that isn't connected can't be asked")
+        } catch {
+            XCTAssertEqual(error as? LinkError, .notConnected)
+        }
+    }
+
     // MARK: Progress and nudges
 
     func testProgressMessagesReachThePhoneWhileProcessing() async throws {

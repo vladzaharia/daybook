@@ -195,12 +195,14 @@ extension AppState {
         if sent { post(["Sent this library’s key to \(peer.name)."]) }
     }
 
-    /// Asks a connected iPhone for the encrypted library's key this Mac is waiting for. Only that iPhone's answer is kept.
-    func requestLibraryKey(from phone: UUID) async {
+    /// Asks a connected iPhone for the encrypted library's key this Mac is waiting for. Only that iPhone's answer is
+    /// kept. Throws when the iPhone can't be reached, so Settings can say so.
+    func requestLibraryKey(from phone: UUID) async throws {
+        guard phoneLink.peers[phone] != nil else { throw LinkError.notConnected }
         guard let request = await sync.libraryKeyRequest() else { return }
         // Noted before sending, so an answer that comes back at once already finds it.
         sync.noteKeyRequested(from: phone)
-        try? await phoneLink.send(.libraryKeyRequest(request), to: phone)
+        try await phoneLink.send(.libraryKeyRequest(request), to: phone)
     }
 
     /// The connected phone that manages a recorder (by its synced ownership), when it starts and stops
