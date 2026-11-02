@@ -105,7 +105,7 @@ extension LibrarySyncEngine {
     func setAside(_ entry: JournalEntry) {
         deleteRemote(entry.url)
         if let delivered = inboxCopy(entry.path) { discardDelivery(delivered) }
-        replacedEntries.insert(entry.path)
+        sealingRuntime.replacedEntries.insert(entry.path)
     }
 
     /// After a pass of a library that started over: objects here whose header names a library it replaced (a rival that
@@ -114,11 +114,11 @@ extension LibrarySyncEngine {
     ///
     /// A rival started at the same time as this one (`Sealing.rivals`) had its key, and maybe things only it held (a
     /// recording an iPhone let go of locally): its files go only once every device has moved on to this library's key
-    /// (`rivalFilesMayGo`), having published what it holds here, and an object only once what it holds is in this library
+    /// (`sealingRuntime.rivalFilesMayGo`), having published what it holds here, and an object only once what it holds is in this library
     /// too (`journalAssets` names it and this library has it). One nothing here holds stays, with the rival's key.
     func deleteReplacedObjects(journalAssets: Set<String> = []) {
         guard let sealing, let replaced = sealing.manifest.replaces, !replaced.isEmpty else { return }
-        let going = Set(replaced.filter { !sealing.isRival($0) || rivalFilesMayGo })
+        let going = Set(replaced.filter { !sealing.isRival($0) || sealingRuntime.rivalFilesMayGo })
         var republished = Set<String>()
         for rival in going where sealing.isRival(rival) {
             for key in (try? keyStore?.keys(for: rival) ?? []) ?? [] {
@@ -156,10 +156,10 @@ extension LibrarySyncEngine {
                 let url = folder.appendingPathComponent(stem), path = "\(directory)/\(stem)"
                 switch SyncFiles.itemState(url) {
                 case .local:
-                    guard let library = checkedObjects[path] ?? sealedLibrary(of: url) else { continue }
+                    guard let library = sealingRuntime.checkedObjects[path] ?? sealedLibrary(of: url) else { continue }
                     if replaced.contains(library), kind != .blob || objectMayGo(path, library) {
-                        deleteRemote(url); checkedObjects[path] = nil
-                    } else { checkedObjects[path] = library }
+                        deleteRemote(url); sealingRuntime.checkedObjects[path] = nil
+                    } else { sealingRuntime.checkedObjects[path] = library }
                 case .inCloud:
                     if starting && kind == .blob { deleteRemote(url) }
                 case .absent:

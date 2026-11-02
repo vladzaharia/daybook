@@ -209,7 +209,7 @@ extension LibrarySyncEngine {
                     try? fm.removeItem(at: url)
                 } else if directory == "Events" || directory == "Metadata", sealing?.plaintextNeedsVouching == true,
                           let id = SyncJournalFile.address(of: name, in: directory),
-                          !(directory == "Events" ? eventCache[id] != nil : metadataCache[id] != nil) {
+                          !(directory == "Events" ? journalCache.headers[id] != nil : journalCache.settings[id] != nil) {
                     // One the library doesn't vouch for was never applied here (`admitPlaintext`): iCloud Drive brings its
                     // author's copy, if it has one.
                     try? fm.removeItem(at: url)

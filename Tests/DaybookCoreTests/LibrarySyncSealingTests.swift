@@ -1269,7 +1269,7 @@ final class LibrarySyncSealingTests: XCTestCase {
         XCTAssertEqual(found.warnings, []); XCTAssertEqual(found.pendingDownloads, 0)
         var counts = await mac.heldAsideLately("Sealed/Events/\(event.name)")
         XCTAssertTrue(counts)
-        var complete = await mac.compactionReadComplete
+        var complete = await mac.compactionRuntime.readComplete
         XCTAssertFalse(complete, "a compaction record it can't read may list what was pruned")
 
         let monthOn = retiredAt.addingTimeInterval(LibrarySyncEngine.heldAsideWindow + 60)
@@ -1277,7 +1277,7 @@ final class LibrarySyncSealingTests: XCTestCase {
         try await pass(mac, "Mac", [kept])
         counts = await mac.heldAsideLately("Sealed/Events/\(event.name)")
         XCTAssertFalse(counts)
-        complete = await mac.compactionReadComplete
+        complete = await mac.compactionRuntime.readComplete
         XCTAssertTrue(complete)
         XCTAssertTrue(files("Sealed/Events").contains(event.name)); XCTAssertTrue(files("Sealed/Compaction").contains(record.name))
         // Opened again, it remembers when it found them.
@@ -1287,7 +1287,7 @@ final class LibrarySyncSealingTests: XCTestCase {
         XCTAssertEqual(again.warnings, []); XCTAssertEqual(again.publishedEvents, 0)
         counts = await reopened.heldAsideLately("Sealed/Events/\(event.name)")
         XCTAssertFalse(counts)
-        complete = await reopened.compactionReadComplete
+        complete = await reopened.compactionRuntime.readComplete
         XCTAssertTrue(complete)
     }
 

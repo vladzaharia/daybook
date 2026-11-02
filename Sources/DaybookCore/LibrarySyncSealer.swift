@@ -286,8 +286,8 @@ extension LibrarySyncEngine {
 
         // Journal entries and compaction records: from before, or sealed under another key.
         for (entries, kind) in [(input.eventEntries, SealedKind.event), (input.metadataEntries, .metadata), (input.compactionEntries, .compaction)] {
-            for entry in entries where !entry.isSealed || sealedKeys[entry.path] != current.id {
-                guard let id = entry.isSealed ? sealedNames[entry.path] : entry.name else { progress.remaining += 1; continue }
+            for entry in entries where !entry.isSealed || sealingRuntime.sealedKeys[entry.path] != current.id {
+                guard let id = entry.isSealed ? sealingRuntime.sealedNames[entry.path] : entry.name else { progress.remaining += 1; continue }
                 let author: String
                 if kind == .event {
                     guard let header = input.events[id] else { progress.remaining += 1; continue }
@@ -295,7 +295,7 @@ extension LibrarySyncEngine {
                     if input.deleted.contains(header.meetingID), !header.deleted { continue }
                     author = header.deviceID
                 } else if kind == .compaction {
-                    guard let record = compactionRecords[entry.path], record.id == id else { progress.remaining += 1; continue }
+                    guard let record = compactionRuntime.records[entry.path], record.id == id else { progress.remaining += 1; continue }
                     author = record.record.deviceID
                 } else {
                     guard let record = input.metadata[id] else { progress.remaining += 1; continue }
@@ -317,7 +317,7 @@ extension LibrarySyncEngine {
         // while iCloud refuses uploads for lack of storage.
         if isMigrator {
             // Downloads asked for that arrived, or whose object went, make room for the next batch.
-            sealerDownloads = sealerDownloads.filter { SyncFiles.itemState(remoteRoot.appendingPathComponent($0)) == .inCloud }
+            sealingRuntime.downloads = sealingRuntime.downloads.filter { SyncFiles.itemState(remoteRoot.appendingPathComponent($0)) == .inCloud }
             var backlog: (bytes: Int64, refused: Bool)?
             objects: for (meetingID, assets) in input.liveAssets.sorted(by: { $0.key.uuidString < $1.key.uuidString }) where !input.deleted.contains(meetingID) {
                 for asset in assets {
@@ -392,10 +392,10 @@ extension LibrarySyncEngine {
         let path = String(object.url.standardizedFileURL.path.dropFirst(remoteRoot.path.count + 1))
         guard SyncFiles.itemState(object.url) == .local else {
             guard audioPolicy == .onDemand else { try? cloud.requestDownload(object.url); return false }
-            if sealerDownloads.contains(path) { return false }
+            if sealingRuntime.downloads.contains(path) { return false }
             guard network() == .unrestricted else { progress.waitsForWiFi = true; return false }
-            guard sealerDownloads.count < Self.sealerDownloadBatch else { return false }
-            sealerDownloads.insert(path)
+            guard sealingRuntime.downloads.count < Self.sealerDownloadBatch else { return false }
+            sealingRuntime.downloads.insert(path)
             try? cloud.requestDownload(object.url)
             return false
         }
@@ -408,7 +408,7 @@ extension LibrarySyncEngine {
         try uploadSealed(asset, from: temporary, sealing: sealing)
         if audioPolicy == .onDemand {
             // Downloaded only to seal it, and in iCloud: iCloud may drop this device's copy.
-            sealerDownloads.remove(path)
+            sealingRuntime.downloads.remove(path)
             cloud.evictLocalCopy(object.url)
         }
         return true
@@ -459,8 +459,8 @@ extension LibrarySyncEngine {
                 if plan.complete {
                     // Plaintext entries compaction pruned need no sealed counterpart: they go too, once what says they're
                     // pruned is in iCloud.
-                    if compactionRecords.values.filter(\.record.isCommit).allSatisfy({ cloud.isUploaded($0.url) }) {
-                        for path in prunedEntryPaths where !path.hasPrefix("Sealed/") { deleteRemote(remoteRoot.appendingPathComponent(path)) }
+                    if compactionRuntime.records.values.filter(\.record.isCommit).allSatisfy({ cloud.isUploaded($0.url) }) {
+                        for path in compactionRuntime.prunedEntryPaths where !path.hasPrefix("Sealed/") { deleteRemote(remoteRoot.appendingPathComponent(path)) }
                     }
                     deleteStalePresence()
                     if sealing.manifest.legacyRetired == nil, let updated = try? updateManifest({ $0.sealing?.legacyRetired = now }), let description = updated.sealing {
@@ -476,7 +476,8 @@ extension LibrarySyncEngine {
         // Retiring keys that aren't current.
         let oldKeys = sealing.keys.values.filter { $0.id != current.id }
         let listedOld = sealing.manifest.keys.filter { $0.id != current.idHex }
-        let oldEntriesListed = (input.eventEntries + input.metadataEntries + input.compactionEntries).contains { $0.isSealed && sealedKeys[$0.path] != current.id }
+        let oldEntriesListed = (input.eventEntries + input.metadataEntries + input.compactionEntries)
+            .contains { $0.isSealed && sealingRuntime.sealedKeys[$0.path] != current.id }
         guard !listedOld.isEmpty || oldEntriesListed else { progress.oldKeysRetired = true; return }
         progress.oldKeysRetired = false
         var ready = true
@@ -488,7 +489,8 @@ extension LibrarySyncEngine {
         }
         if recent.contains(where: { $0.key != SyncDeviceKeyState(state: .ready, id: current.idHex) }) { ready = false; progress.waitingFor.append(.devicesWithCurrentKey) }
         guard ready else { return }
-        let oldEntries = (input.eventEntries + input.metadataEntries + input.compactionEntries).filter { $0.isSealed && sealedKeys[$0.path] != current.id }
+        let oldEntries = (input.eventEntries + input.metadataEntries + input.compactionEntries)
+            .filter { $0.isSealed && sealingRuntime.sealedKeys[$0.path] != current.id }
         // An old key's objects: every object the journal ever named, under every old key the manifest still lists (once
         // it doesn't, they're gone; a stray one is left, unreadable to no one with the key).
         var oldBlobs: [(String, Data?)] = []
@@ -536,7 +538,7 @@ extension LibrarySyncEngine {
             let held = (try? keyStore.keys(for: library)) ?? []
             guard !held.isEmpty else { continue }
             if sealing.isRival(library) {
-                guard rivalFilesMayGo, sealedObjectsNaming(library: library, knownShas: knownShas) == false else { continue }
+                guard sealingRuntime.rivalFilesMayGo, sealedObjectsNaming(library: library, knownShas: knownShas) == false else { continue }
             }
             for key in held { try? keyStore.remove(keyID: key.id, libraryID: library) }
         }
@@ -552,7 +554,7 @@ extension LibrarySyncEngine {
         let due = Set(retired.filter { now.timeIntervalSince($0.at) >= Self.retiredKeyRemoval && sealing.manifest.isRetired($0.id) }.map(\.id))
         let held = sealing.keys.values.filter { due.contains($0.idHex) && $0.id != sealing.current.id }
         guard !held.isEmpty, everyDeviceOnCurrentKey(now: now) else { return }
-        var inUse = Set((entries + compactionRecords.values.map(\.entry)).filter(\.isSealed).compactMap { sealedKeys[$0.path] })
+        var inUse = Set((entries + compactionRuntime.records.values.map(\.entry)).filter(\.isSealed).compactMap { sealingRuntime.sealedKeys[$0.path] })
         for key in held {
             guard let named = sealedObjectsNaming(key: key.id, knownShas: knownShas) else { return }
             if named { inUse.insert(key.id) }
@@ -615,13 +617,13 @@ extension LibrarySyncEngine {
                 let stem = name.hasPrefix(".") && name.hasSuffix(".icloud") ? String(name.dropFirst().dropLast(7)) : name
                 guard SyncFiles.isHash(stem) else { continue }
                 let url = folder.appendingPathComponent(stem), path = "\(directory)/\(stem)"
-                if objectHeaders[path] == nil, directory == "Sealed/Blobs" {
+                if sealingRuntime.objectHeaders[path] == nil, directory == "Sealed/Blobs" {
                     if named == nil { named = objectNames(knownShas) }
-                    if let known = named?[stem] { objectHeaders[path] = known }
+                    if let known = named?[stem] { sealingRuntime.objectHeaders[path] = known }
                 }
-                if objectHeaders[path] == nil {
+                if sealingRuntime.objectHeaders[path] == nil {
                     if SyncFiles.itemState(url) != .local, directory != "Sealed/Blobs" || audioPolicy == .eager || network() == .unrestricted {
-                        headerDownloads.insert(path)
+                        sealingRuntime.headerDownloads.insert(path)
                         try? cloud.requestDownload(url)
                     }
                     guard SyncFiles.itemState(url) == .local else { waiting = true; continue }
@@ -631,11 +633,11 @@ extension LibrarySyncEngine {
                         return try handle.read(upToCount: SealedHeader.size) ?? Data()
                     }
                     guard let parsed = header.flatMap(SealedObject.header(of:)) else { continue }
-                    objectHeaders[path] = (parsed.keyID, parsed.libraryID)
+                    sealingRuntime.objectHeaders[path] = (parsed.keyID, parsed.libraryID)
                     // Downloaded only to read this: iCloud may drop this device's copy.
-                    if headerDownloads.remove(path) != nil, audioPolicy == .onDemand { cloud.evictLocalCopy(url) }
+                    if sealingRuntime.headerDownloads.remove(path) != nil, audioPolicy == .onDemand { cloud.evictLocalCopy(url) }
                 }
-                guard let header = objectHeaders[path] else { continue }
+                guard let header = sealingRuntime.objectHeaders[path] else { continue }
                 if let key, header.keyID == key { found = true }
                 if let library, header.libraryID == library { found = true }
             }
@@ -684,14 +686,16 @@ extension LibrarySyncEngine {
         }
         for entry in entries {
             let kind: SealedKind = entry.directory.hasSuffix("Events") ? .event : entry.directory.hasSuffix(Self.compactionDirectory) ? .compaction : .metadata
-            guard let id = entry.isSealed ? sealedNames[entry.path] : entry.name else { progress.waitingFor.append(.completeRead); complete = false; continue }
+            guard let id = entry.isSealed ? sealingRuntime.sealedNames[entry.path] : entry.name else {
+                progress.waitingFor.append(.completeRead); complete = false; continue
+            }
             let wanted: Bool
             switch kind {
             case .event:
                 guard let header = input.events[id] else { progress.waitingFor.append(.completeRead); complete = false; continue }
                 wanted = !input.deleted.contains(header.meetingID) || header.deleted
             case .compaction:
-                guard compactionRecords[entry.path]?.id == id else { progress.waitingFor.append(.completeRead); complete = false; continue }
+                guard compactionRuntime.records[entry.path]?.id == id else { progress.waitingFor.append(.completeRead); complete = false; continue }
                 wanted = true
             default:
                 guard input.metadata[id] != nil else { progress.waitingFor.append(.completeRead); complete = false; continue }
@@ -732,7 +736,7 @@ extension LibrarySyncEngine {
     private func confirmSealed(_ path: String, kind: SealedKind, id: String) -> Confirmation {
         guard let sealing else { return .missing }
         let url = remoteRoot.appendingPathComponent(path)
-        if !sealerVerified.contains(path) {
+        if !sealingRuntime.verified.contains(path) {
             switch SyncFiles.itemState(url) {
             case .absent: return .missing
             case .inCloud:
@@ -750,7 +754,7 @@ extension LibrarySyncEngine {
                 whole = (try? readSealed(entry, kind: kind, sealing: sealing)).map { SyncDigest.sha256(data: $0.0) == id } == true
             }
             guard whole else { return .missing }
-            sealerVerified.insert(path)
+            sealingRuntime.verified.insert(path)
         }
         return cloud.isUploaded(url) ? .confirmed : .uploading
     }

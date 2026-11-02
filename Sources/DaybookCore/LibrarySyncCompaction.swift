@@ -160,17 +160,17 @@ extension LibrarySyncEngine {
         var read: [String: CompactionEntry] = [:]
         var pending = 0, unreadable = 0, heldBack = 0
         let listed = try compactionEntries()
-        compactionPaths = Set(listed.map(\.path))
+        compactionRuntime.paths = Set(listed.map(\.path))
         // A plaintext record in an encrypted library whose plaintext needs vouching for counts only when it's sealed too, or
         // this process read it when it was history: a commit nothing authenticates could otherwise prune any entry.
         let entries = sealing?.plaintextNeedsVouching == true
-            ? listed.filter { $0.isSealed || compactionRecords[$0.path] != nil || hasSealedCounterpart($0.name, kind: .compaction) }
+            ? listed.filter { $0.isSealed || compactionRuntime.records[$0.path] != nil || hasSealedCounterpart($0.name, kind: .compaction) }
             : listed
         for entry in entries {
             try Task.checkCancellation()
-            if let known = compactionRecords[entry.path] { read[entry.path] = known; continue }
+            if let known = compactionRuntime.records[entry.path] { read[entry.path] = known; continue }
             let unreadableKey = entry.isSealed ? entry.path : entry.name
-            if let reason = unreadableJournal[unreadableKey] { warnings.append(reason); unreadable += 1; continue }
+            if let reason = journalCache.unreadable[unreadableKey] { warnings.append(reason); unreadable += 1; continue }
             do {
                 let (id, bytes) = try readEntry(entry, kind: .compaction)
                 read[entry.path] = CompactionEntry(entry: entry, id: id, record: try SyncCompactionRecord.decode(bytes))
@@ -185,35 +185,36 @@ extension LibrarySyncEngine {
             catch where Self.isPermanent(error) { warnings.append(markUnreadable(unreadableKey, error)); unreadable += 1 }
             catch { pending += 1 }
         }
-        compactionRecords = read
+        compactionRuntime.records = read
         // Pruning is final: what this process learned was pruned stays pruned, even while a consolidated commit that lists
         // it again is still on its way.
-        let pruned = Set(read.values.flatMap { $0.record.pruned ?? [] }).subtracting(prunedIDs)
+        let pruned = Set(read.values.flatMap { $0.record.pruned ?? [] }).subtracting(compactionRuntime.prunedIDs)
         if !pruned.isEmpty { forgetPruned(pruned) }
         let executed = Set(read.values.compactMap(\.record.proposal))
         let latest = read.values.filter(\.record.isProposal).max { ($0.record.createdAt, $0.id) < ($1.record.createdAt, $1.id) }
-        pendingProposal = latest.flatMap { executed.contains($0.id) ? nil : $0 }
-        compactionReadComplete = pending == 0 && unreadable == 0 && heldBack == 0
+        compactionRuntime.pendingProposal = latest.flatMap { executed.contains($0.id) ? nil : $0 }
+        compactionRuntime.readComplete = pending == 0 && unreadable == 0 && heldBack == 0
         return pending
     }
 
     /// Adds to what's pruned, and forgets what's remembered of it.
     func forgetPruned(_ ids: Set<String>) {
-        prunedIDs.formUnion(ids)
+        compactionRuntime.prunedIDs.formUnion(ids)
         for id in ids {
-            eventCache[id] = nil; snapshotCache[id] = nil; metadataCache[id] = nil; journalLocations[id] = nil
+            journalCache.headers[id] = nil; journalCache.snapshots[id] = nil; journalCache.settings[id] = nil; journalCache.locations[id] = nil
         }
     }
 
     /// Whether the sealer leaves an entry alone: a replaced library's, pruned, or held aside.
     func setAsideFromSealer(_ entry: JournalEntry) -> Bool {
-        replacedEntries.contains(entry.path) || prunedEntryPaths.contains(entry.path) || heldAsideEntries[entry.path] != nil
+        sealingRuntime.replacedEntries.contains(entry.path) || compactionRuntime.prunedEntryPaths.contains(entry.path)
+            || sealingRuntime.heldAside[entry.path] != nil
     }
 
     /// A pruned entry a pass found: left out of what the pass read. A courier's copy goes at once (it would otherwise be
     /// written into the sync folder after a day); the sync folder's copy is the compacting Mac's to delete.
     func setAsidePruned(_ entry: JournalEntry) {
-        prunedEntryPaths.insert(entry.path)
+        compactionRuntime.prunedEntryPaths.insert(entry.path)
         if let delivered = inboxCopy(entry.path) { discardDelivery(delivered) }
     }
 
@@ -224,17 +225,17 @@ extension LibrarySyncEngine {
     /// what it added as a new one), so it never publishes against what the proposal prunes. Once true it stays true
     /// (applied heads only move on), and its presence says so.
     func noteCompactionAck() {
-        guard let proposal = pendingProposal, let roots = proposal.record.roots, state.compactionAck != proposal.id else { return }
+        guard let proposal = compactionRuntime.pendingProposal, let roots = proposal.record.roots, state.compactionAck != proposal.id else { return }
         for meeting in proposal.record.deletions ?? [] {
-            guard let id = UUID(uuidString: meeting), state.deletedIDs.contains(id), !heldDeletions.contains(id) else { return }
+            guard let id = UUID(uuidString: meeting), state.deletedIDs.contains(id), !compactionRuntime.heldDeletions.contains(id) else { return }
         }
         for (meeting, root) in roots {
             guard let applied = state.heads[meeting], !applied.isEmpty else { continue }
             // A deleted conversation keeps only its deletions, whatever was applied of it.
             if let id = UUID(uuidString: meeting), state.deletedIDs.contains(id) { continue }
-            if applied.contains(where: { eventCache[$0]?.deleted == true }) { continue }
+            if applied.contains(where: { journalCache.headers[$0]?.deleted == true }) { continue }
             for head in applied where head != root {
-                guard eventCache[head] != nil, ancestorIDs(head, events: eventCache).contains(root) else { return }
+                guard journalCache.headers[head] != nil, ancestorIDs(head, events: journalCache.headers).contains(root) else { return }
             }
         }
         state.compactionAck = proposal.id
@@ -245,9 +246,9 @@ extension LibrarySyncEngine {
     /// One run of compaction, at the end of a pass, on the compacting Mac. Best effort: what fails is tried again later.
     func runCompaction(_ input: CompactionInput, now: Date) {
         guard let policy = compactionPolicy, audioPolicy == .eager, device?.deviceClass == .mac, libraryID != nil,
-              input.complete, compactionReadComplete, unreadableJournal.isEmpty else { return }
+              input.complete, compactionRuntime.readComplete, journalCache.unreadable.isEmpty else { return }
         // A run dated after now was by a clock that was ahead, since set right: it doesn't hold compaction back.
-        if let last = lastCompaction, last <= now, now.timeIntervalSince(last) < policy.interval { return }
+        if let last = compactionRuntime.lastRun, last <= now, now.timeIntervalSince(last) < policy.interval { return }
         // Every device seen lately reads a compacted library, and this is the Mac to compact it.
         guard let others = recentPresence(now: now), others.allSatisfy({ ($0.features ?? []).contains(Self.compactionFeature) }) else { return }
         let candidates = others.filter { record in
@@ -257,7 +258,7 @@ extension LibrarySyncEngine {
         // acknowledge: a device with the same name that's merely away may come back.)
         let superseded = Set(((try? knownDevices(now: now)) ?? []).filter { $0.supersededBy != nil }.map(\.id))
         guard (candidates.map(\.deviceID).filter { !superseded.contains($0) } + [deviceID]).min() == deviceID else { return }
-        lastCompaction = now
+        compactionRuntime.lastRun = now
         var report = CompactionReport()
         // What earlier commits pruned that's still here.
         deletePrunedFiles(input.entries, report: &report)
@@ -273,7 +274,7 @@ extension LibrarySyncEngine {
         // A clock more than a week ahead makes devices in use look away, or gone: nothing of a conversation goes either.
         let ahead = clockLooksAhead(now: now)
         var executed: String?
-        if let proposal = pendingProposal, let roots = proposal.record.roots, state.compactionAck == proposal.id, !dormant, !ahead,
+        if let proposal = compactionRuntime.pendingProposal, let roots = proposal.record.roots, state.compactionAck == proposal.id, !dormant, !ahead,
            others.allSatisfy({ $0.compaction == proposal.id }) {
             executed = proposal.id
             let grouped = Dictionary(grouping: input.events.keys, by: { input.events[$0]!.meetingID })
@@ -289,7 +290,7 @@ extension LibrarySyncEngine {
                 prunable.insert(id)
             }
         }
-        let fresh = prunable.subtracting(prunedIDs)
+        let fresh = prunable.subtracting(compactionRuntime.prunedIDs)
         let freshBytes = fresh.reduce(Int64(0)) { $0 + (sizes[$1] ?? 0) }
         if executed != nil || (!fresh.isEmpty && (fresh.count >= policy.minimumEntries || freshBytes >= policy.minimumBytes)) {
             do {
@@ -297,7 +298,7 @@ extension LibrarySyncEngine {
                 try writeCompactionRecord(SyncCompactionRecord(deviceID: deviceID, createdAt: now, pruned: fresh.sorted(), proposal: executed))
                 forgetPruned(fresh)
                 report.pruned = fresh.count
-                if executed != nil { pendingProposal = nil }
+                if executed != nil { compactionRuntime.pendingProposal = nil }
                 deletePrunedFiles(input.entries, report: &report)
             } catch is CancellationError {
             } catch {
@@ -306,11 +307,11 @@ extension LibrarySyncEngine {
             }
         }
         tidyCompactionRecords(policy, now: now, report: &report)
-        if pendingProposal == nil || proposalIsStale(input, now: now) {
-            let stale = pendingProposal
+        if compactionRuntime.pendingProposal == nil || proposalIsStale(input, now: now) {
+            let stale = compactionRuntime.pendingProposal
             propose(input, sizes: sizes, policy: policy, now: now, report: &report)
             // A stale proposal nothing replaced is withdrawn: devices stop acknowledging it.
-            if let stale, pendingProposal?.id == stale.id { removeCompactionRecord(stale); pendingProposal = nil }
+            if let stale, compactionRuntime.pendingProposal?.id == stale.id { removeCompactionRecord(stale); compactionRuntime.pendingProposal = nil }
         }
         compactionReport = report
     }
@@ -366,7 +367,7 @@ extension LibrarySyncEngine {
     func entrySizes(_ entries: [JournalEntry]) -> [String: Int64] {
         var sizes: [String: Int64] = [:]
         for entry in entries {
-            guard let id = entry.isSealed ? sealedNames[entry.path] : entry.name,
+            guard let id = entry.isSealed ? sealingRuntime.sealedNames[entry.path] : entry.name,
                   let size = (try? entry.url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize else { continue }
             sizes[id, default: 0] += Int64(size)
         }
@@ -376,9 +377,9 @@ extension LibrarySyncEngine {
     /// Deletes pruned entries still in the sync folder, once every commit is in iCloud: a device that finds one gone then
     /// finds the commit that says why (or waits for it, never for the entry).
     func deletePrunedFiles(_ entries: [JournalEntry], report: inout CompactionReport) {
-        guard compactionRecords.values.filter(\.record.isCommit).allSatisfy({ cloud.isUploaded($0.url) }) else { return }
+        guard compactionRuntime.records.values.filter(\.record.isCommit).allSatisfy({ cloud.isUploaded($0.url) }) else { return }
         for entry in entries {
-            guard let id = entry.isSealed ? sealedNames[entry.path] : entry.name, prunedIDs.contains(id),
+            guard let id = entry.isSealed ? sealingRuntime.sealedNames[entry.path] : entry.name, compactionRuntime.prunedIDs.contains(id),
                   SyncFiles.itemState(entry.url) != .absent else { continue }
             let size = (try? entry.url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
             deleteRemote(entry.url)
@@ -428,8 +429,8 @@ extension LibrarySyncEngine {
             ? JournalEntry(url: url, path: path, directory: Self.compactionDirectory, name: id, isSealed: false)
             : JournalEntry(url: url, path: path, directory: SealedKind.compaction.directory!, name: url.lastPathComponent, isSealed: true)
         let entry = CompactionEntry(entry: journal, id: id, record: record)
-        compactionRecords[path] = entry
-        if record.isProposal { pendingProposal = entry }
+        compactionRuntime.records[path] = entry
+        if record.isProposal { compactionRuntime.pendingProposal = entry }
         return entry
     }
 
@@ -438,25 +439,25 @@ extension LibrarySyncEngine {
     /// there are too many, or when one isn't sealed under the current key. A record goes only once what replaces it is
     /// in iCloud.
     private func tidyCompactionRecords(_ policy: SyncCompactionPolicy, now: Date, report: inout CompactionReport) {
-        let records = Array(compactionRecords.values)
+        let records = Array(compactionRuntime.records.values)
         let commits = records.filter(\.record.isCommit)
         guard commits.allSatisfy({ cloud.isUploaded($0.url) }) else { return }
         let executed = Set(commits.compactMap(\.record.proposal))
         func readable(_ entry: CompactionEntry) -> Bool {
             guard let sealing else { return true }
-            return entry.isSealed && sealedKeys[entry.path] == sealing.current.id
+            return entry.isSealed && sealingRuntime.sealedKeys[entry.path] == sealing.current.id
         }
         for entry in records where entry.record.isProposal {
-            if executed.contains(entry.id) || (pendingProposal.map { $0.id != entry.id } ?? true) {
+            if executed.contains(entry.id) || (compactionRuntime.pendingProposal.map { $0.id != entry.id } ?? true) {
                 removeCompactionRecord(entry)
             } else if !readable(entry), let bytes = try? readEntry(entry.entry, kind: .compaction).bytes,
                       let moved = try? writeCompactionBytes(bytes, record: entry.record), moved.path != entry.path, cloud.isUploaded(moved.url) {
                 removeCompactionRecord(entry)
             }
         }
-        let current = compactionRecords.values.filter(\.record.isCommit)
+        let current = compactionRuntime.records.values.filter(\.record.isCommit)
         guard current.count > policy.maximumCommits || current.contains(where: { !readable($0) }) else { return }
-        guard let merged = try? writeCompactionRecord(SyncCompactionRecord(deviceID: deviceID, createdAt: now, pruned: prunedIDs.sorted())),
+        guard let merged = try? writeCompactionRecord(SyncCompactionRecord(deviceID: deviceID, createdAt: now, pruned: compactionRuntime.prunedIDs.sorted())),
               cloud.isUploaded(merged.url) else { return }
         for entry in current where entry.path != merged.path { removeCompactionRecord(entry) }
         report.consolidated = true
@@ -464,13 +465,13 @@ extension LibrarySyncEngine {
 
     private func removeCompactionRecord(_ entry: CompactionEntry) {
         deleteRemote(entry.url)
-        compactionRecords[entry.path] = nil
+        compactionRuntime.records[entry.path] = nil
     }
 
     /// The pending proposal was made long ago, or a conversation in it has a head that doesn't descend from its root (a
     /// device's concurrent edit, which keeps that device from acknowledging it): a new one replaces it.
     private func proposalIsStale(_ input: CompactionInput, now: Date) -> Bool {
-        guard let proposal = pendingProposal, let roots = proposal.record.roots else { return true }
+        guard let proposal = compactionRuntime.pendingProposal, let roots = proposal.record.roots else { return true }
         // So is one dated more than a week after now: proposed by a clock that was ahead.
         let age = now.timeIntervalSince(proposal.record.createdAt)
         if age >= Self.proposalLifetime || age < -Self.clockAheadTolerance { return true }
@@ -502,7 +503,7 @@ extension LibrarySyncEngine {
             roots[meeting.uuidString] = head
             older.formUnion(history)
         }
-        older.subtract(prunedIDs)
+        older.subtract(compactionRuntime.prunedIDs)
         let bytes = older.reduce(Int64(0)) { $0 + (sizes[$1] ?? 0) }
         guard !older.isEmpty, older.count >= policy.minimumEntries || bytes >= policy.minimumBytes else { return }
         let proposal = SyncCompactionRecord(deviceID: deviceID, createdAt: now, roots: roots, deletions: deletions.isEmpty ? nil : deletions.sorted())
@@ -529,7 +530,9 @@ extension LibrarySyncEngine {
 
     /// Everything compaction remembers, for another library.
     func forgetCompaction() {
-        compactionRecords = [:]; compactionPaths = []; prunedIDs = []; pendingProposal = nil; compactionReadComplete = false; lastCompaction = nil
-        prunedEntryPaths = []
+        // Conversations held back are the last pass's, whichever library it read.
+        let held = compactionRuntime.heldDeletions
+        compactionRuntime = CompactionRuntime()
+        compactionRuntime.heldDeletions = held
     }
 }

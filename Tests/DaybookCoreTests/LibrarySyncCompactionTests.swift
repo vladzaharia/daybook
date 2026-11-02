@@ -118,7 +118,7 @@ final class LibrarySyncCompactionTests: XCTestCase {
         for index in 1...5 { try await edit("Mac", meeting.id) { $0.setNotes("Draft \(index)") }; try await pass(mac, "Mac") }
         XCTAssertEqual(files("Events").count, 6)
         // Proposed once there was history: the root is the head then, after the first edit.
-        let proposed = await mac.pendingProposal
+        let proposed = await mac.compactionRuntime.pendingProposal
         let proposal = try XCTUnwrap(proposed)
         XCTAssertEqual(proposal.record.roots?.count, 1)
         // Until the phone acknowledges it, nothing of the conversation goes.
@@ -131,13 +131,13 @@ final class LibrarySyncCompactionTests: XCTestCase {
         // What came before the root goes; a new proposal names the head now.
         try await pass(mac, "Mac")
         XCTAssertEqual(files("Events").count, 5)
-        let proposedNext = await mac.pendingProposal
+        let proposedNext = await mac.compactionRuntime.pendingProposal
         let next = try XCTUnwrap(proposedNext)
         XCTAssertNotEqual(next.id, proposal.id)
         try await pass(phone, "Phone")
         try await pass(mac, "Mac")
         XCTAssertEqual(files("Events").count, 1, "only the root is left")
-        let pruned = await mac.prunedIDs
+        let pruned = await mac.compactionRuntime.prunedIDs
         XCTAssertEqual(pruned.count, 5)
 
         // An edit on the phone, against the root, and one on the Mac after it: an ordinary sequence, no conflicts.
@@ -169,7 +169,7 @@ final class LibrarySyncCompactionTests: XCTestCase {
         })
         try cloud.withhold(remote.appendingPathComponent("Events/\(phoneEdit)"))
         for index in 1...4 { try await edit("Mac", meeting.id) { $0.title = "Planning \(index)" }; try await pass(mac, "Mac") }
-        let proposal = await mac.pendingProposal
+        let proposal = await mac.compactionRuntime.pendingProposal
         XCTAssertNotNil(proposal)
         try cloud.deliver(remote.appendingPathComponent("Events/\(phoneEdit)"))
 
@@ -183,10 +183,10 @@ final class LibrarySyncCompactionTests: XCTestCase {
         let merged = try await held("Mac", meeting.id)
         XCTAssertEqual(merged.title, "Planning 4"); XCTAssertEqual(merged.notes, "Phone notes")
         XCTAssertTrue(files("Events").contains(phoneEdit))
-        let pruned = await mac.prunedIDs
+        let pruned = await mac.compactionRuntime.prunedIDs
         XCTAssertTrue(pruned.isEmpty, "nothing of a conversation with two heads goes")
         // A new proposal leaves it out until someone edits it again.
-        let next = await mac.pendingProposal
+        let next = await mac.compactionRuntime.pendingProposal
         XCTAssertNotEqual(next?.id, proposal?.id)
         XCTAssertNil(next?.record.roots?[meeting.id.uuidString])
         let onPhone = try await pass(phone, "Phone")
@@ -210,7 +210,7 @@ final class LibrarySyncCompactionTests: XCTestCase {
             try await pass(mac, "Mac"); try await pass(pad, "Pad")
         }
         for _ in 0..<2 { try await pass(mac, "Mac"); try await pass(pad, "Pad") }
-        let pruned = await mac.prunedIDs
+        let pruned = await mac.compactionRuntime.prunedIDs
         XCTAssertEqual(pruned.count, 3, "the phone isn't waited for")
         XCTAssertEqual(files("Events").count, 1)
 
@@ -249,10 +249,10 @@ final class LibrarySyncCompactionTests: XCTestCase {
         _ = try await store.moveToTrash(gone.id); _ = try await store.moveToTrash(quiet.id)
         try await pass(mac, "Mac")
         try await pass(mac, "Mac")
-        let proposal = await mac.pendingProposal
+        let proposal = await mac.compactionRuntime.pendingProposal
         XCTAssertEqual(Set(proposal?.record.deletions ?? []), [gone.id.uuidString, quiet.id.uuidString])
         // Until the phone has applied the deletions, their history stays: the phone needs it to tell what it added.
-        let before = await mac.prunedIDs
+        let before = await mac.compactionRuntime.prunedIDs
         XCTAssertTrue(before.isEmpty, "\(before.count) pruned")
 
         let onPhone = try await pass(phone, "Phone")
@@ -264,7 +264,7 @@ final class LibrarySyncCompactionTests: XCTestCase {
         XCTAssertEqual(Set(keptOnPhone.map(\.id)), [kept.id, fork.id], "the unchanged one is simply deleted")
         try await pass(mac, "Mac")
         // Now each deleted conversation keeps only its deletion.
-        let pruned = await mac.prunedIDs
+        let pruned = await mac.compactionRuntime.prunedIDs
         XCTAssertEqual(pruned.count, 6, "four of one, one of the other, and the phone's paragraph")
         try await pass(phone, "Phone")
         let onMac = try await pass(mac, "Mac")
@@ -287,7 +287,7 @@ final class LibrarySyncCompactionTests: XCTestCase {
         let edited = try await pass(phone, "Phone")
         XCTAssertEqual(edited.publishedEvents, 1)
         for _ in 0..<3 { try await pass(mac, "Mac"); try await pass(phone, "Phone") }
-        let pruned = await mac.prunedIDs
+        let pruned = await mac.compactionRuntime.prunedIDs
         XCTAssertTrue(pruned.isEmpty, "the first event alone names the sidecar")
         XCTAssertEqual(files("Events").count, 2)
         let fresh = try self.mac("Z Mac")
@@ -324,7 +324,7 @@ final class LibrarySyncCompactionTests: XCTestCase {
         XCTAssertEqual(manifest.schemaVersion, SyncManifest.compactedSchemaVersion)
         XCTAssertTrue(files("Compaction").isEmpty, "no plaintext records")
         XCTAssertFalse(files("Sealed/Compaction").isEmpty)
-        let pruned = await mac.prunedIDs
+        let pruned = await mac.compactionRuntime.prunedIDs
         XCTAssertFalse(pruned.isEmpty)
         for (path, bytes) in try remoteTree() where path.hasPrefix("Sealed/Compaction/") {
             XCTAssertEqual(SealedObject.header(of: bytes)?.kind, .compaction)
@@ -465,12 +465,12 @@ final class LibrarySyncCompactionTests: XCTestCase {
         try await pass(mac, "Mac", [meeting])
         try await pass(phone, "Phone")
         for index in 1...3 { try await edit("Mac", meeting.id) { $0.setNotes("Draft \(index)") }; try await pass(mac, "Mac") }
-        let proposal = await mac.pendingProposal
+        let proposal = await mac.compactionRuntime.pendingProposal
         XCTAssertNotNil(proposal, "proposed; the phone hasn't acknowledged it")
         let ahead = Date().addingTimeInterval(31 * 24 * 60 * 60)
         await mac.setCompactionClock({ ahead })
         try await pass(mac, "Mac"); try await pass(mac, "Mac")
-        let pruned = await mac.prunedIDs
+        let pruned = await mac.compactionRuntime.prunedIDs
         XCTAssertTrue(pruned.isEmpty, "\(pruned.count) pruned on the Mac's own acknowledgement")
         XCTAssertEqual(files("Events").count, 4)
     }
@@ -489,7 +489,7 @@ final class LibrarySyncCompactionTests: XCTestCase {
         try await pass(phone, "Phone")
         try Data(lost.utf8).write(to: remote.appendingPathComponent("Devices/\(SyncDigest.sha256(data: Data("Lost".utf8))).json"))
         for index in 1...3 { try await edit("Mac", meeting.id) { $0.setNotes("Draft \(index)") }; try await pass(mac, "Mac") }
-        let proposal = await mac.pendingProposal
+        let proposal = await mac.compactionRuntime.pendingProposal
         XCTAssertNotNil(proposal)
         // The Mac's clock jumps six months ahead while the phone syncs: its presence changes, written six months before
         // the Mac's clock says.
@@ -497,7 +497,7 @@ final class LibrarySyncCompactionTests: XCTestCase {
         await mac.setCompactionClock({ ahead })
         try agePresence("Phone", days: -0.0001)
         for _ in 0..<3 { try await pass(mac, "Mac") }
-        var pruned = await mac.prunedIDs
+        var pruned = await mac.compactionRuntime.prunedIDs
         XCTAssertTrue(pruned.isEmpty, "\(pruned.count) pruned with the clock six months ahead")
         XCTAssertEqual(files("Events").count, 4)
 
@@ -506,7 +506,7 @@ final class LibrarySyncCompactionTests: XCTestCase {
         try await pass(phone, "Phone")
         try agePresence("Phone", days: -0.001)
         for _ in 0..<2 { try await pass(mac, "Mac"); try await pass(phone, "Phone") }
-        pruned = await mac.prunedIDs
+        pruned = await mac.compactionRuntime.prunedIDs
         XCTAssertEqual(pruned.count, 3)
     }
 

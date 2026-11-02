@@ -298,7 +298,7 @@ extension LibrarySyncEngine {
             sealing = nil; waitingForKey = description.current; waitingSealing = description
             throw LibrarySyncError.keyUnavailable(description.current)
         }
-        if sealing?.current.id != current.id { sealerVerified = [] }
+        if sealing?.current.id != current.id { sealingRuntime.verified = [] }
         sealing = SealingState(libraryID: manifest.libraryID, manifest: description, keys: held, current: current,
                                startedEncrypted: manifest.supersedes == nil && (description.replaces != nil || manifest.created == description.sealedSince))
         waitingForKey = nil; waitingSealing = nil
@@ -401,8 +401,8 @@ extension LibrarySyncEngine {
         let counterparts = Set(plaintext.filter { hasSealedCounterpart($0.name, kind: kind) }.map(\.name))
         func known(_ id: String) -> Bool {
             switch kind {
-            case .event: return eventCache[id] != nil
-            case .metadata: return metadataCache[id] != nil
+            case .event: return journalCache.headers[id] != nil
+            case .metadata: return journalCache.settings[id] != nil
             default: return false
             }
         }
@@ -447,8 +447,8 @@ extension LibrarySyncEngine {
         guard let sealing else { throw SyncKeyPending(keyID: waitingForKey ?? "") }
         let (plaintext, key) = try readSealed(entry, kind: kind, sealing: sealing)
         let id = SyncDigest.sha256(data: plaintext)
-        sealedNames[entry.path] = id
-        sealedKeys[entry.path] = key.id
+        sealingRuntime.sealedNames[entry.path] = id
+        sealingRuntime.sealedKeys[entry.path] = key.id
         return (id, plaintext)
     }
 
@@ -460,13 +460,13 @@ extension LibrarySyncEngine {
 
     /// Notes a sealed file a pass leaves alone, and, for one sealed with a retired key, when this device first found it.
     func noteHeldAside(_ entry: JournalEntry, _ held: SyncHeldAsideFile) {
-        heldAsideEntries[entry.path] = held.reason
+        sealingRuntime.heldAside[entry.path] = held.reason
         if held.reason == .retiredKey, state.heldAside?[entry.path] == nil { state.heldAside = (state.heldAside ?? [:]).merging([entry.path: sealerClock()]) { $1 } }
     }
 
     /// Whether this pass held aside the file at `path` as sealed with a retired key, first found within `heldAsideWindow`.
     func heldAsideLately(_ path: String) -> Bool {
-        guard heldAsideEntries[path] == .retiredKey else { return false }
+        guard sealingRuntime.heldAside[path] == .retiredKey else { return false }
         let now = sealerClock()
         return now.timeIntervalSince(state.heldAside?[path] ?? now) < Self.heldAsideWindow
     }
@@ -474,7 +474,7 @@ extension LibrarySyncEngine {
     /// Whether a sealed entry read or written here was sealed with a key this device no longer holds (retired and
     /// removed): what's remembered of it vouches for nothing, since no device without the key can read it either.
     func sealedWithKeyGone(_ entry: JournalEntry) -> Bool {
-        guard entry.isSealed, let sealing, let key = sealedKeys[entry.path] else { return false }
+        guard entry.isSealed, let sealing, let key = sealingRuntime.sealedKeys[entry.path] else { return false }
         return sealing.keys[key] == nil
     }
 
@@ -483,7 +483,7 @@ extension LibrarySyncEngine {
     func readSealed(_ entry: JournalEntry, kind: SealedKind, sealing: SealingState) throws -> (Data, LibraryKey) {
         func open(_ bytes: Data) throws -> (Data, LibraryKey) {
             // Which key and library it names, for `sealedObjectsNaming`, whether or not it opens here.
-            if let header = SealedObject.header(of: bytes) { objectHeaders[entry.path] = (header.keyID, header.libraryID) }
+            if let header = SealedObject.header(of: bytes) { sealingRuntime.objectHeaders[entry.path] = (header.keyID, header.libraryID) }
             do {
                 let opened = try SealedObject.open(bytes, kind: kind, libraryID: sealing.libraryID, keyring: sealing.keyring, expectedName: entry.name)
                 return (opened.plaintext, opened.key)
@@ -491,7 +491,7 @@ extension LibrarySyncEngine {
                 // A library this one started over from: its files go (LibrarySyncStartOver.swift). A rival's wait until
                 // every device has moved on.
                 if error == .wrongLibrary, let header = SealedObject.header(of: bytes), sealing.replaces(header.libraryID) {
-                    if sealing.isRival(header.libraryID), !rivalFilesMayGo { throw SyncHeldAsideFile(reason: .rival) }
+                    if sealing.isRival(header.libraryID), !sealingRuntime.rivalFilesMayGo { throw SyncHeldAsideFile(reason: .rival) }
                     throw SyncReplacedFile()
                 }
                 // Sealed with a key this library retired that this device doesn't hold: its author may have been away when
@@ -533,13 +533,13 @@ extension LibrarySyncEngine {
     /// Where an event's sealed file is, to read its snapshot again: where it was read (if that's still there), else its
     /// name under the current key, else under another key held here. Nil: only the plaintext one from before.
     func sealedLocation(of id: String, sealing: SealingState) -> URL? {
-        if let known = journalLocations[id], SyncFiles.itemState(known) != .absent || inboxCopy("Sealed/Events/\(known.lastPathComponent)") != nil {
+        if let known = journalCache.locations[id], SyncFiles.itemState(known) != .absent || inboxCopy("Sealed/Events/\(known.lastPathComponent)") != nil {
             return known
         }
         for key in sealing.readingOrder {
             guard let name = key.objectName(.event, plaintextSHA256: id) else { continue }
             let url = remoteRoot.appendingPathComponent("Sealed/Events/\(name)")
-            if SyncFiles.itemState(url) != .absent || inboxCopy("Sealed/Events/\(name)") != nil { journalLocations[id] = url; return url }
+            if SyncFiles.itemState(url) != .absent || inboxCopy("Sealed/Events/\(name)") != nil { journalCache.locations[id] = url; return url }
         }
         return nil
     }
@@ -565,9 +565,9 @@ extension LibrarySyncEngine {
         }
         ownJournalWrites.insert(path)
         courierWrites[path] = SyncJournalFile(path: path, sha256: SyncDigest.sha256(data: sealed.bytes), size: Int64(sealed.bytes.count))
-        sealedNames[path] = id
-        sealedKeys[path] = key.id
-        if kind == .event { journalLocations[id] = url }
+        sealingRuntime.sealedNames[path] = id
+        sealingRuntime.sealedKeys[path] = key.id
+        if kind == .event { journalCache.locations[id] = url }
         return path
     }
 
@@ -692,7 +692,7 @@ extension LibrarySyncEngine {
             }
             guard try objectHolds(object, digest: asset.sha256) else { throw LibrarySyncError.invalidBlob(asset.sha256) }
             verifiedAssets[target.path] = try assetStamp(target, digest: asset.sha256)
-            sealerVerified.insert(path)
+            sealingRuntime.verified.insert(path)
             noteContainerCopy(path, holding: asset.sha256)
             return
         }
