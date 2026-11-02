@@ -3,6 +3,7 @@ import DaybookCore
 @testable import DaybookKit
 import DaybookTestSupport
 import Foundation
+import Observation
 import XCTest
 @testable import Daybook
 
@@ -231,6 +232,27 @@ final class AppStateTests: XCTestCase {
         await state.flush()
     }
 
+    /// Several rows at once: each move lets the list look, and the list selects its first row once the selected one is
+    /// gone. The neighbour is selected as the selected row goes, so the list finds it there.
+    func testBehaviorTrashingSeveralRowsKeepsThePlaceWhileTheListLooksBetweenMoves() async throws {
+        let (state, _, _) = try await makeState()
+        let now = Date()
+        let ids = ["A", "B", "C", "D", "E"].enumerated().map { index, title in
+            state.newMeeting(title: title, date: now.addingTimeInterval(Double(-index) * 3600))
+        }
+        await state.flush()
+        XCTAssertEqual(state.listedMeetingIDs, ids)
+        state.selectedID = ids[1]
+        let list = ListSelectionFollower()
+        list.follow(state)
+        state.trashMeetings([ids[1], ids[2]], undoManager: nil)
+        try await waitUntil("both to go") { state.meetings.count == 3 }
+        try await waitUntil("the list to look") { list.looks > 0 }
+        XCTAssertEqual(state.selectedID, ids[3], "The row after them, not the top of the list")
+        list.stop()
+        await state.flush()
+    }
+
     func testBehaviorTheRowSelectedAfterATrashIsItsNeighbour() {
         let a = UUID(), b = UUID(), c = UUID(), d = UUID()
         XCTAssertEqual(AppState.neighbour(of: [b], in: [a, b, c, d]), c)
@@ -389,5 +411,37 @@ final class AppStateTests: XCTestCase {
         let file = try AVAudioFile(forWriting: url, settings: format.settings)
         try file.write(from: buffer)
         return url
+    }
+}
+
+/// What the library window's list does as its rows change (`LibraryView.reconcileSelection`), when SwiftUI runs it: on a
+/// later turn of the main queue, it selects the first row once the selected one is gone.
+@MainActor
+private final class ListSelectionFollower {
+    private(set) var looks = 0
+    private var following = false
+
+    func follow(_ state: AppState) {
+        following = true
+        observe(state)
+    }
+
+    func stop() { following = false }
+
+    private func observe(_ state: AppState) {
+        withObservationTracking { _ = state.visibleMeetings.map(\.id) } onChange: { [weak self, weak state] in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, let state, self.following else { return }
+                    self.looks += 1
+                    let visible = state.visibleMeetings
+                    if state.isReady, !state.isSearching, !state.place.isDevice, !visible.contains(where: { $0.id == state.selectedID }) {
+                        state.multiSelection = []
+                        state.selectedID = visible.first?.id
+                    }
+                    self.observe(state)
+                }
+            }
+        }
     }
 }

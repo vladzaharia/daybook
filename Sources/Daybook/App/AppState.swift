@@ -1254,8 +1254,9 @@ final class AppState {
 
     /// Moves conversations to the library's Trash (docs/architecture.md, "Storage and recovery"). Edit › Undo ("Undo
     /// Move to Trash", with `undoManager`) and the notice's Undo put them back. When the selected one goes, the row after
-    /// them in the list is selected (the one before, at the end), so the person keeps their place. One that's busy
-    /// (`isBusy`) stays.
+    /// them in the list is selected (the one before, at the end), so the person keeps their place. That happens as its row
+    /// goes: each move lets the list look, and the list selects its first row once the selected one is gone (`LibraryView`).
+    /// One that's busy (`isBusy`) stays.
     func trashMeetings(_ ids: [UUID], undoManager: UndoManager?) {
         let ids = ids.filter { !isBusy($0) }
         guard !ids.isEmpty else { return }
@@ -1272,10 +1273,10 @@ final class AppState {
                 for id in ids {
                     guard library.isLoaded, try await library.moveToTrash(id, allowed: { !self.isBusy(id) }) else { continue }
                     trashed.append(id)
+                    if selectedID == id { selectedID = neighbour }
                 }
             } catch { report("Couldn’t Move to Trash", "Try again.", error) }
             guard !trashed.isEmpty else { return }
-            if let selectedID, trashed.contains(selectedID) { self.selectedID = neighbour }
             multiSelection.subtract(trashed)
             let title = trashed.count == 1 ? titles[ids.firstIndex(of: trashed[0]) ?? 0].trimmingCharacters(in: .whitespaces) : ""
             let message = trashed.count > 1 ? "Moved \(trashed.count) conversations to the Trash."
