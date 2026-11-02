@@ -1,3 +1,4 @@
+import DaybookDesign
 import DaybookKit
 import SwiftUI
 
@@ -16,11 +17,8 @@ struct PlacementText: View {
     var body: some View {
         if planner.deadline != nil {
             TimelineView(.periodic(from: .now, by: 1)) { context in
-                Text(words(context.date) ?? "")
-                    .monospacedDigit()
-                    .contentTransition(reduceMotion ? .opacity : .numericText(countsDown: true))
-                    .animation(Motion.resolved(Motion.tick, reduceMotion: reduceMotion),
-                               value: planner.secondsLeft(at: context.date))
+                let text = words(context.date) ?? ""
+                Text(text).monospacedDigit().daybookNumberRoll(value: text, countsDown: true)
             }
         } else {
             Text(words(Date()) ?? "")

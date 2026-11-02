@@ -226,7 +226,9 @@ struct NextStepToggleStyle: ToggleStyle {
 
 private struct NextStepToggle: View {
     let configuration: ToggleStyleConfiguration
-    @State private var taps = 0
+    /// The person's own ticks and reopenings, for the feel of each: a step another device ticks is seen, never felt.
+    @State private var completed = 0
+    @State private var reopened = 0
     @Environment(\.daybookDensity) private var density
 
     var body: some View {
@@ -247,7 +249,7 @@ private struct NextStepToggle: View {
 
     private var circle: some View {
         Button {
-            taps += 1
+            if configuration.isOn { reopened += 1 } else { completed += 1 }
             configuration.isOn.toggle()
         } label: {
             Image(systemName: configuration.isOn ? "checkmark.circle.fill" : "circle")
@@ -262,7 +264,8 @@ private struct NextStepToggle: View {
         .buttonStyle(.plain)
         // The circle's middle on the step's first line.
         .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 6 }
-        .sensoryFeedback(.selection, trigger: taps)
+        .sensoryFeedback(.success, trigger: completed)
+        .sensoryFeedback(.selection, trigger: reopened)
         .accessibilityRepresentation { Toggle(isOn: configuration.$isOn) { configuration.label } }
     }
 }

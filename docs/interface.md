@@ -218,6 +218,8 @@ The curves are `DaybookMotion`'s (`Motion` on the Mac, `PhoneStyle.Motion` on th
 | Copy Summary | "Copied" with a checkmark over the top of the page for 1.5 s |
 | A recording is saved | the recorder's band says Saved with the accent checkmark drawn on (`DoneMark`; a fade under Reduce Motion); the iPhone's Record reads Saved with it for `hold` if it's on screen, then Record again |
 | Table mode dims and wakes | a slow dim (`dim`), a quick wake (`fade`), a short fade under Reduce Motion |
+| A countdown or percent changes on its own | its digits roll (`tick`, keyed to the number by `daybookNumberRoll`, so a timer's tick plays it), a fade under Reduce Motion: the summary's "in 12 s" on the page and in the status sheet, and a status line's percent |
+| A next step ticked on the iPhone | a success tap for the person's own tick, a selection tap for reopening; one ticked on another device is seen, never felt |
 | A summary arrives while the page is open | on both apps, the lede, next steps, and sections fade up 40 ms apart (up to six; only fading under Reduce Motion); the colophon glyph bounces (still under Reduce Motion). Opening a page never animates |
 | Summarize Again | the old summary dims to half while the new one is written |
 | A row finishes work | the gradient progress line becomes an accent checkmark for 1.5 s, then fades |

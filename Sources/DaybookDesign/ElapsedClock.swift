@@ -66,6 +66,27 @@ public struct ElapsedClock: View {
     }
 }
 
+extension View {
+    /// Text whose number changes on its own (a countdown, a percent): its digits roll as the clock's do, a fade
+    /// under Reduce Motion. The roll is keyed to `value`, so it plays however the change arrives (a TimelineView's
+    /// tick, a Task), where `.numericText()` alone plays only inside an animation that rarely surrounds it.
+    public func daybookNumberRoll<Value: Equatable>(value: Value, countsDown: Bool = false) -> some View {
+        modifier(NumberRoll(value: value, countsDown: countsDown))
+    }
+}
+
+private struct NumberRoll<Value: Equatable>: ViewModifier {
+    let value: Value
+    let countsDown: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
+            .contentTransition(reduceMotion ? .opacity : .numericText(countsDown: countsDown))
+            .animation(DaybookMotion.resolved(DaybookMotion.tick, reduceMotion: reduceMotion), value: value)
+    }
+}
+
 /// "● RECORDING · MacBook Pro Microphone": the phase in small capitals, then what it records from.
 /// The dot is the one red mark besides the clock and Stop; other phases trade it for their glyph.
 public struct RecordingPhaseLabel: View {
