@@ -41,7 +41,8 @@ struct CaptureEnvironment {
 /// Records the microphone and the call as separate native PCM tracks on one host-clock timeline.
 ///
 /// Call audio comes from a Core Audio process tap on the detected call app when one is known, and
-/// from ScreenCaptureKit (all Mac playback except Daybook) otherwise or if the tap fails. Device
+/// from ScreenCaptureKit (all Mac playback except Daybook) otherwise or if the tap fails; when neither starts and no
+/// call app is known, the microphone records alone (`computerAudioLeftOut`). Device
 /// and route changes are followed rather than ending the recording. After Stop, `CaptureFinalizer`
 /// removes the call's echo from the microphone; this controller only captures.
 @MainActor
@@ -90,7 +91,10 @@ final class RecordingController {
     @ObservationIgnored private var routeObservation: AnyObject?
     @ObservationIgnored private var meterTimer: Timer?
     private var cancelStart = false
-    @ObservationIgnored private var observers: [NSObjectProtocol] = []
+    /// Computer audio couldn't start for a recording with no call app, which then records the microphone alone.
+    private var callAudioLeftOut = false
+    /// Follows the Mac going to sleep for as long as the controller lives (cancelled when it goes).
+    @ObservationIgnored nonisolated(unsafe) private var sleepWatch: Task<Void, Never>?
     /// This recording's caption tap, on its session timeline.
     @ObservationIgnored private var activeCaptionTap: CaptureCaptionTap?
 
@@ -102,9 +106,11 @@ final class RecordingController {
 
     init(environment: CaptureEnvironment = .live) {
         self.environment = environment
-        observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.stopForSleep() }
-        })
+        sleepWatch = Task { [weak self] in
+            for await _ in NSWorkspace.shared.notificationCenter.notifications(named: NSWorkspace.willSleepNotification) {
+                self?.stopForSleep()
+            }
+        }
         // The notification doesn't hold sleep back; the power notification can, briefly, so stops
         // sent to other devices leave before the network goes.
         sleepGate = SystemSleepGate(grace: Self.sleepGrace) { [weak self] in
@@ -112,6 +118,8 @@ final class RecordingController {
             await self?.beforeSleep?()
         }
     }
+
+    deinit { sleepWatch?.cancel() }
 
     private func stopForSleep() {
         captureFailed(RecordingError.interrupted("Recording stopped because the Mac went to sleep. Everything up to then is saved."))
@@ -125,6 +133,7 @@ final class RecordingController {
         lastError = nil
         lastResult = nil
         cancelStart = false
+        callAudioLeftOut = false
         warnings = []
         technicalNotes = [:]
         routeEvents = []
@@ -148,21 +157,28 @@ final class RecordingController {
             activeCaptionTap = captions
             observeRoutes()
 
-            // Call audio starts first, so permission prompts are answered before the microphone
-            // runs and a dialog never leaves a microphone-only recording behind.
+            // Call audio starts first, so permission prompts are answered before the microphone runs. A call app's
+            // audio that can't be recorded at all stops the start; without a call app (a conversation in the room, or
+            // a call Daybook can't name) the microphone records alone and the conversation says how to add the rest.
             if includeSystemAudio {
                 let writer = makeWriter(.systemAudio, manifest: manifest, directory: directory)
                 systemWriter = writer
                 let callCaptions = captions?.call
-                let (source, info) = try await SystemAudioSelector.start(target: callApp, provider: environment.systemAudio,
-                    onBuffer: { buffer, time in writer.append(buffer, hostTimeSeconds: time); callCaptions?(buffer, time) },
-                    onEvent: { [weak self] event in Task { @MainActor in self?.systemEvent(event) } })
-                system = source
-                systemAudioCapture = info
-                writer.setMethod(info.method.rawValue)
-                if let reason = info.fallbackReason, callApp != nil {
-                    warnings.append(reason)
-                    if let detail = info.fallbackDetail { technicalNotes[.systemAudio, default: []].append("\(reason) \(detail)") }
+                do {
+                    let (source, info) = try await SystemAudioSelector.start(target: callApp, provider: environment.systemAudio,
+                        onBuffer: { buffer, time in writer.append(buffer, hostTimeSeconds: time); callCaptions?(buffer, time) },
+                        onEvent: { [weak self] event in Task { @MainActor in self?.systemEvent(event) } })
+                    system = source
+                    systemAudioCapture = info
+                    writer.setMethod(info.method.rawValue)
+                    if let reason = info.fallbackReason, callApp != nil {
+                        warnings.append(reason)
+                        if let detail = info.fallbackDetail { technicalNotes[.systemAudio, default: []].append("\(reason) \(detail)") }
+                    }
+                } catch where callApp == nil {
+                    systemWriter = nil
+                    callAudioLeftOut = true
+                    warn(Self.computerAudioLeftOut, error: error, track: .microphone)
                 }
             }
             try checkStartCancellation()
@@ -225,6 +241,8 @@ final class RecordingController {
 
     static let microphoneChanged = "The microphone changed partway through the recording."
     static let callAudioRestarted = "Call audio restarted partway through, leaving a short gap."
+    /// Computer audio couldn't start for a recording without a call app, so the microphone recorded alone.
+    static let computerAudioLeftOut = "Computer audio isn’t included. Allow Screen & System Audio Recording in Settings › General."
 
     /// Call audio problems never end the recording: a failed tap falls back to ScreenCaptureKit,
     /// and anything else stops only the call track.
@@ -366,7 +384,7 @@ final class RecordingController {
         var result: CaptureResult?
         if let manifest, let directory {
             if tracks.isEmpty { warnings.append("No audio was recorded.") }
-            if manifest.includeSystemAudio && !tracks.contains(where: { $0.role == .systemAudio }) {
+            if manifest.includeSystemAudio && !callAudioLeftOut && !tracks.contains(where: { $0.role == .systemAudio }) {
                 warnings.append("No system audio was received. Check the call’s output and recording permission.")
             }
             let completed = CaptureResult(id: manifest.id, startedAt: manifest.startedAt, endedAt: Date(), tracks: tracks,

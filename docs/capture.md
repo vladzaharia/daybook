@@ -49,6 +49,13 @@ Code: `Sources/Daybook/Capture/` (capture, devices, finalizing) and `Sources/Day
 
    The reason is kept in `SystemAudioCaptureInfo.fallbackReason`. A tap failure never costs
    the recording.
+3. **The microphone alone.** When ScreenCaptureKit can't start either and no call app is known
+   (a conversation in the room, or a call Daybook can't name), most often because Screen &
+   System Audio Recording isn't allowed yet, the microphone records alone. The recording keeps
+   one warning, "Computer audio isn’t included. Allow Screen & System Audio Recording in Settings
+   › General." (`RecordingController.computerAudioLeftOut`), and Floating Notes says "No call
+   audio" with its fix. When a call app *is* known and neither path works, the start fails and
+   says why: half a call isn't recorded silently.
 
 If the tap fails *during* a call, `RecordingController` switches the same `systemAudio.caf` to
 ScreenCaptureKit and records `switchedAt`. The failure might be a rebuild that didn't work, the
@@ -73,8 +80,12 @@ The path used is saved in two places:
 | System Audio Recording Only (`NSAudioCaptureUsageDescription`) | The first time a process tap starts, so the first recording of a known call app. macOS shows the prompt itself. | The call app's audio |
 | Screen & System Audio Recording (`NSScreenCaptureUsageDescription`) | The first recording that falls back to ScreenCaptureKit, through `SCShareableContent` | All Mac audio. Also needed by `MeetingMonitor` to read window titles for automatic detection. |
 
-Call audio starts before the microphone. That way any prompt is answered before your voice is
-being recorded, and a dialog can't leave a microphone-only recording behind.
+Call audio starts before the microphone, so any prompt comes before your voice is being recorded.
+Screen & System Audio Recording can't be granted in its prompt: the person allows it in System
+Settings, often with a relaunch. So the first recording without a call app goes on with the
+microphone alone (above) rather than failing, and Welcome's Allow step asks for both permissions
+ahead of time, with the same Allow… buttons as Settings › General › Permissions
+(`CapturePermissionControl`).
 
 macOS has no public API to check or request the System Audio Recording permission. When it's
 denied, a tap still runs but delivers digital silence. So `ProcessTapSource` keeps a watchdog: if
@@ -637,6 +648,9 @@ decaying tail, with added noise. They cover:
   - a tap failure falling back mid-call;
   - a microphone device change;
   - a call-track failure that keeps the microphone running;
+  - computer audio that can't start without a call app, recording the microphone alone with its
+    one warning, and a known call app whose audio can't be recorded failing the start;
+  - sleep stopping the recording, from a watch that ends with the controller;
   - microphone denial before any call capture;
 - `CaptureFinalizer`:
   - originals byte-identical;

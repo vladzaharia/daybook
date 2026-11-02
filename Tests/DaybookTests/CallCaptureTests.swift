@@ -1,4 +1,5 @@
 import Accelerate
+import AppKit
 import AVFoundation
 import DaybookCore
 import DaybookTestSupport
@@ -407,6 +408,79 @@ final class RecordingControllerTests: XCTestCase {
         XCTAssertFalse(result.warnings.contains { $0.contains("stream stopped") }, "the system's words stay out of the warning")
         let callNotes = result.tracks.first { $0.role == .systemAudio }?.notes ?? []
         XCTAssertTrue(callNotes.contains { $0.contains("stream stopped") }, "and go in the call audio's capture notes")
+    }
+
+    /// A recording in the room (or of a call Daybook can't name) when computer audio can't start, as on a Mac that hasn't
+    /// allowed Screen & System Audio Recording: the microphone records alone, and the conversation says how to add the rest.
+    func testComputerAudioThatCantStartWithoutACallAppRecordsTheMicrophoneAlone() async throws {
+        let system = FakeSystemAudio()
+        system.screenError = RecordingError.interrupted("System audio is unavailable.")
+        let mic = FakeCaptureSource(method: "microphone")
+        let environment = CaptureEnvironment(
+            microphoneAuthorization: { true }, makeMicrophone: { mic }, systemAudio: system,
+            currentRoute: { AudioOutputRoute(kind: .speakers, deviceName: "Speakers", transport: nil) },
+            observeRoutes: { _ in nil }, hostTime: { 100 })
+        let recorder = RecordingController(environment: environment)
+        try await recorder.start(in: try temporaryDirectory(), includeSystemAudio: true, callApp: nil)
+        XCTAssertEqual(recorder.state, .recording)
+        XCTAssertTrue(mic.started)
+        XCTAssertNil(recorder.systemAudioCapture)
+        mic.emit(CallSignals.tone(), at: 100)
+        recorder.updateLevels()
+        XCTAssertFalse(recorder.levels.isCapturingCall, "Floating Notes says there's no call audio, with its fix")
+        let result = try await XCTUnwrapAsync(await recorder.stop())
+        XCTAssertEqual(result.tracks.map(\.role), [.microphone])
+        XCTAssertTrue(result.warnings.contains(RecordingController.computerAudioLeftOut))
+        XCTAssertFalse(result.warnings.contains { $0.contains("No system audio was received") }, "said once, with its fix: \(result.warnings)")
+    }
+
+    /// A call Daybook knows whose audio can't be recorded any way is said before anything records, never half-recorded.
+    func testACallAppWhoseAudioCantBeRecordedStillStopsTheStart() async throws {
+        let system = FakeSystemAudio()
+        system.tapCreationError = FakeError(message: "tap refused")
+        system.screenError = RecordingError.noDisplay
+        let mic = FakeCaptureSource(method: "microphone")
+        let environment = CaptureEnvironment(
+            microphoneAuthorization: { true }, makeMicrophone: { mic }, systemAudio: system,
+            currentRoute: { AudioOutputRoute(kind: .speakers, deviceName: "Speakers", transport: nil) },
+            observeRoutes: { _ in nil }, hostTime: { 100 })
+        let recorder = RecordingController(environment: environment)
+        do {
+            try await recorder.start(in: try temporaryDirectory(), includeSystemAudio: true,
+                                     callApp: CallAppTarget(bundleID: "us.zoom.xos", displayName: "Zoom", isBrowser: false))
+            XCTFail("expected the start to fail")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, RecordingError.noDisplay.localizedDescription)
+        }
+        XCTAssertFalse(mic.started)
+        XCTAssertEqual(recorder.state, .idle)
+    }
+
+    /// The Mac going to sleep stops the recording (what was recorded is kept), and a controller that's gone stops following.
+    func testSleepStopsTheRecordingAndAControllerThatsGoneStopsFollowing() async throws {
+        let mic = FakeCaptureSource(method: "microphone")
+        let environment = CaptureEnvironment(
+            microphoneAuthorization: { true }, makeMicrophone: { mic }, systemAudio: FakeSystemAudio(),
+            currentRoute: { AudioOutputRoute(kind: .speakers, deviceName: "Speakers", transport: nil) },
+            observeRoutes: { _ in nil }, hostTime: { 100 })
+        let recorder = RecordingController(environment: environment)
+        var stopped: String?
+        recorder.onUnexpectedStop = { _, why in stopped = why }
+        try await recorder.start(in: try temporaryDirectory(), includeSystemAudio: false)
+        mic.emit(CallSignals.tone(), at: 100)
+        // The watch begins following on its first turn.
+        await settle { false }
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.willSleepNotification, object: nil)
+        try await waitUntil("the stop for sleep") { stopped != nil }
+        XCTAssertEqual(stopped, "Recording stopped because the Mac went to sleep. Everything up to then is saved.")
+        XCTAssertEqual(recorder.state, .idle)
+
+        weak var released: RecordingController?
+        do {
+            let passing = RecordingController(environment: environment)
+            released = passing
+        }
+        XCTAssertNil(released, "following sleep doesn't keep a controller alive")
     }
 
     func testDeniedMicrophoneNeverStartsCallCapture() async throws {
