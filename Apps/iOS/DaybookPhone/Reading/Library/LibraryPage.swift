@@ -79,14 +79,14 @@ struct LibraryPage: View {
     @ViewBuilder private var content: some View {
         if session.isSearching {
             results
-        } else if session.place == .trash {
+        } else if place.isTrash {
             TrashList(library: library)
         } else {
             list
         }
     }
 
-    private var place: LibraryPlace { session.place.libraryPlace ?? .section(.all) }
+    private var place: LibraryPlace { session.place.libraryPlace }
     private var meetings: [Meeting] { place.meetings(in: library.meetings) }
 
     private var list: some View {
@@ -247,12 +247,11 @@ struct LibraryPage: View {
 
     private var title: String {
         if session.isSelecting { return session.selection.isEmpty ? "Select Conversations" : "\(session.selection.count) Selected" }
-        switch session.place {
+        switch place {
+        case .section(let section): return section.rawValue
+        case .folder(let id): return library.folders.first { $0.id == id }?.name ?? "Folder"
+        case .device: return "Device"
         case .trash: return LibraryWords.trash
-        case .library(.section(let section)): return section.rawValue
-        case .library(.folder(let id)): return library.folders.first { $0.id == id }?.name ?? "Folder"
-        case .library(.device): return "Device"
-        case .library(.trash): return LibraryWords.trash
         }
     }
 
@@ -278,7 +277,7 @@ struct LibraryPage: View {
         } else {
             // Only what works here: no New Note in the Trash, no Select with nothing to select. Glyphs in the title's
             // ink, as the system's back chevron; teal is for what confirms.
-            if session.place != .trash {
+            if !place.isTrash {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(action: newNote) { Label("New Note", systemImage: "square.and.pencil") }
                         .tint(PhoneStyle.Ink.title)
@@ -315,7 +314,7 @@ struct LibraryPage: View {
                 }
                 if let statusSheetInset {
                     Color.clear.frame(height: statusSheetInset).accessibilityHidden(true)
-                } else if session.place != .trash {
+                } else if !place.isTrash {
                     // One row at the thumb: Record, Import, and Search, the same size and spacing as on
                     // the status sheet's row.
                     HStack(alignment: .bottom, spacing: PhoneStyle.Space.s2) {
@@ -430,7 +429,7 @@ private struct PlacesMenu: View {
         }
         Section {
             Picker(LibraryWords.trash, selection: $session.place) {
-                Label(LibraryWords.trash, systemImage: "trash").tag(ReadingPlace.trash)
+                Label(LibraryWords.trash, systemImage: "trash").tag(ReadingPlace.library(.trash))
             }
             .pickerStyle(.inline)
         }

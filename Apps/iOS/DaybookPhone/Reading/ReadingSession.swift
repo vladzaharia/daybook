@@ -162,12 +162,15 @@ final class ReadingSession {
     }
 }
 
-/// Where the list is looking.
+/// Where the list is looking: a place in the library, the Trash too.
 enum ReadingPlace: Hashable {
     case library(LibraryPlace)
-    case trash
 
-    var libraryPlace: LibraryPlace? { if case .library(let place) = self { return place } else { return nil } }
+    /// The Trash, the library's own place (`LibraryPlace.trash`), so there's one way to say it.
+    static let trash = ReadingPlace.library(.trash)
+
+    var libraryPlace: LibraryPlace { switch self { case .library(let place): return place } }
+    var isTrash: Bool { libraryPlace.isTrash }
 }
 
 /// Sheets shown over the conversation or the library.

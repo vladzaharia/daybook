@@ -83,9 +83,10 @@ struct ReadingLaunch {
             session.searchText = search
             session.isSearchPresented = true
         }
-        if let selectMany, let place = session.place.libraryPlace {
+        // The Trash has nothing to select.
+        if let selectMany, !session.place.isTrash {
             session.isSelecting = true
-            session.selection = Set(place.meetings(in: library.meetings).prefix(selectMany).map(\.id))
+            session.selection = Set(session.place.libraryPlace.meetings(in: library.meetings).prefix(selectMany).map(\.id))
         }
         // The exact title, as on the Mac, so one flag opens the same conversation on both.
         guard let select, let meeting = library.meetings.first(where: { $0.title == select }) else { return }

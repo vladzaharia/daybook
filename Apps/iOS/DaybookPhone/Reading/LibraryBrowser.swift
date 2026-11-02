@@ -262,7 +262,8 @@ private struct ReadingLayout: View {
             // The conversation the person chose on the right page stays open in one column.
             if !session.reading, session.chosen, session.openID != nil, !session.isSelecting { session.reading = true }
         } else if session.openID == nil {
-            let place = session.place.libraryPlace ?? .section(.all)
+            // The Trash lists none of the library's: the newest of All, then.
+            let place = session.place.libraryPlace
             if let newest = place.meetings(in: library.meetings).first ?? LibraryPlace.section(.all).meetings(in: library.meetings).first {
                 session.openID = newest.id
                 session.chosen = false

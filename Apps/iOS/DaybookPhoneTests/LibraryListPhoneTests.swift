@@ -78,4 +78,12 @@ final class LibraryListPhoneTests: XCTestCase {
         XCTAssertEqual(LibraryWords.emptyPlace(.trash, libraryIsEmpty: true, platform: .iPhone)?.title, "No Conversations",
                        "an empty Trash says what every empty place says")
     }
+
+    func testBehaviorTheTrashHasOneNameTheLibrarysOwn() {
+        XCTAssertEqual(ReadingPlace.trash, .library(.trash), "one place, however it's written")
+        XCTAssertTrue(ReadingPlace.library(.trash).isTrash)
+        XCTAssertEqual(ReadingPlace.trash.libraryPlace, .trash)
+        XCTAssertFalse(ReadingPlace.library(.section(.all)).isTrash)
+        XCTAssertFalse(ReadingPlace.library(.folder(UUID())).isTrash)
+    }
 }
