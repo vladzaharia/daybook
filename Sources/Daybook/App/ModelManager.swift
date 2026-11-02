@@ -175,6 +175,13 @@ struct ModelManagerSnapshot {
         return ModelSpace.stillToFetch(model.approximateBytes, partial: diskUsage?.partial[model.key] ?? 0, fraction: fetchedWhenRead[model.key])
     }
 
+    /// Why a model's Download waits, said in place of its state in the library and under it in Details: "Needs 632 MB ·
+    /// 300 MB free". Nil when it fits, or there's nothing to download.
+    func spaceNote(for model: CatalogModel) -> ModelLine? {
+        guard status(of: model).canDownload else { return nil }
+        return space.shortfall(downloadBytes(model)).map { ModelLine($0, needsAttention: true) }
+    }
+
     /// What downloading these models still takes: those that aren't here or on their way (`promisedBytes` has those).
     func missingBytes(_ keys: [String]) -> Int64 {
         Set(keys).compactMap { catalog.model($0) }.filter { !installed.contains($0.key) && !status(of: $0).isTransferring }

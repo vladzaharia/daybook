@@ -333,6 +333,11 @@ final class ModelManagerTests: XCTestCase {
         let tiny = snapshot.choice(for: .transcription)
         XCTAssertEqual(tiny.line(space: snapshot.space), ModelLine("Needs 100 MB · 70 MB free", needsAttention: true))
         XCTAssertFalse(tiny.canDownload(space: snapshot.space), "it would fit alone, but not with what's on its way")
+        let catalog = snapshot.catalog
+        XCTAssertEqual(snapshot.spaceNote(for: try XCTUnwrap(catalog.model("whisp/tiny"))), ModelLine("Needs 100 MB · 70 MB free", needsAttention: true),
+                       "the library row and Details say it where the state would be")
+        XCTAssertNil(snapshot.spaceNote(for: try XCTUnwrap(catalog.model("whisp/big"))), "nothing to say of one on its way")
+        XCTAssertNil(snapshot.spaceNote(for: try XCTUnwrap(catalog.model("babel/one"))))
         let detailed = try XCTUnwrap(snapshot.presets.first { $0.preset == .detailed })
         XCTAssertEqual(detailed.missingBytes, 0, "Whisp Big is on its way, counted once")
     }

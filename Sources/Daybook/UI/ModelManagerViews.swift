@@ -32,7 +32,7 @@ struct ModelLibraryRow: View {
     let remove: (ModelRemoval) -> Void
 
     var body: some View {
-        ModelListRow(name: row.name, labels: row.labels, detail: row.subtitle, status: row.status) {
+        ModelListRow(name: row.name, labels: row.labels, detail: row.subtitle, status: row.status, note: spaceNote) {
             HStack(spacing: Space.s2) {
                 primaryAction
                 moreMenu
@@ -40,6 +40,9 @@ struct ModelLibraryRow: View {
         }
         .contextMenu { menuItems }
     }
+
+    /// Why Download waits, where the state would be: "Needs 1.6 GB · 300 MB free".
+    private var spaceNote: ModelLine? { manager.snapshot.spaceNote(for: row.model) }
 
     @ViewBuilder private var primaryAction: some View {
         switch row.status {
@@ -53,8 +56,7 @@ struct ModelLibraryRow: View {
             Button("Cancel") { manager.cancelWaiting(row.id) }
         case .notDownloaded, .damaged, .failed:
             Button("Download") { manager.download(row.id) }
-                .disabled(!manager.space.fits(manager.snapshot.downloadBytes(row.model)))
-                .help(manager.space.shortfall(manager.snapshot.downloadBytes(row.model)) ?? "")
+                .disabled(spaceNote != nil)
         case .updateAvailable:
             if let update = row.update { Button("Update") { Task { await manager.install(update) } } }
         case .downloaded, .builtIn:
@@ -97,7 +99,7 @@ struct ModelLibraryRow: View {
         }
         if row.canDownload {
             Button("Download") { manager.download(row.id) }
-                .disabled(!manager.space.fits(manager.snapshot.downloadBytes(row.model)))
+                .disabled(spaceNote != nil)
         }
         if let update = row.update, row.status == .updateAvailable {
             Button("Install Update") { Task { await manager.install(update) } }
@@ -259,7 +261,13 @@ struct ModelDetailsSheet: View {
         let current = snapshot.inventory.resolve(model.key)?.key
         Section("On This Mac") {
             LabeledContent("Status") {
-                Text(row.status.label).monospacedDigit()
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(row.status.label).monospacedDigit()
+                    // Why Download waits.
+                    if let note = snapshot.spaceNote(for: model) {
+                        Text(note.text).foregroundStyle(Ink.warning).monospacedDigit()
+                    }
+                }
             }
             if !row.selectedRoles.isEmpty {
                 LabeledContent("Chosen for", value: row.selectedRoles.map(\.displayName).joined(separator: ", "))
@@ -298,10 +306,8 @@ struct ModelDetailsSheet: View {
             Spacer()
             if let row {
                 if row.canDownload {
-                    let bytes = manager.snapshot.downloadBytes(row.model)
                     Button("Download") { manager.download(row.id) }
-                        .disabled(!manager.space.fits(bytes))
-                        .help(manager.space.shortfall(bytes) ?? "")
+                        .disabled(manager.snapshot.spaceNote(for: row.model) != nil)
                 }
                 if row.canUse, let role = row.usableRoles.first {
                     Button(row.usableRoles.count == 1 ? "Use" : "Use for \(role.displayName)") { manager.use(row.id, for: role) }

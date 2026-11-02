@@ -183,6 +183,7 @@ public struct ModelListRow<Actions: View>: View {
     private let labels: [String]
     private let detail: String
     private let status: ModelStatus
+    private let note: ModelLine?
     private let actions: Actions
     @Environment(\.daybookDensity) private var density
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -191,12 +192,16 @@ public struct ModelListRow<Actions: View>: View {
     @State private var justDownloaded = false
     @State private var downloads = 0
 
-    /// - Parameter detail: The maker and size: "OpenAI · 487 MB".
-    public init(name: String, labels: [String], detail: String, status: ModelStatus, @ViewBuilder actions: () -> Actions) {
+    /// - Parameters:
+    ///   - detail: The maker and size: "OpenAI · 487 MB".
+    ///   - note: Said in place of the state: why Download waits ("Needs 632 MB · 300 MB free").
+    public init(name: String, labels: [String], detail: String, status: ModelStatus, note: ModelLine? = nil,
+                @ViewBuilder actions: () -> Actions) {
         self.name = name
         self.labels = labels
         self.detail = detail
         self.status = status
+        self.note = note
         self.actions = actions()
     }
 
@@ -255,16 +260,22 @@ public struct ModelListRow<Actions: View>: View {
     private var statusLine: some View {
         HStack(spacing: 0) {
             if !detail.isEmpty { Text(detail + " · ").foregroundStyle(.secondary) }
-            if status == .inUse {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(DaybookPalette.Ink.link)
-                    .imageScale(.small)
-                    .padding(.trailing, 3)
-                    .accessibilityHidden(true)
+            if let note {
+                Text(note.text)
+                    .foregroundStyle(note.needsAttention ? DaybookPalette.Ink.warning : Color.secondary)
+                    .monospacedDigit()
+            } else {
+                if status == .inUse {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(DaybookPalette.Ink.link)
+                        .imageScale(.small)
+                        .padding(.trailing, 3)
+                        .accessibilityHidden(true)
+                }
+                Text(status.label)
+                    .foregroundStyle(statusColor)
+                    .monospacedDigit()
             }
-            Text(status.label)
-                .foregroundStyle(statusColor)
-                .monospacedDigit()
         }
         .font(density == .touch ? .footnote : .subheadline)
         .lineLimit(density == .touch ? 2 : 1)
