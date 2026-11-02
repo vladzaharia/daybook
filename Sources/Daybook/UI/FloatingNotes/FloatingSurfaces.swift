@@ -47,9 +47,9 @@ struct FloatingRecording: View {
             keyboardShortcuts: true)
     }
 
-    private var actions: RecorderActions {
+    private var actions: RecorderSurfaceActions {
         let state = self.state, id = meeting.id
-        return RecorderActions(
+        return RecorderSurfaceActions(
             bookmark: { state.addHighlight(id) },
             stop: { Task { await state.stopRecording() } },
             addNote: { line in

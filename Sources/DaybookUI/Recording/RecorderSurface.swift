@@ -75,7 +75,7 @@ public struct RecorderSurfaceState {
 }
 
 /// What the recorder's controls do.
-public struct RecorderActions {
+public struct RecorderSurfaceActions {
     public var bookmark: () -> Void
     public var stop: () -> Void
     public var resume: () -> Void
@@ -116,7 +116,7 @@ public struct RecorderSlots {
 public struct RecorderSurface: View {
     private let state: RecorderSurfaceState
     private let levels: RecorderLevels
-    private let actions: RecorderActions
+    private let actions: RecorderSurfaceActions
     private let slots: RecorderSlots
     private let writing: Binding<Bool>
     private let clockFocus: AccessibilityFocusState<Bool>.Binding?
@@ -126,7 +126,7 @@ public struct RecorderSurface: View {
     /// - Parameters:
     ///   - writing: Table mode's Write Notes: the notes take the clock's half until Done.
     ///   - clockFocus: Where VoiceOver goes as the recorder appears: the clock, which says it's recording and for how long.
-    public init(state: RecorderSurfaceState, levels: RecorderLevels, actions: RecorderActions, slots: RecorderSlots,
+    public init(state: RecorderSurfaceState, levels: RecorderLevels, actions: RecorderSurfaceActions, slots: RecorderSlots,
                 writing: Binding<Bool> = .constant(false), clockFocus: AccessibilityFocusState<Bool>.Binding? = nil) {
         self.state = state
         self.levels = levels
@@ -159,7 +159,7 @@ public struct RecorderSurface: View {
 struct RecorderPieces {
     let state: RecorderSurfaceState
     let levels: RecorderLevels
-    let actions: RecorderActions
+    let actions: RecorderSurfaceActions
     let slots: RecorderSlots
     let clockFocus: AccessibilityFocusState<Bool>.Binding?
 

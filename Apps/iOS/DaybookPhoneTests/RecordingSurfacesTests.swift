@@ -366,7 +366,7 @@ final class RecorderScreenTests: XCTestCase {
                                              title: "Conversation at 4:07 AM", clock: .since(Date()), isLive: !paused, bookmarkCount: 2, pause: pause)
             let captions = Text("Then everything waits for the Mac to finish").font(.system(size: 26)).lineLimit(1)
             let slots = RecorderSlots(notes: AnyView(notes), captions: AnyView(captions), accessory: AnyView(Circle().frame(width: 44, height: 44)))
-            let surface = RecorderSurface(state: state, levels: RecorderLevels(), actions: RecorderActions(bookmark: {}, stop: {}), slots: slots)
+            let surface = RecorderSurface(state: state, levels: RecorderLevels(), actions: RecorderSurfaceActions(bookmark: {}, stop: {}), slots: slots)
                 .daybookSurface(.column, density: .touch)
                 .dynamicTypeSize(.accessibility5)
             let host = UIHostingController(rootView: surface)

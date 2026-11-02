@@ -93,7 +93,7 @@ struct RecorderScreen: View {
             pause: PhoneRecorderStatus.pause(recorder.state, message: recorder.pauseMessage, canResume: recorder.canResume),
             asleep: asleep)
         let model = self.model
-        let actions = RecorderActions(
+        let actions = RecorderSurfaceActions(
             bookmark: { Task { try? await model.addBookmark() } },
             stop: { Task { try? await model.stopRecording() } },
             resume: { Task { try? await model.resumeRecording() } })
