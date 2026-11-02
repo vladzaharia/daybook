@@ -30,7 +30,7 @@ public struct YourNotes<Editor: View>: View {
 
     private var bookmarks: [(highlight: Highlight, time: TimeInterval, context: HighlightContext?)] {
         let contexts = Dictionary(meeting.highlightContexts().map { ($0.highlight.id, $0) }, uniquingKeysWith: { first, _ in first })
-        return meeting.highlights
+        return meeting.presentHighlights
             .map { (highlight: $0, time: meeting.alignedTime(for: $0) ?? $0.time, context: contexts[$0.id]) }
             .sorted { $0.time < $1.time }
     }
@@ -62,7 +62,7 @@ public struct YourNotes<Editor: View>: View {
             }
         }
         .padding(.bottom, DaybookSpacing.s2)
-        .daybookMotion(DaybookMotion.state, value: meeting.highlights.map(\.id))
+        .daybookMotion(DaybookMotion.state, value: meeting.presentHighlights.map(\.id))
     }
 }
 
