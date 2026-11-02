@@ -97,6 +97,14 @@ final class SettingsWordsTests: XCTestCase {
             width: 402, placement: WindowPlacement(windowWidth: 402, minX: 0)))
     }
 
+    // MARK: Library
+
+    func testTheLibraryRowsCountAsTheMacDoes() {
+        XCTAssertEqual(SettingsWords.templates(SummaryTemplate.builtIns), "\(SummaryTemplate.builtIns.count) built-in")
+        let scoped = GlossaryTerm(term: "Kubernetes", approved: false, sourceMeetingIDs: [UUID()])
+        XCTAssertEqual(SettingsWords.vocabulary([scoped, scoped, scoped]), "3 terms", "never No terms for three in use")
+    }
+
     // MARK: Cloud
 
     func testTheCloudRowSaysWhatSummariesUse() {

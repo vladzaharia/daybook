@@ -1,55 +1,23 @@
 import AppKit
 import DaybookKit
+import DaybookUI
 import SwiftUI
 
-/// Acknowledgements for the models Daybook can use, generated from their manifests
-/// (`ModelAcknowledgements`): the models each license covers, the license and its link, the credit
-/// it requires, and "Non-commercial" where its terms say so. Shown from Settings › Models and in
-/// the About Daybook panel's credits.
+/// Acknowledgements, from Settings › Models: DaybookUI's `AcknowledgementsScreen`, the iPhone's screen, in a sheet.
+/// The models this Mac can use (every model in its catalog, by the rule both apps follow,
+/// `ModelAcknowledgements.entries`), then the software it ships with its notices and licenses. Esc closes it, as
+/// Done does.
 struct ModelAcknowledgementsView: View {
     let catalog: ModelCatalog
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Acknowledgements")
+            Text(AboutWords.acknowledgements)
                 .font(.headline)
                 .padding(.horizontal, Space.s5)
                 .padding(.top, Space.s5)
-            Form {
-                ForEach(ModelAcknowledgements.list(from: catalog)) { entry in
-                    Section {
-                        if let models = entry.otherModels {
-                            LabeledContent("Models") {
-                                Text(models.joined(separator: "\n")).multilineTextAlignment(.trailing)
-                            }
-                        }
-                        LabeledContent("License") {
-                            if let url = URL(string: entry.licenseURL), !entry.licenseURL.isEmpty {
-                                Link(entry.licenseName, destination: url).buttonStyle(.daybookLink)
-                            } else {
-                                Text(entry.licenseName)
-                            }
-                        }
-                        if let attribution = entry.attribution {
-                            Text(attribution)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    } header: {
-                        HStack(spacing: 6) {
-                            Text(entry.title)
-                            if let maker = entry.maker { Text(maker).fontWeight(.regular).foregroundStyle(.secondary) }
-                            Spacer()
-                            if let label = entry.label { ModelLabelChip(label) }
-                            if entry.addedByYou { ModelLabelChip(ModelOrigin.addedByYou.label ?? "") }
-                        }
-                    }
-                }
-            }
-            .formStyle(.grouped)
+            AcknowledgementsScreen(entries: ModelAcknowledgements.entries(from: catalog, usable: nil, meetings: []))
             HStack {
                 Spacer()
                 Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
@@ -57,20 +25,28 @@ struct ModelAcknowledgementsView: View {
             .padding(.horizontal, Space.s5)
             .padding(.vertical, Space.s4)
         }
+        .background {
+            // A sheet with only a Return button ignores Esc; this one takes it.
+            Button("Close", action: { dismiss() })
+                .keyboardShortcut(.cancelAction)
+                .opacity(0)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        }
         .frame(width: 520)
         .frame(minHeight: 360, idealHeight: 720, maxHeight: 760)
     }
 }
 
-/// The About Daybook panel, with the model acknowledgements as its credits: the standard place on
-/// the Mac for the credits an app's parts require.
+/// The About Daybook panel, with the acknowledgements as its credits: the standard place on the Mac for the
+/// credits an app's parts require. The same models as Acknowledgements, then the software it ships.
 enum AboutPanel {
     @MainActor static func show(catalog: ModelCatalog) {
         NSApp.orderFrontStandardAboutPanel(options: [.credits: credits(catalog)])
         NSApp.activate()
     }
 
-    static func credits(_ catalog: ModelCatalog) -> NSAttributedString {
+    static func credits(_ catalog: ModelCatalog, software: SoftwareNotices = .bundled) -> NSAttributedString {
         let body = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
         let bold = NSFont.boldSystemFont(ofSize: NSFont.smallSystemFontSize)
         let paragraph = NSMutableParagraphStyle()
@@ -82,8 +58,8 @@ enum AboutPanel {
             return NSAttributedString(string: string, attributes: attributes)
         }
         let result = NSMutableAttributedString()
-        result.append(text("Models\n", font: bold))
-        for entry in ModelAcknowledgements.list(from: catalog) {
+        result.append(text(AboutWords.models + "\n", font: bold))
+        for entry in ModelAcknowledgements.entries(from: catalog, usable: nil, meetings: []) {
             // A blank line before each entry, so the heading stands apart from the first one too.
             result.append(text("\n"))
             result.append(text("\(entry.title)\(entry.maker.map { " · \($0)" } ?? "")\n", font: bold))
@@ -92,11 +68,15 @@ enum AboutPanel {
             result.append(text(entry.label.map { " · \($0)\n" } ?? "\n", color: .secondaryLabelColor))
             if let attribution = entry.attribution { result.append(text(attribution + "\n", color: .secondaryLabelColor)) }
         }
+        let libraries = software.libraries
+        if !libraries.isEmpty {
+            result.append(text("\n\(AboutWords.software)\n", font: bold))
+            for library in libraries {
+                result.append(text("\n"))
+                result.append(text(library.name + "\n", font: bold))
+                result.append(text(library.license + "\n", color: .secondaryLabelColor))
+            }
+        }
         return result
     }
-}
-
-extension ModelAcknowledgement {
-    /// The models it covers, unless that's only the one its title already names ("Apple Vision").
-    var otherModels: [String]? { models == [title] ? nil : models }
 }

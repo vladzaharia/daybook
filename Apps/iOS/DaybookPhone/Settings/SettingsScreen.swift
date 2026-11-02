@@ -64,6 +64,7 @@ struct SettingsScreen: View {
             list
                 .navigationDestination(for: SettingsRoute.self) { SettingsDestination(route: $0) }
         }
+        .environment(\.settingsPush, SettingsPush { path.append($0) })
     }
 
     /// The screen on the right page, iCloud until another is chosen.
@@ -87,6 +88,8 @@ struct SettingsScreen: View {
                 .navigationDestination(for: SettingsRoute.self) { SettingsDestination(route: $0) }
         }
         .environment(\.settingsPages, pages)
+        // Pushed over the chosen screen, on the right page.
+        .environment(\.settingsPush, SettingsPush { path.append($0) })
         .id(selected)
     }
 
@@ -113,10 +116,10 @@ struct SettingsScreen: View {
             }
             Section {
                 SettingsLink(route: .templates) {
-                    SettingsRow(title: "Summary Templates", detail: templatesSummary, systemImage: "doc.text")
+                    SettingsRow(title: TemplateWords.title, detail: templatesSummary, systemImage: "doc.text")
                 }
                 SettingsLink(route: .vocabulary) {
-                    SettingsRow(title: "Vocabulary", detail: vocabularySummary, systemImage: "character.book.closed")
+                    SettingsRow(title: VocabularyWords.title, detail: vocabularySummary, systemImage: "character.book.closed")
                 }
                 SettingsLink(route: .speakerProfiles) {
                     SettingsRow(title: "Speaker Profiles", detail: SpeakerProfilesScreen.summary(model.library.controller.speakerProfiles.count),
@@ -151,15 +154,11 @@ struct SettingsScreen: View {
         return model.processingCapabilities.transcribes ? "Transcribes on this iPhone" : "Live transcription on this iPhone"
     }
 
-    private var templatesSummary: String {
-        let count = model.library.controller.templates.count
-        return count == 1 ? "1 template" : "\(count) templates"
-    }
+    /// "12 built-in, 2 yours", as the Mac counts them.
+    private var templatesSummary: String { SettingsWords.templates(model.library.controller.templates) }
 
-    private var vocabularySummary: String {
-        let count = model.library.controller.glossary.filter(\.approved).count
-        return count == 0 ? "No terms" : count == 1 ? "1 term" : "\(count) terms"
-    }
+    /// Every term, wherever it's used, as the Mac counts them.
+    private var vocabularySummary: String { SettingsWords.vocabulary(model.library.controller.glossary) }
 
     /// `--open-settings <screen>` (debug), for screenshots.
     private func openRequestedScreen() async {
@@ -227,13 +226,13 @@ struct SettingsDestination: View {
         case .models: ModelsSettingsScreen()
         case .cloud: CloudSettingsScreen()
         case .cloudKey(let provider): CloudKeyScreen(provider: CloudProvider(rawValue: provider) ?? .anthropic)
-        case .templates: TemplatesScreen()
-        case .template(let id): TemplateEditor(templateID: id)
-        case .vocabulary: VocabularyScreen()
+        case .templates: TemplatesPage()
+        case .template(let id): TemplateEditorPage(templateID: id)
+        case .vocabulary: VocabularyPage()
         case .speakerProfiles: SpeakerProfilesScreen()
         case .speakerProfile(let id): SpeakerProfileScreen(profileID: id)
-        case .about: AboutScreen()
-        case .acknowledgements: AcknowledgementsScreen()
+        case .about: AboutPage()
+        case .acknowledgements: AcknowledgementsPage()
         }
     }
 }
@@ -250,6 +249,15 @@ struct SettingsPages {
 extension EnvironmentValues {
     /// Set while Settings is two pages; nil in the hand, and wherever else its screens appear.
     @Entry var settingsPages: SettingsPages? = nil
+    /// Pushes a screen over the one it's read in.
+    @Entry var settingsPush = SettingsPush { _ in }
+}
+
+/// Pushes a screen over the one it's read in: onto the column in the hand, onto the right page open (a new
+/// template's editor, a copy's).
+struct SettingsPush {
+    var push: (SettingsRoute) -> Void
+    func callAsFunction(_ route: SettingsRoute) { push(route) }
 }
 
 /// A row that opens a Settings screen: pushed in the hand; open, shown on the right page, with the
@@ -345,43 +353,5 @@ struct RecordingSettingsScreen: View {
         .settingsScrollEnd()
         .navigationTitle("Recording")
         .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-// MARK: About
-
-struct AboutScreen: View {
-    @Environment(PhoneAppModel.self) private var model
-
-    var body: some View {
-        Form {
-            Section {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Daybook").font(PhoneStyle.Typeface.title(.title)).foregroundStyle(PhoneStyle.Ink.title)
-                    Text("Version \(version)").font(.subheadline).foregroundStyle(PhoneStyle.Ink.secondary)
-                }
-                .padding(.vertical, 6)
-                .accessibilityElement(children: .combine)
-            }
-            Section("Privacy") {
-                Text("Recordings, notes, and transcripts stay on your devices and in your iCloud. A summary goes to a cloud model only when you choose one.")
-                    .font(.subheadline)
-                    .foregroundStyle(PhoneStyle.Ink.body)
-            }
-            // Credits for the models behind this library's transcripts and summaries: only once there are some.
-            if !AcknowledgementsScreen.entries(for: model).isEmpty {
-                Section {
-                    NavigationLink("Acknowledgements", value: SettingsRoute.acknowledgements)
-                }
-            }
-        }
-        .navigationTitle("About")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-
-    private var version: String {
-        let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
-        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
-        return "\(short) (\(build))"
     }
 }

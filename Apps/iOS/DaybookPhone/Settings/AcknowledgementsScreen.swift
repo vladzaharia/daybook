@@ -1,54 +1,30 @@
 import DaybookKit
+import DaybookUI
 import SwiftUI
 
-/// Settings › About › Acknowledgements: the models behind this library's transcripts, speakers,
-/// and summaries (made on a Mac), with their licenses and the credits those require. Generated from
-/// the catalog's manifests (`ModelAcknowledgements`), so a new model's credit arrives with its entry.
-struct AcknowledgementsScreen: View {
+/// Settings › About: DaybookUI's `AboutScreen`, with the version, the privacy statement the Mac shows too, and
+/// Acknowledgements.
+struct AboutPage: View {
+    var body: some View {
+        AboutScreen(acknowledgements: SettingsRoute.acknowledgements)
+    }
+}
+
+/// Settings › About › Acknowledgements: DaybookUI's `AcknowledgementsScreen`, the Mac's too. The models this iPhone
+/// can use (live captions' and its own processing's) and those behind the library's results, by the rule both apps
+/// follow, then the software it ships with the notices and licenses its bundle carries.
+struct AcknowledgementsPage: View {
     @Environment(PhoneAppModel.self) private var model
 
-    /// The models behind this library's results. About links here only when there are some.
+    /// The models this iPhone credits (`ModelAcknowledgements.entries`).
     @MainActor
     static func entries(for model: PhoneAppModel) -> [ModelAcknowledgement] {
-        let catalog = ModelCatalog.builtIn
-        // The models behind the library's results, and those downloaded for live captions.
-        let keys = catalog.resultModelKeys(in: model.library.controller.meetings).union(model.models.inventory.usableVariantKeys)
-        return ModelAcknowledgements.list(from: catalog, only: keys)
+        let models = model.models
+        let usable = Set((models.roles + models.processingRoles).flatMap(models.options(for:)).map(\.key))
+        return ModelAcknowledgements.entries(from: models.catalog, usable: usable, meetings: model.library.controller.meetings)
     }
 
     var body: some View {
-        let entries = Self.entries(for: model)
-        Form {
-            ForEach(entries) { entry in
-                Section {
-                    LabeledContent("Models") {
-                        Text(entry.models.joined(separator: "\n")).multilineTextAlignment(.trailing)
-                    }
-                    if let url = URL(string: entry.licenseURL), !entry.licenseURL.isEmpty {
-                        Link(destination: url) {
-                            // Explicit inks: a link tints its label, so "License" would be teal too.
-                            LabeledContent {
-                                Text(entry.licenseName).foregroundStyle(PhoneStyle.Ink.link)
-                            } label: {
-                                Text("License").foregroundStyle(PhoneStyle.Ink.title)
-                            }
-                        }
-                    } else {
-                        LabeledContent("License", value: entry.licenseName)
-                    }
-                    if let label = entry.label { LabeledContent("Use", value: label) }
-                    if let attribution = entry.attribution {
-                        Text(attribution)
-                            .font(.footnote)
-                            .foregroundStyle(PhoneStyle.Ink.secondary)
-                            .textSelection(.enabled)
-                    }
-                } header: {
-                    Text(entry.maker.map { "\(entry.title) · \($0)" } ?? entry.title)
-                }
-            }
-        }
-        .navigationTitle("Acknowledgements")
-        .navigationBarTitleDisplayMode(.inline)
+        AcknowledgementsScreen(entries: Self.entries(for: model))
     }
 }

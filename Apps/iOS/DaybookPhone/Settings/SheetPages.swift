@@ -1,3 +1,4 @@
+import DaybookDesign
 import DaybookUI
 import SwiftUI
 import UIKit
@@ -74,29 +75,74 @@ private struct PageSheetPresentation<Item: Identifiable, Sheet: View>: ViewModif
 }
 
 /// A sheet's content as a card on the open display's right page, as the reading sheets are
-/// (`LibraryBrowser`'s `PageSheet`). Folded shut while shown, it takes the cover display whole.
+/// (`LibraryBrowser`'s `PageSheet`). Folded shut while shown, it takes the cover display whole. Like a
+/// sheet it closes with a drag down (on its handle) and with VoiceOver's escape, unless what's in it
+/// has changes to lose (`guardingDismissal`), when its own Cancel asks first.
 private struct PageCard<Content: View>: View {
     @ViewBuilder var content: Content
     @Environment(\.surfaceStyle) private var surface
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// What's in it would lose changes if it closed.
+    @State private var guarded = false
+    @State private var drag: CGFloat = 0
+
+    /// How far the handle is dragged before letting go closes the card.
+    private static var closesAfter: CGFloat { 96 }
 
     var body: some View {
-        if surface == .pocket {
-            content.background(Color(uiColor: .systemBackground).ignoresSafeArea())
-        } else {
-            CreaseSplit {
-                Color.clear.accessibilityHidden(true)
-            } trailing: {
-                content
-                    .background(Color(uiColor: .systemBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
-                    .shadow(color: .black.opacity(0.12), radius: 18, y: 4)
-                    .padding(.leading, PhoneStyle.Page.creaseClearance)
-                    .padding(.trailing, PhoneStyle.Space.s3)
-                    .padding(.vertical, PhoneStyle.Space.s2)
+        Group {
+            if surface == .pocket {
+                content.background(Color(uiColor: .systemBackground).ignoresSafeArea())
+            } else {
+                CreaseSplit {
+                    Color.clear.accessibilityHidden(true)
+                } trailing: {
+                    card
+                }
+                // The display under it steps back, as under a sheet.
+                .background(Color.black.opacity(0.2).ignoresSafeArea().accessibilityHidden(true))
             }
-            // The display under it steps back, as under a sheet.
-            .background(Color.black.opacity(0.2).ignoresSafeArea().accessibilityHidden(true))
         }
+        .onPreferenceChange(DismissalGuardKey.self) { value in MainActor.assumeIsolated { guarded = value } }
+        .accessibilityAction(.escape) { if !guarded { dismiss() } }
+    }
+
+    private var card: some View {
+        content
+            .background(Color(uiColor: .systemBackground))
+            // Over the bar's top margin, where a sheet's grabber is, clear of its buttons.
+            .overlay(alignment: .top) { handle }
+        .clipShape(RoundedRectangle(cornerRadius: DaybookRadius.panel, style: .continuous))
+        .shadow(color: .black.opacity(0.12), radius: 18, y: 4)
+        .offset(y: drag)
+        .accessibilityAddTraits(.isModal)
+        .padding(.leading, PhoneStyle.Page.creaseClearance)
+        .padding(.trailing, PhoneStyle.Space.s3)
+        .padding(.vertical, PhoneStyle.Space.s2)
+    }
+
+    /// A sheet's grabber: dragged down past `closesAfter`, the card goes; short of it, or with changes to
+    /// lose, it settles back.
+    private var handle: some View {
+        Capsule()
+            .fill(Color(uiColor: .tertiaryLabel))
+            .frame(width: 36, height: 5)
+            .padding(.top, 5)
+            .frame(width: 120, height: 16, alignment: .top)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 4)
+                    .onChanged { value in drag = max(0, value.translation.height) * (guarded ? 0.15 : 1) }
+                    .onEnded { value in
+                        if !guarded, value.translation.height > Self.closesAfter || value.predictedEndTranslation.height > Self.closesAfter * 2 {
+                            dismiss()
+                        } else {
+                            withAnimation(DaybookMotion.resolved(DaybookMotion.state, reduceMotion: reduceMotion)) { drag = 0 }
+                        }
+                    }
+            )
+            .accessibilityHidden(true)
     }
 }
 

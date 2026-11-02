@@ -2,6 +2,9 @@ import AppKit
 import AVFoundation
 import CoreGraphics
 import DaybookCore
+import DaybookDesign
+import DaybookKit
+import DaybookUI
 import SwiftUI
 
 /// The Settings panes, restored from `@AppStorage("settingsPane")`.
@@ -57,94 +60,15 @@ private struct SettingsPaneSize: ViewModifier {
     }
 }
 
-/// A section footer: one or two sentences in secondary, aligned with the rows above.
-struct SettingsFooter: View {
-    let text: String
-    init(_ text: String) { self.text = text }
-    var body: some View {
-        Text(text)
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-            .multilineTextAlignment(.leading)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 10)
-    }
-}
+// Settings' footers and problem lines are the ones both apps draw (DaybookUI's `SettingsFooter`, DaybookDesign's
+// `ProblemLine` and `DetailsButton`). These names reach the Mac's files that don't import those libraries.
+typealias SettingsFooter = DaybookUI.SettingsFooter
+typealias ProblemLine<Actions: View> = DaybookDesign.ProblemLine<Actions>
+typealias DetailsButton = DaybookDesign.DetailsButton
 
-/// A problem in place, in Settings and its sheets: the warning glyph, one plain sentence in the label colour, the system's
-/// own words behind Details…, and its actions. They sit beside a short sentence and move under a long one, so a row never
-/// squeezes its sentence into a narrow column.
-struct ProblemLine<Actions: View>: View {
-    let text: String
-    var details: String?
-    var symbol = "exclamationmark.triangle.fill"
-    @ViewBuilder var actions: Actions
-
-    /// The glyph's column, so a wrapped sentence and stacked actions keep one leading edge.
-    private static var glyphWidth: CGFloat { 18 }
-    private var hasButtons: Bool { details != nil || Actions.self != EmptyView.self }
-
-    var body: some View {
-        if hasButtons {
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .firstTextBaseline, spacing: Space.s2) {
-                    sentence
-                    Spacer(minLength: Space.s3)
-                    buttons
-                }
-                VStack(alignment: .leading, spacing: Space.s2) {
-                    sentence
-                    // Wrapped, so several long ones ("Get Key from Alex's iPhone 15 Pro Max") stay inside the row.
-                    FlowLayout(spacing: Space.s2) { buttons }
-                        .padding(.leading, Self.glyphWidth + Space.s2)
-                }
-            }
-        } else {
-            sentence
-        }
-    }
-
-    private var sentence: some View {
-        HStack(alignment: .firstTextBaseline, spacing: Space.s2) {
-            Image(systemName: symbol)
-                .foregroundStyle(Ink.warning)
-                .frame(width: Self.glyphWidth)
-                .accessibilityHidden(true)
-            Text(text).fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    @ViewBuilder private var buttons: some View {
-        if let details { DetailsButton(details: details) }
-        actions
-    }
-}
-
-extension ProblemLine where Actions == EmptyView {
-    init(text: String, details: String? = nil, symbol: String = "exclamationmark.triangle.fill") {
-        self.init(text: text, details: details, symbol: symbol) { EmptyView() }
-    }
-
+extension DaybookDesign.ProblemLine where Actions == EmptyView {
     /// An `AppProblem` shown in place: its message, and its details behind Details….
     init(problem: AppProblem) { self.init(text: problem.message, details: problem.details) }
-}
-
-/// Details… beside a problem: the system's own words, selectable, in a popover.
-struct DetailsButton: View {
-    let details: String
-    @State private var showing = false
-
-    var body: some View {
-        Button("Details…") { showing = true }
-            .popover(isPresented: $showing) {
-                Text(details)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(Space.s4)
-                    .frame(width: 360, alignment: .leading)
-            }
-    }
 }
 
 // MARK: - General
@@ -348,13 +272,8 @@ private struct SupportedCallsPopover: View {
 private struct LibrarySettings: View {
     let state: AppState
 
-    /// "Daybook 1.2 (45)"; nothing for a development build without a version.
-    private var version: String? {
-        let info = Bundle.main.infoDictionary
-        guard let short = info?["CFBundleShortVersionString"] as? String else { return nil }
-        guard let build = info?["CFBundleVersion"] as? String else { return "Daybook \(short)" }
-        return "Daybook \(short) (\(build))"
-    }
+    /// "Version 1.2 (45)", as the About panel and the iPhone's About say it; nothing for a development build.
+    private var version: String? { AboutWords.version(Bundle.main.infoDictionary) }
 
     var body: some View {
         Form {
@@ -374,14 +293,9 @@ private struct LibrarySettings: View {
             SyncSettingsView(state: state)
 
             Section {
-                Label {
-                    Text("Recordings and transcripts stay on your devices, and in your own iCloud when sync is on. A summary goes to a cloud model only when you choose one.")
-                        .fixedSize(horizontal: false, vertical: true)
-                } icon: {
-                    Image(systemName: "lock.fill").foregroundStyle(DaybookStyle.brandGradient)
-                }
+                PrivacyStatement()
             } header: {
-                Text("Privacy")
+                Text(AboutWords.privacy)
             } footer: {
                 if let version {
                     Text(version)
