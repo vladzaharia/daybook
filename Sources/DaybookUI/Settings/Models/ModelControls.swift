@@ -79,10 +79,8 @@ public struct ModelPicker: View {
                     }
                 }
             } label: {
-                // The chevrons follow the name's last word, however it wraps.
-                (Text(name + "\u{00A0}").foregroundStyle(DaybookPalette.Ink.title)
-                    + Text(Image(systemName: "chevron.up.chevron.down")).font(.footnote.weight(.semibold))
-                    .foregroundStyle(DaybookPalette.Ink.link))
+                // The chevrons follow the name's last word, however it wraps: a no-break space keeps them together.
+                Text("\(Text(name).foregroundStyle(DaybookPalette.Ink.title))\u{00A0}\(Self.chevrons)")
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -97,6 +95,10 @@ public struct ModelPicker: View {
     }
 
     #if os(iOS)
+    private static var chevrons: Text {
+        Text(Image(systemName: "chevron.up.chevron.down")).font(.footnote.weight(.semibold)).foregroundStyle(DaybookPalette.Ink.link)
+    }
+
     private func item(_ option: ModelOption) -> some View {
         // A menu shows the first text as the item and the second under it.
         VStack(alignment: .leading) {
