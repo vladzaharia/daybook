@@ -226,26 +226,6 @@ struct StatusInputs: Equatable {
     var phoneHasWork: Bool { !phone.isEmpty || !phoneQueue.isEmpty }
 }
 
-extension StatusInputs.Recorder {
-    /// The facts the recorder's page reads its actions from (`RecorderActions`), from the card's.
-    var actionFacts: RecorderFacts {
-        var facts = RecorderFacts(id: id, name: name, shortName: shortName, symbol: "", isDirect: isDirect, state: state, isLinked: isLinked)
-        facts.isRecording = isRecording
-        facts.isListeningLive = isListeningLive
-        facts.managedBy = managedBy
-        facts.handoff = handoff
-        facts.newCount = newCount
-        facts.importing = importing.map {
-            RecorderFacts.Importing(position: $0.position, total: $0.total, fraction: $0.fraction, suspended: $0.suspended, running: importRunning)
-        }
-        facts.hasRecordControl = hasRecordControl
-        facts.hasLiveListening = hasLiveListening
-        facts.canConnect = canConnect
-        facts.notListed = notListed
-        return facts
-    }
-}
-
 enum StatusSheetModel {
     // MARK: Sections
 
@@ -681,10 +661,20 @@ extension StatusInputs.Recorder {
         facts.handoff = handoff
         facts.problem = problem
         facts.newCount = newCount
-        facts.importing = importing.map { RecorderFacts.Importing(position: $0.position, total: $0.total, fraction: $0.fraction, suspended: $0.suspended) }
+        facts.importing = importing.map {
+            RecorderFacts.Importing(position: $0.position, total: $0.total, fraction: $0.fraction, suspended: $0.suspended, running: importRunning)
+        }
+        facts.fastTransfer = fastTransfer
         facts.lastConnected = lastConnected
         facts.otherAppWait = otherAppWait
         facts.folder = folder
+        facts.hasRecordControl = hasRecordControl
+        facts.hasLiveListening = hasLiveListening
+        facts.canConnect = canConnect
+        facts.notListed = notListed
         return facts
     }
+
+    /// The facts the recorder's page reads its actions from (`RecorderActions`), from the card's: the same facts.
+    var actionFacts: RecorderFacts { facts }
 }

@@ -523,13 +523,17 @@ enum StatusSheetInputs {
         inputs.syncLine = sync.statusLine
         switch sync.connection {
         case .checking: inputs.syncTone = .checking
+        case .unavailable where sync.iCloud == .accountChanged:
+            // Paused for the person, not off: Settings › iCloud offers Sync with This Account.
+            inputs.syncTone = .attention
+            inputs.syncLine = SyncStatus.accountChanged.shortText
         case .unavailable(let reason):
             inputs.syncTone = .attention
             inputs.syncOff = true
             inputs.syncLine = StatusSheetModel.unavailablePhrase(reason)
             inputs.syncShort = "Off"
         case .connected:
-            let full = sync.controller?.status == .storageFull
+            let full = sync.isStorageFull
             let olderApp = sync.controller?.warning == .otherInstallation
             if full { inputs.syncLine = SyncStatus.storageFull.shortText }
             if olderApp, !full, sync.lastError == nil { inputs.syncLine = "Older Daybook app installed" }

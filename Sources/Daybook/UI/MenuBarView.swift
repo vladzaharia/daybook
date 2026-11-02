@@ -26,7 +26,8 @@ struct MenuBarView: View {
         }
         // Where Window › Floating Notes opens it, with the same shortcut: on the recording, else the conversation
         // the library window shows, else its home.
-        Button("Show Floating Notes") { state.showFloatingNotes(focus: floatingNotesFocus) }
+        // Floating Notes' one rule for where it opens from a menu (`AppState.floatingNotesFocus`).
+        Button("Show Floating Notes") { state.showFloatingNotes(focus: state.floatingNotesFocus) }
             .keyboardShortcut("n", modifiers: [.command, .option])
         Divider()
         Toggle("Record Calls Automatically", isOn: $state.automaticRecording)
@@ -38,14 +39,6 @@ struct MenuBarView: View {
         SettingsLink { Text("Settings…") }.keyboardShortcut(",")
         Divider()
         Button("Quit Daybook") { NSApp.terminate(nil) }.keyboardShortcut("q")
-    }
-
-    /// Floating Notes' one rule for where it opens from a menu (Window › Floating Notes, this menu, the Dock): on the
-    /// recording, else the conversation the library window shows (one, not a selection of several), else its home.
-    private var floatingNotesFocus: UUID? {
-        if let id = state.recordingID { return id }
-        guard state.multiSelection.count < 2 else { return nil }
-        return state.place.isDevice ? state.deviceConversationID : state.selectedID
     }
 
     private func open(_ place: LibraryPlace?) {
