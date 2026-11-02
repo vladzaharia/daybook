@@ -25,7 +25,7 @@ final class MacFirstMultipointTests: XCTestCase {
         let cloud = try temporaryFolder("Cloud")
         try rig.connectSync(cloud)
         let link = try await PhoneLinkRig.connect(state)
-        defer { Task { await link.tearDown(state) } }
+        addTeardownBlock { await link.tearDown(state) }
         let phone = try await PhoneLibrarySide.make(in: self, root: try temporaryFolder("Phone"), cloud: cloud, phoneID: link.phoneID)
         defer { phone.tearDown() }
         let recordingID = UUID()
@@ -39,20 +39,13 @@ final class MacFirstMultipointTests: XCTestCase {
         try rig.inference.script(phoneAudio, [(0, "Agenda first."), (5, "Then the budget."), (10, "And someone near the phone agreed.")])
 
         // This Mac records with the phone along, and stops; the phone's recording is still on the phone.
-        let id = state.newMeeting(title: "Design review")
-        state.prepareSourceCapture(id)
-        state.recordingID = id
-        state.recordingStartedAt = Date()
-        state.update(id) { $0.status = .recording }
-        state.recordingDidStart(id)
+        let id = try await rig.startRecording(title: "Design review")
         let macStart = try XCTUnwrap(state.recordingStartedAt)
         await state.sources.recorders.settle()
-        state.recordingWillFinish(id, at: Date())
-        state.recordingID = nil
-        state.recordingStartedAt = nil
+        await rig.stopRecording()
         await state.sources.recorders.settle()
         XCTAssertEqual(rig.meeting(id)?.companions?.first?.state, .stopped)
-        try await storeMacRecording(rig, id, audio: macAudio, start: macStart)
+        try await rig.storeMacRecording(id, audio: macAudio, start: macStart)
 
         // Processing starts at once, on this Mac's audio, and says what it's waiting for.
         try rig.inference.block(macAudio)
@@ -127,7 +120,7 @@ final class MacFirstMultipointTests: XCTestCase {
         let cloud = try temporaryFolder("Cloud")
         try rig.connectSync(cloud)
         let link = try await PhoneLinkRig.connect(state)
-        defer { Task { await link.tearDown(state) } }
+        addTeardownBlock { await link.tearDown(state) }
         let phone = try await PhoneLibrarySide.make(in: self, root: try temporaryFolder("Phone"), cloud: cloud, phoneID: link.phoneID)
         defer { phone.tearDown() }
         let recordingID = UUID()
@@ -141,19 +134,12 @@ final class MacFirstMultipointTests: XCTestCase {
         try rig.inference.script(macAudio, [(0, "Agenda first."), (5, "Then the budget.")])
         try rig.inference.script(phoneAudio, [(0, "Agenda first."), (5, "Then the budget."), (10, "And someone near the phone agreed.")])
 
-        let id = state.newMeeting(title: "Design review")
-        state.prepareSourceCapture(id)
-        state.recordingID = id
-        state.recordingStartedAt = Date()
-        state.update(id) { $0.status = .recording }
-        state.recordingDidStart(id)
+        let id = try await rig.startRecording(title: "Design review")
         let macStart = try XCTUnwrap(state.recordingStartedAt)
         await state.sources.recorders.settle()
-        state.recordingWillFinish(id, at: Date())
-        state.recordingID = nil
-        state.recordingStartedAt = nil
+        await rig.stopRecording()
         await state.sources.recorders.settle()
-        try await storeMacRecording(rig, id, audio: macAudio, start: macStart)
+        try await rig.storeMacRecording(id, audio: macAudio, start: macStart)
         state.enqueue(id)
         try await rig.processed(id)
 
@@ -190,21 +176,5 @@ final class MacFirstMultipointTests: XCTestCase {
         guard case .requested(.device) = state.processingStatus(for: other) else {
             return XCTFail("Left for another Mac, got \(state.processingStatus(for: other))")
         }
-    }
-
-    /// This Mac's own recording of `id`, stored as capture stores it, without starting processing.
-    private func storeMacRecording(_ rig: MultiSourceRig, _ id: UUID, audio: URL, start: Date) async throws {
-        let installed = rig.state.installedModels
-        rig.state.installedModels = []
-        try await rig.state.importFiles([audio], source: .microphone, attachTo: id)
-        rig.state.installedModels = installed
-        rig.state.awaitingModels.remove(id)
-        rig.state.update(id) { meeting in
-            meeting.tracks[0].offset = 0
-            meeting.tracks[0].createdAt = start
-            meeting.tracks[0].duration = 0.5
-            meeting.status = .imported
-        }
-        await rig.state.flush()
     }
 }

@@ -20,32 +20,14 @@ final class CascadingRecordingTests: XCTestCase {
         return rig
     }
 
+    /// A phone on the link. This Mac's own Record and Stop run as the person's do, with the rig's fake microphone, when
+    /// the phone asks too.
     private func connect(_ rig: MultiSourceRig, features: [String] = [LinkCapabilities.cascadeFeature, LinkCapabilities.sharedNotesFeature])
         async throws -> PhoneLinkRig {
         let phone = try await PhoneLinkRig.connect(rig.state, features: features)
         rig.state.microphoneAccess = { .authorized }
-        rig.state.phoneCapture = PhoneCapture(start: { id in _ = self.macStartsRecording(rig, into: id); return true },
-                                              stop: { id in self.macStopsRecording(rig, id) })
+        addTeardownBlock { await phone.tearDown(rig.state) }
         return phone
-    }
-
-    /// What `startRecording` does once capture runs (no microphone).
-    @discardableResult
-    private func macStartsRecording(_ rig: MultiSourceRig, into existing: UUID? = nil) -> UUID {
-        let id = existing ?? rig.state.newMeeting(title: "Design review")
-        rig.state.prepareSourceCapture(id)
-        rig.state.recordingID = id
-        rig.state.recordingStartedAt = Date()
-        rig.state.update(id) { $0.status = .recording; $0.date = rig.state.recordingStartedAt! }
-        rig.state.recordingDidStart(id)
-        return id
-    }
-
-    private func macStopsRecording(_ rig: MultiSourceRig, _ id: UUID) {
-        rig.state.recordingWillFinish(id, at: Date())
-        rig.state.recordingID = nil
-        rig.state.recordingStartedAt = nil
-        rig.state.phoneLeads[id] = nil
     }
 
     private func phoneStarts(_ phone: PhoneLinkRig, recordsItself: Bool = true, trigger: LinkCascade.Trigger = .person) async throws
@@ -63,22 +45,20 @@ final class CascadingRecordingTests: XCTestCase {
     func testTheMacsStartAsksTheConnectedPhoneOnItsOwn() async throws {
         let rig = try await rig()
         let phone = try await connect(rig)
-        defer { Task { await phone.tearDown(rig.state) } }
-        let id = macStartsRecording(rig)
+        let id = try await rig.startRecording()
         await rig.state.sources.recorders.settle()
         let start = try XCTUnwrap(phone.recorder.requests.first)
         XCTAssertEqual(start.conversationID, id)
         XCTAssertEqual(start.cascade?.trigger, .person, "a cascading start")
         XCTAssertEqual(start.cascade?.requesterRecords, true)
         XCTAssertEqual(rig.meeting(id)?.companions?.first?.state, .recording)
-        macStopsRecording(rig, id)
+        await rig.stopRecording()
         await rig.state.sources.recorders.settle()
     }
 
     func testAPhonesStartJoinsThisMacUnlessRecordAlongIsOffAndNeverComesBack() async throws {
         let rig = try await rig()
         let phone = try await connect(rig)
-        defer { Task { await phone.tearDown(rig.state) } }
         let (conversation, outcome) = try await phoneStarts(phone)
         guard case .accepted = outcome else { return XCTFail("\(outcome)") }
         XCTAssertEqual(rig.state.recordingID, conversation)
@@ -122,11 +102,10 @@ final class CascadingRecordingTests: XCTestCase {
     func testStoppingTheMacStopsThePhoneThatLedButNotTheOneWhoseStopItWas() async throws {
         let rig = try await rig()
         let phone = try await connect(rig)
-        defer { Task { await phone.tearDown(rig.state) } }
 
         // The person stops this Mac: the phone that led stops too.
         let (first, _) = try await phoneStarts(phone)
-        macStopsRecording(rig, first)
+        await rig.stopRecording()
         await rig.state.sources.recorders.settle()
         XCTAssertEqual(phone.recorder.requests.map(\.action), [.stop])
         XCTAssertEqual(phone.recorder.requests.last?.conversationID, first)
@@ -144,8 +123,7 @@ final class CascadingRecordingTests: XCTestCase {
     func testAPhoneRecordingAlongWithTheMacCanStopItAndIsntAskedBack() async throws {
         let rig = try await rig()
         let phone = try await connect(rig)
-        defer { Task { await phone.tearDown(rig.state) } }
-        let id = macStartsRecording(rig)
+        let id = try await rig.startRecording()
         await rig.state.sources.recorders.settle()
         XCTAssertEqual(rig.meeting(id)?.companions?.first?.state, .recording)
         let stop = try await phone.client.request(LinkRecordRequest(action: .stop, conversationID: id), from: phone.macID)
@@ -159,7 +137,6 @@ final class CascadingRecordingTests: XCTestCase {
     func testAPhoneRecordingOnlyThroughItsRecorderIsFollowedAndStoppedOwedUntilItReconnects() async throws {
         let rig = try await rig()
         let phone = try await connect(rig)
-        defer { Task { await phone.tearDown(rig.state) } }
         let (conversation, outcome) = try await phoneStarts(phone, recordsItself: false, trigger: .recorder)
         guard case .accepted = outcome else { return XCTFail("\(outcome)") }
         XCTAssertEqual(rig.state.recordingID, conversation)
@@ -173,7 +150,7 @@ final class CascadingRecordingTests: XCTestCase {
         // This Mac stops while the phone is away: the stop is owed, and goes when it's back.
         await phone.client.disconnect(from: phone.macID)
         try await waitUntil("the phone is gone") { rig.state.phoneLink.peers[phone.phoneID] == nil }
-        macStopsRecording(rig, conversation)
+        await rig.stopRecording()
         await rig.state.sources.recorders.settle()
         XCTAssertEqual(rig.state.sources.recorders.pendingStops[phone.phoneID.uuidString]?.first?.lead, true)
         try await phone.client.connect(to: phone.macID, via: phone.endpoint)
@@ -197,14 +174,13 @@ final class CascadingRecordingTests: XCTestCase {
         let cloud = try temporaryFolder("Cloud")
         try rig.connectSync(cloud)
         let phone = try await connect(rig)
-        defer { Task { await phone.tearDown(state) } }
         let library = try await PhoneLibrarySide.make(in: self, root: try temporaryFolder("Phone"), cloud: cloud, phoneID: phone.phoneID)
         defer { library.tearDown() }
         let recordingID = UUID()
         phone.recorder.answer = { request in
             .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: Date(), recordingID: recordingID.uuidString))
         }
-        let id = macStartsRecording(rig)
+        let id = try await rig.startRecording()
         let macStart = try XCTUnwrap(state.recordingStartedAt)
         await state.sources.recorders.settle()
 
@@ -238,9 +214,9 @@ final class CascadingRecordingTests: XCTestCase {
 
         // Later, the libraries sync: the phone files its recording with its own paragraph (held by its
         // recording) and the Mac's (as the Mac files it), and its copy of the bookmark.
-        macStopsRecording(rig, id)
+        await rig.stopRecording()
         await state.sources.recorders.settle()
-        try await storeMacRecording(rig, id, audio: try rig.audio("mac-notes.wav", frequency: 330), start: macStart)
+        try await rig.storeMacRecording(id, audio: try rig.audio("mac-notes.wav", frequency: 330), start: macStart)
         await state.synchronizeLibrary()
         await library.synchronize()
         let mine = TimedNote(id: phoneNote.id, time: 12, text: "Phone: Priya and Sam own the checklist")
@@ -306,7 +282,7 @@ final class CascadingRecordingTests: XCTestCase {
     func testARecorderStartedWithThisMacSavesItsAudioIntoTheConversationAndItsFileReplacesIt() async throws {
         let rig = try await rig()
         let (session, device) = try soundcore(rig)
-        let id = macStartsRecording(rig)
+        let id = try await rig.startRecording()
         try await waitUntil("the recorder records along, its audio saved here as it records", timeout: 5) {
             session.liveCaptureConversation == id
         }
@@ -314,7 +290,7 @@ final class CascadingRecordingTests: XCTestCase {
         XCTAssertEqual(rig.meeting(id)?.companions?.first?.state, .recording)
         try await Task.sleep(for: .milliseconds(400))
 
-        macStopsRecording(rig, id)
+        await rig.stopRecording()
         await rig.state.sources.recorders.settle()
         XCTAssertFalse(device.isRecording, "paused with this Mac")
         let recordingID = try XCTUnwrap(rig.meeting(id)?.companions?.first?.recordingID)
@@ -332,8 +308,6 @@ final class CascadingRecordingTests: XCTestCase {
     func testTheRecordersButtonStartsAndStopsThisMac() async throws {
         let rig = try await rig()
         rig.state.microphoneAccess = { .authorized }
-        rig.state.phoneCapture = PhoneCapture(start: { id in _ = self.macStartsRecording(rig, into: id); return true },
-                                              stop: { id in self.macStopsRecording(rig, id) })
         let (session, device) = try soundcore(rig)
         session.direct?.connect()
         try await waitUntil("connected") { session.direct?.isInventoryCurrent == true }
@@ -348,7 +322,7 @@ final class CascadingRecordingTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(300))
 
         // Stopped here: the recorder whose button began it stops too.
-        macStopsRecording(rig, id)
+        await rig.stopRecording()
         await rig.state.sources.recorders.settle()
         XCTAssertFalse(device.isRecording)
 
@@ -360,22 +334,6 @@ final class CascadingRecordingTests: XCTestCase {
         try await waitUntil("its button stops this Mac") { rig.state.recordingID == nil }
         XCTAssertEqual(rig.state.notice, "\(session.device.name) stopped recording, so this Mac stopped too.")
         await rig.state.sources.recorders.settle()
-    }
-
-    /// This Mac's own recording of `id`, stored as capture stores it.
-    private func storeMacRecording(_ rig: MultiSourceRig, _ id: UUID, audio: URL, start: Date) async throws {
-        let installed = rig.state.installedModels
-        rig.state.installedModels = []
-        try await rig.state.importFiles([audio], source: .microphone, attachTo: id)
-        rig.state.installedModels = installed
-        rig.state.awaitingModels.remove(id)
-        rig.state.update(id) { meeting in
-            meeting.tracks[0].offset = 0
-            meeting.tracks[0].createdAt = start
-            meeting.tracks[0].duration = 0.5
-            meeting.status = .imported
-        }
-        await rig.state.flush()
     }
 }
 

@@ -249,7 +249,9 @@ final class FakeInference: MeetingInference, @unchecked Sendable {
     }
 }
 
-/// A temporary library, its preferences suite, and helpers shared by the multi-source tests.
+/// A temporary library, its preferences suite, and helpers shared by the multi-source tests. This Mac's capture is a
+/// fake microphone (`microphone`), so `startRecording` and `stopRecording` run as the person's Record and Stop do,
+/// without recording anything.
 @MainActor
 struct MultiSourceRig {
     let state: AppState
@@ -257,15 +259,22 @@ struct MultiSourceRig {
     let defaults: UserDefaults
     let suite: String
     let inference = FakeInference()
+    /// This Mac's microphone: it starts and stops, and hears nothing unless a test sends it audio.
+    let microphone: FakeCaptureSource
 
     static func make(in test: XCTestCase, models: Bool = true) async throws -> MultiSourceRig {
         let root = test.makeTemporaryFolder("DaybookMultiSource")
         let suite = test.makeTestSuite("daybook.multisource")
         let defaults = UserDefaults(suiteName: suite)!
-        let state = AppState(libraryURL: root, defaults: defaults)
+        // No call audio, live captions, or panel: a recording here is the microphone alone.
+        defaults.set(false, forKey: AppState.Preference.includeComputerAudio)
+        defaults.set(false, forKey: AppState.Preference.showsFloatingNotesWhileRecording)
+        defaults.set(false, forKey: "liveCaptions")
+        let microphone = FakeCaptureSource(method: "microphone")
+        let state = AppState(libraryURL: root, defaults: defaults, capture: Self.capture(microphone))
         await state.initialize()
         XCTAssertTrue(state.isReady)
-        let rig = MultiSourceRig(state: state, root: root, defaults: defaults, suite: suite)
+        let rig = MultiSourceRig(state: state, root: root, defaults: defaults, suite: suite, microphone: microphone)
         state.sources.inference = rig.inference
         state.sources.alignAudio = { _, _, _, _ in nil }
         // Synthetic recordings last a second or two; real ones overlap by minutes.
@@ -282,6 +291,57 @@ struct MultiSourceRig {
         await state.sources.recorders.settle()
         await state.flush()
         try? FileManager.default.removeItem(at: root)
+    }
+
+    /// A capture with `microphone` as this Mac's microphone, allowed, and nothing else.
+    static func capture(_ microphone: FakeCaptureSource) -> CaptureEnvironment {
+        CaptureEnvironment(microphoneAuthorization: { true }, makeMicrophone: { microphone }, systemAudio: FakeSystemAudio(),
+                           currentRoute: { AudioOutputRoute(kind: .speakers, deviceName: "Speakers", transport: nil) },
+                           observeRoutes: { _ in nil }, hostTime: { 100 })
+    }
+
+    // MARK: This Mac's recording
+
+    /// Records as the person's Record does (`AppState.startRecording`): into `existing` (a note, or a conversation a
+    /// phone started), or a new conversation titled `title`.
+    @discardableResult
+    func startRecording(into existing: UUID? = nil, title: String = "Design review") async throws -> UUID {
+        await state.startRecording(title: title, into: existing)
+        return try XCTUnwrap(state.recordingID, "This Mac records")
+    }
+
+    /// Stops as the person's Stop does (`AppState.stopRecording`). What it filed doesn't start processing: the test
+    /// decides when, as with `storeMacRecording`.
+    func stopRecording() async {
+        guard let id = state.recordingID else { return }
+        await holdingProcessing(id) { await state.stopRecording() }
+    }
+
+    /// This Mac's own recording of `id`, stored as capture stores it (its microphone track at `start`), without starting
+    /// processing.
+    func storeMacRecording(_ id: UUID, audio: URL, start: Date, seconds: Double = 0.5) async throws {
+        try await holdingProcessing(id) { try await state.importFiles([audio], source: .microphone, attachTo: id) }
+        state.update(id) { meeting in
+            guard let index = meeting.tracks.firstIndex(where: { $0.source == .microphone && $0.derivedFrom == nil }) else { return }
+            meeting.tracks[index].offset = 0
+            meeting.tracks[index].createdAt = start
+            meeting.tracks[index].duration = seconds
+            meeting.status = .imported
+        }
+        await state.flush()
+    }
+
+    /// Runs `work` with this Mac's models put aside, so whatever it queues for `id` waits instead of running, and isn't
+    /// left waiting for them either.
+    private func holdingProcessing(_ id: UUID, _ work: () async throws -> Void) async rethrows {
+        let installed = state.installedModels
+        state.installedModels = []
+        defer {
+            state.installedModels = installed
+            state.awaitingModels.remove(id)
+            state.queue.settle(id)
+        }
+        try await work()
     }
 
     /// A short synthetic recording; the frequency and length make its bytes distinct.
