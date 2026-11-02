@@ -213,7 +213,7 @@ public struct DeviceRecordingStanding: Equatable, Identifiable {
     }
 }
 
-/// A conversation recorded on this Mac whose time span intersects a device recording.
+/// A conversation recorded on this device whose time span intersects a device recording.
 public struct DeviceOverlap: Equatable, Identifiable {
     public let meetingID: UUID
     public let title: String
@@ -221,7 +221,7 @@ public struct DeviceOverlap: Equatable, Identifiable {
     public let end: Date
     public var id: UUID { meetingID }
 
-    /// Conversations recorded on this Mac that overlap `start ..< start + duration`, most overlap first.
+    /// Conversations recorded on this device that overlap `start ..< start + duration`, most overlap first.
     /// It's only a hint: overlapping in time isn't proof of the same conversation.
     public static func find(start: Date, duration: TimeInterval, in meetings: [Meeting]) -> [DeviceOverlap] {
         guard duration > 0 else { return [] }

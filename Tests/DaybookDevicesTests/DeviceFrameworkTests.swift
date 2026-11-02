@@ -205,6 +205,42 @@ final class DeviceFrameworkTests: XCTestCase {
         if case .integrity = DeviceTransferError(soundcore: SoundcoreError.corruptAudio) {} else { XCTFail("Decode errors are integrity failures") }
     }
 
+    /// One table of a recorder's words for both apps: each says its own device, and the iPhone's say what it can
+    /// do there (Import Audio, its Settings, the Soundcore app on the same phone). No device's words reach the other.
+    func testBehaviorARecordersWordsNameTheDeviceTheyreOn() {
+        for issue in SoundcoreIssue.allCases {
+            let mac = issue.problem(on: .mac), iPhone = issue.problem(on: .iPhone)
+            XCTAssertFalse((iPhone.title + iPhone.message).contains("Mac"), "\(issue) on the iPhone: \(iPhone.message)")
+            XCTAssertFalse((mac.title + mac.message).contains("iPhone"), "\(issue) on the Mac: \(mac.message)")
+            XCTAssertEqual(mac.actions, iPhone.actions, "the iPhone leaves out what it has no screen for itself")
+            XCTAssertEqual(iPhone.id, issue.rawValue)
+        }
+        XCTAssertEqual(SoundcoreIssue.bluetoothUnsupported.title(on: .mac), "This Mac can’t connect to Soundcore")
+        XCTAssertEqual(SoundcoreIssue.bluetoothUnsupported.title(on: .iPhone), "This iPhone can’t connect to Soundcore")
+        XCTAssertEqual(SoundcoreIssue.bluetoothUnsupported.message(on: .iPhone),
+                       "Export recordings from the Soundcore app and import them with Import Audio.")
+        XCTAssertEqual(SoundcoreIssue.bluetoothDenied.message(on: .iPhone), "Allow Bluetooth for Daybook in Settings › Daybook.")
+        XCTAssertEqual(SoundcoreIssue.bluetoothDenied.message(on: .mac), "Allow Daybook in Privacy & Security › Bluetooth.")
+        XCTAssertEqual(SoundcoreIssue.notFound.message(on: .iPhone),
+                       "Take it out of its case, close the Soundcore app, and bring it close to this iPhone.")
+        XCTAssertEqual(SoundcoreIssue.notFound.message(on: .mac),
+                       "Take it out of its case, close the Soundcore app on your phone, and bring it close to this Mac.")
+        XCTAssertEqual(SoundcoreIssue.connectTimeout.message(on: .iPhone), "Take it out of its case to wake it, and close the Soundcore app.")
+        XCTAssertEqual(SoundcoreIssue.rejected.message(on: .iPhone), "Export from the Soundcore app and import the file instead.")
+        XCTAssertEqual(SoundcoreIssue.listFailed.message(on: .iPhone), "Close the Soundcore app, then refresh.")
+        XCTAssertEqual(SoundcoreIssue.listFailed.message(on: .mac), "Close the Soundcore app on your phone, then refresh.")
+        XCTAssertEqual(SoundcoreIssue.notFound.problem, SoundcoreIssue.notFound.problem(on: DevicePlatform.current), "this device's words")
+
+        let mac = SoundcoreWorkIntegration.deviceKind(on: .mac), iPhone = SoundcoreWorkIntegration.deviceKind(on: .iPhone)
+        XCTAssertEqual(mac.discoveryTips.last?.text, "Bring it close to this Mac.")
+        XCTAssertEqual(iPhone.discoveryTips.map(\.text), ["Take it out of its case.", "Close the Soundcore app.",
+                                                          "If your Mac manages it, wait a few minutes.", "Bring it close to this iPhone."])
+        XCTAssertEqual(iPhone.summary, "Over Bluetooth, even while Daybook is closed.")
+        XCTAssertEqual(mac.summary, "Over Bluetooth, or from the Soundcore app.")
+        XCTAssertEqual(mac.method(.direct)?.note, "macOS asks to allow Bluetooth.")
+        XCTAssertEqual(iPhone.method(.direct)?.note, "iOS asks to allow Bluetooth.")
+    }
+
     // MARK: What the library holds
 
     func testLinksFollowKindSerialAndPartialCaptures() {

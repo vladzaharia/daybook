@@ -4,45 +4,66 @@ import Foundation
 /// Anker Soundcore Work (D3200). Direct Bluetooth is the primary path; the Soundcore app's export
 /// folder is the fallback that works with every firmware.
 public struct SoundcoreWorkIntegration: DeviceIntegration {
-    public static let id = "soundcore.work"
+    public nonisolated static let id = "soundcore.work"
 
     public init() {}
 
-    public let kind = DeviceKind(
-        id: Self.id,
-        name: "Soundcore Work",
-        shortName: "Soundcore",
-        vendor: "Anker",
-        systemImage: "recordingtape",
-        summary: "Over Bluetooth, or from the Soundcore app.",
-        methods: [
-            ConnectionMethod(kind: .direct, transport: .bluetoothLE, title: "Directly over Bluetooth",
-                             summary: "Straight from the recorder. New recordings import on their own when it’s nearby.",
-                             systemImage: "antenna.radiowaves.left.and.right", setupAction: "Continue…",
-                             note: "macOS asks to allow Bluetooth."),
-            ConnectionMethod(kind: .files, title: "From the Soundcore app",
-                             summary: "Export recordings from the Soundcore app to a folder. Works with every firmware version.",
-                             systemImage: "folder.badge.gearshape", setupAction: "Choose Folder…"),
-            ConnectionMethod(kind: .account, title: "Soundcore account",
-                             summary: "Not supported.",
-                             systemImage: "person.crop.circle", setupAction: "", isImplemented: false)
-        ],
-        audioSource: .soundcore,
-        allowsMultiple: false,
-        discoveryTips: [
-            DeviceTip(symbol: "moon.zzz", text: "Take it out of its case."),
-            DeviceTip(symbol: "iphone.radiowaves.left.and.right", text: "Close the Soundcore app on your phone."),
-            DeviceTip(symbol: "wave.3.right", text: "Bring it close to this Mac.")
-        ],
-        technicalNotes: [
-            "Daybook speaks the recorder’s Bluetooth protocol directly. It was implemented from community protocol research, not from an Anker SDK.",
-            "Tested against a simulated recorder built from that research. Testing with a physical recorder is still pending, and a firmware update could change the protocol.",
-            "Direct Bluetooth audio is experimental: successful decoding does not guarantee an intact recording. Keep the originals on your recorder and verify important recordings through file export.",
-            "The recorder’s audio protocol exposes its encryption secret during setup. Wireless privacy depends on Bluetooth link protection that has not yet been verified on a physical recorder.",
-            "The import folder works with every firmware version."
-        ],
-        emptyHint: "Press its button once to start recording, and again to stop."
-    )
+    public let kind = SoundcoreWorkIntegration.deviceKind(on: .current)
+
+    /// The kind in `platform`'s words.
+    public nonisolated static func deviceKind(on platform: DevicePlatform) -> DeviceKind {
+        DeviceKind(
+            id: Self.id,
+            name: "Soundcore Work",
+            shortName: "Soundcore",
+            vendor: "Anker",
+            systemImage: "recordingtape",
+            summary: platform == .iPhone ? "Over Bluetooth, even while Daybook is closed." : "Over Bluetooth, or from the Soundcore app.",
+            methods: [
+                ConnectionMethod(kind: .direct, transport: .bluetoothLE, title: "Directly over Bluetooth",
+                                 summary: "Straight from the recorder. New recordings import on their own when it’s nearby.",
+                                 systemImage: "antenna.radiowaves.left.and.right", setupAction: "Continue…",
+                                 note: "\(platform.system) asks to allow Bluetooth."),
+                ConnectionMethod(kind: .files, title: "From the Soundcore app",
+                                 summary: "Export recordings from the Soundcore app to a folder. Works with every firmware version.",
+                                 systemImage: "folder.badge.gearshape", setupAction: "Choose Folder…"),
+                ConnectionMethod(kind: .account, title: "Soundcore account",
+                                 summary: "Not supported.",
+                                 systemImage: "person.crop.circle", setupAction: "", isImplemented: false)
+            ],
+            audioSource: .soundcore,
+            allowsMultiple: false,
+            discoveryTips: discoveryTips(on: platform),
+            technicalNotes: [
+                "Daybook speaks the recorder’s Bluetooth protocol directly. It was implemented from community protocol research, not from an Anker SDK.",
+                "Tested against a simulated recorder built from that research. Testing with a physical recorder is still pending, and a firmware update could change the protocol.",
+                "Direct Bluetooth audio is experimental: successful decoding does not guarantee an intact recording. Keep the originals on your recorder and verify important recordings through file export.",
+                "The recorder’s audio protocol exposes its encryption secret during setup. Wireless privacy depends on Bluetooth link protection that has not yet been verified on a physical recorder.",
+                "The import folder works with every firmware version."
+            ],
+            emptyHint: "Press its button once to start recording, and again to stop."
+        )
+    }
+
+    /// While looking for the recorder: on the iPhone, the Soundcore app is on the same phone, and a Mac that
+    /// manages the recorder lets go of it after a few minutes idle.
+    nonisolated static func discoveryTips(on platform: DevicePlatform) -> [DeviceTip] {
+        switch platform {
+        case .mac:
+            return [
+                DeviceTip(symbol: "moon.zzz", text: "Take it out of its case."),
+                DeviceTip(symbol: "iphone.radiowaves.left.and.right", text: "Close the Soundcore app on your phone."),
+                DeviceTip(symbol: "wave.3.right", text: "Bring it close to this Mac.")
+            ]
+        case .iPhone:
+            return [
+                DeviceTip(symbol: "moon.zzz", text: "Take it out of its case."),
+                DeviceTip(symbol: "xmark.app", text: "Close the Soundcore app."),
+                DeviceTip(symbol: "desktopcomputer", text: "If your Mac manages it, wait a few minutes."),
+                DeviceTip(symbol: "wave.3.right", text: "Bring it close to this iPhone.")
+            ]
+        }
+    }
 
     public func makeConnection(_ method: ConnectionMethodKind, for device: ConfiguredDevice,
                         environment: DeviceEnvironment) -> (any DeviceConnection)? {
@@ -52,7 +73,10 @@ public struct SoundcoreWorkIntegration: DeviceIntegration {
 }
 
 /// Everything that can go wrong with the recorder, each with the copy from the device page banner
-/// table (§8.6): what happened, what is safe, and at most two actions.
+/// table (§8.6): what happened, what is safe, and at most two actions. The words are this device's
+/// (`DevicePlatform.current`): both apps show them as they are. On the iPhone, the Soundcore app is on the
+/// same phone and audio comes in with Import Audio rather than a folder; the iPhone leaves out the actions it
+/// has no screen for (a folder's).
 public enum SoundcoreIssue: String, CaseIterable {
     case bluetoothOff, bluetoothDenied, bluetoothUnsupported, notFound, connectTimeout, rejected
     case notConnected, disconnectedDuringImport, stalled, integrity, didNotConfirm, notRecording
@@ -61,11 +85,14 @@ public enum SoundcoreIssue: String, CaseIterable {
     /// Wi‑Fi Fast Transfer ended without Bluetooth coming back to close the recorder's access point.
     case fastTransferInterrupted
 
-    public var title: String {
+    public var title: String { title(on: .current) }
+    public var message: String { message(on: .current) }
+
+    public func title(on platform: DevicePlatform) -> String {
         switch self {
         case .bluetoothOff: return "Bluetooth is off"
         case .bluetoothDenied: return "Daybook can’t use Bluetooth"
-        case .bluetoothUnsupported: return "This Mac can’t connect to Soundcore"
+        case .bluetoothUnsupported: return "\(platform.thisDeviceCapitalized) can’t connect to Soundcore"
         case .notFound: return "No Soundcore found nearby"
         case .connectTimeout: return "Soundcore didn’t finish connecting"
         case .rejected: return "This Soundcore didn’t accept the connection"
@@ -80,14 +107,21 @@ public enum SoundcoreIssue: String, CaseIterable {
         }
     }
 
-    public var message: String {
+    public func message(on platform: DevicePlatform) -> String {
+        // The Soundcore app runs on a phone: on the Mac, "on your phone"; on the iPhone, it's this one.
+        let soundcoreApp = platform == .iPhone ? "the Soundcore app" : "the Soundcore app on your phone"
         switch self {
         case .bluetoothOff: return "Turn on Bluetooth to connect to your Soundcore."
-        case .bluetoothDenied: return "Allow Daybook in Privacy & Security › Bluetooth."
-        case .bluetoothUnsupported: return "Use the Soundcore app and an import folder instead."
-        case .notFound: return "Take it out of its case, close the Soundcore app on your phone, and bring it close to this Mac."
-        case .connectTimeout: return "Take it out of its case to wake it, and close the Soundcore app on your phone."
-        case .rejected: return "Use the Soundcore app and an import folder instead."
+        case .bluetoothDenied:
+            return platform == .iPhone ? "Allow Bluetooth for Daybook in Settings › Daybook." : "Allow Daybook in Privacy & Security › Bluetooth."
+        case .bluetoothUnsupported:
+            return platform == .iPhone ? "Export recordings from the Soundcore app and import them with Import Audio."
+                : "Use the Soundcore app and an import folder instead."
+        case .notFound: return "Take it out of its case, close \(soundcoreApp), and bring it close to \(platform.thisDevice)."
+        case .connectTimeout: return "Take it out of its case to wake it, and close \(soundcoreApp)."
+        case .rejected:
+            return platform == .iPhone ? "Export from the Soundcore app and import the file instead."
+                : "Use the Soundcore app and an import folder instead."
         case .notConnected: return "Take your Soundcore out of its case to wake it, then connect."
         case .disconnectedDuringImport:
             return "The recording is still on your Soundcore. Importing continues when it reconnects."
@@ -96,7 +130,7 @@ public enum SoundcoreIssue: String, CaseIterable {
             return "Some audio didn’t arrive intact. The recording is still on your Soundcore."
         case .didNotConfirm: return "Check its light: solid orange means it’s recording."
         case .notRecording: return "Start recording on your Soundcore, then listen live."
-        case .listFailed: return "Close the Soundcore app on your phone, then refresh."
+        case .listFailed: return "Close \(soundcoreApp), then refresh."
         case .fastTransferInterrupted: return "The recording is still on your Soundcore. Connect to turn off its Wi‑Fi."
         }
     }
@@ -119,8 +153,11 @@ public enum SoundcoreIssue: String, CaseIterable {
 
     public var isTransferProblem: Bool { [.disconnectedDuringImport, .stalled, .integrity].contains(self) }
 
-    public var problem: DeviceProblem {
-        DeviceProblem(id: rawValue, title: title, message: message, actions: actions, isTransferProblem: isTransferProblem)
+    public var problem: DeviceProblem { problem(on: .current) }
+
+    public func problem(on platform: DevicePlatform) -> DeviceProblem {
+        DeviceProblem(id: rawValue, title: title(on: platform), message: message(on: platform), actions: actions,
+                      isTransferProblem: isTransferProblem)
     }
 
     /// Maps a protocol error to the problem people see.
@@ -149,7 +186,7 @@ extension DeviceTransferError {
     }
 }
 
-/// The recorder this Mac connects to, with its last confirmed status and recording list, so stale
+/// The recorder this device connects to, with its last confirmed status and recording list, so stale
 /// values can be shown with their time instead of disappearing.
 public struct SoundcoreSnapshot: Codable, Equatable {
     public var deviceID: UUID

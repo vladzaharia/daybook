@@ -4,6 +4,27 @@ import Foundation
 // Words and numbers for device surfaces, shared by every kind: lengths, storage as hours, battery,
 // signal, dates, and stale values with their time.
 
+/// The device Daybook is running on, for words that name it: a recorder's problems and tips say "this Mac" on
+/// the Mac and "this iPhone" on the iPhone, from one table both apps share.
+public enum DevicePlatform: Sendable, CaseIterable {
+    case mac, iPhone
+
+    public static var current: DevicePlatform {
+        #if os(iOS)
+        .iPhone
+        #else
+        .mac
+        #endif
+    }
+
+    /// "this Mac", "this iPhone".
+    public var thisDevice: String { self == .mac ? "this Mac" : "this iPhone" }
+    /// "This Mac", "This iPhone": starting a sentence.
+    public var thisDeviceCapitalized: String { self == .mac ? "This Mac" : "This iPhone" }
+    /// "macOS", "iOS".
+    public var system: String { self == .mac ? "macOS" : "iOS" }
+}
+
 /// How long a recording is: exact when the recorder reports its end, otherwise an estimate.
 public enum RecordingLength: Hashable {
     case exact(TimeInterval)

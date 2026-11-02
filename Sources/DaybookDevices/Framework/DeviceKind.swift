@@ -13,7 +13,7 @@ public enum ConnectionMethodKind: String, Codable, CaseIterable, Hashable, Compa
     /// The person saves exported audio to a folder that Daybook watches.
     case files
     /// A vendor app or account. Declared so the architecture has a place for it, but Daybook
-    /// implements none: it never sends audio off the Mac to be processed.
+    /// implements none: it never sends audio off the device to be processed.
     case account
 
     public static func < (lhs: Self, rhs: Self) -> Bool { allCases.firstIndex(of: lhs)! < allCases.firstIndex(of: rhs)! }

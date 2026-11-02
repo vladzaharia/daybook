@@ -306,7 +306,7 @@ public final class DeviceSession: Identifiable {
         scheduleEvaluation()
     }
 
-    /// Conversations recorded on this Mac that overlap a recording.
+    /// Conversations recorded on this device that overlap a recording.
     public func overlaps(_ recording: DeviceRecording) -> [DeviceOverlap] {
         guard let start = recording.startedAt, let length = recording.length else { return [] }
         return DeviceOverlap.find(start: start, duration: length.seconds, in: meetings)

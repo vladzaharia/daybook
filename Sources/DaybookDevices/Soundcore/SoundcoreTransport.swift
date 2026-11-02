@@ -121,7 +121,7 @@ public final class CoreBluetoothSoundcoreTransport: NSObject, SoundcoreTransport
 
     public func connect(_ id: UUID) {
         guard let central, let target = peripherals[id] ?? central.retrievePeripherals(withIdentifiers: [id]).first else {
-            events?.transportFailed(id, .connectFailed("The recorder isn’t known to this Mac."))
+            events?.transportFailed(id, .connectFailed("The recorder isn’t known to \(DevicePlatform.current.thisDevice)."))
             return
         }
         if let current = peripheral, current.identifier != id { central.cancelPeripheralConnection(current) }
