@@ -69,7 +69,11 @@ public struct ConversationHeader<Pill: View>: View {
                     focusIfAsked()
                 }
                 .onChange(of: meeting.title) { _, title in if !editing { draft = title } }
-                .onChange(of: meeting.id) { _, _ in draft = meeting.title }
+                .onChange(of: meeting.id) { old, _ in
+                    // Another conversation in the same place: what was typed goes to the one it was typed for.
+                    if editing { commit(to: old) }
+                    draft = meeting.title
+                }
                 .onChange(of: editing) { _, now in if !now { commit() } }
                 .onChange(of: focusTitle) { _, _ in focusIfAsked() }
                 .onDisappear { if editing { commit() } }
@@ -96,13 +100,17 @@ public struct ConversationHeader<Pill: View>: View {
         }
     }
 
-    private func commit() {
-        guard let title = TitleEdit.committed(draft: draft, current: meeting.title) else {
+    private func commit() { commit(to: meeting.id) }
+
+    /// Saves the draft as `id`'s title, once and never empty; otherwise the field shows the title again.
+    private func commit(to id: Meeting.ID) {
+        let current = library.meeting(id)?.title ?? meeting.title
+        guard let title = TitleEdit.committed(draft: draft, current: current) else {
             draft = meeting.title
             return
         }
         draft = title
-        library.update(meeting.id, actionName: "Rename", undoManager: undoManager) { $0.title = title }
+        library.update(id, actionName: "Rename", undoManager: undoManager) { $0.title = title }
     }
 
     // MARK: Byline
