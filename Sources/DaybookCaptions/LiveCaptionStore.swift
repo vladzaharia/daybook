@@ -73,14 +73,21 @@ public final class LiveCaptionStore: Sendable {
         try? await onQueue { self.delete(meetingID) }
     }
 
-    /// Removes the captions a transcript has replaced (`isReplaced`), and those of conversations no
-    /// longer in the library (moved to the Trash). `conversations`: every conversation in the library,
-    /// with when each of its transcripts was made. `keeping`: conversations being captioned now.
+    /// Removes the captions a transcript has replaced (`isReplaced`), and those of conversations moved
+    /// to the Trash. `conversations`: every conversation in the library, with when each of its
+    /// transcripts was made. `keeping`: conversations being captioned now. `trashed`: the conversations
+    /// in the Trash, on a device where a recording's conversation only joins the library once it's
+    /// filed (the iPhone: one stopped a moment ago, or one a crash left for recovery), so captions of a
+    /// conversation the library doesn't have yet stay; nil where a conversation exists from the moment
+    /// it's recorded (the Mac), so captions of any conversation not in the library go.
     /// Reads only the captions of conversations that have a transcript, off the caller's actor.
-    public func prune(_ conversations: [UUID: [Date]], keeping: Set<UUID>) async {
+    public func prune(_ conversations: [UUID: [Date]], keeping: Set<UUID>, trashed: Set<UUID>? = nil) async {
         try? await onQueue {
             for id in self.conversations() where !keeping.contains(id) {
-                guard let made = conversations[id] else { self.delete(id); continue }
+                guard let made = conversations[id] else {
+                    if trashed?.contains(id) ?? true { self.delete(id) }
+                    continue
+                }
                 guard !made.isEmpty, let captions = self.captions(for: id) else { continue }
                 if Self.isReplaced(captions, transcriptsMadeAt: made) { self.delete(id) }
             }

@@ -17,10 +17,10 @@ extension LiveCaptionStore {
         shown(captions, conversation: meeting.id, transcriptsMadeAt: meeting.transcripts.map(\.createdAt))
     }
 
-    /// Removes the captions a transcript has replaced, and those of conversations not in `meetings` (moved
-    /// to the Trash). `keeping`: the conversation being recorded.
-    public func prune(meetings: [Meeting], keeping: UUID?) async {
-        await prune(Self.transcriptDates(meetings), keeping: keeping.map { [$0] } ?? [])
+    /// Removes the captions a transcript has replaced, and those of conversations moved to the Trash
+    /// (`prune(_:keeping:trashed:)`). `keeping`: the conversation being recorded.
+    public func prune(meetings: [Meeting], keeping: UUID?, trashed: Set<UUID>? = nil) async {
+        await prune(Self.transcriptDates(meetings), keeping: keeping.map { [$0] } ?? [], trashed: trashed)
     }
 }
 

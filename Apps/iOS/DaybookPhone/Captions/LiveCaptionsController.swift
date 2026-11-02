@@ -127,10 +127,12 @@ final class LiveCaptionsController {
         }
     }
 
-    /// Removes the captions transcripts replaced, and those of conversations gone to the Trash, off the
-    /// main actor (`LiveCaptionStore.prune`). The recording in progress keeps its own.
-    func prune(meetings: [Meeting]) {
-        let store = self.store, keeping = activeMeetingID
-        Task { await store.prune(meetings: meetings, keeping: keeping) }
+    /// Removes the captions transcripts replaced, and those of conversations in the Trash (`trashed`), off
+    /// the main actor (`LiveCaptionStore.prune`). The recording in progress keeps its own, and so does a
+    /// recording that isn't filed yet, whose conversation the library doesn't have: one stopped a moment
+    /// ago, or one a crash left for recovery.
+    func prune(meetings: [Meeting], trashed: [UUID]) {
+        let store = self.store, keeping = activeMeetingID, trashed = Set(trashed)
+        Task { await store.prune(meetings: meetings, keeping: keeping, trashed: trashed) }
     }
 }

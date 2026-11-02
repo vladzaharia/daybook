@@ -298,7 +298,7 @@ final class PhoneAppModel: RecordingCommandHandling {
 
     private func pruneCaptions() {
         guard library.controller.isLoaded else { return }
-        captions.prune(meetings: library.controller.meetings)
+        captions.prune(meetings: library.controller.meetings, trashed: library.controller.trashedMeetingIDs())
     }
 
     // MARK: Library keys

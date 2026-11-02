@@ -431,7 +431,10 @@ Code: `Sources/Daybook/Captions/` (the Mac's controller, echo rule, and settings
   later one replaced. It's outside `Meetings/`, so sync never reads it. One rule on both apps:
   captions are replaced by any transcript made after they began (`LiveCaptionStore.isReplaced`), and
   then deleted, as are captions of conversations moved to the Trash (`prune`, off the main thread, a
-  second after a transcript or the set of conversations changes; typing notes never prunes).
+  second after a transcript or the set of conversations changes; typing notes never prunes). A Mac
+  conversation exists from the moment it's recorded, so captions of one the library doesn't have are
+  gone; an iPhone recording joins the library only once it's filed, so the iPhone passes its Trash
+  (`trashed`) and keeps captions of a recording stopped a moment ago or left by a crash for recovery.
 - **Where they show.** Every live caption on both apps is one renderer, `LiveCaptionStrip`
   (DaybookDesign), in a style per surface: "LIVE CAPTIONS · TENTATIVE" on top, the newest line in
   Body ink, earlier ones in Secondary, still-revised words in Meta, and "Listening…" before anything

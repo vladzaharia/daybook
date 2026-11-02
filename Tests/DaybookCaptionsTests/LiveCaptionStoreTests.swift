@@ -97,6 +97,24 @@ final class LiveCaptionStoreTests: XCTestCase {
         XCTAssertNil(store.captions(for: untranscribed))
     }
 
+    func testBehaviorPruningWithTheTrashKeepsCaptionsOfAConversationNotFiledYet() async throws {
+        let store = LiveCaptionStore(libraryRoot: root)
+        let began = Date()
+        let unfiled = UUID(), trashed = UUID(), replaced = UUID()
+        for id in [unfiled, trashed, replaced] {
+            try await store.save(LiveCaptions(meetingID: id, localeIdentifier: "en_US", segments: [line("Hi", 0)], createdAt: began))
+        }
+        // The iPhone: a recording joins the library once it's filed, so only what's in the Trash is gone.
+        await store.prune([replaced: [began.addingTimeInterval(60)]], keeping: [], trashed: [trashed])
+        XCTAssertEqual(store.conversations(), [unfiled], "a recording stopped a moment ago, or left by a crash, keeps its captions")
+
+        // Filed, its captions stay until a transcript replaces them, or it goes to the Trash.
+        await store.prune([unfiled: []], keeping: [], trashed: [])
+        XCTAssertEqual(store.conversations(), [unfiled])
+        await store.prune([:], keeping: [], trashed: [unfiled])
+        XCTAssertTrue(store.conversations().isEmpty)
+    }
+
     // MARK: A recording
 
     func testBehaviorASessionSavesAsItListensAndKeepsWhatStandsAtTheEnd() async throws {

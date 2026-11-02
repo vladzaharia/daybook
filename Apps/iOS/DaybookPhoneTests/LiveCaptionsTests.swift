@@ -96,8 +96,33 @@ final class LiveCaptionsTests: XCTestCase {
         // The Mac's transcript lands: the captions go from this iPhone, as they do from the Mac.
         meeting.transcripts.append(TrackTranscript(trackID: track.id, segments: [], createdAt: Date()))
         XCTAssertNil(LiveCaptionStore.shown(saved, for: meeting))
-        model.captions.prune(meetings: [meeting])
+        model.captions.prune(meetings: [meeting], trashed: [])
         try await waitUntil("replaced captions removed") { model.captions.store.captions(for: id) == nil }
+    }
+
+    func testCaptionsOfARecordingNotFiledYetStayUntilItsConversationGoesToTheTrash() async throws {
+        let model = try makeModel(rig: RecorderRig(), captioner: ScriptedCaptioner(lines: []))
+        let store = model.captions.store
+        // A recording the app was killed during saved its captions as it listened; its conversation joins
+        // the library only when recovery files it (as one just stopped does when it's filed).
+        let unfiled = UUID()
+        try await store.save(LiveCaptions(meetingID: unfiled, localeIdentifier: "en_US", segments: [
+            LiveCaptionSegment(start: 0, end: 1, text: "Said before the crash", isTentative: false)]))
+        try await model.library.reload()
+
+        // Meanwhile the library changes, which prunes: another conversation goes to the Trash with its captions.
+        let other = Meeting(id: UUID(), title: "Standup")
+        model.library.controller.add(other)
+        try await store.save(LiveCaptions(meetingID: other.id, localeIdentifier: "en_US", segments: [
+            LiveCaptionSegment(start: 0, end: 1, text: "Trashed", isTentative: false)]))
+        _ = try await model.library.controller.moveToTrash(other.id)
+        try await waitUntil("the trashed conversation's captions removed") { store.captions(for: other.id) == nil }
+        XCTAssertNotNil(store.captions(for: unfiled), "a recording not filed yet keeps its captions")
+
+        // Filed, its captions stay with it, and go when it goes to the Trash.
+        model.library.controller.add(Meeting(id: unfiled, title: "Recovered"))
+        _ = try await model.library.controller.moveToTrash(unfiled)
+        try await waitUntil("removed with its conversation") { store.captions(for: unfiled) == nil }
     }
 
     func testAFailingCaptionerNeverStopsTheRecording() async throws {
