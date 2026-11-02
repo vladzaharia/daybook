@@ -26,8 +26,12 @@ public struct StatusLineItem: Identifiable, Equatable, Sendable {
     public var progress: Double?
     /// A shorter way to say it, when `text` doesn't fit on one line.
     public var shortText: String?
+    /// A countdown runs out then ("Summarizing in 12 s"): the words count down to it a second at a time
+    /// (`text(at:)`), and only the words redraw. Waiting isn't progress, so a countdown is calm.
+    public var countdownUntil: Date?
 
-    public init(id: String, symbol: String, title: String, text: String, tone: StatusTone, progress: Double? = nil, shortText: String? = nil) {
+    public init(id: String, symbol: String, title: String, text: String, tone: StatusTone, progress: Double? = nil, shortText: String? = nil,
+                countdownUntil: Date? = nil) {
         self.id = id
         self.symbol = symbol
         self.title = title
@@ -35,9 +39,26 @@ public struct StatusLineItem: Identifiable, Equatable, Sendable {
         self.tone = tone
         self.progress = progress
         self.shortText = shortText
+        self.countdownUntil = countdownUntil
     }
 
     public var accessibilityLabel: String { "\(title), \(text)" }
+
+    /// The words at a moment: a countdown's seconds move with it ("Summarizing in 11 s · 1 waiting").
+    public func text(at now: Date) -> String { counting(text, at: now) }
+
+    /// The short words at a moment, when there are any.
+    public func shortText(at now: Date) -> String? { shortText.map { counting($0, at: now) } }
+
+    /// The seconds left at a moment, rounded up and never under one; nil without a countdown.
+    public func secondsLeft(at now: Date) -> Int? {
+        countdownUntil.map { max(1, Int($0.timeIntervalSince(now).rounded(.up))) }
+    }
+
+    private func counting(_ words: String, at now: Date) -> String {
+        guard let seconds = secondsLeft(at: now) else { return words }
+        return words.replacingOccurrences(of: #"in \d+ s"#, with: "in \(seconds) s", options: .regularExpression)
+    }
 }
 
 /// Type and spacing for status lines and chips on each platform.
@@ -67,18 +88,31 @@ public struct StatusMetrics: Equatable, Sendable {
     /// A density's metrics: the iPhone's under touch, the Mac's in a window or the panel.
     public static func `for`(_ density: DaybookDensity) -> StatusMetrics { density == .touch ? .phone : .mac }
 
+    /// Under touch the glyph column grows with Dynamic Type up to this, so a large glyph never draws over its
+    /// title; the glyph itself stops growing at `largestGlyphSize`.
+    public static let glyphColumnLimit: CGFloat = 44
+    /// The largest text size a line's glyph follows.
+    public static let largestGlyphSize = DynamicTypeSize.accessibility2
+    /// The most lines a line's words take when they sit under the title, at the accessibility sizes.
+    public static let stackedLineLimit = 2
+
     var titleFont: Font { usesTextStyles ? .subheadline.weight(.medium) : .system(size: titleSize, weight: .medium) }
     var textFont: Font { usesTextStyles ? .subheadline : .system(size: textSize) }
     var glyphFont: Font { usesTextStyles ? .subheadline.weight(.medium) : .system(size: glyphSize, weight: .medium) }
 }
 
 /// A status line: glyph, title, and what's happening, in one row; the gradient line under it while
-/// work runs. Recording swaps the glyph for the red dot.
+/// work runs. Recording swaps the glyph for the red dot. Under touch the glyph column grows with
+/// Dynamic Type, and at the accessibility sizes the words go under the title, on up to two lines, so
+/// nothing is drawn over or cut to a letter. A countdown's words count down a second at a time, the
+/// digits rolling (fading under Reduce Motion), and only they redraw.
 public struct StatusLineView: View {
     private let line: StatusLineItem
     private let override: StatusMetrics?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.daybookDensity) private var density
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @ScaledMetric(relativeTo: .subheadline) private var typeScale: CGFloat = 1
 
     /// - Parameter metrics: An explicit size; nil takes the surface's density's.
     public init(_ line: StatusLineItem, metrics: StatusMetrics? = nil) {
@@ -88,26 +122,38 @@ public struct StatusLineView: View {
 
     private var metrics: StatusMetrics { override ?? .for(density) }
 
+    /// The glyph column: fixed in the window and the panel; under touch, grown with the text up to its limit.
+    private var glyphColumn: CGFloat {
+        let metrics = metrics
+        guard metrics.usesTextStyles else { return metrics.glyphColumn }
+        return min(StatusMetrics.glyphColumnLimit, (metrics.glyphColumn * typeScale).rounded())
+    }
+
+    /// The words go under the title: at the accessibility sizes, under touch.
+    private var stacks: Bool { metrics.usesTextStyles && typeSize.isAccessibilitySize }
+
     public var body: some View {
+        let metrics = metrics, column = glyphColumn
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: metrics.spacing) {
                 StatusGlyph(symbol: line.symbol, tone: line.tone, animates: line.tone == .working && line.progress == nil && !reduceMotion,
                             font: metrics.glyphFont, dot: metrics.glyphSize * 0.62)
-                    .frame(width: metrics.glyphColumn)
-                Text(line.title)
-                    .font(metrics.titleFont)
-                    .foregroundStyle(DaybookPalette.Ink.title)
-                    .lineLimit(1)
-                    .layoutPriority(1)
-                ViewThatFits(in: .horizontal) {
-                    lineText(line.text)
-                    if let short = line.shortText { lineText(short) }
-                    lineText(line.text).truncationMode(.tail)
+                    .dynamicTypeSize(...StatusMetrics.largestGlyphSize)
+                    .frame(width: column)
+                if stacks {
+                    VStack(alignment: .leading, spacing: 2) {
+                        title.lineLimit(StatusMetrics.stackedLineLimit)
+                        words
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    title.lineLimit(1).layoutPriority(1)
+                    words
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
             }
             if line.tone == .working, let progress = line.progress {
-                WorkProgressLine(fraction: progress).padding(.leading, metrics.glyphColumn + metrics.spacing)
+                WorkProgressLine(fraction: progress).padding(.leading, column + metrics.spacing)
             }
         }
         .contentShape(Rectangle())
@@ -115,12 +161,47 @@ public struct StatusLineView: View {
         .accessibilityLabel(line.accessibilityLabel)
     }
 
+    private var title: some View {
+        Text(line.title)
+            .font(metrics.titleFont)
+            .foregroundStyle(DaybookPalette.Ink.title)
+    }
+
+    /// What's happening: the whole of it when it fits, else the short form, else cut at the end; under
+    /// the title, up to two lines. A countdown ticks inside its own timeline.
+    @ViewBuilder private var words: some View {
+        if line.countdownUntil != nil {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                fitted(line.text(at: context.date), short: line.shortText(at: context.date))
+                    .contentTransition(reduceMotion ? .opacity : .numericText(countsDown: true))
+                    .daybookMotion(DaybookMotion.tick, value: line.secondsLeft(at: context.date))
+            }
+        } else {
+            fitted(line.text, short: line.shortText)
+                .contentTransition(.numericText())
+        }
+    }
+
+    @ViewBuilder private func fitted(_ text: String, short: String?) -> some View {
+        if stacks {
+            // A separator stays with the words before it, so a line never starts "· 40%".
+            lineText(text.replacingOccurrences(of: " · ", with: "\u{00A0}· "))
+                .lineLimit(StatusMetrics.stackedLineLimit).truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            ViewThatFits(in: .horizontal) {
+                lineText(text).lineLimit(1)
+                if let short { lineText(short).lineLimit(1) }
+                lineText(text).lineLimit(1).truncationMode(.tail)
+            }
+        }
+    }
+
     private func lineText(_ text: String) -> some View {
         Text(text)
             .font(metrics.textFont)
+            .monospacedDigit()
             .foregroundStyle(line.tone == .attention ? DaybookPalette.Ink.warning : DaybookPalette.Ink.secondary)
-            .lineLimit(1)
-            .contentTransition(.numericText())
     }
 }
 

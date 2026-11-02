@@ -132,7 +132,9 @@ struct StatusGlyphColumn: DynamicProperty {
     var value: CGFloat { density == .touch ? DaybookTileSize.card.side(scale: scale) : DaybookTileSize.card.base }
 }
 
-/// One full-width card: the quiet fill, the card radius, an inset divider between rows.
+/// One full-width card: the quiet fill, the card radius, an inset divider between rows. The divider above
+/// a row starts where that row's text does: past the glyph column, or at the card's edge for a row with no
+/// column (`statusRowAtCardEdge()`).
 public struct StatusCard<Content: View>: View {
     private let content: Content
 
@@ -142,7 +144,7 @@ public struct StatusCard<Content: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             Group(subviews: content) { rows in
                 ForEach(rows) { row in
-                    if row.id != rows.first?.id { StatusDivider() }
+                    if row.id != rows.first?.id { StatusDivider(atCardEdge: row.containerValues.statusRowAtCardEdge) }
                     row
                 }
             }
@@ -153,12 +155,27 @@ public struct StatusCard<Content: View>: View {
     }
 }
 
+extension ContainerValues {
+    /// The row's text starts at the card's edge, with no glyph column before it.
+    @Entry var statusRowAtCardEdge = false
+}
+
+extension View {
+    /// In a `StatusCard`, a row whose text starts at the card's edge (no glyph column): the divider above it does too.
+    /// Set it on the card's row itself (where it's listed in the card), not inside a row's body.
+    public func statusRowAtCardEdge(_ atEdge: Bool = true) -> some View {
+        containerValue(\.statusRowAtCardEdge, atEdge)
+    }
+}
+
 /// The divider between a card's rows, from where the text starts.
 public struct StatusDivider: View {
     private let glyph = StatusGlyphColumn()
-    public init() {}
+    private let atCardEdge: Bool
+    /// - Parameter atCardEdge: The row under it has no glyph column, so its text, and the divider, start at the edge.
+    public init(atCardEdge: Bool = false) { self.atCardEdge = atCardEdge }
     public var body: some View {
-        Divider().padding(.leading, StatusCardMetrics.padding + glyph.value + StatusCardMetrics.gap)
+        Divider().padding(.leading, StatusCardMetrics.padding + (atCardEdge ? 0 : glyph.value + StatusCardMetrics.gap))
     }
 }
 
