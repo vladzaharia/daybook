@@ -45,18 +45,23 @@ public struct ElapsedClock: View {
         self.spokenFrozen = spokenFrozen
     }
 
+    private var runs: Bool { isLive && frozenAt == nil }
+
     public var body: some View {
         TimelineView(.periodic(from: anchor ?? .now, by: anchor == nil ? 0.5 : 1)) { _ in
             let seconds = frozenAt ?? elapsed()
             let text = DaybookTime.short(seconds)
             Text(text)
                 .font(DaybookType.clock(size, weight: weight))
-                .foregroundStyle(isLive && frozenAt == nil ? DaybookPalette.Ink.record : DaybookPalette.Ink.title)
+                .foregroundStyle(runs ? DaybookPalette.Ink.record : DaybookPalette.Ink.title)
                 .contentTransition(reduceMotion ? .opacity : .numericText(countsDown: false))
                 .animation(DaybookMotion.resolved(DaybookMotion.tick, reduceMotion: reduceMotion), value: Int(seconds))
+                // Red to title ink as it pauses or stops: a cross-fade, never a jump.
+                .animation(DaybookMotion.resolved(DaybookMotion.state, reduceMotion: reduceMotion), value: runs)
                 .lineLimit(1)
                 .minimumScaleFactor(0.5)
-                .accessibilityLabel(isLive && frozenAt == nil ? spokenLive(text) : spokenFrozen(text))
+                .accessibilityLabel(runs ? spokenLive(text) : spokenFrozen(text))
+                .accessibilityAddTraits(runs ? .updatesFrequently : [])
         }
     }
 }
@@ -100,6 +105,9 @@ public struct RecordingPhaseLabel: View {
     private let detailYields: Bool
     private let override: Metrics?
     @Environment(\.daybookDensity) private var density
+    @Environment(\.dynamicTypeSize) private var typeSize
+    /// The Saved mark's size under touch, which follows Dynamic Type with the phone's footnote.
+    @ScaledMetric(relativeTo: .footnote) private var touchGlyph: CGFloat = 14
 
     /// - Parameters:
     ///   - detailYields: The detail takes only the room left over (and truncates), so the label's ideal
@@ -117,16 +125,44 @@ public struct RecordingPhaseLabel: View {
 
     private var metrics: Metrics { override ?? .for(density) }
 
+    /// Under touch at the accessibility sizes the detail takes a line of its own under the phase, so
+    /// neither is cut off ("RECORDING · S…").
+    private var stacks: Bool { metrics.textStyle != nil && typeSize.isAccessibilitySize && detail != nil }
+
     public var body: some View {
+        if stacks {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: metrics.dot * 0.65) {
+                    glyph
+                    titleText
+                }
+                if let detail {
+                    Text(detail)
+                        .font(metrics.font(weight: .regular, plus: 0.5))
+                        .foregroundStyle(detailIsWarning ? DaybookPalette.Ink.warning : DaybookPalette.Ink.meta)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .accessibilityElement(children: .combine)
+        } else {
+            row
+        }
+    }
+
+    private var titleText: some View {
+        Text(title)
+            .font(metrics.font(weight: .semibold))
+            .foregroundStyle(ink)
+            .textCase(.uppercase)
+            .tracking(metrics.tracking)
+            .lineLimit(1)
+            .fixedSize()
+    }
+
+    private var row: some View {
         HStack(spacing: metrics.dot * 0.65) {
             glyph
-            Text(title)
-                .font(metrics.font(weight: .semibold))
-                .foregroundStyle(ink)
-                .textCase(.uppercase)
-                .tracking(metrics.tracking)
-                .lineLimit(1)
-                .fixedSize()
+            titleText
             if let detail, detailYields {
                 // All of it, a readable start of it, or none: cut to its first letter it says nothing.
                 ViewThatFits(in: .horizontal) {
@@ -157,9 +193,9 @@ public struct RecordingPhaseLabel: View {
             Circle().fill(DaybookPalette.Ink.record).frame(width: metrics.dot, height: metrics.dot)
                 .daybookGlow(DaybookPalette.Ink.record, radius: 3)
         case .saved:
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: metrics.size + 1, weight: .semibold))
-                .foregroundStyle(DaybookPalette.accent)
+            // Drawn on as it lands (a fade under Reduce Motion); the title says it for VoiceOver.
+            DoneMark(size: metrics.textStyle == nil ? metrics.size + 1 : touchGlyph)
+                .accessibilityHidden(true)
         case .stopped:
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: metrics.size, weight: .semibold))

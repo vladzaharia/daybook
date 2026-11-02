@@ -90,6 +90,8 @@ public struct RollingLevelMeter: View {
             .accessibilityElement()
             .accessibilityLabel(label)
             .accessibilityValue(isLive ? "\(Int((values.last ?? 0) * 100)) percent" : "Paused")
+            // VoiceOver reads a live level now and then, not at every reading.
+            .accessibilityAddTraits(isLive ? .updatesFrequently : [])
     }
 }
 

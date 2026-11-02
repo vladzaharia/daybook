@@ -123,25 +123,41 @@ private struct ControlFace: View {
 // MARK: - Labels
 
 /// Bookmark: amber, with the count in an amber pill. Bounces when one lands, so it's felt without
-/// looking. Hand it `.frame(maxWidth: .infinity, minHeight:)` for the control's size.
+/// looking. Hand it `.frame(maxWidth: .infinity, minHeight:)` for the control's size. Under touch at the
+/// accessibility sizes it's the glyph and the count alone, so neither is cut off; the control keeps its
+/// name for VoiceOver and the large content viewer.
 public struct BookmarkControlLabel: View {
     private let count: Int
     private let title: String
     private let size: CGFloat?
+    private let landed: Int?
+    /// Bounces for each bookmark added, when the caller doesn't say which ones the person made.
+    @State private var added = 0
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// - Parameter size: A fixed size (Mac); nil follows Dynamic Type (`.headline`, iPhone).
-    public init(count: Int, title: String = "Bookmark", size: CGFloat? = nil) {
+    /// - Parameters:
+    ///   - size: A fixed size (Mac); nil follows Dynamic Type (`.headline`, iPhone).
+    ///   - landed: Counts the person's own taps: the symbol bounces for those alone, never for a bookmark
+    ///     another device added or one taken away. Nil bounces for every one added.
+    public init(count: Int, title: String = "Bookmark", size: CGFloat? = nil, landed: Int? = nil) {
         self.count = count
         self.title = title
         self.size = size
+        self.landed = landed
     }
+
+    /// Whether a recorder control drops its words: Dynamic Type at an accessibility size.
+    public static func isGlyphOnly(size: CGFloat?, typeSize: DynamicTypeSize) -> Bool { size == nil && typeSize.isAccessibilitySize }
 
     public var body: some View {
         HStack(spacing: (size ?? 17) * 0.47) {
             Image(systemName: "bookmark.fill")
-                .daybookBounce(value: count)
+                .daybookBounce(value: landed ?? added)
                 .daybookGlow(count > 0 ? DaybookPalette.bookmark : .clear, radius: 3)
-            Text(title).lineLimit(1)
+            if !Self.isGlyphOnly(size: size, typeSize: typeSize) {
+                Text(title).lineLimit(1)
+            }
             if count > 0 {
                 Text("\(count)")
                     .font(size.map { .system(size: $0 - 2, weight: .bold).monospacedDigit() } ?? .subheadline.weight(.bold).monospacedDigit())
@@ -150,22 +166,29 @@ public struct BookmarkControlLabel: View {
                     // The count in its own ink, which keeps 4.5:1 on the amber pill.
                     .foregroundStyle(DaybookPalette.Ink.bookmarkCount)
                     .background(DaybookPalette.bookmark.opacity(0.2), in: DaybookRadius.chip)
-                    .contentTransition(.numericText(value: Double(count)))
+                    // The count rolls as it changes (a fade under Reduce Motion), wherever the change came from.
+                    .contentTransition(reduceMotion ? .opacity : .numericText(value: Double(count)))
+                    .animation(DaybookMotion.resolved(DaybookMotion.tick, reduceMotion: reduceMotion), value: count)
             }
         }
         .font(size.map { .system(size: $0, weight: .semibold) } ?? .headline)
         .foregroundStyle(DaybookPalette.bookmark)
+        .onChange(of: count) { old, new in
+            if new > old { added += 1 }
+        }
     }
 }
 
-/// Stop, or Saving while the recording is filed. White, for the red surface.
+/// Stop, or Saving while the recording is filed. White, for the red surface. Under touch at the
+/// accessibility sizes it's the glyph alone, as Bookmark is.
 public struct StopControlLabel: View {
     private let isSaving: Bool
     private let title: String
     private let savingTitle: String
     private let size: CGFloat?
+    @Environment(\.dynamicTypeSize) private var typeSize
 
-    public init(isSaving: Bool, title: String = "Stop", savingTitle: String = "Saving", size: CGFloat? = nil) {
+    public init(isSaving: Bool, title: String = "Stop", savingTitle: String = "Saving…", size: CGFloat? = nil) {
         self.isSaving = isSaving
         self.title = title
         self.savingTitle = savingTitle
@@ -173,13 +196,14 @@ public struct StopControlLabel: View {
     }
 
     public var body: some View {
+        let words = !BookmarkControlLabel.isGlyphOnly(size: size, typeSize: typeSize)
         HStack(spacing: (size ?? 17) * 0.47) {
             if isSaving {
                 ProgressView().controlSize(.small).tint(.white).environment(\.colorScheme, .dark)
-                Text(savingTitle)
+                if words { Text(savingTitle) }
             } else {
                 Image(systemName: "stop.fill").font(size.map { .system(size: $0 * 0.82, weight: .bold) } ?? .headline)
-                Text(title)
+                if words { Text(title) }
             }
         }
         .lineLimit(1)
