@@ -1,3 +1,4 @@
+import DaybookCore
 import XCTest
 @testable import Daybook
 
@@ -21,6 +22,22 @@ final class ProcessingPreferencesTests: XCTestCase {
         XCTAssertEqual(restored.preferences.speakerOptions.quality, .accurate)
         XCTAssertEqual(restored.preferences.speakerOptions.expectedSpeakerCount, 3)
         XCTAssertEqual(restored.preferences.speakerMatchThreshold, 0.82)
+    }
+
+    func testSummarizeHereTravelsWithTheJobAndEarlierJobsReadAsBefore() throws {
+        let here = ProcessingJob(meetingID: UUID(), mode: .summaryOnly, transcriptionModelID: "asr", summaryModelID: "summary",
+                                 summarizesHere: true)
+        XCTAssertTrue(here.summarizesHere)
+        XCTAssertEqual(try JSONDecoder().decode(ProcessingJob.self, from: JSONEncoder().encode(here)), here)
+        let request = ProcessingRequest(meetingID: here.meetingID, mode: .summaryOnly, requestedBy: .init(id: "phone", name: "Alex’s iPhone"))
+        XCTAssertTrue(here.carrying(request).summarizesHere, "Taking on a request keeps it")
+
+        let usual = ProcessingJob(meetingID: UUID(), transcriptionModelID: "asr", summaryModelID: "summary")
+        XCTAssertFalse(usual.summarizesHere)
+        let stored = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(usual)) as? [String: Any])
+        XCTAssertFalse(stored.keys.contains("summaryHere"), "Written only when set")
+        XCTAssertEqual(here.configurationFingerprint, ProcessingJob(meetingID: UUID(), transcriptionModelID: "asr", summaryModelID: "summary")
+            .configurationFingerprint, "Where the summary runs isn't a model setting")
     }
 
     func testSummaryRefreshDoesNotRequireRemovedAudioModels() {

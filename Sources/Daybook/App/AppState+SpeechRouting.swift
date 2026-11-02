@@ -51,7 +51,8 @@ extension AppState {
     }
 
     /// A job for `meetingID`, frozen with the routed models, these preferences, and their revisions.
-    func makeJob(meetingID: UUID, mode: ProcessingRequest.Mode, templateID: String? = nil, upgrade: ProcessingRequest.Upgrade? = nil) -> ProcessingJob {
+    func makeJob(meetingID: UUID, mode: ProcessingRequest.Mode, templateID: String? = nil, upgrade: ProcessingRequest.Upgrade? = nil,
+                 summarizesHere: Bool = false) -> ProcessingJob {
         let route = speechRoute
         var preferences = processingPreferences
         preferences.speakerModelID = route.speakerModel
@@ -59,6 +60,6 @@ extension AppState {
                              detectSpeakers: detectSpeakers, preferences: preferences, templateID: templateID,
                              revisions: frozenModelRevisions, voiceEmbeddingModelID: route.voiceEmbedder,
                              languageFallbackModelID: route.transcription.fallback, smallTasksModelID: smallTasksModel, photoModelID: photoModel?.id,
-                             upgrade: upgrade)
+                             upgrade: upgrade, summarizesHere: summarizesHere)
     }
 }

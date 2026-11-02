@@ -116,12 +116,20 @@ struct ProcessingJob: Codable, Equatable, Identifiable, Sendable {
     /// request it carries. Its summary goes through the placement with its countdown, or straight to the cloud when
     /// the cloud was the better model.
     let upgrade: ProcessingRequest.Upgrade?
+    /// Set when the person chose Summarize on This Mac (after the cloud couldn't): stored only then, so earlier jobs
+    /// decode and compare as before.
+    private let summaryHere: Bool?
+
+    /// Its summary runs on this Mac whatever the cloud preferences say. It's placed there as the summary step starts and
+    /// ends with it, so a job cancelled, paused, or skipped before then leaves no placement behind.
+    var summarizesHere: Bool { summaryHere == true }
 
     init(id: UUID = UUID(), meetingID: UUID, createdAt: Date = Date(), mode: Mode = .newAudio,
          transcriptionModelID: String, summaryModelID: String, detectSpeakers: Bool = true,
          preferences: ProcessingPreferences = .init(), requestID: UUID? = nil, templateID: String? = nil,
          revisions: [String: String]? = nil, voiceEmbeddingModelID: String? = nil, languageFallbackModelID: String? = nil,
-         smallTasksModelID: String? = nil, photoModelID: String? = nil, upgrade: ProcessingRequest.Upgrade? = nil) {
+         smallTasksModelID: String? = nil, photoModelID: String? = nil, upgrade: ProcessingRequest.Upgrade? = nil,
+         summarizesHere: Bool = false) {
         self.id = id; self.meetingID = meetingID; self.createdAt = createdAt; self.mode = mode
         self.transcriptionModelID = transcriptionModelID; self.summaryModelID = summaryModelID
         self.detectSpeakers = detectSpeakers; self.preferences = preferences.normalized
@@ -132,6 +140,7 @@ struct ProcessingJob: Codable, Equatable, Identifiable, Sendable {
         self.smallTasksModelID = smallTasksModelID
         self.photoModelID = photoModelID
         self.upgrade = upgrade
+        summaryHere = summarizesHere ? true : nil
     }
 
     /// The same job, carrying out `request`.
@@ -140,7 +149,8 @@ struct ProcessingJob: Codable, Equatable, Identifiable, Sendable {
                       summaryModelID: summaryModelID, detectSpeakers: detectSpeakers, preferences: preferences,
                       requestID: request.id, templateID: request.templateID ?? templateID, revisions: revisions,
                       voiceEmbeddingModelID: voiceEmbeddingModelID, languageFallbackModelID: languageFallbackModelID,
-                      smallTasksModelID: smallTasksModelID, photoModelID: photoModelID, upgrade: request.upgrade ?? upgrade)
+                      smallTasksModelID: smallTasksModelID, photoModelID: photoModelID, upgrade: request.upgrade ?? upgrade,
+                      summarizesHere: summarizesHere)
     }
 
     /// The models the job runs, each with the revision it froze.

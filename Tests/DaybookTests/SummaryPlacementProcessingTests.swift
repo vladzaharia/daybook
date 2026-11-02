@@ -287,6 +287,27 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         XCTAssertTrue(rig.inference.summarized.isEmpty)
     }
 
+    func testBehaviorSummarizeOnThisMacRunsHereUnderAlwaysOnceAndOnlyThatOnce() async throws {
+        let cloud = FakeCloud()
+        let rig = try await rig(cloud: cloud, policy: .always)
+        let id = try await conversation(rig, "Here", frequency: 385)
+        rig.state.enqueue(id)
+        try await rig.processed(id)
+        XCTAssertEqual(cloud.summarized, [id], "Always: the cloud")
+        rig.state.summarizeHere(id)
+        XCTAssertNil(rig.state.placements[id], "Placed only when its summary step starts")
+        try await waitUntil("the summary here") { rig.inference.summarized.count == 1 }
+        try await rig.processed(id)
+        XCTAssertEqual(cloud.summarized, [id], "Not the cloud this time")
+        XCTAssertNil(rig.meeting(id)?.summary?.origin.cloudModel)
+        XCTAssertNil(rig.state.placements[id], "Ended with its step")
+        // The next Summarize follows the preferences again.
+        rig.state.enqueue(id, mode: .summaryOnly)
+        try await waitUntil("the cloud again") { cloud.summarized.count == 2 }
+        try await rig.processed(id)
+        XCTAssertEqual(rig.inference.summarized.count, 1)
+    }
+
     func testBehaviorNeverKeepsTheKeyAndSummarizesHereAtOnce() async throws {
         let cloud = FakeCloud()
         let rig = try await rig(cloud: cloud, policy: .never)

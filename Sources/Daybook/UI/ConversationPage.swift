@@ -258,10 +258,7 @@ struct ConversationStatus: View {
             state.downloadModels(state.missingSelectedModels)
         case .chooseModels: openSettingsPane("models")
         case .cloudSettings: openSettingsPane("cloud")
-        case .summarizeHere:
-            // This summary runs here whatever the cloud preferences say.
-            state.placements.beginHere(id)
-            state.enqueue(id, mode: .summaryOnly)
+        case .summarizeHere: state.summarizeHere(id)
         case .placement(let choice): state.chooseSummaryPlacement(choice, for: id)
         case .upgrade(let offer): state.acceptUpgrade(offer, for: id)
         case .dismissUpgrade(let offer): state.dismissUpgrade(offer, for: id)

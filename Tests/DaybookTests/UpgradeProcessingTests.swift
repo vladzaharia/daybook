@@ -144,6 +144,30 @@ final class UpgradeProcessingTests: XCTestCase {
         XCTAssertNil(rig.state.upgradeOffer(for: upgraded))
     }
 
+    func testBehaviorSummarizeOnThisMacCancelledWhileQueuedLeavesNothingPlacedAndTheOfferComesBack() async throws {
+        let rig = try await rig()
+        let id = try await processed(rig, "Here", frequency: 350)
+        _ = withCloud(rig, seconds: 1)
+        madeWith(rig, id, summary: "gemma-4/e2b-4bit")
+        XCTAssertEqual(try offer(rig, id)?.line, "Upgrade summary with Claude Sonnet 5.5")
+        // Another conversation keeps this Mac busy, so Summarize on This Mac waits in the queue.
+        let audio = try rig.audio("Busy.wav", frequency: 355)
+        let busy = try await rig.waitingConversation("Busy", audio: audio, script: [(0, "Hello there.")])
+        try rig.inference.block(audio)
+        rig.state.enqueue(busy)
+        try await waitUntil("the other conversation to be transcribing") { rig.inference.isWaiting(on: audio) }
+        rig.state.summarizeHere(id)
+        XCTAssertTrue(rig.state.queuedIDs.contains(id))
+        XCTAssertNil(rig.state.placements[id], "Placed only when its summary step starts")
+        rig.state.cancelQueued(id)
+        XCTAssertNil(rig.state.placements[id], "Cancelled: nothing left placed")
+        XCTAssertEqual(try offer(rig, id)?.line, "Upgrade summary with Claude Sonnet 5.5", "The offer comes back")
+        try rig.inference.unblock(audio)
+        try await rig.processed(busy)
+        XCTAssertNil(rig.state.placements[id])
+        XCTAssertEqual(rig.meeting(id)?.summary?.modelID, "gemma-4/e2b-4bit", "Nothing ran for it")
+    }
+
     func testBehaviorDismissingHidesTheOfferForGood() async throws {
         let rig = try await rig()
         let id = try await processed(rig, "Dismiss", frequency: 360)

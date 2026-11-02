@@ -99,7 +99,11 @@ extension AppState {
         await cloud.reload()
         placementOptionsChanged()
         defer { placements.end(id) }
-        if let upgrade = job.upgrade, UpgradeRanks.isCloud(upgrade.model) {
+        if job.summarizesHere {
+            // Summarize on This Mac: here, whatever the cloud preferences say. Placed only now, so it lasts as long as
+            // this step does.
+            placements.beginHere(id)
+        } else if let upgrade = job.upgrade, UpgradeRanks.isCloud(upgrade.model) {
             // The person chose the cloud's better summary: no countdown. Without the cloud on offer now (the key went), it
             // places as any due summary does.
             placements.beginInCloud(id)
@@ -139,6 +143,13 @@ extension AppState {
     }
 
     // MARK: Choices
+
+    /// Summarize on This Mac, after the cloud couldn't: a summary that runs here whatever the cloud preferences say. The
+    /// job carries the choice to its summary step (`ProcessingJob.summarizesHere`), so Cancel or Pause before then
+    /// leaves nothing placed, and the next Summarize places as usual.
+    func summarizeHere(_ id: UUID) {
+        enqueue(id, mode: .summaryOnly, summarizesHere: true)
+    }
 
     /// Use the Cloud or Start Now, from the page, the inspector, Floating Notes, or a phone.
     func chooseSummaryPlacement(_ action: SummaryPlacementPlanner.Action, for id: UUID) {

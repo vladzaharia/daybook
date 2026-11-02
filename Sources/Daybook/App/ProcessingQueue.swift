@@ -235,12 +235,12 @@ final class ProcessingQueue {
 /// The queue as `AppState` runs it: jobs are queued (`enqueue`), run one at a time (`runQueue`), paused, cancelled,
 /// and given way to by model downloads.
 extension AppState {
-    func enqueue(_ id: UUID, mode: ProcessingRequest.Mode = .newAudio, upgrade: ProcessingRequest.Upgrade? = nil) {
+    func enqueue(_ id: UUID, mode: ProcessingRequest.Mode = .newAudio, upgrade: ProcessingRequest.Upgrade? = nil, summarizesHere: Bool = false) {
         guard id != recordingID, !queue.isQueued(id), let meeting = meetings.first(where: { $0.id == id }) else { return }
         // A conversation of an iPhone's own, queued only to check where its recording belongs, isn't owed: its mark
         // lives only while Daybook runs, and the next sync pass finds it again (`phoneTranscriptsToCheck`).
         if !checkingPhoneTranscripts.contains(id) { queue.owe(id, mode: mode, upgrade: upgrade) }
-        let job = makeJob(meetingID: id, mode: mode, upgrade: upgrade)
+        let job = makeJob(meetingID: id, mode: mode, upgrade: upgrade, summarizesHere: summarizesHere)
         let hasNew = meeting.hasUntranscribedTranscribableAudio
         let missing = job.requiredModelIDs(hasUntranscribedAudio: hasNew).subtracting(installedModels)
         guard missing.isEmpty else {
