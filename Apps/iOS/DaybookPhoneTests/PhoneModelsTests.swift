@@ -2,6 +2,7 @@ import DaybookCaptions
 import DaybookKit
 import DaybookLive
 import DaybookModelStore
+import Synchronization
 import UIKit
 import XCTest
 @testable import DaybookPhone
@@ -36,12 +37,63 @@ final class PhoneModelsTests: XCTestCase {
         }
     }
 
+    /// Holds each fetch until the test lets it go, then fails it as offline.
+    final class HeldFetcher: ModelArtifactFetcher {
+        private let state = Mutex<(held: [CheckedContinuation<Void, Never>], released: Bool)>(([], false))
+        var isHolding: Bool { state.withLock { !$0.held.isEmpty } }
+
+        func fetch(_ artifact: ModelArtifact, into directory: URL, progress: @escaping @Sendable (Double) -> Void) async throws -> URL {
+            await withCheckedContinuation { continuation in
+                let released = state.withLock { state in
+                    if !state.released { state.held.append(continuation) }
+                    return state.released
+                }
+                if released { continuation.resume() }
+            }
+            throw RecordingFetcher.Offline()
+        }
+
+        func release() {
+            let held = state.withLock { state in
+                state.released = true
+                defer { state.held = [] }
+                return state.held
+            }
+            for continuation in held { continuation.resume() }
+        }
+    }
+
+    /// Background time that's granted at once and runs out when the test says so.
+    final class FakeBackgroundTime: BackgroundTime {
+        private var next = 1
+        private var expirations: [Int: @MainActor @Sendable () -> Void] = [:]
+        private(set) var begun: [String] = []
+        private(set) var ended: [Int] = []
+
+        func begin(_ name: String, expired: @escaping @MainActor @Sendable () -> Void) -> Int? {
+            begun.append(name)
+            defer { next += 1 }
+            expirations[next] = expired
+            return next
+        }
+
+        func end(_ assertion: Int) {
+            ended.append(assertion)
+            expirations[assertion] = nil
+        }
+
+        /// The time is up for every assertion still held.
+        func expire() {
+            for expired in expirations.sorted(by: { $0.key < $1.key }).map(\.value) { expired() }
+        }
+    }
+
     private func makeModels(network: PhoneNetwork, fetcher: any ModelArtifactFetcher = RecordingFetcher(),
-                            memoryGB: UInt64 = 12) -> PhoneModels {
+                            memoryGB: UInt64 = 12, backgroundTime: (any BackgroundTime)? = nil) -> PhoneModels {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("PhoneModelsTests-\(UUID())", isDirectory: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         return PhoneModels(root: root, defaults: makeTestDefaults("PhoneModelsTests"), fetcher: fetcher, network: network,
-                           physicalMemory: memoryGB * 1_073_741_824)
+                           physicalMemory: memoryGB * 1_073_741_824, backgroundTime: backgroundTime ?? FakeBackgroundTime())
     }
 
     func testTheiPhoneStartsWithStreamingModelsAndTheMacsVoiceProfiles() {
@@ -81,6 +133,32 @@ final class PhoneModelsTests: XCTestCase {
         models.allowsCellular = true
         models.download(voices)
         try await waitUntil { fetcher.requests.count >= 2 }
+    }
+
+    func testADownloadEndsItsBackgroundTimeOnceItStops() async throws {
+        let scripted = ScriptedNetwork(), time = FakeBackgroundTime()
+        scripted.set(.unrestricted)
+        let models = makeModels(network: scripted.network, backgroundTime: time)
+        let speakers = try XCTUnwrap(models.choice(for: .liveDiarization))
+        models.download(speakers)
+        XCTAssertEqual(time.begun, ["Daybook model download"])
+        try await waitUntil { if case .failed = models.status(of: speakers) { return true } else { return false } }
+        XCTAssertEqual(time.ended, [1])
+    }
+
+    func testADownloadOutlastingItsBackgroundTimeEndsItThenAndNotAgain() async throws {
+        let scripted = ScriptedNetwork(), fetcher = HeldFetcher(), time = FakeBackgroundTime()
+        scripted.set(.unrestricted)
+        let models = makeModels(network: scripted.network, fetcher: fetcher, backgroundTime: time)
+        let speakers = try XCTUnwrap(models.choice(for: .liveDiarization))
+        models.download(speakers)
+        try await waitUntil { fetcher.isHolding }
+        time.expire()
+        XCTAssertEqual(time.ended, [1], "held past its time, iOS would end the app instead of suspending it")
+        XCTAssertTrue(models.status(of: speakers).isTransferring, "the download carries on")
+        fetcher.release()
+        try await waitUntil { if case .failed = models.status(of: speakers) { return true } else { return false } }
+        XCTAssertEqual(time.ended, [1])
     }
 
     func testADownloadCarriesOnAfterARelaunch() async throws {

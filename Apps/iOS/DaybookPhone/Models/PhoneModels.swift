@@ -91,6 +91,7 @@ final class PhoneModels {
     @ObservationIgnored private let fetcher: any ModelArtifactFetcher
     @ObservationIgnored private let network: PhoneNetwork
     @ObservationIgnored private let physicalMemory: UInt64
+    @ObservationIgnored private let backgroundTime: any BackgroundTime
     @ObservationIgnored private var tasks: [String: Task<Void, Never>] = [:]
     /// Each live role's model, as last resolved, and the other recognizers to try for a language.
     @ObservationIgnored private var resolvedChoices: [ModelRole: String] = [:]
@@ -112,7 +113,7 @@ final class PhoneModels {
     init(root: URL = PhoneModels.defaultRoot, defaults: UserDefaults, catalog: ModelCatalog = .builtIn,
          fetcher: any ModelArtifactFetcher = PhoneModels.downloads, network: PhoneNetwork = .system,
          physicalMemory: UInt64 = ProcessInfo.processInfo.physicalMemory, memoryLimit: UInt64? = nil,
-         runsLanguageModels: Bool = PhoneMemory.runsLanguageModels) {
+         runsLanguageModels: Bool = PhoneMemory.runsLanguageModels, backgroundTime: any BackgroundTime = SystemBackgroundTime()) {
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         var folder = root
         var values = URLResourceValues()
@@ -130,6 +131,7 @@ final class PhoneModels {
         self.fetcher = fetcher
         self.network = network
         self.physicalMemory = physicalMemory
+        self.backgroundTime = backgroundTime
         let stored = defaults.data(forKey: Keys.selections).flatMap { try? JSONDecoder().decode(ModelSelections.self, from: $0) }
         selections = stored ?? ModelSelections()
         allowsCellular = defaults.bool(forKey: Keys.cellular)
@@ -252,11 +254,14 @@ final class PhoneModels {
         let liveRole = roles.first(where: model.serves)
         progress[key] = 0
         let store = self.store, fetcher = self.fetcher
+        // The files go on arriving in the background session while the app is suspended; this asks
+        // for time to check and install them if they finish just as the app leaves the screen. When
+        // that time runs out first, it ends then (held past it, iOS would end the app), and the
+        // install carries on when the app comes back.
+        let background = BackgroundAssertion(backgroundTime)
+        background.begin("Daybook model download")
         tasks[key] = Task { [weak self] in
-            // The files go on arriving in the background session while the app is suspended; this
-            // asks for time to check and install them if they finish just as the app leaves the screen.
-            let background = UIApplication.shared.beginBackgroundTask(withName: "Daybook model download")
-            defer { UIApplication.shared.endBackgroundTask(background) }
+            defer { background.end() }
             do {
                 try await store.install(model, revision: revision, fetcher: fetcher,
                                         validate: { installation in
