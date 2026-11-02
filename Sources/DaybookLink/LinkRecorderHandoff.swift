@@ -41,8 +41,9 @@ public struct LinkRecorderHandoffRequest: Codable, Sendable, Equatable, Identifi
         public static let give: Self = "give"
         /// The requester calls off the request it sent with this `id` (Stop Waiting): an owner still finishing
         /// keeps the recorder, and a device waiting for an offered one stops waiting. Too late once the owner has
-        /// let go: its release still moves the recorder. Older builds refuse it as unsupported, which changes
-        /// nothing.
+        /// let go: its release still moves the recorder. An older build doesn't understand it: it repeats its
+        /// earlier answer or refuses it as unsupported, which the requester ignores, and if it was already letting
+        /// go the recorder still moves, as after its release.
         public static let cancel: Self = "cancel"
     }
 
