@@ -56,7 +56,10 @@ struct LibraryView: View {
         return state.selectedMeeting
     }
 
-    private var showsConversation: Bool { !state.place.isDevice && state.multiSelection.count < 2 && state.selectedMeeting != nil }
+    /// Whether the page is a conversation chosen in the list, which the inspector is for. A device's page has none.
+    private var showsConversation: Bool {
+        !(state.place.isDevice && !state.isSearching) && state.multiSelection.count < 2 && state.selectedMeeting != nil
+    }
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columns) {
@@ -86,7 +89,8 @@ struct LibraryView: View {
                 }
                 // SwiftUI's own changes (closing it by dragging, and keeping its split item in step, which can say
                 // "shown" by itself) are kept without widening the window; only asking for it does (`inspector`).
-                .inspector(isPresented: Binding(get: { inspectorShown }, set: { inspectorPresented = $0 })) {
+                // With no conversation for it (a device's page), there's nothing of the person's to keep.
+                .inspector(isPresented: Binding(get: { inspectorShown }, set: { if showsConversation { inspectorPresented = $0 } })) {
                     ZStack {
                         if let id = state.selectedID { MeetingInspector(state: state, meetingID: id).equatable() }
                     }
@@ -113,7 +117,7 @@ struct LibraryView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in noteScreen() }
         // Tags… and the byline's people ask for the inspector here, so they widen a narrow window as ⌃⌘I does.
-        .onChange(of: state.inspectorRequest) { _, _ in withAnimation { inspector.wrappedValue = true } }
+        .onChange(of: state.inspectorRequest) { _, _ in askForInspector() }
         .onChange(of: inspectorPresented) { _, _ in adaptColumns() }
         .onChange(of: showsConversation) { _, _ in adaptColumns() }
         .onChange(of: columns) { old, shown in columnsChanged(from: old, to: shown) }
@@ -227,9 +231,11 @@ struct LibraryView: View {
 
     /// Every way the person asks for the inspector or puts it away (the toolbar, View › Show Inspector and ⌃⌘I, Tags…,
     /// the byline's people): asked for in a window that holds it back, the window widens, whether or not it was asked
-    /// for already (the stored choice outlives a window that has since narrowed, or a relaunch).
+    /// for already (the stored choice outlives a window that has since narrowed, or a relaunch). With no conversation
+    /// for it, nothing changes, so it doesn't open later unasked.
     private var inspector: Binding<Bool> {
         Binding(get: { inspectorShown }, set: { wanted in
+            guard showsConversation else { return }
             let widens = ColumnFit.widensForInspector(asked: wanted, available: showsConversation, window: windowWidth, screen: screenWidth)
             inspectorPresented = wanted
             // On the next turn: a command or a change may arrive inside an update, and a window resized during a
@@ -240,6 +246,13 @@ struct LibraryView: View {
 
     /// View › Show/Hide Inspector's: `inspector` while there's a conversation for it.
     private var inspectorCommand: Binding<Bool>? { showsConversation ? inspector : nil }
+
+    /// Tags… and the byline's people: the inspector for the conversation on the page. A device's page has no inspector,
+    /// so the conversation it shows opens in the library first, selected, and the inspector beside it.
+    private func askForInspector() {
+        if !showsConversation, let meeting = toolbarMeeting { state.showConversation(meeting.id) }
+        withAnimation { inspector.wrappedValue = true }
+    }
 
     /// The toolbar's Inspector: hides it when it shows; otherwise asks for it, widening the window to make room.
     private func toggleInspector() {

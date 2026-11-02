@@ -133,6 +133,44 @@ final class LibraryInspectorTests: XCTestCase {
         try await rig.processed(id)
     }
 
+    /// A device's page has no inspector. Tags… and the byline's people there open the conversation it shows in the
+    /// library, with the inspector beside it; with no conversation on the page they change nothing, so the inspector
+    /// doesn't open unasked on the next conversation.
+    func testBehaviorAskingForTheInspectorOnADevicePageOpensItsConversation() async throws {
+        let root = makeTemporaryFolder("DaybookInspectorAsk")
+        let defaults = makeTestDefaults()
+        let state = AppState(libraryURL: root, defaults: defaults)
+        await state.initialize()
+        defaults.set(false, forKey: "isInspectorPresented")
+        let id = state.newMeeting(title: "Imported from the recorder")
+
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1400, height: 860), styleMask: [.titled, .resizable],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let hosting = NSHostingController(rootView: LibraryView(state: state).defaultAppStorage(defaults))
+        hosting.sizingOptions = []
+        window.contentViewController = hosting
+        window.setContentSize(NSSize(width: 1400, height: 860))
+        defer { window.close() }
+        try await settle()
+
+        state.place = .device("demo-phone")
+        try await settle()
+        state.showInspector()
+        try await settle()
+        XCTAssertEqual(state.place, .device("demo-phone"), "nothing to open")
+        XCTAssertFalse(defaults.bool(forKey: "isInspectorPresented"), "not stored for later")
+
+        // The page shows an imported recording's conversation.
+        state.deviceConversationID = id
+        try await settle()
+        state.showInspector()
+        try await settle()
+        XCTAssertEqual(state.place, .section(.all))
+        XCTAssertEqual(state.selectedID, id)
+        XCTAssertTrue(defaults.bool(forKey: "isInspectorPresented"))
+    }
+
     /// Lets SwiftUI update and its animations run.
     private func settle() async throws { try await Task.sleep(for: .milliseconds(600)) }
 
