@@ -46,6 +46,8 @@ struct LibraryPage: View {
             .safeAreaBar(edge: .bottom, spacing: 0) { bottomBar }
             .environment(\.editMode, .constant(session.isSelecting ? .active : .inactive))
             .settingsSheet(isPresented: $showingSettings)
+            // A conversation opened from Settings (a recorder's Recent imports) shows once Settings steps aside.
+            .onChange(of: session.openID) { _, id in if id != nil, showingSettings { showingSettings = false } }
             .alert(naming.map { if case .rename = $0 { return "Rename Folder" } else { return "New Folder" } } ?? "",
                    isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })) {
                 TextField("Name", text: $folderName)
