@@ -525,15 +525,17 @@ extension AppState {
     }
 
     /// The recording to check in a conversation of the iPhone's own: its one recording, transcribed on the iPhone
-    /// that made it (its Transcribe request finished by the device that asked), never placed on another's timeline,
-    /// and not checked here yet. A recording a Mac transcribed was checked before the Mac transcribed it, and one
-    /// the person moved here from another conversation is never checked: it's where they filed it.
+    /// that made it (its Transcribe request finished by the device that asked, never taken back), never placed on
+    /// another's timeline, and not checked here yet. A recording a Mac transcribed was checked before the Mac
+    /// transcribed it, and one the person moved here from another conversation is never checked: it's where they
+    /// filed it.
     func phoneTranscriptToCheck(_ meeting: Meeting) -> RecordingTrack? {
         guard meeting.tracks.count == 1, let track = meeting.tracks.first, track.deviceKind == DaybookPhoneIntegration.id,
               track.alignment == nil, meeting.transcripts.contains(where: { $0.trackID == track.id }), !meeting.wasMovedHere(track.id),
               !sources.hasChecked(phoneRecording: track.id) else { return nil }
         let transcribedOnThePhone = (meeting.processingRequests ?? []).contains { request in
             request.mode != .summaryOnly && request.outcome?.result == .completed && request.outcome?.device.id == request.requestedBy.id
+                && !request.isWithdrawn
         }
         return transcribedOnThePhone ? track : nil
     }
