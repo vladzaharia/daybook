@@ -9,7 +9,7 @@ import XCTest
 @MainActor
 final class AppStateTests: XCTestCase {
     func testConcurrentImportsPreserveBothSourcesAndCurrentNotes() async throws {
-        let (state, root, defaults) = try await makeState()
+        let (state, root, _) = try await makeState()
         defer { try? FileManager.default.removeItem(at: root) }
         let id = state.newMeeting(title: "Concurrent import")
         let one = try audio(root, name: "one.wav", frequency: 220)
@@ -32,7 +32,7 @@ final class AppStateTests: XCTestCase {
     }
 
     func testSameRecordingIsNotImportedAgainAsAnotherMeeting() async throws {
-        let (state, root, defaults) = try await makeState()
+        let (state, root, _) = try await makeState()
         defer { try? FileManager.default.removeItem(at: root) }
         let one = try audio(root, name: "first.wav", frequency: 440)
         try await state.importFiles([one], source: .soundcore, attachTo: nil)
@@ -47,7 +47,7 @@ final class AppStateTests: XCTestCase {
     }
 
     func testPendingRecordingCannotBeTrashed() async throws {
-        let (state, root, defaults) = try await makeState()
+        let (state, root, _) = try await makeState()
         defer { try? FileManager.default.removeItem(at: root) }
         let id = state.newMeeting()
         state.isStartingRecording = true

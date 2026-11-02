@@ -1265,11 +1265,12 @@ final class AppState {
             queue.removeJobs(for: id)
             queue.settle(id)
         }
-        Task {
+        Task { [weak self] in
+            guard let self else { return }
             var trashed: [UUID] = []
             do {
                 for id in ids {
-                    guard library.isLoaded, try await library.moveToTrash(id, allowed: { [self] in !isBusy(id) }) else { continue }
+                    guard library.isLoaded, try await library.moveToTrash(id, allowed: { !self.isBusy(id) }) else { continue }
                     trashed.append(id)
                 }
             } catch { report("Couldn’t Move to Trash", "Try again.", error) }
