@@ -10,8 +10,9 @@ import Foundation
 enum VocabularyDemo {
     static func apply(to library: LibraryController, arguments: [String] = CommandLine.arguments) {
         guard arguments.contains("--library"), arguments.contains("--vocabulary-demo"), library.isLoaded, library.glossary.isEmpty else { return }
-        // A term from a conversation, and one from a conversation that's gone.
-        let conversation = library.meetings.first(where: { $0.title == "Weekly product sync" })?.id ?? library.meetings.first?.id ?? UUID()
+        // A term from a conversation (one is made in an empty library), and one from a conversation that's gone.
+        let conversation = library.meetings.first(where: { $0.title == "Weekly product sync" })?.id ?? library.meetings.first?.id
+            ?? library.newMeeting(title: "Weekly product sync with the design and research teams")
         [GlossaryTerm(term: "Daybook", aliases: ["day book"], definition: "The app", approved: true),
          GlossaryTerm(term: "Soundcore Work", definition: "The recorder clipped to a lapel", approved: true),
          GlossaryTerm(term: "Parakeet", aliases: ["Parakeet Ultra"], definition: "", approved: true),
