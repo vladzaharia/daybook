@@ -70,6 +70,7 @@ enum FloatingStatus {
     /// The words under "Recording stopped": why, when the recorder knows a reason of its own; otherwise only what's
     /// left, since the title already says it stopped. `reason` is `AppState.unexpectedStops`' sentence; none means
     /// nothing reached the conversation.
+    @MainActor
     static func stoppedMessage(_ reason: String?) -> String {
         guard let reason else { return "Everything up to then is saved." }
         return reason == RecordingController.unexpectedStopSentence ? "What was recorded is saved." : reason
