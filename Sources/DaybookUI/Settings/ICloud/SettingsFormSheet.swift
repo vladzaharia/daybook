@@ -63,14 +63,17 @@ public struct SettingsFormSheet<Content: View>: View {
                     Button(confirm.title, action: confirm.perform)
                         .keyboardShortcut(.defaultAction)
                         .disabled(!confirm.isEnabled)
-                    if cancel == nil {
-                        // Esc does what the sheet's one button does.
-                        Button("", action: confirm.perform)
-                            .keyboardShortcut(.cancelAction)
-                            .frame(width: 0, height: 0)
-                            .opacity(0)
-                            .accessibilityHidden(true)
-                    }
+                        .background {
+                            if cancel == nil {
+                                // Esc does what the sheet's one button does. Behind it, it takes no room in the row,
+                                // so the button meets the form's edge.
+                                Button("", action: confirm.perform)
+                                    .keyboardShortcut(.cancelAction)
+                                    .disabled(!confirm.isEnabled)
+                                    .opacity(0)
+                                    .accessibilityHidden(true)
+                            }
+                        }
                 }
             }
             .padding(.horizontal, DaybookSpacing.s5)
