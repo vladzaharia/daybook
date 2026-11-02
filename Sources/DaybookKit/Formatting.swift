@@ -85,6 +85,16 @@ public enum RowDate {
     }
 }
 
+/// When a conversation was made or last changed, as Info says it on both apps: "Nov 1 at 3:50 AM", with the year
+/// when it isn't this one ("Nov 1, 2025 at 3:50 AM").
+public enum InfoDate {
+    public static func format(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
+        calendar.isDate(date, equalTo: now, toGranularity: .year)
+            ? date.formatted(.dateTime.day().month(.abbreviated).hour().minute())
+            : date.formatted(.dateTime.day().month(.abbreviated).year().hour().minute())
+    }
+}
+
 /// The second line of a row when nothing is happening: the gist, else your first note, else the length.
 /// A first note that only repeats the title says nothing, so the next line is used instead.
 public enum RowPreview {

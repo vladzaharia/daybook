@@ -7,13 +7,14 @@ import Foundation
 /// the conversation's folder with a mark on its track (`RecordingRemoval`), its transcript leaves the conversation's
 /// at once (`realign`), and Version History says what happened. A removed recording can be put back (Info lists it,
 /// and Undo does it); a moved one is in its own conversation, with its transcript, speakers, names, corrections, and
-/// bookmarks. The app summarizes again afterwards, where its summaries run.
+/// bookmarks. `changed` hears of each conversation whose recordings changed (also on undo and redo), for the app to
+/// summarize it again where its summaries run.
 extension LibraryController {
     /// Remove Recording…: takes the recording (with the copies that share its audio) out of the conversation.
     /// Returns whether anything was removed.
     @discardableResult
     public func removeRecording(_ trackID: UUID, from id: UUID, phoneName: String? = nil, undoManager: UndoManager?,
-                                at now: Date = Date()) -> Bool {
+                                at now: Date = Date(), changed: (@MainActor (UUID) -> Void)? = nil) -> Bool {
         guard let meeting = meeting(id), let track = meeting.tracks.first(where: { $0.id == trackID }), !track.isRemoved else { return false }
         let group = meeting.recordingGroup(of: trackID).map(\.id)
         let words = RecordingWords.inSentence(track, in: meeting, phoneName: phoneName)
@@ -24,9 +25,9 @@ extension LibraryController {
             meeting.revisions.append(MeetingRevision(date: now, field: "source:\(trackID.uuidString):removed", oldValue: "",
                                                      newValue: "Removed \(words)"))
         }
-        Task { await realign(id) }
+        Task { await realign(id); changed?(id) }
         undoManager?.registerUndo(withTarget: self) { controller in
-            controller.putBackRecording(trackID, in: id, phoneName: phoneName, undoManager: undoManager)
+            controller.putBackRecording(trackID, in: id, phoneName: phoneName, undoManager: undoManager, changed: changed)
         }
         undoManager?.setActionName("Remove Recording")
         return true
@@ -35,7 +36,7 @@ extension LibraryController {
     /// Puts a removed recording back in its conversation. Returns whether it was put back.
     @discardableResult
     public func putBackRecording(_ trackID: UUID, in id: UUID, phoneName: String? = nil, undoManager: UndoManager?,
-                                 at now: Date = Date()) -> Bool {
+                                 at now: Date = Date(), changed: (@MainActor (UUID) -> Void)? = nil) -> Bool {
         guard let meeting = meeting(id), let track = meeting.tracks.first(where: { $0.id == trackID }), track.isRemoved,
               track.removal?.movedTo == nil else { return false }
         let group = meeting.recordingGroup(of: trackID).map(\.id)
@@ -45,9 +46,9 @@ extension LibraryController {
             meeting.revisions.append(MeetingRevision(date: now, field: "source:\(trackID.uuidString):put-back", oldValue: "",
                                                      newValue: "Put back \(words)"))
         }
-        Task { await realign(id) }
+        Task { await realign(id); changed?(id) }
         undoManager?.registerUndo(withTarget: self) { controller in
-            controller.removeRecording(trackID, from: id, phoneName: phoneName, undoManager: undoManager)
+            controller.removeRecording(trackID, from: id, phoneName: phoneName, undoManager: undoManager, changed: changed)
         }
         undoManager?.setActionName("Put Back Recording")
         return true
@@ -60,7 +61,8 @@ extension LibraryController {
     /// conversation's ID. Undo puts the recording back and moves the new conversation to the Trash.
     public func moveRecordingToNewConversation(_ trackID: UUID, from id: UUID, phoneName: String? = nil,
                                                audio: (RecordingTrack) async throws -> URL,
-                                               undoManager: UndoManager?, at now: Date = Date()) async throws -> UUID {
+                                               undoManager: UndoManager?, at now: Date = Date(),
+                                               changed: (@MainActor (UUID) -> Void)? = nil) async throws -> UUID {
         guard let source = meeting(id), let track = source.tracks.first(where: { $0.id == trackID }), !track.isRemoved else {
             throw DaybookError.libraryUnavailable
         }
@@ -123,8 +125,13 @@ extension LibraryController {
         }
         await realign(newID)
         await realign(id)
+        changed?(id)
+        changed?(newID)
         undoManager?.registerUndo(withTarget: self) { controller in
-            Task { await controller.takeBackMove(trackID, from: id, to: newID) }
+            Task {
+                await controller.takeBackMove(trackID, from: id, to: newID)
+                changed?(id)
+            }
         }
         undoManager?.setActionName("Move to New Conversation")
         return newID

@@ -1,291 +1,135 @@
 import DaybookCore
 import DaybookIntelligence
 import DaybookKit
+import DaybookUI
 import SwiftUI
 
-/// Properties of the selected conversation, kept out of the page: where it's filed, who spoke,
-/// its recordings, and how it was processed.
+/// Properties of the selected conversation, kept out of the page: DaybookUI's `ConversationInfoForm`, the iPhone's
+/// Info, with this Mac's names, its queue, and what only the Mac adds to Audio (recordings to come and suggested
+/// matches, background audio, Add Recording from a file, a recorder, or this Mac).
 struct MeetingInspector: View {
     let state: AppState
     let meetingID: UUID
-    @AppStorage("inspector.details") private var detailsExpanded = true
-    @AppStorage("inspector.people") private var peopleExpanded = true
-    @AppStorage("inspector.audio") private var audioExpanded = false
-    @AppStorage("inspector.processing") private var processingExpanded = false
-
-    private var meeting: Meeting? { state.meetings.first { $0.id == meetingID } }
+    @Environment(\.undoManager) private var undoManager
 
     var body: some View {
-        if let meeting {
-            Form {
-                Section("Details", isExpanded: $detailsExpanded) { details(meeting) }
-                // Notes alone have no speakers and nothing processed: those sections wait for audio.
-                if !meeting.tracks.isEmpty || !meeting.speakers.isEmpty {
-                    Section("People", isExpanded: $peopleExpanded) { people(meeting) }
+        if state.meetings.contains(where: { $0.id == meetingID }) {
+            ConversationInfoForm(library: state.library, meetingID: meetingID, services: services) { meeting in
+                SourceHooks(state: state, meeting: meeting)
+                BackgroundAudioHook(state: state, meeting: meeting)
+            } addRecording: { meeting in
+                Menu("Add Recording") {
+                    Button("From a File…") { state.chooseImport(attachTo: meeting.id) }
+                    AddRecordingFromDeviceItems(state: state)
+                    Button("Record on This Mac") { Task { await state.startRecording(into: meeting.id) } }
+                        .disabled(state.isRecording || !state.canRecordInto(meeting.id))
                 }
-                Section("Audio", isExpanded: $audioExpanded) { audio(meeting) }
-                if !meeting.tracks.isEmpty || !meeting.revisions.isEmpty {
-                    Section("Processing", isExpanded: $processingExpanded) { processing(meeting) }
-                }
+                .menuStyle(.button)
+                .controlSize(.small)
+                .fixedSize()
+                .disabled(state.processingID == meeting.id || state.recordingID == meeting.id)
             }
-            .formStyle(.grouped)
-            .controlSize(.small)
-            .labeledContentStyle(SecondaryLabelStyle())
         } else {
             ContentUnavailableView("No Selection", systemImage: "sidebar.trailing")
         }
     }
 
-    @ViewBuilder private func details(_ meeting: Meeting) -> some View {
-        Picker("Folder", selection: Binding(get: { meeting.folderID }, set: { folder in state.moveToFolder([meeting.id], folder) })) {
-            Text("None").tag(UUID?.none)
-            if !state.folders.isEmpty { Divider() }
-            ForEach(state.folders) { folder in Text(folder.name).tag(UUID?.some(folder.id)) }
+    private var services: ConversationInfoServices {
+        let state = state
+        return ConversationInfoServices(
+            catalog: state.modelCatalog, words: .mac(id: state.library.thisDevice.id),
+            recordingName: { track, meeting in state.recordingName(track, in: meeting) },
+            recordingLine: { track, meeting in state.sourceLine(track, in: meeting) },
+            actionContext: { meeting in Self.context(state, meeting) },
+            now: { meeting, date in
+                InfoNow.make(state.processingStatus(for: meeting), meeting: meeting, inputs: Self.inputs(state, meeting), now: date)
+            },
+            perform: { action, meeting in perform(action, in: meeting) })
+    }
+
+    static func context(_ state: AppState, _ meeting: Meeting) -> ConversationActions.Context {
+        ConversationActions.Context(platform: .mac, isRecording: state.recordingID == meeting.id,
+                                    isProcessingHere: state.processingID == meeting.id || state.queuedIDs.contains(meeting.id),
+                                    status: state.processingStatus(for: meeting))
+    }
+
+    static func inputs(_ state: AppState, _ meeting: Meeting) -> ConversationStatusPresentation.Inputs {
+        ConversationStatusPresentation.Inputs(words: .mac(id: state.library.thisDevice.id), local: .mac(),
+                                              isRecording: state.recordingID == meeting.id,
+                                              placement: .init(planner: state.placements[meeting.id]))
+    }
+
+    /// A conversation whose recordings changed is processed again here: its new recording transcribed, else its
+    /// summary written again from the transcript it has now.
+    static func summarizeAgain(_ state: AppState) -> @MainActor (UUID) -> Void {
+        { [weak state] id in
+            guard let state, let meeting = state.meetings.first(where: { $0.id == id }), !meeting.presentTracks.isEmpty,
+                  state.processingID != id else { return }
+            state.cancelQueued(id)
+            state.enqueue(id, mode: state.defaultProcessingMode(for: meeting))
         }
-        // Like Finder's Get Info: the label, then chips starting on the label's edge.
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Tags").foregroundStyle(.secondary)
-            TagEditor(tags: meeting.tags ?? [], save: { state.setTags(meeting.id, text: $0.joined(separator: ",")) },
-                      showTag: { tag in state.searchTokens = [.tag(tag)] }, alignment: .leading)
+    }
+
+    private func perform(_ action: ConversationInfoAction, in meeting: Meeting) {
+        let id = meeting.id
+        switch action {
+        case .track(let action, let track):
+            perform(action, track: track, in: meeting)
+        case .putBack(let track):
+            state.library.putBackRecording(track.id, in: id, phoneName: state.phoneName(track), undoManager: undoManager,
+                                           changed: Self.summarizeAgain(state))
+        case .process(let mode):
+            state.enqueue(id, mode: mode)
+        case .summarize:
+            // Choosing a different template summarizes again right away; the earlier summary stays in Version History.
+            guard state.processingID != id else { return }
+            state.cancelQueued(id)
+            state.enqueue(id, mode: .summaryOnly)
+        case .versionHistory:
+            state.activeSheet = .versionHistory
+        case .status(.placement(let choice)):
+            state.chooseSummaryPlacement(choice, for: id)
+        case .status(.stopSummary):
+            state.pauseProcessing(id)
+        case .status:
+            break
+        case .searchTag(let tag):
+            state.searchTokens = [.tag(tag)]
         }
-        Picker("Shows in", selection: Binding(get: { meeting.placement.map(PlacementChoice.init) ?? .automatic }, set: { choice in
-            state.setPlacement([meeting.id], choice.placement)
-        })) {
-            Text(automaticPlacementTitle(meeting)).tag(PlacementChoice.automatic)
-            Divider()
-            Text("Work").tag(PlacementChoice.work)
-            Text("Personal").tag(PlacementChoice.personal)
-        }
-        Picker("Template", selection: state.templateSelection(for: meeting.id)) {
-            Text(automaticTemplateTitle(meeting)).tag("auto")
-            Divider()
-            ForEach(state.templates.filter(\.isBuiltIn)) { template in Text(template.name).tag(template.id) }
-            let custom = state.templates.filter { !$0.isBuiltIn }
-            if !custom.isEmpty {
-                Divider()
-                ForEach(custom) { template in Text(template.name).tag(template.id) }
+    }
+
+    private func perform(_ action: ConversationAction.ID, track: RecordingTrack, in meeting: Meeting) {
+        let id = meeting.id
+        switch action {
+        case .play:
+            guard !state.isRecording else { return }
+            Task {
+                guard let url = await state.audioURL(for: track, meetingID: id) else { return }
+                withAnimation(Motion.state) { state.playback.play(url: url, at: 0, trackID: track.id, meetingID: id) }
             }
-        }
-        LabeledContent("Created", value: meeting.date.formatted(.dateTime.day().month(.abbreviated).hour().minute()))
-        LabeledContent("Edited", value: meeting.updatedAt.formatted(.dateTime.day().month(.abbreviated).hour().minute()))
-    }
-
-    /// The guess folds into the first item, "Automatic (Meeting)", so the row needs no caption.
-    private func automaticTemplateTitle(_ meeting: Meeting) -> String {
-        guard let kind = meeting.summary?.kind, kind != .auto else { return "Automatic" }
-        return "Automatic (\(kind.title))"
-    }
-
-    private func automaticPlacementTitle(_ meeting: Meeting) -> String {
-        var automatic = meeting
-        automatic.placement = nil
-        switch automatic.effectivePlacement {
-        case .work?: return "Work (automatic)"
-        case .personal?: return "Personal (automatic)"
-        case nil: return "Automatic"
-        }
-    }
-
-    @ViewBuilder private func people(_ meeting: Meeting) -> some View {
-        if meeting.speakers.isEmpty {
-            Text("No speakers yet").foregroundStyle(.secondary)
-        } else {
-            let total = max(1, meeting.speakers.map { talkTime($0.id, in: meeting) }.reduce(0, +))
-            // A TV's presenter, left out as background audio, isn't one of the people (colours keep their places).
-            let background = meeting.backgroundOnlySpeakerIDs
-            ForEach(Array(meeting.speakers.enumerated()).filter { !background.contains($0.element.id) }, id: \.element.id) { index, speaker in
-                let time = talkTime(speaker.id, in: meeting)
-                SpeakerRow(name: speaker.name, ink: DaybookStyle.speakerInk(index), talkTime: time, share: time / total) { name in
-                    state.update(meeting.id) { $0.renameSpeaker(id: speaker.id, name: name) }
+        case .adjustTiming:
+            state.activeSheet = .adjustTiming(track.id)
+        case .showOriginalTranscript:
+            state.activeSheet = .originalTranscript(track.id)
+        case .showInFinder:
+            state.showInFinder(id)
+        case .removeRecording:
+            // Its words leave the transcript at once; the summary is written again without them.
+            state.library.removeRecording(track.id, from: id, phoneName: state.phoneName(track), undoManager: undoManager,
+                                          changed: Self.summarizeAgain(state))
+        case .moveToNewConversation:
+            let state = state, undoManager = undoManager
+            Task {
+                do {
+                    _ = try await state.library.moveRecordingToNewConversation(track.id, from: id, phoneName: state.phoneName(track), audio: { track in
+                        try await state.library.audioURL(for: track, in: id)
+                    }, undoManager: undoManager, changed: Self.summarizeAgain(state))
+                } catch {
+                    state.report("Couldn’t Move the Recording", "Try again.", error)
                 }
-                SpeakerIdentityLine(state: state, meeting: meeting, speaker: speaker)
             }
-        }
-    }
-
-    private func talkTime(_ id: String, in meeting: Meeting) -> TimeInterval {
-        meeting.unifiedTranscript.filter { $0.speakerID == id }.reduce(0) { $0 + max(0, $1.end - $1.start) }
-    }
-
-    @ViewBuilder private func audio(_ meeting: Meeting) -> some View {
-        ForEach(meeting.tracks) { track in
-            AudioRow(state: state, meeting: meeting, track: track)
-        }
-        if meeting.tracks.isEmpty { Text("No recordings yet").foregroundStyle(.secondary) }
-        SourceHooks(state: state, meeting: meeting)
-        BackgroundAudioHook(state: state, meeting: meeting)
-        Menu("Add Recording") {
-            Button("From a File…") { state.chooseImport(attachTo: meeting.id) }
-            AddRecordingFromDeviceItems(state: state)
-            Button("Record on This Mac") { Task { await state.startRecording(into: meeting.id) } }
-                .disabled(state.isRecording || !state.canRecordInto(meeting.id))
-        }
-        .menuStyle(.button)
-        .fixedSize()
-        .disabled(state.processingID == meeting.id || state.recordingID == meeting.id)
-    }
-
-    @ViewBuilder private func processing(_ meeting: Meeting) -> some View {
-        // A summary's countdown, with its choices, or the cloud at work.
-        PlacementInspectorRow(state: state, meetingID: meeting.id)
-        if let run = meeting.transcripts.max(by: { $0.createdAt < $1.createdAt }) {
-            LabeledContent("Transcribed", value: state.modelCatalog.name(for: run.modelID, provenance: run.processingSettings?.model))
-                .help(run.createdAt.formatted(date: .abbreviated, time: .shortened))
-        }
-        // Which model found the speakers; "Not identified" only for a transcript that has none.
-        if let model = speakerModel(meeting) {
-            LabeledContent("Speakers", value: model)
-        } else if !meeting.transcripts.isEmpty && meeting.speakers.isEmpty {
-            LabeledContent("Speakers", value: "Not identified")
-        }
-        if let summary = meeting.summary {
-            let origin = summary.origin
-            let help = [origin.colophon(thisDeviceID: state.library.thisDevice.id, thisDevice: AppState.thisDeviceWords, unknown: AppState.thisDeviceWords),
-                        summary.createdAt.formatted(date: .abbreviated, time: .shortened)].joined(separator: " · ")
-            if let cloud = summary.cloudProvenance {
-                // A cloud model's: what it used and cost, from its provenance.
-                LabeledContent {
-                    Text(cloud.name)
-                } label: {
-                    Text("Summary")
-                    if let usage = cloud.usage { Text(usage) }
-                }
-                .help(help)
-            } else {
-                LabeledContent("Summary", value: state.modelCatalog.name(for: summary.modelID, provenance: summary.processingSettings?.model))
-                    .help(help)
-            }
-        }
-        HStack {
-            if !meeting.tracks.isEmpty { ReprocessMenu(state: state, meeting: meeting).fixedSize() }
-            Spacer()
-            if !meeting.revisions.isEmpty { Button("Version History…") { state.activeSheet = .versionHistory } }
-        }
-    }
-
-    private func speakerModel(_ meeting: Meeting) -> String? {
-        meeting.speakers.compactMap(\.analysisSettings).first.map { state.modelCatalog.name(for: $0.modelID, provenance: $0.model) }
-    }
-}
-
-private enum PlacementChoice: Hashable {
-    case automatic, work, personal
-    init(_ placement: LibraryPlacement) { self = placement == .work ? .work : .personal }
-    var placement: LibraryPlacement? {
-        switch self {
-        case .automatic: return nil
-        case .work: return .work
-        case .personal: return .personal
-        }
-    }
-}
-
-private struct SpeakerRow: View {
-    let name: String
-    let ink: Color
-    let talkTime: TimeInterval
-    let share: Double
-    let save: (String) -> Void
-    @State private var draft = ""
-    @FocusState private var focused: Bool
-    var body: some View {
-        HStack(spacing: 8) {
-            Circle().fill(ink).frame(width: 8, height: 8).accessibilityHidden(true)
-            TextField("Speaker", text: $draft)
-                .textFieldStyle(.plain)
-                .labelsHidden()
-                .focused($focused)
-                .onSubmit(commit)
-                .onChange(of: focused) { _, active in if !active { commit() } }
-            Spacer()
-            Capsule().fill(Color.primary.opacity(0.08)).frame(width: 44, height: 4)
-                .overlay(alignment: .leading) { Capsule().fill(ink).frame(width: max(4, 44 * share), height: 4) }
-                .accessibilityLabel("\(Int(share * 100)) percent of the talking")
-            Text(DurationLabel.format(talkTime)).foregroundStyle(.secondary).monospacedDigit().frame(minWidth: 44, alignment: .trailing)
-        }
-        .help("Click to rename")
-        .onAppear { draft = name }
-        .onChange(of: name) { _, value in if !focused { draft = value } }
-    }
-    private func commit() {
-        let value = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        if value.isEmpty { draft = name } else if value != name { save(value) }
-    }
-}
-
-private struct AudioRow: View {
-    let state: AppState
-    let meeting: Meeting
-    let track: RecordingTrack
-
-    private var name: String { state.recordingName(track, in: meeting) }
-    private var alignment: TrackAlignment? { meeting.alignmentReports.first { $0.trackID == track.id } }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 6) {
-                Image(systemName: track.source.systemImage).foregroundStyle(.secondary).frame(width: 16)
-                Text(name).lineLimit(1).truncationMode(.middle)
-                Spacer()
-                Text(track.duration.map(TimeLabel.short) ?? "—").foregroundStyle(.secondary).monospacedDigit()
-                Button { playThis() } label: {
-                    Image(systemName: "play.circle.fill").font(.system(size: 15)).symbolRenderingMode(.hierarchical).foregroundStyle(DaybookStyle.accent)
-                }
-                    .buttonStyle(.borderless)
-                    .disabled(state.isRecording)
-                    .help("Play this recording")
-                    .accessibilityLabel("Play \(name)")
-                Menu {
-                    Button("Play", action: playThis).disabled(state.isRecording)
-                    Divider()
-                    Button("Adjust Timing…") { state.activeSheet = .adjustTiming(track.id) }.disabled(meeting.tracks.count < 2)
-                    Button("Show Original Transcript…") { state.activeSheet = .originalTranscript(track.id) }
-                        .disabled(!meeting.transcripts.contains { $0.trackID == track.id })
-                    Divider()
-                    Button("Show in Finder") { state.showInFinder(meeting.id) }
-                } label: { Image(systemName: "ellipsis") }
-                    .menuStyle(.button).buttonStyle(.borderless).menuIndicator(.hidden).fixedSize()
-                    .help("More")
-                    .accessibilityLabel("More for \(name)")
-            }
-            let line = state.sourceLine(track, in: meeting)
-            if meeting.supersededLivePortions[track.id] != nil || alignment?.method == .unaligned || line != nil {
-                HStack(spacing: 4) {
-                    if meeting.supersededLivePortions[track.id] != nil {
-                        // Kept for playback; the recorder's own file is what's transcribed.
-                        Text("Replaced by the full recording")
-                    } else if alignment?.method == .unaligned {
-                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Ink.warning)
-                        Text("Couldn’t line up")
-                        Button("Adjust Timing…") { state.activeSheet = .adjustTiming(track.id) }
-                            .buttonStyle(.daybookLink)
-                    } else if let line {
-                        Text(line)
-                    }
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.leading, 22)
-            }
-        }
-    }
-
-    private func playThis() {
-        guard !state.isRecording else { return }
-        Task {
-            guard let url = await state.audioURL(for: track, meetingID: meeting.id) else { return }
-            withAnimation(.snappy(duration: 0.25)) { state.playback.play(url: url, at: 0, trackID: track.id, meetingID: meeting.id) }
-        }
-    }
-}
-
-/// Inspector labels recede so the values lead.
-private struct SecondaryLabelStyle: LabeledContentStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        LabeledContent {
-            configuration.content
-        } label: {
-            configuration.label.foregroundStyle(.secondary)
+        default:
+            break
         }
     }
 }
