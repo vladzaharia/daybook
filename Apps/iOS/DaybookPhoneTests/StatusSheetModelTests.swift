@@ -1,5 +1,7 @@
+import DaybookDesign
 import DaybookKit
 import DaybookLink
+import DaybookUI
 import SwiftUI
 import XCTest
 @testable import DaybookPhone
@@ -17,7 +19,7 @@ final class StatusSheetModelTests: XCTestCase {
         return recorder
     }
 
-    private func line(_ recorder: StatusInputs.Recorder?) -> StatusLine { StatusSheetModel.recorderLine(recorder, now: now) }
+    private func line(_ recorder: StatusInputs.Recorder?) -> StatusLineItem { StatusSheetModel.recorderLine(recorder, now: now) }
 
     // MARK: The recorder line
 
@@ -115,7 +117,7 @@ final class StatusSheetModelTests: XCTestCase {
         XCTAssertEqual(managed.text, "Managed by Studio Mac")
         XCTAssertEqual(managed.tone, .calm)
 
-        func handoff(_ state: RecorderHandoff.State) -> StatusLine { line(recorder { $0.managedBy = "Studio Mac"; $0.handoff = state }) }
+        func handoff(_ state: RecorderHandoff.State) -> StatusLineItem { line(recorder { $0.managedBy = "Studio Mac"; $0.handoff = state }) }
         XCTAssertEqual(handoff(.asking(owner: "Studio Mac")).text, "Asking Studio Mac to let go…")
         XCTAssertEqual(handoff(.asking(owner: "Studio Mac")).shortText, "Asking Studio Mac…")
         let finishing = handoff(.ownerFinishing(owner: "Studio Mac", finishing: .importing(title: "Today, 10:02 AM", secondsLeft: 90)))
@@ -170,11 +172,14 @@ final class StatusSheetModelTests: XCTestCase {
         inputs.queue = []
         XCTAssertNil(StatusSheetModel.macLine(inputs, now: now).shortText, "Connected alone stays")
         inputs.mac = .seen(name: "Studio Mac", lastSeen: now.addingTimeInterval(-7_200))
-        XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now).text, "Last seen 2 h ago")
+        XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now).text, RecorderStatusWords.lastSeen(now.addingTimeInterval(-7_200), now: now),
+                       "dated as every device's absence is")
+        XCTAssertTrue(StatusSheetModel.macLine(inputs, now: now).text.hasPrefix("Last seen today"))
         inputs.mac = .noMac
         XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now).text, "Hasn’t synced this library yet")
         inputs.mac = .unavailable("iCloud is off")
-        XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now).text, "Waiting for iCloud")
+        XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now).text, "Needs iCloud", "the iCloud line below says why")
+        XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now).tone, .calm)
         inputs.mac = .checking
         XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now).text, "Looking for it…")
 
@@ -195,6 +200,7 @@ final class StatusSheetModelTests: XCTestCase {
         XCTAssertEqual(mac.text, "Summarizing in 12 s")
         XCTAssertEqual(mac.countdownUntil, now.addingTimeInterval(12))
         XCTAssertEqual(mac.text(at: now.addingTimeInterval(3)), "Summarizing in 9 s", "it ticks")
+        XCTAssertEqual(mac.tone, .calm, "waiting isn't progress: calm, as the Mac's own countdown is")
 
         // This iPhone counting down to sending one to Studio Mac.
         inputs.liveProgress = []
@@ -206,6 +212,7 @@ final class StatusSheetModelTests: XCTestCase {
         inputs.queue = [entry]
         XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now).text, "Summarizing in 15 s")
         XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now).text(at: now.addingTimeInterval(5)), "Summarizing in 10 s")
+        XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now).tone, .calm)
         // Counting down to summarizing on this iPhone: nothing for the Mac's line.
         entry.mac = nil
         entry.countdownPlace = "on this iPhone"
@@ -222,7 +229,7 @@ final class StatusSheetModelTests: XCTestCase {
         inputs.syncTone = .attention
         XCTAssertEqual(StatusSheetModel.syncLine(inputs).tone, .attention)
         XCTAssertEqual(StatusSheetModel.syncLine(inputs).symbol, "exclamationmark.icloud")
-        XCTAssertEqual(StatusSheetModel.lines(inputs, now: now).map(\.kind), [.recorder, .mac, .sync])
+        XCTAssertEqual(StatusSheetModel.lines(inputs, now: now).map(\.id), ["recorder", "mac", "sync"])
     }
 
     // MARK: Detents
@@ -251,6 +258,14 @@ final class StatusSheetModelTests: XCTestCase {
         inputs.hasLiveCaptions = false
         inputs.recorders = []
         XCTAssertEqual(StatusSheetModel.sections(for: .large, inputs), [.lines, .recorders, .macs, .iphone])
+
+        // This iPhone's own work shows from medium on, in its card.
+        inputs.phone = QueueStatusWords.Queue(running: .transcribing, fraction: 0.4)
+        XCTAssertEqual(StatusSheetModel.sections(for: .medium, inputs), [.lines, .recorders, .macs, .iphone])
+        XCTAssertEqual(StatusSheetModel.sections(for: .compact, inputs), [.lines])
+        XCTAssertEqual(StatusDetent.compact.density, .lines)
+        XCTAssertEqual(StatusDetent.medium.density, .cards)
+        XCTAssertEqual(StatusDetent.large.density, .manage)
     }
 
     // MARK: A recorder's card
@@ -317,7 +332,9 @@ final class StatusSheetModelTests: XCTestCase {
         inputs.pairedMacs = []
         inputs.mac = .seen(name: "Studio Mac", lastSeen: now.addingTimeInterval(-7_200))
         let synced = StatusSheetModel.macRows(inputs, now: now)
-        XCTAssertEqual(synced, [StatusMacRow(id: .synced("Studio Mac"), name: "Studio Mac", text: "Last seen 2 h ago", isConnected: false, showsQueue: true)])
+        XCTAssertEqual(synced, [StatusMacRow(id: .synced("Studio Mac"), name: "Studio Mac",
+                                             text: RecorderStatusWords.lastSeen(now.addingTimeInterval(-7_200), now: now), isConnected: false,
+                                             showsQueue: true)])
 
         // No Mac at all: no rows (the card has only Pair with Your Mac…).
         inputs.mac = .noMac
@@ -405,22 +422,19 @@ final class StatusSheetModelTests: XCTestCase {
 
         let queue = StatusSheetModel.queue(meetings: [waitingNew, failed, waitingOld, running, live], liveProgress: progress,
                                            thisDevice: phone.id, now: now)
-        XCTAssertEqual(queue.map(\.title), ["Running", "Live", "Older", "Newer", "Failed"])
+        XCTAssertEqual(queue.map(\.title), ["Running", "Live", "Older", "Newer"],
+                       "no speech is final: its row and page say it, the queue doesn't keep it")
         XCTAssertEqual(queue[0].line, "Transcribing on Studio Mac · 40%")
         XCTAssertTrue(queue[0].isRunning)
         XCTAssertEqual(queue[1].line, "Summarizing on Studio Mac · 50%", "live progress over the link wins")
         XCTAssertEqual(queue[2].line, "Waiting")
         XCTAssertTrue(queue[2].requestedHere, "“Requested from this iPhone”")
+        XCTAssertEqual(queue[2].item(under: "Studio Mac").note, "Requested from this iPhone")
         XCTAssertFalse(queue[3].requestedHere)
-        XCTAssertEqual(queue[4].line, "No speech in this recording")
-        XCTAssertEqual(queue[4].detail, "The audio is saved.")
-        XCTAssertEqual(queue[4].details, "No speech was recognized.", "the Mac's words, behind Details")
-        XCTAssertTrue(queue[4].failed)
         // Under Studio Mac's row in the Macs card, Studio Mac isn't named again.
         XCTAssertEqual(queue[0].line(under: "Studio Mac"), "Transcribing · 40%")
         XCTAssertEqual(queue[1].line(under: "Studio Mac"), "Summarizing · 50%")
         XCTAssertEqual(queue[2].line(under: "Studio Mac"), "Waiting")
-        XCTAssertEqual(queue[4].line(under: "Studio Mac"), "No speech in this recording")
         XCTAssertEqual(StatusSheetModel.queue(meetings: [waitingNew, failed, waitingOld, running, live], liveProgress: progress,
                                               thisDevice: phone.id, now: now, limit: 2).count, 2)
     }
@@ -457,15 +471,191 @@ final class StatusSheetModelTests: XCTestCase {
     }
 
     func testCompactDetentGrowsWithTextSize() {
-        var previous: CGFloat = 0
-        for size in DynamicTypeSize.allCases {
-            let height = StatusCompactDetent.height(for: size, maximum: 800)
-            XCTAssertGreaterThan(height, previous, "\(size) is taller than the size before")
-            previous = height
+        // Up to the accessibility sizes, three lines one row each; past them, one line over three rows.
+        for sizes in [DynamicTypeSize.allCases.filter { !$0.isAccessibilitySize }, DynamicTypeSize.allCases.filter(\.isAccessibilitySize)] {
+            var previous: CGFloat = 0
+            for size in sizes {
+                let height = StatusCompactDetent.height(for: size, maximum: 800)
+                XCTAssertGreaterThan(height, previous, "\(size) is taller than the size before")
+                previous = height
+            }
         }
         // Record (68 pt with the glass) under the grabber's room, then three lines.
         XCTAssertGreaterThanOrEqual(StatusCompactDetent.height(for: .large, maximum: 800), StatusCompactDetent.recordTop + 68 + 16 + 3 * 18 + 16)
         XCTAssertLessThanOrEqual(StatusCompactDetent.height(for: .xxxLarge, maximum: 678), 678 * 0.55, "about half the screen")
-        XCTAssertLessThanOrEqual(StatusCompactDetent.height(for: .accessibility5, maximum: 678), 678 * 0.7)
+        // At the largest size, the Record row and one line leave the list more than half the Duo's cover (it was 70%).
+        XCTAssertLessThanOrEqual(StatusCompactDetent.height(for: .accessibility5, maximum: 678), 678 * 0.5)
+        // This iPhone's line, while it has work, takes a row more.
+        XCTAssertGreaterThan(StatusCompactDetent.height(for: .large, maximum: 800, lines: 4), StatusCompactDetent.height(for: .large, maximum: 800))
+        XCTAssertEqual(StatusCompactDetent.height(for: .accessibility3, maximum: 800, lines: 4),
+                       StatusCompactDetent.height(for: .accessibility3, maximum: 800), "one line at the accessibility sizes, whatever there is")
+    }
+
+    // MARK: This iPhone's own work
+
+    /// rd-10, ux-iphone-21: while this iPhone transcribes its own recording, or pauses it, the sheet says so in the
+    /// words a Mac's home uses for its own queue, and lists the work in the This iPhone card; idle, nothing.
+    func testBehaviorThisIPhonesOwnWorkHasALineAndRowsWhileItHasSome() {
+        let phone = ProcessingRequest.Device(id: "this-phone", name: "Alex’s iPhone")
+        var running = Meeting(title: "Interview")
+        running.processingRequests = [ProcessingRequest(meetingID: running.id, mode: .newAudio, requestedBy: phone, createdAt: now.addingTimeInterval(-60))]
+        var waiting = Meeting(title: "Standup")
+        waiting.processingRequests = [ProcessingRequest(meetingID: waiting.id, mode: .newAudio, requestedBy: phone, createdAt: now.addingTimeInterval(-30))]
+        let local = ProcessingStatus.LocalQueue(running: running.id, fraction: 0.4, queued: [waiting.id], stage: .transcribing)
+        func queue(_ meeting: Meeting) -> ProcessingStatus.LocalQueue? { [running.id, waiting.id].contains(meeting.id) ? local : nil }
+
+        let work = StatusSheetModel.phoneWork(meetings: [waiting, running], local: queue, pause: nil, thisDevice: phone.id, now: now)
+        XCTAssertEqual(work.entries.map(\.title), ["Interview", "Standup"], "what runs, then what waits")
+        XCTAssertEqual(work.entries.map(\.line), ["Transcribing · 40%", "Waiting to transcribe"])
+        XCTAssertEqual(work.entries.first?.progress, 0.4)
+        var inputs = StatusInputs()
+        inputs.phone = work.line
+        inputs.phoneQueue = work.entries
+        let line = StatusSheetModel.phoneLine(inputs, now: now)
+        XCTAssertEqual(line?.title, "This iPhone")
+        XCTAssertEqual(line?.text, "Transcribing · 40% · 1 waiting")
+        XCTAssertEqual(line?.progress, 0.4)
+        XCTAssertEqual(StatusSheetModel.lines(inputs, now: now).map(\.id), ["recorder", "mac", "queue", "sync"],
+                       "this iPhone's line after the devices, before iCloud, as the Mac's home orders its own")
+
+        // Paused for the battery: when it goes on, also where it's narrow.
+        let pausedQueue = ProcessingStatus.LocalQueue(running: nil, queued: [], paused: [running.id, waiting.id])
+        let paused = StatusSheetModel.phoneWork(meetings: [running, waiting], local: { _ in pausedQueue }, pause: .lowBattery,
+                                                thisDevice: phone.id, now: now)
+        XCTAssertEqual(paused.entries.map(\.line), ["Paused · Continues when iPhone is charging", "Paused · Continues when iPhone is charging"])
+        inputs.phone = paused.line
+        XCTAssertEqual(StatusSheetModel.phoneLine(inputs, now: now)?.text, "Paused · Continues when iPhone is charging")
+        XCTAssertEqual(StatusSheetModel.phoneLine(inputs, now: now)?.shortText, "Continues when iPhone is charging")
+
+        // Nothing to do here: no line, and no card until the sheet is at full height.
+        let idle = StatusSheetModel.phoneWork(meetings: [running, waiting], local: { _ in nil }, pause: nil, thisDevice: phone.id, now: now)
+        XCTAssertEqual(idle, StatusSheetModel.PhoneWork())
+        inputs.phone = idle.line
+        inputs.phoneQueue = idle.entries
+        XCTAssertNil(StatusSheetModel.phoneLine(inputs, now: now))
+        XCTAssertFalse(StatusSheetModel.sections(for: .medium, inputs).contains(.iphone))
+        XCTAssertEqual(StatusSheetModel.lines(inputs, now: now).count, 3)
+    }
+
+    /// A summary counting down to this iPhone, or running in the cloud, is this iPhone's own work, not a Mac's.
+    func testBehaviorASummaryCountingDownHereIsThisIPhonesNotAMacs() throws {
+        let id = UUID()
+        let sonnet = CloudModel(provider: .anthropic, id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", tier: .balanced,
+                                inputPrice: 2, outputPrice: 10, priceIsEstimated: false, contextTokens: 200_000, rank: 1)
+        // With the cloud on offer, a summary due here counts down before it starts.
+        let options = SummaryOptions(thisDeviceCanSummarize: true, reachableMacs: [], cloud: sonnet)
+        let here = SummaryPlacementPlanner(options: options, preferences: CloudSummaryPreferences(), at: now, waitsForMacs: true)
+        guard case .countingDown(.thisDevice, _) = here.phase else { return XCTFail("counts down to this iPhone: \(here.phase)") }
+        let meeting = Meeting(id: id, title: "Counting")
+        let work = StatusSheetModel.phoneWork(meetings: [meeting], local: { _ in nil }, pause: nil, thisDevice: "me", planners: [id: here],
+                                              now: now)
+        let row = try XCTUnwrap(work.entries.first?.item(under: nil, now: now))
+        XCTAssertEqual(row.line(at: now.addingTimeInterval(2)), "Summarizing in \(here.secondsLeft(at: now.addingTimeInterval(2)) ?? 0) s",
+                       "under the This iPhone heading it doesn't name the place, and it ticks")
+        XCTAssertEqual(row.actions.map(\.title), here.actions.map(\.title))
+        XCTAssertNotNil(work.line.countdown)
+        XCTAssertEqual(StatusSheetModel.queue(meetings: [meeting], liveProgress: [:], thisDevice: "me", planners: [id: here], now: now), [],
+                       "not in the Macs card")
+        var inputs = StatusInputs()
+        inputs.phone = work.line
+        XCTAssertEqual(StatusSheetModel.phoneLine(inputs, now: now)?.tone, .calm, "a countdown is calm")
+    }
+
+    // MARK: Where a line leads
+
+    /// ux-iphone-02: a line that needs the person leads to its fix; the rest show more.
+    func testBehaviorALineThatNeedsThePersonLeadsToItsFix() {
+        var inputs = StatusInputs()
+        let reason = CloudAvailability.signedOutMessage
+        inputs.syncTone = .attention
+        inputs.syncOff = true
+        inputs.syncLine = StatusSheetModel.unavailablePhrase(reason)
+        inputs.syncShort = "Off"
+        let sync = StatusSheetModel.syncLine(inputs)
+        XCTAssertEqual(sync.text, "Signed out", "the reason, not a bare Off")
+        XCTAssertEqual(sync.shortText, "Off", "Off where it's narrow")
+        XCTAssertEqual(sync.symbol, "icloud.slash")
+        XCTAssertEqual(StatusSheetModel.route(for: sync, inputs), .open(.icloud))
+        XCTAssertEqual(StatusSheetModel.hint(for: .open(.icloud)), "Opens iCloud settings")
+        XCTAssertEqual(StatusSheetModel.unavailablePhrase(CloudAvailability.iCloudDriveOffMessage), "iCloud Drive is off")
+        XCTAssertEqual(StatusSheetModel.unavailablePhrase(CloudAvailability.unsetMessage), "Not available in this build")
+
+        // A paired Mac that isn't set up to transcribe: its page. Not paired here: the Macs card says what to do.
+        let studio = UUID()
+        inputs.mac = .notProcessing(name: "Studio Mac", lastSeen: now)
+        inputs.pairedMacs = [StatusInputs.Mac(id: studio, name: "Studio Mac", line: "Connected", isConnected: true, notProcessing: true)]
+        let mac = StatusSheetModel.macLine(inputs, now: now)
+        XCTAssertEqual(mac.tone, .attention)
+        XCTAssertEqual(StatusSheetModel.route(for: mac, inputs), .open(.mac(studio)))
+        let row = StatusSheetModel.macRows(inputs, now: now).first
+        XCTAssertEqual(row?.text, "Not set up to transcribe", "not \"Connected\"")
+        XCTAssertEqual(row?.fix, "Finish in Daybook › Settings on Studio Mac.")
+        XCTAssertTrue(row?.needsYou == true)
+        inputs.pairedMacs = []
+        XCTAssertEqual(StatusSheetModel.route(for: mac, inputs), .showMore)
+        XCTAssertEqual(StatusSheetModel.macRows(inputs, now: now).first?.fix, "Finish in Daybook › Settings on Studio Mac.")
+
+        // A recorder's problem: its page.
+        let problem = line(recorder { $0.state = .unavailable; $0.isLinked = false; $0.problem = "Bluetooth is off" })
+        XCTAssertEqual(StatusSheetModel.route(for: problem, inputs), .open(.device("sc")))
+        // Calm lines show more.
+        XCTAssertEqual(StatusSheetModel.route(for: line(recorder()), inputs), .showMore)
+        XCTAssertEqual(StatusSheetModel.hint(for: .showMore), "Shows more")
+    }
+
+    // MARK: The queue's failures
+
+    /// ux-iphone-12: a conversation that couldn't finish offers Try Again with what it asked for, and stays in the
+    /// queue only while it's recent; no speech never does.
+    func testBehaviorAFailureOffersTryAgainAndGoesWhenItsOld() {
+        let phone = ProcessingRequest.Device(id: "phone", name: "Alex’s iPhone")
+        let studio = ProcessingRequest.Device(id: "studio", name: "Studio Mac")
+        func failed(_ title: String, mode: ProcessingRequest.Mode = .newAudio, ago: TimeInterval, reason: String = "Out of memory") -> Meeting {
+            var meeting = Meeting(title: title, tracks: [RecordingTrack(id: UUID(), source: .microphone, relativePath: "m.caf", fileName: "m.caf",
+                                                                       offset: 0, sha256: title)])
+            meeting.status = .imported
+            meeting.processingRequests = [ProcessingRequest(meetingID: meeting.id, mode: mode, requestedBy: phone, createdAt: now.addingTimeInterval(-ago - 60))
+                .failed(by: studio, at: now.addingTimeInterval(-ago), reason: reason)].compactMap { $0 }
+            return meeting
+        }
+        let recent = failed("Recent", ago: 3_600)
+        let summary = failed("Summary", mode: .summaryOnly, ago: 3_600)
+        let old = failed("Old", ago: 8 * 86_400)
+        let silent = failed("Silent", ago: 60, reason: "No speech was recognized.")
+        let queue = StatusSheetModel.queue(meetings: [recent, summary, old, silent], liveProgress: [:], thisDevice: phone.id, now: now)
+        XCTAssertEqual(queue.map(\.title), ["Recent", "Summary"])
+        XCTAssertEqual(queue[0].retry, .newAudio)
+        XCTAssertEqual(queue[1].retry, .summaryOnly, "Try Again asks again for what failed, as the page does")
+        let item = queue[0].item(under: "Studio Mac")
+        XCTAssertEqual(item.actions, [.tryAgain(.newAudio)])
+        XCTAssertTrue(item.isProblem)
+        XCTAssertEqual(item.line, "Couldn’t finish")
+        XCTAssertEqual(item.detail, "The speech model couldn’t start on Studio Mac. The recording is saved.",
+                       "in the plain words both apps give its kind")
+        XCTAssertEqual(item.details, "Out of memory")
+        XCTAssertNil(item.note, "a failure isn't “Requested from this iPhone”")
+        XCTAssertEqual(queue[0].item(under: nil).line, "Studio Mac couldn’t finish", "at the top of the card, it names the Mac")
+    }
+
+    // MARK: At the accessibility sizes
+
+    /// hig-ios-05: compact at the accessibility sizes keeps the line that matters most, so the list stays usable.
+    func testBehaviorAtTheAccessibilitySizesCompactKeepsTheLineThatMattersMost() {
+        var inputs = StatusInputs()
+        inputs.recorders = [recorder()]
+        inputs.mac = .seen(name: "Studio Mac", lastSeen: now)
+        inputs.syncLine = "Up to date"
+        inputs.syncTone = .upToDate
+        let lines = StatusSheetModel.lines(inputs, now: now)
+        XCTAssertEqual(StatusSheetModel.compactLines(lines, accessibilitySize: false), lines)
+        XCTAssertEqual(StatusSheetModel.compactLines(lines, accessibilitySize: true).map(\.id), ["recorder-sc"], "connected beats calm")
+        inputs.syncTone = .attention
+        inputs.syncLine = "Sync paused"
+        XCTAssertEqual(StatusSheetModel.compactLines(StatusSheetModel.lines(inputs, now: now), accessibilitySize: true).map(\.id), ["sync"],
+                       "what needs the person first")
+        inputs.recorders = []
+        inputs.syncTone = .upToDate
+        XCTAssertEqual(StatusSheetModel.compactLines(StatusSheetModel.lines(inputs, now: now), accessibilitySize: true).map(\.id), ["mac"],
+                       "“None added” last")
     }
 }

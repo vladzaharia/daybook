@@ -44,6 +44,8 @@ struct RecordStartButton: View {
                 .buttonBorderShape(.capsule)
                 .disabled(model.recorder.state != .idle || model.isFiling)
                 .accessibilityHint(model.recorderOnly != nil ? "Records on this iPhone too" : "Starts recording with the microphone")
+                // The row stops growing at the status sheet's largest size; past it, a long press shows the label large.
+                .accessibilityShowsLargeContentViewer()
 
                 Button { importing = true } label: {
                     Image(systemName: "square.and.arrow.down")
@@ -56,6 +58,7 @@ struct RecordStartButton: View {
                 .buttonBorderShape(.circle)
                 .accessibilityLabel("Import Audio")
                 .accessibilityHint("Adds a recording from Files, such as a voice memo")
+                .accessibilityShowsLargeContentViewer()
             }
         }
         .animation(.snappy, value: model.importing)
