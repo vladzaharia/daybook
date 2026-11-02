@@ -549,6 +549,29 @@ final class PhoneLibraryTests: XCTestCase {
         do { try await library.controller.flushDurably([broken]); XCTFail("the broken one still counts for itself") } catch {}
     }
 
+    /// What this iPhone brought in decides what it transcribes (`ownsTrack`), across relaunches too: a write of that
+    /// list that fails is made again rather than lost.
+    func testBehaviorWhatThisIPhoneBroughtInIsSavedAgainAfterAFailedWrite() async throws {
+        let root = try temporaryDirectory()
+        let library = PhoneLibrary(rootURL: root, installation: "INSTALL-1")
+        try await library.reload()
+        // Something is in the list's way, so it can't be written.
+        let list = root.appendingPathComponent(PhoneLibrary.broughtInFile)
+        try FileManager.default.createDirectory(at: list, withIntermediateDirectories: false)
+        let memo = root.appendingPathComponent("Voice memo.wav")
+        try audioFile(at: memo)
+        let imported = try await library.importFile(memo, requestTranscription: false)
+        let track = try XCTUnwrap(imported.meeting.tracks.first)
+        XCTAssertTrue(library.ownsTrack(track), "this run knows")
+        XCTAssertTrue(library.broughtInUnsaved)
+        XCTAssertFalse(PhoneLibrary(rootURL: root, installation: "INSTALL-1").ownsTrack(track), "a relaunch wouldn't, yet")
+
+        try FileManager.default.removeItem(at: list)
+        try await library.reload()
+        XCTAssertFalse(library.broughtInUnsaved)
+        XCTAssertTrue(PhoneLibrary(rootURL: root, installation: "INSTALL-1").ownsTrack(track), "written at the next load")
+    }
+
     /// An import stopped while it waits for the library (another import holds it) stops waiting at
     /// once, without the library, and brings nothing in: a recorder transfer stopped on the device
     /// page, or an import from Files.

@@ -1,6 +1,7 @@
 import DaybookKit
 import Foundation
 import Observation
+import os
 
 /// Audio for playback on the phone, which is an on-demand replica: conversations arrive without
 /// their audio, and a recording downloads from iCloud the first time it's played
@@ -111,7 +112,9 @@ final class SyncAudioProvider: AudioProviding {
     @discardableResult
     func evict() async -> AudioEvictionReport? {
         guard let engine else { return nil }
-        let report = try? await engine.evictAudio(protecting: protectedTracks(within: keepWindow))
+        var report: AudioEvictionReport?
+        do { report = try await engine.evictAudio(protecting: protectedTracks(within: keepWindow)) }
+        catch { Self.couldntEvict(error) }
         await refreshUsage()
         return report
     }
@@ -122,11 +125,21 @@ final class SyncAudioProvider: AudioProviding {
     func clearDownloaded() async -> UInt64 {
         guard let engine else { return 0 }
         await engine.setAudioCachePolicy(AudioCachePolicy(budgetBytes: 0, evictsUploadedOriginals: false))
-        let report = try? await engine.evictAudio(protecting: protectedTracks(within: playingWindow))
+        var report: AudioEvictionReport?
+        do { report = try await engine.evictAudio(protecting: protectedTracks(within: playingWindow)) }
+        catch { Self.couldntEvict(error) }
         await engine.setAudioCachePolicy(AudioCachePolicy(budgetBytes: budget))
         await refreshUsage()
         return report?.bytesFreed ?? 0
     }
+
+    /// Eviction that didn't work leaves the audio where it is (the meter shows what's still here): logged, and tried
+    /// again at the next eviction.
+    private static func couldntEvict(_ error: Error) {
+        log.error("Couldn’t free downloaded audio: \(String(describing: error), privacy: .public)")
+    }
+
+    private static let log = Logger(subsystem: "local.daybook", category: "audio")
 
     func refreshUsage() async {
         guard let engine else { usage = CacheUsage(budget: budget); return }

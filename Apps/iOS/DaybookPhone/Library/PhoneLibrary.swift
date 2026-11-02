@@ -2,6 +2,7 @@ import AVFoundation
 import DaybookKit
 import Foundation
 import Observation
+import os
 
 /// The library on the phone: DaybookKit's `LibraryController` (the same edits, revisions, search,
 /// `ProcessingStatus`, and `ProcessingRequest` queue the Mac uses), plus what only the phone needs:
@@ -25,6 +26,8 @@ final class PhoneLibrary {
     /// Recordings brought in on this iPhone (imports, recorder transfers), besides its microphone's,
     /// which its device identity names (`ownsTrack`). Kept beside the library, never synced.
     @ObservationIgnored private var broughtIn: Set<UUID>
+    /// The last write of `broughtIn` failed: it's written again with the next one, and at the next load.
+    @ObservationIgnored private(set) var broughtInUnsaved = false
 
     init(rootURL: URL = LibraryLocation.defaultRoot, sync: LibrarySyncController? = nil,
          installation: String = PhoneDevice.installationID()) {
@@ -51,6 +54,7 @@ final class PhoneLibrary {
     func reload() async throws {
         try FileManager.default.createDirectory(at: stagingURL, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try await controller.load()
+        if broughtInUnsaved { saveBroughtIn() }
     }
 
     // MARK: Filing a recording
@@ -305,15 +309,35 @@ final class PhoneLibrary {
     }
 
     private func noteBroughtIn(_ track: RecordingTrack?) {
-        guard let track, broughtIn.insert(track.id).inserted else { return }
-        let url = rootURL.appendingPathComponent(Self.broughtInFile)
-        if let data = try? JSONEncoder().encode(broughtIn.map(\.uuidString).sorted()) { try? data.write(to: url, options: .atomic) }
+        guard let track, broughtIn.insert(track.id).inserted || broughtInUnsaved else { return }
+        saveBroughtIn()
+    }
+
+    /// Writes `broughtIn` beside the library, so a relaunch still transcribes what this iPhone brought in. A write that
+    /// fails is logged and made again with the next one, and at the next load; meanwhile this run knows.
+    private func saveBroughtIn() {
+        do {
+            let data = try JSONEncoder().encode(broughtIn.map(\.uuidString).sorted())
+            try data.write(to: rootURL.appendingPathComponent(Self.broughtInFile), options: .atomic)
+            broughtInUnsaved = false
+        } catch {
+            broughtInUnsaved = true
+            Self.log.error("Couldn’t save the recordings brought in on this iPhone: \(String(describing: error), privacy: .public)")
+        }
     }
 
     private static func readBroughtIn(at url: URL) -> Set<UUID> {
-        guard let data = try? Data(contentsOf: url), let ids = try? JSONDecoder().decode([String].self, from: data) else { return [] }
-        return Set(ids.compactMap(UUID.init(uuidString:)))
+        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+        do {
+            let ids = try JSONDecoder().decode([String].self, from: Data(contentsOf: url))
+            return Set(ids.compactMap(UUID.init(uuidString:)))
+        } catch {
+            log.error("Couldn’t read the recordings brought in on this iPhone: \(String(describing: error), privacy: .public)")
+            return []
+        }
     }
+
+    private static let log = Logger(subsystem: "local.daybook", category: "library")
 
     /// A Transcribe request this iPhone will carry out itself is claimed in the save that files the
     /// recording, before the first sync pass takes it to a Mac (`OnDeviceProcessing`).
