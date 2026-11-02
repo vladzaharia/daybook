@@ -224,12 +224,20 @@ struct LibraryPage: View {
         .paperBackground()
         .overlay { if hits.isEmpty && captionHits.isEmpty { ContentUnavailableView.search(text: session.searchText) } }
         .task(id: CaptionQuery(text: session.searchText, tokens: session.searchTokens, scope: session.searchScope, revision: library.revision)) {
-            let scoped = Set(LibrarySearch.hits(in: library.meetings, text: "", tokens: session.searchTokens, scope: session.searchScope).map(\.meetingID))
-            let found = await LibraryCaptionSearch.hits(in: library.meetings.filter { scoped.contains($0.id) }, query: session.searchText,
+            let candidates = Self.captionCandidates(in: library.meetings, tokens: session.searchTokens, scope: session.searchScope)
+            let found = await LibraryCaptionSearch.hits(in: candidates, query: session.searchText,
                                                         excluding: Set(hits.map(\.meetingID)), libraryRoot: library.rootURL)
             guard !Task.isCancelled else { return }
             captionHits = found
         }
+    }
+
+    /// The conversations whose saved captions search reads: those the search could list (its scope and tokens), and
+    /// only while this iPhone's transcript page shows their captions (`Meeting.showsLiveCaptions`), so a caption result
+    /// always opens at them.
+    static func captionCandidates(in meetings: [Meeting], tokens: [SearchToken], scope: SearchScope) -> [Meeting] {
+        let scoped = Set(LibrarySearch.hits(in: meetings, text: "", tokens: tokens, scope: scope).map(\.meetingID))
+        return meetings.filter { scoped.contains($0.id) && $0.showsLiveCaptions }
     }
 
     /// A place with nothing in it, in the Mac's words; an empty library that's still arriving from iCloud says so.

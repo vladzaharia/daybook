@@ -1,3 +1,4 @@
+import DaybookCaptions
 import DaybookCore
 import DaybookKit
 import DaybookLink
@@ -85,5 +86,30 @@ final class LibraryListPhoneTests: XCTestCase {
         XCTAssertEqual(ReadingPlace.trash.libraryPlace, .trash)
         XCTAssertFalse(ReadingPlace.library(.section(.all)).isTrash)
         XCTAssertFalse(ReadingPlace.library(.folder(UUID())).isTrash)
+    }
+
+    func testBehaviorCaptionSearchListsOnlyCaptionsThisIPhonesPageShows() async throws {
+        let root = try temporaryDirectory()
+        let folder = LibraryCaptionSearch.directory(libraryRoot: root)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let captioned = Meeting(title: "Onboarding design review")
+        // An iPhone's recording joined to a conversation a Mac had already transcribed: an earlier transcript, newer
+        // captions. This iPhone's transcript page shows the transcript, so search doesn't offer the captions.
+        var joined = Meeting(title: "Already transcribed")
+        joined.transcripts = [TrackTranscript(trackID: UUID(), segments: [], modelID: "m", createdAt: Date().addingTimeInterval(-3_600))]
+        joined.unifiedTranscript = [TranscriptSegment(trackID: UUID(), start: 0, end: 1, text: "Hello")]
+        for meeting in [captioned, joined] {
+            let captions = LiveCaptions(meetingID: meeting.id, localeIdentifier: "en_US",
+                                        segments: [LiveCaptionSegment(start: 12, end: 14, text: "The onboarding checklist.", isTentative: false)])
+            try JSONEncoder().encode(captions).write(to: folder.appendingPathComponent("\(meeting.id.uuidString).json"))
+        }
+        XCTAssertFalse(joined.showsLiveCaptions)
+
+        let candidates = LibraryPage.captionCandidates(in: [captioned, joined], tokens: [], scope: .all)
+        XCTAssertEqual(candidates.map(\.id), [captioned.id])
+        let hits = await LibraryCaptionSearch.hits(in: candidates, query: "checklist", excluding: [], libraryRoot: root)
+        XCTAssertEqual(hits.map(\.meeting.id), [captioned.id], "never a result that opens a page with no captions to show")
+        XCTAssertTrue(LibraryPage.captionCandidates(in: [captioned, joined], tokens: [], scope: .work).isEmpty,
+                      "and only in the search's scope")
     }
 }
