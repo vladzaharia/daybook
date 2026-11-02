@@ -134,13 +134,13 @@ extension AppState {
 /// Where the page's shared views go on this Mac: the inspector for Info, the transcript for a passage.
 private struct MacReadingContext: ViewModifier {
     let state: AppState
-    @AppStorage("isInspectorPresented") private var inspectorPresented = false
 
     func body(content: Content) -> some View {
         content.readingContext(ReadingContext(
             thisDevice: AppState.thisDeviceWords, macPlace: "This Mac", audio: { _ in .local }, player: nil,
+            // The window widens for the inspector where it has no room, as for any other ask of it.
             navigator: ReadingNavigator(open: { state.selectedID = $0 },
-                                        showInfo: { _ in inspectorPresented = true },
+                                        showInfo: { _ in state.showInspector() },
                                         search: { state.search = $0 },
                                         showTranscript: { _, _ in state.pageMode = .transcript })))
     }

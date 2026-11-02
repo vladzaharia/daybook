@@ -24,6 +24,9 @@ struct LibraryView: View {
     /// What `adaptColumns` set last, so the change it makes isn't taken for the person's.
     @State private var adaptedColumns: NavigationSplitViewVisibility?
     @State private var windowWidth: CGFloat = 1280
+    /// The visible width of the window's screen, once it's on one: a screen narrower than the inspector needs shows it
+    /// in a window as wide as the screen (`ColumnFit.inspectorFits`).
+    @State private var screenWidth: CGFloat?
     @State private var problemDetails: AppProblem?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var confirmation: ConfirmationBeat?
@@ -76,7 +79,7 @@ struct LibraryView: View {
                     DetailToolbar(state: state, meeting: toolbarMeeting, inspectorAvailable: showsConversation,
                                   inspectorShown: inspectorShown, toggleInspector: toggleInspector, windowAction: windowAction)
                 }
-                .inspector(isPresented: Binding(get: { inspectorShown }, set: { inspectorPresented = $0 })) {
+                .inspector(isPresented: inspector) {
                     ZStack {
                         if let id = state.selectedID { MeetingInspector(state: state, meetingID: id).equatable() }
                     }
@@ -94,14 +97,14 @@ struct LibraryView: View {
         .onChange(of: state.visibleMeetings.map(\.id)) { _, _ in reconcileSelection() }
         .environment(\.readingScale, CGFloat(state.readingScale))
         .focusedSceneValue(\.shownConversation, toolbarMeeting?.id)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { windowWidth = $0; adaptColumns() }
-        // Asking for the inspector in a window too narrow for the page beside it (⌃⌘I, Tags…) widens the window, as
-        // Finder's preview does, rather than squeezing the page; the toolbar's button does too (`toggleInspector`).
-        .onChange(of: inspectorPresented) { _, wanted in
-            adaptColumns()
-            guard wanted, showsConversation, shareAnchor.window?.isKeyWindow == true else { return }
-            DispatchQueue.main.async { makeRoomForInspector(animated: true) }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { windowWidth = $0; noteScreen() }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didChangeScreenNotification)) { note in
+            if (note.object as? NSWindow) === shareAnchor.window { noteScreen() }
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in noteScreen() }
+        // Tags… and the byline's people ask for the inspector here, so they widen a narrow window as ⌃⌘I does.
+        .onChange(of: state.inspectorRequest) { _, _ in withAnimation { inspector.wrappedValue = true } }
+        .onChange(of: inspectorPresented) { _, _ in adaptColumns() }
         .onChange(of: showsConversation) { _, _ in adaptColumns() }
         .onChange(of: columns) { old, shown in columnsChanged(from: old, to: shown) }
         .onChange(of: state.isReady, initial: true) { _, ready in if ready { restore() } }
@@ -206,15 +209,35 @@ struct LibraryView: View {
         withAnimation { columns = target }
     }
 
-    /// The inspector shows only where it leaves the page its 560 pt beside the list (the sidebar stepping aside); in a
-    /// narrower window it waits, still asked for, until the window is wide enough.
-    private var inspectorShown: Bool { inspectorPresented && showsConversation && ColumnFit.inspectorFits(window: windowWidth) }
+    /// The inspector shows only where it leaves the page its 560 pt beside the list (the sidebar stepping aside), or in a
+    /// window as wide as a narrower screen allows; in a narrower window it waits, still asked for, until there's room.
+    private var inspectorShown: Bool {
+        inspectorPresented && showsConversation && ColumnFit.inspectorFits(window: windowWidth, screen: screenWidth)
+    }
+
+    /// Every way of asking for the inspector or putting it away (the toolbar, ⌃⌘I, Tags…, the byline's people, closing
+    /// it): asked for in a window that holds it back, the window widens, whether or not it was asked for already (the
+    /// stored choice outlives a window that has since narrowed, or a relaunch).
+    private var inspector: Binding<Bool> {
+        Binding(get: { inspectorShown }, set: { wanted in
+            let widens = ColumnFit.widensForInspector(asked: wanted, available: showsConversation, window: windowWidth, screen: screenWidth)
+            inspectorPresented = wanted
+            // On the next turn: this may be called inside an update, and a window resized during a layout pass lays
+            // itself out again without end.
+            if widens { DispatchQueue.main.async { makeRoomForInspector(animated: true) } }
+        })
+    }
 
     /// The toolbar's Inspector: hides it when it shows; otherwise asks for it, widening the window to make room.
     private func toggleInspector() {
         let show = !inspectorShown
-        if show { makeRoomForInspector(animated: !reduceMotion) }
-        withAnimation { inspectorPresented = show }
+        withAnimation { inspector.wrappedValue = show }
+    }
+
+    /// The width of the screen the window is on now, as the inspector's room depends on it.
+    private func noteScreen() {
+        screenWidth = shareAnchor.window?.screen?.visibleFrame.width
+        adaptColumns()
     }
 
     /// Widens a window too narrow for the page beside the list and the inspector to `ColumnFit.narrowestWithInspector`,
@@ -270,7 +293,7 @@ struct LibraryView: View {
             state.copySummary(meeting.id)
             confirmation = .copied
         case .tags:
-            withAnimation { inspectorPresented = true }
+            state.showInspector()
         default:
             MacShare.share(id, meeting: meeting, state: state, anchor: shareAnchor)
         }
@@ -293,8 +316,21 @@ enum ColumnFit: String, Comparable, CaseIterable {
     /// allows. (macOS's split view won't fold its list column away, so the window makes the room instead.)
     static let narrowestWithInspector: CGFloat = list + inspector + page
 
-    /// Whether a window `window` wide has room for the inspector beside the page and the list, the sidebar aside.
-    static func inspectorFits(window: CGFloat) -> Bool { window >= narrowestWithInspector }
+    /// How far short of its screen's visible width a window still fills it (a tiled window keeps a margin).
+    static let screenMargin: CGFloat = 24
+
+    /// Whether a window `window` wide has room for the inspector beside the page and the list, the sidebar aside: the
+    /// page's 560 pt, or on a screen narrower than that needs (`screen`, its visible width), a window as wide as the
+    /// screen allows, the page narrower, so the inspector is never out of reach.
+    static func inspectorFits(window: CGFloat, screen: CGFloat? = nil) -> Bool {
+        window >= min(narrowestWithInspector, (screen ?? .infinity) - screenMargin)
+    }
+
+    /// Whether asking for the inspector (`asked`) widens the window first: there's a conversation for it (`available`)
+    /// and the window holds it back for want of room, whether or not it was asked for before.
+    static func widensForInspector(asked: Bool, available: Bool, window: CGFloat, screen: CGFloat?) -> Bool {
+        asked && available && !inspectorFits(window: window, screen: screen)
+    }
 
     init(_ visibility: NavigationSplitViewVisibility) {
         switch visibility {

@@ -35,6 +35,28 @@ final class LibraryWindowTests: XCTestCase {
         XCTAssertNil(ColumnFit.widened(CGRect(x: 0, y: 0, width: 1280, height: 900), to: 1140, on: screen), "already wide enough")
     }
 
+    /// On a screen narrower than the inspector needs (a 13-inch laptop at Larger Text, 1024 pt), a window as wide as the
+    /// screen allows shows it beside a narrower page, rather than holding it back for good.
+    func testBehaviorTheInspectorShowsOnANarrowScreenInAWindowAsWideAsTheScreen() {
+        XCTAssertTrue(ColumnFit.inspectorFits(window: 1024, screen: 1024), "full width, or full screen")
+        XCTAssertTrue(ColumnFit.inspectorFits(window: 1008, screen: 1024), "tiled to fill it, with a margin")
+        XCTAssertFalse(ColumnFit.inspectorFits(window: 735, screen: 1024), "half of it: the window widens first")
+        XCTAssertFalse(ColumnFit.inspectorFits(window: 1130, screen: 1470), "a wide screen keeps the page its 560 pt")
+        XCTAssertTrue(ColumnFit.inspectorFits(window: 1140, screen: nil), "before the window is on a screen, the usual rule")
+        XCTAssertEqual(ColumnFit.cap(window: 1024, inspector: true, previous: .all), .doubleColumn, "the sidebar still steps aside")
+    }
+
+    /// The toolbar, ⌃⌘I, Tags…, and the byline's people all widen a window that holds the inspector back, even when it
+    /// was asked for already (opened in a wider window, or before a relaunch), so none of them does nothing.
+    func testBehaviorAskingForTheInspectorWidensAWindowThatHoldsItBack() {
+        XCTAssertTrue(ColumnFit.widensForInspector(asked: true, available: true, window: 735, screen: 1470))
+        XCTAssertTrue(ColumnFit.widensForInspector(asked: true, available: true, window: 735, screen: 1024), "as far as the screen allows")
+        XCTAssertFalse(ColumnFit.widensForInspector(asked: true, available: true, window: 1280, screen: 1470), "it shows already")
+        XCTAssertFalse(ColumnFit.widensForInspector(asked: true, available: true, window: 1024, screen: 1024), "as wide as it goes")
+        XCTAssertFalse(ColumnFit.widensForInspector(asked: false, available: true, window: 735, screen: 1470), "putting it away")
+        XCTAssertFalse(ColumnFit.widensForInspector(asked: true, available: false, window: 735, screen: 1470), "a device's page has none")
+    }
+
     func testBehaviorOnlyThePersonsOwnChangeOfColumnsIsKept() {
         XCTAssertEqual(ColumnFit.choice(from: .doubleColumn, to: .all, cap: .doubleColumn), .all, "showing the sidebar is a choice")
         XCTAssertEqual(ColumnFit.choice(from: .all, to: .doubleColumn, cap: .all), .doubleColumn, "hiding it with room to spare is too")

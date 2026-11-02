@@ -80,6 +80,8 @@ extension AppState {
 
     func focusSearch() { searchFocusRequest += 1 }
 
+    func showInspector() { inspectorRequest += 1 }
+
     func focusTitle(_ id: UUID) { titleFocusRequest = id }
 
     /// File › New Note (⌘N): a conversation that's only your notes so far, titled as on the iPhone

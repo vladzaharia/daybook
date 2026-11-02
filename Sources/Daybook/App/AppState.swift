@@ -63,6 +63,9 @@ final class AppState {
     var newFolderRequest: NewFolderRequest?
     /// Incremented to move keyboard focus to the library search field.
     var searchFocusRequest = 0
+    /// Incremented to ask the main window for the inspector (Tags…, the byline's people), which a window too narrow
+    /// for it widens to show (`LibraryView`).
+    var inspectorRequest = 0
     /// View › Make Text Bigger scales only the reading surface.
     var readingScale: Double { didSet { preferences.set(readingScale, forKey: Preference.readingScale) } }
     /// App-owned so menu commands can drive it. Only what shows the playhead reads its position, which
