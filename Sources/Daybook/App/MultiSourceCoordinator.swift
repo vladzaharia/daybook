@@ -278,12 +278,14 @@ final class CompanionRecorders {
         let recorders = eligible().filter { $0.session.id != lead?.sessionID }
         guard !recorders.isEmpty else { status = alone(meetingID); return }
         let cascade = LinkCascade(trigger: lead != nil ? .device : recorderLead != nil ? .recorder : trigger)
-        // Each recorder starts at once, alongside the others; the start is done when every one has answered.
         starting[meetingID] = Task { [weak self] in
             guard let self else { return }
+            // Each recorder's link is written first, in the recorders' order; then every one starts at
+            // once, alongside the others, and the start is done when every one has answered.
+            let starts = recorders.map { ($0.session, $0.control, self.addLink($0.session, $0.control, meetingID: meetingID, at: start)) }
             await withTaskGroup(of: Void.self) { group in
-                for recorder in recorders {
-                    group.addTask { await self.start(recorder.session, recorder.control, meetingID: meetingID, at: start, cascade: cascade) }
+                for (session, control, link) in starts {
+                    group.addTask { await self.start(session, control, link: link, meetingID: meetingID, at: start, cascade: cascade) }
                 }
             }
         }
@@ -491,16 +493,23 @@ final class CompanionRecorders {
 
     // MARK: Start and stop
 
-    private func start(_ session: DeviceSession, _ control: any RecordControlConnection, meetingID: UUID, at start: Date,
-                       cascade: LinkCascade? = nil) async {
+    /// A recorder's link in the conversation, written as it's asked to start: a device that answers
+    /// names no serial of its own.
+    private func addLink(_ session: DeviceSession, _ control: any RecordControlConnection, meetingID: UUID, at start: Date) -> CompanionRecording {
+        let serial = control is any AnsweringRecordControl ? nil : Self.serial(session, control)
+        let link = CompanionRecording(deviceID: session.id, deviceKind: session.kind.id, deviceSerial: serial,
+                                      deviceName: session.device.name, macStartedAt: start)
+        write(meetingID) { $0.append(link) }
+        return link
+    }
+
+    private func start(_ session: DeviceSession, _ control: any RecordControlConnection, link: CompanionRecording, meetingID: UUID,
+                       at start: Date, cascade: LinkCascade? = nil) async {
         if let answering = control as? any AnsweringRecordControl {
-            await self.start(session, answering, meetingID: meetingID, at: start, cascade: cascade)
+            await self.start(session, answering, link: link, meetingID: meetingID, at: start, cascade: cascade)
             return
         }
         let name = session.device.name
-        let link = CompanionRecording(deviceID: session.id, deviceKind: session.kind.id, deviceSerial: Self.serial(session, control),
-                                      deviceName: name, macStartedAt: start)
-        write(meetingID) { $0.append(link) }
         if let owner = session.managedElsewhere {
             // Another device manages the recorder over Bluetooth; this Mac doesn't reach for it, but asks
             // that device to start it when it can (a connected iPhone), so one device drives it.
@@ -603,11 +612,9 @@ final class CompanionRecorders {
 
     /// Asks a device that answers to record too. It connects to this Mac on its own, so one that
     /// isn't connected now is unavailable. Its recording arrives through sync.
-    private func start(_ session: DeviceSession, _ control: any AnsweringRecordControl, meetingID: UUID, at start: Date,
-                       cascade: LinkCascade? = nil) async {
+    private func start(_ session: DeviceSession, _ control: any AnsweringRecordControl, link: CompanionRecording, meetingID: UUID,
+                       at start: Date, cascade: LinkCascade? = nil) async {
         let name = session.device.name
-        let link = CompanionRecording(deviceID: session.id, deviceKind: session.kind.id, deviceName: name, macStartedAt: start)
-        write(meetingID) { $0.append(link) }
         guard control.state.isConnected, !stopRequested.contains(meetingID) else {
             update(meetingID, link.id) { $0.state = .unavailable }
             status = stopRequested.contains(meetingID) ? nil : "\(name) isn’t connected. Recording on this Mac only."

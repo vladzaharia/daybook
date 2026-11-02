@@ -99,6 +99,28 @@ final class MultipointRecordingTests: XCTestCase {
         XCTAssertEqual(session.links.imported[link.recordingID!], id, "The device page shows it as already in Daybook")
     }
 
+    /// Every recorder starts alongside the others, and the conversation lists their links in the recorders' order,
+    /// whichever reaches the main actor first.
+    func testRecordersStartTogetherWithTheirLinksInTheRecordersOrder() async throws {
+        let rig = try await MultiSourceRig.make(in: self, models: false)
+        addTeardownBlock { await rig.tearDown() }
+        let kind = SoundcoreWorkIntegration().kind
+        let sessions = (0..<5).map { index in
+            DeviceSession(device: ConfiguredDevice(id: "recorder-\(index)", kind: kind), kind: kind,
+                          connections: [FakeRecorder()], defaults: rig.defaults)
+        }
+        for session in sessions { addTeardownBlock { session.shutDown() } }
+        rig.state.sources.recorders.sessions = { sessions }
+        for _ in 0..<3 {
+            let id = macStartsRecording(rig)
+            await rig.state.sources.recorders.settle()
+            XCTAssertEqual(rig.meeting(id)?.companions?.map(\.deviceID), sessions.map(\.id))
+            XCTAssertEqual(rig.meeting(id)?.companions?.map(\.state), Array(repeating: .recording, count: sessions.count))
+            macStopsRecording(rig, id)
+            await rig.state.sources.recorders.settle()
+        }
+    }
+
     func testRecorderOutOfRangeLeavesTheMacRecordingUntouched() async throws {
         let recorder = FakeRecorder()
         recorder.reachable = false
