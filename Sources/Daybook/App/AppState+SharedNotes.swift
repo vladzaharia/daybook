@@ -84,7 +84,7 @@ extension AppState {
     }
 
     /// Sends each phone what it's owed, then `messages`, in order, one send after another; whatever a send
-    /// doesn't deliver is owed to that phone again.
+    /// doesn't deliver is owed to that phone again, ahead of (and never over) what it was owed meanwhile.
     private func deliverSharedNotes(_ messages: [LinkMessage], to phones: [UUID]) {
         guard !phones.isEmpty else { return }
         let link = phoneLink, tracker = sharedNotes, previous = sharedNotesSend
@@ -94,7 +94,7 @@ extension AppState {
                 let all = tracker.takeOwed(by: phone) + messages
                 for (index, message) in all.enumerated() {
                     do { try await link.send(message, to: phone) } catch {
-                        tracker.owe(Array(all[index...]), to: phone)
+                        tracker.oweAgain(Array(all[index...]), to: phone)
                         break
                     }
                 }

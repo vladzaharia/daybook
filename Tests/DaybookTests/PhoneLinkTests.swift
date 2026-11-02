@@ -326,6 +326,29 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertFalse(tracker.isOwed(phone), "the recording ended: sync carries the rest")
     }
 
+    func testBehaviorAFailedSendIsOwedAgainAheadOfNewerChangesWithoutUndoingThem() {
+        let tracker = SharedNotesTracker()
+        let conversation = UUID(), phone = UUID(), paragraph = UUID(), other = UUID()
+        func note(_ text: String, _ id: UUID = paragraph) -> LinkMessage {
+            .note(LinkNote(id: id, conversationID: conversation, text: text, time: 1, madeAt: Date(), changedAt: Date()))
+        }
+        let mark = LinkMessage.bookmark(LinkBookmark(id: UUID(), conversationID: conversation, recordingTime: 3, createdAt: Date()))
+        tracker.begin(conversation, notes: [], bookmarks: [])
+        // A send of "Draft" and a bookmark is under way, and fails, while the paragraph's newer text was owed
+        // (the phone had just left).
+        let sending = tracker.takeOwed(by: phone) + [note("Draft"), mark, note("Agenda", other)]
+        tracker.owe([note("Final")], to: phone)
+        tracker.oweAgain(sending, to: phone)
+        let owed = tracker.takeOwed(by: phone)
+        XCTAssertEqual(owed.count, 3, "the unsent paragraph's older text is dropped")
+        guard case .bookmark = owed[0], case .note(let agenda) = owed[1], case .note(let latest) = owed[2] else { return XCTFail("\(owed)") }
+        XCTAssertEqual(agenda.text, "Agenda", "unsent changes go first, as they were made first")
+        XCTAssertEqual(latest.text, "Final", "a paragraph's newer text owed meanwhile stays")
+        tracker.end()
+        tracker.oweAgain([mark], to: phone)
+        XCTAssertFalse(tracker.isOwed(phone), "nothing is owed once the recording ended")
+    }
+
     // MARK: Record control
 
     func testTheMacAsksAConnectedPhoneToRecordAlongAndStop() async throws {

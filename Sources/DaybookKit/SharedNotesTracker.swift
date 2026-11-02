@@ -8,9 +8,9 @@ import Foundation
 /// arrived is never sent back: the device diffs its notes against it after every change, and records
 /// what arrives before applying it.
 ///
-/// A change a device recording along didn't get (it was away for a moment, or the send failed) is owed to
-/// it (`owe(_:to:)`) and goes out, before anything newer, once it's back (`takeOwed(by:)`), until the
-/// recording ends.
+/// A change a device recording along didn't get (it was away for a moment) is owed to it (`owe(_:to:)`) and
+/// goes out, before anything newer, once it's back (`takeOwed(by:)`), until the recording ends. A send that
+/// fails puts back what it didn't deliver ahead of what's owed since (`oweAgain(_:to:)`).
 ///
 /// Notes and bookmarks that were there before the shared recording began aren't sent: sync carries them.
 @MainActor
@@ -75,7 +75,28 @@ public final class SharedNotesTracker {
         owed[device] = list
     }
 
-    /// What a device is owed, in order, taken to send now (it's owed again whatever doesn't go).
+    /// Puts back what a send taken from `takeOwed(by:)` didn't deliver: before anything owed since, since it was
+    /// made first. A paragraph owed since keeps its newer text, and the unsent one of it is dropped.
+    public func oweAgain(_ unsent: [LinkMessage], to device: UUID) {
+        guard isActive, !unsent.isEmpty else { return }
+        let since = owed[device] ?? []
+        let newer = Set(since.compactMap { message -> UUID? in
+            if case .note(let note) = message { return note.id } else { return nil }
+        })
+        var list: [LinkMessage] = []
+        for message in unsent {
+            if case .note(let note) = message {
+                if newer.contains(note.id) { continue }
+                list.removeAll { if case .note(let earlier) = $0 { return earlier.id == note.id } else { return false } }
+            }
+            list.append(message)
+        }
+        list += since
+        if list.count > Self.owedLimit { list.removeFirst(list.count - Self.owedLimit) }
+        owed[device] = list
+    }
+
+    /// What a device is owed, in order, taken to send now (`oweAgain(_:to:)` puts back whatever doesn't go).
     public func takeOwed(by device: UUID) -> [LinkMessage] { owed.removeValue(forKey: device) ?? [] }
 
     /// Whether a device is owed changes.
