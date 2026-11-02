@@ -117,14 +117,6 @@ final class PhoneUpgradeTests: XCTestCase {
         rig.upgrades.offer(for: try XCTUnwrap(rig.controller.meeting(id)), now: rig.clock.now)
     }
 
-    private func waitUntil(_ what: String, timeout: TimeInterval = 10, _ condition: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(timeout)
-        while !condition() {
-            guard Date() < deadline else { return XCTFail("timed out waiting for \(what)") }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-    }
-
     // MARK: Tests
 
     func testBehaviorAMacsBetterModelIsOfferedInTheIPhonesWordsAndAskedByName() async throws {
