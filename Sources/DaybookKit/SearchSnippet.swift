@@ -11,6 +11,38 @@ extension SearchHit {
         return DisplaySnippet(text: text, match: range)
     }
 
+    /// Whether the result shows its snippet: a match in the title is marked in the title itself instead.
+    public var showsSnippet: Bool { field != .title || match == nil }
+
+    /// The match within the conversation's title as a row shows it (`title`), when the title is where it was.
+    public func titleMatch(in title: String) -> Range<String.Index>? {
+        guard field == .title, let match, !match.isEmpty else { return nil }
+        return title.range(of: String(snippet[match]), options: [.caseInsensitive, .diacriticInsensitive])
+    }
+
+    /// Where it was found, under the result, the same on both apps: "Title", "Summary", "Your notes", "Transcript ·
+    /// Maya · 0:12", "Transcript · 3 matches", and "Conversation" for one found by its tags or people alone.
+    public var location: String {
+        switch field {
+        case .title: return match == nil ? "Conversation" : "Title"
+        case .summary: return "Summary"
+        case .notes: return "Your notes"
+        case .transcript:
+            if matchCount > 1 { return "Transcript · \(matchCount) matches" }
+            return (["Transcript", speaker, time.map(TimeLabel.short)].compactMap { $0 }).joined(separator: " · ")
+        }
+    }
+
+    /// The location's glyph.
+    public var locationSymbol: String {
+        switch field {
+        case .title: return "textformat"
+        case .summary: return "text.alignleft"
+        case .notes: return "note.text"
+        case .transcript: return "quote.bubble"
+        }
+    }
+
     /// The words a row shows and the range of the match within them.
     public struct DisplaySnippet: Equatable, Sendable {
         public var text: String

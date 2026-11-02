@@ -28,6 +28,38 @@ final class LibraryWordsTests: XCTestCase {
         XCTAssertFalse(LibraryWords.encryptsHere(summary), "nothing left to encrypt")
     }
 
+    func testBehaviorTheListSaysSyncHasStoppedInSettingsWordsOnlyWhenItNeedsThePerson() {
+        XCTAssertEqual(LibraryWords.syncAttention(.storageFull, hasSynced: true), "iCloud storage is full.")
+        XCTAssertEqual(LibraryWords.syncAttention(.failure(details: "The network went away"), hasSynced: true), "Sync is paused.")
+        XCTAssertEqual(LibraryWords.syncAttention(.waitingForKey, hasSynced: false), "Waiting for this library’s key.")
+        XCTAssertEqual(LibraryWords.syncAttention(.signedOut, hasSynced: true), "Signed out of iCloud.")
+        XCTAssertNil(LibraryWords.syncAttention(.signedOut, hasSynced: false), "a Mac that never synced isn't told in its list")
+        for working in [SyncStatus.off, .unavailableInThisBuild, .syncing, .upToDate(at: Date()), .keyStoreUnreadable, .connecting] {
+            XCTAssertNil(LibraryWords.syncAttention(working, hasSynced: true), "\(working)")
+        }
+        XCTAssertEqual(LibraryWords.notSyncing, "Not syncing")
+    }
+
+    func testBehaviorAnEmptyLibrarySaysItsConversationsAreComingUntilThisInstallsFirstPassEnds() {
+        func getting(empty: Bool = true, checking: Bool = false, connected: Bool = true, lastSync: Date? = nil, more: Bool = false) -> Bool {
+            LibraryWords.isGettingConversations(libraryIsEmpty: empty, checking: checking, connected: connected, lastSync: lastSync, hasMoreWork: more)
+        }
+        XCTAssertTrue(getting(), "connected, no pass finished yet")
+        XCTAssertFalse(getting(connected: false), "sync off or unavailable: the library is just empty")
+        XCTAssertTrue(getting(checking: true, connected: false), "still looking for the library")
+        XCTAssertTrue(getting(lastSync: Date(), more: true), "the first pass stopped with more to bring")
+        XCTAssertFalse(getting(lastSync: Date()), "a pass finished and brought nothing: it's empty")
+        XCTAssertFalse(getting(empty: false), "conversations are here")
+        XCTAssertEqual(LibraryWords.gettingConversations, "Getting your conversations…")
+    }
+
+    func testBehaviorRestoreSaysWhatCameBack() {
+        XCTAssertEqual(LibraryWords.restored(Meeting(title: "Old standup")), "Restored “Old standup”.")
+        XCTAssertEqual(LibraryWords.restored(Meeting(title: " ")), "Restored a conversation.")
+        XCTAssertEqual(LibraryWords.trash, "Trash")
+        XCTAssertEqual(LibraryWords.searchPrompt, "Titles, notes, transcripts")
+    }
+
     func testANetworkSuitsLargeDownloadsOnlyOnWiFiOutsideLowDataMode() {
         XCTAssertEqual(SyncNetworkCondition(satisfied: true, expensive: false, constrained: false), .unrestricted)
         XCTAssertEqual(SyncNetworkCondition(satisfied: true, expensive: true, constrained: false), .restricted, "cellular, or a hotspot")

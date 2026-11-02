@@ -657,7 +657,7 @@ final class AppState {
             switch place {
             case .section(let section): return section.contains(meeting)
             case .folder(let id): return meeting.folderID == id
-            case .device: return false
+            case .device, .trash: return false
             }
         }.sorted { $0.date > $1.date }
         visibleMemo = (place, libraryRevision, visible)

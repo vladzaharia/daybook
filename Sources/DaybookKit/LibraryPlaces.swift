@@ -38,21 +38,25 @@ extension Meeting {
     public var displayKind: MeetingKind { kind == .auto ? summary?.kind ?? .auto : kind }
 }
 
-/// Where the library is looking: a section, a folder, or a recorder's page.
+/// Where the library is looking: a section, a folder, the Trash, or a recorder's page.
 public enum LibraryPlace: Hashable, Sendable {
     /// `device` is a configured device's ID.
     case section(LibrarySection), folder(UUID), device(String)
+    /// What was moved to the Trash, which Restore puts back (`LibraryController.trashedMeetings()`).
+    case trash
 
     public var isDevice: Bool { if case .device = self { return true } else { return false } }
     public var deviceID: String? { if case .device(let id) = self { return id } else { return nil } }
+    public var isTrash: Bool { self == .trash }
 
-    /// The conversations this place lists, newest first. A device's page lists its recordings instead.
+    /// The conversations this place lists, newest first. A device's page lists its recordings instead, and the
+    /// Trash what's in its folder, which the library's conversations don't include.
     public func meetings(in meetings: [Meeting]) -> [Meeting] {
         meetings.filter { meeting in
             switch self {
             case .section(let section): return section.contains(meeting)
             case .folder(let id): return meeting.folderID == id
-            case .device: return false
+            case .device, .trash: return false
             }
         }.sorted { $0.date > $1.date }
     }
@@ -62,6 +66,12 @@ public enum LibraryPlace: Hashable, Sendable {
 public enum SearchToken: Hashable, Identifiable, Sendable {
     case tag(String), speaker(String)
     public var id: String { switch self { case .tag(let tag): return "tag:" + tag; case .speaker(let name): return "speaker:" + name } }
+
+    /// What it shows: the tag or the name.
+    public var text: String { switch self { case .tag(let tag): return tag; case .speaker(let name): return name } }
+
+    /// Its glyph, the same in both apps' fields and suggestions: a tag's is Tags…'s own.
+    public var symbol: String { switch self { case .tag: return "tag"; case .speaker: return "person" } }
 }
 
 /// Where a search looks.
