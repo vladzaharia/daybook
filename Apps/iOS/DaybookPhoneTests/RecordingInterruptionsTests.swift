@@ -1,3 +1,4 @@
+import AVFoundation
 import DaybookCore
 import DaybookKit
 import XCTest
@@ -159,7 +160,8 @@ final class RecordingInterruptionsTests: XCTestCase {
         saved.phase = .saved
         XCTAssertEqual(RecordingActivityController.dismissal(for: saved, now: started), .after(started.addingTimeInterval(8)))
 
-        let full = PhoneNotices.recordingStoppedText(savedUpTo: 3_734, because: PhoneRecorderError.diskBacklog)
+        // The writer's own error when storage fills up.
+        let full = PhoneNotices.recordingStoppedText(savedUpTo: 3_734, because: NSError(domain: AVFoundationErrorDomain, code: -11807))
         XCTAssertEqual(full.title, "Recording stopped")
         XCTAssertEqual(full.body, "Everything up to 1:02:14 is saved. Free up space to record again.")
         XCTAssertEqual(PhoneNotices.recordingStoppedText(savedUpTo: 3_734, because: PhoneRecorderError.encoderUnavailable("x")).body,
@@ -168,5 +170,32 @@ final class RecordingInterruptionsTests: XCTestCase {
                        "No audio was recorded.")
         let nothing = PhoneAppModel.stoppedActivity(recording: nil, bookmarks: 0)
         XCTAssertEqual(nothing.endLine, "No audio was recorded")
+    }
+
+    func testBehaviorFreeUpSpaceIsAskedOnlyWhenStorageIsFull() {
+        let gigabyte: Int64 = 1_000_000_000
+        // Out of space, however the writer says it.
+        XCTAssertTrue(PhoneNotices.isStorageFull(NSError(domain: AVFoundationErrorDomain, code: AVError.Code.diskFull.rawValue), spaceLeft: nil))
+        XCTAssertTrue(PhoneNotices.isStorageFull(CocoaError(.fileWriteOutOfSpace), spaceLeft: nil))
+        XCTAssertTrue(PhoneNotices.isStorageFull(NSError(domain: NSPOSIXErrorDomain, code: Int(ENOSPC)), spaceLeft: nil))
+        let underneath = NSError(domain: AVFoundationErrorDomain, code: AVError.Code.unknown.rawValue,
+                                 userInfo: [NSUnderlyingErrorKey: NSError(domain: NSPOSIXErrorDomain, code: Int(ENOSPC))])
+        XCTAssertTrue(PhoneNotices.isStorageFull(underneath, spaceLeft: 50 * gigabyte), "the writer's own error, out of space underneath")
+        XCTAssertEqual(PhoneNotices.recordingStoppedText(savedUpTo: 65, because: underneath).body,
+                       "Everything up to 1:05 is saved. Free up space to record again.")
+
+        // Storage that couldn't keep up is full only when little is left.
+        XCTAssertTrue(PhoneNotices.isStorageFull(PhoneRecorderError.diskBacklog, spaceLeft: gigabyte / 5))
+        XCTAssertEqual(PhoneNotices.recordingStoppedText(savedUpTo: 65, because: PhoneRecorderError.diskBacklog, spaceLeft: gigabyte / 5).body,
+                       "Everything up to 1:05 is saved. Free up space to record again.")
+        XCTAssertFalse(PhoneNotices.isStorageFull(PhoneRecorderError.diskBacklog, spaceLeft: 50 * gigabyte), "slow, with space to spare")
+        XCTAssertEqual(PhoneNotices.recordingStoppedText(savedUpTo: 65, because: PhoneRecorderError.diskBacklog, spaceLeft: 50 * gigabyte).body,
+                       "Everything up to 1:05 is saved.")
+        XCTAssertFalse(PhoneNotices.isStorageFull(PhoneRecorderError.diskBacklog, spaceLeft: nil), "space unknown: never guessed")
+
+        // Anything else isn't about space.
+        XCTAssertFalse(PhoneNotices.isStorageFull(PhoneRecorderError.encoderUnavailable("append"), spaceLeft: 0))
+        XCTAssertFalse(PhoneNotices.isStorageFull(NSError(domain: AVFoundationErrorDomain, code: AVError.Code.unknown.rawValue), spaceLeft: 0))
+        XCTAssertFalse(PhoneNotices.isStorageFull(nil, spaceLeft: 0))
     }
 }

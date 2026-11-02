@@ -1,3 +1,4 @@
+import AVFoundation
 import DaybookKit
 import Foundation
 import UserNotifications
@@ -11,7 +12,7 @@ import UserNotifications
 ///   background, nor a Live Activity, so the recorder's audio is saved here as it records and a
 ///   notification says so; opening Daybook from it records on this iPhone too. Never a microphone kept
 ///   open silently, and never a claim that this iPhone records when it doesn't.
-/// - A recording stopped by itself while Daybook wasn't in front (storage couldn't keep up, the
+/// - A recording stopped by itself while Daybook wasn't in front (storage full or too slow, the
 ///   encoder failed): time-sensitive, so it reaches a pocket through Focus, and opening it goes to the
 ///   conversation it was saved in.
 @MainActor
@@ -55,15 +56,49 @@ struct PhoneNotices {
 
     static let recordingStoppedID = "recording.stopped"
 
-    /// "Recording stopped" and what's saved: everything up to its frozen time, and, when storage
-    /// couldn't keep up, what to do about it. Without audio saved (`savedUpTo` nil), `otherwise` says what
+    /// "Recording stopped" and what's saved: everything up to its frozen time, and, when storage is full
+    /// (`isStorageFull`), what to do about it. Without audio saved (`savedUpTo` nil), `otherwise` says what
     /// happened instead ("No audio was recorded. Your notes are saved.").
-    static func recordingStoppedText(savedUpTo elapsed: TimeInterval?, because cause: Error?,
+    static func recordingStoppedText(savedUpTo elapsed: TimeInterval?, because cause: Error?, spaceLeft: Int64? = nil,
                                      otherwise: String = "No audio was recorded.") -> (title: String, body: String) {
         guard let elapsed else { return ("Recording stopped", otherwise) }
         let saved = "Everything up to \(TimeLabel.short(elapsed)) is saved."
-        let body = (cause as? PhoneRecorderError) == .diskBacklog ? saved + " Free up space to record again." : saved
+        let body = isStorageFull(cause, spaceLeft: spaceLeft) ? saved + " Free up space to record again." : saved
         return ("Recording stopped", body)
+    }
+
+    /// Below this much space for important use, storage that couldn't keep up is storage that's full.
+    static let nearlyFull: Int64 = 1_000_000_000
+
+    /// Whether a recording stopped because this iPhone's storage is full: the writer said so (out of
+    /// space, there or underneath its own error), or storage couldn't keep up (`PhoneRecorderError.diskBacklog`)
+    /// with less than `nearlyFull` left (`spaceLeft`: what the staging folder's volume has for important
+    /// use). A backlog with space to spare, or with the space unknown, is something else.
+    static func isStorageFull(_ cause: Error?, spaceLeft: Int64?) -> Bool {
+        guard let cause else { return false }
+        if (cause as? PhoneRecorderError) == .diskBacklog { return spaceLeft.map { $0 < nearlyFull } ?? false }
+        return saysOutOfSpace(cause as NSError, depth: 0)
+    }
+
+    private static func saysOutOfSpace(_ error: NSError, depth: Int) -> Bool {
+        switch (error.domain, error.code) {
+        case (AVFoundationErrorDomain, AVError.Code.diskFull.rawValue),
+             (NSCocoaErrorDomain, NSFileWriteOutOfSpaceError),
+             (NSPOSIXErrorDomain, Int(ENOSPC)),
+             (NSOSStatusErrorDomain, -34):   // dskFulErr, from the audio file underneath
+            return true
+        default:
+            guard depth < 4 else { return false }
+            return error.underlyingErrors.contains { saysOutOfSpace($0 as NSError, depth: depth + 1) }
+        }
+    }
+
+    /// What the volume holding `folder` has for important use (what iOS can free for it included), read
+    /// off the main actor; nil when it can't say.
+    static func spaceLeft(at folder: URL) async -> Int64? {
+        await Task.detached(priority: .userInitiated) {
+            try? folder.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage
+        }.value
     }
 
     func recordingStopped(_ text: (title: String, body: String), opening destination: AppDestination) {

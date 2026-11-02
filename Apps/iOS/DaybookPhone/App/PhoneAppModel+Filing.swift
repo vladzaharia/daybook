@@ -109,7 +109,7 @@ extension PhoneAppModel {
         }
     }
 
-    /// The recording stopped by itself (storage couldn't keep up, the encoder failed): what was recorded
+    /// The recording stopped by itself (storage full or too slow, the encoder failed): what was recorded
     /// is filed, the Live Activity ends as stopped in the warning ink with the time everything is saved up
     /// to, the Macs and recorders stop with it, and, when Daybook isn't in front, a time-sensitive
     /// notification says so. In front, the notice does.
@@ -133,8 +133,11 @@ extension PhoneAppModel {
             outcome = await fileUnfinished(recorder.unfinishedFolder, failure: recorder.lastFailure, reason: recorder.lastError ?? Self.notFinished)
         }
         noteStopped(outcome)
+        // Storage that couldn't keep up asks to free space only when it's nearly full.
+        let spaceLeft = (cause as? PhoneRecorderError) == .diskBacklog ? await PhoneNotices.spaceLeft(at: library.stagingURL) : nil
         // Saved up to its end, or (no audio at all) what happened to the notes.
-        let text = PhoneNotices.recordingStoppedText(savedUpTo: recording.map { _ in savedUpTo }, because: cause, otherwise: outcome.result.sentence)
+        let text = PhoneNotices.recordingStoppedText(savedUpTo: recording.map { _ in savedUpTo }, because: cause, spaceLeft: spaceLeft,
+                                                     otherwise: outcome.result.sentence)
         say("\(text.title). \(text.body)", details: recorder.lastError)
         if !isInFront {
             let opens: AppDestination = { if case .saved(let id, _)? = outcome.filing { return .conversation(id) } else { return .library } }()
