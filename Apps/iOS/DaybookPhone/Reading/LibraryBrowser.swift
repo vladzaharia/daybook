@@ -167,7 +167,9 @@ private struct ReadingLayout: View {
     @ViewBuilder private var leftPage: some View {
         if session.reading, let id = session.openID, let meeting = library.meeting(id) {
             NavigationStack {
+                // A page of its own for each conversation, as the preview's: turning to another never animates it in.
                 SummaryPage(library: library, meeting: meeting)
+                    .id(id)
                     .environment(\.isTwoPage, true)
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {

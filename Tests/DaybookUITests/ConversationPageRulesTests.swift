@@ -68,6 +68,27 @@ final class ConversationPageRulesTests: XCTestCase {
         XCTAssertEqual(SummaryRevealTiming.delay(index: 9), SummaryRevealTiming.delay(index: 5), "no block waits longer than the sixth")
     }
 
+    func testBehaviorOnlyASummaryThatArrivesWhileItsConversationIsOpenIsRevealed() {
+        let opened = Date(timeIntervalSince1970: 1_800_000_000)
+        var standup = Meeting(title: "Standup")
+        standup.summary = MeetingSummary(overview: "Old", createdAt: opened)
+        var review = Meeting(title: "Design review")
+        review.summary = MeetingSummary(overview: "Theirs", createdAt: opened.addingTimeInterval(60))
+        let arrival = SummaryArrival(opening: standup)
+        XCTAssertFalse(arrival.reveals(standup.summary!, in: standup), "opening a page never animates")
+
+        // The page turns to another conversation without being made again: its summary was already there.
+        XCTAssertFalse(arrival.reveals(review.summary!, in: review))
+        XCTAssertFalse(SummaryArrival(opening: review).reveals(review.summary!, in: review))
+
+        standup.summary = MeetingSummary(overview: "New", createdAt: opened.addingTimeInterval(120))
+        XCTAssertTrue(arrival.reveals(standup.summary!, in: standup), "a summary that arrived while it was open")
+        var empty = Meeting(title: "Walk")
+        let waiting = SummaryArrival(opening: empty)
+        empty.summary = MeetingSummary(overview: "First", createdAt: opened)
+        XCTAssertTrue(waiting.reveals(empty.summary!, in: empty), "the first summary arrives too")
+    }
+
     func testBehaviorBulletsFollowTheDensity() {
         XCTAssertEqual(SummaryMarkdownMetrics.bullet(density: .window).dot, 5)
         XCTAssertEqual(SummaryMarkdownMetrics.bullet(density: .window, scale: 1.2).column, 16 * 1.2, accuracy: 0.001)

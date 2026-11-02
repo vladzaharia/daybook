@@ -1,5 +1,24 @@
 import DaybookDesign
+import DaybookKit
 import SwiftUI
+
+/// The summary a page opened with, kept with its conversation: only a summary that arrives while the page shows that
+/// conversation is revealed. A page that turns to another conversation starts again from that one's summary
+/// (`opening`), and until it has, reveals nothing.
+public struct SummaryArrival: Equatable, Sendable {
+    private let meetingID: UUID
+    private let openedWith: Date?
+
+    public init(opening meeting: Meeting) {
+        meetingID = meeting.id
+        openedWith = meeting.summary?.createdAt
+    }
+
+    /// Whether `summary` arrived while the page showed `meeting`.
+    public func reveals(_ summary: MeetingSummary, in meeting: Meeting) -> Bool {
+        meeting.id == meetingID && summary.createdAt != openedWith
+    }
+}
 
 extension View {
     /// A block of a summary that arrived while its page was open fades up a moment after the one before it (40 ms

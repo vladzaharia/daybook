@@ -35,8 +35,8 @@ struct SummaryPage: View {
     /// Saved live captions take the transcript's page, which then doesn't say "Not transcribed yet".
     @State private var hasCaptions = false
     /// The summary present when the page opened. Any later one arrived while the page was on screen, so it's
-    /// revealed block by block; opening a page never animates.
-    @State private var openedWith: Date?
+    /// revealed block by block; opening a page never animates, nor does turning it to another conversation.
+    @State private var arrival: SummaryArrival
     /// A Settings screen the status opened (Cloud Settings).
     @State private var settings: PageSettings?
 
@@ -45,7 +45,7 @@ struct SummaryPage: View {
         self.meeting = meeting
         self.showsHeader = showsHeader
         self.bottomEdgeEffect = bottomEdgeEffect
-        _openedWith = State(initialValue: meeting.summary?.createdAt)
+        _arrival = State(initialValue: SummaryArrival(opening: meeting))
     }
 
     var body: some View {
@@ -74,7 +74,7 @@ struct SummaryPage: View {
                     .daybookMotion(DaybookMotion.state, value: StatusBlockLayout.motionKey(status))
                     if let summary = meeting.summary {
                         SummaryBody(meeting: meeting, summary: summary, library: library, query: query,
-                                    revealing: summary.createdAt != openedWith, passages: passages,
+                                    revealing: arrival.reveals(summary, in: meeting), passages: passages,
                                     blockID: Self.blockID) { section in
                             ForEach(meeting.photos(in: section)) { PhotoTile(meeting: meeting, photo: $0, large: true).padding(.top, PhoneStyle.Space.s2) }
                         }
@@ -110,6 +110,7 @@ struct SummaryPage: View {
         .environment(\.readingWidth, .narrow)
         .readingContext(readingContext)
         .paperBackground()
+        .onChange(of: meeting.id) { arrival = SummaryArrival(opening: meeting) }
         .task(id: SavedCaptions.Reading(meeting, lastSave: captionsSaved)) {
             let read = await SavedCaptions.read(for: meeting, from: captionStore) != nil
             guard !Task.isCancelled else { return }

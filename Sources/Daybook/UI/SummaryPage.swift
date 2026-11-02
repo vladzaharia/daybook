@@ -13,13 +13,13 @@ struct SummaryPage: View {
     let play: (PlaybackTarget) -> Void
     /// The summary present when the page opened. Any later one arrived while the page was on screen,
     /// so it's revealed block by block; opening a page never animates.
-    @State private var openedWith: Date?
+    @State private var arrival: SummaryArrival
     @Environment(\.readingScale) private var scale
     @Environment(\.pageIsNarrow) private var narrow
 
     init(state: AppState, player: AudioPlaybackController, meeting: Meeting, play: @escaping (PlaybackTarget) -> Void) {
         self.state = state; self.player = player; self.meeting = meeting; self.play = play
-        _openedWith = State(initialValue: meeting.summary?.createdAt)
+        _arrival = State(initialValue: SummaryArrival(opening: meeting))
     }
 
     private var isRecording: Bool { state.recordingID == meeting.id }
@@ -31,7 +31,7 @@ struct SummaryPage: View {
             ConversationStatus(state: state, meeting: meeting)
             if let summary = meeting.summary {
                 SummaryBody(meeting: meeting, summary: summary, library: state.library, query: state.search,
-                            revealing: summary.createdAt != openedWith, passages: passages) { section in
+                            revealing: arrival.reveals(summary, in: meeting), passages: passages) { section in
                     let pictures = meeting.photos(in: section)
                     if !pictures.isEmpty { SectionPhotos(state: state, meeting: meeting, photos: pictures) }
                 }
@@ -68,6 +68,7 @@ struct SummaryPage: View {
         }
         .environment(\.findQuery, state.search)
         .macReadingContext(state)
+        .onChange(of: meeting.id) { arrival = SummaryArrival(opening: meeting) }
         .daybookMotion(Motion.page, value: meeting.summary?.createdAt)
         .daybookMotion(Motion.dim, value: meeting.status == .summarizing)
     }
