@@ -63,7 +63,10 @@ struct PhoneTranscriptPage: View {
         .onChange(of: session.transcriptRequest, initial: true) { _, request in
             guard let request else { return }
             requests += 1
-            scrollRequest = TranscriptScrollRequest(target: request.target, token: requests, flash: request.flash)
+            // The passage washes once, when it's first jumped to; turning back to the page later only scrolls there.
+            let flash = request.flash && session.flashedSegment?.uuidString == request.target
+            if flash { session.flashedSegment = nil }
+            scrollRequest = TranscriptScrollRequest(target: request.target, token: requests, flash: flash)
         }
         .task(id: "\(meeting.id)-\(meeting.showsLiveCaptions)-\(captionsSaved?.timeIntervalSince1970 ?? 0)") {
             // Captions come from the store `LibraryBrowser` provides; a transcript replaces them.
