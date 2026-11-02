@@ -11,25 +11,59 @@ enum CloudAvailability: Equatable, Sendable {
     case checking
     /// The library's folder inside the container.
     case available(URL)
+    /// Sync can't run, in a sentence: one of `Reason`'s, or another the sync controller gave.
     case unavailable(String)
+
+    /// Why `check` found iCloud unavailable, each with its sentence.
+    enum Reason: CaseIterable, Equatable, Sendable {
+        /// The build has no iCloud container (an unsigned or simulator build): nothing in Settings fixes it.
+        case notSetUp
+        /// Nobody is signed in to iCloud.
+        case signedOut
+        /// iCloud Drive is off for Daybook.
+        case iCloudDriveOff
+
+        var sentence: String {
+            switch self {
+            case .notSetUp: return "iCloud isn’t set up for this build."
+            case .signedOut: return "Sign in to iCloud to sync your library."
+            case .iCloudDriveOff: return "Turn on iCloud Drive for Daybook in Settings."
+            }
+        }
+
+        /// Settings can fix it (signing in, or iCloud Drive for Daybook); a build without iCloud can't.
+        var settingsCanFix: Bool { self != .notSetUp }
+
+        /// The reason a sentence says, when it's one of these.
+        init?(sentence: String) {
+            guard let reason = Self.allCases.first(where: { $0.sentence == sentence }) else { return nil }
+            self = reason
+        }
+    }
 
     static let infoKey = "DaybookICloudContainerIdentifier"
 
-    static let unsetMessage = "iCloud isn’t set up for this build."
+    static let unsetMessage = Reason.notSetUp.sentence
+    static let signedOutMessage = Reason.signedOut.sentence
+    static let iCloudDriveOffMessage = Reason.iCloudDriveOff.sentence
 
     static var containerIdentifier: String? {
         Bundle.main.object(forInfoDictionaryKey: infoKey) as? String
     }
 
-    static let signedOutMessage = "Sign in to iCloud to sync your library."
-    static let iCloudDriveOffMessage = "Turn on iCloud Drive for Daybook in Settings."
-
     var isAvailable: Bool { if case .available = self { return true } else { return false } }
 
-    /// Settings can fix it (signing in, or iCloud Drive for Daybook); a build without iCloud can't.
+    /// Why it's unavailable, when it's one of `check`'s reasons.
+    var reason: Reason? {
+        if case .unavailable(let sentence) = self { return Reason(sentence: sentence) }
+        return nil
+    }
+
+    /// Settings can fix it (signing in, or iCloud Drive for Daybook); a build without iCloud can't. A
+    /// sentence the sync controller gave is taken as one Settings may fix.
     var settingsCanFix: Bool {
-        if case .unavailable(let reason) = self { return reason != Self.unsetMessage }
-        return false
+        guard case .unavailable = self else { return false }
+        return reason?.settingsCanFix ?? true
     }
 
     /// The sentence the interface shows; nil when there's nothing to say.
@@ -45,14 +79,14 @@ enum CloudAvailability: Equatable, Sendable {
                       signedIn: @Sendable () -> Bool = { FileManager.default.ubiquityIdentityToken != nil },
                       resolve: @escaping @Sendable (String) -> URL? = { FileManager.default.url(forUbiquityContainerIdentifier: $0) }) async -> CloudAvailability {
         guard let container, !container.isEmpty, !container.contains("$(") else {
-            return .unavailable(unsetMessage)
+            return .unavailable(Reason.notSetUp.sentence)
         }
         guard signedIn() else {
-            return .unavailable(signedOutMessage)
+            return .unavailable(Reason.signedOut.sentence)
         }
         let url = await Task.detached(priority: .utility) { resolve(container) }.value
         guard let url else {
-            return .unavailable(iCloudDriveOffMessage)
+            return .unavailable(Reason.iCloudDriveOff.sentence)
         }
         return .available(url.appendingPathComponent("Documents", isDirectory: true).appendingPathComponent("Daybook", isDirectory: true))
     }

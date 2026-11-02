@@ -1,3 +1,4 @@
+import DaybookCore
 import DaybookLink
 import Foundation
 
@@ -69,6 +70,13 @@ struct MultipointSession: Equatable, Sendable {
 
     var isMacLed: Bool { if case .macLed = role { return true } else { return false } }
 
+    /// Where the conversation's timeline begins on this iPhone's clock, by what the leading Mac said
+    /// (`MultipointTimeline.zero`): its timeline's zero, or its own start, less the clocks' offset. Nil
+    /// when it said neither.
+    var timelineZero: Date? {
+        MultipointTimeline.zero(timelineStart: timelineStart, leadStartedAt: leadStartedAt, clockOffset: leadClockOffset)
+    }
+
     /// The Macs this iPhone owes a stop when its recording ends.
     var macsToStop: [Mac] { isMacLed ? [] : macs.filter(\.needsStop) }
 
@@ -103,7 +111,7 @@ extension MultipointSession {
     var journaled: CaptureMultipoint {
         var lead: UUID?
         if case .macLed(let mac) = role { lead = mac }
-        return CaptureMultipoint(role: isMacLed ? "macLed" : "phoneLed", leadMacID: lead, leadStartedAt: leadStartedAt,
+        return CaptureMultipoint(role: isMacLed ? .macLed : .phoneLed, leadMacID: lead, leadStartedAt: leadStartedAt,
                                  timelineStart: timelineStart, leadClockOffset: leadClockOffset, title: title, date: date,
                                  macs: macs.map { CaptureMultipoint.Mac(id: $0.id, name: $0.name, startedByPhone: $0.startedByPhone,
                                                                         mayHaveRecorded: $0.mayHaveRecorded) })
@@ -114,7 +122,7 @@ extension MultipointSession {
     init?(conversationID: UUID, journaled: CaptureMultipoint?) {
         guard let journaled else { return nil }
         let role: Role
-        if journaled.role == "macLed", let lead = journaled.leadMacID { role = .macLed(macID: lead) } else { role = .phoneLed }
+        if journaled.role == .macLed, let lead = journaled.leadMacID { role = .macLed(macID: lead) } else { role = .phoneLed }
         self.init(conversationID: conversationID, role: role,
                   macs: journaled.macs.map { Mac(id: $0.id, name: $0.name, state: $0.mayHaveRecorded ? .recording : .failed(""),
                                                  startedAt: nil, startedByPhone: $0.startedByPhone) },

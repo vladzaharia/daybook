@@ -89,7 +89,18 @@ final class PhoneRecorder {
     private(set) var pauseMessage: String?
     /// Conversation seconds when the current pause began.
     private(set) var pausedAt: TimeInterval?
+    /// The recorder's words for its last problem: a start, resume, or stop that failed, or one it
+    /// reports while it keeps recording (`journalWarning`).
     private(set) var lastError: String?
+    /// Why the last start, resume, or stop failed, when it was one of the recorder's own reasons: for
+    /// callers to act on (a Mac told that the microphone isn't allowed), never to show.
+    private(set) var lastFailure: PhoneRecorderError?
+    /// Why the recording stopped by itself, when it did (`onUnexpectedStop`): storage that couldn't keep
+    /// up (`PhoneRecorderError.diskBacklog`), or the encoder. Cleared when the next recording starts.
+    private(set) var unexpectedStop: Error?
+    /// The staging folder of the last recording Stop couldn't finish (`lastFailure` says why), kept for its
+    /// notes and for recovery. Cleared when the next recording starts.
+    private(set) var unfinishedFolder: URL?
 
     /// State, pauses, routes, and bookmarks changed (not levels).
     @ObservationIgnored var onChange: (() -> Void)?
@@ -97,6 +108,9 @@ final class PhoneRecorder {
     @ObservationIgnored var onLevel: ((AudioLevel) -> Void)?
     /// The encoder or storage failed; the recording was finished as it stood.
     @ObservationIgnored var onUnexpectedStop: ((PhoneRecording?) -> Void)?
+    /// The interruption ended and iOS asked to continue, but recording couldn't (another app still
+    /// holds the microphone, say): it stays paused, with Resume.
+    @ObservationIgnored var onResumeFailed: ((Error) -> Void)?
     /// A copy of the live input for listeners such as live captions: each buffer after the writer has
     /// it, on the audio thread, with its host time. It must return at once and never throw; the
     /// recording doesn't wait for it or depend on it. Read when input starts (start, resume, restart).
@@ -108,8 +122,8 @@ final class PhoneRecorder {
     @ObservationIgnored private var inputGeneration = UUID()
     @ObservationIgnored private var journal: PhoneCaptureJournal?
     @ObservationIgnored private var directory: URL?
-    @ObservationIgnored private var meterTimer: Timer?
-    @ObservationIgnored private var journalTimer: Timer?
+    /// The meter's and the journal's ticks while recording (`startTicks`).
+    @ObservationIgnored private var ticks: [Task<Void, Never>] = []
     @ObservationIgnored private var notesSave: Task<Void, Never>?
     @ObservationIgnored private var cancelStart = false
     @ObservationIgnored private let journalQueue = DispatchQueue(label: "local.daybook.phone.journal", qos: .utility)
@@ -120,6 +134,8 @@ final class PhoneRecorder {
     static let silentMicrophoneSeconds: TimeInterval = 3
     /// Between level readings while recording (`onLevel`).
     static let levelInterval: TimeInterval = 1.0 / 15
+    /// Between journal writes while recording, besides those a change makes.
+    static let journalInterval: TimeInterval = 5
     /// The pause message when iOS gives no reason (a call, Siri, an alarm).
     static let unspecifiedInterruption = "A call or another app interrupted the recording."
     /// `lastError` when the journal can't be written, before the system's reason.
@@ -135,6 +151,8 @@ final class PhoneRecorder {
     var isCapturing: Bool { state == .recording || state == .starting || isPaused }
     var bookmarkCount: Int { highlights.count }
     var stagingDirectory: URL? { directory }
+    /// Whether Daybook may use the microphone, without asking.
+    var microphonePermission: MicrophonePermission { environment.session.microphonePermission }
 
     /// Seconds into the conversation. Keeps counting through a pause, because the conversation does.
     var elapsedTime: TimeInterval {
@@ -142,8 +160,14 @@ final class PhoneRecorder {
         return max(0, environment.clock.continuousTime() - anchor.continuousTime)
     }
 
-    /// Where the conversation's first sample fell on the host clock, for multipoint alignment.
-    var hostTimeAnchor: TimeInterval? { writer?.anchor?.hostTime }
+    /// Waits, for at most about one and a half seconds, until the first sample has fixed the recording's
+    /// start (`startedAt`), which a Mac recording along places its own by. It arrives within a few buffers.
+    func waitForFirstSample() async {
+        for _ in 0..<30 where isActive && startedAt == nil {
+            try? await Task.sleep(for: .milliseconds(50))
+            updateLevels()
+        }
+    }
 
     // MARK: Start, pause, resume, stop
 
@@ -151,7 +175,7 @@ final class PhoneRecorder {
         guard state == .idle else { throw PhoneRecorderError.alreadyRecording }
         state = .starting
         cancelStart = false
-        lastError = nil; canResume = false; pauseMessage = nil
+        lastError = nil; lastFailure = nil; unexpectedStop = nil; unfinishedFolder = nil; canResume = false; pauseMessage = nil
         captureID = id; self.recordingID = recordingID; self.title = title; startedAt = nil
         notes = ""; timedNotes = []; highlights = []; photos = []; sharedNotes = [:]; sharedBookmarks = [:]
         level = .silent; isMicrophoneSilent = false
@@ -178,21 +202,30 @@ final class PhoneRecorder {
             try startInput()
             try checkStartCancelled()
             state = .recording
-            startTimers()
+            startTicks()
             onChange?()
         } catch {
             lastError = error.localizedDescription
+            lastFailure = error as? PhoneRecorderError
             await abandonStart()
             throw error
         }
     }
 
-    /// Continues after an interruption (or a failed input restart).
+    /// Continues after an interruption (or a failed input restart). When it can't, it stays paused
+    /// with Resume, and says why (`lastFailure`); the caller says so to the person.
     func resume() async throws {
         guard isPaused else { throw PhoneRecorderError.notRecording }
-        try environment.session.activate()
-        inputRoute = environment.session.currentInput
-        try startInput()
+        do {
+            try environment.session.activate()
+            inputRoute = environment.session.currentInput
+            try startInput()
+        } catch {
+            lastFailure = error as? PhoneRecorderError
+            onChange?()
+            throw error
+        }
+        lastFailure = nil
         state = .recording
         canResume = false
         pauseMessage = nil
@@ -208,7 +241,7 @@ final class PhoneRecorder {
     }
 
     /// Finishes the recording and returns it ready to file. Nil if nothing was recorded or the file
-    /// couldn't be built; the staging folder then stays for recovery.
+    /// couldn't be built (`lastFailure` says which); the staging folder then stays for recovery.
     @discardableResult
     func stop() async -> PhoneRecording? {
         switch state {
@@ -223,7 +256,7 @@ final class PhoneRecorder {
         state = .stopping
         inputGeneration = UUID()
         onChange?()
-        stopTimers()
+        stopTicks()
         notesSave?.cancel()
         writer?.setAcceptingAudio(false)
         input?.stop()
@@ -252,6 +285,8 @@ final class PhoneRecorder {
                 recording = finished.1
             } catch {
                 lastError = error.localizedDescription
+                lastFailure = error as? PhoneRecorderError
+                unfinishedFolder = directory
                 try? snapshot.write(to: directory)
             }
         }
@@ -425,9 +460,10 @@ final class PhoneRecorder {
     nonisolated private static func adoptOrphanSegments(_ journal: inout PhoneCaptureJournal, in directory: URL) {
         let known = Set(journal.segments.map(\.fileName))
         let files = ((try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? [])
-            .filter { $0.hasPrefix("segment-") && $0.hasSuffix(".m4a") && !known.contains($0) }.sorted()
-        for file in files {
-            let index = Int(file.dropFirst("segment-".count).dropLast(".m4a".count)) ?? (journal.segments.count)
+            .compactMap { name in CaptureSegment.index(fromFileName: name).map { (index: $0, name: name) } }
+            .filter { !known.contains($0.name) }
+            .sorted { $0.index < $1.index }
+        for (index, file) in files {
             let previousEnd = journal.segments.map { $0.startOffset + Double($0.frameCount) / journal.sampleRate }.max() ?? 0
             journal.segments.append(CaptureSegment(index: index, fileName: file, startOffset: previousEnd, frameCount: 0, closed: false,
                                                    firstSampleHostTime: 0, clockAnchors: [], notes: ["Placed after the previous part; its exact start wasn’t saved."]))
@@ -450,7 +486,10 @@ final class PhoneRecorder {
             canResume = true
             persistJournal()
             onChange?()
-            if shouldResume { Task { try? await resume() } }
+            guard shouldResume else { return }
+            Task {
+                do { try await resume() } catch { onResumeFailed?(error) }
+            }
         case .routeChanged(let reason, let route):
             inputRoute = route
             guard isCapturing else { return }
@@ -533,6 +572,7 @@ final class PhoneRecorder {
     private func writerFailed(_ error: Error) {
         guard state == .recording || isPaused else { return }
         lastError = error.localizedDescription
+        unexpectedStop = error
         journal?.warnings.append(error.localizedDescription)
         Task {
             let recording = await stop()
@@ -585,7 +625,7 @@ final class PhoneRecorder {
     }
 
     private func reset() {
-        stopTimers()
+        stopTicks()
         writer = nil
         input = nil
         journal = nil
@@ -650,26 +690,34 @@ final class PhoneRecorder {
         onChange?()
     }
 
-    private func startTimers() {
-        stopTimers()
-        let meter = Timer(timeInterval: Self.levelInterval, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.updateLevels() }
-        }
-        let journal = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.persistJournal() }
-        }
-        RunLoop.main.add(meter, forMode: .common)
-        RunLoop.main.add(journal, forMode: .common)
-        meterTimer = meter
-        journalTimer = journal
+    /// While recording: the meter reads about fifteen times a second, and the journal is written every
+    /// few seconds besides the writes a change makes. Each tick is a task on the main actor, stopped with
+    /// the recording.
+    private func startTicks() {
+        stopTicks()
+        ticks = [
+            Self.repeating(every: Self.levelInterval) { [weak self] in self?.updateLevels() },
+            Self.repeating(every: Self.journalInterval) { [weak self] in self?.persistJournal() },
+        ]
     }
 
-    private func stopTimers() {
-        meterTimer?.invalidate(); meterTimer = nil
-        journalTimer?.invalidate(); journalTimer = nil
+    private func stopTicks() {
+        for tick in ticks { tick.cancel() }
+        ticks = []
     }
 
-    /// Called by the meter timer; internal so tests can sample without waiting on it.
+    /// Runs `tick` every `interval` seconds until cancelled.
+    private static func repeating(every interval: TimeInterval, _ tick: @escaping @MainActor () -> Void) -> Task<Void, Never> {
+        Task { @MainActor in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(interval))
+                guard !Task.isCancelled else { return }
+                tick()
+            }
+        }
+    }
+
+    /// Called by the meter's tick; internal so tests can sample without waiting on it.
     func updateLevels() {
         guard let writer else { return }
         if startedAt == nil, let anchor = writer.anchor {

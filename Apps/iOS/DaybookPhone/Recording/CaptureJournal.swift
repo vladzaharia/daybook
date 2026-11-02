@@ -19,6 +19,20 @@ struct CaptureSegment: Codable, Equatable, Sendable {
     var clockAnchors: [ClockAnchor]
     /// Format conversions and device switches inside this segment.
     var notes: [String]?
+
+    /// The file a segment is written to: "segment-000.m4a", "segment-001.m4a"…
+    static func fileName(index: Int) -> String { String(format: "segment-%03d.m4a", index) }
+
+    /// The index a segment's file name carries; nil for a file that isn't a segment's.
+    static func index(fromFileName name: String) -> Int? {
+        guard name.hasPrefix(filePrefix), name.hasSuffix(fileSuffix), name.count > filePrefix.count + fileSuffix.count else { return nil }
+        let digits = name.dropFirst(filePrefix.count).dropLast(fileSuffix.count)
+        guard digits.allSatisfy({ $0.isASCII && $0.isNumber }) else { return nil }
+        return Int(digits)
+    }
+
+    private static let filePrefix = "segment-"
+    private static let fileSuffix = ".m4a"
 }
 
 /// A pause in the recording.
@@ -62,8 +76,20 @@ struct CaptureMultipoint: Codable, Equatable, Sendable {
         var mayHaveRecorded: Bool
     }
 
-    /// `macLed` (a Mac asked this iPhone to record its conversation) or `phoneLed`.
-    var role: String
+    /// Who leads the recording, written "macLed" or "phoneLed" as journals always were.
+    enum Role: String, Codable, Sendable {
+        /// A Mac asked this iPhone to record its conversation.
+        case macLed
+        /// This iPhone started; any Macs record along.
+        case phoneLed
+
+        /// A role a later build wrote reads as this iPhone's own, so its recording is still recovered.
+        init(from decoder: Decoder) throws {
+            self = Role(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .phoneLed
+        }
+    }
+
+    var role: Role
     /// The Mac that leads, when one does.
     var leadMacID: UUID?
     /// When that Mac's recording started, and the conversation's timeline zero, on its clock.

@@ -71,33 +71,32 @@ struct CameraPicker: UIViewControllerRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
+    /// The picker's delegate, on the main actor as UIKit calls it (`UIImagePickerControllerDelegate` is
+    /// main-actor in the SDK). The photo is encoded off the main actor.
     @MainActor
     final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
         var parent: CameraPicker
 
         init(_ parent: CameraPicker) { self.parent = parent }
 
-        nonisolated func imagePickerController(_ picker: UIImagePickerController,
-                                               didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+        func imagePickerController(_ picker: UIImagePickerController,
+                                   didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
             let accepted = Date()
-            nonisolated(unsafe) let image = info[.originalImage] as? UIImage
-            nonisolated(unsafe) let metadata = info[.mediaMetadata] as? [String: Any]
-            MainActor.assumeIsolated {
-                let capture = parent.capture, failed = parent.failed
-                parent.finish()
-                guard let image else { failed(); return }
-                Task.detached(priority: .userInitiated) {
-                    guard let photo = CameraPhoto.encode(image, metadata: metadata, fallback: accepted) else {
-                        await failed()
-                        return
-                    }
-                    await capture(photo)
+            let capture = parent.capture, failed = parent.failed
+            parent.finish()
+            guard let image = info[.originalImage] as? UIImage else { failed(); return }
+            let metadata = info[.mediaMetadata] as? [String: Any]
+            Task.detached(priority: .userInitiated) {
+                guard let photo = CameraPhoto.encode(image, metadata: metadata, fallback: accepted) else {
+                    await failed()
+                    return
                 }
+                await capture(photo)
             }
         }
 
-        nonisolated func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
-            MainActor.assumeIsolated { parent.finish() }
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.finish()
         }
     }
 }

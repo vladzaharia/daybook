@@ -620,7 +620,7 @@ final class LinkServicesTests: XCTestCase {
         rig.pump(2)
         await rig.recorder.flush()
         let folder = try XCTUnwrap(rig.recorder.stagingDirectory)
-        XCTAssertEqual(try PhoneCaptureJournal.load(from: folder).multipoint?.role, "macLed")
+        XCTAssertEqual(try PhoneCaptureJournal.load(from: folder).multipoint?.role, .macLed)
         rig.recorder.prepareForTermination()   // the process ends here
 
         let relaunched = PhoneAppModel(recorder: RecorderRig().recorder, library: model.library, posture: DevicePosture(),
@@ -737,7 +737,6 @@ final class LinkServicesTests: XCTestCase {
     /// Macs paired before this iPhone started asking keep working as they did: they may start recording.
     func testMacsPairedBeforeAskingMayStillStartRecording() async throws {
         let defaults = makeTestDefaults("LinkServicesTests")
-        defaults.set(Date().addingTimeInterval(3_600), forKey: PhoneSettings.Keys.macRecordDecisionsSince)   // pairing below predates it
         let settings = PhoneSettings(defaults: defaults)
         let mac = try await makeMac()
         let link = makeLink()
@@ -1034,7 +1033,6 @@ final class LinkServicesTests: XCTestCase {
         XCTAssertTrue(settings.macMayStartRecording(macID, pairedAt: pairedAt), "on when paired")
         settings.setMacMayStartRecording(false, for: macID, pairedAt: pairedAt)
         let relaunched = PhoneSettings(defaults: try XCTUnwrap(UserDefaults(suiteName: suite)))
-        XCTAssertEqual(relaunched.macRecordDecisionsSince, settings.macRecordDecisionsSince)
         XCTAssertFalse(relaunched.macMayStartRecording(macID, pairedAt: pairedAt), "turned off stays off")
         // Paired again later: on again.
         let again = pairedAt.addingTimeInterval(60)

@@ -27,10 +27,20 @@ enum AudioSessionEvent: Equatable, Sendable {
 protocol AudioSessionControlling: AnyObject {
     var onEvent: ((AudioSessionEvent) -> Void)? { get set }
     var currentInput: AudioInputRoute? { get }
+    /// Whether Daybook may record, without asking.
+    var microphonePermission: MicrophonePermission { get }
     func requestRecordPermission() async -> Bool
     /// Configures and activates the session for recording.
     func activate() throws
     func deactivate()
+}
+
+/// Whether the person has let Daybook use the microphone. Never asked, iOS asks with Daybook on
+/// screen, so a start from the background continues in front first (`StartRecordingIntent`).
+enum MicrophonePermission: Equatable, Sendable {
+    case notAsked
+    case allowed
+    case denied
 }
 
 /// The real `AVAudioSession`.
@@ -84,11 +94,19 @@ final class LiveAudioSession: AudioSessionControlling {
         session.currentRoute.inputs.first.map { AudioInputRoute(name: $0.portName, portType: $0.portType.rawValue) }
     }
 
-    func requestRecordPermission() async -> Bool {
+    var microphonePermission: MicrophonePermission {
         switch AVAudioApplication.shared.recordPermission {
-        case .granted: return true
+        case .granted: return .allowed
+        case .denied: return .denied
+        default: return .notAsked
+        }
+    }
+
+    func requestRecordPermission() async -> Bool {
+        switch microphonePermission {
+        case .allowed: return true
         case .denied: return false
-        default: return await AVAudioApplication.requestRecordPermission()
+        case .notAsked: return await AVAudioApplication.requestRecordPermission()
         }
     }
 
@@ -147,13 +165,21 @@ final class LiveAudioSession: AudioSessionControlling {
 final class ScriptedAudioSession: AudioSessionControlling {
     var onEvent: ((AudioSessionEvent) -> Void)?
     var currentInput: AudioInputRoute? = AudioInputRoute(name: "Synthetic Microphone", portType: "Synthetic")
+    /// The person's answer, once asked.
     var permission = true
+    /// Whether they've been asked; until then, asking gives `permission`.
+    var permissionAsked = true
     var activationError: Error?
     private(set) var activations = 0
     private(set) var deactivations = 0
     private(set) var isActive = false
 
-    func requestRecordPermission() async -> Bool { permission }
+    var microphonePermission: MicrophonePermission { !permissionAsked ? .notAsked : permission ? .allowed : .denied }
+
+    func requestRecordPermission() async -> Bool {
+        permissionAsked = true
+        return permission
+    }
 
     func activate() throws {
         if let activationError { throw activationError }

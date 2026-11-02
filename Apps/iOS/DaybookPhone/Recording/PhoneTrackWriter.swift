@@ -180,7 +180,7 @@ final class PhoneTrackWriter: @unchecked Sendable {
     private func openSegment(firstSampleHostTime host: TimeInterval) throws {
         let index = nextIndex
         nextIndex += 1
-        let fileName = String(format: "segment-%03d.m4a", index)
+        let fileName = CaptureSegment.fileName(index: index)
         writer = try AACSegmentWriter(url: directory.appendingPathComponent(fileName), format: format, realTime: realTime)
         lastAnchor = nil
         let start = lock.withLock { sessionAnchor.map { clock.continuousTime(forHostTime: host) - $0.continuousTime } } ?? 0

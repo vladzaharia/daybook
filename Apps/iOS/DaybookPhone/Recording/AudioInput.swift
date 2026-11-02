@@ -1,4 +1,5 @@
 import AVFoundation
+import DaybookCore
 import Foundation
 
 /// How a phone recording is stored.
@@ -244,21 +245,5 @@ final class SyntheticAudioInput: AudioInputSource, @unchecked Sendable {
             let voice = sin(2 * .pi * pitch * t) + 0.5 * sin(4 * .pi * pitch * t) + 0.25 * sin(6 * .pi * pitch * t)
             return Float(0.18 * syllable * voice)
         }
-    }
-}
-
-extension AVAudioPCMBuffer {
-    /// A copy the caller owns.
-    func copied() -> AVAudioPCMBuffer? {
-        guard let copy = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameLength) else { return nil }
-        copy.frameLength = frameLength
-        let source = UnsafeMutableAudioBufferListPointer(mutableAudioBufferList)
-        let destination = UnsafeMutableAudioBufferListPointer(copy.mutableAudioBufferList)
-        guard source.count == destination.count else { return nil }
-        for index in source.indices {
-            guard let input = source[index].mData, let output = destination[index].mData else { return nil }
-            memcpy(output, input, Int(min(source[index].mDataByteSize, destination[index].mDataByteSize)))
-        }
-        return copy
     }
 }
