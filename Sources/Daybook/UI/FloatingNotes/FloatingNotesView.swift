@@ -12,7 +12,7 @@ import SwiftUI
 final class FloatingNotesModel {
     let state: AppState
     let input = InputDeviceName()
-    let levels = PanelLevels()
+    let levels = RecorderLevels()
     /// The conversation shown when nothing is recording; nil is the home.
     private(set) var focusID: UUID?
     /// The conversation this panel watched record.
@@ -98,6 +98,8 @@ struct FloatingNotesView: View {
     /// Live captions are running for the recording. Kept here, rather than reading the captions,
     /// so a revised word redraws only the caption strip.
     @State private var captionsShowing: UUID?
+    /// Opens the library's window wherever it is: closed, minimized, or behind.
+    @Environment(\.openWindow) private var openWindow
 
     enum Surface: Equatable { case recording, conversation, home }
 
@@ -108,42 +110,48 @@ struct FloatingNotesView: View {
     private var surface: Surface { isRecording ? .recording : afterStop ? .conversation : .home }
 
     var body: some View {
-        // A summary's countdown is said a second at a time; otherwise the panel redraws only for what it reads.
-        TimelineView(.periodic(from: .now, by: state.placements.undecided.isEmpty ? 3_600 : 1)) { _ in
-            panel(FloatingStatusInputs.make(state, meeting: meeting, afterStop: afterStop, inputDevice: input.name))
-        }
-        .background { shortcuts }
-        // Inside the safe-area escape, so the minimum is measured against the whole window.
-        .frame(minWidth: FloatingLayout.minimumSize.width, minHeight: FloatingLayout.minimumSize.height)
-        .background(DaybookPalette.paper)
-        .ignoresSafeArea()
-        .onAppear {
-            input.start()
-            runLevels()
-        }
-        .onChange(of: state.recordingID) { _, id in
-            model.recordingChanged(id)
-            runLevels()
-        }
-        .onChange(of: state.captions.showing, initial: true) { _, showing in
-            if showing != captionsShowing { captionsShowing = showing }
-        }
+        // The panel redraws for what it reads; a summary's countdown redraws only its own chip or line.
+        panel(FloatingStatusInputs.make(state, meeting: meeting, afterStop: afterStop, inputDevice: input.name))
+            .background { shortcuts }
+            // Inside the safe-area escape, so the minimum is measured against the whole window.
+            .frame(minWidth: FloatingLayout.minimumSize.width, minHeight: FloatingLayout.minimumSize.height)
+            .background(DaybookPalette.paper)
+            .ignoresSafeArea()
+            .onAppear {
+                input.start()
+                runLevels()
+            }
+            .onChange(of: state.recordingID) { _, id in
+                model.recordingChanged(id)
+                runLevels()
+            }
+            .onChange(of: state.captions.showing, initial: true) { _, showing in
+                if showing != captionsShowing { captionsShowing = showing }
+            }
+            #if DEBUG
+            .onReceive(NotificationCenter.default.publisher(for: FloatingNotesDemo.openRequested)) { _ in context(compact: false, chips: []).open() }
+            #endif
+    }
+
+    private func context(compact: Bool, chips: [RecorderChip]) -> PanelContext {
+        let openWindow = self.openWindow
+        return PanelContext(state: state, meeting: meeting, band: chrome.band, compact: compact, chips: chips,
+                            showLibrary: { openWindow(id: WindowID.library) }, goHome: model.goHome)
     }
 
     private func panel(_ inputs: FloatingStatusInputs) -> some View {
         GeometryReader { proxy in
             let compact = proxy.size.height < FloatingLayout.compactBelow
             let chips = FloatingStatus.chips(inputs, including: chipKinds(compact: compact))
-            let menus = ChipMenus(state: state, meeting: meeting, openMeeting: openInDaybook)
             ZStack(alignment: .top) {
-                content(inputs: inputs, chips: compact ? [] : chips, menus: menus, compact: compact)
+                content(inputs: inputs, context: context(compact: compact, chips: compact ? [] : chips))
                     .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
                     .transition(.opacity)
                     .id(surface)
                 // Full, the band holds the phase and the chips get a row of their own under it;
                 // compact, the band holds both.
-                StatusBand(chrome: chrome, phase: FloatingStatus.phase(inputs), chips: compact ? chips : [], menus: menus,
-                           compact: compact)
+                StatusBand(chrome: chrome, phase: FloatingStatus.phase(inputs), chips: compact ? chips : [],
+                           context: context(compact: compact, chips: chips), compact: compact)
             }
             .daybookMotion(DaybookMotion.state, value: surface)
             .daybookMotion(DaybookMotion.state, value: compact)
@@ -164,17 +172,15 @@ struct FloatingNotesView: View {
     }
 
     @ViewBuilder
-    private func content(inputs: FloatingStatusInputs, chips: [FloatingChip], menus: ChipMenus, compact: Bool) -> some View {
-        let context = PanelContext(state: state, band: chrome.band, compact: compact, chips: chips, menus: menus,
-                                   open: openInDaybook, goHome: model.goHome)
+    private func content(inputs: FloatingStatusInputs, context: PanelContext) -> some View {
         switch surface {
         case .recording:
             if let meeting {
-                RecordingSurface(context: context, meeting: meeting, inputs: inputs, levels: model.levels,
-                                 captionsShowing: captionsShowing == meeting.id)
+                FloatingRecording(context: context, meeting: meeting, inputs: inputs, levels: model.levels,
+                                  captionsShowing: captionsShowing == meeting.id)
             }
         case .conversation:
-            if let meeting { AfterStopSurface(context: context, meeting: meeting, inputs: inputs) }
+            if let meeting { FloatingAfterStop(context: context, meeting: meeting, inputs: inputs) }
         case .home:
             HomeSurface(context: context, focused: meeting, inputs: inputs)
         }
@@ -195,7 +201,7 @@ struct FloatingNotesView: View {
     /// stray Escape during a call should do nothing.
     private var shortcuts: some View {
         Group {
-            Button("Open in Daybook", action: openInDaybook).keyboardShortcut("o")
+            Button("Open in Daybook") { context(compact: false, chips: []).open() }.keyboardShortcut("o")
             Button("Make Text Bigger") { state.readingScale = ReadingScale.bigger(state.readingScale) }.keyboardShortcut("+")
             Button("Make Text Smaller") { state.readingScale = ReadingScale.smaller(state.readingScale) }.keyboardShortcut("-")
             Button("Actual Size") { state.readingScale = 1 }.keyboardShortcut("0")
@@ -206,44 +212,52 @@ struct FloatingNotesView: View {
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
-
-    /// The shown conversation in the main window, or the main window itself from the home.
-    private func openInDaybook() { open(meeting?.id) }
-
-    fileprivate func open(_ id: UUID?) {
-        PanelContext.openInDaybook(state: state, id: id)
-    }
 }
 
 /// What every surface needs from the panel around it.
 struct PanelContext {
     let state: AppState
+    /// The conversation shown, for the chips' menus.
+    let meeting: Meeting?
     /// The title band's height: content starts below it.
     let band: CGFloat
     let compact: Bool
     /// The status chips for a row under the band (full layouts); empty when the band holds them.
-    let chips: [FloatingChip]
-    let menus: ChipMenus
-    let open: () -> Void
+    let chips: [RecorderChip]
+    /// Opens the library's window (the scene's `openWindow`), closed or not.
+    let showLibrary: @MainActor () -> Void
     let goHome: () -> Void
+
+    /// The shown conversation in the main window, or the main window itself from the home.
+    @MainActor func open() { openConversation(meeting?.id) }
 
     /// Brings Daybook forward on a conversation (or as it was, for nil).
     @MainActor
-    static func openInDaybook(state: AppState, id: UUID?) {
+    func openConversation(_ id: UUID?) {
         if let id {
             state.place = .section(.all)
             state.selectedID = id
         }
-        NSApp.activate()
-        NSApp.windows.first { $0.canBecomeMain && $0.isVisible }?.makeKeyAndOrderFront(nil)
+        Self.bringLibraryForward(showLibrary)
     }
 
     /// A device's page in the main window.
     @MainActor
-    static func showDevice(state: AppState, id: String) {
+    func showDevice(_ id: String) {
         state.showDevice(id)
+        Self.bringLibraryForward(showLibrary)
+    }
+
+    /// The library's window, in front: opened if it was closed, restored if it was minimized. Floating Notes is
+    /// often all that's open of Daybook during a call, and it can't become the main window itself.
+    @MainActor
+    static func bringLibraryForward(_ showLibrary: @MainActor () -> Void) {
+        showLibrary()
         NSApp.activate()
-        NSApp.windows.first { $0.canBecomeMain && $0.isVisible }?.makeKeyAndOrderFront(nil)
+        for window in NSApp.windows where window.identifier?.rawValue.hasPrefix(WindowID.library) == true {
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            window.makeKeyAndOrderFront(nil)
+        }
     }
 }
 
@@ -254,9 +268,9 @@ struct PanelContext {
 /// compact, the chips join it and shorten, then shrink to their glyphs, as the panel narrows.
 private struct StatusBand: View {
     let chrome: PanelChrome
-    let phase: FloatingPhase?
-    let chips: [FloatingChip]
-    let menus: ChipMenus
+    let phase: RecorderPhase?
+    let chips: [RecorderChip]
+    let context: PanelContext
     let compact: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -265,7 +279,7 @@ private struct StatusBand: View {
             if compact {
                 ViewThatFits(in: .horizontal) {
                     bar(.full, yields: false)
-                    ForEach(ChipRow.Fit.allCases, id: \.self) { fit in bar(fit, yields: true) }
+                    ForEach(RecorderChipFit.allCases, id: \.self) { fit in bar(fit, yields: true) }
                 }
             } else {
                 Spacer(minLength: 0)
@@ -281,18 +295,19 @@ private struct StatusBand: View {
         .accessibilityLabel("Status")
     }
 
-    private func bar(_ fit: ChipRow.Fit, yields: Bool) -> some View {
-        HStack(spacing: 4) {
+    private func bar(_ fit: RecorderChipFit, yields: Bool) -> some View {
+        HStack(spacing: chips.contains(where: \.expands) ? 8 : 4) {
             if let phase { phaseLabel(phase, yields: yields) }
-            if !yields || phase?.detail == nil { Spacer(minLength: 4) }
-            ForEach(chips) { chip in ChipControl(chip: chip, fit: fit, menus: menus) }
+            // A chip at work takes the rest of the band itself; otherwise the chips sit at its trailing end.
+            if (!yields || phase?.detail == nil) && !chips.contains(where: \.expands) { Spacer(minLength: 4) }
+            ForEach(chips) { chip in RecorderChipControl(chip: chip, fit: fit) { ChipMenuItems(context: context, chip: $0) } }
         }
     }
 
-    private func phaseLabel(_ phase: FloatingPhase, yields: Bool) -> some View {
+    private func phaseLabel(_ phase: RecorderPhase, yields: Bool) -> some View {
         RecordingPhaseLabel(phase.phase, title: phase.title, detail: phase.detail, detailIsWarning: phase.detailIsWarning,
                             detailYields: yields, metrics: .panel)
-            .help(phase.detailIsWarning ? FloatingStatus.microphoneSilentHelp : phase.detail ?? "")
+            .help(phase.detailIsWarning ? RecordingStatusWords.microphoneSilentHelp : phase.detail ?? "")
     }
 
     /// Compact snaps the panel short (the status bar, one caption line, the controls); Expand returns.
@@ -315,106 +330,27 @@ private struct StatusBand: View {
     }
 }
 
-/// The status chips in a row of their own under the band: whole labels when they fit, then short
-/// ones, then glyphs.
-struct ChipRow: View {
-    /// How much each chip says, widest first. A chip whose short label says as much shortens first;
-    /// then prominent chips (processing, anything that needs the person) keep their words while the
-    /// others give theirs up.
-    enum Fit: CaseIterable {
-        case full, shortFirst, shortOthers, glyphOthers, short, glyph
-
-        func label(_ chip: FloatingChip) -> String? {
-            switch self {
-            case .full: return chip.label
-            case .shortFirst: return chip.shortensFirst ? chip.shortLabel : chip.label
-            case .shortOthers: return chip.isProminent ? Fit.shortFirst.label(chip) : chip.shortLabel
-            case .glyphOthers: return chip.isProminent ? Fit.shortFirst.label(chip) : nil
-            case .short: return chip.isProminent ? chip.shortLabel : nil
-            case .glyph: return nil
-            }
-        }
-    }
-
-    let chips: [FloatingChip]
-    let menus: ChipMenus
-
-    var body: some View {
-        ViewThatFits(in: .horizontal) {
-            ForEach(Fit.allCases, id: \.self) { fit in row(fit) }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Status")
-    }
-
-    private func row(_ fit: Fit) -> some View {
-        HStack(spacing: 6) {
-            ForEach(chips) { chip in ChipControl(chip: chip, fit: fit, menus: menus) }
-        }
-    }
-}
-
-/// What a chip's menu can do, and for which conversation.
-struct ChipMenus {
-    let state: AppState
-    let meeting: Meeting?
-    let openMeeting: () -> Void
-}
-
-/// One chip: a menu with its whole status and what you can do about it. The call chip only says.
-private struct ChipControl: View {
-    let chip: FloatingChip
-    let fit: ChipRow.Fit
-    let menus: ChipMenus
-
-    var body: some View {
-        let face = StatusChip(symbol: chip.symbol, text: label, tone: chip.tone, showsDot: chip.showsDot, progress: chip.progress,
-                              filled: true, metrics: .mac)
-        Group {
-            if chip.target == .call {
-                face
-            } else {
-                Menu {
-                    Text(chip.detail)
-                    Divider()
-                    ChipMenuItems(state: menus.state, chip: chip, meeting: menus.meeting, openMeeting: menus.openMeeting)
-                } label: {
-                    face
-                }
-                .menuStyle(.button)
-                .buttonStyle(.plain)
-                .menuIndicator(.hidden)
-            }
-        }
-        .fixedSize()
-        .help(chip.detail)
-        .accessibilityLabel(chip.detail)
-    }
-
-    private var label: String? { fit.label(chip) }
-}
-
-private struct ChipMenuItems: View {
-    let state: AppState
-    let chip: FloatingChip
-    let meeting: Meeting?
-    let openMeeting: () -> Void
+/// What a chip's menu can do, for the panel's conversation.
+struct ChipMenuItems: View {
+    let context: PanelContext
+    let chip: RecorderChip
     @Environment(\.openSettings) private var openSettings
+
+    private var state: AppState { context.state }
 
     var body: some View {
         switch chip.target {
         case .recorder(let id):
             if let session = state.devices.session(id) {
                 RecorderHandoffMenuItems(state: state, session: session)
-                Button("Show \(session.device.name)") { PanelContext.showDevice(state: state, id: id) }
+                Button("Show \(session.device.name)") { context.showDevice(id) }
             }
-        case .phone(let id):
+        case .peer(let id):
             if let session = state.devices.session(id) {
-                Button("Show \(session.device.name)") { PanelContext.showDevice(state: state, id: id) }
+                Button("Show \(session.device.name)") { context.showDevice(id) }
             }
         case .processing:
-            if let meeting {
+            if let meeting = context.meeting {
                 if let planner = state.placements[meeting.id], !planner.actions.isEmpty {
                     // Where its summary runs: Use the Cloud, Start Now.
                     ForEach(planner.actions, id: \.self) { action in
@@ -427,9 +363,9 @@ private struct ChipMenuItems: View {
                         state.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting))
                     }
                 }
-                Button("Open in Daybook", action: openMeeting)
+                Button("Open in Daybook") { context.open() }
             }
-            if let meeting, state.awaitingModels.contains(meeting.id) {
+            if let meeting = context.meeting, state.awaitingModels.contains(meeting.id) {
                 Button("Open Settings…") { openSettingsPane(.models) }
             }
         case .queue:
@@ -437,10 +373,10 @@ private struct ChipMenuItems: View {
                 ForEach(planner.actions, id: \.self) { action in
                     Button(action.title) { state.chooseSummaryPlacement(action, for: id) }
                 }
-                Button("Open in Daybook") { PanelContext.openInDaybook(state: state, id: id) }
+                Button("Open in Daybook") { context.openConversation(id) }
             } else if let id = state.processingID {
                 Button("Pause Transcription") { state.pauseProcessing(id) }
-                Button("Open in Daybook") { PanelContext.openInDaybook(state: state, id: id) }
+                Button("Open in Daybook") { context.openConversation(id) }
             }
             if !state.awaitingModels.isEmpty {
                 Button("Open Settings…") { openSettingsPane(.models) }

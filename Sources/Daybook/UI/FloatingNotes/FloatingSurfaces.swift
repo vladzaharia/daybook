@@ -7,205 +7,69 @@ import DaybookKit
 import DaybookUI
 import SwiftUI
 
-// The panel's three surfaces, in the iPhone's recording-surface and status-sheet language
-// (docs/interface.md, "Floating Notes"), each full or compact by the panel's height.
+// The panel's three surfaces (docs/interface.md, "Floating Notes"). While recording and after Stop it's the
+// recorder both apps share (DaybookUI's `RecorderSurface` and `RecorderAfterStop`), filled from AppState; with
+// nothing recording, a small home in the language of the iPhone's status sheet. Each is full or compact by the
+// panel's height.
 
 // MARK: - Recording
 
-/// While recording: the title, the red clock beside a meter for each source, your notes with their
-/// times, live captions, and large Bookmark and Stop. What else records this conversation is in the
-/// chips above, at every size. Compact: the clock and meters, one caption line, and the controls.
-struct RecordingSurface: View {
+/// While recording: the title, the red clock beside a meter for each source, your notes with their times and
+/// bookmarks, live captions, and large Bookmark and Stop. What else records this conversation is in the chips, at
+/// every size. Compact: the clock and meters, a line for a note, one caption line, and the controls.
+struct FloatingRecording: View {
     let context: PanelContext
     let meeting: Meeting
     let inputs: FloatingStatusInputs
-    let levels: PanelLevels
+    let levels: RecorderLevels
     let captionsShowing: Bool
 
     private var state: AppState { context.state }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if context.compact {
-                compactBody
-            } else {
-                fullBody
-            }
-        }
+        RecorderSurface(state: surfaceState, levels: levels, actions: actions, slots: slots)
+            .environment(\.surfaceLayout, context.compact ? .compact : .column)
+            .daybookMotion(DaybookMotion.state, value: captionsShowing)
     }
 
-    private var fullBody: some View {
-        Group {
-            VStack(alignment: .leading, spacing: 10) {
-                if !context.chips.isEmpty {
-                    // Spacing 10 plus this: the same gap to the title as after Stop.
-                    ChipRow(chips: context.chips, menus: context.menus).padding(.bottom, FloatingLayout.chipsBottom - 10)
+    private var surfaceState: RecorderSurfaceState {
+        RecorderSurfaceState(
+            title: meeting.title,
+            rename: { [state, id = meeting.id] title in state.update(id) { $0.title = title } },
+            chips: context.chips,
+            meters: FloatingStatus.meters(inputs),
+            clock: .since(state.recordingStartedAt ?? Date()),
+            isLive: inputs.phase == .recording,
+            bookmarkCount: meeting.highlights.filter { $0.trackID == nil }.count,
+            canBookmark: !state.isStoppingRecording,
+            isSaving: state.isStoppingRecording,
+            topInset: context.band,
+            keyboardShortcuts: true)
+    }
+
+    private var actions: RecorderActions {
+        let state = self.state, id = meeting.id
+        return RecorderActions(
+            bookmark: { state.addHighlight(id) },
+            stop: { Task { await state.stopRecording() } },
+            addNote: { line in
+                guard let notes = state.meetings.first(where: { $0.id == id })?.notes else { return }
+                state.editNotes(id, text: RecorderNoteField.appending(line, to: notes))
+            })
+    }
+
+    private var slots: RecorderSlots {
+        RecorderSlots(
+            notes: AnyView(PanelNotes(state: state, meeting: meeting, isRecording: true, showsLane: true)),
+            captions: AnyView(Group {
+                if captionsShowing {
+                    PanelCaptions(captions: state.captions, compact: context.compact)
+                        .padding(.top, context.compact ? 0 : 6)
+                        .transition(.opacity)
                 }
-                PanelTitleField(state: state, meeting: meeting)
-                HStack(alignment: .center, spacing: 14) {
-                    clock(size: 34)
-                    PanelMeters(levels: levels, inputs: inputs, stack: .full)
-                }
-            }
-            .padding(.horizontal, FloatingLayout.inset)
-            .padding(.top, context.band + (context.chips.isEmpty ? 4 : FloatingLayout.chipsTop))
-            .padding(.bottom, 12)
-            PanelRule()
-            PanelNotes(state: state, meeting: meeting, isRecording: true, showsLane: true)
-            if captionsShowing {
-                PanelCaptions(captions: state.captions, compact: false)
-                    .padding(.top, 6)
-                    .transition(.opacity)
-            }
-            controls(height: 44, radius: 13, size: 14)
-        }
-        .daybookMotion(DaybookMotion.state, value: captionsShowing)
+            }),
+            menu: { [context] chip in AnyView(ChipMenuItems(context: context, chip: chip)) })
     }
-
-    private var compactBody: some View {
-        Group {
-            HStack(alignment: .center, spacing: 12) {
-                clock(size: 26)
-                PanelMeters(levels: levels, inputs: inputs, stack: .compact)
-            }
-            .padding(.horizontal, FloatingLayout.inset)
-            .padding(.top, context.band + 6)
-            Spacer(minLength: 4)
-            // The newest caption sits on the controls, as the strip does on iPhone.
-            if captionsShowing {
-                PanelCaptions(captions: state.captions, compact: true)
-            }
-            controls(height: 34, radius: 10, size: 13)
-        }
-    }
-
-    @ViewBuilder
-    private func clock(size: CGFloat) -> some View {
-        if let start = state.recordingStartedAt {
-            ElapsedClock(since: start, size: size, weight: .medium)
-                .fixedSize()
-                // Stop carries the elapsed time for VoiceOver too.
-                .accessibilitySortPriority(1)
-        }
-    }
-
-    private var bookmarkCount: Int { meeting.highlights.filter { $0.trackID == nil }.count }
-
-    private func controls(height: CGFloat, radius: CGFloat, size: CGFloat) -> some View {
-        PanelControls(compact: context.compact) {
-            Button { state.addHighlight(meeting.id) } label: {
-                BookmarkControlLabel(count: bookmarkCount, size: size)
-                    .frame(maxWidth: .infinity, minHeight: height)
-                    .contentShape(Rectangle())
-            }
-            .daybookControl(.standard, shape: .roundedRectangle(radius: radius))
-            .disabled(state.isStoppingRecording)
-            .keyboardShortcut("d")
-            .help("Add Bookmark (⌘D)")
-            .accessibilityLabel(bookmarkCount > 0 ? "Bookmark, \(bookmarkCount) so far" : "Bookmark")
-        } trailing: {
-            Button { Task { await state.stopRecording() } } label: {
-                StopControlLabel(isSaving: state.isStoppingRecording, savingTitle: "Saving…", size: size)
-                    .frame(maxWidth: .infinity, minHeight: height)
-                    .contentShape(Rectangle())
-            }
-            .daybookControl(.stop, shape: .roundedRectangle(radius: radius))
-            .disabled(state.isStoppingRecording)
-            .keyboardShortcut("r", modifiers: [.command, .shift])
-            .help("Stop Recording (⇧⌘R)")
-            .accessibilityLabel("Stop recording")
-            .accessibilityValue(state.recordingStartedAt.map { SpokenTime.format(Date().timeIntervalSince($0)) } ?? "")
-        }
-    }
-}
-
-/// One rolling meter per source the recording has now, in the iPhone's style: the microphone, the
-/// call, and each recorder and iPhone recording along (`FloatingStatus.meters`). Each is labelled with
-/// its chip's glyph, its name in the tooltip and for VoiceOver, so a muted microphone, a call that
-/// isn't being captured, or a device that hears nothing shows up during the call, not afterwards. They
-/// share the meter area (`MeterStack`). The meters read the trails themselves, so only they redraw as
-/// levels arrive.
-private struct PanelMeters: View {
-    let levels: PanelLevels
-    let inputs: FloatingStatusInputs
-    let stack: MeterStack
-
-    var body: some View {
-        let meters = FloatingStatus.meters(inputs)
-        let row = stack.rowHeight(meters.count), gap = stack.gap(meters.count)
-        VStack(spacing: gap) {
-            ForEach(meters) { meter in
-                MeterRow(meter: meter, trail: levels.trail(meter.source),
-                         isLive: inputs.phase == .recording && meter.isRecording && levels.heard.contains(meter.source),
-                         height: row, glyph: stack.glyphSize(row: row, gap: gap))
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .onChange(of: meters.map(\.source), initial: true) { _, sources in levels.follow(sources) }
-    }
-}
-
-/// A source's glyph and its meter. Resting (flat and grey) while it isn't recording, or before its
-/// levels arrive.
-private struct MeterRow: View {
-    let meter: FloatingMeter
-    let trail: LevelTrail
-    let isLive: Bool
-    let height: CGFloat
-    let glyph: CGFloat
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: meter.symbol)
-                .font(.system(size: glyph, weight: .medium))
-                .foregroundStyle(meter.warning != nil ? DaybookPalette.Ink.warning : DaybookPalette.Ink.meta)
-                // The row's height, whatever the glyph's: rows share the area exactly.
-                .frame(width: 16, height: height)
-                .accessibilityHidden(true)
-            RollingLevelMeter(trail: trail, isLive: isLive, metrics: .panel, accessibilityLabel: "\(meter.name) level")
-                .frame(height: height)
-                .accessibilityHint(meter.warning ?? "")
-        }
-        .help(meter.warning ?? meter.name)
-    }
-}
-
-/// How the meters share their area. One source takes it all; more split it, down to a minimum row,
-/// the area growing to keep that; past the most the area may take, the rows thin instead (to a
-/// floor), so many sources still leave the notes their room.
-struct MeterStack: Equatable {
-    /// The height one source takes, and two share.
-    var area: CGFloat
-    /// Between two rows; more rows sit closer.
-    var gap: CGFloat
-    var tightGap: CGFloat
-    var minimumRow: CGFloat
-    var maximumArea: CGFloat
-    var floorRow: CGFloat
-
-    /// Beside the 34 pt clock.
-    static let full = MeterStack(area: 40, gap: 6, tightGap: 4, minimumRow: 10, maximumArea: 56, floorRow: 4)
-    /// Beside the 26 pt clock, compact.
-    static let compact = MeterStack(area: 24, gap: 4, tightGap: 3, minimumRow: 8, maximumArea: 42, floorRow: 3)
-
-    func gap(_ count: Int) -> CGFloat { count > 2 ? tightGap : gap }
-
-    func rowHeight(_ count: Int) -> CGFloat {
-        guard count > 1 else { return area }
-        let gaps = gap(count) * CGFloat(count - 1)
-        let shared = (area - gaps) / CGFloat(count)
-        if shared >= minimumRow { return shared }
-        if CGFloat(count) * minimumRow + gaps <= maximumArea { return minimumRow }
-        return max(floorRow, (maximumArea - gaps) / CGFloat(count))
-    }
-
-    /// The whole stack's height.
-    func height(_ count: Int) -> CGFloat {
-        count == 0 ? 0 : rowHeight(count) * CGFloat(count) + gap(count) * CGFloat(count - 1)
-    }
-
-    /// A row's glyph: 10 pt, smaller when the rows are too close for it.
-    func glyphSize(row: CGFloat, gap: CGFloat) -> CGFloat { max(7, min(10, row + gap - 2)) }
 }
 
 /// The live captions under the notes: the newest lines, You or Call in the time lane. Observes the
@@ -229,80 +93,80 @@ private struct PanelCaptions: View {
 
 // MARK: - After Stop
 
-/// After a Stop seen in the panel: the conversation and your notes; the status bar says what's
-/// becoming of it. Open is where Bookmark was, and Record where Stop was, for the next call.
-struct AfterStopSurface: View {
+/// After a Stop seen in the panel: the conversation and your notes; the chips say what's becoming of it. Open is
+/// where Bookmark was, and Record where Stop was, for the next call. A recording that stopped short says why, with
+/// Record Again into the same conversation.
+struct FloatingAfterStop: View {
     let context: PanelContext
     let meeting: Meeting
     let inputs: FloatingStatusInputs
 
     private var state: AppState { context.state }
-    private var recordingFailed: Bool { inputs.phase == .stopped }
-    private var processingFailed: Bool { !recordingFailed && meeting.status == .failed }
+    private var stoppedShort: Bool { inputs.phase == .stopped }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 3) {
-                if !context.chips.isEmpty {
-                    // VStack spacing 3 plus this.
-                    ChipRow(chips: context.chips, menus: context.menus).padding(.bottom, FloatingLayout.chipsBottom - 3)
-                }
-                PanelTitleField(state: state, meeting: meeting)
-                // The band says "Saved · 28:00", so the line under the title leaves the length out.
-                PanelMetaLine(meeting: meeting, showsDuration: inputs.phase != .saved, goHome: context.goHome)
-            }
-            .padding(.horizontal, FloatingLayout.inset)
-            .padding(.top, context.band + (context.chips.isEmpty ? 4 : FloatingLayout.chipsTop))
-            .padding(.bottom, context.compact ? 4 : 12)
-            if recordingFailed || processingFailed {
-                problem
-                    .padding(.horizontal, FloatingLayout.inset)
-                    .padding(.bottom, 12)
-            }
-            if context.compact {
-                Spacer(minLength: 0)
-            } else {
-                PanelRule()
-                PanelNotes(state: state, meeting: meeting, isRecording: false, showsLane: true)
-            }
-            controls
-        }
+        RecorderAfterStop(state: afterState, actions: actions,
+                          notes: AnyView(PanelNotes(state: state, meeting: meeting, isRecording: false, showsLane: true)),
+                          menu: { [context] chip in AnyView(ChipMenuItems(context: context, chip: chip)) })
+            .environment(\.surfaceLayout, context.compact ? .compact : .column)
     }
 
-    @ViewBuilder private var problem: some View {
-        if recordingFailed {
-            AttentionBox(title: "Recording stopped", message: context.compact ? nil : "Everything up to then is saved.", compact: true)
-                .help(meeting.errorMessage ?? "")
-        } else {
-            let what = meeting.transcripts.isEmpty ? "transcribing" : "summarizing"
-            AttentionBox(title: "Couldn’t finish \(what)", message: context.compact ? nil : meeting.errorMessage.map { FriendlyError.message(for: $0) },
-                         compact: true) {
-                // A recording with no speech in it can't do better a second time.
-                if !FriendlyError.isNoSpeech(meeting.errorMessage ?? "") {
-                    Button("Try Again") { state.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting)) }
-                        .buttonStyle(.daybookLink)
-                        .font(.system(size: 12, weight: .medium))
-                        .disabled(state.queuedIDs.contains(meeting.id) || state.processingID == meeting.id)
-                }
-            }
-            .help(meeting.errorMessage ?? "")
-        }
+    private var afterState: RecorderAfterStopState {
+        RecorderAfterStopState(
+            title: meeting.title,
+            rename: { [state, id = meeting.id] title in state.update(id) { $0.title = title } },
+            chips: context.chips,
+            // The band says "Saved · 18 min", so the line under the title leaves the length out.
+            meta: PanelMeta.text(meeting, showsDuration: inputs.phase != .saved),
+            problem: problem,
+            openTitle: meeting.summary != nil ? "Open Summary" : "Open",
+            recordTitle: stoppedShort ? "Record Again" : "Record",
+            canRecord: state.isReady && !state.isStoppingRecording && !state.isRecording,
+            isStartingRecording: state.isStartingRecording,
+            topInset: context.band,
+            keyboardShortcuts: true)
     }
 
-    private var controls: some View {
-        let height: CGFloat = context.compact ? 34 : 44, radius: CGFloat = context.compact ? 10 : 13, size: CGFloat = context.compact ? 13 : 14
-        return PanelControls(compact: context.compact) {
-            Button(action: context.open) {
-                OpenControlLabel(title: meeting.summary != nil ? "Open Summary" : "Open", size: size)
-                    .frame(maxWidth: .infinity, minHeight: height)
-                    .contentShape(Rectangle())
-            }
-            .daybookControl(.standard, shape: .roundedRectangle(radius: radius))
-            .help("Open in Daybook (⌘O)")
-        } trailing: {
-            RecordButton(state: state, title: recordingFailed ? "Record Again" : "Record", into: nil, size: size, height: height,
-                         shape: .roundedRectangle(radius: radius))
+    private var actions: RecorderAfterStopActions {
+        let state = self.state, id = meeting.id, again = stoppedShort
+        return RecorderAfterStopActions(
+            open: context.open,
+            record: { Task { again ? await state.recordAgain(into: id) : await state.startRecording() } },
+            metaLink: (title: "Recent", help: "Show recent conversations", action: context.goHome))
+    }
+
+    private var problem: RecorderProblem? {
+        if stoppedShort {
+            // Why it stopped, in the recorder's one sentence; the system's words stay in the tooltip.
+            return RecorderProblem(title: "Recording stopped", message: state.unexpectedStops[meeting.id] ?? "Everything up to then is saved.",
+                                   help: meeting.errorMessage)
         }
+        guard case .failed(let words)? = inputs.work else { return nil }
+        let failure: ProcessingStatus.Failure? = { if case .failed(let failure) = state.processingStatus(for: meeting) { return failure }; return nil }()
+        // A recording with no speech in it can't do better a second time.
+        let retries = failure?.kind != .noSpeech
+        return RecorderProblem(title: words.title, message: words.message, help: failure?.reason,
+                               actionTitle: retries ? "Try Again" : nil,
+                               actionEnabled: !state.queuedIDs.contains(meeting.id) && state.processingID != meeting.id,
+                               action: retries ? { [state, meeting] in state.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting)) } : nil)
+    }
+}
+
+extension AppState {
+    /// Record Again after a recording stopped short: into the same conversation, after what was saved. The
+    /// processing its first part queued waits for the whole.
+    func recordAgain(into id: UUID) async {
+        if processingID == id { pauseProcessing(id) } else if queuedIDs.contains(id) { cancelQueued(id) }
+        // A job that was running lets go of the conversation once its work notices.
+        for _ in 0..<40 where processingID == id { try? await Task.sleep(for: .milliseconds(50)) }
+        // The first part is still being added: its capture holds the conversation's folder until it's in the library.
+        let session = storageURL.appendingPathComponent("Staging").appendingPathComponent(id.uuidString)
+            .appendingPathComponent("capture-session.json").path
+        for _ in 0..<60 where FileManager.default.fileExists(atPath: session) { try? await Task.sleep(for: .milliseconds(50)) }
+        // One that couldn't be added is kept there for recovery: record anew rather than fail.
+        let held = FileManager.default.fileExists(atPath: session)
+        dismissUnexpectedStop(id)
+        await startRecording(into: held ? nil : id)
     }
 }
 
@@ -323,24 +187,30 @@ struct HomeSurface: View {
             if context.compact {
                 if let focused {
                     VStack(alignment: .leading, spacing: 3) {
-                        PanelTitleField(state: state, meeting: focused)
+                        PanelTitle(state: state, meeting: focused)
                         PanelMetaLine(meeting: focused, goHome: context.goHome)
                     }
                     .padding(.horizontal, FloatingLayout.inset)
                     .padding(.top, context.band + 4)
                 } else {
                     // The newest conversation, a click from Daybook; the band carries the status.
-                    RecentConversations(state: state, limit: 1, showsHeading: false)
+                    RecentConversations(context: context, limit: 1, showsHeading: false)
                         .padding(.top, context.band + 2)
                 }
                 Spacer(minLength: 0)
             } else {
                 // The status lines take the chips' room under the band.
-                let hasLines = !FloatingStatus.lines(inputs).isEmpty
-                if hasLines {
-                    TimelineView(.periodic(from: .now, by: 30)) { timeline in
+                let lines = FloatingStatus.lines(inputs)
+                if !lines.isEmpty {
+                    // A countdown moves a second at a time; otherwise the lines' recency ("Last seen") every half minute.
+                    TimelineView(.periodic(from: .now, by: lines.contains { $0.countdownUntil != nil } ? 1 : 30)) { timeline in
                         VStack(alignment: .leading, spacing: 7) {
-                            ForEach(FloatingStatus.lines(inputs, now: timeline.date)) { line in StatusLineButton(state: state, line: line) }
+                            ForEach(FloatingStatus.lines(inputs, now: timeline.date)) { line in
+                                let item = FloatingStatus.item(line, at: timeline.date)
+                                // A countdown's digits roll down as they change.
+                                StatusLineButton(context: context, line: item)
+                                    .daybookMotion(DaybookMotion.tick, value: line.countdownUntil == nil ? "" : item.text)
+                            }
                         }
                         .padding(.horizontal, FloatingLayout.inset)
                         .padding(.bottom, 14)
@@ -349,31 +219,39 @@ struct HomeSurface: View {
                 }
                 if let focused {
                     // The conversation, under the device lines: its status chip sits over its title, as after Stop.
-                    if hasLines { PanelRule() }
+                    if !lines.isEmpty { RecorderRule().padding(.horizontal, FloatingLayout.inset) }
                     VStack(alignment: .leading, spacing: 3) {
                         if !context.chips.isEmpty {
-                            ChipRow(chips: context.chips, menus: context.menus).padding(.bottom, FloatingLayout.chipsBottom - 3)
+                            RecorderChipRow(chips: context.chips) { ChipMenuItems(context: context, chip: $0) }
+                                .padding(.bottom, FloatingLayout.chipsBottom - 3)
                         }
-                        PanelTitleField(state: state, meeting: focused)
+                        PanelTitle(state: state, meeting: focused)
                         PanelMetaLine(meeting: focused, goHome: context.goHome)
                     }
                     .padding(.horizontal, FloatingLayout.inset)
-                    .padding(.top, hasLines ? 12 : context.band + (context.chips.isEmpty ? 4 : FloatingLayout.chipsTop))
+                    .padding(.top, !lines.isEmpty ? 12 : context.band + (context.chips.isEmpty ? 4 : FloatingLayout.chipsTop))
                     .padding(.bottom, 8)
                     PanelNotes(state: state, meeting: focused, isRecording: false, showsLane: false)
                 } else {
-                    RecentConversations(state: state)
-                        .padding(.top, hasLines ? 0 : context.band + 6)
+                    RecentConversations(context: context)
+                        .padding(.top, !lines.isEmpty ? 0 : context.band + 6)
                 }
             }
             controls
         }
     }
 
+    /// Record goes into the focused conversation only while it has only notes; one that already has a recording
+    /// gets a new conversation of its own, so a past call is never added to (docs/interface.md, "Home").
+    static func recordTarget(_ focused: Meeting?) -> UUID? {
+        focused.flatMap { $0.tracks.isEmpty ? $0.id : nil }
+    }
+
     private var controls: some View {
         let height: CGFloat = context.compact ? 34 : 44
         return PanelControls(compact: context.compact) {
-            RecordButton(state: state, title: "Record", into: focused?.id, size: context.compact ? 13 : 15, height: height, shape: .capsule)
+            RecordButton(state: state, title: "Record", into: Self.recordTarget(focused), size: context.compact ? 13 : 15, height: height,
+                         shape: .capsule)
         } trailing: {
             Button {
                 NSApp.activate()
@@ -394,17 +272,17 @@ struct HomeSurface: View {
 
 /// A status line that opens what it's about: a recorder's or iPhone's page.
 private struct StatusLineButton: View {
-    let state: AppState
+    let context: PanelContext
     let line: StatusLineItem
 
     var body: some View {
         let device = line.id.hasPrefix("recorder-") ? String(line.id.dropFirst(9)) : line.id.hasPrefix("phone-") ? String(line.id.dropFirst(6)) : nil
         if let device {
-            Button { PanelContext.showDevice(state: state, id: device) } label: { StatusLineView(line, metrics: .mac) }
+            Button { context.showDevice(device) } label: { StatusLineView(line) }
                 .buttonStyle(.plain)
                 .accessibilityHint("Opens it in Daybook")
         } else {
-            StatusLineView(line, metrics: .mac)
+            StatusLineView(line)
         }
     }
 }
@@ -412,11 +290,12 @@ private struct StatusLineButton: View {
 /// The newest conversations, in the iPhone's row style: the title, then the time and what's
 /// happening (or the gist), a glyph only when it isn't ready. A row opens in Daybook.
 private struct RecentConversations: View {
-    let state: AppState
+    let context: PanelContext
     var limit = 5
     var showsHeading = true
 
     var body: some View {
+        let state = context.state
         let recent = state.meetings.filter { $0.id != state.recordingID }.sorted { $0.date > $1.date }.prefix(limit)
         VStack(alignment: .leading, spacing: 4) {
             if showsHeading {
@@ -439,7 +318,7 @@ private struct RecentConversations: View {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(recent)) { meeting in
                         RecentRow(meeting: meeting, status: MacRowStatus.make(state, meeting)) {
-                            PanelContext.openInDaybook(state: state, id: meeting.id)
+                            context.openConversation(meeting.id)
                         }
                     }
                 }
@@ -485,25 +364,20 @@ private struct RecentRow: View {
 // MARK: - Pieces
 
 /// The conversation's title in New York, editable in place.
-struct PanelTitleField: View {
+private struct PanelTitle: View {
     let state: AppState
     let meeting: Meeting
-    @Environment(\.readingScale) private var scale
 
     var body: some View {
-        let title = Binding(get: { meeting.title }, set: { title in state.update(meeting.id) { $0.title = title } })
-        ZStack(alignment: .leading) {
-            if title.wrappedValue.isEmpty {
-                Text("Untitled Conversation").foregroundStyle(DaybookPalette.Ink.faint).accessibilityHidden(true)
-            }
-            TextField("Title", text: title, prompt: Text(verbatim: ""))
-                .textFieldStyle(.plain)
-                .foregroundStyle(DaybookPalette.Ink.title)
-                .labelsHidden()
-        }
-        .font(.system(size: 17 * min(scale, 1.3), weight: .semibold, design: .serif))
-        .lineLimit(1)
-        .truncationMode(.tail)
+        RecorderTitle(meeting.title, rename: { [state, id = meeting.id] title in state.update(id) { $0.title = title } })
+    }
+}
+
+/// When it was, and how long.
+enum PanelMeta {
+    static func text(_ meeting: Meeting, showsDuration: Bool = true) -> String {
+        ([meeting.date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).hour().minute())]
+         + [showsDuration ? meeting.duration.map(DurationLabel.format) : nil].compactMap { $0 }).joined(separator: " · ")
     }
 }
 
@@ -515,8 +389,7 @@ private struct PanelMetaLine: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(([meeting.date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).hour().minute())]
-                  + [showsDuration ? meeting.duration.map(DurationLabel.format) : nil].compactMap { $0 }).joined(separator: " · "))
+            Text(PanelMeta.text(meeting, showsDuration: showsDuration))
                 .foregroundStyle(DaybookPalette.Ink.secondary)
                 .monospacedDigit()
                 .lineLimit(1)
@@ -529,7 +402,8 @@ private struct PanelMetaLine: View {
     }
 }
 
-/// The notes, with each paragraph's time in the lane (right-aligned at x = 44, text at 52).
+/// The notes, with each paragraph's time in the lane (right-aligned at x = 44, text at 52), and the bookmarks
+/// made while recording as ticks beside the paragraphs written after them.
 private struct PanelNotes: View {
     let state: AppState
     let meeting: Meeting
@@ -544,7 +418,8 @@ private struct PanelNotes: View {
         MarginNotesEditor(
             text: Binding(get: { meeting.notes }, set: { state.editNotes(meeting.id, text: $0) }),
             times: times,
-            placeholder: "Add a note…",
+            marks: showsLane ? Self.marks(meeting) : [],
+            placeholder: MarginNotesEditor.placeholder,
             fontSize: 14 * scale, lineSpacing: 4 * scale,
             margin: lane ? FloatingLayout.textLeading : FloatingLayout.inset, trailingInset: FloatingLayout.inset,
             timeFontSize: FloatingLayout.timeSize, bottomInset: 12,
@@ -558,17 +433,10 @@ private struct PanelNotes: View {
                     .allowsHitTesting(false)
             }
     }
-}
 
-/// A hairline between the header and the notes.
-private struct PanelRule: View {
-    @Environment(\.colorSchemeContrast) private var contrast
-    var body: some View {
-        Rectangle()
-            .fill(contrast == .increased ? DaybookPalette.Ink.meta : DaybookPalette.Ink.faint.opacity(0.45))
-            .frame(height: contrast == .increased ? 1 : 0.5)
-            .padding(.horizontal, FloatingLayout.inset)
-            .accessibilityHidden(true)
+    /// The conversation's bookmarks on the notes' timeline.
+    static func marks(_ meeting: Meeting) -> [NoteMark] {
+        meeting.highlights.map { NoteMark(id: $0.id.uuidString, kind: .bookmark, time: meeting.alignedTime(for: $0) ?? $0.time) }
     }
 }
 
@@ -608,19 +476,5 @@ private struct RecordButton: View {
         .disabled(!state.isReady || state.isStartingRecording || state.isStoppingRecording || state.isRecording)
         .keyboardShortcut("r", modifiers: [.command, .shift])
         .help("Start Recording (⇧⌘R)")
-    }
-}
-
-/// Open in Daybook: the link teal and the arrow out of the panel.
-private struct OpenControlLabel: View {
-    let title: String
-    let size: CGFloat
-    var body: some View {
-        HStack(spacing: 6) {
-            Text(title).lineLimit(1)
-            Image(systemName: "arrow.up.forward").font(.system(size: size * 0.75, weight: .semibold))
-        }
-        .font(.system(size: size, weight: .semibold))
-        .foregroundStyle(DaybookPalette.Ink.link)
     }
 }

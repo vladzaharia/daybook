@@ -5,13 +5,14 @@ import DaybookDesign
 import DaybookDevices
 import DaybookKit
 import DaybookLink
+import DaybookUI
 import Foundation
 import Observation
 
 // Where Floating Notes' status comes from: the device hub and every recorder session, the iPhone
 // link, recorder handoff, sync, and the few level facts that change rarely (call audio detected,
 // a silent microphone). The panel reads them through `FloatingStatusInputs.make`, and redraws for
-// what it read; the meters, which change 15 times a second, are sampled apart (`PanelLevels`).
+// what it read; the meters, which change 15 times a second, are sampled apart (`RecorderLevels`).
 
 extension FloatingStatusInputs {
     /// Gathers the panel's facts. `meeting` is the conversation the panel shows; `afterStop` says
@@ -26,29 +27,31 @@ extension FloatingStatusInputs {
         } else if state.isStartingRecording {
             inputs.phase = .starting
         } else if afterStop, let meeting {
-            inputs.phase = meeting.status == .failed && meeting.tracks.isEmpty ? .stopped : .saved
+            inputs.phase = stoppedShort(meeting, state: state) ? .stopped : .saved
         }
-        inputs.duration = meeting?.duration
-        inputs.inputDevice = inputDevice
-        inputs.microphoneSilent = isRecording && levels.isMicrophoneSilent
-        inputs.includesCall = isRecording && state.includeComputerAudio
+        inputs.recording.here = AppState.thisDeviceWords
+        inputs.recording.duration = meeting?.duration
+        inputs.recording.inputDevice = inputDevice
+        inputs.recording.microphoneSilent = isRecording && levels.isMicrophoneSilent
+        inputs.recording.includesCall = isRecording && state.includeComputerAudio
         if isRecording, state.includeComputerAudio {
             if levels.isCapturingCall {
-                inputs.call = levels.isCallAudioDetected ? .detected : .quiet
+                inputs.recording.call = levels.isCallAudioDetected ? .detected : .quiet
             } else if state.recorder.isRecording, state.recorder.elapsedTime > 5 {
-                inputs.call = .missing
+                inputs.recording.call = .missing
             }
         }
         let links = isRecording ? (meeting?.companions ?? []).filter { $0.macEndedAt == nil } : []
         for session in state.devices.sessions where session.direct != nil {
+            let along = links.last { $0.deviceID == session.id }?.state
             if session.kind.id == DaybookPhoneIntegration.id {
-                inputs.phones.append(phone(session, state: state, links: links))
+                inputs.recording.peers.append(phone(session, state: state, along: along))
             } else {
-                inputs.recorders.append(recorder(session, state: state, links: links))
+                inputs.recording.recorders.append(RecorderFacts(session: session, handoff: state.recorderHandoff.state(of: session), along: along))
             }
         }
-        // A recording that failed has nothing to process; the panel says what happened instead.
-        if let meeting, !isRecording, inputs.phase != .stopped { inputs.work = work(for: meeting, state: state) }
+        // A recording that failed with nothing saved has nothing to process; the panel says what happened instead.
+        if let meeting, !isRecording, inputs.phase != .stopped || !meeting.tracks.isEmpty { inputs.work = work(for: meeting, state: state) }
         inputs.queue = queue(state)
         inputs.syncProblem = syncProblem(state.sync.status.problem)
         #if DEBUG
@@ -57,33 +60,17 @@ extension FloatingStatusInputs {
         return inputs
     }
 
+    /// The recording ended short: nothing reached the conversation, or this Mac's capture stopped on its own
+    /// (`AppState.unexpectedStops`), so what's saved ends early.
     @MainActor
-    private static func recorder(_ session: DeviceSession, state: AppState, links: [CompanionRecording]) -> Recorder {
-        var recorder = Recorder(id: session.id, name: session.device.name, shortName: session.kind.shortName,
-                                symbol: session.kind.systemImage, state: session.state)
-        recorder.isLinked = session.isLinked
-        recorder.battery = session.status?.battery?.level
-        recorder.charging = session.status?.battery?.charging == true
-        recorder.isRecording = session.isLinked && session.status?.isRecording == true
-        recorder.along = links.last { $0.deviceID == session.id }?.state
-        recorder.managedBy = session.managedElsewhere?.ownerName
-        recorder.managedByPhone = session.managedElsewhere?.ownerClass == .phone
-        recorder.handoff = state.recorderHandoff.state(of: session)
-        recorder.handoffLine = state.handoffLine(for: session)
-        recorder.problem = session.problem?.title
-        recorder.newCount = session.managedElsewhere == nil ? session.newRecordings.count : 0
-        if session.queue.isActive {
-            recorder.importing = Importing(position: session.queue.position, total: session.queue.total, fraction: session.importProgress,
-                                           suspended: session.queue.isSuspended)
-        }
-        recorder.lastConnected = session.direct?.lastConnectedAt ?? session.primary?.lastConnectedAt
-        return recorder
+    static func stoppedShort(_ meeting: Meeting, state: AppState) -> Bool {
+        (meeting.status == .failed && meeting.tracks.isEmpty) || state.unexpectedStops[meeting.id] != nil
     }
 
     @MainActor
-    private static func phone(_ session: DeviceSession, state: AppState, links: [CompanionRecording]) -> Phone {
-        var phone = Phone(id: session.id, name: session.device.name)
-        phone.isConnected = session.isLinked
+    private static func phone(_ session: DeviceSession, state: AppState, along: CompanionRecording.State?) -> RecordingStatusInputs.Peer {
+        var phone = RecordingStatusInputs.Peer(id: session.id, name: session.device.name, kind: .iPhone, isConnected: session.isLinked,
+                                               along: along, lastConnected: session.direct?.lastConnectedAt)
         if let id = UUID(uuidString: session.id), let recording = state.phoneLink.recordingStates[id], phone.isConnected {
             switch recording.phase {
             case .recording, .starting: phone.activity = .recording
@@ -91,8 +78,6 @@ extension FloatingStatusInputs {
             default: phone.activity = .idle
             }
         }
-        phone.along = links.last { $0.deviceID == session.id }?.state
-        phone.lastConnected = session.direct?.lastConnectedAt
         return phone
     }
 
@@ -108,8 +93,7 @@ extension FloatingStatusInputs {
         switch state.processingStatus(for: meeting) {
         case .processing(let progress):
             if let device = progress.device {
-                let verb = progress.stage == .summarizing ? "Summarizing" : progress.stage == .identifyingSpeakers ? "Identifying speakers" : "Transcribing"
-                return .elsewhere(device: device.name, verb: verb, fraction: progress.fraction)
+                return .elsewhere(device: device.name, stage: progress.stage, fraction: progress.fraction)
             }
             switch progress.stage {
             case .transcribing: return .transcribing(progress.fraction)
@@ -120,7 +104,7 @@ extension FloatingStatusInputs {
         case .requested(.models): return .models
         case .requested(.paused): return .paused
         case .requested(.device(let request)): return .requested(device: request.requestedBy.name)
-        case .failed(let failure): return .failed(FriendlyError.message(for: failure.reason))
+        case .failed(let failure): return .failed(FailureWords(failure, words: .mac(id: state.library.thisDevice.id)))
         case .recorded: return nil
         case .transcribed: return .ready(summary: false)
         case .awaitingRecordings(let recordings): return .awaiting(ProcessingStatus.awaitingLine(recordings))
@@ -135,11 +119,7 @@ extension FloatingStatusInputs {
         var queue = Queue()
         if let id = state.processingID, state.meetings.contains(where: { $0.id == id }) {
             // The step the page and the claim say (`AppState.runningStage`), never guessed from the engine's words.
-            switch state.runningStage {
-            case .transcribing: queue.running = .transcribing
-            case .identifyingSpeakers: queue.running = .identifyingSpeakers
-            case .summarizing: queue.running = .summarizing
-            }
+            queue.running = state.runningStage
             queue.fraction = state.processingProgress.fraction
             switch state.placements[id]?.phase {
             case .countingDown(_, let until)?: queue.countdown = until
@@ -207,138 +187,9 @@ final class InputDeviceName {
 
 // MARK: - Levels
 
-/// The rolling meters' trails, one per source the recording has (`FloatingStatus.meters`), sampled
-/// fifteen times a second while recording: this Mac's level monitor for the microphone and the call,
-/// each recorder's live audio, and the levels each iPhone sends over the link. Only the meters read
-/// the trails, and `heard` changes only when a source's levels start or stop arriving, so nothing
-/// else redraws as levels arrive.
-@MainActor
-@Observable
-final class PanelLevels {
-    /// Where each source's level comes from: 0…1 for a meter, or nil when it has none now.
-    struct Readers {
-        var microphone: @MainActor () -> Double?
-        var call: @MainActor () -> Double?
-        var recorder: @MainActor (String) -> Double?
-        var phone: @MainActor (String) -> Double?
-
-        @MainActor
-        func read(_ source: FloatingMeter.Source) -> Double? {
-            switch source {
-            case .microphone: return microphone()
-            case .call: return call()
-            case .recorder(let id): return recorder(id)
-            case .phone(let id): return phone(id)
-            }
-        }
-    }
-
-    /// The sources whose levels are arriving; the others' meters rest, flat.
-    private(set) var heard: Set<FloatingMeter.Source> = []
-    @ObservationIgnored private var trails: [FloatingMeter.Source: LevelTrail] = [:]
-    @ObservationIgnored private var sources: [FloatingMeter.Source] = []
-    @ObservationIgnored private var timer: Timer?
-    @ObservationIgnored private var readers: Readers?
-    @ObservationIgnored private var synthetic = false
-    @ObservationIgnored private var tick = 0
-    static let capacity = 160
-
-    var isRunning: Bool { timer != nil }
-
-    /// A source's trail, for its meter.
-    func trail(_ source: FloatingMeter.Source) -> LevelTrail {
-        if let trail = trails[source] { return trail }
-        let trail = LevelTrail(capacity: Self.capacity)
-        trails[source] = trail
-        return trail
-    }
-
-    /// The sources to sample: the recording's now. A source that joins starts flat; one that leaves
-    /// drops its trail.
-    func follow(_ sources: [FloatingMeter.Source]) {
-        guard sources != self.sources else { return }
-        let joined = sources.filter { !self.sources.contains($0) }
-        trails = trails.filter { sources.contains($0.key) }
-        self.sources = sources
-        // A simulated recording draws a conversation already under way, in every row.
-        if synthetic, isRunning {
-            for source in joined {
-                let trail = trail(source)
-                for back in stride(from: Self.capacity, to: 0, by: -1) { trail.append(Self.synthetic(source, tick: tick - back, in: sources)) }
-            }
-        }
-        heard = heard.intersection(sources)
-    }
-
-    /// Starts sampling through `readers`, or stops when `running` is false (the meters fall flat).
-    func run(_ running: Bool, readers: Readers, synthetic: Bool = false) {
-        guard running else {
-            timer?.invalidate()
-            timer = nil
-            self.readers = nil
-            trails.values.forEach { $0.reset() }
-            if !heard.isEmpty { heard = [] }
-            return
-        }
-        guard timer == nil else { return }
-        self.readers = readers
-        self.synthetic = synthetic
-        if synthetic {
-            // A simulated recording has no audio: draw a plausible conversation, already under way.
-            for _ in 0..<Self.capacity { sample() }
-        }
-        let timer = Timer(timeInterval: 1.0 / 15, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.sample() }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        self.timer = timer
-    }
-
-    /// One reading from every source. A source with none now falls flat, then stops redrawing.
-    func sample() {
-        tick &+= 1
-        var heard: Set<FloatingMeter.Source> = []
-        for source in sources {
-            let trail = trail(source)
-            let value = synthetic ? Self.synthetic(source, tick: tick, in: sources) : readers?.read(source)
-            if let value {
-                trail.append(value)
-                heard.insert(source)
-            } else if trail.values.contains(where: { $0 != 0 }) {
-                trail.append(0)
-            }
-        }
-        if heard != self.heard { self.heard = heard }
-    }
-
-    /// A stand-in level for each row of a simulated recording: you and the call take turns; a recorder
-    /// in the room hears both (the call through the speakers, more quietly), and an iPhone beside you
-    /// hears you, a little later and softer.
-    private static func synthetic(_ source: FloatingMeter.Source, tick: Int, in sources: [FloatingMeter.Source]) -> Double {
-        let t = Double(tick) / 15
-        let offset = 0.37 * Double(sources.firstIndex(of: source) ?? 0)
-        switch source {
-        case .microphone: return speech(t, phase: 0)
-        case .call: return speech(t, phase: 2.1)
-        case .recorder: return min(1, 0.04 + 0.9 * max(speech(t, phase: offset), 0.55 * speech(t, phase: 2.1 + offset)))
-        case .phone: return min(1, 0.05 + 0.8 * speech(t, phase: offset) * (0.8 + 0.2 * sin(t * 1.9)) + 0.2 * speech(t, phase: 2.1 + offset))
-        }
-    }
-
-    /// Syllables in phrases, taking turns: a deterministic stand-in for speech.
-    private static func speech(_ t: Double, phase: Double) -> Double {
-        let turn = sin((t + phase) * 0.45) > -0.2 ? 1.0 : 0.15
-        let phrase = sin((t + phase) * 1.3) > -0.55 ? 1.0 : 0.1
-        let syllable = abs(sin((t + phase) * 7.7)) * (0.6 + 0.4 * abs(sin((t + phase) * 2.9 + 0.7)))
-        return min(1, 0.06 + turn * phrase * (0.25 + 0.7 * syllable))
-    }
-
-    deinit { timer?.invalidate() }
-}
-
-extension PanelLevels.Readers {
-    /// The live sources: this Mac's level monitor (the call only while it's captured), each recorder's
-    /// live audio saved into the recording, and each iPhone's levels over the link.
+extension RecorderLevels.Readers {
+    /// The live sources: this Mac's level monitor (the call only while it's captured), each recorder's live audio
+    /// saved into the recording, and each iPhone's levels over the link.
     @MainActor
     static func live(_ state: AppState) -> Self {
         let monitor = state.recorder.levels
@@ -352,7 +203,7 @@ extension PanelLevels.Readers {
                 guard let state, let conversation = state.recordingID else { return nil }
                 return state.devices.session(id)?.liveLevel(into: conversation)
             },
-            phone: { [weak state] id in
+            peer: { [weak state] id in
                 guard let state, let conversation = state.recordingID, let phone = UUID(uuidString: id) else { return nil }
                 return state.phoneLevels.next(phone, conversation: conversation)
             })

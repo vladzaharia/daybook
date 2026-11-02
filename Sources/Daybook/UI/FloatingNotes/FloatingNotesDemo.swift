@@ -17,6 +17,9 @@ import Foundation
 /// - `stopped`: after Stop, the recording itself failed. `failed`: transcription couldn't finish.
 /// - `home`: the panel opened from the menu bar, nothing recording, this Mac transcribing another.
 ///
+/// `--notes-open` closes the main window once the scenario shows, then opens the conversation from the panel as
+/// Open does, so a snapshot shows the window come back.
+///
 /// Combine with `--device-demo connected` (a Soundcore at 80%), `--phone-demo connected` (a paired
 /// iPhone on loopback), and `--handoff-demo managed` (the Soundcore managed by the iPhone).
 /// `--notes-size` sets the panel's size; `--notes-contrast` draws it in the Increase Contrast
@@ -33,9 +36,17 @@ enum FloatingNotesDemo {
     static let increasedContrast = CommandLine.arguments.contains("--notes-contrast")
     /// A simulated recording has no audio, so the meters draw a stand-in conversation.
     static let syntheticLevels = CommandLine.arguments.contains("--simulate-recording")
+    /// `--notes-open`: the panel opens its conversation (as Open does) after the main window was closed.
+    static let openRequested = Notification.Name("FloatingNotesDemo.openRequested")
 
     /// Sets up the scenario once the library is ready (after `--simulate-recording`, if any).
     static func apply(to state: AppState) {
+        if CommandLine.arguments.contains("--notes-open") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                for window in NSApp.windows where window.identifier?.rawValue.hasPrefix(WindowID.library) == true { window.close() }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { NotificationCenter.default.post(name: openRequested, object: nil) }
+            }
+        }
         guard let scenario else { return }
         switch scenario {
         case .multipoint, .paused:
@@ -69,8 +80,8 @@ enum FloatingNotesDemo {
     /// What the iPhone would report that the demo phone can't send: a pause.
     static func adjust(_ inputs: inout FloatingStatusInputs, meeting: Meeting?) {
         guard scenario == .paused, inputs.phase == .recording else { return }
-        for index in inputs.phones.indices where inputs.phones[index].along != nil {
-            inputs.phones[index].activity = .paused
+        for index in inputs.recording.peers.indices where inputs.recording.peers[index].along != nil {
+            inputs.recording.peers[index].activity = .paused
         }
     }
 

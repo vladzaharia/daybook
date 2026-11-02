@@ -3,40 +3,45 @@ import DaybookCore
 import DaybookDesign
 import DaybookDevices
 import DaybookKit
+import DaybookUI
 import SwiftUI
 import XCTest
 @testable import Daybook
 
-/// What Floating Notes' status bar and home lines say in each state
-/// (`FloatingStatus`), read from plain inputs as the iPhone's status-sheet tests do.
+/// What Floating Notes' status bar and home lines say in each state (`FloatingStatus`), read from plain inputs as
+/// the iPhone's status-sheet tests do. The recording's words are the ones the iPhone's recorder says too
+/// (`RecordingStatusWords`), and recorders and iPhones read as they do everywhere else.
 final class FloatingNotesStatusTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
-    private func soundcore(_ state: ConnectionState = .connected, battery: Int? = 80) -> FloatingStatusInputs.Recorder {
-        var recorder = FloatingStatusInputs.Recorder(id: "sc", name: "Soundcore Work", shortName: "Soundcore",
-                                                     symbol: "recordingtape", state: state)
-        recorder.isLinked = state == .connected
-        recorder.battery = battery
+    private func soundcore(_ state: ConnectionState = .connected, battery: Int? = 80) -> RecorderFacts {
+        var recorder = RecorderFacts(id: "sc", name: "Soundcore Work", shortName: "Soundcore", symbol: "recordingtape", isDirect: true,
+                                     state: state, isLinked: state == .connected)
+        recorder.batteryLevel = battery
         return recorder
     }
 
-    private func phone(connected: Bool = true) -> FloatingStatusInputs.Phone {
-        FloatingStatusInputs.Phone(id: "ph", name: "Alex’s iPhone", isConnected: connected)
+    private func phone(connected: Bool = true) -> RecordingStatusInputs.Peer {
+        RecordingStatusInputs.Peer(id: "ph", name: "Alex’s iPhone", kind: .iPhone, isConnected: connected)
     }
 
     private func recording(_ change: (inout FloatingStatusInputs) -> Void = { _ in }) -> FloatingStatusInputs {
         var inputs = FloatingStatusInputs()
         inputs.phase = .recording
-        inputs.inputDevice = "MacBook Pro Microphone"
+        inputs.recording.inputDevice = "MacBook Pro Microphone"
         change(&inputs)
         return inputs
+    }
+
+    private func recorderChip(_ facts: RecorderFacts, recording: Bool, now: Date = Date()) -> RecorderChip? {
+        RecordingStatusWords.recorderChip(facts, recording: recording, here: "this Mac", now: now)
     }
 
     // MARK: Phase
 
     func testRecordingPhaseNamesTheInputDeviceUntilTheMicrophoneIsSilent() {
-        XCTAssertEqual(FloatingStatus.phase(recording()), FloatingPhase(phase: .recording, title: "Recording", detail: "MacBook Pro Microphone"))
-        let silent = FloatingStatus.phase(recording { $0.microphoneSilent = true })
+        XCTAssertEqual(FloatingStatus.phase(recording()), RecorderPhase(phase: .recording, title: "Recording", detail: "MacBook Pro Microphone"))
+        let silent = FloatingStatus.phase(recording { $0.recording.microphoneSilent = true })
         XCTAssertEqual(silent?.detail, "Microphone silent", "as the iPhone says it")
         XCTAssertEqual(silent?.detailIsWarning, true)
     }
@@ -45,33 +50,46 @@ final class FloatingNotesStatusTests: XCTestCase {
         var inputs = FloatingStatusInputs()
         XCTAssertNil(FloatingStatus.phase(inputs), "Nothing recording: the band stays quiet")
         inputs.phase = .saved
-        inputs.duration = 761
-        XCTAssertEqual(FloatingStatus.phase(inputs), FloatingPhase(phase: .saved, title: "Saved", detail: "12:41"))
+        inputs.recording.duration = 18 * 60
+        XCTAssertEqual(FloatingStatus.phase(inputs), RecorderPhase(phase: .saved, title: "Saved", detail: "18 min"))
         inputs.phase = .stopped
         XCTAssertEqual(FloatingStatus.phase(inputs)?.phase, .stopped)
+    }
+
+    /// Regression: the band said "SAVED · 18:00" for an 18-minute conversation, which reads as a time of day.
+    func testBehaviorSavedSaysHowLongTheWayThePageDoesNeverLikeAClock() {
+        var inputs = FloatingStatusInputs()
+        inputs.phase = .saved
+        for (seconds, words) in [(TimeInterval(18 * 60), "18 min"), (761, "13 min"), (3_660, DurationLabel.format(3_660)), (43, "43 sec")] {
+            inputs.recording.duration = seconds
+            let detail = FloatingStatus.phase(inputs)?.detail
+            XCTAssertEqual(detail, words)
+            XCTAssertEqual(detail, DurationLabel.format(seconds), "as the page's play pill and the list say it")
+            XCTAssertFalse(detail?.contains(":") ?? true, "\(seconds) s: never a clock time")
+        }
     }
 
     // MARK: Chips
 
     func testCallChipFollowsTheCallTrack() {
-        XCTAssertNil(FloatingStatus.callChip(.off))
-        XCTAssertEqual(FloatingStatus.callChip(.detected)?.tone, .linked)
-        XCTAssertEqual(FloatingStatus.callChip(.quiet)?.tone, .calm)
-        let missing = FloatingStatus.callChip(.missing)
+        XCTAssertNil(RecordingStatusWords.callChip(.off))
+        XCTAssertEqual(RecordingStatusWords.callChip(.detected)?.tone, .linked)
+        XCTAssertEqual(RecordingStatusWords.callChip(.quiet)?.tone, .calm)
+        let missing = RecordingStatusWords.callChip(.missing)
         XCTAssertEqual(missing?.tone, .attention)
         XCTAssertEqual(missing?.label, "No call audio")
         XCTAssertTrue(missing?.detail.contains("Screen & System Audio Recording") == true, "A missing call says how to fix it")
     }
 
     func testCallChipOnlyWhileRecording() {
-        var inputs = recording { $0.call = .detected }
+        var inputs = recording { $0.recording.call = .detected }
         XCTAssertEqual(FloatingStatus.chips(inputs).first?.target, .call)
         inputs.phase = .saved
         XCTAssertFalse(FloatingStatus.chips(inputs).contains { $0.target == .call })
     }
 
     func testConnectedRecorderShowsBatteryAndTheDotWhenRecordingAlong() {
-        let connected = FloatingStatus.recorderChip(soundcore(), recording: true)
+        let connected = recorderChip(soundcore(), recording: true)
         XCTAssertEqual(connected?.label, "Soundcore · 80%")
         XCTAssertEqual(connected?.shortLabel, "Soundcore", "Short, it keeps its name")
         XCTAssertEqual(connected?.tone, .linked)
@@ -80,7 +98,7 @@ final class FloatingNotesStatusTests: XCTestCase {
 
         var along = soundcore()
         along.along = .recording
-        let chip = FloatingStatus.recorderChip(along, recording: true)
+        let chip = recorderChip(along, recording: true)
         XCTAssertEqual(chip?.showsDot, true)
         XCTAssertEqual(chip?.detail, "Soundcore Work · Recording along · 80%")
     }
@@ -88,7 +106,7 @@ final class FloatingNotesStatusTests: XCTestCase {
     func testRecorderThatDidNotStartNeedsThePerson() {
         var recorder = soundcore()
         recorder.along = .unavailable
-        let chip = FloatingStatus.recorderChip(recorder, recording: true)
+        let chip = recorderChip(recorder, recording: true)
         XCTAssertEqual(chip?.tone, .attention)
         XCTAssertEqual(chip?.label, "Not recording")
     }
@@ -97,29 +115,32 @@ final class FloatingNotesStatusTests: XCTestCase {
         var recorder = soundcore(.notConnected, battery: nil)
         recorder.managedBy = "Alex’s iPhone"
         recorder.managedByPhone = true
-        let chip = FloatingStatus.recorderChip(recorder, recording: true)
+        let chip = recorderChip(recorder, recording: true)
         XCTAssertEqual(chip?.label, "Soundcore on Alex’s iPhone")
         XCTAssertEqual(chip?.shortLabel, "On iPhone")
         XCTAssertEqual(chip?.tone, .calm)
         XCTAssertEqual(chip?.detail, "Soundcore Work · Managed by Alex’s iPhone")
-        XCTAssertEqual(FloatingStatus.recorderLine(recorder)?.text, "Managed by Alex’s iPhone")
+        var inputs = FloatingStatusInputs()
+        inputs.recording.recorders = [recorder]
+        XCTAssertEqual(FloatingStatus.lines(inputs).first?.text, "Managed by Alex’s iPhone")
     }
 
     func testHandoffUnderWayWinsOverEverythingElse() {
         var recorder = soundcore()
         recorder.handoff = .asking(owner: "Alex’s iPhone")
-        recorder.handoffLine = "Asking Alex’s iPhone to let go of Soundcore Work…"
-        let chip = FloatingStatus.recorderChip(recorder, recording: false)
+        let chip = recorderChip(recorder, recording: false)
         XCTAssertEqual(chip?.tone, .working)
         XCTAssertEqual(chip?.label, "Moving…")
-        XCTAssertEqual(chip?.detail, recorder.handoffLine)
-        XCTAssertEqual(FloatingStatus.recorderLine(recorder)?.text, recorder.handoffLine)
+        XCTAssertEqual(chip?.detail, "Asking Alex’s iPhone to let go of Soundcore Work…")
+        var inputs = FloatingStatusInputs()
+        inputs.recording.recorders = [recorder]
+        XCTAssertEqual(FloatingStatus.lines(inputs).first?.text, "Asking Alex’s iPhone to let go…")
     }
 
     func testDisconnectedRecorderSaysWhenItWasLastSeen() {
         var recorder = soundcore(.notConnected, battery: nil)
         recorder.lastConnected = now.addingTimeInterval(-3_600)
-        let chip = FloatingStatus.recorderChip(recorder, recording: true, now: now)
+        let chip = recorderChip(recorder, recording: true, now: now)
         XCTAssertEqual(chip?.label, "Not connected")
         XCTAssertTrue(chip?.detail.hasPrefix("Soundcore Work · Not connected · Last seen") == true)
     }
@@ -128,12 +149,12 @@ final class FloatingNotesStatusTests: XCTestCase {
         var along = phone()
         along.along = .recording
         along.activity = .recording
-        let chip = FloatingStatus.phoneChip(along, recording: true)
+        let chip = RecordingStatusWords.peerChip(along, recording: true)
         XCTAssertEqual(chip?.showsDot, true)
         XCTAssertEqual(chip?.detail, "Alex’s iPhone is recording too")
 
         along.activity = .paused
-        let paused = FloatingStatus.phoneChip(along, recording: true)
+        let paused = RecordingStatusWords.peerChip(along, recording: true)
         XCTAssertEqual(paused?.tone, .attention)
         XCTAssertEqual(paused?.label, "Alex’s iPhone paused")
         XCTAssertEqual(paused?.shortLabel, "Paused")
@@ -148,62 +169,76 @@ final class FloatingNotesStatusTests: XCTestCase {
         along.activity = .paused
         var recorder = soundcore()
         recorder.along = .recording
-        let chips = FloatingStatus.chips(recording { $0.call = .detected; $0.recorders = [recorder]; $0.phones = [along] })
-        XCTAssertEqual(chips.map(\.target), [.call, .recorder("sc"), .phone("ph")])
-        func labels(_ fit: ChipRow.Fit) -> [String?] { chips.map(fit.label) }
+        let chips = FloatingStatus.chips(recording { $0.recording.call = .detected; $0.recording.recorders = [recorder]; $0.recording.peers = [along] })
+        XCTAssertEqual(chips.map(\.target), [.call, .recorder("sc"), .peer("ph")])
+        func labels(_ fit: RecorderChipFit) -> [String?] { chips.map(fit.label) }
         XCTAssertEqual(labels(.full), ["Call", "Soundcore · 80%", "Alex’s iPhone paused"])
         XCTAssertEqual(labels(.shortFirst), ["Call", "Soundcore · 80%", "Paused"], "The paused chip shortens first")
         XCTAssertEqual(labels(.shortOthers), ["Call", "Soundcore", "Paused"], "Names stay")
         XCTAssertEqual(labels(.glyphOthers), [nil, nil, "Paused"], "What needs the person keeps its words longest")
         XCTAssertEqual(labels(.short), [nil, nil, "Paused"])
         XCTAssertEqual(labels(.glyph), [nil, nil, nil])
-        XCTAssertEqual(ChipRow.Fit.allCases.first, .full)
+        XCTAssertEqual(RecorderChipFit.allCases.first, .full)
 
         // Processing keeps its whole words until only short labels are left.
         let work = try XCTUnwrap(FloatingStatus.workChip(.transcribing(0.4)))
         XCTAssertFalse(work.shortensFirst)
-        XCTAssertEqual([ChipRow.Fit.shortFirst, .shortOthers, .glyphOthers].map { $0.label(work) }, Array(repeating: work.label, count: 3))
-        XCTAssertEqual(ChipRow.Fit.short.label(work), work.shortLabel)
+        XCTAssertEqual([RecorderChipFit.shortFirst, .shortOthers, .glyphOthers].map { $0.label(work) }, Array(repeating: work.label, count: 3))
+        XCTAssertEqual(RecorderChipFit.short.label(work), work.shortLabel)
     }
 
     func testDisconnectedPhoneHasNoChipButKeepsItsLine() {
-        XCTAssertNil(FloatingStatus.phoneChip(phone(connected: false), recording: true))
-        XCTAssertEqual(FloatingStatus.phoneLine(phone(connected: false)).text, "Not connected")
-        XCTAssertEqual(FloatingStatus.phoneChip(phone(), recording: false)?.tone, .linked)
+        XCTAssertNil(RecordingStatusWords.peerChip(phone(connected: false), recording: true))
+        var inputs = FloatingStatusInputs()
+        inputs.recording.peers = [phone(connected: false)]
+        XCTAssertEqual(FloatingStatus.lines(inputs).first?.text, "Not connected")
+        XCTAssertEqual(RecordingStatusWords.peerChip(phone(), recording: false)?.tone, .linked)
     }
 
-    func testProcessingChipsUseTheCopyPassWords() {
+    func testProcessingChipsUseTheSharedWords() {
         let here = FloatingStatus.workChip(.transcribing(0.4))
         XCTAssertEqual(here?.label, "Transcribing · 40%")
         XCTAssertEqual(here?.detail, "Transcribing · 40%", "This Mac doesn't name itself")
         XCTAssertEqual(here?.progress, 0.4)
-        XCTAssertEqual(FloatingStatus.workChip(.elsewhere(device: "Studio Mac", verb: "Transcribing", fraction: 0.4))?.label,
+        XCTAssertEqual(FloatingStatus.workChip(.elsewhere(device: "Studio Mac", stage: .transcribing, fraction: 0.4))?.label,
                        "Transcribing on Studio Mac · 40%", "Another device is named: which one works is the status")
         XCTAssertEqual(FloatingStatus.workChip(.summarizing)?.label, "Summarizing…")
+        XCTAssertEqual(FloatingStatus.workChip(.waiting)?.label, "Waiting to transcribe")
         XCTAssertEqual(FloatingStatus.workChip(.models)?.label, "Waiting for models")
         XCTAssertEqual(FloatingStatus.workChip(.requested(device: "Alex’s iPhone"))?.label, "Requested from Alex’s iPhone",
                        "the iPhone asked; it isn't what the conversation waits for")
         XCTAssertEqual(FloatingStatus.workChip(.ready(summary: true))?.label, "Summary ready")
-        XCTAssertEqual(FloatingStatus.workChip(.failed("It ran out of memory."))?.tone, .attention)
+        let failed = FailureWords(kind: .modelsMissing, reason: "", hadTranscripts: false, device: "this Mac")
+        let chip = FloatingStatus.workChip(.failed(failed))
+        XCTAssertEqual(chip?.tone, .attention)
+        XCTAssertEqual(chip?.detail, failed.message, "Its menu says it in the words both apps use")
     }
 
     /// Where a summary runs (docs/multipoint.md, "Where summaries run"): its countdown in the chip and the home's
-    /// line for this Mac, a second at a time, and the cloud at work.
-    func testBehaviorASummarysCountdownAndTheCloudShowInTheChipAndTheHome() {
+    /// line for this Mac, a second at a time, and the cloud at work. Only the chip or the line redraws.
+    func testBehaviorASummarysCountdownAndTheCloudShowInTheChipAndTheHome() throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
-        let countdown = FloatingStatus.workChip(.summaryCountdown(until: now.addingTimeInterval(11.2), cloud: true), now: now)
-        XCTAssertEqual(countdown?.label, "Summarizing in 12 s")
-        XCTAssertEqual(countdown?.shortLabel, "12 s")
-        XCTAssertEqual(countdown?.detail, "Summarizing on this Mac in 12 s", "The menu's first line says it whole")
-        XCTAssertEqual(countdown?.tone, .calm)
+        let countdown = try XCTUnwrap(FloatingStatus.workChip(.summaryCountdown(until: now.addingTimeInterval(11.2), cloud: true), now: now))
+        XCTAssertEqual(countdown.label, "Summarizing in 12 s")
+        XCTAssertEqual(countdown.shortLabel, "12 s")
+        XCTAssertEqual(countdown.detail, "Summarizing on this Mac in 12 s", "The menu's first line says it whole")
+        XCTAssertEqual(countdown.tone, .calm)
+        let later = countdown.at(now.addingTimeInterval(3))
+        XCTAssertEqual(later.label, "Summarizing in 9 s", "The chip moves on its own")
+        XCTAssertEqual(later.shortLabel, "9 s")
+        XCTAssertEqual(later.detail, "Summarizing on this Mac in 9 s")
+        XCTAssertNil(FloatingStatus.workChip(.summarizing)?.countdownUntil, "Nothing else ticks")
         XCTAssertEqual(FloatingStatus.workChip(.summarizingWith("Claude Sonnet 5.5"))?.label, "Summarizing with Claude Sonnet 5.5")
         var queue = FloatingStatusInputs.Queue(running: .summarizing, waiting: 1)
         queue.countdown = now.addingTimeInterval(5)
-        XCTAssertEqual(FloatingStatus.queueLine(queue, now: now)?.text, "Summarizing in 5 s · 1 waiting")
-        XCTAssertEqual(FloatingStatus.queueLine(queue, now: now.addingTimeInterval(2))?.text, "Summarizing in 3 s · 1 waiting")
+        let line = try XCTUnwrap(FloatingStatus.queueWords(queue, now: now))
+        XCTAssertEqual(line.text, "Summarizing in 5 s · 1 waiting")
+        XCTAssertEqual(FloatingStatus.item(line, at: now.addingTimeInterval(2)).text, "Summarizing in 3 s · 1 waiting")
+        XCTAssertEqual(FloatingStatus.item(line, at: now.addingTimeInterval(2)).shortText, "Summarizing in 3 s")
+        XCTAssertEqual(FloatingStatus.queueChip(queue, now: now)?.countdownUntil, queue.countdown)
         queue.countdown = nil
         queue.cloudModel = "Claude Sonnet 5.5"
-        XCTAssertEqual(FloatingStatus.queueLine(queue, now: now)?.text, "Summarizing with Claude Sonnet 5.5 · 1 waiting")
+        XCTAssertEqual(FloatingStatus.queueWords(queue, now: now)?.text, "Summarizing with Claude Sonnet 5.5 · 1 waiting")
     }
 
     func testWorkChipShowsOnceTheConversationIsNotRecording() {
@@ -244,11 +279,11 @@ final class FloatingNotesStatusTests: XCTestCase {
 
     func testChipKindsLeaveOutWhatTheSurfaceSays() {
         let inputs = recording {
-            $0.call = .detected
-            $0.recorders = [soundcore()]
-            $0.phones = [phone()]
+            $0.recording.call = .detected
+            $0.recording.recorders = [soundcore()]
+            $0.recording.peers = [phone()]
         }
-        XCTAssertEqual(FloatingStatus.chips(inputs).map(\.id), ["call", "recorder-sc", "phone-ph"])
+        XCTAssertEqual(FloatingStatus.chips(inputs).map(\.id), ["call", "recorder-sc", "peer-ph"])
         XCTAssertEqual(FloatingStatus.chips(inputs, including: [.call]).map(\.id), ["call"])
         XCTAssertTrue(FloatingStatus.chips(inputs, including: []).isEmpty)
     }
@@ -273,13 +308,13 @@ final class FloatingNotesStatusTests: XCTestCase {
         along.activity = .recording
         idle.id = "idle"
         let inputs = recording {
-            $0.includesCall = true
-            $0.call = .detected
-            $0.recorders = [recorder, late, refused, soundcore()]
-            $0.phones = [along, idle]
+            $0.recording.includesCall = true
+            $0.recording.call = .detected
+            $0.recording.recorders = [recorder, late, refused, soundcore()]
+            $0.recording.peers = [along, idle]
         }
         let meters = FloatingStatus.meters(inputs)
-        XCTAssertEqual(meters.map(\.source), [.microphone, .call, .recorder("sc"), .recorder("late"), .phone("ph")],
+        XCTAssertEqual(meters.map(\.source), [.microphone, .call, .recorder("sc"), .recorder("late"), .peer("ph")],
                        "in the chips' order; a recorder that didn't start, and devices only connected, have none")
         XCTAssertEqual(meters.map(\.symbol), ["mic", "waveform", "recordingtape", "recordingtape", "iphone"], "the chips' glyphs")
         XCTAssertEqual(meters.map(\.name), ["Microphone", "Call audio", "Soundcore Work", "Soundcore Work", "Alex’s iPhone"])
@@ -292,14 +327,14 @@ final class FloatingNotesStatusTests: XCTestCase {
         along.along = .recording
         along.activity = .paused
         let inputs = recording {
-            $0.microphoneSilent = true
-            $0.includesCall = true
-            $0.call = .missing
-            $0.phones = [along]
+            $0.recording.microphoneSilent = true
+            $0.recording.includesCall = true
+            $0.recording.call = .missing
+            $0.recording.peers = [along]
         }
         let meters = FloatingStatus.meters(inputs)
-        XCTAssertEqual(meters[0].warning, FloatingStatus.microphoneSilentHelp)
-        XCTAssertEqual(meters[1].warning, FloatingStatus.callMissingHelp)
+        XCTAssertEqual(meters[0].warning, RecordingStatusWords.microphoneSilentHelp)
+        XCTAssertEqual(meters[1].warning, RecordingStatusWords.callMissingHelp)
         XCTAssertFalse(meters[1].isRecording, "a call that isn't captured rests")
         XCTAssertNil(meters[2].warning)
         XCTAssertFalse(meters[2].isRecording, "a paused iPhone rests")
@@ -313,8 +348,8 @@ final class FloatingNotesStatusTests: XCTestCase {
 
     func testHomeLinesListRecordersPhonesThenTheQueue() {
         var inputs = FloatingStatusInputs()
-        inputs.recorders = [soundcore()]
-        inputs.phones = [phone()]
+        inputs.recording.recorders = [soundcore()]
+        inputs.recording.peers = [phone()]
         inputs.queue = .init(running: .transcribing, fraction: 0.62, waiting: 2)
         let lines = FloatingStatus.lines(inputs, now: now)
         XCTAssertEqual(lines.map(\.title), ["Soundcore Work", "Alex’s iPhone", "This Mac"])
@@ -322,11 +357,12 @@ final class FloatingNotesStatusTests: XCTestCase {
         XCTAssertEqual(lines[1].text, "Connected")
         XCTAssertEqual(lines[2].text, "Transcribing · 62% · 2 waiting")
         XCTAssertEqual(lines[2].progress, 0.62)
+        XCTAssertEqual(lines.map(\.id), ["recorder-sc", "phone-ph", "queue"], "a line opens its device's page by its ID")
     }
 
     func testIdleQueueHasNoLine() {
-        XCTAssertNil(FloatingStatus.queueLine(.init()))
-        XCTAssertEqual(FloatingStatus.queueLine(.init(waiting: 3))?.text, "3 waiting to transcribe")
+        XCTAssertNil(FloatingStatus.queueWords(.init()))
+        XCTAssertEqual(FloatingStatus.queueWords(.init(waiting: 3))?.text, "3 waiting to transcribe")
     }
 
     func testWhatRecordsAlongShowsOnceInTheChips() {
@@ -335,20 +371,30 @@ final class FloatingNotesStatusTests: XCTestCase {
         var recorder = soundcore()
         recorder.along = .recording
         let chips = FloatingStatus.chips(recording {
-            $0.phones = [along]
-            $0.recorders = [recorder]
+            $0.recording.peers = [along]
+            $0.recording.recorders = [recorder]
         })
-        XCTAssertEqual(chips.filter(\.showsDot).map(\.id), ["recorder-sc", "phone-ph"], "The red dot on each, and no line under the clock")
-        XCTAssertEqual(chips.first { $0.id == "phone-ph" }?.detail, "Alex’s iPhone is recording too")
+        XCTAssertEqual(chips.filter(\.showsDot).map(\.id), ["recorder-sc", "peer-ph"], "The red dot on each, and no line under the clock")
+        XCTAssertEqual(chips.first { $0.id == "peer-ph" }?.detail, "Alex’s iPhone is recording too")
 
         along.activity = .paused
         let paused = FloatingStatus.chips(recording {
-            $0.phones = [along]
-            $0.recorders = [recorder]
+            $0.recording.peers = [along]
+            $0.recording.recorders = [recorder]
         })
         XCTAssertEqual(paused.filter(\.showsDot).map(\.id), ["recorder-sc"])
-        XCTAssertEqual(paused.first { $0.id == "phone-ph" }?.label, "Alex’s iPhone paused")
-        XCTAssertEqual(paused.first { $0.id == "phone-ph" }?.tone, .attention)
+        XCTAssertEqual(paused.first { $0.id == "peer-ph" }?.label, "Alex’s iPhone paused")
+        XCTAssertEqual(paused.first { $0.id == "peer-ph" }?.tone, .attention)
+    }
+
+    /// Regression: with last week's conversation focused, Record in the panel added a new call to it, and that
+    /// conversation was transcribed and summarized again. Record goes into a conversation only while it has only notes.
+    func testBehaviorHomeRecordsIntoTheFocusedConversationOnlyWhileItHasOnlyNotes() {
+        var notes = Meeting(title: "Ideas for the offsite", date: now)
+        XCTAssertEqual(HomeSurface.recordTarget(notes), notes.id, "a conversation that's only notes gets its recording")
+        notes.tracks = [RecordingTrack(source: .microphone, relativePath: "Originals/mic.wav", fileName: "mic.wav", offset: 0)]
+        XCTAssertNil(HomeSurface.recordTarget(notes), "one that already has a recording gets a new conversation instead")
+        XCTAssertNil(HomeSurface.recordTarget(nil), "the home records a new conversation")
     }
 }
 

@@ -1,4 +1,5 @@
 import DaybookLink
+import DaybookUI
 import Foundation
 import XCTest
 @testable import Daybook
@@ -46,15 +47,15 @@ final class FloatingNotesMetersTests: XCTestCase {
 
     func testBehaviorEachSourceGetsItsOwnTrailAndOnlyHeardSourcesAreLive() {
         var recorder: Double? = nil
-        let levels = PanelLevels()
-        let readers = PanelLevels.Readers(microphone: { 0.6 }, call: { nil }, recorder: { _ in recorder }, phone: { _ in nil })
-        levels.follow([.microphone, .call, .recorder("sc"), .phone("ph")])
+        let levels = RecorderLevels()
+        let readers = RecorderLevels.Readers(microphone: { 0.6 }, call: { nil }, recorder: { _ in recorder }, peer: { _ in nil })
+        levels.follow([.microphone, .call, .recorder("sc"), .peer("ph")])
         levels.run(true, readers: readers)
         defer { levels.run(false, readers: readers) }
         levels.sample()
         XCTAssertEqual(levels.trail(.microphone).values.last, 0.6)
         XCTAssertEqual(levels.heard, [.microphone], "a source without levels rests")
-        XCTAssertTrue(levels.trail(.phone("ph")).values.allSatisfy { $0 == 0 }, "an iPhone that sends none stays flat")
+        XCTAssertTrue(levels.trail(.peer("ph")).values.allSatisfy { $0 == 0 }, "an iPhone that sends none stays flat")
 
         // A recorder's audio arrives, then stops: its meter falls flat.
         recorder = 0.4
@@ -68,15 +69,15 @@ final class FloatingNotesMetersTests: XCTestCase {
 
         // A source that leaves drops its trail; one that joins starts flat.
         let micTrail = levels.trail(.microphone)
-        levels.follow([.microphone, .phone("other")])
+        levels.follow([.microphone, .peer("other")])
         XCTAssertTrue(levels.trail(.microphone) === micTrail, "a source that stays keeps its trail")
-        XCTAssertTrue(levels.trail(.phone("other")).values.allSatisfy { $0 == 0 })
+        XCTAssertTrue(levels.trail(.peer("other")).values.allSatisfy { $0 == 0 })
         XCTAssertEqual(levels.heard, [.microphone])
     }
 
     func testBehaviorStoppingFlattensEveryMeter() {
-        let levels = PanelLevels()
-        let readers = PanelLevels.Readers(microphone: { 0.5 }, call: { 0.5 }, recorder: { _ in 0.5 }, phone: { _ in 0.5 })
+        let levels = RecorderLevels()
+        let readers = RecorderLevels.Readers(microphone: { 0.5 }, call: { 0.5 }, recorder: { _ in 0.5 }, peer: { _ in 0.5 })
         levels.follow([.microphone, .call])
         levels.run(true, readers: readers)
         XCTAssertTrue(levels.isRunning)
@@ -114,17 +115,17 @@ final class FloatingNotesMetersTests: XCTestCase {
         XCTAssertTrue(AppState.linkIdentity(sync: state.sync, defaults: makeTestDefaults("FloatingNotesMetersTests.identity"))
             .features.contains(LinkCapabilities.liveLevelsFeature), "this Mac tells iPhones it draws their levels")
         let id = UUID(), phone = UUID()
-        let readers = PanelLevels.Readers.live(state)
+        let readers = RecorderLevels.Readers.live(state)
         state.phoneLevelled(LinkLevels(conversationID: id, values: [0.5]), from: phone)
-        XCTAssertNil(readers.phone(phone.uuidString), "not recording: nothing kept")
+        XCTAssertNil(readers.peer(phone.uuidString), "not recording: nothing kept")
 
         state.recordingID = id
         state.phoneLevelled(LinkLevels(conversationID: UUID(), values: [0.7]), from: phone)
-        XCTAssertNil(readers.phone(phone.uuidString), "another conversation's levels")
+        XCTAssertNil(readers.peer(phone.uuidString), "another conversation's levels")
         state.phoneLevelled(LinkLevels(conversationID: id, values: [0.3, 0.5]), from: phone)
-        XCTAssertEqual(readers.phone(phone.uuidString), 0.3)
-        XCTAssertEqual(readers.phone(phone.uuidString), 0.5)
-        XCTAssertNil(readers.phone(UUID().uuidString), "another iPhone sent none")
+        XCTAssertEqual(readers.peer(phone.uuidString), 0.3)
+        XCTAssertEqual(readers.peer(phone.uuidString), 0.5)
+        XCTAssertNil(readers.peer(UUID().uuidString), "another iPhone sent none")
         XCTAssertNil(readers.recorder("missing"), "no such recorder: no level")
         state.recordingID = nil
     }
