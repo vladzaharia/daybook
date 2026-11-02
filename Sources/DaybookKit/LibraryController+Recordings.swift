@@ -110,8 +110,9 @@ extension LibraryController {
             meeting.highlights = carried.highlights
             // The passages as they read here, so fusing the new conversation finds the corrections made to them.
             meeting.unifiedTranscript = carried.passages
-            meeting.revisions = carried.revisions + [MeetingRevision(date: now, field: "source:\(trackID.uuidString):moved-from", oldValue: "",
-                                                                     newValue: "Moved from “\(source.title)”")]
+            // Named by the copy: the person filed it here (`wasMovedHere`), so it's never matched back.
+            meeting.revisions = carried.revisions + [MeetingRevision(date: now, field: RecordingRemoval.movedHereField(mapping[trackID] ?? trackID),
+                                                                     oldValue: "", newValue: "Moved from “\(source.title)”")]
             meeting.kind = source.kind
             meeting.status = carried.transcripts.isEmpty ? .imported : .ready
         }

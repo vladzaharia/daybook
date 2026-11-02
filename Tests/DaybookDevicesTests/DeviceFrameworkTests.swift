@@ -306,6 +306,31 @@ final class DeviceFrameworkTests: XCTestCase {
         XCTAssertEqual(split.imported.map(\.id), ["5", "3", "1"])
     }
 
+    func testAMovedRecordingIsInItsNewConversationOnlyAndARemovedOneStaysWhereItCanBePutBack() {
+        let identity = DeviceRecordingIdentity(kind: "soundcore.work", serial: "AAAA", recordingID: "1")
+        func track(_ id: String, removal: RecordingRemoval? = nil) -> RecordingTrack {
+            var track = RecordingTrack(source: .soundcore, relativePath: "Originals/\(id).wav", fileName: "\(id).wav",
+                                       device: DeviceRecordingIdentity(kind: "soundcore.work", serial: "AAAA", recordingID: id))
+            track.removal = removal
+            return track
+        }
+        // Moved into a conversation of its own: the new conversation is listed first, as a new one is.
+        let moved = Meeting(title: "Interview", tracks: [track("1")])
+        let left = Meeting(title: "Weekly sync", tracks: [track("1", removal: RecordingRemoval(removedAt: Date(), movedTo: moved.id)),
+                                                          track("2", removal: RecordingRemoval(removedAt: Date()))])
+        for meetings in [[moved, left], [left, moved]] {
+            let links = DeviceLibraryLinks(meetings: meetings, kind: "soundcore.work", serial: "AAAA")
+            XCTAssertEqual(links.imported["1"], moved.id, "In Daybook opens the conversation it moved to")
+            XCTAssertEqual(links.recent.filter { $0.recordingID == "1" }.map(\.meetingID), [moved.id], "listed once")
+            XCTAssertEqual(DeviceLibraryLinks.meeting(holding: identity, in: meetings), moved.id, "not the one it left")
+            // A removed recording is still in its conversation, which lists it to put back.
+            XCTAssertEqual(links.imported["2"], left.id)
+        }
+        // Moved, and its new conversation since deleted: the recording isn't in Daybook, so it can come in again.
+        XCTAssertNil(DeviceLibraryLinks.meeting(holding: identity, in: [left]))
+        XCTAssertNil(DeviceLibraryLinks(meetings: [left], kind: "soundcore.work").imported["1"])
+    }
+
     func testSplitHoldsTheRecordingInProgressApart() {
         var now = recording(9)
         now.isInProgress = true

@@ -458,9 +458,10 @@ extension AppState {
         guard let meeting = meetings.first(where: { $0.id == id }), job.requestID != nil || meeting.openProcessingRequests.isEmpty else { return false }
         // Not yet seen here: from a device (the phone, or a recorder another device imported), no
         // transcript, and not yet a source of this conversation (the phone may have filed it as one
-        // still to place, holding the notes typed on it). Recordings this Mac imported were placed then.
+        // still to place, holding the notes typed on it). Recordings this Mac imported were placed then,
+        // and one the person moved here from another conversation is where they filed it.
         let arriving = meeting.tracks.filter { track in
-            track.deviceKind != nil && !meeting.transcripts.contains { $0.trackID == track.id }
+            track.deviceKind != nil && !meeting.transcripts.contains { $0.trackID == track.id } && !meeting.wasMovedHere(track.id)
                 && (track.alignment == nil
                     || (track.alignment?.isPending == true && !meeting.revisions.contains { $0.kind == .source(track.id.uuidString) }))
         }
@@ -525,10 +526,11 @@ extension AppState {
 
     /// The recording to check in a conversation of the iPhone's own: its one recording, transcribed on the iPhone
     /// that made it (its Transcribe request finished by the device that asked), never placed on another's timeline,
-    /// and not checked here yet. A recording a Mac transcribed was checked before the Mac transcribed it.
+    /// and not checked here yet. A recording a Mac transcribed was checked before the Mac transcribed it, and one
+    /// the person moved here from another conversation is never checked: it's where they filed it.
     func phoneTranscriptToCheck(_ meeting: Meeting) -> RecordingTrack? {
         guard meeting.tracks.count == 1, let track = meeting.tracks.first, track.deviceKind == DaybookPhoneIntegration.id,
-              track.alignment == nil, meeting.transcripts.contains(where: { $0.trackID == track.id }),
+              track.alignment == nil, meeting.transcripts.contains(where: { $0.trackID == track.id }), !meeting.wasMovedHere(track.id),
               !sources.hasChecked(phoneRecording: track.id) else { return nil }
         let transcribedOnThePhone = (meeting.processingRequests ?? []).contains { request in
             request.mode != .summaryOnly && request.outcome?.result == .completed && request.outcome?.device.id == request.requestedBy.id

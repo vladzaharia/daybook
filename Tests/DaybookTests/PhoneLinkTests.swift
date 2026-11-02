@@ -1486,6 +1486,58 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertEqual(track.alignment?.offset ?? 99, 0.1, accuracy: 0.001)
     }
 
+    /// Regression: a phone recording the person moved out of a conversation before it was transcribed (the
+    /// conversation waited for models) was matched straight back into it when its new conversation was processed,
+    /// and its new conversation went to the Trash, so it was listed nowhere. The person filed it: it stays, and is
+    /// transcribed there. Nor is it checked again once the iPhone transcribes it there.
+    func testAPhoneRecordingMovedIntoAConversationOfItsOwnStaysThere() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        // The sound would put it back where it was, which overlaps it in time.
+        state.sources.alignAudio = { _, _, _, _ in AudioAlignment(offset: 0.1, rate: 1, confidence: 0.9) }
+        let macAudio = try rig.audio("standup-moved.wav", frequency: 330)
+        let phoneAudio = try rig.audio("iphone-moved.wav", frequency: 490)
+        try rig.inference.script(macAudio, [(0, "Standup notes.")])
+        try rig.inference.script(phoneAudio, [(0, "A side conversation.")])
+        let start = Date().addingTimeInterval(-300)
+        let id = try await rig.macConversation("Standup", at: start, seconds: 0.5, audio: macAudio)
+        // The phone's recording is in it, and the conversation waits for models.
+        let installed = state.installedModels
+        state.installedModels = []
+        let identity = DeviceRecordingIdentity(kind: DaybookPhoneIntegration.id, serial: UUID().uuidString, recordingID: UUID().uuidString)
+        try await state.importFiles([phoneAudio], source: .microphone, attachTo: id, device: identity)
+        let phone = try XCTUnwrap(rig.meeting(id)?.tracks.first { $0.deviceKind == DaybookPhoneIntegration.id })
+        state.update(id) { meeting in
+            guard let index = meeting.tracks.firstIndex(where: { $0.id == phone.id }) else { return }
+            meeting.tracks[index].startedAt = start.addingTimeInterval(0.1)
+            meeting.tracks[index].duration = 0.5
+        }
+
+        let moved = try await state.library.moveRecordingToNewConversation(phone.id, from: id, audio: { track in
+            try await state.library.audioURL(for: track, in: id)
+        }, undoManager: nil)
+        state.installedModels = installed
+        state.awaitingModels.removeAll()
+        state.enqueue(moved, mode: .newAudio)
+        try await rig.processed(moved)
+        let own = try XCTUnwrap(rig.meeting(moved), "its new conversation stays")
+        let copy = try XCTUnwrap(own.tracks.first)
+        XCTAssertEqual(own.tracks.count, 1)
+        XCTAssertEqual(own.transcripts.map(\.trackID), [copy.id], "transcribed there")
+        XCTAssertEqual(rig.meeting(id)?.presentTracks.map(\.source), [.microphone], "the conversation it left has its own recording")
+        XCTAssertEqual(rig.meeting(id)?.tracks.first { $0.id == phone.id }?.removal?.movedTo, moved)
+        XCTAssertEqual(rig.inference.transcribed, [try AudioDigest.sha256(fileURL: phoneAudio)])
+
+        // Transcribed on the iPhone in its new conversation instead, it isn't checked for another one.
+        var onThePhone = own
+        let device = ProcessingRequest.Device.phone
+        let request = ProcessingRequest(meetingID: moved, mode: .newAudio, requestedBy: device)
+        onThePhone.processingRequests = [try XCTUnwrap(request.claimed(by: device, at: Date())?.completed(by: device, at: Date()))]
+        XCTAssertNil(state.phoneTranscriptToCheck(onThePhone))
+        onThePhone.revisions.removeAll { $0.field == RecordingRemoval.movedHereField(copy.id) }
+        XCTAssertNotNil(state.phoneTranscriptToCheck(onThePhone), "a recording the iPhone filed there itself is checked")
+    }
+
     // MARK: A recording the iPhone transcribed itself
 
     /// What the iPhone's own processing leaves (docs/iphone.md, "Processing on this iPhone"): its recording transcribed

@@ -16,11 +16,20 @@ public struct RecordingRemoval: Codable, Equatable, Sendable {
         self.removedAt = removedAt
         self.movedTo = movedTo
     }
+
+    /// The Version History field that records a recording (its copy, by the copy's ID) arriving in the conversation
+    /// it was moved to (`Meeting.wasMovedHere`).
+    public static func movedHereField(_ trackID: UUID) -> String { "source:\(trackID.uuidString):moved-from" }
 }
 
 extension RecordingTrack {
     /// It was taken out of its conversation (`removal`).
     public var isRemoved: Bool { removal != nil }
+
+    /// It was moved into a conversation of its own, where its copy is the recording now. Finding where a recording
+    /// is (a device's recordings already in Daybook, audio already imported) skips this one, so a moved recording
+    /// is found in its new conversation. A removed one is still found here, where it can be put back.
+    public var isMovedOut: Bool { removal?.movedTo != nil }
 }
 
 extension Meeting {
@@ -29,6 +38,15 @@ extension Meeting {
 
     /// Recordings removed from it (not moved), which can be put back.
     public var removedTracks: [RecordingTrack] { tracks.filter { $0.removal != nil && $0.removal?.movedTo == nil } }
+
+    /// The person moved this recording here from another conversation (Move to New Conversation), with the copies
+    /// that share its audio: this is where they filed it. It's never matched to another conversation the way a
+    /// recording that arrives on its own is (by a recorder's link, overlap in time, or the sound), so it can't be
+    /// matched straight back into the one it left. Its Version History entry says so, which syncs with it.
+    public func wasMovedHere(_ trackID: UUID) -> Bool {
+        let fields = Set(recordingGroup(of: trackID).map { RecordingRemoval.movedHereField($0.id) })
+        return revisions.contains { fields.contains($0.field) }
+    }
 
     /// Its bookmarks, without those on a recording taken out of it: they leave with the recording (a moved one's are
     /// in its new conversation) and come back when it's put back. Bookmark lists, the timeline, and what a summary is

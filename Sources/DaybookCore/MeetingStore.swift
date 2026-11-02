@@ -185,10 +185,11 @@ public actor MeetingStore {
 
     /// The first of `candidates` (the library's conversations, as the caller has them) holding a
     /// recording with this digest, checked against the file itself: a stale digest in the metadata
-    /// must not hide a missing or changed original. Only recordings that claim the digest are read.
+    /// must not hide a missing or changed original. Only recordings that claim the digest are read. A recording
+    /// moved out of a conversation is in the one it moved to (`isMovedOut`).
     public func verifiedMeeting(withDigest digest: String, among candidates: [Meeting]) async -> Meeting? {
-        for meeting in candidates where meeting.tracks.contains(where: { $0.sha256 == digest }) {
-            for track in meeting.tracks where track.sha256 == digest {
+        for meeting in candidates where meeting.tracks.contains(where: { $0.sha256 == digest && !$0.isMovedOut }) {
+            for track in meeting.tracks where track.sha256 == digest && !track.isMovedOut {
                 if await isVerified(track, digest: digest, in: meeting.id) { return meeting }
             }
         }

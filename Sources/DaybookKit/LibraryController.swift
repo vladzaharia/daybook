@@ -156,11 +156,12 @@ public final class LibraryController {
 
     /// The conversation that already holds these exact bytes, if any. The file is hashed off the
     /// main actor and matched against the digests the library already has in memory; only a
-    /// conversation that claims the digest has its original read to confirm it.
+    /// conversation that claims the digest has its original read to confirm it. A recording moved into a
+    /// conversation of its own is found there, never in the one it left.
     public func existingMeeting(containingAudioAt url: URL) async throws -> Meeting? {
         guard let store else { throw DaybookError.libraryUnavailable }
         let digest = try await AudioDigest.sha256(contentsOf: url)
-        let candidates = meetings.filter { $0.tracks.contains { $0.sha256 == digest } }
+        let candidates = meetings.filter { $0.tracks.contains { $0.sha256 == digest && !$0.isMovedOut } }
         guard !candidates.isEmpty, let found = await store.verifiedMeeting(withDigest: digest, among: candidates) else { return nil }
         return meeting(found.id) ?? found
     }

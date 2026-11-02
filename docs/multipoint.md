@@ -346,6 +346,9 @@ so only the Mac that carries out the request does this (any Mac, for a recording
   the phone's summary; this Mac summarizes it only when the phone asked. One the phone holds a claim on (it's
   summarizing it) is checked when that's done. A recording the phone transcribed counts as the phone's when
   its Transcribe request was finished by the device that asked; one a Mac transcribed was checked before.
+- **Moved here by the person** (Move to New Conversation, [architecture](architecture.md#recordings-taken-out)):
+  a recording in the conversation it was moved into is where the person filed it (`Meeting.wasMovedHere`), so
+  none of the above runs for it, and it's never matched back into the conversation it left.
 
 ## Starting anywhere
 

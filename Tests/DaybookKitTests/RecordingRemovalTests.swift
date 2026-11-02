@@ -208,4 +208,21 @@ final class RecordingRemovalTests: XCTestCase {
         let restored = try XCTUnwrap(MeetingEvidence.highlights(back))
         XCTAssertTrue(restored.contains("Pricing") && restored.contains("interview"))
     }
+
+    func testBehaviorAMovedRecordingsAudioIsFoundInItsNewConversation() async throws {
+        let library = try await open()
+        let (id, _, dropped, _) = try await twoRecordings(library)
+        let newID = try await library.moveRecordingToNewConversation(dropped, from: id, audio: { track in
+            try await library.audioURL(for: track, in: id)
+        }, undoManager: nil)
+        // The conversation it left comes first, as a later one does in a library opened again.
+        library.update(id) { $0.date = Date().addingTimeInterval(3_600) }
+        await library.flush()
+        let reopened = try await open()
+        XCTAssertEqual(reopened.meetings.first?.id, id)
+        let found = try await reopened.existingMeeting(containingAudioAt: root.appendingPathComponent("Interview.m4a"))
+        XCTAssertEqual(found?.id, newID, "importing it again finds the conversation it moved to, which lists it")
+        let stays = try await reopened.existingMeeting(containingAudioAt: root.appendingPathComponent("mic.wav"))
+        XCTAssertEqual(stays?.id, id)
+    }
 }

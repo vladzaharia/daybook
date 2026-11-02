@@ -37,11 +37,12 @@ public struct DeviceLibraryLinks: Equatable {
     /// The conversation that already holds this recording in full: the same kind and recording ID,
     /// from the same recorder when both name a serial. Importers check it right before they ingest,
     /// because another device's import of the same recording can arrive through sync while this one
-    /// transfers. A Listen Live portion never matches: each is its own stretch of audio.
+    /// transfers. A Listen Live portion never matches: each is its own stretch of audio. A recording moved into a
+    /// conversation of its own is held there, never by the one it left (`isMovedOut`).
     public static func meeting(holding identity: DeviceRecordingIdentity, in meetings: [Meeting]) -> UUID? {
         guard !identity.recordingID.hasSuffix(partialSuffix) else { return nil }
         for meeting in meetings {
-            for track in meeting.tracks {
+            for track in meeting.tracks where !track.isMovedOut {
                 guard let device = track.device, device.kind == identity.kind, device.recordingID == identity.recordingID else { continue }
                 if let serial = identity.serial, let other = device.serial, !serial.isEmpty, !other.isEmpty, serial != other { continue }
                 return meeting.id
@@ -106,9 +107,10 @@ public struct DeviceLibraryIndex: Equatable {
 
     private var byKind: [String: [Track]] = [:]
 
+    /// A recording moved into a conversation of its own is listed once, in that conversation (`isMovedOut`).
     public init(meetings: [Meeting]) {
         for meeting in meetings {
-            for track in meeting.tracks {
+            for track in meeting.tracks where !track.isMovedOut {
                 guard let device = track.device else { continue }
                 byKind[device.kind, default: []].append(Track(meetingID: meeting.id, trackID: track.id, device: device,
                                                               createdAt: track.createdAt, fileName: track.fileName, sha256: track.sha256))
