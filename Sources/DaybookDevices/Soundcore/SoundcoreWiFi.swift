@@ -91,6 +91,15 @@ public enum SoundcoreWiFi {
         guard !digits.isEmpty else { return nil }
         return Data(hex: digits)
     }
+
+    /// This device is on the recorder's network `ssid`: it has an address on the recorder's subnet and, where the
+    /// build can read the name of the Wi‑Fi it's on (`readsName`; on iPhone, the Access Wi‑Fi Information
+    /// entitlement), that name is `ssid`. An address alone isn't proof: a home or café network can use the same
+    /// addresses, and a host there would answer for the recorder. Without the name, the audio still can't be read
+    /// or forged there: it's encrypted and checked with the key exchanged over Bluetooth.
+    public static func isOnRecorderNetwork(_ ssid: String, currentName: String?, readsName: Bool, sharesSubnet: Bool) -> Bool {
+        sharesSubnet && (!readsName || currentName == ssid)
+    }
 }
 
 /// Joins and leaves the recorder's own network. On iPhone that's `NEHotspotConfiguration`
@@ -98,12 +107,12 @@ public enum SoundcoreWiFi {
 /// foreground; the simulator has its own.
 @MainActor
 public protocol SoundcoreHotspot: AnyObject {
-    /// Joins the network and returns once this device is on it, by its name, with an address on the
-    /// recorder's subnet. An address alone isn't proof: a home or café network can use the same addresses.
+    /// Joins the network and returns once this device is on it (`isJoined`).
     func join(ssid: String, password: String, recorder host: String) async throws
-    /// The Wi‑Fi network this device is on now is `ssid`. Asked again right before each WebSocket attempt,
-    /// so nothing is sent to a host on another network that happens to have the recorder's address.
-    func isJoined(to ssid: String) async -> Bool
+    /// This device is on the recorder's network `ssid` now, as `SoundcoreWiFi.isOnRecorderNetwork` says: by its
+    /// address and, where the build can read it, its name. Asked again right before each WebSocket attempt, so
+    /// nothing is sent once this device has gone back to another network.
+    func isJoined(to ssid: String, recorder host: String) async -> Bool
     /// Leaves it and forgets it.
     func leave(ssid: String)
 }
@@ -115,7 +124,7 @@ public enum SoundcoreHotspotError: LocalizedError, Equatable {
     case declined
     /// The network didn't appear, or joining it failed.
     case failed(String)
-    /// This device isn't on the recorder's network by its name, whatever its address says.
+    /// This device isn't on the recorder's network (`SoundcoreHotspot.isJoined`), whatever iOS said of the join.
     case notJoined
 
     public var errorDescription: String? {
@@ -123,7 +132,8 @@ public enum SoundcoreHotspotError: LocalizedError, Equatable {
         case .unavailable: return "This build of Daybook can’t join the recorder’s Wi‑Fi."
         case .declined: return "Joining the recorder’s Wi‑Fi was declined."
         case .failed(let reason): return "The recorder’s Wi‑Fi couldn’t be joined: \(reason)"
-        case .notJoined: return "This device isn’t on the recorder’s Wi‑Fi."
+        // Fast Transfer is the iPhone's alone.
+        case .notJoined: return "This iPhone isn’t on the recorder’s Wi‑Fi."
         }
     }
 }

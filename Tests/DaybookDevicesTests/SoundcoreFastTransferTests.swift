@@ -343,8 +343,24 @@ final class SoundcoreFastTransferTests: XCTestCase {
         XCTAssertEqual(count(rig, 0x1a, 0x07), 1, "over Bluetooth")
         XCTAssertEqual(rig.library.imports[0].seconds, 1, accuracy: 0.1)
         let row = try XCTUnwrap(rig.connection.technicalDetails.first { $0.label == "Fast Transfer" })
-        XCTAssertTrue(row.value.hasSuffix(SoundcoreHotspotError.notJoined.localizedDescription), row.value)
+        XCTAssertTrue(row.value.hasSuffix("This iPhone isn’t on the recorder’s Wi‑Fi."), row.value)
         XCTAssertTrue(rig.connection.usesFastTransfer, "a failure, not the person's No")
+    }
+
+    /// On the recorder's network: an address on its subnet always, and its name only where the build can read names
+    /// (the Access Wi‑Fi Information entitlement). Without the entitlement iOS answers every name with nil, which
+    /// mustn't fail every join.
+    func testBehaviorTheNetworkIsCheckedByNameOnlyWhereTheBuildCanReadIt() {
+        let ssid = "WiFi-1730000000000"
+        func check(_ name: String?, readsName: Bool, sharesSubnet: Bool = true) -> Bool {
+            SoundcoreWiFi.isOnRecorderNetwork(ssid, currentName: name, readsName: readsName, sharesSubnet: sharesSubnet)
+        }
+        XCTAssertTrue(check(ssid, readsName: true))
+        XCTAssertFalse(check("Home", readsName: true), "another network with the same addresses")
+        XCTAssertFalse(check(nil, readsName: true))
+        XCTAssertFalse(check(ssid, readsName: true, sharesSubnet: false), "no address there yet")
+        XCTAssertTrue(check(nil, readsName: false), "a build that can't read names: iOS says nil")
+        XCTAssertFalse(check(nil, readsName: false, sharesSubnet: false))
     }
 
     // MARK: Falling back to Bluetooth

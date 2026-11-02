@@ -15,6 +15,8 @@
 	</array>
 	<key>com.apple.developer.networking.HotspotConfiguration</key>
 	<true/>
+	<key>com.apple.developer.networking.wifi-info</key>
+	<true/>
 	<key>com.apple.developer.ubiquity-container-identifiers</key>
 	<array>
 		<string>$(DAYBOOK_ICLOUD_CONTAINER)</string>

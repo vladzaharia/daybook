@@ -12,8 +12,18 @@ import NetworkExtension
 public final class SystemSoundcoreHotspot: SoundcoreHotspot {
     /// After iOS says it joined, how long to wait for it to be on the recorder's network with an address there.
     public var addressWait: Duration = .seconds(20)
+    /// iOS names the Wi‑Fi this iPhone is on (`NEHotspotNetwork.fetchCurrent`) only to an app with the Access Wi‑Fi
+    /// Information entitlement (`com.apple.developer.networking.wifi-info`); without it every answer is nil. So the
+    /// name is checked only in a build that has it, which says so in its Info.plist (`readsNetworkNameKey`, set beside
+    /// the entitlement). Otherwise an address on the recorder's subnet is the check.
+    public let readsNetworkName: Bool
 
-    public init() {}
+    /// Info.plist's Boolean that this build has the Access Wi‑Fi Information entitlement.
+    public static let readsNetworkNameKey = "DaybookReadsWiFiName"
+
+    public init(readsNetworkName: Bool = Bundle.main.object(forInfoDictionaryKey: SystemSoundcoreHotspot.readsNetworkNameKey) as? Bool == true) {
+        self.readsNetworkName = readsNetworkName
+    }
 
     public func join(ssid: String, password: String, recorder host: String) async throws {
         let configuration = NEHotspotConfiguration(ssid: ssid, passphrase: password, isWEP: false)
@@ -28,23 +38,27 @@ public final class SystemSoundcoreHotspot: SoundcoreHotspot {
             default: throw SoundcoreHotspotError.failed(error.localizedDescription)
             }
         }
-        // `apply` succeeding doesn't promise the join, and an address on the recorder's subnet doesn't either: the
-        // Wi‑Fi this iPhone was on may use the same addresses (192.168.1.x), and then a host there would answer for
-        // the recorder. Wait until iOS names the recorder's network as the current one, and there's an address on it.
+        // `apply` succeeding doesn't promise the join: wait until this iPhone is on the recorder's network.
         let deadline = ContinuousClock.now.advanced(by: addressWait)
-        while await !isJoined(to: ssid) || !Self.sharesSubnet(with: host) {
+        while await !isJoined(to: ssid, recorder: host) {
             guard ContinuousClock.now < deadline else { throw SoundcoreHotspotError.failed("This iPhone isn’t on its network.") }
             try await Task.sleep(for: .milliseconds(250))
         }
     }
 
-    /// iOS names `ssid` as the Wi‑Fi network it's on now. It tells an app the name of a network that app
-    /// configured (`NEHotspotNetwork.fetchCurrent`), which the recorder's is.
-    public func isJoined(to ssid: String) async -> Bool {
-        let current = await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
+    /// An address on the recorder's subnet and, where this build can read it, iOS naming `ssid` as the Wi‑Fi this
+    /// iPhone is on: with the entitlement, `fetchCurrent` names a network the app configured, as the recorder's is.
+    public func isJoined(to ssid: String, recorder host: String) async -> Bool {
+        var current: String?
+        if readsNetworkName { current = await Self.currentNetworkName() }
+        return SoundcoreWiFi.isOnRecorderNetwork(ssid, currentName: current, readsName: readsNetworkName,
+                                                 sharesSubnet: Self.sharesSubnet(with: host))
+    }
+
+    private static func currentNetworkName() async -> String? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
             NEHotspotNetwork.fetchCurrent { network in continuation.resume(returning: network?.ssid) }
         }
-        return current == ssid
     }
 
     public func leave(ssid: String) {

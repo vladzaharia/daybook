@@ -65,9 +65,9 @@ public enum SoundcoreFastTransferError: LocalizedError, Equatable {
 /// 1. Over Bluetooth, after the usual key exchange (the Wi‑Fi transfer reuses that key), `1A 05` with an
 ///    access point name and password Daybook chooses; the recorder answers with its address and port.
 /// 2. Bluetooth is let go on purpose, and the recorder gets `accessPointStartup` to start its network.
-/// 3. The iPhone joins it (`SoundcoreHotspot`; iOS asks each time) and, once iOS names the recorder's network
-///    as the one it's on, opens `wss://` to the recorder, taking its self-signed certificate, with a UDP
-///    keep-alive every two seconds.
+/// 3. The iPhone joins it (`SoundcoreHotspot`; iOS asks each time) and, while it's on the recorder's network
+///    (`SoundcoreHotspot.isJoined`), opens `wss://` to the recorder, taking its self-signed certificate, with a
+///    UDP keep-alive every two seconds.
 /// 4. Each recording is asked for as hex text (`1A 07` with an offset of 0), and arrives as the same
 ///    encrypted packets as over Bluetooth, through the same checks.
 /// 5. FINISH, the network left, Bluetooth back, and `1A 02` closes the access point. Nothing deletes.
@@ -252,14 +252,14 @@ final class SoundcoreFastTransfer {
     }
 
     /// The recorder's WebSocket, in a few attempts: its network may take a moment to route. Each attempt opens
-    /// only while iOS names the recorder's network as the one this device is on: the recorder's address alone
-    /// could reach a host on another network with the same addresses, and the socket takes any certificate.
+    /// only while this device is on the recorder's network (`SoundcoreHotspot.isJoined`): once iOS has gone back
+    /// to another, the recorder's address could reach a host there, and the socket takes any certificate.
     private func connect(_ accessPoint: SoundcoreAccessPoint, hotspot: any SoundcoreHotspot) async throws -> SoundcoreWebSocket {
         var last: Error = WebSocketError.timedOut
         for attempt in 0..<max(1, timing.webSocketAttempts) {
             if attempt > 0 { try await Task.sleep(for: timing.webSocketRetry) }
             try stillStarting()
-            guard await hotspot.isJoined(to: accessPoint.ssid) else { throw SoundcoreHotspotError.notJoined }
+            guard await hotspot.isJoined(to: accessPoint.ssid, recorder: accessPoint.host) else { throw SoundcoreHotspotError.notJoined }
             try stillStarting()
             let socket = SoundcoreWebSocket(host: accessPoint.host, port: accessPoint.port, requiresWiFi: hooks.requiresWiFi)
             do {

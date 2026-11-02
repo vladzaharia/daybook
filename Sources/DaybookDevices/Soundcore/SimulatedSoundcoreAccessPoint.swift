@@ -218,7 +218,9 @@ public final class SimulatedSoundcoreHotspot: SoundcoreHotspot {
         joined = dropsAfterJoining ? nil : ssid
     }
 
-    public func isJoined(to ssid: String) async -> Bool { joined == ssid }
+    /// By name, as a build with the Access Wi‑Fi Information entitlement checks: the simulated network is on loopback,
+    /// so there's no subnet to share.
+    public func isJoined(to ssid: String, recorder host: String) async -> Bool { joined == ssid }
 
     public func leave(ssid: String) {
         leaves.append(ssid)

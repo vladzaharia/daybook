@@ -49,6 +49,8 @@
 	<string>$(DAYBOOK_ICLOUD_CONTAINER)</string>
 	<key>DaybookKeychainSharedGroup</key>
 	<string>$(AppIdentifierPrefix)local.daybook.shared</string>
+	<key>DaybookReadsWiFiName</key>
+	<true/>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>LSApplicationCategoryType</key>

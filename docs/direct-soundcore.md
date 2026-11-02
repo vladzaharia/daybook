@@ -215,13 +215,18 @@ Transfer, treat every byte below as a well-informed guess; any failure falls bac
    network to start. The connection stays "Connected" meanwhile, and a Bluetooth drop then isn't a
    disconnect.
 3. The iPhone joins the network (`NEHotspotConfiguration`, `joinOnce`: iOS asks the person each time
-   and drops the network about 15 seconds after Daybook leaves the foreground). The join counts only once
-   iOS names the recorder's network as the current one (`NEHotspotNetwork.fetchCurrent`, which tells an app
-   the name of a network it configured) and there's an address on its subnet: an address alone isn't
-   proof, because the Wi‑Fi the iPhone was on may use the same addresses (192.168.1.x), and a host there
-   would answer for the recorder.
-4. `wss://<address>:<port>`, three attempts two seconds apart, each only while iOS still names the
-   recorder's network as the one it's on (`SoundcoreHotspot.isJoined`); otherwise nothing is opened and the
+   and drops the network about 15 seconds after Daybook leaves the foreground). The join counts once the
+   iPhone is on the recorder's network (`SoundcoreHotspot.isJoined`, `SoundcoreWiFi.isOnRecorderNetwork`):
+   it has an address on the recorder's subnet and, in a build with the Access Wi‑Fi Information
+   entitlement, iOS names the recorder's network as the current one (`NEHotspotNetwork.fetchCurrent`). An
+   address alone isn't proof, because the Wi‑Fi the iPhone was on may use the same addresses
+   (192.168.1.x), and a host there would answer for the recorder. `fetchCurrent` answers nil to an app
+   without that entitlement, whichever network it configured, so the name is checked only where the build
+   says it has it (Info.plist's `DaybookReadsWiFiName`, set beside the entitlement); without it the subnet
+   is the check. What a host there could do is limited either way: the audio is encrypted and checked
+   with the key exchanged over Bluetooth, and a message is capped (step 4).
+4. `wss://<address>:<port>`, three attempts two seconds apart, each only while the iPhone is still on the
+   recorder's network (`SoundcoreHotspot.isJoined`, as in step 3); otherwise nothing is opened and the
    transfer falls back. Daybook writes the opening handshake
    itself, with the header names, case, and order of the official app's HTTP client (`Upgrade`,
    `Connection`, `Sec-WebSocket-Key`, `Sec-WebSocket-Version`, `Host`, `Accept-Encoding: gzip`, and its
@@ -290,6 +295,24 @@ Joining another network needs the Hotspot Configuration capability. Done (2026-1
 Profiles regenerate in the release pipeline; nothing here touches signing. A build without the
 entitlement still works: its first join fails at once and every transfer stays on Bluetooth.
 
+### Owner steps: the Access Wi‑Fi Information entitlement
+
+Checking the recorder's network by its name (step 3 above) needs iOS to tell Daybook which network the
+iPhone is on, which `NEHotspotNetwork.fetchCurrent` does only for an app with the Access Wi‑Fi
+Information capability. Not done yet:
+
+1. The account owner enables **Access Wi‑Fi Information** on the App ID `local.daybook` in the developer
+   portal (Certificates, Identifiers & Profiles › Identifiers). Agents never do this.
+2. The entitlement is already in `Apps/iOS/project.yml` beside Hotspot Configuration,
+   `com.apple.developer.networking.wifi-info: true`, with Info.plist's `DaybookReadsWiFiName: true`, which
+   turns the name check on (`SystemSoundcoreHotspot.readsNetworkName`). The two go together: a build
+   without the entitlement that still read the flag would wait out every join and fall back.
+
+Until the capability is on the App ID, signing a device build or an archive fails with "the profile
+doesn't include the `com.apple.developer.networking.wifi-info` entitlement", unless automatic provisioning
+adds it. To ship before then, remove both lines from `Apps/iOS/project.yml`; Fast Transfer then checks
+the subnet alone, as step 3 says.
+
 ### Verifying it on a recorder
 
 Until then it's unverified. To check it, on an iPhone build with the entitlement, near a charged
@@ -299,6 +322,10 @@ and the `local.daybook.devices` log (`Soundcore` category), and note whether the
 changed, whether its Wi‑Fi appeared in Settings › Wi‑Fi, how long the transfer took against Bluetooth,
 and whether Bluetooth came back and the access point closed. A failure at the WebSocket step usually
 means the handshake or TLS differs; a capture of the official app's Fast Transfer would settle it.
+
+Also check, on a real iPhone with the Access Wi‑Fi Information entitlement, that `fetchCurrent` names the
+recorder's SSID (`WiFi-…`) once joined: the transfer goes over Wi‑Fi rather than ending with "The
+recorder’s Wi‑Fi couldn’t be joined: This iPhone isn’t on its network." after 20 seconds.
 
 ## The recorder's clock
 

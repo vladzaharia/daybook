@@ -107,7 +107,7 @@ public enum WebSocketError: LocalizedError, Equatable {
 /// opening handshake, so the header names, their case, and their order are what the official app's
 /// HTTP client sends (the recorder's parser may match them exactly). It accepts the recorder's
 /// self-signed certificate, for this one connection to the recorder's own network, which Fast Transfer
-/// opens only once iOS names that network as the one it's on (`SoundcoreHotspot.isJoined`): the audio
+/// opens only while the iPhone is on that network (`SoundcoreHotspot.isJoined`): the audio
 /// itself is encrypted with the key exchanged over Bluetooth, and checked as a Bluetooth transfer is. A
 /// message larger than a frame may be (`WebSocketFrame.maximumPayload`) ends the connection.
 @MainActor

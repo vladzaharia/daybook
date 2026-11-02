@@ -1656,7 +1656,9 @@ before and after.
 
 **Needs a recorder.** Whether the Soundcore app's transfer reaches Daybook on iOS, and whether three
 quiet seconds is enough between its files. All of Fast Transfer: `1A 05` and its reply, the ten-second
-start, joining (iOS's prompt, the address), TLS and the WebSocket handshake on the recorder's parser,
+start, joining (iOS's prompt, the address, and, once the owner has enabled Access Wi‑Fi Information,
+`NEHotspotNetwork.fetchCurrent` naming the recorder's `WiFi-…` network on a real iPhone; simulator tests
+can't, since the simulated hotspot answers by name itself), TLS and the WebSocket handshake on the recorder's parser,
 the file request's form and last byte, the keep-alive, the recorder accepting Bluetooth while its
 access point is open, `1A 02`'s reply and whether `FINISH` closes the access point on its own, and the
 throughput against Bluetooth ([verifying it](direct-soundcore.md#verifying-it-on-a-recorder)).
