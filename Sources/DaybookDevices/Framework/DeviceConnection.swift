@@ -284,8 +284,16 @@ public protocol DeviceConnection: AnyObject, Observable {
     /// The method has its configuration (a remembered recorder, a chosen folder).
     var isSetUp: Bool { get }
 
+    /// An import, Listen Live, or a Start or Pause is waiting for another app on the same link to finish its
+    /// transfer (the Soundcore app, over the link iOS shares between apps). False for most connections.
+    var isWaitingForOtherApp: Bool { get }
+
     /// Called by the session when state or inventory changes, so it can resume or auto-import.
     var onChange: (() -> Void)? { get set }
+
+    /// The device's preferences changed (Settings › Devices, the recorder's page): its name, which methods
+    /// are on, automatic import, Fast Transfer. Each connection takes what applies to it.
+    func preferencesChanged(_ device: ConfiguredDevice)
 
     /// Restores saved configuration and, where the person allowed it, reconnects quietly.
     func activate()
@@ -301,7 +309,7 @@ public protocol DeviceConnection: AnyObject, Observable {
     /// Ends everything for good (the device was removed or the app quits).
     func shutDown()
 
-    /// Moves one recording to this Mac. Throws `DeviceTransferError`, or `CancellationError` when
+    /// Moves one recording to this device. Throws `DeviceTransferError`, or `CancellationError` when
     /// the task is cancelled. Partial audio is discarded before throwing.
     func transfer(_ recording: DeviceRecording,
                   progress: @escaping @MainActor (TransferPhase, UInt64) -> Void) async throws -> TransferredAudio
@@ -313,10 +321,12 @@ public protocol DeviceConnection: AnyObject, Observable {
 
 extension DeviceConnection {
     public var isInventoryCurrent: Bool { !isRefreshing }
+    public var isWaitingForOtherApp: Bool { false }
     public func refreshIfStale() {
         guard state.isConnected, !isRefreshing else { return }
         if inventoryUpdatedAt.map({ Date().timeIntervalSince($0) > 60 }) ?? true { refresh() }
     }
+    public func preferencesChanged(_ device: ConfiguredDevice) {}
     public func didImport(_ recording: DeviceRecording) {}
     public func shutDown() { disconnect() }
 }
@@ -357,12 +367,59 @@ public protocol RecordControlConnection: DeviceConnection {
     func pauseRecording()
 }
 
+/// What a recorder is recording, as one device knows it: live while connected, otherwise as last
+/// confirmed. A `RecordingStateConnection` publishes it (for the device page, the iPhone's Live Activity,
+/// the link's `recording.state`, and multipoint).
+public struct RecorderRecordingState: Equatable, Sendable {
+    /// The recorder said it's recording.
+    public var isRecording: Bool
+    /// The recording it names as in progress (its `DeviceRecording.id`): recording, or paused on firmware
+    /// that keeps the file open. Nil when it names none.
+    public var recordingID: String?
+    /// When that recording started, by the recorder's clock corrected by its measured offset.
+    public var startedAt: Date?
+    /// When the recorder last confirmed this.
+    public var asOf: Date
+    /// Connected now: live. Otherwise remembered, and shown with its time.
+    public var isLive: Bool
+    /// This device asked the recorder to start this recording.
+    public var startedHere: Bool
+
+    public init(isRecording: Bool, recordingID: String? = nil, startedAt: Date? = nil, asOf: Date, isLive: Bool,
+                startedHere: Bool = false) {
+        self.isRecording = isRecording
+        self.recordingID = recordingID
+        self.startedAt = startedAt
+        self.asOf = asOf
+        self.isLive = isLive
+        self.startedHere = startedHere
+    }
+}
+
+/// What a recorder is recording, as one device knows it: live while connected, otherwise as last
+/// confirmed for a while. A recording state the recorder pushes unasked is its button
+/// (docs/devices.md, "What the recorder is recording").
+@MainActor
+public protocol RecordingStateConnection: RecordControlConnection {
+    /// Nil when it isn't recording, or nothing recent enough is known.
+    func recordingState(at now: Date) -> RecorderRecordingState?
+    /// The recorder's own button started (true) or stopped (false) a recording: a pushed state that
+    /// changes what this device knew, while no Start or Pause of its own is waiting for an answer.
+    var onButton: ((Bool) -> Void)? { get set }
+    /// Holds the link while the recorder is in range, so its button is heard (the iPhone, for a recorder
+    /// that records along with it): never let go when idle, and back at once after a drop.
+    var staysConnected: Bool { get set }
+}
+
 /// A direct connection to a recorder that only one device may manage at a time (a synced
 /// `RecorderOwnership`; docs/devices.md, "One owner per recorder").
 @MainActor
 public protocol ManagedConnection: DeviceConnection {
     /// The recorder's serial number, once a connection has reported it: the identity ownership uses.
     var recorderSerial: String? { get }
+    /// The serial of the recorder this method remembers, whether or not it's connected now: what the
+    /// library's links match its tracks by. Nil until a connection has reported one.
+    var rememberedSerial: String? { get }
     /// Another device manages this recorder. While set, this device doesn't connect to it.
     var managedElsewhere: RecorderOwnership? { get set }
     /// Connects as soon as the recorder is free, with no deadline: after a handoff, the device that
@@ -371,15 +428,61 @@ public protocol ManagedConnection: DeviceConnection {
 }
 
 extension ManagedConnection {
+    public var rememberedSerial: String? { recorderSerial }
     public func connectWhenAvailable() { connect() }
 }
 
-/// Hears a recording while it's being made, saving it to this Mac as it arrives.
+/// Hears a recording while it's being made, saving it to this device as it arrives: Listen Live, and a
+/// shared recording's live audio (docs/devices.md, "A recorder's audio in a shared recording").
 @MainActor
 public protocol LiveListeningConnection: DeviceConnection {
     var live: LiveCapture { get }
+    /// The conversation the live audio being received is saved into, when it's a shared recording's.
+    var liveConversation: UUID? { get }
+    /// The listening under way: it ends once what arrived has been handed on to be saved (`onLiveSaved`).
+    var listeningTask: Task<Void, Never>? { get }
+    /// A live portion to save: the staged file (the handler removes it once it's saved), the recording's ID,
+    /// its length, and the conversation it was captured for, if any.
+    var onLiveSaved: ((URL, String, TimeInterval, UUID?) -> Void)? { get set }
+    /// Listen Live, captioned.
     func startListening()
+    /// Receives the recording in progress and saves it as it arrives; with `conversation`, into that shared
+    /// recording, captioned when `captions`. False when it can't start now (not connected, not recording,
+    /// already listening).
+    @discardableResult
+    func startListening(into conversation: UUID?, captions: Bool) -> Bool
+    /// Saves what arrived. The recorder keeps recording.
     func stopListening()
+}
+
+/// Brings long recordings over the recorder's own Wi‑Fi rather than Bluetooth (Fast Transfer, iPhone;
+/// docs/direct-soundcore.md, "Wi‑Fi Fast Transfer").
+@MainActor
+public protocol FastTransferConnection: DeviceConnection {
+    /// This device can join a recorder's network, so the preference applies here.
+    var joinsRecorderWiFi: Bool { get }
+    /// This device can bring recordings over the recorder's Wi‑Fi now.
+    var offersFastTransfer: Bool { get }
+    /// Where Fast Transfer is while it runs.
+    var fastTransferStage: FastTransferStage? { get }
+    /// The person chose these recordings to come over Wi‑Fi, whatever their length.
+    func requestFastTransfer(_ ids: [String])
+    /// Another recording from this recorder is waiting in the import queue (the session sets it): the
+    /// Wi‑Fi link stays open for it.
+    var hasMoreQueued: (() -> Bool)? { get set }
+    /// The person declined joining the recorder's network: their No turns the device's Fast Transfer off,
+    /// and its switch is the way back.
+    var onFastTransferDeclined: (() -> Void)? { get set }
+}
+
+/// Imports on its own when the recorder is in range, waiting between attempts so its own app can reach it.
+@MainActor
+public protocol AutomaticImportScheduling: DeviceConnection {
+    /// When the wait before the next automatic attempt ends, on the wall clock.
+    var automaticDueAt: Date? { get }
+    /// A background wake (iOS app refresh, which runs no timers while suspended): an attempt whose wait has
+    /// run out starts now.
+    func resumeAutomaticImportIfDue(now: Date)
 }
 
 /// A connection whose recordings are in the library already, because they arrive through sync

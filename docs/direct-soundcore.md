@@ -148,7 +148,7 @@ recordings; neither simulator success nor successful decoding establishes audio 
 
 ## Listen Live and record control
 
-- Listen Live reads the recording in progress, saves it to this Mac as it arrives, and captions it
+- Listen Live reads the recording in progress, saves it to this device as it arrives, and captions it
   live on the shared DaybookCaptions engine, packet by packet (docs/devices.md, "Listen Live
   captions"). Stop Listening keeps what arrived as a conversation; a disconnect keeps it too.
   The portion is stored with the recording ID plus `~live`, and the full recording joins that
@@ -213,12 +213,20 @@ Transfer, treat every byte below as a well-informed guess; any failure falls bac
    network to start. The connection stays "Connected" meanwhile, and a Bluetooth drop then isn't a
    disconnect.
 3. The iPhone joins the network (`NEHotspotConfiguration`, `joinOnce`: iOS asks the person each time
-   and drops the network when Daybook leaves the foreground), and waits for an address on its subnet.
-4. `wss://<address>:<port>`, three attempts two seconds apart. Daybook writes the opening handshake
+   and drops the network about 15 seconds after Daybook leaves the foreground). The join counts only once
+   iOS names the recorder's network as the current one (`NEHotspotNetwork.fetchCurrent`, which tells an app
+   the name of a network it configured) and there's an address on its subnet: an address alone isn't
+   proof, because the Wi‑Fi the iPhone was on may use the same addresses (192.168.1.x), and a host there
+   would answer for the recorder.
+4. `wss://<address>:<port>`, three attempts two seconds apart, each only while iOS still names the
+   recorder's network as the one it's on (`SoundcoreHotspot.isJoined`); otherwise nothing is opened and the
+   transfer falls back. Daybook writes the opening handshake
    itself, with the header names, case, and order of the official app's HTTP client (`Upgrade`,
    `Connection`, `Sec-WebSocket-Key`, `Sec-WebSocket-Version`, `Host`, `Accept-Encoding: gzip`, and its
    `User-Agent`), because the recorder's parser may match them exactly. It accepts the recorder's
-   self-signed certificate for that connection only. A UDP keep-alive
+   self-signed certificate for that connection only. A message is at most 16 MiB in all, the largest frame
+   either side accepts (`WebSocketMessages`), so continuation frames can't grow one without end; past that
+   the WebSocket ends and the transfer falls back. A UDP keep-alive
    (`soundcore-keep-alive-unicast`) goes to port 32003 every two seconds.
 5. Each recording is asked for as hex text, `08 EE 00 00 00 1A 07 12 00 | offset | id | 1B` (18 bytes,
    no checksum, the offset always 0), and arrives as the same encrypted `1A 07`/`1A 08`/`1A 0A` frames
@@ -229,13 +237,27 @@ Transfer, treat every byte below as a well-informed guess; any failure falls bac
    `1A 02` to close the access point. Nothing deletes anything (deleting is `1A 10`, never sent).
 
 **Falling back.** Any failure (the recorder refusing or not answering `1A 05`, the join declined or
-failing, the WebSocket not opening or dropping, a slice missing, Daybook leaving the foreground) ends
-Fast Transfer, brings Bluetooth back, and the transfer starts again from the beginning over Bluetooth:
-nothing partial is kept, and it isn't counted as a failed attempt. An unanswered `1A 05` is followed by
-`1A 02` over the link that's still up, in case the recorder opened it anyway. After a failure,
-transfers stay on Bluetooth for 30 minutes (`fastTransferPause`); a join iOS fails at once ("internal
-error", which is what a build without the Hotspot Configuration entitlement gets) keeps this build on
-Bluetooth until the app's build changes or the person turns the preference off and on.
+failing, the iPhone not on the recorder's network, the WebSocket not opening or dropping, a slice missing,
+Daybook out of the foreground) ends Fast Transfer, brings Bluetooth back, and the transfer starts again
+from the beginning over Bluetooth: nothing partial is kept, and it isn't counted as a failed attempt. An
+unanswered `1A 05` is followed by `1A 02` over the link that's still up, in case the recorder opened it
+anyway. After a failure, transfers stay on Bluetooth for 30 minutes (`fastTransferPause`); a join iOS
+fails at once ("internal error", which is what a build without the Hotspot Configuration entitlement
+gets) keeps this build on Bluetooth until the app's build changes or the person turns the preference off
+and on.
+
+**A declined join is a choice.** The person's No to iOS's prompt turns that recorder's Fast Transfer off
+(`ConfiguredDevice.fastTransferForLongRecordings`, so the recorder page's switch reads off and is the way
+back) and drops any recordings they'd chosen for Wi‑Fi. The transfer carries on over Bluetooth at once,
+with no pause to wait out, and nothing asks again until they turn it on.
+
+**Out of the foreground.** Fast Transfer starts only with Daybook in front, and holds a short background
+task while it runs (`SoundcoreWiFiHooks.holdInBackground`; on iPhone, `UIApplication.beginBackgroundTask`).
+Leaving before the iPhone is on the recorder's network ends it at once (joining needs Daybook in front);
+iOS asking to join is a system alert, which leaves Daybook inactive rather than in the background, so it
+doesn't count. On the recorder's network, a moment elsewhere doesn't cost the transfer: it carries on for
+10 seconds (`fastTransferBackgroundGrace`, under the 15 iOS keeps the network), and ends, back to
+Bluetooth, only if Daybook hasn't come back by then or the system ends the background time first.
 
 **Recovery.** From `1A 05`'s answer until `1A 02` is sent, the remembered recorder carries
 `accessPointSSID` and `accessPointSince`. Whatever ends Fast Transfer (Disconnect, quitting, a crash,
@@ -245,8 +267,10 @@ clears it. While it's set and the recorder isn't connected, the page says "Fast 
 recorder accepts a Bluetooth connection while its access point is open, and whether it closes the
 access point on its own after `FINISH` or a timeout, is unverified.
 
-**What the page says.** The import's line says "Starting Wi‑Fi…" while it sets up and "Over Wi‑Fi. Keep
-Daybook open until it finishes." while it transfers; Device Details' "Fast Transfer" row says how the
+**What the page says.** The import's line says "Starting Wi‑Fi…" while it sets up, "Joining Soundcore
+Work’s Wi‑Fi…" (the recorder's name) from just before iOS asks to join a network called `WiFi-…`, so the
+question has its context, and "Over Wi‑Fi. Keep Daybook open until it finishes." while it transfers;
+Device Details' "Fast Transfer" row says how the
 last attempt went ("Over Wi‑Fi, Today, 10:02 AM", or "Back to Bluetooth, …" and why), or "Unavailable in
 this build".
 
@@ -313,11 +337,15 @@ access point: a TLS WebSocket server with a self-signed certificate made in memo
 HTTP parser accepts only the official client's header names exactly, and a UDP listener counting
 keep-alives. They cover a long recording over Wi‑Fi with the Bluetooth key reused and the access point
 closed after, a batch sharing one access point, the link ending between two recordings, short
-recordings staying on Bluetooth unless chosen, the foreground only (and leaving it mid-transfer), a
-build without the entitlement (and not trying again), a declined join, the WebSocket dropping
-mid-file, `1A 05` refused or unanswered, and an access point left open closed on the next connection
-and remembered across a relaunch. `SoundcoreProtocolTests` cover `1A 05`'s payload and reply, the
-18-byte file request, and WebSocket framing at every length form, masked and not.
+recordings staying on Bluetooth unless chosen, "Joining Soundcore Work’s Wi‑Fi…" said as iOS asks, the
+foreground only (leaving it mid-transfer, a moment away that keeps the transfer on Wi‑Fi, and the
+background time running out), the background task held and let go, a build without the entitlement (and
+not trying again), a declined join (Fast Transfer off for that recorder, Bluetooth at once, and on again
+with no pause), an iPhone back on another network before the WebSocket (nothing opened), the WebSocket
+dropping mid-file, `1A 05` refused or unanswered, and an access point left open closed on the next
+connection and remembered across a relaunch. `SoundcoreProtocolTests` cover `1A 05`'s payload and reply,
+the 18-byte file request, WebSocket framing at every length form, masked and not, and a fragmented message
+put back together and refused past its limit.
 
 `SoundcoreSimulatorTests` run the real connection, session, queue, and importer against the
 simulated recorder: setup and remembered reconnection (direct and after a scan), paged listing

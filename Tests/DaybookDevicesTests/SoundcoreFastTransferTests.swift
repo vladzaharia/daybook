@@ -19,11 +19,7 @@ final class SoundcoreFastTransferTests: XCTestCase {
     override func setUp() async throws {
         suite = makeTestSuite("local.daybook.tests.soundcore-wifi")
         defaults = UserDefaults(suiteName: suite)
-        staging = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookWiFi-\(UUID().uuidString)", isDirectory: true)
-    }
-
-    override func tearDown() async throws {
-        try? FileManager.default.removeItem(at: staging)
+        staging = makeTemporaryFolder("DaybookWiFi")
     }
 
     // MARK: Harness
@@ -40,12 +36,33 @@ final class SoundcoreFastTransferTests: XCTestCase {
         var meetings: [Meeting] = []
     }
 
+    /// The app's background time as iOS hands it out: how often it was held and let go, and the system ending it.
+    @MainActor
+    private final class BackgroundTime {
+        private(set) var held = 0
+        private(set) var released = 0
+        private var expired: (@MainActor () -> Void)?
+
+        func hold(_ expired: @escaping @MainActor () -> Void) -> @MainActor () -> Void {
+            held += 1
+            self.expired = expired
+            return { [weak self] in
+                self?.released += 1
+                self?.expired = nil
+            }
+        }
+
+        /// The system ends the background time before Fast Transfer let it go.
+        func expire() { expired?() }
+    }
+
     private struct Rig {
         let session: DeviceSession
         let connection: SoundcoreConnection
         let device: SimulatedSoundcore
         let hotspot: SimulatedSoundcoreHotspot
         let hooks: SoundcoreWiFiHooks
+        let background: BackgroundTime
         let library: Library
         let configured: ConfiguredDevice
     }
@@ -76,11 +93,14 @@ final class SoundcoreFastTransferTests: XCTestCase {
         timing.webSocketRetry = .milliseconds(100)
         timing.keepAlive = .milliseconds(40)
         timing.fastTransferLinger = .seconds(2)
+        timing.fastTransferBackgroundGrace = .milliseconds(50)
         configure?(&timing)
         environment.soundcoreTiming = timing
         let hotspot = SimulatedSoundcoreHotspot(recorder: device)
+        let background = BackgroundTime()
         let wifi = environment.soundcoreWiFi
         wifi.hotspot = hotspot
+        wifi.holdInBackground = { background.hold($0) }
         wifi.requiresWiFi = false
         wifi.keepAlivePort = { [weak device] _ in device?.accessPoint?.keepAlivePort ?? 9 }
         wifi.build = "test"
@@ -101,7 +121,8 @@ final class SoundcoreFastTransferTests: XCTestCase {
         }
         session.activate()
         session.libraryChanged([], ready: true)
-        return Rig(session: session, connection: connection, device: device, hotspot: hotspot, hooks: wifi, library: library, configured: configured)
+        return Rig(session: session, connection: connection, device: device, hotspot: hotspot, hooks: wifi, background: background,
+                   library: library, configured: configured)
     }
 
     private func connect(_ rig: Rig) async throws {
@@ -132,6 +153,9 @@ final class SoundcoreFastTransferTests: XCTestCase {
         let device = recorder(count: 1)
         device.pace = .milliseconds(20)
         let rig = rig(device)
+        // What the page says as iOS asks to join a network called "WiFi-1730…".
+        var saidAtThePrompt: [String?] = []
+        rig.hotspot.onJoin = { [weak session = rig.session] in saidAtThePrompt.append(session?.fastTransferStage?.label) }
         try await connect(rig)
         XCTAssertTrue(rig.session.offersFastTransfer)
         let target = rig.session.newRecordings[0]
@@ -139,9 +163,14 @@ final class SoundcoreFastTransferTests: XCTestCase {
         try await waitUntil("Fast Transfer to start") { rig.session.fastTransferStage != nil }
         try await waitUntil("the file over Wi‑Fi") { rig.session.fastTransferStage == .transferring && !device.wifiRequests.isEmpty }
         XCTAssertEqual(FastTransferStage.transferring.label, "Over Wi‑Fi")
+        XCTAssertEqual(saidAtThePrompt, ["Joining Soundcore Work’s Wi‑Fi…"], "the recorder's own name, before iOS asks")
         XCTAssertEqual(rig.connection.state, .connected, "the page still reads as connected")
+        XCTAssertTrue(rig.connection.fastTransferHoldsBackgroundTime, "a short background task while it runs")
         try await waitUntil("the import") { rig.library.imports.count == 1 && !rig.session.queue.isActive }
         try await waitForBluetooth(rig)
+        XCTAssertEqual(rig.background.held, 1)
+        XCTAssertEqual(rig.background.released, 1, "let go once Fast Transfer ended")
+        XCTAssertFalse(rig.connection.fastTransferHoldsBackgroundTime)
 
         // Over Bluetooth: the key exchange the Wi‑Fi transfer reuses, 1A 05, and after Bluetooth came
         // back, 1A 02. The file itself came over Wi‑Fi, asked for from the start.
@@ -238,7 +267,8 @@ final class SoundcoreFastTransferTests: XCTestCase {
         try await waitUntil("the import") { rig.library.imports.count == 1 && !rig.session.queue.isActive }
         XCTAssertEqual(count(rig, 0x1a, 0x05), 0, "in the background it's Bluetooth")
 
-        // Leaving the foreground mid-transfer ends Fast Transfer; the import carries on over Bluetooth.
+        // Leaving the foreground mid-transfer, for longer than the moment iOS keeps the network, ends Fast
+        // Transfer; the import carries on over Bluetooth.
         rig.hooks.isForeground = true
         rig.session.importRecordings([rig.session.newRecordings[0]])
         try await waitUntil("the file over Wi‑Fi") { !device.wifiRequests.isEmpty }
@@ -250,6 +280,71 @@ final class SoundcoreFastTransferTests: XCTestCase {
         XCTAssertTrue(rig.session.failures.isEmpty)
         XCTAssertNil(rig.session.transferProblem)
         XCTAssertTrue(stagedFiles.isEmpty)
+        XCTAssertEqual(rig.background.released, rig.background.held, "the background time let go")
+        XCTAssertTrue(rig.connection.usesFastTransfer, "leaving isn't a No")
+    }
+
+    /// A glance at another app while the recording comes over Wi‑Fi: Daybook keeps running for a short
+    /// while, iOS keeps the recorder's network, and the transfer finishes over Wi‑Fi.
+    func testBehaviorAMomentOutOfDaybookKeepsTheTransferOnWiFi() async throws {
+        let device = recorder(count: 1)
+        device.pace = .milliseconds(30)
+        let rig = rig(device, configure: { $0.fastTransferBackgroundGrace = .seconds(30) })
+        try await connect(rig)
+        rig.session.importRecordings([rig.session.newRecordings[0]])
+        try await waitUntil("the file over Wi‑Fi") { !device.wifiRequests.isEmpty }
+        rig.hooks.isForeground = false
+        try await Task.sleep(for: .milliseconds(60))
+        rig.hooks.isForeground = true
+        try await waitUntil("the import") { rig.library.imports.count == 1 && !rig.session.queue.isActive }
+        try await waitForBluetooth(rig)
+        XCTAssertEqual(device.wifiRequests.count, 1)
+        XCTAssertEqual(count(rig, 0x1a, 0x07), 0, "never over Bluetooth")
+        XCTAssertEqual(rig.library.imports[0].seconds, 1, accuracy: 0.1)
+        let row = try XCTUnwrap(rig.connection.technicalDetails.first { $0.label == "Fast Transfer" })
+        XCTAssertTrue(row.value.hasPrefix("Over Wi‑Fi, "), row.value)
+        XCTAssertEqual(rig.background.held, 1)
+        XCTAssertEqual(rig.background.released, 1)
+    }
+
+    /// The system ends Daybook's background time before the transfer is done: Fast Transfer ends at once, and
+    /// the recording comes over Bluetooth from the start.
+    func testBehaviorFastTransferEndsWhenItsBackgroundTimeRunsOut() async throws {
+        let device = recorder(count: 1)
+        device.pace = .milliseconds(30)
+        let rig = rig(device, configure: { $0.fastTransferBackgroundGrace = .seconds(30) })
+        try await connect(rig)
+        rig.session.importRecordings([rig.session.newRecordings[0]])
+        try await waitUntil("the file over Wi‑Fi") { !device.wifiRequests.isEmpty }
+        rig.hooks.isForeground = false
+        rig.background.expire()
+        try await waitUntil("the import") { rig.library.imports.count == 1 && !rig.session.queue.isActive }
+        try await waitForBluetooth(rig)
+        XCTAssertEqual(count(rig, 0x1a, 0x07), 1, "over Bluetooth")
+        XCTAssertEqual(rig.library.imports[0].seconds, 1, accuracy: 0.1, "the whole recording")
+        XCTAssertEqual(rig.background.released, 1)
+        XCTAssertTrue(rig.session.failures.isEmpty)
+        XCTAssertNil(rig.session.transferProblem)
+    }
+
+    /// iOS goes back to another network after the join, one whose addresses may be the recorder's: nothing is
+    /// opened there, and the recording comes over Bluetooth.
+    func testBehaviorTheSocketOpensOnlyOnTheRecordersOwnNetwork() async throws {
+        let device = recorder(count: 1)
+        let rig = rig(device)
+        rig.hotspot.dropsAfterJoining = true
+        try await connect(rig)
+        rig.session.importRecordings([rig.session.newRecordings[0]])
+        try await waitUntil("the import") { rig.library.imports.count == 1 && !rig.session.queue.isActive }
+        try await waitForBluetooth(rig)
+        let accessPoint = try XCTUnwrap(device.lastAccessPoint)
+        XCTAssertTrue(accessPoint.handshakes.isEmpty, "no WebSocket was opened")
+        XCTAssertTrue(device.wifiRequests.isEmpty)
+        XCTAssertEqual(count(rig, 0x1a, 0x07), 1, "over Bluetooth")
+        XCTAssertEqual(rig.library.imports[0].seconds, 1, accuracy: 0.1)
+        let row = try XCTUnwrap(rig.connection.technicalDetails.first { $0.label == "Fast Transfer" })
+        XCTAssertTrue(row.value.hasSuffix(SoundcoreHotspotError.notJoined.localizedDescription), row.value)
+        XCTAssertTrue(rig.connection.usesFastTransfer, "a failure, not the person's No")
     }
 
     // MARK: Falling back to Bluetooth
@@ -280,20 +375,38 @@ final class SoundcoreFastTransferTests: XCTestCase {
         XCTAssertTrue(rig.session.offersFastTransfer, "turning it on again tries afresh")
     }
 
-    /// The person declines iOS's prompt: Bluetooth, and no asking again for a while.
-    func testADeclinedJoinFallsBackAndDoesNotAskAgainSoon() async throws {
-        let rig = rig(recorder(count: 2))
+    /// The person declines iOS's prompt: that's their choice. Fast Transfer turns off for this recorder (its
+    /// switch reads off, and is the way back), the recording comes over Bluetooth at once, and nothing asks again.
+    func testBehaviorADeclinedJoinTurnsFastTransferOffForThatRecorder() async throws {
+        let rig = rig(recorder(count: 3))
         rig.hotspot.failure = .declined
+        var kept: [ConfiguredDevice] = []
+        rig.session.onDeviceChange = { kept.append($0) }
         try await connect(rig)
         rig.session.importRecordings([rig.session.newRecordings[0]])
         try await waitUntil("the import") { rig.library.imports.count == 1 && !rig.session.queue.isActive }
         try await waitForBluetooth(rig)
+        XCTAssertEqual(count(rig, 0x1a, 0x07), 1, "over Bluetooth")
+        XCTAssertEqual(rig.session.device.fastTransferForLongRecordings, false, "the recorder's Fast Transfer reads off")
+        XCTAssertFalse(rig.connection.usesFastTransfer)
+        XCTAssertEqual(kept.last?.usesFastTransfer, false, "kept with the device")
+        XCTAssertTrue(rig.session.offersFastTransfer, "Import over Wi‑Fi and the switch stay")
+        XCTAssertNil(rig.session.problem, "not a problem: it imported")
+        XCTAssertTrue(rig.connection.lastTechnicalProblem?.hasPrefix("Fast Transfer: ") == true)
+
         rig.session.importRecordings([rig.session.newRecordings[0]])
         try await waitUntil("the second import") { rig.library.imports.count == 2 && !rig.session.queue.isActive }
         XCTAssertEqual(rig.hotspot.joins.count, 1, "asked once")
         XCTAssertEqual(count(rig, 0x1a, 0x07), 2)
-        XCTAssertTrue(rig.session.offersFastTransfer, "it still offers it: only paused")
-        XCTAssertTrue(rig.connection.lastTechnicalProblem?.hasPrefix("Fast Transfer: ") == true)
+
+        // Turning it on again is the undo, with no pause to wait out.
+        rig.hotspot.failure = nil
+        rig.session.update { $0.fastTransferForLongRecordings = true }
+        rig.session.importRecordings([rig.session.newRecordings[0]])
+        try await waitUntil("the third import") { rig.library.imports.count == 3 && !rig.session.queue.isActive }
+        try await waitForBluetooth(rig, closed: 2)
+        XCTAssertEqual(rig.hotspot.joins.count, 2, "asked again once it was turned back on")
+        XCTAssertEqual(rig.device.wifiRequests.count, 1, "over Wi‑Fi")
     }
 
     func testTheWiFiDroppingMidFileFallsBackToBluetoothAndSavesNothingPartial() async throws {

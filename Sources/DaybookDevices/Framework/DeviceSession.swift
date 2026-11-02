@@ -44,7 +44,7 @@ public final class DeviceSession: Identifiable {
     @ObservationIgnored public var importer: DeviceImporter?
     /// Persists a changed configuration.
     @ObservationIgnored public var onDeviceChange: ((ConfiguredDevice) -> Void)?
-    /// The recorder's own button started (true) or stopped (false) a recording (`SoundcoreConnection.onButton`).
+    /// The recorder's own button started (true) or stopped (false) a recording (`RecordingStateConnection.onButton`).
     @ObservationIgnored public var onRecorderButton: ((DeviceSession, Bool) -> Void)?
     /// Libraries load after devices start; nothing imports automatically until then.
     public private(set) var libraryReady = false
@@ -89,15 +89,21 @@ public final class DeviceSession: Identifiable {
         for connection in connections {
             connection.onChange = { [weak self, method = connection.method] in self?.connectionChanged(method) }
         }
-        if let soundcore = direct as? SoundcoreConnection {
-            soundcore.onLiveSaved = { [weak self] url, id, seconds, conversation in
+        if let live = direct as? any LiveListeningConnection {
+            live.onLiveSaved = { [weak self] url, id, seconds, conversation in
                 self?.saveLive(url: url, recordingID: id, seconds: seconds, into: conversation)
             }
-            soundcore.onButton = { [weak self] on in
+        }
+        if let recorder = direct as? any RecordingStateConnection {
+            recorder.onButton = { [weak self] on in
                 guard let self else { return }
                 self.onRecorderButton?(self, on)
             }
-            soundcore.hasMoreQueued = { [weak self] in self?.queue.waiting.contains { $0.method == .direct } == true }
+        }
+        if let fast = direct as? any FastTransferConnection {
+            fast.hasMoreQueued = { [weak self] in self?.queue.waiting.contains { $0.method == .direct } == true }
+            // The person said no to joining its network: the recorder's Fast Transfer switch shows it off.
+            fast.onFastTransferDeclined = { [weak self] in self?.update { $0.fastTransferForLongRecordings = false } }
         }
     }
 
@@ -159,19 +165,21 @@ public final class DeviceSession: Identifiable {
 
     /// An import, Listen Live, or a Start or Pause is waiting for another app on the same link (the
     /// Soundcore app, through the link iOS shares between apps) to finish its transfer.
-    public var isWaitingForOtherApp: Bool { (direct as? SoundcoreConnection)?.isWaitingForOtherApp == true }
+    public var isWaitingForOtherApp: Bool { direct?.isWaitingForOtherApp == true }
 
     /// What the recorder's page and status line say meanwhile: "Waiting for the Soundcore app to finish".
     public var otherAppWait: String? { isWaitingForOtherApp ? "Waiting for the \(kind.shortName) app to finish" : nil }
 
+    private var fastTransfer: (any FastTransferConnection)? { direct as? any FastTransferConnection }
+
     /// Recordings can come over the recorder's own Wi‑Fi here (Fast Transfer, iPhone).
-    public var offersFastTransfer: Bool { managedElsewhere == nil && (direct as? SoundcoreConnection)?.offersFastTransfer == true }
+    public var offersFastTransfer: Bool { managedElsewhere == nil && fastTransfer?.offersFastTransfer == true }
 
     /// This device can join the recorder's network, so Fast Transfer's preference applies.
-    public var hasFastTransfer: Bool { managedElsewhere == nil && (direct as? SoundcoreConnection)?.joinsRecorderWiFi == true }
+    public var hasFastTransfer: Bool { managedElsewhere == nil && fastTransfer?.joinsRecorderWiFi == true }
 
     /// Fast Transfer's stage while it runs.
-    public var fastTransferStage: FastTransferStage? { (direct as? SoundcoreConnection)?.fastTransferStage }
+    public var fastTransferStage: FastTransferStage? { fastTransfer?.fastTransferStage }
 
     /// One problem at a time: a transfer's first, then the primary connection's, then any other's.
     public var problem: DeviceProblem? {
@@ -272,7 +280,7 @@ public final class DeviceSession: Identifiable {
     /// The library changed, with its recorder tracks already indexed (the hub indexes once for every device).
     public func libraryChanged(_ meetings: [Meeting], index: DeviceLibraryIndex, ready: Bool) {
         self.meetings = meetings
-        let serial = status?.serial ?? (direct as? SoundcoreConnection)?.remembered?.serial
+        let serial = status?.serial ?? (direct as? any ManagedConnection)?.rememberedSerial
         let tracks = index.tracks(kind: kind.id)
         // Only this kind's tracks (and the recorder's serial) decide the links; anything else in the
         // library changing leaves them as they are.
@@ -311,11 +319,7 @@ public final class DeviceSession: Identifiable {
         change(&updated)
         guard updated != device else { return }
         device = updated
-        if let soundcore = direct as? SoundcoreConnection {
-            soundcore.importsAutomatically = updated.importsAutomatically
-            soundcore.isEnabled = updated.isEnabled(.direct)
-            soundcore.usesFastTransfer = updated.usesFastTransfer
-        }
+        connections.forEach { $0.preferencesChanged(updated) }
         if let files {
             if updated.isEnabled(.files) { if files.isSetUp && !files.isWatching { files.connect() } } else { files.disconnect() }
         }
@@ -360,7 +364,7 @@ public final class DeviceSession: Identifiable {
     /// `overWiFi`: the person chose Fast Transfer for these, whatever their length.
     public func importRecordings(_ recordings: [DeviceRecording], attachTo: UUID? = nil, automatic: Bool = false, overWiFi: Bool = false) {
         guard let primary else { return }
-        if overWiFi { (primary as? SoundcoreConnection)?.requestFastTransfer(recordings.map(\.id)) }
+        if overWiFi { (primary as? any FastTransferConnection)?.requestFastTransfer(recordings.map(\.id)) }
         enqueue(recordings, method: primary.method, attachTo: attachTo, automatic: automatic)
     }
 
@@ -594,34 +598,33 @@ public final class DeviceSession: Identifiable {
     /// start now (not connected, not recording, already listening).
     @discardableResult
     public func captureLive(into conversation: UUID) -> Bool {
-        guard let soundcore = direct as? SoundcoreConnection, managedElsewhere == nil else { return false }
-        if soundcore.live.isListening { return soundcore.liveConversation == conversation }
-        return soundcore.startListening(into: conversation, captions: true)
+        guard let recorder = direct as? any LiveListeningConnection, managedElsewhere == nil else { return false }
+        if recorder.live.isListening { return recorder.liveConversation == conversation }
+        return recorder.startListening(into: conversation, captions: true)
     }
 
     /// The conversation the recorder's live audio is being saved into, while it is.
     public var liveCaptureConversation: UUID? {
-        guard let soundcore = direct as? SoundcoreConnection, soundcore.live.isListening else { return nil }
-        return soundcore.liveConversation
+        guard let recorder = direct as? any LiveListeningConnection, recorder.live.isListening else { return nil }
+        return recorder.liveConversation
     }
 
     /// How loud the recorder's live audio is, 0…1 for a meter, while it's saved into `conversation`;
     /// nil before its audio arrives, or once it stops arriving.
     public func liveLevel(into conversation: UUID, at now: Date = Date()) -> Double? {
-        guard let soundcore = direct as? SoundcoreConnection, soundcore.live.isListening, soundcore.liveConversation == conversation else { return nil }
-        return soundcore.live.level(at: now)
+        guard let recorder = direct as? any LiveListeningConnection, recorder.live.isListening,
+              recorder.liveConversation == conversation else { return nil }
+        return recorder.live.level(at: now)
     }
 
     /// Ends a live capture and waits (at most `limit`) until what arrived is in the library. Returns the
     /// latest live portion saved (or that couldn't be), which the caller checks against its conversation.
     @discardableResult
     public func endLiveCapture(within limit: Duration = .seconds(15)) async -> LiveSave? {
-        guard let soundcore = direct as? SoundcoreConnection else { return nil }
-        if soundcore.live.isListening { soundcore.stopListening() }
-        let deadline = ContinuousClock.now.advanced(by: limit)
-        while soundcore.live.isListening, ContinuousClock.now < deadline {
-            try? await Task.sleep(for: .milliseconds(20))
-        }
+        guard let recorder = direct as? any LiveListeningConnection else { return nil }
+        if recorder.live.isListening { recorder.stopListening() }
+        // Listening ends once what arrived is handed on to be saved (`saveLive`), then the save itself.
+        if let listening = recorder.listeningTask { await listening.finished(within: limit) }
         await liveSave?.value
         return lastLiveSave
     }
@@ -810,6 +813,41 @@ public final class DeviceSession: Identifiable {
         self.receivedBytes = receivedBytes
     }
     #endif
+}
+
+extension Task where Success == Void, Failure == Never {
+    /// Waits until the task has finished, or `limit` has passed, whichever comes first. True when it finished.
+    /// Awaiting `value` alone can't be cut short; the waiter that loses the race is let go.
+    @MainActor
+    @discardableResult
+    func finished(within limit: Duration) async -> Bool {
+        let race = FinishRace()
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            race.continuation = continuation
+            race.timer = Task { @MainActor in
+                guard (try? await Task<Never, Never>.sleep(for: limit)) != nil else { return }
+                race.settle(false)
+            }
+            Task { @MainActor in
+                await self.value
+                race.settle(true)
+            }
+        }
+    }
+}
+
+/// A task finishing, raced against a timer: whichever comes first answers.
+@MainActor
+private final class FinishRace {
+    var continuation: CheckedContinuation<Bool, Never>?
+    var timer: Task<Void, Never>?
+
+    func settle(_ finished: Bool) {
+        guard let continuation else { return }
+        self.continuation = nil
+        timer?.cancel()
+        continuation.resume(returning: finished)
+    }
 }
 
 /// A recording that was waiting to import when a recorder moved between devices: the device taking

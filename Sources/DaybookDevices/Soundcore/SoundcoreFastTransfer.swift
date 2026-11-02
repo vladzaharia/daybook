@@ -6,8 +6,8 @@ public enum FastTransferStage: Equatable, Sendable {
     case opening
     /// Bluetooth let go; the recorder's network is starting.
     case starting
-    /// Joining its network (iOS asks the person).
-    case joining
+    /// Joining its network: iOS asks the person, so the page names whose network it is.
+    case joining(recorder: String)
     /// Opening the WebSocket.
     case connecting
     /// Transferring, or waiting for the next recording queued.
@@ -15,10 +15,11 @@ public enum FastTransferStage: Equatable, Sendable {
     /// Ending: FINISH, leaving the network, back to Bluetooth, and the access point closed.
     case closing
 
-    /// What the page says: "Starting Wi‑Fi…", "Over Wi‑Fi", "Back to Bluetooth…".
+    /// What the page says: "Starting Wi‑Fi…", "Joining Soundcore Work’s Wi‑Fi…", "Over Wi‑Fi", "Back to Bluetooth…".
     public var label: String {
         switch self {
-        case .opening, .starting, .joining, .connecting: return "Starting Wi‑Fi…"
+        case .opening, .starting, .connecting: return "Starting Wi‑Fi…"
+        case .joining(let recorder): return "Joining \(recorder)’s Wi‑Fi…"
         case .transferring: return "Over Wi‑Fi"
         case .closing: return "Back to Bluetooth…"
         }
@@ -32,6 +33,8 @@ protocol SoundcoreFastTransferHost: AnyObject {
     var bluetoothSession: SoundcoreSession? { get }
     /// Another recording from this recorder is waiting in the import queue.
     var moreQueued: Bool { get }
+    /// The recorder's name as the person knows it, for "Joining Soundcore Work’s Wi‑Fi…".
+    var recorderName: String { get }
     /// Lets the Bluetooth link go on purpose: the recorder is starting its access point.
     func leaveBluetoothForWiFi()
     /// Brings the Bluetooth link back. Once it's confirmed, the connection closes the access point.
@@ -62,14 +65,17 @@ public enum SoundcoreFastTransferError: LocalizedError, Equatable {
 /// 1. Over Bluetooth, after the usual key exchange (the Wi‑Fi transfer reuses that key), `1A 05` with an
 ///    access point name and password Daybook chooses; the recorder answers with its address and port.
 /// 2. Bluetooth is let go on purpose, and the recorder gets `accessPointStartup` to start its network.
-/// 3. The iPhone joins it (`SoundcoreHotspot`; iOS asks each time) and opens `wss://` to the recorder,
-///    taking its self-signed certificate, with a UDP keep-alive every two seconds.
+/// 3. The iPhone joins it (`SoundcoreHotspot`; iOS asks each time) and, once iOS names the recorder's network
+///    as the one it's on, opens `wss://` to the recorder, taking its self-signed certificate, with a UDP
+///    keep-alive every two seconds.
 /// 4. Each recording is asked for as hex text (`1A 07` with an offset of 0), and arrives as the same
 ///    encrypted packets as over Bluetooth, through the same checks.
 /// 5. FINISH, the network left, Bluetooth back, and `1A 02` closes the access point. Nothing deletes.
 ///
 /// Any failure falls back to Bluetooth, and the access point is closed on the next confirmed Bluetooth
-/// link whatever happened (`accessPointMayBeOpen` persists that it may be open).
+/// link whatever happened (`accessPointMayBeOpen` persists that it may be open). While it runs, the app
+/// holds a short background task (`SoundcoreWiFiHooks.holdInBackground`): a moment outside Daybook doesn't
+/// cost a transfer on the recorder's network, and a longer one ends Fast Transfer tidily.
 @MainActor
 final class SoundcoreFastTransfer {
     /// How the last attempt went, for Device Details.
@@ -85,6 +91,8 @@ final class SoundcoreFastTransfer {
     var isActive: Bool { stage != nil }
     /// On the recorder's network now, with nothing ending it.
     var isLinked: Bool { link != nil && ending == nil }
+    /// The app's background time is held (tests).
+    var holdsBackgroundTime: Bool { releaseBackground != nil }
 
     private weak var host: (any SoundcoreFastTransferHost)?
     private let hooks: SoundcoreWiFiHooks
@@ -95,6 +103,10 @@ final class SoundcoreFastTransfer {
     private var downloading = false
     private var lingering: Task<Void, Never>?
     private var ending: Task<Void, Never>?
+    /// Ends the background task held while Fast Transfer runs.
+    private var releaseBackground: (@MainActor () -> Void)?
+    /// Out of the foreground on the recorder's network: Fast Transfer ends when this runs out.
+    private var backgroundGrace: Task<Void, Never>?
 
     private struct Link {
         let socket: SoundcoreWebSocket
@@ -106,11 +118,7 @@ final class SoundcoreFastTransfer {
         self.host = host
         self.hooks = hooks
         self.timing = timing
-        hooks.observeForeground { [weak self] front in
-            guard !front, let self, self.isActive else { return }
-            self.outcome = .fellBack(Date(), SoundcoreFastTransferError.background.localizedDescription)
-            self.end()
-        }
+        hooks.observeForeground { [weak self] front in self?.foregroundChanged(front) }
     }
 
     /// Moves one recording over the recorder's Wi‑Fi, opening it first unless it's open. True when it's
@@ -156,6 +164,8 @@ final class SoundcoreFastTransfer {
         stage = .closing
         lingering?.cancel()
         lingering = nil
+        backgroundGrace?.cancel()
+        backgroundGrace = nil
         let socket = link?.socket
         ending = Task { [weak self] in
             if let socket, socket.isOpen {
@@ -177,6 +187,7 @@ final class SoundcoreFastTransfer {
         tearDown()
         leftBluetooth = false
         stage = nil
+        letBackgroundGo()
     }
 
     // MARK: Starting
@@ -184,6 +195,7 @@ final class SoundcoreFastTransfer {
     private func start() async throws {
         guard let host, let hotspot = hooks.hotspot, let bluetooth = host.bluetoothSession else { throw SoundcoreError.disconnected }
         stage = .opening
+        holdBackground()
         let credentials = SoundcoreWiFi.credentials()
         let accessPoint: SoundcoreAccessPoint
         do {
@@ -204,13 +216,14 @@ final class SoundcoreFastTransfer {
         try stillStarting()
         guard hooks.isForeground else { throw SoundcoreFastTransferError.background }
 
-        stage = .joining
+        // Said before iOS asks to join a network named "WiFi-1730…", so the question has its context.
+        stage = .joining(recorder: host.recorderName)
         joined = accessPoint.ssid
         try await hotspot.join(ssid: accessPoint.ssid, password: accessPoint.password, recorder: accessPoint.host)
         try stillStarting()
 
         stage = .connecting
-        let socket = try await connect(accessPoint)
+        let socket = try await connect(accessPoint, hotspot: hotspot)
         try stillStarting()
         let keepAlive = SoundcoreKeepAlive(host: accessPoint.host, port: hooks.keepAlivePort(accessPoint.host),
                                            requiresWiFi: hooks.requiresWiFi, interval: timing.keepAlive)
@@ -238,11 +251,15 @@ final class SoundcoreFastTransfer {
         try Task.checkCancellation()
     }
 
-    /// The recorder's WebSocket, in a few attempts: its network may take a moment to route.
-    private func connect(_ accessPoint: SoundcoreAccessPoint) async throws -> SoundcoreWebSocket {
+    /// The recorder's WebSocket, in a few attempts: its network may take a moment to route. Each attempt opens
+    /// only while iOS names the recorder's network as the one this device is on: the recorder's address alone
+    /// could reach a host on another network with the same addresses, and the socket takes any certificate.
+    private func connect(_ accessPoint: SoundcoreAccessPoint, hotspot: any SoundcoreHotspot) async throws -> SoundcoreWebSocket {
         var last: Error = WebSocketError.timedOut
         for attempt in 0..<max(1, timing.webSocketAttempts) {
             if attempt > 0 { try await Task.sleep(for: timing.webSocketRetry) }
+            try stillStarting()
+            guard await hotspot.isJoined(to: accessPoint.ssid) else { throw SoundcoreHotspotError.notJoined }
             try stillStarting()
             let socket = SoundcoreWebSocket(host: accessPoint.host, port: accessPoint.port, requiresWiFi: hooks.requiresWiFi)
             do {
@@ -255,6 +272,47 @@ final class SoundcoreFastTransfer {
             }
         }
         throw last
+    }
+
+    // MARK: The foreground
+
+    /// iOS joins a network for an app in front and drops it about 15 seconds after the app leaves. Joining needs
+    /// Daybook in front (iOS asks the person there), so leaving before it's on the recorder's network ends Fast
+    /// Transfer at once. On it, a moment elsewhere doesn't cost the transfer: it carries on for
+    /// `fastTransferBackgroundGrace`, and ends (back to Bluetooth) only if Daybook hasn't come back by then.
+    private func foregroundChanged(_ front: Bool) {
+        guard isActive, ending == nil else { return }
+        backgroundGrace?.cancel()
+        backgroundGrace = nil
+        guard !front else { return }
+        guard isLinked else { return leftForeground() }
+        let grace = timing.fastTransferBackgroundGrace
+        backgroundGrace = Task { [weak self] in
+            guard (try? await Task.sleep(for: grace)) != nil, let self, !self.hooks.isForeground else { return }
+            self.leftForeground()
+        }
+    }
+
+    /// Out of the foreground for good, or out of background time: back to Bluetooth.
+    private func leftForeground() {
+        guard isActive, ending == nil else { return }
+        outcome = .fellBack(Date(), SoundcoreFastTransferError.background.localizedDescription)
+        end()
+    }
+
+    /// Asks the app for a short while in the background, held until Fast Transfer has ended. If the system
+    /// ends that time first, Fast Transfer ends at once.
+    private func holdBackground() {
+        guard releaseBackground == nil, let hold = hooks.holdInBackground else { return }
+        releaseBackground = hold { [weak self] in self?.leftForeground() }
+    }
+
+    private func letBackgroundGo() {
+        backgroundGrace?.cancel()
+        backgroundGrace = nil
+        let release = releaseBackground
+        releaseBackground = nil
+        release?()
     }
 
     // MARK: Ending
@@ -286,6 +344,7 @@ final class SoundcoreFastTransfer {
         }
         ending = nil
         stage = nil
+        letBackgroundGo()
     }
 
     private func tearDown() {

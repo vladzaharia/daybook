@@ -321,7 +321,9 @@ background relaunch that never reaches `launch`), so each says what it can still
   activity is stale.
 - **Soundcore Work** gets its own Live Activity (`RecorderLiveActivity`) for Listen Live (with Stop
   Listening) and for a recording this iPhone started on it: live while connected, "Recording · as
-  of 10:07 AM" after it lets the recorder go, and "Not confirmed" once that's 20 minutes old.
+  of 10:07 AM" after it lets the recorder go, and "Not confirmed" once that's 20 minutes old. Its updates
+  and its end reach ActivityKit in the order they were made (`RecorderActivityController`), so an older
+  state never lands after a newer one, or after the end.
 - Tests (`RecordingSurfacesTests`, `RecorderActivityTests`) cover the state and timeline logic, the
   Live Activity buttons' contrast (4.5:1 in light, dark, and Increase Contrast), and the recorder
   activity against the simulated recorder, not pixels.

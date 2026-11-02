@@ -87,7 +87,7 @@ public final class DeviceHub {
     /// A background wake (iOS app refresh): recorders whose wait before the next automatic import has
     /// run out reach for the recorder now, since their timers didn't run while the app was suspended.
     public func resumeAutomaticImportsIfDue(now: Date = Date()) {
-        for session in sessions { (session.direct as? SoundcoreConnection)?.resumeAutomaticImportIfDue(now: now) }
+        for session in sessions { (session.direct as? any AutomaticImportScheduling)?.resumeAutomaticImportIfDue(now: now) }
     }
 
     public func session(_ id: String) -> DeviceSession? { sessions.first { $0.id == id } }

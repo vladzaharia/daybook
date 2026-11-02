@@ -17,8 +17,8 @@ import os
 ///   pauses a recording only when the person asks.
 @MainActor
 @Observable
-public final class SoundcoreConnection: DiscoveringConnection, RecordControlConnection,
-                                 LiveListeningConnection, DetailedConnection, ManagedConnection {
+public final class SoundcoreConnection: DiscoveringConnection, RecordingStateConnection, LiveListeningConnection,
+                                        DetailedConnection, ManagedConnection, FastTransferConnection, AutomaticImportScheduling {
     /// Where the connection is. Each phase owns at most one timer.
     public enum Phase: Equatable {
         case idle
@@ -152,6 +152,11 @@ public final class SoundcoreConnection: DiscoveringConnection, RecordControlConn
         return serial?.isEmpty == false ? serial : nil
     }
 
+    /// The remembered recorder's serial number.
+    public var rememberedSerial: String? {
+        remembered?.serial.isEmpty == false ? remembered?.serial : nil
+    }
+
     /// The device's "Fast Transfer". Turning it on again tries Fast Transfer afresh,
     /// even where a join failed before.
     public var usesFastTransfer = true {
@@ -164,6 +169,10 @@ public final class SoundcoreConnection: DiscoveringConnection, RecordControlConn
     /// The import queue has another recording from this recorder waiting (the device's session sets it):
     /// Fast Transfer keeps the recorder's Wi‑Fi open for it.
     @ObservationIgnored public var hasMoreQueued: (() -> Bool)?
+    /// The person declined joining the recorder's Wi‑Fi (the device's session turns its preference off).
+    @ObservationIgnored public var onFastTransferDeclined: (() -> Void)?
+    /// The device's name, as the person knows it: "Joining Soundcore Work’s Wi‑Fi…".
+    @ObservationIgnored private(set) var recorderName: String
 
     /// Settings › Devices › Connect over Bluetooth.
     public var isEnabled = true {
@@ -180,7 +189,8 @@ public final class SoundcoreConnection: DiscoveringConnection, RecordControlConn
     private let captionHooks: LiveCaptionHooks
     @ObservationIgnored private var transport: (any SoundcoreTransport)?
     @ObservationIgnored private var session: SoundcoreSession?
-    @ObservationIgnored private var listeningTask: Task<Void, Never>?
+    /// Listen Live under way: it ends once what arrived is handed on to be saved.
+    @ObservationIgnored public private(set) var listeningTask: Task<Void, Never>?
     private var peripheral: UUID?
     @ObservationIgnored private var timer: Task<Void, Never>?
     @ObservationIgnored private var idleTimer: Task<Void, Never>?
@@ -234,7 +244,17 @@ public final class SoundcoreConnection: DiscoveringConnection, RecordControlConn
         importsAutomatically = device.importsAutomatically
         isEnabled = device.isEnabled(.direct)
         usesFastTransfer = device.usesFastTransfer
+        recorderName = device.name
         wifiHooks = environment.soundcoreWiFi
+    }
+
+    /// Settings › Devices and the recorder's page: automatic import, Connect over Bluetooth, Fast Transfer,
+    /// and its name.
+    public func preferencesChanged(_ device: ConfiguredDevice) {
+        if importsAutomatically != device.importsAutomatically { importsAutomatically = device.importsAutomatically }
+        if isEnabled != device.isEnabled(.direct) { isEnabled = device.isEnabled(.direct) }
+        if usesFastTransfer != device.usesFastTransfer { usesFastTransfer = device.usesFastTransfer }
+        if recorderName != device.name { recorderName = device.name }
     }
 
     // MARK: DeviceConnection
@@ -282,21 +302,21 @@ public final class SoundcoreConnection: DiscoveringConnection, RecordControlConn
     /// What the recorder is recording: live while connected; otherwise as last confirmed, for at most
     /// `SoundcoreTiming.lastKnownRecording` (nobody can see it stop meanwhile), then unknown (nil).
     /// Nil too when it wasn't recording when last seen.
-    public var recordingState: SoundcoreRecordingState? { recordingState(at: Date()) }
+    public var recordingState: RecorderRecordingState? { recordingState(at: Date()) }
 
-    public func recordingState(at now: Date) -> SoundcoreRecordingState? {
+    public func recordingState(at now: Date) -> RecorderRecordingState? {
         _ = recordingKnowledgeAge
         if case .connected = phase, let info {
             let active = listedThisConnection ? activeRecordingID : remembered?.activeRecordingID
-            return SoundcoreRecordingState(isRecording: info.isRecording, activeRecordingID: active, startedAt: startDate(of: active),
-                                           asOf: statusUpdatedAt ?? now, isLive: true, startedHere: active != nil && active == startedHereID)
+            return RecorderRecordingState(isRecording: info.isRecording, recordingID: active.map(String.init), startedAt: startDate(of: active),
+                                          asOf: statusUpdatedAt ?? now, isLive: true, startedHere: active != nil && active == startedHereID)
         }
         guard let snapshot = remembered, let info = snapshot.info, let asOf = snapshot.statusUpdatedAt,
               info.isRecording || snapshot.activeRecordingID != nil,
               now.timeIntervalSince(asOf) < Self.seconds(timing.lastKnownRecording) else { return nil }
         let active = snapshot.activeRecordingID
-        return SoundcoreRecordingState(isRecording: info.isRecording, activeRecordingID: active, startedAt: startDate(of: active),
-                                       asOf: asOf, isLive: false, startedHere: active != nil && active == startedHereID)
+        return RecorderRecordingState(isRecording: info.isRecording, recordingID: active.map(String.init), startedAt: startDate(of: active),
+                                      asOf: asOf, isLive: false, startedHere: active != nil && active == startedHereID)
     }
 
     private func startDate(of id: UInt32?) -> Date? {
@@ -1246,7 +1266,7 @@ public final class SoundcoreConnection: DiscoveringConnection, RecordControlConn
         if case .connected = phase {
             recordingNow = listedThisConnection ? activeRecordingID : remembered?.activeRecordingID
         } else {
-            recordingNow = recordingState?.activeRecordingID
+            recordingNow = recordingState?.recordingID.flatMap { UInt32($0) }
         }
         let correction = clockCorrection
         var result = listing.map { $0.deviceRecording(inProgress: $0.id == recordingNow, clockCorrection: correction) }
@@ -1426,6 +1446,9 @@ extension SoundcoreConnection: SoundcoreFastTransferHost {
     /// This device can join a recorder's network (the iPhone): Fast Transfer's preference applies here.
     public var joinsRecorderWiFi: Bool { wifiHooks.hotspot != nil }
 
+    /// The background task Fast Transfer holds while it runs (tests).
+    var fastTransferHoldsBackgroundTime: Bool { fastTransfer.holdsBackgroundTime }
+
     /// This device can bring recordings over the recorder's Wi‑Fi now: it can join networks, and this
     /// build hasn't found it can't.
     public var offersFastTransfer: Bool { joinsRecorderWiFi && !fastTransferUnavailableHere }
@@ -1548,9 +1571,19 @@ extension SoundcoreConnection: SoundcoreFastTransferHost {
     func fastTransferFailed(_ error: Error) {
         lastTechnicalProblem = "Fast Transfer: \(error.localizedDescription)"
         Self.log.notice("Fast Transfer fell back to Bluetooth: \(error.localizedDescription, privacy: .public)")
-        if (error as? SoundcoreHotspotError) == .unavailable {
+        switch error {
+        case SoundcoreHotspotError.unavailable:
             storage.set(wifiHooks.build, "fastTransferUnavailableIn")
-        } else if (error as? SoundcoreFastTransferError) != .background {
+        case SoundcoreHotspotError.declined:
+            // The person's No is a choice, not a passing failure: Fast Transfer turns off for this recorder (its
+            // switch on the recorder's page is the way back), nothing else chosen for Wi‑Fi asks again, and the
+            // transfer carries on over Bluetooth now.
+            fastTransferRequested.removeAll()
+            usesFastTransfer = false
+            onFastTransferDeclined?()
+        case SoundcoreFastTransferError.background:
+            break
+        default:
             fastTransferPausedUntil = Date().addingTimeInterval(Self.seconds(timing.fastTransferPause))
         }
     }

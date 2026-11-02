@@ -1,3 +1,4 @@
+import DaybookCore
 import Foundation
 
 // Wi‑Fi Fast Transfer's wire format, from community protocol research: tacshi/Soundcore's PROTOCOL.md
@@ -74,7 +75,7 @@ public enum SoundcoreWiFi {
     public static func fileRequest(recordingID: UInt32, offset: UInt32 = 0) -> String {
         var bytes: [UInt8] = [0x08, 0xee, 0x00, 0x00, 0x00, 0x1a, 0x07, 0x12, 0x00]
         bytes += [UInt8](littleEndian32(offset)) + [UInt8](littleEndian32(recordingID)) + [0x1b]
-        return hex(bytes)
+        return bytes.lowercaseHex
     }
 
     /// The recording and offset a file request asks for (the simulator, tests).
@@ -84,23 +85,11 @@ public enum SoundcoreWiFi {
         return (id, offset)
     }
 
-    public static func hex<Bytes: Sequence>(_ bytes: Bytes) -> String where Bytes.Element == UInt8 {
-        bytes.map { String(format: "%02x", $0) }.joined()
-    }
-
-    /// Bytes from hex text, ignoring spaces; nil when it isn't hex.
+    /// Bytes from hex text, ignoring spaces; nil when it's empty or isn't hex.
     public static func bytes(hex text: String) -> Data? {
-        let digits = text.filter { !$0.isWhitespace }
-        guard !digits.isEmpty, digits.count.isMultiple(of: 2) else { return nil }
-        var data = Data(capacity: digits.count / 2)
-        var index = digits.startIndex
-        while index < digits.endIndex {
-            let next = digits.index(index, offsetBy: 2)
-            guard let byte = UInt8(digits[index..<next], radix: 16) else { return nil }
-            data.append(byte)
-            index = next
-        }
-        return data
+        let digits = String(text.filter { !$0.isWhitespace })
+        guard !digits.isEmpty else { return nil }
+        return Data(hex: digits)
     }
 }
 
@@ -109,8 +98,12 @@ public enum SoundcoreWiFi {
 /// foreground; the simulator has its own.
 @MainActor
 public protocol SoundcoreHotspot: AnyObject {
-    /// Joins the network and returns once this device has an address on the recorder's subnet.
+    /// Joins the network and returns once this device is on it, by its name, with an address on the
+    /// recorder's subnet. An address alone isn't proof: a home or café network can use the same addresses.
     func join(ssid: String, password: String, recorder host: String) async throws
+    /// The Wi‑Fi network this device is on now is `ssid`. Asked again right before each WebSocket attempt,
+    /// so nothing is sent to a host on another network that happens to have the recorder's address.
+    func isJoined(to ssid: String) async -> Bool
     /// Leaves it and forgets it.
     func leave(ssid: String)
 }
@@ -122,12 +115,15 @@ public enum SoundcoreHotspotError: LocalizedError, Equatable {
     case declined
     /// The network didn't appear, or joining it failed.
     case failed(String)
+    /// This device isn't on the recorder's network by its name, whatever its address says.
+    case notJoined
 
     public var errorDescription: String? {
         switch self {
         case .unavailable: return "This build of Daybook can’t join the recorder’s Wi‑Fi."
         case .declined: return "Joining the recorder’s Wi‑Fi was declined."
         case .failed(let reason): return "The recorder’s Wi‑Fi couldn’t be joined: \(reason)"
+        case .notJoined: return "This device isn’t on the recorder’s Wi‑Fi."
         }
     }
 }
@@ -138,15 +134,20 @@ public enum SoundcoreHotspotError: LocalizedError, Equatable {
 public final class SoundcoreWiFiHooks {
     /// Joins and leaves the recorder's network.
     public var hotspot: (any SoundcoreHotspot)?
-    /// Daybook is in the foreground. Fast Transfer runs only then: iOS joins networks for an app in
-    /// front and suspends one in the background. Leaving the foreground ends it, and the transfer
-    /// carries on over Bluetooth.
+    /// Daybook is in the foreground. Fast Transfer starts only then: iOS joins networks for an app in
+    /// front and drops them soon after it leaves. Leaving for longer than a moment
+    /// (`SoundcoreTiming.fastTransferBackgroundGrace`) ends it, and the transfer carries on over Bluetooth.
     public var isForeground = true {
         didSet {
             guard isForeground != oldValue else { return }
             observers.forEach { $0(isForeground) }
         }
     }
+    /// Keeps Daybook running a short while after it leaves the foreground (iOS's background task), held while
+    /// Fast Transfer runs so a moment elsewhere doesn't cost the transfer and a longer one ends it tidily.
+    /// `expired` is called if the system ends that time first. Returns what lets it go. Nil (the Mac, tests
+    /// that don't ask): nothing is held.
+    public var holdInBackground: ((_ expired: @escaping @MainActor () -> Void) -> @MainActor () -> Void)?
     /// Where the keep-alive goes, for a recorder's address: its port 32003, or the simulator's own.
     public var keepAlivePort: (String) -> UInt16 = { _ in SoundcoreWiFi.keepAlivePort }
     /// The connection to the recorder must go over Wi‑Fi. The simulator's is on loopback.

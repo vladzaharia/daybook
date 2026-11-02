@@ -2,6 +2,7 @@ import DaybookDevices
 import DaybookKit
 import Foundation
 import Observation
+import UIKit
 
 /// Recorders on iPhone (DaybookDevices): Soundcore Work over Bluetooth, usually the device in your
 /// pocket, and other recorders through Files. Its recordings import into the library as recorder
@@ -86,8 +87,10 @@ final class PhoneDevices {
                 transport.onRestore = { ids in weakSelf?.didRestore(ids) }
                 return transport
             }
-            // Wi‑Fi Fast Transfer joins the recorder's own network (docs/direct-soundcore.md).
+            // Wi‑Fi Fast Transfer joins the recorder's own network (docs/direct-soundcore.md), with a short
+            // background task while it runs.
             environment.soundcoreWiFi.hotspot = SystemSoundcoreHotspot()
+            environment.soundcoreWiFi.holdInBackground = Self.holdInBackground
         case .inert:
             environment.soundcoreTransport = { InertSoundcoreTransport() }
         case .simulator:
@@ -98,6 +101,7 @@ final class PhoneDevices {
             // Fast Transfer against the simulated recorder's access point, on loopback.
             let wifi = environment.soundcoreWiFi
             wifi.hotspot = SimulatedSoundcoreHotspot(recorder: recorder)
+            wifi.holdInBackground = Self.holdInBackground
             wifi.requiresWiFi = false
             wifi.keepAlivePort = { [weak recorder] _ in recorder?.accessPoint?.keepAlivePort ?? SoundcoreWiFi.keepAlivePort }
             simulator = recorder
@@ -162,18 +166,47 @@ final class PhoneDevices {
         holdRecorders()
         applyOwnership()
         recorderActivity?.follow()
+        observeBackground()
     }
 
     func shutDown() { hub.shutDown() }
 
-    /// Wi‑Fi Fast Transfer runs only in the foreground: leaving it ends Fast Transfer, and the transfer
-    /// carries on over Bluetooth.
+    /// Wi‑Fi Fast Transfer starts only in the foreground, and leaving it for more than a moment ends Fast
+    /// Transfer, which carries on over Bluetooth. A system alert over Daybook makes the scene inactive, not
+    /// background: iOS asking to join the recorder's network is one, and Daybook is still in front under it.
+    /// Going to the background always counts (`backgroundObserver`), whatever order the scene reports it in.
     func foregroundChanged(_ isForeground: Bool) {
-        hub.environment.soundcoreWiFi.isForeground = isForeground
+        hub.environment.soundcoreWiFi.isForeground = isForeground || UIApplication.shared.applicationState == .inactive
+    }
+
+    @ObservationIgnored private var backgroundObserver: NSObjectProtocol?
+
+    private func observeBackground() {
+        backgroundObserver = NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil,
+                                                                    queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.hub.environment.soundcoreWiFi.isForeground = false }
+        }
+    }
+
+    /// A short background task while Fast Transfer runs (`SoundcoreWiFiHooks.holdInBackground`).
+    private static func holdInBackground(expired: @escaping @MainActor () -> Void) -> @MainActor () -> Void {
+        var task = UIBackgroundTaskIdentifier.invalid
+        let end = {
+            guard task != .invalid else { return }
+            UIApplication.shared.endBackgroundTask(task)
+            task = .invalid
+        }
+        task = UIApplication.shared.beginBackgroundTask(withName: "Fast Transfer") {
+            MainActor.assumeIsolated {
+                expired()
+                end()
+            }
+        }
+        return end
     }
 
     /// Background app refresh: a recorder whose wait before the next automatic import ran out while
-    /// the app was suspended reaches for the recorder now (`SoundcoreConnection.automaticDueAt`).
+    /// the app was suspended reaches for the recorder now (`AutomaticImportScheduling.automaticDueAt`).
     func backgroundRefresh() {
         guard started else { return }
         hub.resumeAutomaticImportsIfDue()
@@ -190,14 +223,14 @@ final class PhoneDevices {
     }
 
     /// A recorder this iPhone manages that records along with it keeps its link while in range, so its
-    /// button is heard, even with Daybook in the background (`SoundcoreConnection.staysConnected`).
+    /// button is heard, even with Daybook in the background (`RecordingStateConnection.staysConnected`).
     /// Never in tests' inert mode, which has no recorder to reach.
     func holdRecorders() {
         guard mode != .inert || holdsInTests else { return }
         for session in hub.sessions {
-            guard let soundcore = session.direct as? SoundcoreConnection else { continue }
+            guard let recorder = session.direct as? any RecordingStateConnection else { continue }
             let hold = session.managedElsewhere == nil && session.device.recordsAlongsideMac && session.device.isEnabled(.direct)
-            if soundcore.staysConnected != hold { soundcore.staysConnected = hold }
+            if recorder.staysConnected != hold { recorder.staysConnected = hold }
         }
     }
 

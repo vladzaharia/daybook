@@ -56,9 +56,13 @@ public struct SoundcoreTiming {
     public var keepAlive: Duration = .seconds(2)
     /// After a Wi‑Fi transfer with another recording queued, how long the Wi‑Fi link waits for it.
     public var fastTransferLinger: Duration = .seconds(30)
-    /// After Fast Transfer fails (the join declined, the network didn't appear), how long transfers stay
-    /// on Bluetooth.
+    /// After Fast Transfer fails (the network didn't appear, the WebSocket didn't open), how long transfers
+    /// stay on Bluetooth. A declined join isn't a failure: it turns the recorder's Fast Transfer off.
     public var fastTransferPause: Duration = .seconds(1_800)
+    /// After Daybook leaves the foreground while on the recorder's network, how long the transfer carries on
+    /// over Wi‑Fi before falling back to Bluetooth: under the 15 seconds iOS keeps a network joined once for
+    /// an app that has left.
+    public var fastTransferBackgroundGrace: Duration = .seconds(10)
 
     public init(request: Duration = .seconds(10), stall: Duration = .seconds(45), settle: Duration = .seconds(1), scan: Duration = .seconds(15), connect: Duration = .seconds(20), reconnect: Duration = .seconds(10), recordConfirm: Duration = .seconds(10), backoff: [Duration] = [2, 5, 15, 30, 60].map { .seconds($0) }, idleRelease: Duration = .seconds(300), automaticIdleRelease: Duration = .seconds(30), automaticCooldown: Duration = .seconds(900), lastKnownRecording: Duration = .seconds(1_200), relist: [Duration] = [15, 60].map { .seconds($0) }) {
         self.request = request

@@ -20,12 +20,8 @@ final class SoundcoreSimulatorTests: XCTestCase {
     override func setUp() async throws {
         suite = makeTestSuite("local.daybook.tests.soundcore-sim")
         defaults = UserDefaults(suiteName: suite)
-        staging = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookSim-\(UUID().uuidString)", isDirectory: true)
+        staging = makeTemporaryFolder("DaybookSim")
         transportsMade = 0
-    }
-
-    override func tearDown() async throws {
-        try? FileManager.default.removeItem(at: staging)
     }
 
     // MARK: Harness
@@ -962,7 +958,7 @@ final class SoundcoreSimulatorTests: XCTestCase {
         XCTAssertEqual(status.recordingStartedAt, SoundcoreRecording(id: id, size: 0).date)
         let known = try XCTUnwrap(rig.connection.recordingState)
         XCTAssertFalse(known.isLive)
-        XCTAssertEqual(known.activeRecordingID, id)
+        XCTAssertEqual(known.recordingID, String(id))
         XCTAssertTrue(known.startedHere)
         XCTAssertEqual(DeviceDateFormat.recordingAsOf(status.updatedAt),
                        "Recording · as of \(status.updatedAt.formatted(date: .omitted, time: .shortened))")
@@ -978,7 +974,7 @@ final class SoundcoreSimulatorTests: XCTestCase {
         let relaunched = SoundcoreConnection(device: configured, environment: environment)
         relaunched.activate()
         XCTAssertEqual(relaunched.status?.isRecording, true)
-        XCTAssertEqual(relaunched.recordingState?.activeRecordingID, id)
+        XCTAssertEqual(relaunched.recordingState?.recordingID, String(id))
         XCTAssertEqual(relaunched.recordings.first { $0.id == String(id) }?.isInProgress, true)
 
         // Nobody can see it stop: after a while it's unknown again, and the page, which reads it, redraws.

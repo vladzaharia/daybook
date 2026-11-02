@@ -10,7 +10,7 @@ import NetworkExtension
 /// ("internal error"), which is `.unavailable`, and transfers stay on Bluetooth.
 @MainActor
 public final class SystemSoundcoreHotspot: SoundcoreHotspot {
-    /// After iOS says it joined, how long to wait for an address on the recorder's network.
+    /// After iOS says it joined, how long to wait for it to be on the recorder's network with an address there.
     public var addressWait: Duration = .seconds(20)
 
     public init() {}
@@ -28,12 +28,23 @@ public final class SystemSoundcoreHotspot: SoundcoreHotspot {
             default: throw SoundcoreHotspotError.failed(error.localizedDescription)
             }
         }
-        // `apply` succeeding doesn't promise the join: wait for an address on the recorder's subnet.
+        // `apply` succeeding doesn't promise the join, and an address on the recorder's subnet doesn't either: the
+        // Wi‑Fi this iPhone was on may use the same addresses (192.168.1.x), and then a host there would answer for
+        // the recorder. Wait until iOS names the recorder's network as the current one, and there's an address on it.
         let deadline = ContinuousClock.now.advanced(by: addressWait)
-        while !Self.sharesSubnet(with: host) {
-            guard ContinuousClock.now < deadline else { throw SoundcoreHotspotError.failed("This iPhone has no address on its network.") }
+        while await !isJoined(to: ssid) || !Self.sharesSubnet(with: host) {
+            guard ContinuousClock.now < deadline else { throw SoundcoreHotspotError.failed("This iPhone isn’t on its network.") }
             try await Task.sleep(for: .milliseconds(250))
         }
+    }
+
+    /// iOS names `ssid` as the Wi‑Fi network it's on now. It tells an app the name of a network that app
+    /// configured (`NEHotspotNetwork.fetchCurrent`), which the recorder's is.
+    public func isJoined(to ssid: String) async -> Bool {
+        let current = await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
+            NEHotspotNetwork.fetchCurrent { network in continuation.resume(returning: network?.ssid) }
+        }
+        return current == ssid
     }
 
     public func leave(ssid: String) {

@@ -62,9 +62,17 @@ DeviceHub (@MainActor @Observable)       │  configured devices, persisted as [
     declared.
   - Operations: `activate`, `connect`, `disconnect`, `refresh`, `transfer(_:progress:)`
     (cancellable; throws `DeviceTransferError`; never returns partial audio),
-    `automaticImports(links:since:excluding:)`, `didImport`, `forget`, `shutDown`.
-  - Optional abilities as protocols: `DiscoveringConnection` (setup's search and connect),
-    `RecordControlConnection`, `LiveListeningConnection`, `DetailedConnection`.
+    `automaticImports(links:since:excluding:)`, `didImport`, `preferencesChanged` (the device's
+    name, methods, automatic import, Fast Transfer), `forget`, `shutDown`, and `isWaitingForOtherApp`
+    (false unless the link is shared with another app).
+  - Optional abilities as protocols, which the session, the hub, and both apps ask for by capability,
+    never by a kind's concrete type, so a second kind with the same ability gets the same behaviour:
+    `DiscoveringConnection` (setup's search and connect), `RecordControlConnection`,
+    `RecordingStateConnection` (what it's recording as a `RecorderRecordingState`, its button, holding the
+    link), `ManagedConnection` (one owner, the remembered serial), `LiveListeningConnection` (Listen Live
+    and a shared recording's live audio: the conversation it goes into, the listening task, the saved
+    portion), `FastTransferConnection` (the recorder's own Wi‑Fi), `AutomaticImportScheduling` (the wait
+    between quiet attempts, resumed on a background wake), and `DetailedConnection`.
 - **Session** (`DeviceSession`): runs the device's import queue. Import with an optional
   conversation to attach to; Stop current; Stop all; Remove from queue; Try Again. A
   disconnect puts the interrupted recording back at the front and suspends the queue; it
@@ -150,8 +158,8 @@ that recording joins the same conversation.
 
 ## What the recorder is recording
 
-`SoundcoreConnection.recordingState` (`SoundcoreRecordingState`) is what this device knows:
-`isRecording` (the recorder's flag), `activeRecordingID` (the file it names as in progress, also
+`SoundcoreConnection.recordingState` (`RecorderRecordingState`, through `RecordingStateConnection`) is what
+this device knows: `isRecording` (the recorder's flag), `recordingID` (the file it names as in progress, also
 when paused on firmware that keeps it open), `startedAt` (its start on this device's clock),
 `asOf`, `isLive` (connected now), and `startedHere` (this device asked it to start). While
 connected it's live. After the link goes (the idle release lets go even of a recording Daybook just
@@ -209,8 +217,8 @@ The device managing a recorder that records along with a shared recording saves 
 conversation as it records (`DeviceSession.captureLive(into:)`, Listen Live's stream, captioned as
 Listen Live is, so the shared recording's captions show the recorder's lines: `LiveCaptureCaptions`;
 docs/capture.md, "Every source"; and metered: `liveLevel(into:)`, each buffer's level as it arrives, not
-published, for Floating Notes to sample), ends it when the shared recording stops (`endLiveCapture`, which waits until it's in the
-library), and imports the recorder's own file into the same conversation once it's finished and
+published, for Floating Notes to sample), ends it when the shared recording stops (`endLiveCapture`, which awaits the listening task, at most 15 s, and
+then the save, until it's in the library), and imports the recorder's own file into the same conversation once it's finished and
 listed (`importWhenFinished`, the same waiting list as a handoff's imports). A live portion is a track
 whose recording ID ends with `~live`; the full recording replaces it (docs/multipoint.md, "A recorder's
 audio while it records"). The device page shows it as Listen Live (Stop Listening keeps what arrived).

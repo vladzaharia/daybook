@@ -21,6 +21,9 @@ final class RecorderActivityController: RecorderCommandHandling {
     private var current: Target?
     private var lastSent = Date.distantPast
     private var sessions: () -> [DeviceSession]
+    /// The last update or end sent. ActivityKit's calls are async, so each waits for the one before it: an
+    /// older state never lands after a newer one, and an update never lands after the end.
+    private var sending: Task<Void, Never>?
 
     init(sessions: @escaping () -> [DeviceSession]) {
         self.sessions = sessions
@@ -31,12 +34,13 @@ final class RecorderActivityController: RecorderCommandHandling {
     static func target(_ sessions: [DeviceSession], now: Date = Date()) -> Target? {
         var targets: [Target] = []
         for session in sessions {
-            guard let soundcore = session.direct as? SoundcoreConnection, soundcore.managedElsewhere == nil else { continue }
-            let known = soundcore.recordingState(at: now)
-            guard let content = Content.make(isListening: soundcore.live.isListening, isRecording: known?.isRecording == true,
+            guard session.managedElsewhere == nil, let recorder = session.direct as? any RecordingStateConnection else { continue }
+            let known = recorder.recordingState(at: now)
+            let listening = (recorder as? any LiveListeningConnection)?.live.isListening == true
+            guard let content = Content.make(isListening: listening, isRecording: known?.isRecording == true,
                                              startedHere: known?.startedHere == true, startedAt: known?.startedAt,
                                              isLive: known?.isLive ?? false, asOf: known?.asOf ?? now),
-                  let id = known?.activeRecordingID.map(String.init) ?? (content.phase == .listening ? "live" : nil) else { continue }
+                  let id = known?.recordingID ?? (content.phase == .listening ? "live" : nil) else { continue }
             targets.append(Target(recorderName: session.device.name, recordingID: id, content: content))
         }
         return targets.first { $0.content.phase == .listening } ?? targets.first
@@ -55,7 +59,7 @@ final class RecorderActivityController: RecorderCommandHandling {
             current = target
             lastSent = now
             let content = target.content
-            if let activity { Task { await activity.update(ActivityContent(state: content, staleDate: content.staleDate(from: now))) } }
+            if let activity { send { await activity.update(ActivityContent(state: content, staleDate: content.staleDate(from: now))) } }
         }
     }
 
@@ -79,7 +83,16 @@ final class RecorderActivityController: RecorderCommandHandling {
         self.activity = nil
         var final = last.content
         final.phase = .ended
-        Task { await activity.end(ActivityContent(state: final, staleDate: nil), dismissalPolicy: .after(Date().addingTimeInterval(8))) }
+        send { await activity.end(ActivityContent(state: final, staleDate: nil), dismissalPolicy: .after(Date().addingTimeInterval(8))) }
+    }
+
+    /// Sends one change to ActivityKit after the ones before it have landed.
+    private func send(_ change: @escaping @MainActor () async -> Void) {
+        let previous = sending
+        sending = Task { @MainActor in
+            await previous?.value
+            await change()
+        }
     }
 
     // MARK: RecorderCommandHandling

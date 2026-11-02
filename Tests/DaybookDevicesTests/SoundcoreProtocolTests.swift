@@ -2,6 +2,7 @@ import AVFoundation
 import AudioToolbox
 import CryptoKit
 import DaybookIntelligence
+import DaybookTestSupport
 import XCTest
 @testable import DaybookDevices
 
@@ -89,6 +90,30 @@ final class SoundcoreProtocolTests: XCTestCase {
         XCTAssertThrowsError(try WebSocketFrame.decode(&data))
         // RFC 6455's example key.
         XCTAssertEqual(WebSocketFrame.accept(for: "dGhlIHNhbXBsZSBub25jZQ=="), "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")
+    }
+
+    func testBehaviorAFragmentedMessageIsPutBackTogetherAndRefusedPastItsLimit() throws {
+        var messages = WebSocketMessages(limit: 10)
+        XCTAssertNil(try messages.add(fin: false, opcode: WebSocketFrame.binary, payload: Data([1, 2, 3])))
+        XCTAssertNil(try messages.add(fin: false, opcode: 0, payload: Data([4, 5, 6])))
+        let whole = try XCTUnwrap(messages.add(fin: true, opcode: 0, payload: Data([7, 8, 9, 10])))
+        XCTAssertEqual(whole.opcode, WebSocketFrame.binary)
+        XCTAssertEqual(whole.payload, Data(1...10), "exactly the limit is whole")
+        let text = try XCTUnwrap(messages.add(fin: true, opcode: WebSocketFrame.text, payload: Data("OK".utf8)))
+        XCTAssertEqual(text.payload, Data("OK".utf8))
+
+        // Each frame small, the message without end: refused once it passes the limit, not kept growing.
+        var flood = WebSocketMessages(limit: 10)
+        XCTAssertNil(try flood.add(fin: false, opcode: WebSocketFrame.binary, payload: Data(count: 4)))
+        XCTAssertNil(try flood.add(fin: false, opcode: 0, payload: Data(count: 4)))
+        XCTAssertThrowsError(try flood.add(fin: false, opcode: 0, payload: Data(count: 4))) { error in
+            XCTAssertEqual(error as? WebSocketError, .protocolError("A message was too large."))
+        }
+        var single = WebSocketMessages(limit: 10)
+        XCTAssertThrowsError(try single.add(fin: true, opcode: WebSocketFrame.binary, payload: Data(count: 11)))
+        var orphan = WebSocketMessages()
+        XCTAssertThrowsError(try orphan.add(fin: true, opcode: 0, payload: Data([1])), "nothing to continue")
+        XCTAssertEqual(orphan.limit, WebSocketFrame.maximumPayload, "a message may be as large as a frame")
     }
 
     func testBatteryBucketsAndStorageUnits() throws {
@@ -221,8 +246,7 @@ final class SoundcoreProtocolTests: XCTestCase {
     }
 
     func testSimulatorFixturesDecodeThroughTheNativeOpusPath() throws {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).wav")
-        defer { try? FileManager.default.removeItem(at: url) }
+        let url = makeTemporaryFolder("SoundcoreOpus").appendingPathComponent("decoded.wav")
         let frames = SimulatedSoundcore.frames(seconds: 1)
         XCTAssertGreaterThanOrEqual(frames.count, 49)
         XCTAssertTrue(frames.allSatisfy { $0.count == 160 })

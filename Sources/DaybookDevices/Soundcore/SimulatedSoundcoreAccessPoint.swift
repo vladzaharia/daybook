@@ -198,6 +198,11 @@ public final class SimulatedSoundcoreHotspot: SoundcoreHotspot {
     public private(set) var leaves: [String] = []
     /// The network joined now.
     public private(set) var joined: String?
+    /// After joining, this device goes back to another network (iOS dropping the recorder's for one the
+    /// person uses, whose addresses may be alike) before the WebSocket opens.
+    public var dropsAfterJoining = false
+    /// Called as a join begins, when iOS would ask the person.
+    public var onJoin: (() -> Void)?
 
     public init(recorder: SimulatedSoundcore?) {
         self.recorder = recorder
@@ -205,12 +210,15 @@ public final class SimulatedSoundcoreHotspot: SoundcoreHotspot {
 
     public func join(ssid: String, password: String, recorder host: String) async throws {
         joins.append(ssid)
+        onJoin?()
         if let failure { throw failure }
         guard let accessPoint = recorder?.accessPoint, accessPoint.ssid == ssid, accessPoint.password == password else {
             throw SoundcoreHotspotError.failed("The network didn’t appear.")
         }
-        joined = ssid
+        joined = dropsAfterJoining ? nil : ssid
     }
+
+    public func isJoined(to ssid: String) async -> Bool { joined == ssid }
 
     public func leave(ssid: String) {
         leaves.append(ssid)

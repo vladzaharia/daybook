@@ -61,6 +61,34 @@ public enum WebSocketFrame {
     }
 }
 
+/// A message's frames put back together. A message larger than `limit` in all is refused, however small its
+/// frames: a peer that keeps sending continuation frames can't grow it without end.
+struct WebSocketMessages {
+    let limit: Int
+    private var partial: (opcode: UInt8, data: Data)?
+
+    init(limit: Int = WebSocketFrame.maximumPayload) {
+        self.limit = limit
+    }
+
+    /// The whole message once a data frame (text, binary, or continuation) ends one; nil while it's still
+    /// arriving. Throws for a continuation with nothing to continue, or a message over the limit.
+    mutating func add(fin: Bool, opcode: UInt8, payload: Data) throws -> (opcode: UInt8, payload: Data)? {
+        var message: (opcode: UInt8, data: Data)
+        if opcode == 0 {
+            guard let partial else { throw WebSocketError.protocolError("A continuation frame came first.") }
+            message = partial
+            guard payload.count <= limit - message.data.count else { throw WebSocketError.protocolError("A message was too large.") }
+            message.data.append(payload)
+        } else {
+            guard payload.count <= limit else { throw WebSocketError.protocolError("A message was too large.") }
+            message = (opcode, payload)
+        }
+        partial = fin ? nil : message
+        return fin ? (message.opcode, message.data) : nil
+    }
+}
+
 public enum WebSocketError: LocalizedError, Equatable {
     case handshake(String), protocolError(String), closed, timedOut, network(String)
 
@@ -78,8 +106,10 @@ public enum WebSocketError: LocalizedError, Equatable {
 /// A WebSocket client over TLS for the recorder's access point, on Network.framework. It writes its own
 /// opening handshake, so the header names, their case, and their order are what the official app's
 /// HTTP client sends (the recorder's parser may match them exactly). It accepts the recorder's
-/// self-signed certificate, for this one connection to the recorder's own network: the audio itself is
-/// encrypted with the key exchanged over Bluetooth, and checked as a Bluetooth transfer is.
+/// self-signed certificate, for this one connection to the recorder's own network, which Fast Transfer
+/// opens only once iOS names that network as the one it's on (`SoundcoreHotspot.isJoined`): the audio
+/// itself is encrypted with the key exchanged over Bluetooth, and checked as a Bluetooth transfer is. A
+/// message larger than a frame may be (`WebSocketFrame.maximumPayload`) ends the connection.
 @MainActor
 final class SoundcoreWebSocket {
     enum Message: Equatable { case text(String), binary(Data) }
@@ -94,7 +124,7 @@ final class SoundcoreWebSocket {
     private let port: UInt16
     private let key = Data((0..<16).map { _ in UInt8.random(in: 0...255) }).base64EncodedString()
     private var buffer = Data()
-    private var fragments: (opcode: UInt8, data: Data)?
+    private var messages = WebSocketMessages()
     private var opening: CheckedContinuation<Void, Error>?
     private var ended = false
 
@@ -197,7 +227,7 @@ final class SoundcoreWebSocket {
                 opening?.resume()
                 opening = nil
             }
-            while !ended, let frame = try WebSocketFrame.decode(&buffer) { handle(frame.fin, frame.opcode, frame.payload) }
+            while !ended, let frame = try WebSocketFrame.decode(&buffer) { try handle(frame.fin, frame.opcode, frame.payload) }
         } catch {
             fail(error)
         }
@@ -220,14 +250,10 @@ final class SoundcoreWebSocket {
         }
     }
 
-    private func handle(_ fin: Bool, _ opcode: UInt8, _ payload: Data) {
+    private func handle(_ fin: Bool, _ opcode: UInt8, _ payload: Data) throws {
         switch opcode {
-        case WebSocketFrame.text, WebSocketFrame.binary:
-            if fin { deliver(opcode, payload) } else { fragments = (opcode, payload) }
-        case 0:
-            guard var fragments else { return fail(WebSocketError.protocolError("A continuation frame came first.")) }
-            fragments.data.append(payload)
-            if fin { self.fragments = nil; deliver(fragments.opcode, fragments.data) } else { self.fragments = fragments }
+        case WebSocketFrame.text, WebSocketFrame.binary, 0:
+            if let message = try messages.add(fin: fin, opcode: opcode, payload: payload) { deliver(message.opcode, message.payload) }
         case WebSocketFrame.ping:
             let mask = (0..<4).map { _ in UInt8.random(in: 0...255) }
             connection.send(content: WebSocketFrame.encode(opcode: WebSocketFrame.pong, payload: payload, mask: mask),

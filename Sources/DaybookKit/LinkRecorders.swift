@@ -13,13 +13,13 @@ extension LinkRecorderState {
     @MainActor
     public init?(session: DeviceSession, conversationID: UUID? = nil) {
         guard session.managedElsewhere == nil, let control = session.direct as? any RecordControlConnection, control is any ManagedConnection else { return nil }
-        if let soundcore = session.direct as? SoundcoreConnection {
+        if let recorder = control as? any RecordingStateConnection {
             // Its recording state: live while connected, then what it last confirmed (for a while), including a
             // recording paused with its file still open.
-            guard let state = soundcore.recordingState else { return nil }
-            let open = state.isRecording || state.activeRecordingID != nil
+            guard let state = recorder.recordingState(at: Date()) else { return nil }
+            let open = state.isRecording || state.recordingID != nil
             self.init(kind: session.kind.id, serial: session.recorderSerial ?? control.status?.serial, name: session.device.name,
-                      isRecording: state.isRecording, recordingID: open ? state.activeRecordingID.map { String($0) } : nil,
+                      isRecording: state.isRecording, recordingID: open ? state.recordingID : nil,
                       startedAt: open ? state.startedAt : nil, asOf: state.asOf, conversationID: conversationID)
             return
         }
