@@ -23,8 +23,8 @@ Both apps are one App Store Connect app with one bundle ID, `local.daybook`, so 
 | CI under load | `iphone` | `xcode-27` | nightly and manual: every iPhone test three times (`-test-iterations 3`) |
 | Release | `validate` | (CI's jobs) | calls `ci.yml` on the release commit with `mac_configuration: Release`, so the Mac app is built the way the release builds it. The signing jobs wait for it |
 | Release | `prepare` | `ubuntu-24.04` | checks the ref (`scripts/ci/check-ref.sh`: a `v*` tag must point at a commit on `main`), works out the version (`scripts/ci/version.sh`) and when the run was created, and writes release notes and What to Test (`scripts/ci/release-notes.sh`) |
-| Release | `iphone` | `xcode-27`, environment `release` | works out its build number (see [Versions](#versions)), looks for this run's build in App Store Connect, archives `DaybookPhone` with `DaybookPhoneWidgets` (`build-ios.sh --archive`), checks the archive (`check-ios-archive.sh`), exports with `app-store-connect` and uploads it (`build-ios.sh --export upload`), then waits for processing, sets What to Test, and adds the build to the beta group (`asc-testflight.sh`) |
-| Release | `mac` | `xcode-27`, environment `release` | works out its build number, resumes a notarization a previous attempt left pending, fetches the packages, archives (`build-app.sh --archive-only`, sandboxed with the `sandbox` input), exports with `developer-id` (`mac-export.sh`, which runs `build-app.sh --export-only`), then checks that the app's `CFBundleShortVersionString` and `CFBundleVersion` are the run's version and build and that it's the kind of build the run asked for (`check-mac-app.sh`: unsandboxed, or sandboxed with the migration manifest), notarizes, staples, and writes the ZIP, a DMG when possible, and `SHA256SUMS.txt` (`package-mac.sh`), and attests their build provenance |
+| Release | `iphone` | `xcode-27`, environment `iOS TestFlight` | works out its build number (see [Versions](#versions)), looks for this run's build in App Store Connect, archives `DaybookPhone` with `DaybookPhoneWidgets` (`build-ios.sh --archive`), checks the archive (`check-ios-archive.sh`), exports with `app-store-connect` and uploads it (`build-ios.sh --export upload`), then waits for processing, sets What to Test, and adds the build to the beta group (`asc-testflight.sh`) |
+| Release | `mac` | `xcode-27`, environment `Mac download` | works out its build number, resumes a notarization a previous attempt left pending, fetches the packages, archives (`build-app.sh --archive-only`, sandboxed with the `sandbox` input), exports with `developer-id` (`mac-export.sh`, which runs `build-app.sh --export-only`), then checks that the app's `CFBundleShortVersionString` and `CFBundleVersion` are the run's version and build and that it's the kind of build the run asked for (`check-mac-app.sh`: unsandboxed, or sandboxed with the migration manifest), notarizes, staples, and writes the ZIP, a DMG when possible, and `SHA256SUMS.txt` (`package-mac.sh`), and attests their build provenance |
 | Release | `draft` | `ubuntu-24.04` | tags only, after `mac`: verifies the checksums and creates the GitHub Release as a **draft** with the Mac files (`scripts/ci/github-release.sh draft`). A re-run updates its own draft; it never touches a published release |
 | Release | `publish` | `ubuntu-24.04` | tags only, after `draft` and, when the run releases the iPhone app, after `iphone` succeeded: publishes the draft (`github-release.sh publish`). `draft` and `publish` are the only jobs with `contents: write`, and they hold no Apple secrets |
 
@@ -36,7 +36,7 @@ Hardening:
 - `.github/dependabot.yml` opens weekly update pull requests for the actions (grouped) and the Swift packages; see [Dependency updates](#dependency-updates).
 - Nothing uses `pull_request_target`.
 - Concurrency groups cancel superseded pull request runs and never cancel a release. CI's group includes the workflow's name, which is "Release" when `release.yml` calls it, so a push to `main` can't queue behind or replace a release's validation.
-- Secrets are environment secrets in `release`. Only jobs that a reviewer approved can read them, and only from `main` or a `v*` tag. Each secret is passed only to the steps that need it, and becomes a file only while such a step runs: see [Secrets on the runner](#secrets-on-the-runner).
+- Secrets are environment secrets in each distribution channel's environment (`iOS TestFlight`, `Mac TestFlight`, `Mac download`), each holding only what its job needs. Only jobs that a reviewer approved can read them, and only from `main` or a `v*` tag. Each secret is passed only to the steps that need it, and becomes a file only while such a step runs: see [Secrets on the runner](#secrets-on-the-runner).
 - Runners are GitHub-hosted only. The repository's `.github/actionlint.yaml` lists `xcode-27` under actionlint's `self-hosted-runner` key only because actionlint 1.7.12 predates the label. It's GitHub-hosted.
 
 ## Runner and Xcode
@@ -92,7 +92,7 @@ A red night isn't a broken build. It names the tests whose timing assumptions do
 
 Every release job authenticates Xcode with the App Store Connect API key. The key goes to xcodebuild as `-authenticationKeyPath`, `-authenticationKeyID`, and `-authenticationKeyIssuerID`, together with `-allowProvisioningUpdates`. The release jobs never pass `-allowProvisioningDeviceRegistration`, so runners are never registered as devices.
 
-That's the one exception to "nothing but the owner's first-time provisioning passes `-allowProvisioningUpdates`" (AGENTS.md): the release pipeline, authenticated by the key in the approval-gated `release` environment. `build-app.sh` and `build-ios.sh` refuse the key unless they run on GitHub Actions under `release.yml`, so a local build or an agent can't reach that path by setting the variables. Both take that guard from one place, `scripts/lib/build-common.sh` (`asc_key_arguments`), with the project generation, the package pinning, the team lookup, and the App Store export options they share; a change to the rule changes it for both apps. The App Store Connect scripts (`asc-testflight.sh`, `asc-profile.sh`, `asc-certificates.sh`, `asc-development-certificate.sh`) and `secrets.sh` share `scripts/ci/lib/asc.sh`: one token in a private header file, removed when the script ends, one request with retries for reads only, and the `security -i` helpers that keep passwords off command lines.
+That's the one exception to "nothing but the owner's first-time provisioning passes `-allowProvisioningUpdates`" (AGENTS.md): the release pipeline, authenticated by the key in the approval-gated channel environments. `build-app.sh` and `build-ios.sh` refuse the key unless they run on GitHub Actions under `release.yml`, so a local build or an agent can't reach that path by setting the variables. Both take that guard from one place, `scripts/lib/build-common.sh` (`asc_key_arguments`), with the project generation, the package pinning, the team lookup, and the App Store export options they share; a change to the rule changes it for both apps. The App Store Connect scripts (`asc-testflight.sh`, `asc-profile.sh`, `asc-certificates.sh`, `asc-development-certificate.sh`) and `secrets.sh` share `scripts/ci/lib/asc.sh`: one token in a private header file, removed when the script ends, one request with retries for reads only, and the `security -i` helpers that keep passwords off command lines.
 
 - **Archive** (`build-ios.sh --archive`, `build-app.sh --archive-only`): automatic signing with Apple Development.
   - A fresh runner has no development certificate, so Xcode creates one through the key. It appears in the account as *Apple Development: Created via API*.
@@ -114,10 +114,10 @@ So the pipeline keeps **one** development certificate for every run. `scripts/as
 
 ```sh
 export DAYBOOK_ASC_KEY_PATH=~/keys/AuthKey_ABC123DEFG.p8 DAYBOOK_ASC_KEY_ID=ABC123DEFG DAYBOOK_ASC_ISSUER_ID=<issuer uuid>
-scripts/asc-development-certificate.sh          # --repo OWNER/NAME --environment release are the defaults
+scripts/asc-development-certificate.sh          # every channel's environment; --environment NAME for one, --repo OWNER/NAME
 ```
 
-- It makes a key and a signing request in a private temporary directory, asks App Store Connect for the certificate, packs both as a `.p12` with a random password, and checks that macOS imports it with an Apple Development identity. It then stores the `.p12` and its password as the `release` secrets `DEVELOPMENT_P12_BASE64` and `DEVELOPMENT_P12_PASSWORD` (through `gh`'s standard input) and the certificate's ID as the repository variable `DAYBOOK_DEVELOPMENT_CERTIFICATE_ID`. Nothing stays on disk. If a step after making the certificate fails, it revokes it again.
+- It makes a key and a signing request in a private temporary directory, asks App Store Connect for the certificate, packs both as a `.p12` with a random password, and checks that macOS imports it with an Apple Development identity. It then stores the `.p12` and its password as each channel environment's secrets `DEVELOPMENT_P12_BASE64` and `DEVELOPMENT_P12_PASSWORD` (through `gh`'s standard input) and the certificate's ID as the repository variable `DAYBOOK_DEVELOPMENT_CERTIFICATE_ID`. Nothing stays on disk. If a step after making the certificate fails, it revokes it again.
 - The two archive steps pass the secrets to `secrets.sh`, which imports the `.p12` (and Apple's WWDR G3 intermediate, by digest) into the step's temporary keychain. Automatic signing finds a valid development identity and creates no certificate.
 - It's optional and never blocks a release: without the secrets, or with a `.p12` that's wrong, expired, or revoked, the step warns in the run's summary and the archive creates a certificate as before.
 - The certificate lasts a year. Run the script again before it expires; the new one replaces the secrets and the variable, and the old one can then be revoked.
@@ -182,7 +182,7 @@ Apple ties each capability to the role of a **team** key, created under App Stor
 | Certificates, identifiers, and profiles through the API, which automatic signing with `-allowProvisioningUpdates` needs (development certificate, profiles, cloud-managed Apple Distribution) | yes | no (a team key can't carry the per-user "Certificates, Identifiers & Profiles" access) | no |
 | Cloud-managed **Developer ID** certificate | only if Apple allows it for the key, see below | no | no |
 
-**Use an Admin key.** It's the only team role that can do all of the iPhone path. The key is powerful, so it lives only in the approval-gated `release` environment. Revoke it in App Store Connect if it ever leaks, and generate a new one.
+**Use an Admin key.** It's the only team role that can do all of the iPhone path. The key is powerful, so it lives only in the approval-gated channel environments. Revoke it in App Store Connect if it ever leaks, and generate a new one.
 
 **Developer ID needs the fallback.** Apple restricts Developer ID certificates to the Account Holder. An Admin *user* can use the cloud-managed Developer ID certificate only after the Account Holder grants access in Users and Access; a team key has no such setting. Confirmed on the first release run (2026-10-24): with the Admin key alone, the Mac export fails with "Cloud signing permission error" and "No profiles for 'local.daybook.app' were found". The fallback below covers it. Cloud-managed Apple Distribution, which the iPhone uses, does work with the Admin key.
 
@@ -213,7 +213,7 @@ The iPhone app doesn't need a fallback: cloud-managed Apple Distribution is avai
 
 ## Secrets and variables
 
-Environment **`release`** secrets:
+Secrets in each **channel environment** (`iOS TestFlight`, `Mac TestFlight`, and `Mac download`; the Developer ID identity only in `Mac download`):
 
 | Secret | Value |
 |---|---|
@@ -235,7 +235,7 @@ Repository **variables**:
 | `DAYBOOK_RELEASE_XCODE_BUILD` | optional: the exact Xcode build releases must use; unset means `27A9275` (see [Runner and Xcode](#runner-and-xcode)) |
 | `DAYBOOK_DEVELOPMENT_CERTIFICATE_ID` | the pipeline's development certificate, which `asc-certificates.sh` never revokes; set by `asc-development-certificate.sh` |
 
-The `release` environment has required reviewers (the owner) and deployment policies for branch `main` and tags `v*`.
+Each channel environment has required reviewers (the owner) and deployment policies for branch `main` and tags `v*`. The earlier single `release` environment holds the same secrets until it's deleted, once a release has gone through the channels (Settings › Environments › `release` › Delete).
 
 `scripts/ci/setup-github.sh` creates all of this from local files. It also sets the repository's Actions and security settings: read-only workflow tokens, required SHA pinning, approval before outside contributors' pull requests run workflows, secret scanning with push protection, and Dependabot alerts and security updates. With `--protect-tags` it adds a ruleset so only admins create, move, or delete `v*` tags. **It prints the plan and changes nothing unless `--apply` is passed.**
 
@@ -338,11 +338,11 @@ git tag -a v1.4.0 -m "Daybook 1.4.0: two-page reading on iPhone Duo"
 git push origin v1.4.0
 ```
 
-Then approve the run: Actions › Release › Review deployments › `release` › Approve. One approval covers both the iPhone and Mac jobs.
+Then approve the run's distribution channels (Approving a release, below).
 
 - The tag's message opens the GitHub Release notes and What to Test, followed by the commits since the previous tag.
 - The iPhone build appears in TestFlight, in `DAYBOOK_TESTFLIGHT_GROUP`, once processed. "Daybook Internal" is an internal group with access to every build, so each build reaches it by itself; `asc-testflight.sh` only adds builds to groups without that access (App Store Connect refuses it otherwise: 422 "Builds cannot be assigned to this internal group").
-- The Mac ZIP (and DMG), with `SHA256SUMS.txt`, are attached to a **draft** GitHub Release as soon as the Mac job finishes. The release is published, and becomes "Latest" unless it's a prerelease, only after the iPhone build is on TestFlight. If the iPhone job fails, the release stays a draft: re-run the failed job, and `publish` runs after it. To ship the Mac app without the iPhone one, publish the draft by hand (Releases › the draft › Edit › Publish release).
+- The Mac ZIP (and DMG), with `SHA256SUMS.txt`, are attached to a **draft** GitHub Release as soon as the Mac job finishes. It's the Mac download channel, so it's published right after (and becomes "Latest" unless it's a prerelease), without waiting for the TestFlight channels.
 - A tag run with `apps: mac` publishes as soon as the draft is ready. With `apps: iphone` there are no Mac files, so there's no GitHub Release.
 
 A tag such as `v1.4.0-rc.1` releases marketing version 1.4.0 and marks the GitHub Release as a prerelease.
@@ -398,6 +398,27 @@ xcrun stapler validate /Applications/Daybook.app
 ```
 
 The Mac job attests every file in `SHA256SUMS.txt` with `actions/attest-build-provenance`: a Sigstore-signed SLSA provenance statement naming the repository, `release.yml`, the commit, and the run that built it. `gh attestation verify` checks the file's digest against it, so a download that didn't come from this workflow fails. The attestations are listed under the repository's Actions › Attestations.
+
+
+### Approving a release
+
+Each distribution channel is a GitHub environment, and its signing job waits for it:
+
+| Channel | Environment | Job |
+|---|---|---|
+| iPhone on TestFlight | `iOS TestFlight` | `iphone` |
+| Mac on TestFlight | `Mac TestFlight` | `mac-testflight` (with `DAYBOOK_MAC_TESTFLIGHT` or the `mac_testflight` input) |
+| Mac download (Developer ID, notarized, on the GitHub Release) | `Mac download` | `mac`, then `draft` and `publish` |
+
+The run's **Review deployments** lists the channels it waits on; tick those to ship and **Approve and deploy**, then **Reject** the rest, so the run doesn't wait on them. Or from a terminal, where they're all approved unless skipped:
+
+```sh
+scripts/approve-release.sh                               # the newest waiting run, every channel
+scripts/approve-release.sh --skip mac-testflight         # rejects that one; also ios-testflight, mac-download
+scripts/approve-release.sh --run 41595328717 --dry-run   # says what it would do
+```
+
+The channels are independent: the GitHub Release doesn't wait for TestFlight, and a TestFlight channel that's rejected or fails leaves the others as they are.
 
 ## One bundle ID
 
@@ -488,7 +509,7 @@ What the first builds should be checked for: on the Mac, the library, devices, a
 | An archive fails: "Your account has reached the maximum number of certificates" | Archives have been creating development certificates: the pipeline's isn't set up, or has expired. Run `scripts/asc-certificates.sh --older-than 0`, then `--revoke`, and set up the pipeline's certificate with `scripts/asc-development-certificate.sh` ([Development certificates](#development-certificates)). Then re-run the failed jobs. |
 | `secrets.sh` warns: "the development .p12 has no valid Apple Development identity" | The pipeline's certificate expired or was revoked. The release goes on, creating a certificate; run `scripts/asc-development-certificate.sh` for a new one. |
 | `build-app.sh` or `build-ios.sh`: "The App Store Connect API key is for the release pipeline only" | The `DAYBOOK_ASC_*` variables are set outside `release.yml` on GitHub Actions. Unset them; build with your Xcode account and existing profiles. |
-| The tag was pushed and nothing ran | Check Actions › Release: the run is waiting for approval in `release`. A tag that isn't `vX.Y.Z[-suffix]` fails in `prepare`. |
+| The tag was pushed and nothing ran | Check Actions › Release: the run is waiting for its channels' approval (Approving a release). A tag that isn't `vX.Y.Z[-suffix]` fails in `prepare`. |
 | `prepare`: "v1.4.0 points at …, which isn't on main" | The tag is on a commit that isn't merged. Delete the tag (an admin, with the ruleset), merge, and tag the merged commit. |
 
 ## Checking the pipeline locally
