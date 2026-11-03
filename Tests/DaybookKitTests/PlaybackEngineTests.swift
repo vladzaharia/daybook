@@ -1,4 +1,5 @@
 import AVFoundation
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import DaybookKit
@@ -73,8 +74,8 @@ final class PlaybackEngineTests: XCTestCase {
         guard engine.play() else { throw XCTSkip("No audio output to play to") }
         defer { engine.unload() }
         XCTAssertTrue(engine.isPlaying)
-        try await Task.sleep(for: .milliseconds(450))
-        XCTAssertGreaterThan(engine.position, 0.2, "the clock reads the position while it plays")
+        // Until the clock has read it moving, rather than for a fixed while: a loaded runner ticks late.
+        try await waitUntil("the clock reads the position while it plays") { engine.position > 0.2 }
 
         engine.skip(-15)
         XCTAssertEqual(engine.position, 0, "back past the start is the start")

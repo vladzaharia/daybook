@@ -12,8 +12,9 @@ final class AudioPlaybackTests: XCTestCase {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookPlayback-\(UUID().uuidString).wav")
         defer { try? FileManager.default.removeItem(at: url) }
         let format = AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1)!
-        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 32_000)!
-        buffer.frameLength = 32_000
+        // Ten seconds, so it can't play out while a slow machine waits for the position to move.
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 160_000)!
+        buffer.frameLength = 160_000
         try AVAudioFile(forWriting: url, settings: format.settings).write(from: buffer)
 
         let playback = AudioPlaybackController()
@@ -25,9 +26,9 @@ final class AudioPlaybackTests: XCTestCase {
         playback.mute()
         if playback.errorMessage != nil { throw XCTSkip("No audio output to play to") }
         XCTAssertTrue(playback.isPlaying)
-        try await Task.sleep(for: .milliseconds(450))
+        // Until the position has moved a few times, rather than for a fixed while: a loaded runner ticks late.
+        try await waitUntil("the position moved meanwhile") { everything.count > playing.count + 2 }
         XCTAssertEqual(playing.count, 1, "Once, when it started")
-        XCTAssertGreaterThan(everything.count, playing.count + 2, "The position moved meanwhile")
 
         playback.pause()
         XCTAssertFalse(playback.isPlaying)
