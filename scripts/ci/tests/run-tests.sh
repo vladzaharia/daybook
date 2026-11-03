@@ -25,6 +25,7 @@
 #   xcresult-retries.sh   passes on retry and flaky iterations, from xcresulttool fixtures
 #   check-ios-archive.sh  synthetic archives: export compliance, icon, versions (macOS: needs plutil)
 #   setup-github.sh       the dry run prints the plan and never calls gh
+#   approve-release.sh    approves every waiting channel at once, rejects skipped ones, and checks first
 #   select-xcode.sh       version and exact-build checks, SDKs, and the summary, with stand-in tools
 #   secrets.sh            run/setup/cleanup with the API key, and a command that sees no raw secret; on macOS, the
 #                         .p12 keychain (Developer ID and development) with a stand-in security that checks no
@@ -287,8 +288,12 @@ development_certificate() {
 expect_ok "makes it and stores it" development_certificate 1
 expect_eq "one Apple Development certificate, from a CSR" "POST DEVELOPMENT -----BEGIN CERTIFICATE REQUEST-----" \
     "$(jq -r 'select(.method == "POST") | "\(.method) \(.body.data.attributes.certificateType) \(.body.data.attributes.csrContent | split("\n")[0])"' "$log")"
-secrets="$work/devcert-gh/secrets/release"
-expect_ok "both secrets in the release environment" test -s "$secrets/DEVELOPMENT_P12_BASE64" -a -s "$secrets/DEVELOPMENT_P12_PASSWORD"
+secrets="$work/devcert-gh/secrets/Mac download"
+for channel in "iOS TestFlight" "Mac TestFlight" "Mac download"; do
+    expect_ok "both secrets in '$channel'" test -s "$work/devcert-gh/secrets/$channel/DEVELOPMENT_P12_BASE64" \
+        -a -s "$work/devcert-gh/secrets/$channel/DEVELOPMENT_P12_PASSWORD"
+done
+expect_ok "the same .p12 in each" cmp -s "$work/devcert-gh/secrets/iOS TestFlight/DEVELOPMENT_P12_BASE64" "$secrets/DEVELOPMENT_P12_BASE64"
 # What the script said, when it stopped before storing them (a runner once failed here without a trace).
 [[ -s "$secrets/DEVELOPMENT_P12_BASE64" ]] || sed 's/^/        /' "$work/devcert.out"
 base64 -d < "$secrets/DEVELOPMENT_P12_BASE64" > "$work/development.p12"
@@ -301,6 +306,8 @@ expect_eq "and nothing revoked" "" "$(jq -r 'select(.method == "DELETE") | .path
 expect_fail "a .p12 macOS can't use fails" development_certificate 0
 expect_eq "and revokes the new certificate" "DELETE /v1/certificates/cert-new" "$(jq -r 'select(.method == "DELETE") | "\(.method) \(.path)"' "$log")"
 expect_ok "storing nothing" test ! -e "$work/devcert-gh/secrets"
+expect_ok "--environment stores it in that one alone" development_certificate 1 --environment "Mac TestFlight"
+expect_eq "(only there)" "Mac TestFlight" "$(ls "$work/devcert-gh/secrets")"
 
 # --- asc-profile.sh against the mock and a stand-in security ---------------------------------------------
 echo "asc-profile.sh"
@@ -507,16 +514,69 @@ plan="$(PATH="$work/bin:$PATH" "$ci/setup-github.sh" --asc-key "$key" --asc-issu
     --testflight-group "External testers" --protect-tags 2>&1)"
 expect_ok "dry run never calls gh" test ! -e "$work/gh-calls"
 expect_ok "dry run says nothing changed" grep -q 'Nothing was changed' <<< "$plan"
-for needle in "environments/release" "deployment-branch-policies" "gh secret set ASC_KEY_P8_BASE64 --env release" \
-              "gh secret set ASC_ISSUER_ID --env release" "DAYBOOK_TEAM_ID --body 48H7CLBV8Y" \
+for needle in "environments/iOS%20TestFlight" "environments/Mac%20TestFlight" "environments/Mac%20download" \
+              "deployment-branch-policies" "gh secret set ASC_KEY_P8_BASE64 --env iOS\\ TestFlight" \
+              "gh secret set ASC_KEY_P8_BASE64 --env Mac\\ TestFlight" "gh secret set ASC_ISSUER_ID --env Mac\\ download" \
+              "DAYBOOK_TEAM_ID --body 48H7CLBV8Y" \
               "DAYBOOK_TESTFLIGHT_GROUP --body External\\ testers" "default_workflow_permissions=read" "rulesets" \
               "sha_pinning_required=true" "secret_scanning_push_protection" "automated-security-fixes"; do
     expect_ok "plan includes $needle" grep -qF -- "$needle" <<< "$plan"
 done
 key_body="$(sed '1d;$d' "$key" | tr -d '\n' | cut -c1-24)"
 expect_fail "plan never prints the key" grep -qF -- "$key_body" <<< "$plan"
+expect_fail "no Developer ID identity without --developer-id-p12" grep -qF DEVELOPER_ID_P12 <<< "$plan"
+p12_plan="$(PATH="$work/bin:$PATH" "$ci/setup-github.sh" --asc-key "$key" --asc-issuer-id "$issuer" --developer-id-p12 "$key" 2>&1)"
+expect_eq "the Developer ID identity goes to 'Mac download'" 2 "$(grep -cF -- '--env Mac\ download' <<< "$(grep -F DEVELOPER_ID_P12 <<< "$p12_plan")")"
+expect_eq "and nowhere else" 2 "$(grep -cF 'gh secret set DEVELOPER_ID_P12' <<< "$p12_plan")"
+one_plan="$(PATH="$work/bin:$PATH" "$ci/setup-github.sh" --asc-key "$key" --asc-issuer-id "$issuer" --environment "Mac TestFlight" 2>&1)"
+expect_ok "--environment sets up that channel" grep -qF "environments/Mac%20TestFlight" <<< "$one_plan"
+expect_fail "and no other" grep -qF "environments/iOS%20TestFlight" <<< "$one_plan"
+expect_fail "rejects a channel that doesn't exist" "$ci/setup-github.sh" --asc-key "$key" --asc-issuer-id "$issuer" --environment release
+expect_fail "rejects a Developer ID identity without 'Mac download'" "$ci/setup-github.sh" --asc-key "$key" --asc-issuer-id "$issuer" \
+    --environment "iOS TestFlight" --developer-id-p12 "$key"
 expect_fail "rejects a bad issuer" "$ci/setup-github.sh" --asc-key "$key" --asc-issuer-id nope
 expect_fail "rejects a missing key" "$ci/setup-github.sh" --asc-key "$work/none.p8" --asc-issuer-id "$issuer"
+
+# --- approve-release.sh against a fake gh -----------------------------------------------------------
+echo "approve-release.sh"
+mkdir -p "$work/approve-bin" "$work/approve-gh"
+cp "$here/fake_gh.sh" "$work/approve-bin/gh"
+chmod +x "$work/approve-bin/gh"
+# approve_release [ARGS...]: run 4242 waits on the three channels unless pending.json says otherwise.
+approve_release() {
+    : > "$work/approve-gh/calls"
+    rm -f "$work/approve-gh/reviews"
+    PATH="$work/approve-bin:$PATH" GH_STATE="$work/approve-gh" "$ci/../approve-release.sh" "$@" > "$work/approve.out" 2>&1
+}
+channels_pending() {
+    jq -n --argjson can "${1:-true}" '[{id: 11, name: "iOS TestFlight"}, {id: 12, name: "Mac TestFlight"}, {id: 13, name: "Mac download"}]
+        | map({environment: ., current_user_can_approve: $can})' > "$work/approve-gh/pending.json"
+}
+echo 4242 > "$work/approve-gh/waiting-run"
+channels_pending
+expect_ok "approves the waiting run" approve_release
+expect_eq "every channel, in one review" '{"environment_ids":[11,12,13],"state":"approved","comment":""}' "$(cat "$work/approve-gh/reviews")"
+expect_ok "and says which" grep -qF 'approved: iOS TestFlight, Mac TestFlight, Mac download' "$work/approve.out"
+expect_ok "--skip rejects that channel" approve_release --skip ios-testflight --comment "Mac only"
+expect_eq "the rest approved, it rejected" \
+    '{"environment_ids":[12,13],"state":"approved","comment":"Mac only"}|{"environment_ids":[11],"state":"rejected","comment":"Mac only"}' \
+    "$(paste -sd '|' - < "$work/approve-gh/reviews")"
+expect_ok "a skip by the environment's own name" approve_release --skip "Mac download" --skip mac-testflight
+expect_eq "(both rejected, in the run's order)" '[12,13]' "$(jq -c 'select(.state == "rejected") | .environment_ids' "$work/approve-gh/reviews")"
+expect_ok "--dry-run" approve_release --dry-run
+expect_ok "changes nothing" test ! -e "$work/approve-gh/reviews"
+expect_ok "--run names the run" approve_release --run 77
+expect_ok "(that one)" grep -qF 'actions/runs/77/pending_deployments' "$work/approve-gh/calls"
+: > "$work/approve-gh/waiting-run"
+expect_fail "no waiting run fails" approve_release
+expect_ok "and says so" grep -qF 'no Release run is waiting' "$work/approve.out"
+echo 4242 > "$work/approve-gh/waiting-run"
+channels_pending false
+expect_fail "a channel you can't approve fails" approve_release
+expect_ok "before reviewing anything" test ! -e "$work/approve-gh/reviews"
+echo '[]' > "$work/approve-gh/pending.json"
+expect_fail "a run waiting on nothing fails" approve_release
+expect_fail "a bad --run fails" approve_release --run abc
 
 # --- build-ios.sh upload retry, with a stand-in xcodebuild --------------------------------------------
 echo "build-ios.sh upload retry"
