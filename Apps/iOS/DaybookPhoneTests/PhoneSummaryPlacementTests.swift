@@ -263,7 +263,10 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         XCTAssertEqual(planner.line(at: rig.clock.now, thisDevice: PhoneSummaryPlacement.thisDeviceWords), "Summarizing on this iPhone in 15 s")
         XCTAssertEqual(planner.actions, [.useCloud, .startNow, .waitForMac])
         rig.placement.perform(.startNow, for: id)
-        try await waitUntil("the summary") { rig.library.meeting(id)?.summary != nil }
+        // The processor saves the summary, then finishes the request once the suggested terms are in.
+        try await waitUntil("the summary, and its request finished") {
+            rig.library.meeting(id)?.summary != nil && summaryRequests(rig.library, id).first?.outcome != nil
+        }
         XCTAssertNil(rig.placement.runs[id], "the processor's work: its status says it")
         let summary = try XCTUnwrap(rig.library.meeting(id)?.summary)
         XCTAssertEqual(summary.overview, "From this iPhone")
