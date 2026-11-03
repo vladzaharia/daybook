@@ -2,7 +2,9 @@
 # download on a GitHub Release; with mac_testflight (or the DAYBOOK_MAC_TESTFLIGHT variable), the Mac app
 # also goes to TestFlight. Both apps are one App Store Connect app, local.daybook (docs/release.md, "One
 # bundle ID"). Runs for a pushed v* tag, or by hand from main or a v* tag.
-# Signing jobs wait for approval in the `release` environment, which holds every secret.
+# Each distribution channel is an environment of its own (`iOS TestFlight`, `Mac TestFlight`, `Mac download`),
+# holding the secrets its job needs; approving a run ticks the channels it ships to, and an unticked one is
+# rejected (scripts/approve-release.sh approves them all at once, or all but those skipped).
 # docs/release.md covers the setup, the secrets, and how to cut a release.
 name: Release
 
@@ -208,7 +210,7 @@ jobs:
     if: needs.prepare.outputs.iphone == 'true'
     runs-on: xcode-27
     timeout-minutes: 120
-    environment: release
+    environment: iOS TestFlight
     permissions:
       contents: read
     env:
@@ -337,7 +339,7 @@ jobs:
     if: needs.prepare.outputs.mac == 'true'
     runs-on: xcode-27
     timeout-minutes: 150
-    environment: release
+    environment: Mac download
     permissions:
       contents: read
       id-token: write # build provenance: the Sigstore certificate for the attestation
@@ -488,7 +490,7 @@ jobs:
     if: needs.prepare.outputs.mac_testflight == 'true'
     runs-on: xcode-27
     timeout-minutes: 150
-    environment: release
+    environment: Mac TestFlight
     permissions:
       contents: read
     env:
@@ -608,8 +610,9 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
-  # The GitHub Release starts as a draft as soon as the Mac app is packaged, and becomes public only
-  # once every app the run releases is out (`publish`). Neither job holds Apple secrets.
+  # The GitHub Release is the Mac download channel: a draft as soon as the Mac app is packaged, then public
+  # (`publish`). It doesn't wait for the TestFlight channels, which are approved or rejected on their own.
+  # Neither job holds Apple secrets.
   draft:
     name: GitHub Release (draft)
     needs: [prepare, mac]
@@ -648,12 +651,9 @@ jobs:
 
   publish:
     name: Publish the GitHub Release
-    needs: [prepare, draft, iphone]
-    # After the draft, and after the iPhone build is on TestFlight when this run releases the iPhone
-    # app (`apps: mac` skips the iphone job, and publishing doesn't wait for it then).
+    needs: [prepare, draft]
     if: >-
-      !cancelled() && needs.prepare.outputs.is_tag == 'true' && needs.draft.result == 'success' &&
-      (needs.iphone.result == 'success' || (needs.iphone.result == 'skipped' && needs.prepare.outputs.iphone != 'true'))
+      !cancelled() && needs.prepare.outputs.is_tag == 'true' && needs.draft.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
