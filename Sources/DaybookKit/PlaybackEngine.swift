@@ -71,6 +71,15 @@ public final class PlaybackEngine: NSObject, AVAudioPlayerDelegate {
         duration > 0 && position >= duration - endTolerance
     }
 
+    /// Whether a player that stopped on its own played to the end: it's at the end, or it went back to the start as a
+    /// player does when it finishes, and the last tick read it within a tick of the end. Otherwise it was interrupted.
+    public nonisolated static func playedOut(previous: TimeInterval, current: TimeInterval, duration: TimeInterval, rate: Float) -> Bool {
+        guard duration > 0 else { return false }
+        if startsOver(at: current, duration: duration) { return true }
+        let tickSeconds = Double(tick.components.seconds) + Double(tick.components.attoseconds) / 1e18
+        return current == 0 && previous >= duration - (tickSeconds * Double(max(rate, 1)) + endTolerance)
+    }
+
     /// `seconds` held inside a recording `duration` long; anything that isn't a number is its start.
     public nonisolated static func clamped(_ seconds: TimeInterval, duration: TimeInterval) -> TimeInterval {
         guard seconds.isFinite else { return 0 }
@@ -179,12 +188,17 @@ public final class PlaybackEngine: NSObject, AVAudioPlayerDelegate {
 
     private func readPosition() {
         guard let player else { stopClock(); return }
+        let previous = position
         position = min(player.currentTime, duration)
-        // Stopped without being asked (an interruption, headphones unplugged): say so once.
+        // Stopped without being asked. The tick can see a recording that played out before the delegate says so,
+        // so the end is told apart from an interruption (headphones unplugged) here too, and said once either way:
+        // the delegate stays quiet once this has.
         if !player.isPlaying, isPlaying {
+            let playedOut = Self.playedOut(previous: previous, current: player.currentTime, duration: duration, rate: player.rate)
             setPlaying(false)
             stopClock()
-            onEnding?(.stoppedElsewhere)
+            if playedOut { position = duration }
+            onEnding?(playedOut ? .reachedEnd : .stoppedElsewhere)
         }
     }
 
@@ -193,7 +207,8 @@ public final class PlaybackEngine: NSObject, AVAudioPlayerDelegate {
     public nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         let finished = ObjectIdentifier(player)
         Task { @MainActor [weak self] in
-            guard let self, let current = self.player, ObjectIdentifier(current) == finished else { return }
+            // Not when the clock already said how it ended.
+            guard let self, let current = self.player, ObjectIdentifier(current) == finished, self.isPlaying else { return }
             self.setPlaying(false)
             self.position = self.duration
             self.stopClock()
@@ -205,7 +220,7 @@ public final class PlaybackEngine: NSObject, AVAudioPlayerDelegate {
         let failed = ObjectIdentifier(player)
         let words = error?.localizedDescription
         Task { @MainActor [weak self] in
-            guard let self, let current = self.player, ObjectIdentifier(current) == failed else { return }
+            guard let self, let current = self.player, ObjectIdentifier(current) == failed, self.isPlaying else { return }
             self.setPlaying(false)
             self.stopClock()
             self.onEnding?(.undecodable(words))

@@ -34,6 +34,18 @@ final class PlaybackEngineTests: XCTestCase {
         XCTAssertFalse(PlaybackEngine.startsOver(at: 0, duration: 0), "nothing loaded")
     }
 
+    /// Whichever notices first, the clock or the player's delegate, a recording that played out is told apart from
+    /// one that was interrupted, so it's said once and the same way (a slow runner's clock saw the end first).
+    func testBehaviorAStopAtTheEndIsTheEndWhicheverSideSeesItFirst() {
+        XCTAssertTrue(PlaybackEngine.playedOut(previous: 59.9, current: 60, duration: 60, rate: 1), "at the end")
+        XCTAssertTrue(PlaybackEngine.playedOut(previous: 59.92, current: 0, duration: 60, rate: 1), "back at the start after finishing")
+        XCTAssertTrue(PlaybackEngine.playedOut(previous: 59.8, current: 0, duration: 60, rate: 2), "a tick covers more at double speed")
+        XCTAssertFalse(PlaybackEngine.playedOut(previous: 59.8, current: 0, duration: 60, rate: 1), "the same place is short of the end at normal speed")
+        XCTAssertFalse(PlaybackEngine.playedOut(previous: 30, current: 30, duration: 60, rate: 1), "stopped in the middle: interrupted")
+        XCTAssertFalse(PlaybackEngine.playedOut(previous: 12, current: 0, duration: 60, rate: 1), "reset from the middle isn't the end")
+        XCTAssertFalse(PlaybackEngine.playedOut(previous: 0, current: 0, duration: 0, rate: 1), "nothing loaded")
+    }
+
     func testBehaviorASeekStaysInsideTheRecording() {
         XCTAssertEqual(PlaybackEngine.clamped(-15, duration: 60), 0)
         XCTAssertEqual(PlaybackEngine.clamped(75, duration: 60), 60)
