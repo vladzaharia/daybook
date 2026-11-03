@@ -727,6 +727,7 @@ if macos; then
     # fake_app NAME BUNDLE_ID ENTITLEMENTS [MANIFEST]: an app whose executable is a copy of true, signed ad hoc.
     fake_app() {
         local app="$work/apps/$1/Daybook.app"
+        umask 022
         /bin/rm -rf "$work/apps/$1"
         /bin/mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
         /bin/cp /usr/bin/true "$app/Contents/MacOS/Daybook"
@@ -781,6 +782,14 @@ if macos; then
         -o "$work/same-name-manifest.plist" "$resources/container-migration.plist"
     expect_fail "a manifest that leaves the earlier release's preferences behind" \
         check_app --app "$(fake_app signed-sandbox-same-name local.daybook "$sandbox_ent" "$work/same-name-manifest.plist")" --kind signed-sandbox
+    # Built under umask 077: installed from a package, as root's, nobody else could read it.
+    app="$(fake_app private-file local.daybook "$sandbox_ent" "$resources/container-migration.plist")"
+    chmod 700 "$app/Contents/MacOS/Daybook"
+    expect_fail "a release with a file only its owner can read" check_app --app "$app" --kind signed-sandbox
+    expect_ok "names it" grep -q "only its owner can read Contents/MacOS/Daybook: an installer package" "$work/check-app.out"
+    app="$(fake_app private-folder local.daybook "$resources/Daybook.entitlements")"
+    chmod 700 "$app/Contents/Resources"
+    expect_fail "or a folder" check_app --app "$app" --kind signed
     # Daybook-Sandbox.entitlements is Daybook.entitlements plus the App Sandbox's keys, nothing else: a key added to one
     # (keychain access groups, say) has to be added to the other.
     entitlement_keys() { plutil -p "$1" | sed -n 's/^  "\([^"]*\)" =>.*/\1/p' | sort; }
@@ -1046,6 +1055,8 @@ status=0
 env "${secrets_env[@]}" "$ci/secrets.sh" run -- sh -c 'exit 7' 2>/dev/null || status=$?
 expect_eq "the command's exit status comes through" "7" "$status"
 expect_ok "and the files are still removed" test ! -e "$work/runner-temp/daybook-secrets"
+expect_eq "the command keeps the step's umask: only the secrets' files are private" "0022" \
+    "$(umask 022; env "${secrets_env[@]}" "$ci/secrets.sh" run -- sh -c umask 2>/dev/null)"
 expect_fail "a key that isn't a .p8 fails" env "${secrets_env[@]}" ASC_KEY_P8_BASE64="$(printf 'nope' | base64)" "$ci/secrets.sh" run -- true
 expect_ok "leaving nothing behind" test ! -e "$work/runner-temp/daybook-secrets"
 expect_ok "raw PEM is accepted too" env "${secrets_env[@]}" ASC_KEY_P8_BASE64="$(cat "$key")" "$ci/secrets.sh" run -- true
