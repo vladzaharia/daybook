@@ -143,7 +143,8 @@ final class PhoneModelsTests: XCTestCase {
         models.download(speakers)
         XCTAssertEqual(time.begun, ["Daybook model download"])
         try await waitUntil("the failure") { if case .failed = models.status(of: speakers) { return true } else { return false } }
-        XCTAssertEqual(time.ended, [1])
+        // The time ends as the download's task finishes, just after it reports the failure.
+        try await waitUntil("its background time to end") { time.ended == [1] }
     }
 
     func testADownloadOutlastingItsBackgroundTimeEndsItThenAndNotAgain() async throws {
