@@ -12,7 +12,8 @@
 #                   and TestFlight build (build-app.sh --app-store), and Developer ID with --sandbox, are this kind
 #
 # Every sandboxed kind needs the capabilities Daybook uses: audio input, microphone, Bluetooth, network client and
-# server, user-selected files, and app-scoped bookmarks. Exits 1 with every problem listed.
+# server, user-selected files, and app-scoped bookmarks. Every kind lets everyone read its files and open its folders:
+# an installer package (TestFlight, the App Store) installs the app as root's. Exits 1 with every problem listed.
 set -euo pipefail
 
 app=""
@@ -89,6 +90,18 @@ expect_no_manifest() {
     [[ ! -e "$manifest" ]] || problem "this build mustn't carry container-migration.plist: only signed sandboxed builds and the rehearsal move a library"
 }
 
+# App Store Connect refuses a package "that includes files that are only readable by the root user".
+expect_readable() {
+    local private count
+    private="$(cd "$app" && find . \( -type f ! -perm -o=r \) -o \( -type d ! -perm -o=rx \))"
+    [[ -n "$private" ]] || return 0
+    count="$(wc -l <<< "$private" | tr -d ' ')"
+    private="${private%%$'\n'*}"
+    (( count == 1 )) || private="$private (and $(( count - 1 )) more)"
+    problem "only its owner can read ${private#./}: an installer package makes it root's (built under umask 077?)"
+}
+
+expect_readable
 case "$kind" in
     adhoc)
         expect_bundle local.daybook.adhoc

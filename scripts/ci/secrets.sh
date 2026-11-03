@@ -228,7 +228,12 @@ run() {
     trap 'cleanup' EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
+    local mask
+    mask="$(umask)"
     setup
+    # Only the secrets' files are private (setup's umask 077). What the command builds keeps the step's umask: an
+    # installer package installs the app as root, and App Store Connect refuses one whose files only root can read.
+    umask "$mask"
     # The command gets the files setup wrote, never the secrets they came from.
     unset ASC_KEY_P8_BASE64 DEVELOPER_ID_P12_BASE64 DEVELOPER_ID_P12_PASSWORD DEVELOPMENT_P12_BASE64 DEVELOPMENT_P12_PASSWORD
     local status=0
