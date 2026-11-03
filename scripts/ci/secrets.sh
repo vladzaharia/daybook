@@ -11,7 +11,7 @@
 #   scripts/ci/secrets.sh cleanup    delete the keychain (restoring the keychain search list) and the
 #                                    files; safe to run more than once, and when setup never ran
 #
-# Inputs (environment; in release.yml these come from the `release` environment's secrets):
+# Inputs (environment; in release.yml these come from the job's channel environment's secrets):
 #   ASC_KEY_ID, ASC_ISSUER_ID     App Store Connect API key ID and issuer ID
 #   ASC_KEY_P8_BASE64             the AuthKey_<id>.p8 file, base64-encoded (raw PEM is accepted too)
 #   DEVELOPER_ID_P12_BASE64       optional fallback: Developer ID Application certificate and private
@@ -84,7 +84,7 @@ decode_to() {
 }
 
 setup() {
-    : "${ASC_KEY_ID:?ASC_KEY_ID is required (a secret in the release environment)}"
+    : "${ASC_KEY_ID:?ASC_KEY_ID is required (a secret in each channel environment)}"
     : "${ASC_ISSUER_ID:?ASC_ISSUER_ID is required}"
     : "${ASC_KEY_P8_BASE64:?ASC_KEY_P8_BASE64 is required}"
     [[ "$ASC_KEY_ID" =~ ^[A-Z0-9]{10}$ ]] || fail "ASC_KEY_ID should be the 10-character key ID"

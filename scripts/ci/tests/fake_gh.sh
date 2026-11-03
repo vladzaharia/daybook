@@ -8,6 +8,9 @@
 #   gh secret set NAME --env ENV   keeps its standard input as $GH_STATE/secrets/ENV/NAME
 #   gh variable get|set NAME [--body VALUE]   over $GH_STATE/variables/NAME
 #   gh repo view     example/daybook
+#   gh api .../actions/runs/<id>/pending_deployments          $GH_STATE/pending.json
+#   gh api -X POST .../actions/runs/<id>/pending_deployments --input -   appends the body to $GH_STATE/reviews
+#   gh run list ...  $GH_STATE/waiting-run (a run ID, or nothing) as [{"databaseId": ID}]
 set -euo pipefail
 dir="${GH_STATE:?}"
 printf '%s\n' "$*" >> "$dir/calls"
@@ -17,10 +20,12 @@ if [[ "${1-}" == api ]]; then
     method=GET
     jq_filter="."
     path=""
+    input=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -X) method="$2"; shift ;;
             --jq) jq_filter="$2"; shift ;;
+            --input) input="$2"; shift ;;
             --silent) ;;
             *) path="$1" ;;
         esac
@@ -36,6 +41,11 @@ if [[ "${1-}" == api ]]; then
                     | {id: (.[0] | tonumber), key: .[1], ref: .[2]}
                     | select(($ref == "" or .ref == $ref) and (.key | startswith($key)))]}' "$dir/caches" | jq -r "$jq_filter"
             ;;
+        "GET "*/actions/runs/*/pending_deployments)
+            jq -r "$jq_filter" "$dir/pending.json" ;;
+        "POST "*/actions/runs/*/pending_deployments)
+            [[ "$input" == - ]] || { echo "fake gh: pending_deployments needs --input -" >&2; exit 2; }
+            jq -c . >> "$dir/reviews" ;;
         "DELETE "*/actions/caches/*)
             id="${path##*/}"
             grep -v "^$id"$'\t' "$dir/caches" > "$dir/caches.new" || true
@@ -66,6 +76,10 @@ case "${1-} ${2-}" in
         printf '%s\n' "$body" > "$dir/variables/$name"
         exit 0 ;;
     "repo view") echo example/daybook; exit 0 ;;
+    "run list")
+        id="$(cat "$dir/waiting-run" 2>/dev/null || true)"
+        if [[ -n "$id" ]]; then echo "$id"; fi
+        exit 0 ;;
 esac
 
 state="$(cat "$dir/state")"

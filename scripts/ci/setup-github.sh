@@ -1,23 +1,26 @@
 #!/bin/bash
-# Configures GitHub for the release pipeline: the `release` environment (required reviewers, main and
-# v* tags only), its secrets, the repository variables, and Actions hardening. Prints the plan and
-# changes nothing unless --apply is given.
+# Configures GitHub for the release pipeline: one environment per distribution channel, `iOS TestFlight`,
+# `Mac TestFlight`, and `Mac download` (each with required reviewers, main and v* tags only, and the secrets
+# its job needs), the repository variables, and Actions hardening. Prints the plan and changes nothing
+# unless --apply is given.
 #
 #   scripts/ci/setup-github.sh --asc-key ~/keys/AuthKey_ABC123DEFG.p8 --asc-issuer-id <uuid> \
 #       [--developer-id-p12 ~/keys/developer-id.p12] [--testflight-group "Daybook testers"] \
-#       [--reviewer vladzaharia] [--protect-tags] [--apply]
+#       [--reviewer vladzaharia] [--environment "Mac download"] [--protect-tags] [--apply]
 #
 # Options:
 #   --repo OWNER/NAME          default vladzaharia/daybook
 #   --asc-key FILE             the App Store Connect API key (.p8), downloaded once from App Store Connect
 #   --asc-key-id ID            default: from the file name AuthKey_<ID>.p8
 #   --asc-issuer-id UUID       App Store Connect › Users and Access › Integrations › Team Keys, "Issuer ID"
-#   --developer-id-p12 FILE    optional fallback signing identity (docs/release.md, Signing). Its password
-#                              comes from $DEVELOPER_ID_P12_PASSWORD, or a prompt with --apply.
+#   --developer-id-p12 FILE    optional fallback signing identity (docs/release.md, Signing), stored in `Mac
+#                              download` only. Its password comes from $DEVELOPER_ID_P12_PASSWORD, or a
+#                              prompt with --apply.
 #   --team-id ID               default 48H7CLBV8Y
 #   --testflight-group NAME    beta group every release build is added to (variable; optional)
 #   --build-offset N           added to the run number for CFBundleVersion (default 1000; scripts/ci/version.sh)
 #   --reviewer LOGIN           who approves release runs (repeatable; default the repository owner)
+#   --environment NAME         only this channel's environment (repeatable; default all three)
 #   --protect-tags             also add a tag ruleset: only admins create, move, or delete v* tags
 #   --apply                    make the changes. Without it, nothing is sent to GitHub.
 #
@@ -37,7 +40,9 @@ build_offset="1000"
 reviewers=()
 protect_tags=0
 apply=0
-environment="release"
+environments=()
+# The distribution channels, each an environment its signing job deploys to (release.yml).
+channels=("iOS TestFlight" "Mac TestFlight" "Mac download")
 
 usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
 fail() { echo "setup-github.sh: $*" >&2; exit 1; }
@@ -53,6 +58,7 @@ while [[ $# -gt 0 ]]; do
         --testflight-group) testflight_group="${2-}"; shift ;;
         --build-offset) build_offset="${2-}"; shift ;;
         --reviewer) reviewers+=("${2-}"); shift ;;
+        --environment) environments+=("${2-}"); shift ;;
         --protect-tags) protect_tags=1 ;;
         --apply) apply=1 ;;
         -h|--help) usage; exit 0 ;;
@@ -80,6 +86,16 @@ if [[ -n "$p12" ]]; then
     [[ -r "$p12" ]] || fail "can't read $p12"
 fi
 (( ${#reviewers[@]} )) || reviewers=("${repo%%/*}")
+(( ${#environments[@]} )) || environments=("${channels[@]}")
+for environment in "${environments[@]}"; do
+    grep -qxF -- "$environment" <<< "$(printf '%s\n' "${channels[@]}")" \
+        || fail "--environment must be one of: ${channels[*]}"
+done
+if [[ -n "$p12" ]] && ! grep -qxF "Mac download" <<< "$(printf '%s\n' "${environments[@]}")"; then
+    fail "--developer-id-p12 goes to 'Mac download'; add --environment \"Mac download\""
+fi
+# An environment's name in an API path ("Mac download" → Mac%20download).
+encoded() { jq -rn --arg name "$1" '$name | @uri'; }
 
 # --- Plan and execution helpers ---------------------------------------------------------------------
 step=0
@@ -87,10 +103,10 @@ say() { step=$(( step + 1 )); printf '\n%d. %s\n' "$step" "$*"; }
 show() { printf '   $'; printf ' %q' "$@"; printf '\n'; }
 # run CMD...: print it, and run it with --apply.
 run() { show "$@"; if (( apply )); then "$@"; fi; }
-# secret NAME DESCRIPTION: the value is read from the function `value_<NAME>` and piped to gh.
+# secret ENVIRONMENT NAME DESCRIPTION: the value is read from the function `value_<NAME>` and piped to gh.
 secret() {
-    local name="$1" description="$2"
-    printf '   $ <%s> | gh secret set %s --env %s --repo %s\n' "$description" "$name" "$environment" "$repo"
+    local environment="$1" name="$2" description="$3"
+    printf '   $ <%s> | gh secret set %s --env %q --repo %s\n' "$description" "$name" "$environment" "$repo"
     if (( apply )); then
         "value_$name" | gh secret set "$name" --env "$environment" --repo "$repo"
     fi
@@ -152,8 +168,7 @@ if (( apply )); then
         || echo "   warning: couldn't set it; set it in Settings › Actions › General › Approval for running fork pull request workflows" >&2
 fi
 
-# --- 2. The release environment -----------------------------------------------------------------------
-say "Environment '$environment': required reviewers (${reviewers[*]}), deployments only from main and v* tags"
+# --- 2. One environment per distribution channel -------------------------------------------------------
 reviewer_json=""
 for login in "${reviewers[@]}"; do
     show gh api "users/$login" --jq .id
@@ -165,37 +180,42 @@ for login in "${reviewers[@]}"; do
     reviewer_json+="${reviewer_json:+,}{\"type\":\"User\",\"id\":${id}}"
 done
 environment_body="{\"wait_timer\":0,\"prevent_self_review\":false,\"reviewers\":[${reviewer_json}],\"deployment_branch_policy\":{\"protected_branches\":false,\"custom_branch_policies\":true}}"
-printf "   \$ echo '%s' | gh api -X PUT repos/%s/environments/%s --input -\n" "$environment_body" "$repo" "$environment"
-if (( apply )); then
-    printf '%s' "$environment_body" | gh api -X PUT "repos/$repo/environments/$environment" --input - >/dev/null
-fi
-
-existing=""
-show gh api "repos/$repo/environments/$environment/deployment-branch-policies" --jq '.branch_policies[] | "\(.type):\(.name)"'
-if (( apply )); then
-    existing="$(gh api "repos/$repo/environments/$environment/deployment-branch-policies" --jq '.branch_policies[] | "\(.type):\(.name)"')"
-fi
-for policy in "branch:main" "tag:v*"; do
-    if grep -qxF "$policy" <<< "$existing"; then
-        echo "   (policy $policy already exists)"
-        continue
+for environment in "${environments[@]}"; do
+    path="repos/$repo/environments/$(encoded "$environment")"
+    say "Environment '$environment': required reviewers (${reviewers[*]}), deployments only from main and v* tags"
+    printf "   \$ echo '%s' | gh api -X PUT %s --input -\n" "$environment_body" "$path"
+    if (( apply )); then
+        printf '%s' "$environment_body" | gh api -X PUT "$path" --input - >/dev/null
     fi
-    run gh api -X POST "repos/$repo/environments/$environment/deployment-branch-policies" \
-        -f name="${policy#*:}" -f type="${policy%%:*}" --silent
-done
+    existing=""
+    show gh api "$path/deployment-branch-policies" --jq '.branch_policies[] | "\(.type):\(.name)"'
+    if (( apply )); then
+        existing="$(gh api "$path/deployment-branch-policies" --jq '.branch_policies[] | "\(.type):\(.name)"')"
+    fi
+    for policy in "branch:main" "tag:v*"; do
+        if grep -qxF "$policy" <<< "$existing"; then
+            echo "   (policy $policy already exists)"
+            continue
+        fi
+        run gh api -X POST "$path/deployment-branch-policies" -f name="${policy#*:}" -f type="${policy%%:*}" --silent
+    done
 
-# --- 3. Secrets (environment-scoped: only approved release jobs can read them) -----------------------
-say "Secrets in '$environment': the App Store Connect API key"
-secret ASC_KEY_ID "$asc_key_id"
-secret ASC_ISSUER_ID "issuer ID $asc_issuer_id"
-secret ASC_KEY_P8_BASE64 "base64 of $asc_key"
-if [[ -n "$p12" ]]; then
-    say "Secrets in '$environment': the Developer ID fallback identity"
-    secret DEVELOPER_ID_P12_BASE64 "base64 of $p12"
-    secret DEVELOPER_ID_P12_PASSWORD "its password, from \$DEVELOPER_ID_P12_PASSWORD or a prompt"
-else
-    say "No --developer-id-p12: Developer ID signing will use Xcode's cloud-managed certificate (docs/release.md)"
-fi
+    # --- 3. Its secrets (environment-scoped: only its approved job can read them) ----------------------
+    say "Secrets in '$environment': the App Store Connect API key"
+    secret "$environment" ASC_KEY_ID "$asc_key_id"
+    secret "$environment" ASC_ISSUER_ID "issuer ID $asc_issuer_id"
+    secret "$environment" ASC_KEY_P8_BASE64 "base64 of $asc_key"
+    if [[ "$environment" == "Mac download" ]]; then
+        if [[ -n "$p12" ]]; then
+            say "Secrets in '$environment': the Developer ID fallback identity"
+            secret "$environment" DEVELOPER_ID_P12_BASE64 "base64 of $p12"
+            secret "$environment" DEVELOPER_ID_P12_PASSWORD "its password, from \$DEVELOPER_ID_P12_PASSWORD or a prompt"
+        else
+            say "No --developer-id-p12: Developer ID signing will use Xcode's cloud-managed certificate (docs/release.md)"
+        fi
+    fi
+done
+echo "   Each channel's development certificate: scripts/asc-development-certificate.sh (docs/release.md)."
 
 # --- 4. Variables ---------------------------------------------------------------------------------------
 say "Repository variables"
@@ -225,7 +245,7 @@ fi
 
 echo
 if (( apply )); then
-    echo "Done. Check Settings › Environments › $environment, then cut a release (docs/release.md)."
+    echo "Done. Check Settings › Environments (${environments[*]}), then cut a release (docs/release.md)."
 else
     echo "Nothing was changed. Re-run with --apply to make these changes."
 fi
