@@ -1455,6 +1455,7 @@ extension AppState {
         finishCaptions()
         recordingWillFinish(id, at: result.endedAt)
         recordingID = nil; recordingStartedAt = nil; recordingWasAutomatic = false
+        CallPromptWindow.shared.recordingEnded()
         sync.publishActivity(recording: nil)
         phones.recordingEnded(id)
         do {

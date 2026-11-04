@@ -101,6 +101,11 @@ final class CallPromptWindow {
         if case .record? = question { finish(.notNow) }
     }
 
+    /// The recording it asks about stopping has ended some other way: the question goes, unanswered.
+    func recordingEnded() {
+        if case .ended? = question { dismiss() }
+    }
+
     /// Where it shows: the top-trailing corner of where Floating Notes opens, so Record can grow it into the notes.
     static func frame(under notes: NSRect) -> NSRect {
         NSRect(x: notes.maxX - size.width, y: notes.maxY - size.height, width: size.width, height: size.height)
@@ -314,8 +319,10 @@ extension AppState {
     /// A recording the person started, during `call`, which has now ended: asked whether to stop, never stopped. No
     /// answer in time keeps it recording.
     func askToStop(after call: MeetingCandidate) {
+        let recording = recordingID
         CallPromptWindow.shared.ask(.ended(call)) { [weak self] answer in
-            guard answer == .stop, let self else { return }
+            // Only the recording it asked about: never one started since.
+            guard answer == .stop, let self, self.recordingID == recording else { return }
             Task { await self.stopRecording(manual: true) }
         }
     }
@@ -324,8 +331,10 @@ extension AppState {
         switch answer {
         case .record, .alwaysRecord:
             if answer == .alwaysRecord { callAppChoices[call.bundleID] = .always }
-            guard recordingID == nil, !isStartingRecording else { return }
+            // A recording already under way (started by the person meanwhile) is the call's, as when the call started
+            // during it: the line says so, and the call ending asks whether to stop it.
             monitor.callRecordingStarted()
+            guard recordingID == nil, !isStartingRecording else { return }
             // Started for a call, it stops when the call ends, as one recorded automatically does.
             Task { await startRecording(title: call.windowTitle, automatic: true) }
         case .never:
