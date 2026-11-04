@@ -48,7 +48,7 @@ final class ModelManifestTests: XCTestCase {
                        "v3/fp16/SortformerOffline_v2.1.mlmodelc")
         // Sizes come from the files now, not estimates.
         XCTAssertEqual(catalog.model("qwen2.5/7b-4bit")?.approximateBytes, 4_294_215_757)
-        // The speech models FluidAudio 0.17.7 runs, pinned to FluidInference's conversions.
+        // The speech models FluidAudio 0.18.0 runs, pinned to FluidInference's conversions.
         let ultra = try XCTUnwrap(catalog.model("parakeet/ultra"))
         XCTAssertEqual(ultra.latestRevision?.artifacts.map(\.repository), ["FluidInference/parakeet-ultra-coreml"])
         XCTAssertEqual(ultra.latestRevision?.id, "95eaa59a39d4394f047a4dc5cce480388a60d1b6")
