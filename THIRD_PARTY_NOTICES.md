@@ -5,7 +5,7 @@ Daybook links native open-source libraries. Package.resolved records the exact d
 | Library | Purpose | License / source |
 | --- | --- | --- |
 | argmax-oss-swift 1.1.1 (WhisperKit) | In-process Core ML speech recognition | MIT · https://github.com/argmaxinc/argmax-oss-swift |
-| FluidAudio 0.17.7 | In-process speech recognition (Parakeet) and speaker diarization | Apache-2.0 · https://github.com/FluidInference/FluidAudio |
+| FluidAudio 0.18.0 | In-process speech recognition (Parakeet) and speaker diarization | Apache-2.0 · https://github.com/FluidInference/FluidAudio |
 | MLX Swift 0.32.3 / MLX Swift LM 3.32.3 | In-process Metal language-model inference and constrained (guided) generation | MIT · https://github.com/ml-explore/mlx-swift and https://github.com/ml-explore/mlx-swift-lm |
 | XGrammar 0.1.30 (vendored in MLX Swift LM) | JSON-schema constrained decoding | Apache-2.0 · https://github.com/mlc-ai/xgrammar |
 | Swift Transformers 1.3.5 | Language-model tokenizers and explicit model downloads | Apache-2.0 · https://github.com/huggingface/swift-transformers |
