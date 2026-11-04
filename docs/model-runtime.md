@@ -48,8 +48,8 @@ The recommended summary default (the catalog's `initialSelection`) is Gemma 4 E2
 | Nemotron 3 Diarization | 199 MB | Balanced and Detailed. Up to eight speakers, overlapping speech, 10 ms resolution; NVIDIA's card reports AMI-SDM DER 11.14 against Sortformer v2.1's 21.42. Voice profiles come from Community-1 on its turns. No expected speaker count; more than eight expected speakers run Community-1. |
 | Nemotron 3 · Compact | 102 MB | The split-graph W8A8 build with a 10.24 s window. FluidInference reports DER 9.63 vs 9.47 on AMI and correct speaker counts on all 16 test meetings; not verified here. |
 | Community-1 | 22 MB | Quick, and any number of speakers: complete recordings, editable reusable voice profiles, and an optional expected speaker count. Uses whole-file segmentation, embedding extraction, and VBx clustering. Also makes the voice profiles for Nemotron's turns. |
-| Sortformer 2.1 Compact | 92 MB | Real 6-bit palettized weights. Smaller download and memory footprint; can lose detail compared with FP16. Maximum four speaker slots; no reusable voice profiles. |
-| Sortformer 2.1 Full Precision | 242 MB | Real FP16 weights. An alternative for noisy small-group conversations. Maximum four speaker slots; no reusable voice profiles. Can miss quiet or distant speech. |
+| Sortformer 2.1 Compact (retired 2026-11-03: no longer offered; models.md) | 92 MB | Real 6-bit palettized weights. Smaller download and memory footprint; can lose detail compared with FP16. Maximum four speaker slots; no reusable voice profiles. |
+| Sortformer 2.1 Full Precision (retired 2026-11-03) | 242 MB | Real FP16 weights. An alternative for noisy small-group conversations. Maximum four speaker slots; no reusable voice profiles. Can miss quiet or distant speech. |
 
 These limits are capabilities in the catalog (`maxSpeakers`, `voiceEmbeddings`, `expectedSpeakerCount`), which Settings and the pipeline read instead of checking which model is selected.
 

@@ -22,6 +22,7 @@
       "variants": [
         {
           "id": "compact",
+          "roles": [],
           "name": "Sortformer 2.1 · Compact",
           "detail": "Smaller download. At most 4 speakers; no voice matching.",
           "releaseDate": "2025-10-22",
@@ -88,6 +89,7 @@
         },
         {
           "id": "fp16",
+          "roles": [],
           "name": "Sortformer 2.1 · Full Precision",
           "detail": "Better on noisy audio. At most 4 speakers; no voice matching.",
           "releaseDate": "2025-10-22",

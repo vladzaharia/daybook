@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "minimumReaderVersion": 1,
-  "catalogVersion": "2026.10.31",
+  "catalogVersion": "2026.11.03",
   "presets": [
     {
       "id": "quick",

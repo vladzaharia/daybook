@@ -22,7 +22,8 @@ struct ModelsSettingsScreen: View {
                                    download: models.processingDownload, space: models.space,
                                    downloadAction: { models.downloadMissing(in: PhoneModels.transcribingRoles) },
                                    cancelAction: { models.cancelDownloads(in: PhoneModels.transcribingRoles) })
-            ForEach(models.processingRoles, id: \.self) { role in
+            // The voice-profile model comes with the speaker model: it isn't a choice of its own.
+            ForEach(models.processingRoles.filter { $0 != .speakerEmbedding }, id: \.self) { role in
                 roleSection(role, models: models)
             }
             if let live = models.liveDownload {
