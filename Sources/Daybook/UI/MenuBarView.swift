@@ -30,8 +30,10 @@ struct MenuBarView: View {
         Button("Show Floating Notes") { state.showFloatingNotes(focus: state.floatingNotesFocus) }
             .keyboardShortcut("n", modifiers: [.command, .option])
         Divider()
-        Toggle("Record Calls Automatically", isOn: $state.automaticRecording)
-        if state.automaticRecording { DetectionStatusText(monitor: state.monitor) }
+        Picker("When a Call Starts", selection: $state.callPolicy) {
+            ForEach(CallRecordingPolicy.allCases) { Text($0.title).tag($0) }
+        }
+        if state.callPolicy != .off { DetectionStatusText(monitor: state.monitor) }
         // What's going on, when there's something to say; it reads the job's progress apart from the rest.
         MenuBarStatusItems(state: state)
         Divider()

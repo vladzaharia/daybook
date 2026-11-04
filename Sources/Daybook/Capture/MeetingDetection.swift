@@ -4,25 +4,50 @@ import DaybookCore
 import Foundation
 import Observation
 
-/// A conservative rule: audio activity alone never establishes that a call has begun.
+/// A conservative rule: audio activity alone never establishes that a call has begun, except in an app that uses the
+/// microphone for nothing but calls.
 struct MeetingAppRule: Codable, Equatable, Identifiable, Sendable {
     var id: String { bundleID }
     var bundleID: String
     var displayName: String
     var meetingTitleFragments: [String]
     var isBrowser: Bool = false
+    /// Whether a call needs a meeting window to start. An app whose window is there all along (FaceTime, Discord,
+    /// WhatsApp, Signal) can't say a call by its window, so its call starts on the microphone alone and ends with its
+    /// audio.
+    var needsMeetingWindow: Bool = true
+
+    /// Whether its audio plays through a process other apps share (Orion's, WebKit's GPU process, which is Safari's
+    /// too): it's a candidate only with a meeting window of its own, so Safari's audio is never Orion's call.
+    var sharesAudioProcess: Bool { bundleID.lowercased() == "com.kagi.kagimacos" }
 
     static let defaults: [MeetingAppRule] = [
         .init(bundleID: "us.zoom.xos", displayName: "Zoom", meetingTitleFragments: ["zoom meeting", "zoom webinar", "zoom workplace meeting"]),
-        .init(bundleID: "com.microsoft.teams2", displayName: "Teams", meetingTitleFragments: ["meeting |", "call |", "(meeting)", "meeting with"]),
+        .init(bundleID: "com.microsoft.teams2", displayName: "Teams", meetingTitleFragments: teamsTitles),
+        .init(bundleID: "com.microsoft.teams", displayName: "Teams (classic)", meetingTitleFragments: teamsTitles),
         .init(bundleID: "com.tinyspeck.slackmacgap", displayName: "Slack", meetingTitleFragments: ["huddle"]),
+        .init(bundleID: "com.cisco.webexmeetingsapp", displayName: "Webex", meetingTitleFragments: ["webex", "meeting"]),
+        .init(bundleID: "com.webex.meetingmanager", displayName: "Webex Meetings", meetingTitleFragments: ["webex", "meeting"]),
+        .init(bundleID: "com.logmein.GoToMeeting", displayName: "GoTo Meeting", meetingTitleFragments: ["goto", "meeting"]),
+        .init(bundleID: "com.amazon.Amazon-Chime", displayName: "Chime", meetingTitleFragments: ["meeting", "call"]),
+        .init(bundleID: "com.apple.FaceTime", displayName: "FaceTime", meetingTitleFragments: [], needsMeetingWindow: false),
+        .init(bundleID: "com.hnc.Discord", displayName: "Discord", meetingTitleFragments: [], needsMeetingWindow: false),
+        .init(bundleID: "net.whatsapp.WhatsApp", displayName: "WhatsApp", meetingTitleFragments: [], needsMeetingWindow: false),
+        .init(bundleID: "org.whispersystems.signal-desktop", displayName: "Signal", meetingTitleFragments: [], needsMeetingWindow: false),
         .init(bundleID: "com.google.Chrome", displayName: "Chrome", meetingTitleFragments: browserTitles, isBrowser: true),
         .init(bundleID: "com.apple.Safari", displayName: "Safari", meetingTitleFragments: browserTitles, isBrowser: true),
         .init(bundleID: "org.mozilla.firefox", displayName: "Firefox", meetingTitleFragments: browserTitles, isBrowser: true),
         .init(bundleID: "com.microsoft.edgemac", displayName: "Edge", meetingTitleFragments: browserTitles, isBrowser: true),
-        .init(bundleID: "company.thebrowser.Browser", displayName: "Arc", meetingTitleFragments: browserTitles, isBrowser: true)
+        .init(bundleID: "company.thebrowser.Browser", displayName: "Arc", meetingTitleFragments: browserTitles, isBrowser: true),
+        .init(bundleID: "company.thebrowser.dia", displayName: "Dia", meetingTitleFragments: browserTitles, isBrowser: true),
+        .init(bundleID: "com.brave.Browser", displayName: "Brave", meetingTitleFragments: browserTitles, isBrowser: true),
+        .init(bundleID: "com.vivaldi.Vivaldi", displayName: "Vivaldi", meetingTitleFragments: browserTitles, isBrowser: true),
+        .init(bundleID: "com.operasoftware.Opera", displayName: "Opera", meetingTitleFragments: browserTitles, isBrowser: true),
+        .init(bundleID: "com.kagi.kagimacOS", displayName: "Orion", meetingTitleFragments: browserTitles, isBrowser: true)
     ]
-    private static let browserTitles = ["google meet", "meet.google.com", "meet -", "zoom meeting", "teams.microsoft.com", "microsoft teams meeting"]
+    private static let teamsTitles = ["meeting |", "call |", "(meeting)", "meeting with"]
+    private static let browserTitles = ["google meet", "meet.google.com", "meet -", "zoom meeting", "teams.microsoft.com", "microsoft teams meeting",
+                                        "webex", "whereby", "jitsi"]
 }
 
 struct MeetingCandidate: Equatable, Sendable {
@@ -33,10 +58,15 @@ struct MeetingCandidate: Equatable, Sendable {
     var hasOutputActivity: Bool
     var hasMeetingWindow: Bool
     var isBrowser: Bool
+    /// False for an app that uses the microphone for nothing but calls (`MeetingAppRule.needsMeetingWindow`).
+    var needsMeetingWindow = true
 
     // Browser audio belongs to the whole process, not a tab. Requiring input at
     // startup avoids recording media from another tab beside a dormant Meet tab.
-    var canStart: Bool { hasMeetingWindow && (hasInputActivity || (hasOutputActivity && !isBrowser)) }
+    var canStart: Bool {
+        guard needsMeetingWindow else { return hasInputActivity }
+        return hasMeetingWindow && (hasInputActivity || (hasOutputActivity && !isBrowser))
+    }
     // A dedicated native meeting window stays meaningful while muted. A browser tab
     // can stay open after a call ends, so browsers must continue using an audio device.
     var canContinue: Bool { hasInputActivity || hasOutputActivity || (hasMeetingWindow && !isBrowser) }
@@ -136,7 +166,13 @@ enum MeetingReading: Equatable, Sendable {
     case failed
 }
 
-/// Watches for calls while "Record calls automatically" is on. Every two seconds it looks at the Mac off the main actor
+/// What became of a call the monitor found: it's being recorded, Daybook is asking about it, or it isn't recorded (the
+/// app's Never, or a recording already under way of something else), which pauses the monitor until it ends.
+enum CallResponse: Equatable, Sendable {
+    case recording, asking, notRecorded
+}
+
+/// Watches for calls while "When a call starts" isn't Off. Every two seconds it looks at the Mac off the main actor
 /// (`MeetingActivityReader`), and only the state machine's answer comes back here, so a Mac with hundreds of windows
 /// never stalls the window it's drawing.
 @MainActor
@@ -147,9 +183,13 @@ final class MeetingMonitor {
     private(set) var activeCandidate: MeetingCandidate?
     private(set) var statusText = MeetingMonitor.off
     var rules = MeetingAppRule.defaults
-    @ObservationIgnored var onMeetingStarted: ((MeetingCandidate) -> Void)?
-    /// The call ended. Returns whether that stopped a recording (one it started), which the status line then says.
-    @ObservationIgnored var onMeetingEnded: (() -> Bool)?
+    /// A call has started; what became of it. Without a handler it's being recorded.
+    @ObservationIgnored var onMeetingStarted: ((MeetingCandidate) -> CallResponse)?
+    /// The call ended, with the call it was. Returns whether that stopped a recording (one it started), which the status
+    /// line then says.
+    @ObservationIgnored var onMeetingEnded: ((MeetingCandidate?) -> Bool)?
+    /// Daybook is asking whether to record the active call.
+    @ObservationIgnored private var asking = false
     @ObservationIgnored private var machine = MeetingDetectionStateMachine()
     @ObservationIgnored private var sampling: Task<Void, Never>?
     /// Looks in a row that couldn't be made.
@@ -202,17 +242,27 @@ final class MeetingMonitor {
         isMonitoring = false
         isMeetingActive = false
         activeCandidate = nil
+        asking = false
         statusText = Self.off
     }
 
     func suppressCurrentMeeting() {
         machine.suppressCurrentMeeting()
         isMeetingActive = false
+        asking = false
         statusText = Self.paused
+    }
+
+    /// The call Daybook asked about is being recorded now.
+    func callRecordingStarted() {
+        asking = false
+        if let activeCandidate, isMeetingActive { statusText = "Recording a \(activeCandidate.callName)." }
     }
 
     /// One look's answer, on the main actor. Internal so tests drive the monitor with scripted looks and times.
     func apply(_ reading: MeetingReading, at now: Date) {
+        // The call as it was before this look: the look that ends it has already let it go.
+        let previous = activeCandidate
         let event: MeetingDetectionStateMachine.Event?
         switch reading {
         case .failed:
@@ -235,12 +285,22 @@ final class MeetingMonitor {
             activeCandidate = candidate
             isMeetingActive = true
             endedLine = nil
-            statusText = "Recording a \(candidate.callName)."
-            onMeetingStarted?(candidate)
+            switch onMeetingStarted?(candidate) ?? .recording {
+            case .recording:
+                asking = false
+                statusText = "Recording a \(candidate.callName)."
+            case .asking:
+                asking = true
+                statusText = "Asking whether to record the \(candidate.callName)."
+            case .notRecorded:
+                suppressCurrentMeeting()
+            }
         case .ended:
+            let call = previous
             isMeetingActive = false
             activeCandidate = nil
-            let line = onMeetingEnded?() == true ? Self.endedAndStopped : Self.ended
+            asking = false
+            let line = onMeetingEnded?(call) == true ? Self.endedAndStopped : Self.ended
             endedLine = line
             statusText = line
         case nil:
@@ -251,7 +311,8 @@ final class MeetingMonitor {
     private func line(windowsReadable: Bool) -> String {
         if machine.suppressedBundleID != nil { return Self.paused }
         if let activeCandidate {
-            return isMeetingActive ? "Recording a \(activeCandidate.callName)." : "Checking whether the \(activeCandidate.callName) has started…"
+            guard isMeetingActive else { return "Checking whether the \(activeCandidate.callName) has started…" }
+            return asking ? "Asking whether to record the \(activeCandidate.callName)." : "Recording a \(activeCandidate.callName)."
         }
         if !windowsReadable { return Self.needsPermission }
         return endedLine ?? Self.listening
@@ -360,10 +421,10 @@ enum MeetingActivityReader {
             }?.title
             let input = owned.contains(where: \.isRunningInput)
             let output = owned.contains(where: \.isRunningOutput)
-            guard input || output || title != nil else { return nil }
+            guard input || output || title != nil, title != nil || !rule.sharesAudioProcess else { return nil }
             return MeetingCandidate(bundleID: rule.bundleID, appName: rule.displayName, windowTitle: title ?? rule.displayName,
                                     hasInputActivity: input, hasOutputActivity: output, hasMeetingWindow: title != nil,
-                                    isBrowser: rule.isBrowser)
+                                    isBrowser: rule.isBrowser, needsMeetingWindow: rule.needsMeetingWindow)
         }
     }
 }

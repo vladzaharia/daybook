@@ -397,6 +397,7 @@ private struct DebugLaunchActions: ViewModifier {
             DeviceDemo.apply(to: state)
             PhoneDemo.apply(to: state)
             FloatingNotesDemo.apply(to: state)
+            CallPromptDemo.apply(to: state)
             PhotoDemo.apply(to: state)
             LibraryDemo.apply(to: state)
             CloudSettingsDemo.apply(to: state)

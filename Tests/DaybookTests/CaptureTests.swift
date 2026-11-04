@@ -120,7 +120,7 @@ final class MeetingMonitorTests: XCTestCase {
     private func makeMonitor(endsRecording: Bool = true) -> (MeetingMonitor, ended: () -> Int) {
         let monitor = MeetingMonitor(read: { _ in .failed })
         var ends = 0
-        monitor.onMeetingEnded = { ends += 1; return endsRecording }
+        monitor.onMeetingEnded = { _ in ends += 1; return endsRecording }
         return (monitor, { ends })
     }
 
