@@ -578,6 +578,84 @@ echo '[]' > "$work/approve-gh/pending.json"
 expect_fail "a run waiting on nothing fails" approve_release
 expect_fail "a bad --run fails" approve_release --run abc
 
+# --- await-validation.sh against a fake gh, whose answers change from one call to the next ----------
+echo "await-validation.sh"
+await_validation() {
+    : > "$work/approve-gh/calls"
+    PATH="$work/approve-bin:$PATH" GH_STATE="$work/approve-gh" "$ci/await-validation.sh" --repo example/daybook \
+        --interval 0 "$@" > "$work/await.out" 2>&1
+}
+# run_state ID STATUS[:CONCLUSION]...: the CI run's answers, one per call.
+run_state() {
+    local id="$1" state
+    shift
+    for state in "$@"; do jq -cn --arg s "${state%%:*}" --arg c "${state#*:}" '{status: $s, conclusion: (if $c == $s then null else $c end)}'; done \
+        > "$work/approve-gh/run-$id.seq"
+}
+# jobs_state ID 'STATUS:CONCLUSION:NAME|…'...: the run's jobs, one listing per call.
+jobs_state() {
+    local id="$1" listing
+    shift
+    for listing in "$@"; do
+        jq -cn --arg l "$listing" '{jobs: [$l | split("|")[] | select(length > 0) | split(":")
+            | {status: .[0], conclusion: (if .[1] == "" then null else .[1] end), name: .[2]}]}'
+    done > "$work/approve-gh/jobs-$id.seq"
+}
+run_state 5 queued in_progress completed:success
+expect_ok "waits for CI on main to pass" await_validation --ci-run 5
+expect_eq "(asking until it had)" "3" "$(grep -c 'actions/runs/5' "$work/approve-gh/calls")"
+expect_ok "and says so" grep -qF 'CI passed on this commit: https://github.com/example/daybook/actions/runs/5' "$work/await.out"
+run_state 6 in_progress completed:failure
+expect_fail "CI on main that failed fails" await_validation --ci-run 6
+expect_ok "naming the run" grep -qF "CI on main didn't pass on this commit (failure): https://github.com/example/daybook/actions/runs/6" "$work/await.out"
+run_state 7 in_progress
+expect_fail "gives up when the time runs out" await_validation --ci-run 7 --timeout 0
+expect_ok "saying what it waited for" grep -qF 'gave up after 0 minutes: CI on main is in_progress' "$work/await.out"
+validate="Validate the release commit"
+jobs_state 9 "" "in_progress::$validate / Lint|queued::$validate / iPhone app|in_progress::Mac to TestFlight" \
+    "completed:success:$validate / Lint|completed:success:$validate / iPhone app|completed:skipped:$validate / Prune superseded caches|in_progress::Mac to TestFlight"
+expect_ok "waits for this run's validation" await_validation --run 9
+expect_ok "(its jobs alone, not the signing jobs)" grep -qF 'Validation passed: 3 jobs' "$work/await.out"
+expect_ok "having waited for it to start" grep -qF "Waiting: validation hasn't started" "$work/await.out"
+expect_ok "then to finish" grep -qF 'Waiting: 2 of 2 validation jobs still running' "$work/await.out"
+jobs_state 10 "completed:success:$validate / Lint|completed:failure:$validate / iPhone app|in_progress::$validate / Mac app"
+expect_fail "a failed validation job fails at once" await_validation --run 10
+expect_ok "naming it" grep -qF "validation didn't pass: $validate / iPhone app (failure)" "$work/await.out"
+expect_fail "--ci-run and --run together" await_validation --ci-run 5 --run 9
+expect_fail "or neither" await_validation
+expect_fail "a run ID that isn't one" await_validation --run abc
+
+# --- stable-mtimes.sh, on a scratch repository and a clone of it ----------------------------------------
+echo "stable-mtimes.sh"
+mtimes_repo="$work/mtimes"
+mkdir -p "$mtimes_repo/Sources"
+git -C "$mtimes_repo" init -q
+printf 'one\n' > "$mtimes_repo/Sources/A.swift"
+printf 'two\n' > "$mtimes_repo/Sources/B.swift"
+printf 'one\n' > "$mtimes_repo/Sources/Same.swift"
+ln -s A.swift "$mtimes_repo/Sources/Link.swift"
+git -C "$mtimes_repo" add -A
+git -C "$mtimes_repo" -c user.name=t -c user.email=t@example.com commit -qm one
+mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1"; }
+expect_ok "dates a checkout's files" "$ci/stable-mtimes.sh" "$mtimes_repo"
+a_time="$(mtime "$mtimes_repo/Sources/A.swift")"
+expect_eq "from the content: 2000-01-01 plus the blob hash's first 28 bits" \
+    "$(( 946684800 + 16#$(git -C "$mtimes_repo" rev-parse HEAD:Sources/A.swift | cut -c1-7) ))" "$a_time"
+expect_eq "the same content, the same time" "$a_time" "$(mtime "$mtimes_repo/Sources/Same.swift")"
+expect_ok "other content, another time" test "$a_time" != "$(mtime "$mtimes_repo/Sources/B.swift")"
+git clone -q "$mtimes_repo" "$work/mtimes-clone"
+"$ci/stable-mtimes.sh" "$work/mtimes-clone" > /dev/null
+expect_eq "and the same in a fresh checkout" "$a_time" "$(mtime "$work/mtimes-clone/Sources/A.swift")"
+printf 'eno\n' > "$work/mtimes-clone/Sources/A.swift"
+touch -t 202001010000 "$work/mtimes-clone/Sources/A.swift" "$work/mtimes-reference"
+"$ci/stable-mtimes.sh" "$work/mtimes-clone" > /dev/null
+expect_eq "a file edited since (the same size) keeps its own time" "$(mtime "$work/mtimes-reference")" \
+    "$(mtime "$work/mtimes-clone/Sources/A.swift")"
+git -C "$work/mtimes-clone" add Sources/A.swift
+"$ci/stable-mtimes.sh" "$work/mtimes-clone" > /dev/null
+expect_ok "and once added, gets its new content's" test "$a_time" != "$(mtime "$work/mtimes-clone/Sources/A.swift")"
+expect_fail "outside a checkout it fails" "$ci/stable-mtimes.sh" "$work/approve-bin"
+
 # --- build-ios.sh upload retry, with a stand-in xcodebuild --------------------------------------------
 echo "build-ios.sh upload retry"
 if macos; then
@@ -861,7 +939,25 @@ if macos; then
         '  {"name": "Apple Watch Ultra 3", "udid": "AAAAAAAA-0000-0000-0000-0000000000AA", "isAvailable": true}]}}' \
         > "$work/simulators.json"
     expect_ok "--test without an iPhone Duo tests on the iPhone 18 Pro" build_ios STUB_SIMULATORS="$work/simulators.json" -- --test
-    expect_ok "(by its UDID)" grep -q -- '-destination id=AAAAAAAA-0000-0000-0000-000000000018 test' <<< "$(xcb ' test')"
+    expect_ok "(by its UDID)" grep -q -- '-destination id=AAAAAAAA-0000-0000-0000-000000000018 test-without-building$' <<< "$(xcb ' test')"
+    # One build, the same every time: the generic destination for this Mac's architecture only.
+    sim_build="-destination generic/platform=iOS Simulator ARCHS=$(uname -m)"
+    expect_eq "after building for testing once, for this Mac's architecture" \
+        "-resolvePackageDependencies|$sim_build build-for-testing|-destination id=AAAAAAAA-0000-0000-0000-000000000018 test-without-building" \
+        "$(grep '^xcodebuild' "$work/stub.log" | sed -E 's/.*(-resolvePackageDependencies).*/\1/; s/.*(-destination .*)/\1/' | paste -sd '|' -)"
+    expect_ok "--build-for-testing builds" build_ios -- --build-for-testing
+    expect_eq "and tests nothing" "$sim_build build-for-testing" \
+        "$(grep '^xcodebuild .*-destination' "$work/stub.log" | sed -E 's/.*(-destination .*)/\1/')"
+    expect_ok "--test --skip-build tests what was built" build_ios -- --test --skip-build --simulator "iPhone 18 Pro" \
+        --test-arg -only-testing:DaybookPhoneTests/ShellTests
+    expect_eq "without generating, resolving, or building" \
+        "xcodebuild -destination platform=iOS Simulator,name=iPhone 18 Pro test-without-building -only-testing:DaybookPhoneTests/ShellTests" \
+        "$(grep -E '^(xcodebuild|xcodegen)' "$work/stub.log" | sed -E 's/^(xcodebuild).*(-destination .*)/\1 \2/')"
+    expect_ok "a plain build is the same simulator build" build_ios -- --simulator unused
+    expect_eq "(no tests)" "$sim_build build" "$(grep '^xcodebuild .*-destination' "$work/stub.log" | sed -E 's/.*(-destination .*)/\1/')"
+    expect_fail "--skip-build without --test" build_ios -- --skip-build
+    expect_fail "--build-for-testing with --test" build_ios -- --build-for-testing --test
+    expect_fail "--build-for-testing for a device" build_ios -- --build-for-testing --device --no-sign
     echo '{"devices": {}}' > "$work/no-simulators.json"
     expect_fail "--test with no iPhone simulator fails" build_ios STUB_SIMULATORS="$work/no-simulators.json" -- --test
     expect_ok "and says so" grep -q "No iPhone simulator is available for --test" "$work/build-ios.out"

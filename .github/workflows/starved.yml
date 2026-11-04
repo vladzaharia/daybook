@@ -36,13 +36,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Date the files by their content
+        run: scripts/ci/stable-mtimes.sh
       - name: Select Xcode
         run: scripts/ci/select-xcode.sh --metal
       - name: Cache key
         id: key
-        env:
-          PACKAGE_HASH: ${{ hashFiles('Package.resolved', 'Package.swift') }}
-        run: echo "build=swiftpm-${RUNNER_OS}-${DAYBOOK_XCODE_BUILD}-${PACKAGE_HASH}" >> "$GITHUB_OUTPUT"
+        run: echo "build=swiftpm-${RUNNER_OS}-${DAYBOOK_XCODE_BUILD}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
       # CI's cache from main; this workflow never saves one.
       - name: Restore the SwiftPM build
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -104,15 +104,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Date the files by their content
+        run: scripts/ci/stable-mtimes.sh
       - name: Select Xcode
         run: scripts/ci/select-xcode.sh --sdk iphoneos27.1 --sdk iphonesimulator27.1
       - name: Install XcodeGen
         run: scripts/ci/install-xcodegen.sh
       - name: Cache key
         id: key
-        env:
-          PROJECT_HASH: ${{ hashFiles('Package.resolved', 'Package.swift', 'Apps/iOS/project.yml') }}
-        run: echo "build=ios-dd-${RUNNER_OS}-${DAYBOOK_XCODE_BUILD}-${PROJECT_HASH}" >> "$GITHUB_OUTPUT"
+        run: echo "build=ios-dd-${RUNNER_OS}-${DAYBOOK_XCODE_BUILD}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
       - name: Restore derived data
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

@@ -16,21 +16,23 @@ Both apps are one App Store Connect app with one bundle ID, `local.daybook`, so 
 |---|---|---|---|
 | CI | `lint` | `ubuntu-24.04` | actionlint (pinned, checksum-verified, with shellcheck on every `run:` block), shellcheck on every script under `scripts/` (all bash), and `scripts/ci/tests/run-tests.sh`, which also compiles the Python helpers with warnings as errors |
 | CI | `package` | `xcode-27` | `swift build --build-tests --force-resolved-versions` once (then `git diff --exit-code -- Package.resolved`), then `swift test --skip-build` per test-target group, then the timing-budget test alone (see below) |
-| CI | `iphone` | `xcode-27` | `scripts/build-ios.sh --test` on a simulator (iPhone Duo if the image has one, otherwise iPhone 18 Pro), the two encoder timing tests alone (see below), then an unsigned Release device archive checked the way a release would be |
+| CI | `iphone` | `xcode-27` | `scripts/build-ios.sh --build-for-testing` once, then the tests on that build (`--test --skip-build`) on a simulator (iPhone Duo if the image has one, otherwise iPhone 18 Pro), then the two encoder timing tests alone (see below) |
+| CI | `iphone-archive` | `xcode-27` | beside `iphone`: an unsigned Release device archive (`build-ios.sh --archive --no-sign`), checked the way a release would be. Its cache is the one the release's `iphone` job restores |
 | CI | `mac` | `xcode-27` | `scripts/ci/tests/run-tests.sh --require-all` (every group, including the macOS-only ones: CryptoKit's JWT check, the archive checks, the upload retry, the build scripts, and the keychain), then `scripts/build-app.sh --debug --ad-hoc` (Release with the `mac_configuration` input, which a manual run and `release.yml` set; a release's validation always builds Release), then the bundle is checked for its signature, icon, MLX `default.metallib`, and App Sandbox entitlements (`scripts/ci/check-mac-app.sh --kind adhoc`: sandboxed, `local.daybook.adhoc`, no migration manifest) |
 | CI | `caches` | `ubuntu-24.04` | pushes to `main` only: deletes the caches this run's keys superseded (`scripts/ci/prune-caches.sh`) |
 | CI under load | `package` | `xcode-27` | nightly and manual: the package's test bundles at background priority while busy loops take every core |
 | CI under load | `iphone` | `xcode-27` | nightly and manual: every iPhone test three times (`-test-iterations 3`) |
-| Release | `validate` | (CI's jobs) | calls `ci.yml` on the release commit with `mac_configuration: Release`, so the Mac app is built the way the release builds it. The signing jobs wait for it |
-| Release | `prepare` | `ubuntu-24.04` | checks the ref (`scripts/ci/check-ref.sh`: a `v*` tag must point at a commit on `main`), works out the version (`scripts/ci/version.sh`) and when the run was created, and writes release notes and What to Test (`scripts/ci/release-notes.sh`) |
-| Release | `iphone` | `xcode-27`, environment `iOS TestFlight` | works out its build number (see [Versions](#versions)), looks for this run's build in App Store Connect, archives `DaybookPhone` with `DaybookPhoneWidgets` (`build-ios.sh --archive`), checks the archive (`check-ios-archive.sh`), exports with `app-store-connect` and uploads it (`build-ios.sh --export upload`), then waits for processing, sets What to Test, and adds the build to the beta group (`asc-testflight.sh`) |
-| Release | `mac` | `xcode-27`, environment `Mac download` | works out its build number, resumes a notarization a previous attempt left pending, fetches the packages, archives (`build-app.sh --archive-only`, sandboxed with the `sandbox` input), exports with `developer-id` (`mac-export.sh`, which runs `build-app.sh --export-only`), then checks that the app's `CFBundleShortVersionString` and `CFBundleVersion` are the run's version and build and that it's the kind of build the run asked for (`check-mac-app.sh`: unsandboxed, or sandboxed with the migration manifest), notarizes, staples, and writes the ZIP, a DMG when possible, and `SHA256SUMS.txt` (`package-mac.sh`), and attests their build provenance |
+| Release | `prepare` | `ubuntu-24.04` | checks the ref (`scripts/ci/check-ref.sh`: a `v*` tag must point at a commit on `main`), works out the version (`scripts/ci/version.sh`) and when the run was created, finds CI's run on `main` for the commit, and writes release notes and What to Test (`scripts/ci/release-notes.sh`) |
+| Release | `validate` | (CI's jobs) | only when `main` has no CI run for the commit: calls `ci.yml` on it with `mac_configuration: Release`, so the Mac app is built the way the release builds it. See [Validation](#validation) |
+| Release | `iphone` | `xcode-27`, environment `iOS TestFlight` | works out its build number (see [Versions](#versions)), looks for this run's build in App Store Connect, restores the Release build CI saved from `main`, archives `DaybookPhone` with `DaybookPhoneWidgets` (`build-ios.sh --archive`), checks the archive (`check-ios-archive.sh`), waits for the commit's tests (`await-validation.sh`), exports with `app-store-connect` and uploads it (`build-ios.sh --export upload`), then waits for processing, sets What to Test, and adds the build to the beta group (`asc-testflight.sh`) |
+| Release | `mac` | `xcode-27`, environment `Mac download` | works out its build number, resumes a notarization a previous attempt left pending, fetches the packages, archives (`build-app.sh --archive-only`, sandboxed with the `sandbox` input), waits for the commit's tests, exports with `developer-id` (`mac-export.sh`, which runs `build-app.sh --export-only`), then checks that the app's `CFBundleShortVersionString` and `CFBundleVersion` are the run's version and build and that it's the kind of build the run asked for (`check-mac-app.sh`: unsandboxed, or sandboxed with the migration manifest), notarizes, staples, and writes the ZIP, a DMG when possible, and `SHA256SUMS.txt` (`package-mac.sh`), and attests their build provenance |
+| Release | `mac-testflight` | `xcode-27`, environment `Mac TestFlight` | with `DAYBOOK_MAC_TESTFLIGHT` or the `mac_testflight` input: the `iphone` job's steps for the Mac App Store build (`build-app.sh --app-store`), checked with `check-mac-app.sh --kind signed-sandbox` |
 | Release | `draft` | `ubuntu-24.04` | tags only, after `mac`: verifies the checksums and creates the GitHub Release as a **draft** with the Mac files (`scripts/ci/github-release.sh draft`). A re-run updates its own draft; it never touches a published release |
-| Release | `publish` | `ubuntu-24.04` | tags only, after `draft` and, when the run releases the iPhone app, after `iphone` succeeded: publishes the draft (`github-release.sh publish`). `draft` and `publish` are the only jobs with `contents: write`, and they hold no Apple secrets |
+| Release | `publish` | `ubuntu-24.04` | tags only, after `draft`: publishes the draft (`github-release.sh publish`). `draft` and `publish` are the only jobs with `contents: write`, and they hold no Apple secrets |
 
 Hardening:
 
-- Every workflow starts from `permissions: {}`, and each job asks for `contents: read` (or `write` in `draft` and `publish` only). The Release `mac` job alone adds `id-token: write` and `attestations: write`, for build provenance.
+- Every workflow starts from `permissions: {}`, and each job asks for `contents: read` (or `write` in `draft` and `publish` only). The Release signing jobs add `actions: read`, to see the commit's tests, and `mac` alone adds `id-token: write` and `attestations: write`, for build provenance.
 - Actions are pinned to commit SHAs, with the version in a comment, and the repository requires it (Settings › Actions › "Require actions to be pinned to a full-length commit SHA", `sha_pinning_required`). Checkouts don't persist credentials.
 - Secret scanning with push protection, Dependabot alerts, and Dependabot security updates are on. `.gitignore` keeps signing material out (`*.p8`, `*.p12`, `AuthKey_*`, `*.mobileprovision`, `*.provisionprofile`, `*.cer`).
 - `.github/dependabot.yml` opens weekly update pull requests for the actions (grouped) and the Swift packages; see [Dependency updates](#dependency-updates).
@@ -50,15 +52,19 @@ Hardening:
 
 ## CI details
 
-**Caches.** MLX, WhisperKit, and FluidAudio dominate the build.
+**Caches.** MLX, WhisperKit, and FluidAudio dominate a cold build. A warm one compiles only what changed since `main`'s last push.
 
 - `package` caches `.build`.
-- `iphone` caches its derived data, without logs and the index.
+- `iphone` caches its derived data (Debug, for the simulator), and `iphone-archive` its Release derived data, which the release's `iphone` job also restores. Both leave out logs and the index.
 - `mac` caches its derived data and `SourcePackages`, per configuration.
 
-Keys combine the Xcode build with a hash of `Package.resolved`, `Package.swift`, and the project spec. Only pushes to `main` save a cache, and only when the key is new. Pull requests restore from the base branch and never save, so they can't fill or poison the 10 GB cache quota. A dependency or Xcode change starts a new cache.
+Every push to `main` saves each job's cache, keyed by the Xcode build and the commit (`ios-dd-macOS-27A9275-<sha>`), and every job restores the newest of its family (the key up to the commit). Pull requests and releases only restore, so they can't fill or poison the 10 GB cache quota: only code on `main` writes a cache, the release's signed archive included.
 
-After a push to `main`, the `caches` job (`scripts/ci/prune-caches.sh`) deletes the older caches of each family the run used: same key up to the hash, so `swiftpm-macOS-27A9275-…`, `ios-dd-macOS-27A9275-…`, and `mac-dd-macOS-27A9275-Debug-…`. It deletes them only when the run's own cache for that family is saved, so a failed run never removes the last good one. It's the only job with `actions: write`, and it builds nothing: it runs that one script. (When `release.yml` calls CI, its `validate` job grants `actions: write` as a ceiling only, because GitHub checks a called workflow's permissions before the run starts; the `caches` job never runs there.) Caches of an older Xcode build age out after 7 days unused. Run CI manually with `clean` ticked to build without caches.
+**File dates.** Xcode and SwiftPM rebuild what changed by modification time, and a checkout dates every file at the time of the checkout, so a restored build would compile all of Daybook's own code again. Every job that builds first runs `scripts/ci/stable-mtimes.sh`, which dates each tracked file by its content (2000-01-01 plus the first 28 bits of its blob hash): a file that hasn't changed has the time it had when the cache was saved, and only what changed compiles. A file edited since the last `git add` keeps its own time. On a development Mac, a fresh clone over a restored build compiled nothing, for the Mac app and for the iPhone app's tests alike, and an edited file still recompiled.
+
+**One iPhone build.** `build-ios.sh` builds for the simulator the same way every time: the generic simulator destination, for the Mac's own architecture. `--test` builds for testing once, then runs `test-without-building`; CI builds in its own step (`--build-for-testing`) and runs both test steps with `--test --skip-build`. A generic build alone also compiles x86_64, and alternating it with a simulator's own destination recompiled every target that imports a C module (MLX, Tokenizers) each time.
+
+After a push to `main`, the `caches` job (`scripts/ci/prune-caches.sh`) deletes the older caches of each family the run used: same key up to the commit, so `swiftpm-macOS-27A9275-…`, `ios-dd-macOS-27A9275-…`, `ios-release-dd-macOS-27A9275-…`, and `mac-dd-macOS-27A9275-Debug-…`. It deletes them only when the run's own cache for that family is saved, so a failed run never removes the last good one. It's the only job with `actions: write`, and it builds nothing: it runs that one script. (When `release.yml` calls CI, its `validate` job grants `actions: write` as a ceiling only, because GitHub checks a called workflow's permissions before the run starts; the `caches` job never runs there.) Caches of an older Xcode build age out after 7 days unused. Run CI manually with `clean` ticked to build without caches.
 
 **Test waits.** Every wait in the tests (`waitUntil`/`waitFor` in `Tests/DaybookTestSupport` and `DaybookPhoneTests/TestSupport.swift`, and the link tests' loopback timeouts) is multiplied by `DAYBOOK_TEST_TIMEOUT_SCALE`. CI's package and iPhone test steps set it to 2 (`TEST_RUNNER_DAYBOOK_TEST_TIMEOUT_SCALE` for `xcodebuild`, which hands it to the test runner without the prefix); CI under load sets 5. The isolated timing steps below keep their own budgets, unscaled.
 
@@ -84,7 +90,7 @@ A red night isn't a broken build. It names the tests whose timing assumptions do
 
 **Artifacts.** On failure, CI uploads the swift test logs, the iPhone `.xcresult` bundles and Xcode logs, or the Mac build logs. They're kept for 14 days.
 
-**The release check in CI.** The `iphone` job runs `check-ios-archive.sh` on an unsigned archive with `continue-on-error`. Problems that would block a release then show up on every run without failing it.
+**The release check in CI.** The `iphone-archive` job runs `check-ios-archive.sh` on an unsigned archive with `continue-on-error`. Problems that would block a release then show up on every run without failing it.
 
 ## Signing
 
@@ -338,7 +344,7 @@ git tag -a v1.4.0 -m "Daybook 1.4.0: two-page reading on iPhone Duo"
 git push origin v1.4.0
 ```
 
-Then approve the run's distribution channels (Approving a release, below).
+Then approve the run's distribution channels (Approving a release, below). They ask within a minute or two; the jobs build meanwhile and wait for the commit's tests before uploading anything ([Validation](#validation)).
 
 - The tag's message opens the GitHub Release notes and What to Test, followed by the commits since the previous tag.
 - The iPhone build appears in TestFlight, in `DAYBOOK_TESTFLIGHT_GROUP`, once processed. "Daybook Internal" is an internal group with access to every build, so each build reaches it by itself; `asc-testflight.sh` only adds builds to groups without that access (App Store Connect refuses it otherwise: 422 "Builds cannot be assigned to this internal group").
@@ -419,6 +425,12 @@ scripts/approve-release.sh --run 41595328717 --dry-run   # says what it would do
 ```
 
 The channels are independent: the GitHub Release doesn't wait for TestFlight, and a TestFlight channel that's rejected or fails leaves the others as they are.
+
+### Validation
+
+A release ships only a commit whose tests passed, but it doesn't test the commit again when `main` already has. A tag points at a commit on `main`, and the push that brought it there ran CI on it: `prepare` finds that run, and the signing jobs wait for it. Only when `main` has none (it was cancelled, say) does `validate` run CI's jobs in the release run itself.
+
+The signing jobs don't wait for the tests to start, so their channels ask for approval as soon as `prepare` is done, and the archives build meanwhile. Each job then waits at **Wait for the release commit's tests** (`scripts/ci/await-validation.sh`), before it exports or uploads anything, for that CI run to pass, or for this run's `validate` jobs. A test that fails fails the job there. If it was a flake, re-run the failed jobs of that CI run, then of the release.
 
 ## One bundle ID
 

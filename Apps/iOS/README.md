@@ -12,7 +12,9 @@ ignored by git, so it never conflicts; regenerate it whenever the spec or the fi
 ```sh
 brew install xcodegen                     # once
 scripts/build-ios.sh                      # generate, then build for the iOS Simulator
-scripts/build-ios.sh --test               # ... and run the unit tests (an iPhone Duo simulator if there is one)
+scripts/build-ios.sh --test               # ... build for testing, and run the unit tests (an iPhone Duo simulator if there is one)
+scripts/build-ios.sh --test --skip-build --test-arg -only-testing:DaybookPhoneTests/ShellTests
+                                          # run tests again on that build, without building
 scripts/build-ios.sh --generate-only      # just regenerate, then open Apps/iOS/Daybook.xcodeproj
 scripts/build-ios.sh --device             # a signed build for a physical iPhone (never installs it)
 scripts/build-ios.sh --device --no-sign   # compile for a device without signing

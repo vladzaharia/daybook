@@ -11,6 +11,8 @@
 #   gh api .../actions/runs/<id>/pending_deployments          $GH_STATE/pending.json
 #   gh api -X POST .../actions/runs/<id>/pending_deployments --input -   appends the body to $GH_STATE/reviews
 #   gh run list ...  $GH_STATE/waiting-run (a run ID, or nothing) as [{"databaseId": ID}]
+#   gh api .../actions/runs/<id> and .../actions/runs/<id>/jobs?...   the next line of $GH_STATE/run-<id>.seq
+#                    or $GH_STATE/jobs-<id>.seq (one JSON document a line; the last one repeats)
 set -euo pipefail
 dir="${GH_STATE:?}"
 printf '%s\n' "$*" >> "$dir/calls"
@@ -26,7 +28,7 @@ if [[ "${1-}" == api ]]; then
             -X) method="$2"; shift ;;
             --jq) jq_filter="$2"; shift ;;
             --input) input="$2"; shift ;;
-            --silent) ;;
+            --silent|--paginate) ;;
             *) path="$1" ;;
         esac
         shift
@@ -43,6 +45,12 @@ if [[ "${1-}" == api ]]; then
             ;;
         "GET "*/actions/runs/*/pending_deployments)
             jq -r "$jq_filter" "$dir/pending.json" ;;
+        "GET "*/actions/runs/*/jobs\?*|"GET "*/actions/runs/[0-9]*)
+            if [[ "$path" == */jobs\?* ]]; then id="${path%/jobs\?*}"; seq="$dir/jobs-${id##*/}.seq"; else seq="$dir/run-${path##*/}.seq"; fi
+            [[ -s "$seq" ]] || { echo "fake gh: no $seq" >&2; exit 2; }
+            head -1 "$seq" | jq -r "$jq_filter"
+            if [[ "$(wc -l < "$seq")" -gt 1 ]]; then tail -n +2 "$seq" > "$seq.next"; mv "$seq.next" "$seq"; fi
+            ;;
         "POST "*/actions/runs/*/pending_deployments)
             [[ "$input" == - ]] || { echo "fake gh: pending_deployments needs --input -" >&2; exit 2; }
             jq -c . >> "$dir/reviews" ;;

@@ -3,7 +3,13 @@
 # XcodeGen, then builds with xcodebuild. It never installs anything on a device.
 #
 #   scripts/build-ios.sh                    generate, then build for the iOS Simulator (no team needed)
-#   scripts/build-ios.sh --test             ... and run the unit tests on a simulator
+#   scripts/build-ios.sh --test             ... build for testing instead, and run the unit tests on a simulator
+#   scripts/build-ios.sh --build-for-testing
+#                                           build for testing, without running the tests
+#   scripts/build-ios.sh --test --skip-build
+#                                           run the tests on what the last build for testing made, without
+#                                           generating, resolving, or building anything
+#                                           Simulator builds compile for this Mac's architecture only.
 #   scripts/build-ios.sh --device           build for a physical iPhone with automatic signing;
 #                                           needs DAYBOOK_TEAM_ID (or Apps/iOS/Config/Signing.local.xcconfig)
 #                                           and profiles that already exist: the script never registers
@@ -58,6 +64,8 @@ DERIVED="${DAYBOOK_IOS_DERIVED_DATA:-$APP/build/DerivedData}"
 CONFIGURATION=""
 MODE=simulator
 RUN_TESTS=0
+BUILD_FOR_TESTING=0
+SKIP_BUILD=0
 SIGN=1
 SIMULATOR=""
 EXPORT=""
@@ -73,6 +81,8 @@ while [[ $# -gt 0 ]]; do
         --device) MODE=device ;;
         --no-sign) SIGN=0 ;;
         --test) RUN_TESTS=1 ;;
+        --build-for-testing) BUILD_FOR_TESTING=1 ;;
+        --skip-build) SKIP_BUILD=1 ;;
         --generate-only) MODE=generate ;;
         --resolve) MODE=resolve ;;
         --archive) MODE=archive ;;
@@ -100,6 +110,18 @@ if [[ -n "$EXPORT" && "$MODE" != archive && "$MODE" != export ]]; then
     echo "--export goes with --archive, or alone to export an existing --archive-path" >&2
     exit 2
 fi
+if (( BUILD_FOR_TESTING + SKIP_BUILD )) && [[ "$MODE" != simulator ]]; then
+    echo "--build-for-testing and --skip-build are for the simulator" >&2
+    exit 2
+fi
+if (( BUILD_FOR_TESTING && (RUN_TESTS || SKIP_BUILD) )); then
+    echo "--build-for-testing builds without testing: --test already builds for testing" >&2
+    exit 2
+fi
+if (( SKIP_BUILD && !RUN_TESTS )); then
+    echo "--skip-build goes with --test" >&2
+    exit 2
+fi
 if [[ -z "$CONFIGURATION" ]]; then
     if [[ "$MODE" == archive || "$MODE" == export ]]; then CONFIGURATION=Release; else CONFIGURATION=Debug; fi
 fi
@@ -118,14 +140,18 @@ if [[ "$RUN_TESTS" == 1 && "$MODE" == simulator && -z "$SIMULATOR" ]]; then
     }
 fi
 
-if [[ "$MODE" != export ]]; then
+if [[ "$MODE" != export && "$SKIP_BUILD" == 0 ]]; then
     XCODEGEN="$(find_xcodegen)"
     generate_project "$XCODEGEN" "$APP" "$PROJECT" "$ROOT"
 fi
 [[ "$MODE" == generate ]] && exit 0
 
-if [[ "$MODE" != export ]]; then
+if [[ "$MODE" != export && "$SKIP_BUILD" == 0 ]]; then
     resolve_packages "$PROJECT" DaybookPhone "$ROOT" -derivedDataPath "$DERIVED"
+fi
+if [[ "$SKIP_BUILD" == 1 && ! -d "$PROJECT" ]]; then
+    echo "--skip-build needs an earlier --build-for-testing (no $PROJECT)" >&2
+    exit 1
 fi
 [[ "$MODE" == resolve ]] && exit 0
 
@@ -209,10 +235,19 @@ if [[ "$MODE" == export ]]; then
     exit 0
 fi
 
-xcodebuild "${COMMON[@]}" -destination 'generic/platform=iOS Simulator' build
-echo "Built $DERIVED/Build/Products/$CONFIGURATION-iphonesimulator/DaybookPhone.app"
-
+# Every simulator build is the same one, for this Mac's architecture, so each reuses what the last made. The
+# generic destination alone would add x86_64, and alternating it with a simulator's own destination recompiles
+# every target that imports a C module (MLX, Tokenizers) each time.
+SIMULATOR_BUILD=(-destination 'generic/platform=iOS Simulator' "ARCHS=$(uname -m)")
+if [[ "$RUN_TESTS" == 0 && "$BUILD_FOR_TESTING" == 0 ]]; then
+    xcodebuild "${COMMON[@]}" "${SIMULATOR_BUILD[@]}" build
+    echo "Built $DERIVED/Build/Products/$CONFIGURATION-iphonesimulator/DaybookPhone.app"
+    exit 0
+fi
+if [[ "$SKIP_BUILD" == 0 ]]; then
+    xcodebuild "${COMMON[@]}" "${SIMULATOR_BUILD[@]}" build-for-testing
+fi
 if [[ "$RUN_TESTS" == 1 ]]; then
     if [[ "$SIMULATOR" =~ ^[0-9A-F-]{36}$ ]]; then DESTINATION="id=$SIMULATOR"; else DESTINATION="platform=iOS Simulator,name=$SIMULATOR"; fi
-    xcodebuild "${COMMON[@]}" -destination "$DESTINATION" test ${TEST_ARGS[@]+"${TEST_ARGS[@]}"}
+    xcodebuild "${COMMON[@]}" -destination "$DESTINATION" test-without-building ${TEST_ARGS[@]+"${TEST_ARGS[@]}"}
 fi
