@@ -81,7 +81,7 @@ public struct SoftwareNotices: Equatable, Sendable {
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
-    /// The libraries THIRD_PARTY_NOTICES.md lists, with their licenses: "FluidAudio 0.17.7", "Apache-2.0". For
+    /// The libraries THIRD_PARTY_NOTICES.md lists, with their licenses: "FluidAudio 0.18.0", "Apache-2.0". For
     /// the Mac's About panel credits.
     public var libraries: [(name: String, license: String)] {
         guard let notices else { return [] }

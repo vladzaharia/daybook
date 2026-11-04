@@ -46,7 +46,9 @@ let package = Package(
         .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", exact: "3.32.3"),
         // mlx-swift-lm asks for 0.32.x; pinned here so the MLX runtime never moves on its own.
         .package(url: "https://github.com/ml-explore/mlx-swift", exact: "0.32.3"),
-        .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.17.7", traits: []),
+        // Diarizer only: since 0.18.0 speaker detection (Community-1, Nemotron 3, Sortformer) is a trait, so `[]` would
+        // compile it out. TTS and the NeMo text-normalization binary stay off; Daybook uses neither.
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.18.0", traits: ["Diarizer"]),
         // Hub: the model store's downloads. Tokenizers: MLX's tokenizer and chat templates (MLXTokenizerAdapter).
         .package(url: "https://github.com/huggingface/swift-transformers.git", exact: "1.3.5")
     ],
