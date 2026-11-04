@@ -636,7 +636,8 @@ printf 'one\n' > "$mtimes_repo/Sources/Same.swift"
 ln -s A.swift "$mtimes_repo/Sources/Link.swift"
 git -C "$mtimes_repo" add -A
 git -C "$mtimes_repo" -c user.name=t -c user.email=t@example.com commit -qm one
-mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1"; }
+# BSD stat on macOS; GNU stat on Linux, where -f means the file system, not a format.
+mtime() { if macos; then stat -f %m "$1"; else stat -c %Y "$1"; fi; }
 expect_ok "dates a checkout's files" "$ci/stable-mtimes.sh" "$mtimes_repo"
 a_time="$(mtime "$mtimes_repo/Sources/A.swift")"
 expect_eq "from the content: 2000-01-01 plus the blob hash's first 28 bits" \
