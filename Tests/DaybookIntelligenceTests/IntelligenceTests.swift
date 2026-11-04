@@ -23,8 +23,8 @@ final class IntelligenceTests: XCTestCase {
         for model in ["sortformer-2.1/fp16", "sortformer-2.1/compact"] {
             do {
                 _ = try await runtime.diarize(url: root.appendingPathComponent("missing.wav"), model: ModelReference(model))
-                XCTFail("Sortformer must not download models implicitly")
-            } catch LocalIntelligenceError.modelNotInstalled(let id) { XCTAssertEqual(id, model) }
+                XCTFail("Sortformer finds no speakers any more")
+            } catch LocalIntelligenceError.unsupportedRole(let id, _) { XCTAssertEqual(id, model) }
         }
         do {
             _ = try await runtime.summarize(transcript: "Hello", notes: "", model: "qwen-7b")
