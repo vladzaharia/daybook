@@ -212,15 +212,32 @@ final class AppState {
         get { modelSelections[.summarization] ?? "" }
         set { modelSelections[.summarization] = newValue }
     }
-    var automaticRecording: Bool {
+    /// What happens when a call starts (`CallRecordingPolicy`): Off, Ask (the call prompt), or Record Automatically.
+    var callPolicy: CallRecordingPolicy {
         didSet {
-            preferences.set(automaticRecording, forKey: Preference.automaticRecording)
-            if automaticRecording { monitor.startMonitoring() }
-            else {
+            guard callPolicy != oldValue else { return }
+            CallPolicy.save(callPolicy, choices: callAppChoices, in: preferences)
+            if callPolicy == .off {
                 monitor.stopMonitoring()
+                CallPromptWindow.shared.dismiss()
                 if recordingWasAutomatic { Task { await stopRecording(manual: false) } }
+            } else {
+                startCallMonitoring()
             }
         }
+    }
+    /// Apps whose calls get their own answer, ahead of `callPolicy` (Always Record, Never, Ask).
+    var callAppChoices: [String: CallAppChoice] {
+        didSet { CallPolicy.save(callPolicy, choices: callAppChoices, in: preferences) }
+    }
+    /// Whether every call is recorded as soon as it starts: Record Automatically.
+    var automaticRecording: Bool { callPolicy == .record }
+
+    /// Looks at this Mac for calls, except under XCTest, whose AppStates must never read the real audio server or ask
+    /// about a call the developer is on (the monitor's own tests drive it with scripted looks).
+    private func startCallMonitoring() {
+        guard !MacCaptioners.isRunningTests else { return }
+        monitor.startMonitoring()
     }
     var includeComputerAudio: Bool { didSet { preferences.set(includeComputerAudio, forKey: Preference.includeComputerAudio) } }
     var processSyncedAudio: Bool { didSet { preferences.set(processSyncedAudio, forKey: Preference.processSyncedAudio); presenceChanged() } }
@@ -437,7 +454,8 @@ final class AppState {
         devices = DeviceHub(environment: environment)
         recorderHandoff = RecorderHandoff(library: library, devices: devices, deviceClass: .mac, defaults: defaults)
         sources = MultiSourceCoordinator(defaults: defaults)
-        automaticRecording = defaults.bool(forKey: Preference.automaticRecording)
+        callPolicy = CallPolicy.stored(in: defaults)
+        callAppChoices = CallPolicy.storedChoices(in: defaults)
         includeComputerAudio = defaults.object(forKey: Preference.includeComputerAudio) as? Bool ?? true
         processSyncedAudio = defaults.object(forKey: Preference.processSyncedAudio) as? Bool ?? true
         detectSpeakers = defaults.object(forKey: Preference.detectSpeakers) as? Bool ?? true
@@ -452,13 +470,30 @@ final class AppState {
         searchMemo.onUpdate = { [weak self] in self?.searchResultsArrived &+= 1 }
         sync.onSyncRequested = { [weak self] in await self?.synchronizeLibrary() }
         monitor.onMeetingStarted = { [weak self] candidate in
-            guard let self, self.automaticRecording, self.recordingID == nil, !self.isStartingRecording else { return }
-            Task { await self.startRecording(title: candidate.windowTitle, automatic: true) }
+            guard let self else { return .notRecorded }
+            switch CallPolicy.decision(for: candidate.bundleID, policy: self.callPolicy, choices: self.callAppChoices,
+                                       busy: self.recordingID != nil || self.isStartingRecording) {
+            case .record:
+                Task { await self.startRecording(title: candidate.windowTitle, automatic: true) }
+                return .recording
+            case .ask:
+                self.askToRecord(candidate)
+                return .asking
+            case .ignore:
+                // A recording already under way carries on as it is; a call its app says Never to is left alone.
+                return self.recordingID != nil || self.isStartingRecording ? .recording : .notRecorded
+            }
         }
-        monitor.onMeetingEnded = { [weak self] in
-            guard let self, self.recordingWasAutomatic else { return false }
-            Task { await self.stopRecording(manual: false) }
-            return true
+        monitor.onMeetingEnded = { [weak self] call in
+            guard let self else { return false }
+            CallPromptWindow.shared.callEnded()
+            if self.recordingWasAutomatic {
+                Task { await self.stopRecording(manual: false) }
+                return true
+            }
+            // A recording the person started is theirs to stop: asked, never stopped.
+            if self.recordingID != nil, !self.isStoppingRecording, let call { self.askToStop(after: call) }
+            return false
         }
         recorder.onUnexpectedStop = { [weak self] result, reason in
             guard let self else { return }
@@ -708,7 +743,7 @@ final class AppState {
             await recoverRecordings()
             devices.start()
             sync.restore()
-            if automaticRecording { monitor.startMonitoring() }
+            if callPolicy != .off { startCallMonitoring() }
             await startPhoneLinkIfPaired()
             closeRecoveredLinks()
             // Requests this Mac held when it last quit or crashed run again (or are given back), and so does its own
@@ -1352,7 +1387,7 @@ extension AppState {
     /// Records into `existing` when given (a notes-only conversation), otherwise into a new conversation.
     func startRecording(title: String? = nil, automatic: Bool = false, into existing: UUID? = nil) async {
         guard isReady, recordingID == nil, !isStartingRecording, !isStoppingRecording else { return }
-        guard !automatic || automaticRecording else { return }
+        guard !automatic || callPolicy != .off else { return }
         isStartingRecording = true
         defer { isStartingRecording = false }
         let previousSelection = selectedID

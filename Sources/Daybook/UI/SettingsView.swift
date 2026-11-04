@@ -167,7 +167,7 @@ private struct GeneralSettings: View {
     var body: some View {
         Form {
             Section {
-                // Record calls automatically and the menu bar item work only while Daybook is open.
+                // Watching for calls and the menu bar item work only while Daybook is open.
                 Toggle("Open at login", isOn: Binding(get: { loginItem.isOn }, set: { loginItem.set($0) }))
                     .controlSize(.regular)
                 if let problem = loginItem.problem {
@@ -214,17 +214,31 @@ private struct RecordingSettings: View {
                         .help("Supported Calls")
                         .accessibilityLabel("Supported calls")
                         .popover(isPresented: $showingSupportedApps, arrowEdge: .bottom) { SupportedCallsPopover() }
-                        Toggle("Record calls automatically", isOn: automaticRecording)
-                            .labelsHidden()
-                            .toggleStyle(.switch)
-                            .controlSize(.regular)
+                        Picker("When a call starts", selection: callPolicy) {
+                            ForEach(CallRecordingPolicy.allCases) { Text($0.title).tag($0) }
+                        }
+                        .labelsHidden()
+                        .fixedSize()
                     }
                 } label: {
-                    Text("Record calls automatically")
-                    if state.automaticRecording { DetectionStatusLine(state: state) }
+                    Text("When a call starts")
+                    if state.callPolicy != .off { DetectionStatusLine(state: state) }
                 }
                 Toggle("Show floating notes while recording", isOn: $showsFloatingNotes)
                     .controlSize(.regular)
+            }
+
+            // An app given its own answer from the call prompt's menu (Always Record, Never), changeable here.
+            if !state.callAppChoices.isEmpty {
+                Section("Apps") {
+                    ForEach(state.callAppChoices.keys.sorted { CallPolicy.appName(for: $0) < CallPolicy.appName(for: $1) }, id: \.self) { app in
+                        Picker(CallPolicy.appName(for: app), selection: appChoice(app)) {
+                            ForEach(CallAppChoice.allCases) { Text($0.title).tag(Optional($0)) }
+                            Divider()
+                            Text("Use Setting").tag(CallAppChoice?.none)
+                        }
+                    }
+                }
             }
 
             LiveCaptionSettingsSection(settings: state.captionSettings)
@@ -251,11 +265,17 @@ private struct RecordingSettings: View {
         })
     }
 
-    private var automaticRecording: Binding<Bool> {
-        Binding(get: { state.automaticRecording }, set: { enabled in
-            if enabled && !CGPreflightScreenCaptureAccess() { requestScreenCapture() }
-            state.automaticRecording = enabled
+    /// Asking or recording reads the call's window title, which needs Screen & System Audio Recording: asked for here.
+    private var callPolicy: Binding<CallRecordingPolicy> {
+        Binding(get: { state.callPolicy }, set: { policy in
+            if policy != .off && !CGPreflightScreenCaptureAccess() { requestScreenCapture() }
+            state.callPolicy = policy
         })
+    }
+
+    /// An app's own answer; none follows When a call starts.
+    private func appChoice(_ app: String) -> Binding<CallAppChoice?> {
+        Binding(get: { state.callAppChoices[app] }, set: { state.callAppChoices[app] = $0 })
     }
 
     @ViewBuilder private var microphoneStatus: some View {
@@ -412,7 +432,7 @@ private struct AllowedLabel: View {
     }
 }
 
-/// The live line under "Record calls automatically", shown only while it's on: a mint dot while
+/// The live line under "When a call starts", shown only while it isn't Off: a mint dot while
 /// listening, the recording red while a detected call is being recorded.
 private struct DetectionStatusLine: View {
     let state: AppState

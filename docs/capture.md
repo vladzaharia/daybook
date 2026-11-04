@@ -510,19 +510,56 @@ Code: `Sources/Daybook/Captions/` (the Mac's controller, echo rule, and settings
   and Call talking over one another on speakers (the microphone's echo of the call is left out);
   add `--snapshot <dir>` to capture Floating Notes and the page.
 
+## Calls
+
+**When a call starts** (Settings › Recording, and the menu bar extra) is Off, **Ask** (a new
+installation's), or Record Automatically (`CallRecordingPolicy`). The old Record calls automatically
+switch becomes Record Automatically when it was on and Ask when it was off, and Daybook still writes
+it, on only for Record Automatically, for an older version to read (`CallPolicy.stored`, `save`). An
+app can have an answer of its own ahead of it (`CallAppChoice`: Ask, Always Record, Never), chosen in
+the call prompt's menu and changed or removed under Settings › Recording › Apps. Off is off whatever
+an app's answer. `CallPolicy.decision` is the whole rule, and nothing is decided while a recording is
+being made or started.
+
+**The call prompt** (`CallPromptWindow`, `CallPrompt.swift`), for Ask: a small panel in the
+top-trailing corner of where Floating Notes opens, non-activating, floating over a full-screen call
+on every Space and kept out of screen shares, as Floating Notes is. It shows the app's icon, the call
+("Zoom call") and its meeting window's title, Record and Not Now, and in its menu Always Record Zoom
+Calls and Never for Zoom. VoiceOver announces it. A hairline along its foot drains over 15 seconds and
+holds while the pointer is over it; no answer by then is Not Now. **Record** starts the recording, as
+one started for the call (it stops when the call ends), and the panel grows into Floating Notes'
+frame as Floating Notes takes its place (a fade under Reduce Motion, or when Floating Notes doesn't
+show while recording). Not Now, Never, and a call that ends before an answer leave the call alone
+until it ends (`suppressCurrentMeeting`).
+
+**Ending a recording the person started.** A call ending during a recording someone started
+themselves never stops it: the prompt asks "The Zoom call ended · Stop recording?", with Keep
+Recording and Stop, and after 30 seconds without an answer the recording goes on. A recording the
+call started (Record Automatically, Always Record, or Record in the prompt) stops 45 seconds after the
+call ends, as before.
+
+**Under test** the app's own monitor never starts (`MacCaptioners.isRunningTests`): an `AppState` in
+a test must not read this Mac's audio server or ask about a call the developer is on. The monitor's
+tests drive it with scripted looks.
+
 ## Automatic meeting detection
 
 `MeetingMonitor` exposes:
 
 - `startMonitoring()` and `stopMonitoring()`;
 - `statusText`, `activeCandidate`, and `isMeetingActive`;
-- `onMeetingStarted` and `onMeetingEnded`.
+- `onMeetingStarted`, which answers what became of the call (`CallResponse`: being recorded, being
+  asked about, or not recorded, which pauses the monitor until the call ends), and `onMeetingEnded`,
+  which hears which call ended; `callRecordingStarted()` when a call asked about starts recording.
 
 Its mutable `rules: [MeetingAppRule]` property is the configurable allowlist. The defaults cover
-Zoom, Teams, Slack huddles, and meeting pages in Chrome, Safari, Firefox, Edge, and Arc. Rules
-match bundle IDs and meeting-specific window-title fragments. An app's audio is the processes its
-call would be tapped from (`CallAppTarget.owns`: helpers by prefix, case-insensitively, and Safari's
-WebKit audio process), so detection and the tap agree on which app is in a call. They're
+Zoom, Teams (and classic Teams), Slack huddles, Webex, GoTo Meeting, Chime, FaceTime, Discord,
+WhatsApp, Signal, and meeting pages in Safari, Chrome, Firefox, Edge, Arc, Dia, Brave, Vivaldi,
+Opera, and Orion. Rules match bundle IDs and meeting-specific window-title fragments. An app's audio
+is the processes its call would be tapped from (`CallAppTarget.owns`: helpers by prefix,
+case-insensitively, Teams' `com.microsoft.vcxpc`, and WebKit's audio processes for Safari and
+Orion), so detection and the tap agree on which app is in a call. Orion shares WebKit's GPU process
+with Safari, so it's a candidate only with a meeting window of its own (`sharesAudioProcess`). They're
 heuristics, not integrations with private vendor call APIs.
 
 **Looking.** Every two seconds the monitor looks at the Mac off the main actor
@@ -535,7 +572,9 @@ ID looked up once however many windows it has. The loop is a task that `stopMoni
 a look that finishes after that is dropped.
 
 **Starting.** A start needs two things, continuously for six seconds: a matching meeting window,
-and Core Audio activity from that allowed app.
+and Core Audio activity from that allowed app. FaceTime, Discord, WhatsApp, and Signal have their
+window open all along, so a window can't say a call there: they start on the app's microphone alone,
+and continue only on its audio (`MeetingAppRule.needsMeetingWindow`).
 
 - Native apps can start with input or output activity. Playback activity lets a muted native
   meeting start.
@@ -587,7 +626,7 @@ notifications (`DeviceNotifications`):
 - **Recording**, when a call starts recording on its own while Floating Notes isn't showing,
   naming the call ("Zoom call"). A click shows Floating Notes. It goes when that recording ends.
 
-Permission is asked the first time someone records or turns on Record calls automatically, for
+Permission is asked the first time someone records or chooses Record Automatically, for
 alerts and sound, as a recorder's first import asks (`DeviceNotifications.authorizationOptions`):
 the system asks once, so whichever comes first, Recording stopped can be heard. Only a
 bundled app posts (`UNUserNotificationCenter` crashes an unbundled binary); tests drive the same
@@ -701,7 +740,7 @@ Spotlight index:
   unless Personal, nothing while it's in front, and taken back once seen;
 - an automatic start said only while Floating Notes is hidden, taken back when it ends, and an
   earlier stop taken back by the next recording; permission asked once, at the first recording or
-  Record calls automatically;
+  When a call starts (Record Automatically);
 - a click opening the conversation, and Record Again recording with a fake microphone;
 - the intents waiting for the app and its library, and Start, Bookmark, Stop, New Note, and Open
   Conversation on the app's state;

@@ -137,8 +137,11 @@ struct CallAppTarget: Codable, Equatable, Sendable {
     var processBundlePrefixes: [String] {
         var prefixes = [bundleID]
         switch bundleID.lowercased() {
-        case "com.apple.safari": prefixes += ["com.apple.WebKit.GPU", "com.apple.WebKit.WebContent"]
+        // Safari and Orion are WebKit's: their audio plays through WebKit's shared GPU process.
+        case "com.apple.safari", "com.kagi.kagimacos": prefixes += ["com.apple.WebKit.GPU", "com.apple.WebKit.WebContent"]
         case "org.mozilla.firefox": prefixes += ["org.mozilla.plugincontainer"]
+        // Teams plays and records its calls in a helper of its own.
+        case "com.microsoft.teams2", "com.microsoft.teams": prefixes += ["com.microsoft.vcxpc"]
         default: break
         }
         return prefixes

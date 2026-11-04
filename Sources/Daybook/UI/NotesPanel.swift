@@ -22,6 +22,9 @@ final class FloatingNotesWindow {
 
     var isVisible: Bool { panel?.isVisible == true }
 
+    /// Where the panel is, or opens: the call prompt shows in its top-trailing corner and grows into it.
+    var restingFrame: NSRect { (panel ?? makePanel()).frame }
+
     /// - Parameters:
     ///   - focus: The conversation to show; nil shows the home (or the recording, while there is one).
     ///   - afterStop: Show `focus` as just stopped, as if the panel had watched it record.
