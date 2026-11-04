@@ -14,7 +14,7 @@ struct PhoneOverview: View {
     let session: DeviceSession
     /// Sync turning on or off redraws the page (its problem says when it's off).
     private let sync: LibrarySyncController
-    @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openSettingsWindow
 
     init(state: AppState, session: DeviceSession) {
         self.state = state
@@ -76,7 +76,7 @@ struct PhoneOverview: View {
             pairAgain: { state.requestAddDevice(kind: DaybookPhoneIntegration.id) },
             problemAction: session.problem == nil ? nil : (title: "Library Settings…", perform: {
                 LaunchOptions.defaults.set(SettingsPane.library.rawValue, forKey: SettingsPane.storageKey)
-                openSettings()
+                openSettingsWindow.settings()
             }),
             canStartRecording: phone?.isSetUp == true ? Binding(get: { session.device.recordsAlongsideMac },
                                                                set: { on in session.update { $0.alsoRecordsWithMac = on } }) : nil,

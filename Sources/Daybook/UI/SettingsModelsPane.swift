@@ -19,15 +19,31 @@ private final class ModelManagerSlot {
     }
 }
 
-/// Settings › Models: processing (synced recordings, the quality preset, and what's left to download); each role's
-/// model with the settings that belong to it; words and templates; then the model library (what's on this Mac,
-/// updates, every model by family, adding a model, and acknowledgements). Rendered from `ModelManagerSnapshot`, so the
-/// catalog decides which roles and models appear. Processing, the role rows, the library's size, and its model rows are
-/// DaybookUI's, drawn as the iPhone draws them.
+/// The pages Settings › Models opens.
+enum ModelsPage: String, Hashable {
+    case transcription, speakers, summaries, library
+
+    var title: String {
+        switch self {
+        case .transcription: "Transcription"
+        case .speakers: "Speakers"
+        case .summaries: "Summaries"
+        case .library: "Model Library"
+        }
+    }
+}
+
+/// Settings › Models: the quality processing runs at, what it still needs to download, and whether this Mac transcribes
+/// what other devices sync; then a page each for Transcription, Speakers, and Summaries (each role's model with the
+/// settings that belong to it), and Model Library (what's on this Mac, updates, every model by family, adding a
+/// model, and acknowledgements). Rendered from `ModelManagerSnapshot`, so the catalog decides which roles and models
+/// appear. The role rows, the library's size, and its model rows are DaybookUI's, drawn as the iPhone draws them.
 struct ModelSettings: View {
     @Bindable var state: AppState
     @State private var slot = ModelManagerSlot()
-    @Environment(\.openWindow) private var openWindow
+    @State private var path: [ModelsPage] = []
+    /// Where Model Library scrolls to when it opens (`--model-demo`).
+    @State private var libraryAnchor: ModelSettingsAnchor?
     @State private var showingVoiceMatching = false
     @State private var removal: ModelRemoval?
     @State private var details: ModelDetailsRequest?
@@ -41,52 +57,32 @@ struct ModelSettings: View {
 
     private var manager: ModelManager { slot.manager(for: state) }
 
-    /// Roles with sections of their own; any other role gets a section after Summaries.
-    private static let placedRoles: Set<ModelRole> = [.transcription, .diarization, .speakerEmbedding, .summarization, .smallTasks]
+    /// Why removing waits.
+    static let busyHelp = "Available when downloads and processing finish"
 
     var body: some View {
-        let snapshot = manager.snapshot
-        let choices = Dictionary(uniqueKeysWithValues: snapshot.roleChoices.map { ($0.role, $0) })
-        ScrollViewReader { proxy in
-            Form {
-                processingSection(snapshot)
-                transcriptionSection(choices[.transcription], space: snapshot.space)
-                speakersSection(choices, space: snapshot.space)
-                if choices[.summarization] != nil || choices[.smallTasks] != nil {
-                    Section("Summaries") {
-                        if let choice = choices[.summarization] { roleRow(choice, label: "Model", space: snapshot.space) }
-                        if let choice = choices[.smallTasks] { roleRow(choice, label: choice.title, space: snapshot.space) }
-                    }
-                }
-                ForEach(snapshot.roleChoices.filter { !Self.placedRoles.contains($0.role) }) { choice in
-                    Section(choice.title) { roleRow(choice, label: "Model", space: snapshot.space) }
-                }
-                wordsSection
-                librarySection(snapshot)
-                    .id(ModelSettingsAnchor.library)
-                let families = snapshot.families
-                ForEach(families) { family in
-                    Section {
-                        ForEach(family.rows) { row in
-                            ModelLibraryRow(manager: manager, row: row,
-                                            showDetails: { details = ModelDetailsRequest(key: row.id) },
-                                            remove: { removal = $0 })
+        NavigationStack(path: $path) {
+            ModelsOverview(state: state, manager: manager)
+                .navigationTitle("Models")
+                .navigationDestination(for: ModelsPage.self) { page in
+                    Group {
+                        switch page {
+                        case .transcription: TranscriptionModelsPage(state: state, manager: manager)
+                        case .speakers: SpeakerModelsPage(state: state, manager: manager, showingVoiceMatching: $showingVoiceMatching)
+                        case .summaries: SummaryModelsPage(state: state, manager: manager)
+                        case .library:
+                            DownloadedModelsPage(state: state, manager: manager, anchor: $libraryAnchor, details: $details, removal: $removal,
+                                                 showingAddModel: $showingAddModel, showingAcknowledgements: $showingAcknowledgements)
                         }
-                    } header: {
-                        Text(family.name)
-                    } footer: {
-                        if family.id == families.last?.id { libraryFooter }
                     }
-                    .id(ModelSettingsAnchor.family(family.id))
+                    .navigationTitle(page.title)
                 }
-            }
-            .formStyle(.grouped)
-            .task {
-                await manager.refresh()
-                await ModelSettingsDemo.apply(state: state, manager: manager, proxy: proxy, details: $details, removal: $removal,
-                                              showingAddModel: $showingAddModel, showingAcknowledgements: $showingAcknowledgements,
-                                              showingVoiceMatching: $showingVoiceMatching)
-            }
+        }
+        .task {
+            await manager.refresh()
+            await ModelSettingsDemo.apply(state: state, manager: manager, open: { path = [$0] }, scroll: { libraryAnchor = $0 },
+                                          details: $details, removal: $removal, showingAddModel: $showingAddModel,
+                                          showingAcknowledgements: $showingAcknowledgements, showingVoiceMatching: $showingVoiceMatching)
         }
         .onChange(of: state.installedModels) { _, _ in Task { await manager.refresh() } }
         .onChange(of: state.downloadingID) { _, _ in Task { await manager.refresh() } }
@@ -107,65 +103,149 @@ struct ModelSettings: View {
         } message: { problem in Text(problem.message) }
         .sheet(item: $problemDetails) { ProblemDetailsSheet(problem: $0) }
     }
+}
 
-    // MARK: Processing
+// MARK: Overview
 
-    /// Whether this Mac transcribes what other devices sync to it, the quality presets, and the row that downloads what
-    /// the choices still need (DaybookUI's, as the iPhone's). A preset whose download wouldn't fit here says how much it
-    /// needs.
-    private func processingSection(_ snapshot: ModelManagerSnapshot) -> some View {
-        ModelProcessingSection(toggleTitle: "Transcribe synced recordings on this Mac", isOn: $state.processSyncedAudio,
-                               download: snapshot.downloadSummary(detectSpeakers: state.detectSpeakers), space: snapshot.space,
-                               downloadAction: { manager.downloadSelected() }, cancelAction: { manager.cancelSelected() }) {
-            ForEach(snapshot.presets) { summary in
-                ModelQualityRow(summary.option, note: summary.isCurrent ? nil : snapshot.space.shortfall(summary.missingBytes)
-                    .map { ModelLine($0, needsAttention: true) }) { summary.preset?.apply(to: state) }
+/// The Models page itself: Quality, the row that downloads what the choices still need, Transcribe synced recordings,
+/// then a row for each page, with what it's set to.
+private struct ModelsOverview: View {
+    @Bindable var state: AppState
+    let manager: ModelManager
+
+    var body: some View {
+        let snapshot = manager.snapshot
+        let choices = Dictionary(uniqueKeysWithValues: snapshot.roleChoices.map { ($0.role, $0) })
+        Form {
+            Section {
+                qualityRow(snapshot)
+                if let download = snapshot.downloadSummary(detectSpeakers: state.detectSpeakers) {
+                    ModelDownloadRow(download, space: snapshot.space, download: { manager.downloadSelected() },
+                                     cancel: { manager.cancelSelected() })
+                }
+            }
+            Section {
+                Toggle("Transcribe synced recordings on this Mac", isOn: $state.processSyncedAudio)
+                    .controlSize(.regular)
+            }
+            Section {
+                pageRow(.transcription, value: choices[.transcription]?.selectionName)
+                pageRow(.speakers, value: state.detectSpeakers ? choices[.diarization]?.selectionName : "Off")
+                pageRow(.summaries, value: choices[.summarization]?.selectionName)
+            }
+            Section {
+                pageRow(.library, value: ModelSize.format(snapshot.storage.total))
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    /// Quick, Balanced, or Detailed, with what it takes; Custom while the choices match none of them. A preset whose
+    /// download wouldn't fit here says how much it needs.
+    @ViewBuilder private func qualityRow(_ snapshot: ModelManagerSnapshot) -> some View {
+        let presets = snapshot.presets
+        let current = presets.first(where: \.isCurrent)
+        LabeledContent {
+            Picker("Quality", selection: Binding(get: { current?.id ?? "custom" }, set: { id in
+                presets.first { $0.id == id }?.preset?.apply(to: state)
+            })) {
+                ForEach(presets) { summary in
+                    Text(summary.isRecommended ? "\(summary.title) (Recommended)" : summary.title).tag(summary.id)
+                }
+            }
+            .labelsHidden()
+            .fixedSize()
+        } label: {
+            Text("Quality")
+            if let current {
+                if let shortfall = snapshot.space.shortfall(current.missingBytes) {
+                    Text(shortfall).foregroundStyle(Ink.warning)
+                } else {
+                    Text("\(ModelSize.format(current.bytes)) · \(current.memoryGB) GB memory").monospacedDigit()
+                }
             }
         }
     }
 
-    // MARK: Roles
-
-    private func roleRow(_ choice: ModelRoleChoice, label: String, space: ModelSpace) -> some View {
-        ModelRoleRow(label: label, choice: choice, space: space, actions: manager.rowActions(for: choice.role))
-    }
-
-    @ViewBuilder private func transcriptionSection(_ choice: ModelRoleChoice?, space: ModelSpace) -> some View {
-        if let choice {
-            Section(choice.title) {
-                roleRow(choice, label: "Model", space: space)
-                TranscriptionLanguageSettings(state: state, manager: manager)
+    private func pageRow(_ page: ModelsPage, value: String?) -> some View {
+        NavigationLink(value: page) {
+            LabeledContent(page.title) {
+                if let value { Text(value).lineLimit(1) }
             }
         }
     }
+}
+
+// MARK: Pages
+
+/// A role's model, with Download, Cancel, or the choice of another.
+private struct ModelRoleSetting: View {
+    let choice: ModelRoleChoice
+    let label: String
+    let manager: ModelManager
+
+    var body: some View {
+        ModelRoleRow(label: label, choice: choice, space: manager.snapshot.space, actions: manager.rowActions(for: choice.role))
+    }
+}
+
+/// Settings › Models › Transcription: the model, the language and the model for other languages, live captions' models
+/// where this Mac has a choice of them, and the vocabulary every transcript and summary is given.
+private struct TranscriptionModelsPage: View {
+    let state: AppState
+    let manager: ModelManager
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        let choices = manager.snapshot.roleChoices
+        Form {
+            if let choice = choices.first(where: { $0.role == .transcription }) {
+                Section {
+                    ModelRoleSetting(choice: choice, label: "Model", manager: manager)
+                    TranscriptionLanguageSettings(state: state, manager: manager)
+                }
+            }
+            let live = choices.filter(\.role.isLiveOnly)
+            if !live.isEmpty {
+                Section("Live Captions") {
+                    ForEach(live) { ModelRoleSetting(choice: $0, label: $0.title, manager: manager) }
+                }
+            }
+            Section {
+                LabeledContent {
+                    Button("Edit…") { openWindow(id: WindowID.vocabulary) }
+                } label: {
+                    Text("Vocabulary")
+                    Text(SettingsWords.vocabulary(state.glossary))
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+/// Settings › Models › Speakers: whether Daybook tells speakers apart and with which model, how carefully, how many,
+/// whether it matches voices across recordings, and the speaker profiles. Every speaker model offered makes voice
+/// profiles, itself or with the voice-profile model, which comes with it rather than as a choice of its own.
+private struct SpeakerModelsPage: View {
+    @Bindable var state: AppState
+    let manager: ModelManager
+    @Binding var showingVoiceMatching: Bool
 
     private var speakerModel: String { state.processingPreferences.speakerModelID }
     /// From capabilities in the catalog, not names: the speaker model's own voice profiles, or the voice-profile model's.
     private var supportsVoiceMatching: Bool { state.makesVoiceProfiles }
     private var supportsSpeakerCount: Bool { ModelRouting.supportsExpectedSpeakerCount(speakerModel, catalog: state.modelCatalog) }
 
-    @ViewBuilder private func speakersSection(_ choices: [ModelRole: ModelRoleChoice], space: ModelSpace) -> some View {
-        Section("Speakers") {
-            Toggle("Tell speakers apart", isOn: $state.detectSpeakers)
-                .controlSize(.regular)
-            Group {
-                // Every speaker model offered makes voice profiles, itself or with the voice-profile model, which comes with it.
-                if let choice = choices[.diarization] { roleRow(choice, label: "Model", space: space) }
-                // What the speaker model can't do isn't offered, rather than shown dimmed with an apology.
-                if supportsVoiceMatching {
-                    LabeledContent {
-                        HStack(spacing: Space.s3) {
-                            if state.processingPreferences.matchSpeakersAcrossSources {
-                                Button("Adjust…") { showingVoiceMatching = true }
-                            }
-                            Toggle("Match voices across recordings", isOn: $state.processingPreferences.matchSpeakersAcrossSources)
-                                .labelsHidden()
-                                .toggleStyle(.switch)
-                                .controlSize(.regular)
-                        }
-                    } label: {
-                        Text("Match voices across recordings")
-                    }
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Tell speakers apart", isOn: $state.detectSpeakers)
+                    .controlSize(.regular)
+            }
+            Section {
+                if let choice = manager.snapshot.roleChoices.first(where: { $0.role == .diarization }) {
+                    ModelRoleSetting(choice: choice, label: "Model", manager: manager)
                 }
                 LabeledContent("Accuracy") {
                     Picker("Accuracy", selection: $state.processingPreferences.speakerOptions.quality) {
@@ -184,11 +264,29 @@ struct ModelSettings: View {
                         ForEach(speakerCounts, id: \.self) { Text("\($0)").tag($0) }
                     }
                 }
+                // What the speaker model can't do isn't offered, rather than shown dimmed with an apology.
+                if supportsVoiceMatching {
+                    LabeledContent {
+                        HStack(spacing: Space.s3) {
+                            if state.processingPreferences.matchSpeakersAcrossSources {
+                                Button("Adjust…") { showingVoiceMatching = true }
+                            }
+                            Toggle("Match voices across recordings", isOn: $state.processingPreferences.matchSpeakersAcrossSources)
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                                .controlSize(.regular)
+                        }
+                    } label: {
+                        Text("Match voices across recordings")
+                    }
+                }
             }
-            .padding(.leading, Space.s5)
             .disabled(!state.detectSpeakers)
-            SpeakerProfilesSettingsRow(state: state)
+            Section {
+                SpeakerProfilesSettingsRow(state: state)
+            }
         }
+        .formStyle(.grouped)
     }
 
     private var speakerCounts: [Int] {
@@ -201,44 +299,100 @@ struct ModelSettings: View {
             state.processingPreferences.speakerOptions.expectedSpeakerCount = value == 0 ? nil : value
         })
     }
+}
 
-    // MARK: Words and templates
+/// Settings › Models › Summaries: the summary model, the models for the smaller jobs around it (titles, photos), and
+/// the templates summaries follow.
+private struct SummaryModelsPage: View {
+    let state: AppState
+    let manager: ModelManager
+    @Environment(\.openWindow) private var openWindow
 
-    private var wordsSection: some View {
-        Section("Words and Templates") {
-            LabeledContent {
-                Button("Edit…") { openWindow(id: WindowID.vocabulary) }
-            } label: {
-                Text("Vocabulary")
-                Text(vocabularyCount)
+    /// Roles with pages of their own; any other, live captions' aside, is one of a summary's smaller jobs.
+    private static let elsewhere: Set<ModelRole> = [.transcription, .diarization, .speakerEmbedding, .summarization]
+
+    var body: some View {
+        let choices = manager.snapshot.roleChoices
+        Form {
+            if let choice = choices.first(where: { $0.role == .summarization }) {
+                Section {
+                    ModelRoleSetting(choice: choice, label: "Model", manager: manager)
+                }
             }
-            LabeledContent {
-                Button("Edit…") { openWindow(id: WindowID.templates) }
-            } label: {
-                Text("Summary templates")
-                Text(templateCount)
+            let others = choices.filter { !Self.elsewhere.contains($0.role) && !$0.role.isLiveOnly }
+            if !others.isEmpty {
+                Section {
+                    ForEach(others) { ModelRoleSetting(choice: $0, label: $0.title, manager: manager) }
+                }
+            }
+            Section {
+                LabeledContent {
+                    Button("Edit…") { openWindow(id: WindowID.templates) }
+                } label: {
+                    Text("Summary templates")
+                    Text(SettingsWords.templates(state.templates))
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+/// Settings › Models › Model Library: how much the models take here, what can go, updates, then every model by
+/// family, with Add Model and the acknowledgements at the foot.
+private struct DownloadedModelsPage: View {
+    let state: AppState
+    let manager: ModelManager
+    @Binding var anchor: ModelSettingsAnchor?
+    @Binding var details: ModelDetailsRequest?
+    @Binding var removal: ModelRemoval?
+    @Binding var showingAddModel: Bool
+    @Binding var showingAcknowledgements: Bool
+
+    var body: some View {
+        let snapshot = manager.snapshot
+        ScrollViewReader { proxy in
+            Form {
+                librarySection(snapshot)
+                    .id(ModelSettingsAnchor.library)
+                let families = snapshot.families
+                ForEach(families) { family in
+                    Section {
+                        ForEach(family.rows) { row in
+                            ModelLibraryRow(manager: manager, row: row,
+                                            showDetails: { details = ModelDetailsRequest(key: row.id) },
+                                            remove: { removal = $0 })
+                        }
+                    } header: {
+                        Text(family.name)
+                    } footer: {
+                        if family.id == families.last?.id { libraryFooter }
+                    }
+                    .id(ModelSettingsAnchor.family(family.id))
+                }
+            }
+            .formStyle(.grouped)
+            .onChange(of: anchor, initial: true) { _, target in
+                guard let target else { return }
+                Task {
+                    try? await Task.sleep(for: .milliseconds(300))
+                    proxy.scrollTo(target, anchor: .top)
+                    anchor = nil
+                }
             }
         }
     }
 
-    /// "12 terms · 3 suggested", as the iPhone counts them (`SettingsWords`).
-    private var vocabularyCount: String { SettingsWords.vocabulary(state.glossary) }
-
-    /// "12 built-in, 2 yours".
-    private var templateCount: String { SettingsWords.templates(state.templates) }
-
-    // MARK: Library
-
     @ViewBuilder private func librarySection(_ snapshot: ModelManagerSnapshot) -> some View {
         let storage = snapshot.storage
-        ModelLibrarySection(total: storage.total) {
+        ModelLibrarySection(total: storage.total, showsHeader: false) {
             Button("Show in Finder") { manager.showModelsFolder() }
         } rows: {
             if !storage.removableRevisions.isEmpty {
                 LabeledContent {
                     Button("Remove") { Task { await manager.removeOldRevisions() } }
                         .disabled(!manager.canChangeFiles)
-                        .help(manager.canChangeFiles ? "" : Self.busyHelp)
+                        .help(manager.canChangeFiles ? "" : ModelSettings.busyHelp)
                 } label: {
                     Text("Old revisions")
                     Text(ModelSize.format(storage.removableRevisionBytes)).monospacedDigit()
@@ -248,7 +402,7 @@ struct ModelSettings: View {
                 LabeledContent {
                     Button("Remove") { Task { await manager.removeOldDownloads() } }
                         .disabled(!manager.canChangeFiles)
-                        .help(manager.canChangeFiles ? "" : Self.busyHelp)
+                        .help(manager.canChangeFiles ? "" : ModelSettings.busyHelp)
                 } label: {
                     Text("Old downloads")
                     Text(ModelSize.format(storage.oldDownloadBytes)).monospacedDigit()
@@ -276,9 +430,6 @@ struct ModelSettings: View {
             }
         }
     }
-
-    /// Why removing waits.
-    static let busyHelp = "Available when downloads and processing finish"
 
     private var isUpdateProblem: Bool { if case .failed = manager.updateCheck { return true }; return false }
 
@@ -310,7 +461,7 @@ struct ModelDetailsRequest: Identifiable {
     var id: String { key }
 }
 
-/// Where the pane can scroll to.
+/// Where Model Library can scroll to.
 enum ModelSettingsAnchor: Hashable {
     case library, updates, family(String)
 }
@@ -375,9 +526,9 @@ enum ModelSettingsDemo {
         return "https://huggingface.co/\(repository.isEmpty ? ModelDemo.addRepository : repository)"
     }
 
-    static func apply(state: AppState, manager: ModelManager, proxy: ScrollViewProxy, details: Binding<ModelDetailsRequest?>,
-                      removal: Binding<ModelRemoval?>, showingAddModel: Binding<Bool>, showingAcknowledgements: Binding<Bool>,
-                      showingVoiceMatching: Binding<Bool>) async {
+    static func apply(state: AppState, manager: ModelManager, open: (ModelsPage) -> Void, scroll: (ModelSettingsAnchor) -> Void,
+                      details: Binding<ModelDetailsRequest?>, removal: Binding<ModelRemoval?>, showingAddModel: Binding<Bool>,
+                      showingAcknowledgements: Binding<Bool>, showingVoiceMatching: Binding<Bool>) async {
         #if DEBUG
         guard ModelDemo.isRequested, !applied else { return }
         applied = true
@@ -394,18 +545,20 @@ enum ModelSettingsDemo {
         if let key = ModelDemo.value("downloading"), !key.isEmpty { state.downloadModels([key]) }
         if ModelDemo.value("updates") != nil { await manager.checkForUpdates() }
         try? await Task.sleep(for: .milliseconds(300))
+        // "page:<transcription|speakers|summaries|library>" opens a page; "scroll:…" opens Model Library there.
+        if let page = ModelDemo.value("page").flatMap(ModelsPage.init(rawValue:)) { open(page) }
         switch ModelDemo.value("scroll") {
-        case "library"?: proxy.scrollTo(ModelSettingsAnchor.library, anchor: .top)
-        case "updates"?: proxy.scrollTo(ModelSettingsAnchor.updates, anchor: .top)
-        case let value? where value.hasPrefix("family:"): proxy.scrollTo(ModelSettingsAnchor.family(String(value.dropFirst(7))), anchor: .top)
+        case "library"?: open(.library); scroll(.library)
+        case "updates"?: open(.library); scroll(.updates)
+        case let value? where value.hasPrefix("family:"): open(.library); scroll(.family(String(value.dropFirst(7))))
         default: break
         }
         if let key = ModelDemo.value("details"), !key.isEmpty { details.wrappedValue = ModelDetailsRequest(key: key) }
         if let key = ModelDemo.value("remove"), !key.isEmpty { removal.wrappedValue = manager.removal(of: key) }
         if ModelDemo.value("add") != nil { showingAddModel.wrappedValue = true }
         if ModelDemo.value("acknowledgements") != nil { showingAcknowledgements.wrappedValue = true }
-        // "voice-matching" opens the voice-matching thresholds.
-        if ModelDemo.value("voice-matching") != nil { showingVoiceMatching.wrappedValue = true }
+        // "voice-matching" opens the voice-matching thresholds, from Speakers.
+        if ModelDemo.value("voice-matching") != nil { open(.speakers); showingVoiceMatching.wrappedValue = true }
         if ModelDemo.value("about") != nil { AboutPanel.show(catalog: state.modelCatalog) }
         #endif
     }

@@ -242,7 +242,7 @@ final class RecordingController {
     static let microphoneChanged = "The microphone changed partway through the recording."
     static let callAudioRestarted = "Call audio restarted partway through, leaving a short gap."
     /// Computer audio couldn't start for a recording without a call app, so the microphone recorded alone.
-    static let computerAudioLeftOut = "Computer audio isn’t included. Allow Screen & System Audio Recording in Settings › General."
+    static let computerAudioLeftOut = "Computer audio isn’t included. Allow Screen & System Audio Recording in Settings › Recording."
 
     /// Call audio problems never end the recording: a failed tap falls back to ScreenCaptureKit,
     /// and anything else stops only the call track.

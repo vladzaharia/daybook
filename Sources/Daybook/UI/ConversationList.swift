@@ -518,7 +518,7 @@ enum MacActions {
 /// Settings….
 private struct SyncAttention: View {
     let state: AppState
-    @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openSettingsWindow
 
     private var text: String? {
         #if DEBUG
@@ -532,7 +532,7 @@ private struct SyncAttention: View {
         if let text {
             LibrarySyncLine(text) {
                 LaunchOptions.defaults.set(SettingsPane.library.rawValue, forKey: SettingsPane.storageKey)
-                openSettings()
+                openSettingsWindow.settings()
                 NSApp.activate()
             }
             .padding(10)

@@ -6,7 +6,7 @@ import Foundation
 import Observation
 
 /// The two permissions a recording on this Mac needs, where they stand and how to ask, for Welcome's Allow page in
-/// the same terms as Settings › General › Permissions: the microphone, asked for in place; and Screen & System Audio
+/// the same terms as Settings › Recording › Permissions: the microphone, asked for in place; and Screen & System Audio
 /// Recording (computer audio), which macOS asks for once. After that it's allowed in System Settings, often with a
 /// relaunch, so a recording without it records the microphone alone (`RecordingController.computerAudioLeftOut`).
 @MainActor
@@ -29,7 +29,7 @@ final class CapturePermissions {
             openSettings: { PrivacySettings.open($0) })
     }
 
-    /// Settings › General's key: whether macOS has asked for Screen & System Audio Recording, which it does once.
+    /// Settings › Recording's key: whether macOS has asked for Screen & System Audio Recording, which it does once.
     static let screenCaptureRequestedKey = "screenCaptureRequested"
 
     private(set) var microphone: WelcomePermissionState

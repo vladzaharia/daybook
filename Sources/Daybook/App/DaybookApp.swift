@@ -94,6 +94,7 @@ enum WindowID {
     static let templates = "templates"
     static let speakerProfiles = "speaker-profiles"
     static let welcome = "welcome"
+    static let settings = "settings"
 }
 
 struct DaybookApp: App {
@@ -140,8 +141,14 @@ struct DaybookApp: App {
             .defaultSize(width: 720, height: 480)
             .windowResizability(.contentMinSize)
 
-        Settings { SettingsView(state: state).defaultAppStorage(LaunchOptions.defaults) }
+        // A window rather than SwiftUI's Settings scene, whose title bar and toolbar are two rows: back and the page's
+        // title share one bar, as System Settings has them. Daybook › Settings… (⌘,) opens it (DaybookCommands).
+        Window("Settings", id: WindowID.settings) { SettingsView(state: state).defaultAppStorage(LaunchOptions.defaults) }
+            .windowToolbarStyle(.unified)
             .windowResizability(.contentSize)
+            .restorationBehavior(.disabled)
+            .defaultLaunchBehavior(.suppressed)
+            .commandsRemoved()
 
         MenuBarExtra(isInserted: menuBarExtraInserted) {
             MenuBarView(state: state).defaultAppStorage(LaunchOptions.defaults)
@@ -361,7 +368,6 @@ private final class DockMenuItem: NSMenuItem {
 private struct DebugLaunchActions: ViewModifier {
     let state: AppState
     @Environment(\.openWindow) private var openWindow
-    @Environment(\.openSettings) private var openSettings
     @State private var applied = false
     func body(content: Content) -> some View {
         content.onChange(of: state.isReady) { _, ready in
@@ -383,7 +389,7 @@ private struct DebugLaunchActions: ViewModifier {
             if LaunchOptions.value(after: "--page") == "transcript" { state.pageMode = .transcript }
             if CommandLine.arguments.contains("--inspector") { LaunchOptions.defaults.set(true, forKey: AppState.Preference.isInspectorPresented) }
             if let pane = LaunchOptions.value(after: "--open-settings").flatMap(SettingsPane.init(rawValue:)) {
-                pane.open(with: openSettings, activating: false)
+                pane.open(with: openWindow, activating: false)
             }
             if let id = LaunchOptions.value(after: "--open-window") { openWindow(id: id) }
             if CommandLine.arguments.contains("--show-notes") { state.showFloatingNotes(focus: state.selectedID) }

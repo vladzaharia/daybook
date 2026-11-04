@@ -84,7 +84,7 @@ Call audio starts before the microphone, so any prompt comes before your voice i
 Screen & System Audio Recording can't be granted in its prompt: the person allows it in System
 Settings, often with a relaunch. So the first recording without a call app goes on with the
 microphone alone (above) rather than failing, and Welcome's Allow Recording page asks for both
-permissions ahead of time, with the same Allow… buttons as Settings › General › Permissions
+permissions ahead of time, with the same Allow… buttons as Settings › Recording › Permissions
 (`CapturePermissions`, which shares Settings' record that macOS has asked once). Coming back from
 System Settings, the page reads both again.
 
@@ -433,7 +433,7 @@ Code: `Sources/Daybook/Captions/` (the Mac's controller, echo rule, and settings
 - **Every source.** Live captions cover every source a recording has, not only this Mac's:
   - **You and Call** with the live models, each its own captioner over models loaded once
     (`LiveModelHost`): checked with the real models on this Mac, both captioning at once
-    (docs/validation.md). With computer audio off ("Include computer audio" in Settings › General)
+    (docs/validation.md). With computer audio off ("Include computer audio" in Settings › Recording)
     there's no Call track and no Call captions; that's the setting, not the captions.
   - **A recorder recording along** (Soundcore Work through `DeviceSession.captureLive`): its live
     audio is captioned as Listen Live is, and `LiveCaptureCaptions` hands each recorder's lines to the
@@ -487,7 +487,7 @@ Code: `Sources/Daybook/Captions/` (the Mac's controller, echo rule, and settings
   transcript's page at the caption. The Mac reads them off the main actor once they're saved and
   after pruning (`LiveCaptionsController.readSaved`), and not while it records the conversation,
   when the conversation page shows them live.
-- **Settings › General › Live Captions.** DaybookUI's `LiveCaptionSettingsSection`, the iPhone's
+- **Settings › Recording › Live Captions.** DaybookUI's `LiveCaptionSettingsSection`, the iPhone's
   too: "Show while recording" (on by default, as on the iPhone) and the language ("Same as This Mac",
   any `SpeechTranscriber` locale, and those only the downloaded live recognizers cover,
   `LiveModelSet.languages`: the Latin model's six, the multilingual model's 35; on macOS 15 only

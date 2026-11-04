@@ -189,8 +189,8 @@ extension DeviceSession {
 @MainActor
 enum DeviceActions {
     /// Settings › Devices.
-    static func openSettings(_ openSettings: OpenSettingsAction) {
-        SettingsPane.devices.open(with: openSettings, activating: false)
+    static func openSettings(_ openWindow: OpenWindowAction) {
+        SettingsPane.devices.open(with: openWindow, activating: false)
     }
 
     /// Show Audio File in Finder for an imported recording.

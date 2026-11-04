@@ -61,7 +61,7 @@ struct LiveCaptionsSection: View {
 
 // MARK: - Settings
 
-/// Settings › General › Live captions: DaybookUI's section with this Mac's settings.
+/// Settings › Recording › Live Captions: DaybookUI's section with this Mac's settings.
 typealias LiveCaptionSettingsSection = DaybookUI.LiveCaptionSettingsSection<LiveCaptionSettings>
 
 extension DaybookUI.LiveCaptionSettingsSection where Settings == LiveCaptionSettings {

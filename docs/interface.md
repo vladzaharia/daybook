@@ -83,7 +83,7 @@ The redesign was planned from UX, platform (macOS 26/27 Human Interface Guidelin
   - **Keys:** ⌘D bookmark, ⇧⌘R stop (or record), ⌘O open in Daybook, ⌘W hide (the recording continues), ⌘+ / ⌘− / ⌘0 text size. There is no Esc binding, so a stray Escape during a call does nothing.
   - **Accessibility:** under Reduce Motion the meters stop scrolling (their bars light from the left up to the level), the clock fades rather than rolls, and surfaces fade. Increase Contrast uses the Ink scale's contrast values and outlines the chips, controls, and Stop; it and Reduce Transparency drop the neon glows. The clock and the meters tell VoiceOver they update often. Each note time is a button for VoiceOver ("Play from 4 minutes 10 seconds") where it plays, or says when the note was taken, and each bookmark tick says itself, beside the notes (the editor's `NotesContainerView` lists them, since a text view reports no children); Play from Here (in the notes' menu and as a VoiceOver action) plays from the paragraph at the insertion point; ⌘F finds in the notes.
 - **Menu bar extra:** a standard menu (`.menuBarExtraStyle(.menu)`). Its label is a symbol only, because a ticking text label re-lays out the status item every second. Personal conversations are never named in it ("a personal conversation"). Show Floating Notes (⌥⌘N) opens where Window › Floating Notes does: on the recording, else the conversation the library window shows, else its home. Under Record Calls Automatically, its status speaks only when there's something to say, in the words Floating Notes' home and the iPhone's status sheet use, each item naming what it's about since a menu has no title column (`MenuBarStatus`): this Mac's work ("Transcribing “Weekly product sync” · 40% · 2 waiting", opening it), a summary's countdown as a heading over Use the Cloud and Start Now, a model downloading, a recorder that's moving, importing ("Importing from Soundcore Work · 1 of 3"), listening live, recording, or needs you, with its new recordings ("Soundcore Work · 2 New Recordings…"), each opening its page, a paired iPhone recording or paused ("Alex's iPhone · Paused"), Use on This Mac for a recorder another device manages, and iCloud only as a problem, over Open Sync Settings….
-- **Settings** has five panes: General, Models, Cloud, Devices, and Library.
+- **Settings** is laid out as System Settings is: a window of its own (`WindowID.settings`; Daybook › Settings…, ⌘,) with its pages in a sidebar with search (General, Recording; Devices, Library; Models, Cloud), each a grouped page, and back and the page's title on one toolbar. Models opens pages of its own: Transcription, Speakers, Summaries, and Model Library (docs/models.md). General has Open at login and the menu bar item; Recording has computer audio, Record calls automatically, Floating Notes, Live Captions, and the permissions; Library has the folder, storage, iCloud Sync, and imports. The search finds a page by its name or what's on it (`SettingsPane.keywords`).
   - **General**'s Recording has Open at login (`LoginItem`, `SMAppService.mainApp`), off until the person turns it on, since Record calls automatically and the menu bar item work only while Daybook is open. It's on while System Settings still waits to approve it, with "Allow Daybook in Login Items to open it at login." and Open Login Items Settings… under it (a `ProblemLine`, as is a refusal, with the system's words behind Details…).
   - **Models** is the model manager ([models.md](models.md#the-model-manager)), a grouped form generated from the catalog:
     - Quality: Quick, Balanced, and Detailed as radio rows, each with its models, size, and memory, and this Mac's recommendation marked; Custom appears when the choices match none.
@@ -180,7 +180,7 @@ Tests: `DesignTokenTests` (every ink's contrast on its surface, each chip kind's
   - Conversation; Bookmark; Recording / Audio; Version History; Template.
   - Transcribe, Summarize Again, Identify Speakers Again, Transcribe Everything Again (never "Transcribe Now").
   - New Note (File › New Note, ⌘N; the library's New Note on the iPhone) starts a conversation that's only your notes, titled "Note at 10:15 AM" on both apps; Record records into it.
-  - Record calls automatically (Settings › General and the menu bar extra), beside "Listening for calls".
+  - Record calls automatically (Settings › Recording and the menu bar extra), beside "Listening for calls".
   - Add Photos… everywhere; Photo Deleted for a photo that's gone; Microphone silent, never "Mic silent".
   - Errors: the alert's title names what couldn't be done ("Couldn’t Import Audio"), its message is one plain sentence with what to do, and the system's own words are behind Details… (`AppState.report`, `AppProblem`). When a permission is why (a recording that can't use the microphone), the alert adds Open System Settings. Only what the person did raises an alert: work that runs on its own (placing a recording that arrived, comparing sound) writes its trouble to the log. A library that can't open says so on the page instead, in a problem box with Details…, Show in Finder, and Try Again (`LibraryProblemPage`), since relaunching rarely fixes it.
   - A recording that can't start leaves nothing behind: a conversation made for it goes again, and one recorded into (a note) stays as it was; the alert says why.
@@ -227,7 +227,7 @@ The curves are `DaybookMotion`'s (`Motion` on the Mac, `PhoneStyle.Motion` on th
 | Processing or downloading | the gradient progress bar fills; a `WorkProgress` bar steps once per report |
 | Template edited | the Edited capsule scales in |
 | A Mac and an iPhone pair | the other device's glyph turns into the Mac and iPhone together (`land`), the title becomes "Paired with …" beside a checkmark that draws on, and the code leaves; the iPhone taps success (a failed code, an error tap) |
-| Auto-record is listening | the mint dot in Settings › General pulses |
+| Auto-record is listening | the mint dot in Settings › Recording pulses |
 
 ### Deliberate departures from Direction A
 
@@ -274,7 +274,7 @@ Debug builds accept launch arguments that open a specific surface against a sepa
   --place work|personal|all|trash|device|device:<name>|folder:<name>
   --select "<conversation title>"     --page transcript     --inspector (or --info, the iPhone's word)
   --search "<query>"                  --sheet history|timing|corrections
-  --open-settings general|models|cloud|devices|library
+  --open-settings general|recording|devices|library|models|cloud
   --cloud-demo none|anthropic|both|never|failed|summary
                                       Settings › Cloud with in-memory keys and the catalog's models (no network,
                                       no keychain); failed opens Add Key with a refused key; summary (with
@@ -307,7 +307,8 @@ Debug builds accept launch arguments that open a specific surface against a sepa
                                       activate, fullscreen, toolbar, zoom, top, sidebar, inspector (as
                                       Tags… asks for it; full screen needs activate, so run it as an app
                                       with `open`)
-  --model-demo <step,…>               Settings › Models states without the network; see models.md
+  --model-demo <step,…>               Settings › Models states without the network; see models.md. page:<transcription|
+                                      speakers|summaries|library> opens one of its pages
   --placement-demo countdown|cloud|colophon|colophon-mac
                                       with --library-demo (or --notes-demo processing), a summary's countdown, the
                                       cloud at work, or a colophon from the cloud or another Mac; see PlacementDemo.swift

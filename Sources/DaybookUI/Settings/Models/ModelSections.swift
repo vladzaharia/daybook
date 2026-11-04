@@ -60,16 +60,19 @@ extension ModelProcessingSection where Presets == EmptyView {
 /// size, old revisions, updates; the iPhone's models with Remove).
 public struct ModelLibrarySection<Accessory: View, Rows: View>: View {
     private let total: Int64
+    private let showsHeader: Bool
     private let accessory: Accessory
     private let rows: Rows
     @Environment(\.daybookDensity) private var density
 
     /// - Parameters:
     ///   - total: What the downloaded models take on this device.
+    ///   - showsHeader: "Model Library" over it; not on the Mac's page of that name.
     ///   - accessory: Beside the size: the Mac's Show in Finder.
     ///   - rows: Under it.
-    public init(total: Int64, @ViewBuilder accessory: () -> Accessory, @ViewBuilder rows: () -> Rows) {
+    public init(total: Int64, showsHeader: Bool = true, @ViewBuilder accessory: () -> Accessory, @ViewBuilder rows: () -> Rows) {
         self.total = total
+        self.showsHeader = showsHeader
         self.accessory = accessory()
         self.rows = rows()
     }
@@ -86,7 +89,7 @@ public struct ModelLibrarySection<Accessory: View, Rows: View>: View {
             }
             rows
         } header: {
-            Text("Model Library")
+            if showsHeader { Text("Model Library") }
         }
     }
 }
