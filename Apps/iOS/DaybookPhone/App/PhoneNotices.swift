@@ -158,7 +158,10 @@ struct PhoneNotices {
         }
     }, remind: { meetings in
         let center = UNUserNotificationCenter.current()
-        Task {
+        // Each pass after the one before, so an older list's reminders never land after a newer one took them away.
+        let before = PhoneNotices.reminding
+        PhoneNotices.reminding = Task {
+            await before?.value
             let earlier = await center.pendingNotificationRequests().map(\.identifier).filter { $0.hasPrefix(PhoneNotices.meetingPrefix) }
             center.removePendingNotificationRequests(withIdentifiers: earlier)
             for meeting in meetings {
@@ -177,6 +180,9 @@ struct PhoneNotices {
             }
         }
     })
+
+    /// The meeting reminders' latest pass.
+    private static var reminding: Task<Void, Never>?
 
     static let silent = PhoneNotices(post: { _ in }, remove: { _ in }, askPermission: {})
 }
