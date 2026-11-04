@@ -480,6 +480,16 @@ docs/iphone.md "Moving to the new app".
   iPhone app for the Simulator; a single multiplatform target built for both after SDK-conditional bundle ID and
   Info.plist and an excluded resource.
 
+**Seen on a development Mac (2026-11-03), open.** After a sandboxed `local.daybook` build first ran there (its container
+appeared at 16:49), `~/Library/Preferences/local.daybook.plist` was gone, moved by the manifest, but
+`~/Library/Preferences/local.daybook.app.plist` (last written 2026-11-01) was still in place. The container is
+privacy-protected, so what it holds wasn't read. No settings were lost: the Developer ID build had already carried
+`local.daybook.app`'s settings into `local.daybook.plist` (`PreferencesCarryOver`), and that file moved. For someone
+coming straight from a release before the one bundle ID to the App Store build, though, `local.daybook.app.plist` is
+where the settings are. The probes above moved one preferences file under another name, never two in one manifest.
+To settle it: on a fresh user account, put both files in place, run the rehearsal build with the real manifest, and
+check that both left `~/Library/Preferences` and that the app shows the settings from `local.daybook.app.plist`.
+
 **Still needs the owner or hardware.** The portal and App Store Connect steps, in order (docs/release.md, "One bundle ID");
 until they're done and `release.yml` changes, a tagged release fails (docs/release.md, "Known blockers"). Then: a signed
 Developer ID build's first launch over a real `local.daybook.app` install (settings, devices, the iPhone reconnecting
