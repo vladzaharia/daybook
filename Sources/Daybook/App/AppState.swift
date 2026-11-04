@@ -490,8 +490,10 @@ final class AppState {
             guard let self else { return .notRecorded }
             let decision = CallPolicy.decision(for: candidate.bundleID, policy: self.callPolicy, choices: self.callAppChoices,
                                                busy: self.recordingID != nil || self.isStartingRecording)
-            // The calendar's meeting, when there is one, names the recording.
-            let meeting = decision == .ignore ? nil : self.meeting(for: candidate)
+            // The calendar's meeting, when there is one, names the recording, and isn't asked about again as it starts:
+            // its call was, or its app's answer stands.
+            let meeting = self.meeting(for: candidate)
+            if let meeting { self.askedMeetings.insert(meeting.id) }
             switch decision {
             case .record:
                 Task { await self.startRecording(title: meeting?.title ?? candidate.windowTitle, automatic: true) }
@@ -1478,6 +1480,7 @@ extension AppState {
         recordingWillFinish(id, at: result.endedAt)
         recordingID = nil; recordingStartedAt = nil; recordingWasAutomatic = false
         calendarMeeting = nil
+        CallPromptWindow.shared.recordingEnded()
         sync.publishActivity(recording: nil)
         phones.recordingEnded(id)
         do {
