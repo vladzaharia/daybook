@@ -15,6 +15,7 @@ Both apps are one App Store Connect app with one bundle ID, `local.daybook`, so 
 | Workflow | Job | Runner | What it does |
 |---|---|---|---|
 | CI | `lint` | `ubuntu-24.04` | actionlint (pinned, checksum-verified, with shellcheck on every `run:` block), shellcheck on every script under `scripts/` (all bash), and `scripts/ci/tests/run-tests.sh`, which also compiles the Python helpers with warnings as errors |
+| CI | `changes` | `ubuntu-24.04` | whether a pull request changes anything but documentation (`scripts/ci/changes.sh`: `docs/` and Markdown outside the apps' sources, the bundled `THIRD_PARTY_NOTICES.md` aside). One that doesn't skips `package`, `iphone`, `iphone-archive`, and `mac`; every push to `main` runs them, so a release always has a CI run to wait for |
 | CI | `package` | `xcode-27` | `swift build --build-tests --force-resolved-versions` once (then `git diff --exit-code -- Package.resolved`), then `swift test --skip-build` per test-target group, then the timing-budget test alone (see below) |
 | CI | `iphone` | `xcode-27` | `scripts/build-ios.sh --build-for-testing` once, then the tests on that build (`--test --skip-build`) on a simulator (iPhone Duo if the image has one, otherwise iPhone 18 Pro), then the two encoder timing tests alone (see below) |
 | CI | `iphone-archive` | `xcode-27` | beside `iphone`: an unsigned Release device archive (`build-ios.sh --archive --no-sign`), checked the way a release would be. Its cache is the one the release's `iphone` job restores |
