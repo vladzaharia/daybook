@@ -61,6 +61,8 @@
 	<array>
 		<string>_daybook-link._tcp</string>
 	</array>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Daybook names recordings after their meeting and reminds you to record a meeting when it starts.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Daybook takes photos of whiteboards, slides, and notes for your conversations.</string>
 	<key>NSLocalNetworkUsageDescription</key>

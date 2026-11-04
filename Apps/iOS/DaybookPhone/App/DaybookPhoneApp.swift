@@ -104,6 +104,8 @@ struct DaybookPhoneApp: App {
             // Recorders first: their timers didn't run while the app was suspended.
             await model.devices.backgroundRefresh()
             await model.sync.backgroundRefresh()
+            // The next meetings' reminders, for whoever hasn't opened Daybook in a while.
+            await model.remindMeetings()
         }
     }
 }

@@ -35,8 +35,17 @@ final class CalendarMeetingsTests: XCTestCase {
                       "a block of one's own isn't a meeting")
         XCTAssertTrue(CalendarMeetings.startingNow([event("Skipping", starts: 0, declined: true)], at: now, asked: []).isEmpty)
         XCTAssertEqual(CalendarMeetings.startingNow([event("B", starts: 0.2), event("A", starts: -1)], at: now, asked: []).map(\.id), ["A", "B"])
+        XCTAssertTrue(CalendarMeetings.startingNow([event(" ", starts: 0)], at: now, asked: []).isEmpty, "nothing to call it")
         XCTAssertEqual(sync.peopleLine, "4 people")
         XCTAssertNil(event("Solo", starts: 0, people: 1).peopleLine)
+    }
+
+    func testBehaviorTheIPhoneRemindsOfTheNextMeetingsWithOtherPeople() {
+        let events = [event("Later", starts: 120), event("Now", starts: 0), event("Soon", starts: 15), event("Solo", starts: 30, people: 1),
+                      event("Declined", starts: 45, declined: true), event("Gone", starts: -30), event("Next", starts: 60)]
+        XCTAssertEqual(CalendarMeetings.upcoming(events, after: now, limit: 2).map(\.id), ["Soon", "Next"],
+                       "after now, with other people, not declined, earliest first, at most the limit")
+        XCTAssertEqual(CalendarMeetings.upcoming(events, after: now, limit: 10).map(\.id), ["Soon", "Next", "Later"])
     }
 
     func testBehaviorTheCallServiceALinkNames() {

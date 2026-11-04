@@ -31,6 +31,8 @@ struct PhoneAppEnvironment {
     var deviceMode: PhoneDevices.Mode
     /// The notifications Daybook posts.
     var notices: PhoneNotices
+    /// This iPhone's calendars, for Use Calendar.
+    var calendar: any MeetingCalendarReading
     /// The system's continued-processing task for transcribing in the background; nil runs without it.
     var continuedProcessing: () -> (any ContinuedProcessing.Scheduler)?
     /// Recordings and Listen Live may load a live captioner. Tests inject their own instead.
@@ -52,6 +54,7 @@ struct PhoneAppEnvironment {
             network: .shared,
             deviceMode: options.deviceSimulator ? .simulator : .live,
             notices: .app,
+            calendar: EventKitMeetingCalendar(),
             continuedProcessing: { SystemContinuedProcessingScheduler() },
             makesCaptioners: true,
             startsLink: true,
@@ -59,7 +62,7 @@ struct PhoneAppEnvironment {
     }
 
     /// Nothing real: memory key stores, a scratch suite and models folder for this process, no downloads, no
-    /// recorders, no notifications, no Spotlight, no link at launch.
+    /// recorders, no notifications, no calendars, no Spotlight, no link at launch.
     static var inert: PhoneAppEnvironment {
         PhoneAppEnvironment(
             defaults: InertScratch.defaults,
@@ -71,6 +74,7 @@ struct PhoneAppEnvironment {
             network: .unrestricted,
             deviceMode: .inert,
             notices: .silent,
+            calendar: NoMeetingCalendar(),
             continuedProcessing: { nil },
             makesCaptioners: false,
             startsLink: false,

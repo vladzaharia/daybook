@@ -98,6 +98,10 @@ final class PhoneAppModel: RecordingCommandHandling {
     private(set) var isForeground = true
     /// The notifications Daybook posts (none in tests).
     @ObservationIgnored var notices: PhoneNotices
+    /// A meeting's notification asked to record it, once Daybook is in front (`PhoneCalendar.swift`).
+    @ObservationIgnored var meetingToRecord: String?
+    /// Watching the calendar for changes, to schedule reminders again.
+    @ObservationIgnored var calendarChanges: NSObjectProtocol?
 
     @ObservationIgnored let activities = RecordingActivityController()
     @ObservationIgnored private var launched = false
@@ -384,6 +388,8 @@ final class PhoneAppModel: RecordingCommandHandling {
             await sync.connect()
         }
         guard !options.isRunningTests else { return }
+        watchCalendar()
+        remindMeetings()
         if !recorder.isActive { activities.endOrphans() }
         await recoverLeftovers()
         pruneCaptions()
@@ -426,6 +432,8 @@ final class PhoneAppModel: RecordingCommandHandling {
         switch phase {
         case .active:
             if multipoints.recorderOnly != nil, !recorder.isActive { Task { await multipoints.recordAlongWithRecorder() } }
+            recordMeetingWhenInFront()
+            remindMeetings()
             labelCaptionSpeakers()
             // A courier that's off only because the account couldn't be checked (woken in the background soon after the
             // iPhone started) tries again now.
@@ -446,6 +454,7 @@ final class PhoneAppModel: RecordingCommandHandling {
             speakerPass = nil
             sync.scheduleBackgroundRefresh()
             sync.finishOnLeavingForeground()
+            remindMeetings()
             Task { await link.setActivity(recorder.isActive || multipoints.recorderOnly != nil ? .backgroundRecording : .background) }
         default:
             break
@@ -486,6 +495,10 @@ final class PhoneAppModel: RecordingCommandHandling {
     /// Opens Daybook at `destination` (a notification, Open Conversation, New Note): the interface goes
     /// there (`OpensDestinations`) and says it has (`reached`).
     func open(_ destination: AppDestination) {
+        if case .recordMeeting(let title) = destination {
+            meetingToRecord = title
+            recordMeetingWhenInFront()
+        }
         self.destination = DestinationRequest(destination: destination)
     }
 
@@ -593,7 +606,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         let recordingID = UUID()
         // Processing pauses first: a recording never waits for it, or shares the iPhone with it.
         processor.conditions.isRecording = true
-        let title = requestedTitle ?? Meeting.defaultTitle()
+        let title = requestedTitle ?? meetingTitle() ?? Meeting.defaultTitle()
         // Staged by the recording's own ID: the conversation may hold an earlier one still being filed.
         let directory = library.stagingURL.appendingPathComponent(recordingID.uuidString, isDirectory: true)
         notice = nil

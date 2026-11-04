@@ -18,6 +18,9 @@ final class PhoneSettings {
     /// recording from the background (an intent, a Mac's request) it needs one, so it's shown then
     /// whatever this says.
     var showsLiveActivity: Bool { didSet { defaults.set(showsLiveActivity, forKey: Keys.showsLiveActivity) } }
+    /// Use Calendar: a recording started here is named after the meeting going on, and a meeting with other people
+    /// sends a notification as it starts (`PhoneCalendar.swift`). Off until the person turns it on and allows access.
+    var usesCalendar: Bool { didSet { defaults.set(usesCalendar, forKey: Keys.usesCalendar) } }
     /// A paired Mac may start and stop recording here ("Record on iPhone too").
     var acceptsMacRecordRequests: Bool { didSet { defaults.set(acceptsMacRecordRequests, forKey: Keys.acceptsMacRecordRequests) } }
     /// How much downloaded audio to keep for playback before the least recently played goes back to iCloud.
@@ -103,6 +106,7 @@ final class PhoneSettings {
         processesOnThisIPhone = defaults.object(forKey: Keys.processesOnThisIPhone) as? Bool ?? true
         showsLiveActivity = defaults.object(forKey: Keys.showsLiveActivity) as? Bool ?? true
         acceptsMacRecordRequests = defaults.object(forKey: Keys.acceptsMacRecordRequests) as? Bool ?? true
+        usesCalendar = defaults.bool(forKey: Keys.usesCalendar)
         let stored = (defaults.object(forKey: Keys.audioCacheBudget) as? NSNumber)?.int64Value ?? 0
         audioCacheBudget = stored > 0 ? UInt64(stored) : 1_000_000_000
         liveCaptions = defaults.object(forKey: Keys.liveCaptions) as? Bool ?? true
@@ -127,6 +131,7 @@ final class PhoneSettings {
         static let processesOnThisIPhone = "phone.processesOnThisIPhone"
         static let showsLiveActivity = "phone.showsLiveActivity"
         static let acceptsMacRecordRequests = "phone.acceptsMacRecordRequests"
+        static let usesCalendar = "phone.usesCalendar"
         static let audioCacheBudget = "phone.audioCacheBudget"
         static let liveCaptions = "phone.liveCaptions"
         static let captionLocale = "phone.captionLocale"
