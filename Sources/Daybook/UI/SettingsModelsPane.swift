@@ -149,8 +149,8 @@ struct ModelSettings: View {
             Toggle("Tell speakers apart", isOn: $state.detectSpeakers)
                 .controlSize(.regular)
             Group {
+                // Every speaker model offered makes voice profiles, itself or with the voice-profile model, which comes with it.
                 if let choice = choices[.diarization] { roleRow(choice, label: "Model", space: space) }
-                if let choice = choices[.speakerEmbedding] { roleRow(choice, label: choice.title, space: space) }
                 // What the speaker model can't do isn't offered, rather than shown dimmed with an apology.
                 if supportsVoiceMatching {
                     LabeledContent {
