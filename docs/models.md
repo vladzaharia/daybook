@@ -235,21 +235,23 @@ Settings › Models is built from the catalog and the engines this build registe
 
 **Room for a download.** A download that wouldn't fit in what's free where the models go (`volumeAvailableCapacityForImportantUsage`) doesn't start: its row says "Needs 632 MB · 300 MB free" in the warning ink and Download waits. A model download that filled the disk would stop recordings and sync too. What it needs is its size less what an unfinished download already fetched. What's free sets aside what the downloads already under way and waiting will still take (`ModelSpace.less`; the one under way less what it had fetched when the space was read), so two downloads that each fit but together wouldn't don't both start, on the Mac and the iPhone alike. Welcome asks the same of each preset (`ModelPreset.spaceNote(in:)`).
 
-The Mac's pane, top to bottom:
+The Mac's pane is a page with pages of its own, as System Settings has them (`SettingsModelsPane.swift`):
 
-- **Processing:**
+- **Models** itself:
+  - Quality: Quick, Balanced, or Detailed from `ModelRecommendations` in a pop-up, the one the catalog recommends for this Mac's tier marked "(Recommended)", and under it what the current one takes ("16.5 GB · 32 GB memory"), or "Needs 16.5 GB · 12 GB free" in the warning ink when it won't fit. A preset sets every role it names, and its speaker effort; any other combination reads "Custom", which the pop-up shows only then.
+  - A row under it speaks only while the chosen models aren't all on this Mac: what's left with its size and Download, or progress and Cancel.
   - Transcribe synced recordings on this Mac (whether this Mac takes other devices' work).
-  - Quick, Balanced, and Detailed from `ModelRecommendations`, each with its models, total download, and suggested memory. The one the catalog recommends for this Mac's tier is marked "Recommended". Each names its models on up to two lines, the ones that set the presets apart first (the summary, then speakers) and the ones every preset shares last, so a row cut short still says how it differs. A preset whose download wouldn't fit says how much it needs.
-  - A preset sets every role it names, and its speaker effort. Any other combination reads "Custom".
-  - A row under them speaks only while the chosen models aren't all on this Mac: what's left with its size and Download, or progress and Cancel.
-- **Role choices:**
-  - One pop-up per role. Transcription carries the language rows from `TranscriptionLanguageSettings`. Speakers has the speaker model and, when a model serves it, voice profiles, then the speaker settings, enabled by capabilities, and Speaker profiles (Edit… opens the Speaker Profiles window). Summaries has summaries, plus titles and tags.
-  - The roles offered are the `ModelRole.known` roles with a model that can run here, then any other role a registered engine serves. Any further role gets its own section.
-  - Each menu item is the model, with its state underneath ("Downloaded", its download size, "Needs a newer Daybook") and "Non-commercial" where it applies.
+  - A row for each page, with what it's set to: Transcription, Speakers ("Off" when Tell speakers apart is), Summaries, and Model Library with the disk the models take.
+- **Transcription:** the model with the language rows from `TranscriptionLanguageSettings`, live captions' models where this Mac offers them, and Vocabulary (Edit… opens its window).
+- **Speakers:** Tell speakers apart, then the speaker model, Accuracy, Number of speakers where the model takes one, and Match voices across recordings (with Adjust…), enabled by capabilities; then Speaker profiles (Edit… opens the Speaker Profiles window). The voice-profile model comes with the speaker model and isn't a row.
+- **Summaries:** the summary model, then the smaller jobs' (titles and tags, photos, any other role an engine serves), and Summary templates (Edit…).
+- **Role rows** on every page:
+  - One pop-up per role. Each menu item is the model, with its state underneath ("Downloaded", its download size, "Needs a newer Daybook") and "Non-commercial" where it applies.
+  - The roles offered are the `ModelRole.known` roles with a model that can run here, then any other role a registered engine serves.
   - Models that can't run here are listed last, disabled, with the reason. Hiding them would make an entry vanish without explanation, and the library lists them anyway.
   - Choosing a model that isn't downloaded chooses it, and the row shows "Not downloaded · 1.6 GB" with Download. Processing waits for it ("Waiting for models") and never runs another model instead.
   - Transcription's Other languages row is a role row too, for the model speech goes to in the languages the chosen one doesn't cover.
-- **Model Library:**
+- **Model Library**, its own page:
   - Downloaded models with their disk use (`diskUsage`), and Show in Finder beside it.
   - "Old revisions" with Remove, only when there are some: `ModelInventory.replacedRevisions`, less pinned, leased, and queued revisions, removed with `collectGarbage`.
   - "Old downloads" (`removeLegacyLeftovers`), only when there are some.

@@ -109,13 +109,13 @@ private struct DevicePageContent: View {
 struct DeviceMoreMenuContent: View {
     let state: AppState
     let session: DeviceSession
-    @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openSettingsWindow
 
     var body: some View {
         Group {
             RecorderMenuItems(session: session)
             Divider()
-            Button("Device Settings…") { DeviceActions.openSettings(openSettings) }
+            Button("Device Settings…") { DeviceActions.openSettings(openSettingsWindow) }
         }
         .environment(\.recorderServices, state.recorderServices)
     }

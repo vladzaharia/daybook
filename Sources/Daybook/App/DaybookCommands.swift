@@ -18,6 +18,8 @@ struct DaybookCommands: Commands {
         CommandGroup(replacing: .appInfo) {
             Button("About Daybook") { AboutPanel.show(catalog: state.modelCatalog) }
         }
+        // Settings is a window of its own (`WindowID.settings`), so its menu item is too.
+        CommandGroup(replacing: .appSettings) { SettingsMenuItem() }
         FileCommands(state: state)
         // Continuity Camera: Take Photo, Scan Documents, and Add Sketch from an iPhone or iPad
         // (the page receives them through `importsItemProviders`).
@@ -369,4 +371,14 @@ struct FolderMenuItems: View {
 
     /// The window's undo manager; a menu bar item reads the key window's, which is the library's whenever it's enabled.
     private var undo: UndoManager? { undoManager ?? NSApp.keyWindow?.undoManager }
+}
+
+/// Daybook › Settings… (⌘,).
+private struct SettingsMenuItem: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Settings…") { openWindow.settings() }
+            .keyboardShortcut(",")
+    }
 }

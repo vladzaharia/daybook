@@ -8,7 +8,7 @@ import SwiftUI
 struct MenuBarView: View {
     @Bindable var state: AppState
     @Environment(\.openWindow) private var openWindow
-    @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openSettingsWindow
 
     var body: some View {
         // Items show the shortcuts they have in the app's menus, as Settings… and Quit do.
@@ -36,7 +36,11 @@ struct MenuBarView: View {
         MenuBarStatusItems(state: state)
         Divider()
         Button("Open Daybook") { open(nil) }
-        SettingsLink { Text("Settings…") }.keyboardShortcut(",")
+        Button("Settings…") {
+            openSettingsWindow.settings()
+            NSApp.activate()
+        }
+        .keyboardShortcut(",")
         Divider()
         Button("Quit Daybook") { NSApp.terminate(nil) }.keyboardShortcut("q")
     }
@@ -53,7 +57,7 @@ struct MenuBarView: View {
 private struct MenuBarStatusItems: View {
     let state: AppState
     @Environment(\.openWindow) private var openWindow
-    @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openSettingsWindow
 
     var body: some View {
         let lines = MenuBarStatus.lines(MenuBarStatus.inputs(state))
@@ -105,7 +109,7 @@ private struct MenuBarStatusItems: View {
 
     private func showSettings(_ pane: SettingsPane) {
         LaunchOptions.defaults.set(pane.rawValue, forKey: SettingsPane.storageKey)
-        openSettings()
+        openSettingsWindow.settings()
         NSApp.activate()
     }
 }

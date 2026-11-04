@@ -197,7 +197,7 @@ struct ConversationStatus: View {
     /// A summary's countdown, and the cloud at work.
     private let placements: SummaryPlacements
     @AppStorage(SettingsPane.storageKey) private var settingsPane = "general"
-    @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openSettingsWindow
     @Environment(\.undoManager) private var undoManager
 
     init(state: AppState, meeting: Meeting) {
@@ -293,7 +293,7 @@ struct ConversationStatus: View {
 
     private func openSettingsPane(_ pane: String) {
         settingsPane = pane
-        openSettings()
+        openSettingsWindow.settings()
     }
 }
 

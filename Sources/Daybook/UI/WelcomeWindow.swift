@@ -227,7 +227,7 @@ private struct WelcomePresetGroup: View {
 
 // MARK: - Allow
 
-/// The microphone and computer audio, with the same Allow… buttons as Settings › General › Permissions.
+/// The microphone and computer audio, with the same Allow… buttons as Settings › Recording › Permissions.
 private struct WelcomeAllow: View {
     let permissions: CapturePermissions
     let next: () -> Void

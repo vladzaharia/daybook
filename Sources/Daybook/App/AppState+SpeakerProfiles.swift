@@ -37,7 +37,7 @@ extension AppState {
 
     // MARK: Voices for speakers found without them
 
-    /// The model that gives speakers their voices (Settings › Models › Voice Profiles; Community-1
+    /// The model that gives speakers their voices (the voice-profile model, which comes with the speaker model; Community-1
     /// unless another was chosen), when it's on this Mac. Nil otherwise: nothing is downloaded for it.
     var voiceProfileModel: ModelReference? {
         let selections = ModelRouting.withDefaultVoiceEmbedder(modelSelections, catalog: modelCatalog, engines: runtime.engines)

@@ -434,7 +434,7 @@ a second local runtime), which are gone, with their plumbing (`LiveTranscriber`,
   drops audio. Its backlog is raised to about a minute of 20 ms packets (`LiveCaptionHooks.backlog`);
   past that the oldest wait is dropped, never the audio being saved.
 - **Defaults.** The hooks' default makes the Speech framework's captioner where it exists (macOS 26,
-  iOS 26) in the device's language, never downloading one. The Mac points them at Settings › General
+  iOS 26) in the device's language, never downloading one. The Mac points them at Settings › Recording
   › Live Captions (the same switch and language as its recordings, downloading the language when
   the person listens). On the iPhone the default applies until the app sets its own.
 - **What the session publishes** (`DeviceSession`, `@MainActor`, `@Observable`, as the hub and every connection

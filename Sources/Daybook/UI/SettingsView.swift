@@ -8,56 +8,142 @@ import DaybookUI
 import ServiceManagement
 import SwiftUI
 
-/// The Settings panes, restored from `@AppStorage(SettingsPane.storageKey)`.
-enum SettingsPane: String {
-    case general, models, cloud, devices, library
+/// Settings' pages, in the sidebar's order, the one showing restored from `@AppStorage(SettingsPane.storageKey)`.
+enum SettingsPane: String, CaseIterable, Identifiable {
+    case general, recording, devices, library, models, cloud
+
+    var id: String { rawValue }
+
+    /// The sidebar's groups, as System Settings spaces its own.
+    static let groups: [[SettingsPane]] = [[.general, .recording], [.devices, .library], [.models, .cloud]]
+
+    var title: String {
+        switch self {
+        case .general: "General"
+        case .recording: "Recording"
+        case .devices: "Devices"
+        case .library: "Library"
+        case .models: "Models"
+        case .cloud: "Cloud"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .general: "gearshape.fill"
+        case .recording: "waveform"
+        case .devices: "iphone"
+        case .library: "books.vertical.fill"
+        case .models: "cpu.fill"
+        case .cloud: "cloud.fill"
+        }
+    }
+
+    /// The icon's tile, colored as System Settings colors its own.
+    var tint: Color {
+        switch self {
+        case .general: .gray
+        case .recording: .red
+        case .devices: .blue
+        case .library: .brown
+        case .models: .purple
+        case .cloud: .cyan
+        }
+    }
+
+    /// What else finds the page in the sidebar's search: what's on it, in the words people look for.
+    var keywords: [String] {
+        switch self {
+        case .general: ["Login", "Startup", "Menu Bar"]
+        case .recording: ["Microphone", "Computer Audio", "Calls", "Automatic", "Live Captions", "Floating Notes", "Permissions", "Screen"]
+        case .devices: ["iPhone", "Recorder", "Soundcore", "Pair", "Bluetooth", "Wi-Fi"]
+        case .library: ["Folder", "Storage", "iCloud", "Sync", "Import", "Privacy", "Encryption"]
+        case .models: ["Transcription", "Speakers", "Summaries", "Language", "Download", "Quality", "Voice", "Vocabulary", "Templates",
+                       "Parakeet", "Whisper", "Gemma", "Nemotron", "Community-1"]
+        case .cloud: ["Anthropic", "OpenAI", "Claude", "GPT", "Key"]
+        }
+    }
+
+    /// Whether the sidebar's search finds the page.
+    func matches(_ query: String) -> Bool {
+        let query = query.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return true }
+        return ([title] + keywords).contains { $0.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil }
+    }
 }
 
-/// Settings (Direction A §5.14): five grouped panes, 600 pt wide, each as tall as its content.
+/// Settings, laid out as System Settings is: the pages in a sidebar with search, each a grouped page that can open
+/// pages of its own (Models' Transcription, Speakers, Summaries, and Model Library).
 struct SettingsView: View {
     let state: AppState
     @AppStorage(SettingsPane.storageKey) private var pane = SettingsPane.general
+    @State private var query = ""
 
     var body: some View {
-        TabView(selection: $pane) {
-            Tab("General", systemImage: "gearshape", value: SettingsPane.general) {
-                GeneralSettings(state: state).settingsPane()
+        NavigationSplitView {
+            List(selection: selection) {
+                ForEach(SettingsPane.groups, id: \.self) { group in
+                    Section {
+                        ForEach(group.filter { $0.matches(query) }) { pane in
+                            SettingsSidebarRow(pane: pane).tag(pane)
+                        }
+                    }
+                }
+                if !SettingsPane.allCases.contains(where: { $0.matches(query) }) {
+                    Text("No Results").foregroundStyle(.secondary)
+                }
             }
-            Tab("Models", systemImage: "cpu", value: SettingsPane.models) {
-                ModelSettings(state: state).settingsPane()
-            }
-            Tab("Cloud", systemImage: "cloud", value: SettingsPane.cloud) {
-                CloudSettings(state: state).settingsPane()
-            }
-            Tab("Devices", systemImage: "recordingtape", value: SettingsPane.devices) {
-                DevicesSettingsPane(state: state).settingsPane()
-            }
-            Tab("Library", systemImage: "books.vertical", value: SettingsPane.library) {
-                LibrarySettings(state: state).settingsPane()
+            .searchable(text: $query, placement: .sidebar, prompt: "Search")
+            .navigationSplitViewColumnWidth(215)
+            .toolbar(removing: .sidebarToggle)
+        } detail: {
+            page.id(pane)
+        }
+        .frame(width: 780)
+        .frame(minHeight: 520, idealHeight: 680)
+    }
+
+    private var selection: Binding<SettingsPane?> {
+        Binding(get: { pane }, set: { if let chosen = $0 { pane = chosen } })
+    }
+
+    @ViewBuilder private var page: some View {
+        switch pane {
+        // Models has pages of its own, so its stack is its own.
+        case .models: ModelSettings(state: state)
+        default:
+            NavigationStack {
+                Group {
+                    switch pane {
+                    case .general: GeneralSettings()
+                    case .recording: RecordingSettings(state: state)
+                    case .devices: DevicesSettingsPane(state: state)
+                    case .library: LibrarySettings(state: state)
+                    case .cloud: CloudSettings(state: state)
+                    case .models: EmptyView()
+                    }
+                }
+                .navigationTitle(pane.title)
             }
         }
     }
 }
 
-extension View {
-    /// A pane is 600 pt wide and hugs its content, so the window resizes as panes change.
-    func settingsPane() -> some View { modifier(SettingsPaneSize()) }
-}
+/// A page in the sidebar: its symbol on a colored tile, then its name.
+private struct SettingsSidebarRow: View {
+    let pane: SettingsPane
 
-/// Hugs the pane's content; a pane taller than the screen keeps the screen's height and scrolls.
-private struct SettingsPaneSize: ViewModifier {
-    @State private var contentHeight: CGFloat = 0
-    /// The visible screen height, less the title bar and pane toolbar.
-    private var limit: CGFloat { max(320, (NSScreen.main?.visibleFrame.height ?? 900) - 120) }
-
-    func body(content: Content) -> some View {
-        let fits = contentHeight <= limit
-        content
-            .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, height in contentHeight = height }
-            .scrollDisabled(fits)
-            .fixedSize(horizontal: false, vertical: fits)
-            .frame(width: 600)
-            .frame(height: fits ? nil : limit)
+    var body: some View {
+        Label {
+            Text(pane.title)
+        } icon: {
+            Image(systemName: pane.systemImage)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 20, height: 20)
+                .background(pane.tint.gradient, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .accessibilityHidden(true)
+        }
     }
 }
 
@@ -75,25 +161,44 @@ extension DaybookDesign.ProblemLine where Actions == EmptyView {
 // MARK: - General
 
 private struct GeneralSettings: View {
-    let state: AppState
-    /// The import-matching switch lives on the sources coordinator, which the window doesn't follow.
-    @Bindable private var sources: MultiSourceCoordinator
-    @AppStorage(AppState.Preference.showsFloatingNotesWhileRecording) private var showsFloatingNotes = true
     @AppStorage(AppState.Preference.showsMenuBarExtra) private var showsMenuBarExtra = true
+    @State private var loginItem = LoginItem.forSettings()
+
+    var body: some View {
+        Form {
+            Section {
+                // Record calls automatically and the menu bar item work only while Daybook is open.
+                Toggle("Open at login", isOn: Binding(get: { loginItem.isOn }, set: { loginItem.set($0) }))
+                    .controlSize(.regular)
+                if let problem = loginItem.problem {
+                    ProblemLine(text: problem.text, details: problem.details) {
+                        if problem.opensSettings {
+                            Button("Open Login Items Settings…") { loginItem.openSettings() }
+                        }
+                    }
+                }
+                Toggle("Show Daybook in the menu bar", isOn: $showsMenuBarExtra)
+                    .controlSize(.regular)
+            }
+        }
+        .formStyle(.grouped)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in loginItem.refresh() }
+    }
+}
+
+// MARK: - Recording
+
+private struct RecordingSettings: View {
+    let state: AppState
+    @AppStorage(AppState.Preference.showsFloatingNotesWhileRecording) private var showsFloatingNotes = true
     @AppStorage("screenCaptureRequested") private var screenCaptureRequested = false
     @State private var microphone = AVCaptureDevice.authorizationStatus(for: .audio)
     @State private var screenCapture = CGPreflightScreenCaptureAccess()
     @State private var showingSupportedApps = false
-    @State private var loginItem = LoginItem.forSettings()
-
-    init(state: AppState) {
-        self.state = state
-        sources = state.sources
-    }
 
     var body: some View {
         Form {
-            Section("Recording") {
+            Section {
                 Toggle(isOn: computerAudio) {
                     Text("Include computer audio")
                     Text("Records the other people on a call.")
@@ -118,19 +223,7 @@ private struct GeneralSettings: View {
                     Text("Record calls automatically")
                     if state.automaticRecording { DetectionStatusLine(state: state) }
                 }
-                // Record calls automatically and the menu bar item work only while Daybook is open.
-                Toggle("Open at login", isOn: Binding(get: { loginItem.isOn }, set: { loginItem.set($0) }))
-                    .controlSize(.regular)
-                if let problem = loginItem.problem {
-                    ProblemLine(text: problem.text, details: problem.details) {
-                        if problem.opensSettings {
-                            Button("Open Login Items Settings…") { loginItem.openSettings() }
-                        }
-                    }
-                }
                 Toggle("Show floating notes while recording", isOn: $showsFloatingNotes)
-                    .controlSize(.regular)
-                Toggle("Add imported files to conversations they overlap", isOn: $sources.matchesImportedFiles)
                     .controlSize(.regular)
             }
 
@@ -145,11 +238,6 @@ private struct GeneralSettings: View {
                 if !screenCapture {
                     SettingsFooter("Needed to record computer audio.")
                 }
-            }
-
-            Section("Menu Bar") {
-                Toggle("Show Daybook in the menu bar", isOn: $showsMenuBarExtra)
-                    .controlSize(.regular)
             }
         }
         .formStyle(.grouped)
@@ -204,7 +292,6 @@ private struct GeneralSettings: View {
     private func refreshPermissions() {
         microphone = AVCaptureDevice.authorizationStatus(for: .audio)
         screenCapture = CGPreflightScreenCaptureAccess()
-        loginItem.refresh()
     }
 }
 
@@ -389,6 +476,13 @@ private struct SupportedCallsPopover: View {
 
 private struct LibrarySettings: View {
     let state: AppState
+    /// The import-matching switch lives on the sources coordinator, which the window doesn't follow.
+    @Bindable private var sources: MultiSourceCoordinator
+
+    init(state: AppState) {
+        self.state = state
+        sources = state.sources
+    }
 
     /// "Version 1.2 (45)", as the About panel and the iPhone's About say it; nothing for a development build.
     private var version: String? { AboutWords.version(Bundle.main.infoDictionary) }
@@ -410,6 +504,11 @@ private struct LibrarySettings: View {
             }
 
             SyncSettingsView(state: state)
+
+            Section("Imports") {
+                Toggle("Add imported files to conversations they overlap", isOn: $sources.matchesImportedFiles)
+                    .controlSize(.regular)
+            }
 
             Section {
                 PrivacyStatement()

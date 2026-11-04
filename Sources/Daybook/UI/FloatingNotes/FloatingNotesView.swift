@@ -334,7 +334,7 @@ private struct StatusBand: View {
 struct ChipMenuItems: View {
     let context: PanelContext
     let chip: RecorderChip
-    @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openSettingsWindow
 
     private var state: AppState { context.state }
 
@@ -390,7 +390,7 @@ struct ChipMenuItems: View {
 
     private func openSettingsPane(_ pane: SettingsPane) {
         LaunchOptions.defaults.set(pane.rawValue, forKey: SettingsPane.storageKey)
-        openSettings()
+        openSettingsWindow.settings()
         NSApp.activate()
     }
 }
