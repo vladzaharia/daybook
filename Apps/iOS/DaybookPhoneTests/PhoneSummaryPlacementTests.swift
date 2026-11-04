@@ -23,6 +23,8 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         private var _asked: [UUID] = []
         private var gate: CheckedContinuation<Void, Never>?
         private var held = false
+        /// What a summary says, from the conversation as it read it.
+        var overview: @Sendable (Meeting) -> String = { _ in "From the cloud" }
         init(models: [CloudModel]) { self.models = models }
         var asked: [UUID] { lock.withLock { _asked } }
         var isWaiting: Bool { lock.withLock { gate != nil } }
@@ -39,7 +41,7 @@ final class PhoneSummaryPlacementTests: XCTestCase {
                 }
             } onCancel: { [weak self] in self?.release() }
             try Task.checkCancellation()
-            return MeetingSummary(title: meeting.title, overview: "From the cloud", modelID: model.id)
+            return MeetingSummary(title: meeting.title, overview: overview(meeting), modelID: model.id)
         }
     }
 
@@ -251,6 +253,24 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         await rig.placement.summaryIsDue(id)
         try await waitUntil("the summary") { rig.library.meeting(id)?.summary != nil }
         XCTAssertEqual(cloud.asked, [id])
+    }
+
+    /// A speaker named while the cloud writes the summary: the name follows into it, as into a summary already there.
+    func testBehaviorANameGivenWhileTheCloudSummarizesFollowsIntoTheSummary() async throws {
+        let cloud = Cloud(models: [sonnet])
+        cloud.overview = { meeting in "\(meeting.speakers.first?.name ?? "No one") ships on Friday." }
+        let rig = try await rig(cloud: cloud)
+        rig.cloud.preferences.policy = .always
+        let id = transcribed(rig.library)
+        rig.library.update(id) { $0.speakers = [Speaker(id: "run:S1", name: "Speaker 1")] }
+        cloud.hold()
+        await rig.placement.summaryIsDue(id)
+        try await waitUntil("the cloud to be asked") { cloud.isWaiting }
+        rig.library.renameSpeaker("run:S1", to: "Priya", in: id)
+        cloud.release()
+        try await waitUntil("the summary") { rig.library.meeting(id)?.summary != nil }
+        XCTAssertEqual(rig.library.meeting(id)?.summary?.overview, "Priya ships on Friday.")
+        XCTAssertEqual(cloud.asked, [id], "Written once")
     }
 
     // MARK: This iPhone's own summarizer

@@ -28,6 +28,9 @@ final class FakeCloud: CloudSummarizing, @unchecked Sendable {
     private var _held = false
     private var waiting: [CheckedContinuation<Void, Never>] = []
 
+    /// What a summary says, from the conversation as it read it.
+    var overview: @Sendable (Meeting) -> String = { _ in "From the cloud" }
+
     init(models: [CloudModel] = [FakeCloud.sonnet]) { self.models = models }
 
     var summarized: [UUID] { lock.withLock { _summarized } }
@@ -49,7 +52,7 @@ final class FakeCloud: CloudSummarizing, @unchecked Sendable {
             if !held { continuation.resume() }
         }
         progress(1)
-        return MeetingSummary(title: "Call", overview: "From the cloud", modelID: model.id)
+        return MeetingSummary(title: "Call", overview: overview(meeting), modelID: model.id)
     }
 }
 
@@ -285,6 +288,34 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         try await rig.processed(id)
         XCTAssertEqual(cloud.summarized, [id])
         XCTAssertTrue(rig.inference.summarized.isEmpty)
+    }
+
+    /// A speaker named while the summary is being written: the name follows into it, as into a summary already there,
+    /// and nothing is summarized twice. Notes written meanwhile still summarize it again.
+    func testBehaviorANameGivenWhileSummarizingFollowsIntoTheSummaryWithoutAnother() async throws {
+        let cloud = FakeCloud()
+        cloud.overview = { meeting in "\(meeting.speakers.first?.name ?? "No one") ships on Friday." }
+        let rig = try await rig(cloud: cloud, policy: .always)
+        let id = try await conversation(rig, "Names", frequency: 390)
+        cloud.hold()
+        rig.state.enqueue(id)
+        try await waitUntil("the cloud to be asked") { cloud.isWaiting }
+        let speaker = try XCTUnwrap(rig.meeting(id)?.speakers.first)
+        XCTAssertEqual(speaker.name, "Speaker 1")
+        rig.state.library.renameSpeaker(speaker.id, to: "Priya", in: id)
+        cloud.release()
+        try await rig.processed(id)
+        XCTAssertEqual(cloud.summarized, [id], "Written once")
+        XCTAssertEqual(rig.meeting(id)?.summary?.overview, "Priya ships on Friday.")
+        XCTAssertEqual(rig.meeting(id)?.revisions.filter { $0.field == "summary" }.count, 1, "One summary in Version History")
+
+        cloud.hold()
+        rig.state.enqueue(id, mode: .summaryOnly)
+        try await waitUntil("the cloud to be asked again") { cloud.isWaiting }
+        rig.state.library.update(id) { $0.notes = "Bring the deck" }
+        cloud.release()
+        try await rig.processed(id)
+        XCTAssertEqual(cloud.summarized, [id, id, id], "The notes changed meanwhile: summarized again")
     }
 
     func testBehaviorSummarizeOnThisMacRunsHereUnderAlwaysOnceAndOnlyThatOnce() async throws {
