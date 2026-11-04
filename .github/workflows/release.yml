@@ -418,6 +418,8 @@ jobs:
             --run-attempt "$RUN_ATTEMPT" --offset "$OFFSET" | grep '^build_')"
           printf '%s\n' "$numbers"
           echo "BUILD=$(printf '%s\n' "$numbers" | sed -n 's/^build_number=//p')" >> "$GITHUB_ENV"
+      - name: Date the files by their content
+        run: scripts/ci/stable-mtimes.sh
       - name: Select Xcode
         run: scripts/ci/select-xcode.sh --metal --expect-build "$DAYBOOK_RELEASE_XCODE_BUILD"
       - name: Install XcodeGen
@@ -447,6 +449,19 @@ jobs:
             echo "BUILD=$(printf '%s\n' "$out" | sed -n 's/^build=//p')" >> "$GITHUB_ENV"
             echo "::notice title=Notarization resumed::Waiting for the earlier submission $submission instead of building again"
           fi
+      # The Release build CI's mac-archive job saved from main, so the archive compiles only what changed since.
+      # Only pushes to main write caches a release can restore.
+      - name: Restore the Release build CI saved
+        if: steps.resume.outputs.submission == ''
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            build/macOS/DerivedData
+            build/macOS/SourcePackages
+            !build/macOS/DerivedData/Logs
+            !build/macOS/DerivedData/Index.noindex
+          key: mac-dd-${{ runner.os }}-${{ env.DAYBOOK_XCODE_BUILD }}-Release-${{ github.sha }}
+          restore-keys: mac-dd-${{ runner.os }}-${{ env.DAYBOOK_XCODE_BUILD }}-Release-
       # Package checkouts and manifests run before any secret exists.
       - name: Fetch the packages at their pinned versions
         if: steps.resume.outputs.submission == ''
@@ -585,6 +600,8 @@ jobs:
         with:
           name: release-notes
           path: notes
+      - name: Date the files by their content
+        run: scripts/ci/stable-mtimes.sh
       - name: Select Xcode
         run: scripts/ci/select-xcode.sh --metal --expect-build "$DAYBOOK_RELEASE_XCODE_BUILD"
       - name: Install XcodeGen
@@ -603,6 +620,19 @@ jobs:
             echo "BUILD=$found" >> "$GITHUB_ENV"
             echo "::notice title=Already uploaded::Daybook for Mac $VERSION ($found) is in App Store Connect from an earlier attempt; skipping the archive and upload"
           fi
+      # The Release build CI's mac-archive job saved from main, so the archive compiles only what changed since.
+      # Only pushes to main write caches a release can restore.
+      - name: Restore the Release build CI saved
+        if: steps.earlier.outputs.build == ''
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            build/macOS/DerivedData
+            build/macOS/SourcePackages
+            !build/macOS/DerivedData/Logs
+            !build/macOS/DerivedData/Index.noindex
+          key: mac-dd-${{ runner.os }}-${{ env.DAYBOOK_XCODE_BUILD }}-Release-${{ github.sha }}
+          restore-keys: mac-dd-${{ runner.os }}-${{ env.DAYBOOK_XCODE_BUILD }}-Release-
       # Package checkouts and manifests run before any secret exists.
       - name: Fetch the packages at their pinned versions
         if: steps.earlier.outputs.build == ''

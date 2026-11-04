@@ -421,12 +421,69 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+  # Pushes to main only: the Mac app's Release archive as a release builds it (ad hoc here: signing changes no
+  # compile), so main keeps building in Release, and the release's two Mac archives restore its cache.
+  mac-archive:
+    name: Mac archive (Release, ad hoc)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: xcode-27
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    outputs:
+      cache_key: ${{ steps.key.outputs.build }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Date the files by their content
+        run: scripts/ci/stable-mtimes.sh
+      - name: Select Xcode
+        run: scripts/ci/select-xcode.sh --metal
+      - name: Install XcodeGen
+        run: scripts/ci/install-xcodegen.sh
+      - name: Cache key
+        id: key
+        run: echo "build=mac-dd-${RUNNER_OS}-${DAYBOOK_XCODE_BUILD}-Release-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+      - name: Restore derived data
+        id: restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            build/macOS/DerivedData
+            build/macOS/SourcePackages
+            !build/macOS/DerivedData/Logs
+            !build/macOS/DerivedData/Index.noindex
+          key: ${{ steps.key.outputs.build }}
+          restore-keys: mac-dd-${{ runner.os }}-${{ env.DAYBOOK_XCODE_BUILD }}-Release-
+      - name: Archive (no team, signed to run locally)
+        id: archive
+        run: scripts/build-app.sh --ad-hoc --archive-only
+      - name: Save derived data
+        if: steps.restore.outputs.cache-hit != 'true' && steps.archive.outcome == 'success'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            build/macOS/DerivedData
+            build/macOS/SourcePackages
+            !build/macOS/DerivedData/Logs
+            !build/macOS/DerivedData/Index.noindex
+          key: ${{ steps.key.outputs.build }}
+      - name: Upload build logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mac-archive-logs
+          path: build/macOS/DerivedData/Logs/
+          retention-days: 14
+          if-no-files-found: ignore
+
   # After a push to main has saved its caches (each job's key ends in the commit), the older caches of the
   # same families go, so they don't crowd the 10 GB quota. A family whose new cache wasn't saved is left alone. The only job that can write to Actions; it
   # builds nothing and runs only scripts/ci/prune-caches.sh.
   caches:
     name: Prune superseded caches
-    needs: [package, iphone, iphone-archive, mac]
+    needs: [package, iphone, iphone-archive, mac, mac-archive]
     if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -443,7 +500,7 @@ jobs:
           REPO: ${{ github.repository }}
           KEYS: >-
             ${{ needs.package.outputs.cache_key }} ${{ needs.iphone.outputs.cache_key }}
-            ${{ needs.iphone-archive.outputs.cache_key }} ${{ needs.mac.outputs.cache_key }}
+            ${{ needs.iphone-archive.outputs.cache_key }} ${{ needs.mac.outputs.cache_key }} ${{ needs.mac-archive.outputs.cache_key }}
         run: |
           read -r -a keys <<< "$KEYS"
           scripts/ci/prune-caches.sh --repo "$REPO" --ref refs/heads/main ${keys[@]+"${keys[@]}"}
