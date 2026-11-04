@@ -480,6 +480,16 @@ docs/iphone.md "Moving to the new app".
   iPhone app for the Simulator; a single multiplatform target built for both after SDK-conditional bundle ID and
   Info.plist and an excluded resource.
 
+**Seen on a development Mac (2026-11-03), open.** After a sandboxed `local.daybook` build first ran there (its container
+appeared at 16:49), `~/Library/Preferences/local.daybook.plist` was gone, moved by the manifest, but
+`~/Library/Preferences/local.daybook.app.plist` (last written 2026-11-01) was still in place. The container is
+privacy-protected, so what it holds wasn't read. No settings were lost: the Developer ID build had already carried
+`local.daybook.app`'s settings into `local.daybook.plist` (`PreferencesCarryOver`), and that file moved. For someone
+coming straight from a release before the one bundle ID to the App Store build, though, `local.daybook.app.plist` is
+where the settings are. The probes above moved one preferences file under another name, never two in one manifest.
+To settle it: on a fresh user account, put both files in place, run the rehearsal build with the real manifest, and
+check that both left `~/Library/Preferences` and that the app shows the settings from `local.daybook.app.plist`.
+
 **Still needs the owner or hardware.** The portal and App Store Connect steps, in order (docs/release.md, "One bundle ID");
 until they're done and `release.yml` changes, a tagged release fails (docs/release.md, "Known blockers"). Then: a signed
 Developer ID build's first launch over a real `local.daybook.app` install (settings, devices, the iPhone reconnecting
@@ -3567,6 +3577,47 @@ tokenizers installed on the owner's Mac (copies of their tokenizer and config fi
   quit mid-shard) starts again; files that finished are kept, as before. 1.1.6 resumed the file itself.
 - The app links the new packages' licenses and NOTICE files (swift-crypto and swift-asn1 carry NOTICE.txt) in
   `Contents/Resources/Licenses`, and `THIRD_PARTY_NOTICES.md` lists them.
+
+## FluidAudio 0.18.0 (2026-11-03)
+
+Dependabot's bump from 0.17.7 (#42) didn't compile: `Nemotron3Config`, `Nemotron3Models`, `Nemotron3Diarizer`, and
+`Nemotron3ChunkResult` weren't found. Nothing was renamed or removed. 0.18.0 put speaker detection behind a package
+trait, `Diarizer` (FluidAudio #990), and Daybook's `traits: []`, there to leave out the NeMo text-normalization binary,
+now left out every diarizer too: Nemotron 3, Community-1's offline pipeline, and Sortformer. Package.swift asks for
+`traits: ["Diarizer"]`; text-to-speech and NeMo text normalization stay off. No Daybook code needed changing.
+
+What changed under what Daybook calls, read from FluidAudio's source between the two tags:
+
+- **Parakeet** (`AsrManager`, `AsrModels.loadLocal`): same API. A word decoded in both windows of a seam now takes
+  its timing from the window that heard it away from its edge (`ASRConfig.seamTimingRealignment`, on by default,
+  FluidAudio #975), so seam words in recordings over 15 s get later, truer ends, and a seam's text can change. The
+  encoder ladder and pause-cut windows (FluidAudio #1019) apply only to a multifunction encoder, which only Phonon-2's
+  newer build has; the pinned Ultra and Redux revisions decode as before. `<unk>` tokens are dropped (only Bark emits
+  them; Daybook's word merge already skipped them). A 16-bit mono 16 kHz WAV is read in place instead of converted.
+- **Community-1** (`OfflineDiarizerManager`, `OfflineDiarizerConfig`, `OfflineDiarizerModels`): same API and
+  defaults. The new `segmentation.batchSize` defaults to the 32 it was fixed at. `embedSpan`, which
+  `WeSpeakerEmbedder` reproduces, was refactored onto batched predictions but computes the same window (tiled span,
+  every frame weighted, silence-aware FBank re-centering); a public `embedSpans` joined it.
+- **Nemotron 3 Diarization and Sortformer:** unchanged apart from the trait.
+- **Nemotron 3.5 ASR Streaming** (`StreamingNemotronMultilingualAsrManager`): the partial-text callback publishes only
+  text a blank-span rescue can no longer change, and only when it changes (FluidAudio #994, #1005). Daybook doesn't
+  use the callback; `getTokenTimings()` and `finishWithTokenTimings()` are unchanged.
+- Daybook uses neither FluidAudio's VAD nor its sound classification (the background-audio check is Apple's
+  SoundAnalysis).
+
+No model files, catalog revisions, or digests changed. Engine versions stay 1 (a version rises for an ability a
+manifest entry may require), and results record "1 (FluidAudio 0.18.0)".
+
+**Tests.** `swift build` and `swift build --build-tests` built, and `swift test` passed 2,185 XCTest cases in ten
+bundles with 0 failures and 3 skipped (two measurements behind environment variables, and the motion audit's list of
+curves still written in views). `EngineRuntimeTests` checks the new runtime name against Package.resolved.
+`scripts/build-app.sh --ad-hoc --debug` built and packaged the Mac app. The iPhone app built for testing
+(`scripts/build-ios.sh --build-for-testing`), and its 376 tests passed with 0 failures on an iPhone Duo simulator,
+iOS 27.1 (`--test --skip-build --test-arg -parallel-testing-enabled --test-arg NO`).
+
+**Still to check with real weights** (no model was downloaded): Parakeet Ultra's transcript and word timings on a
+recording longer than 15 s against 0.17.7's, at the seams; the smoke test (`--smoke-test --download-models`) with
+Parakeet, Community-1, and Nemotron 3; live captions and live speakers on the Mac and an iPhone.
 
 ## One copy at a time on the Mac (2026-10-28)
 

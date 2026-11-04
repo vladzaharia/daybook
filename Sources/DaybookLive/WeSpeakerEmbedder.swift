@@ -3,8 +3,10 @@ import Foundation
 
 /// One embedding for one stretch of audio from Community-1's FBank and WeSpeaker ResNet34 models:
 /// the span is repeated to fill the 10-second window and every frame is weighted, so only that
-/// speaker shapes it. This mirrors FluidAudio 0.17.7's internal `OfflineEmbeddingExtractor.embedSpan`
-/// (its public `embedSpans` arrives after 0.17.7), including the silence-aware FBank re-centering.
+/// speaker shapes it. This mirrors FluidAudio's internal `OfflineEmbeddingExtractor.embedSpan` (unchanged
+/// through 0.18.0), including the silence-aware FBank re-centering. 0.18.0's public
+/// `OfflineDiarizerManager.embedSpans` does the same, but needs all four Community-1 models and an audio source,
+/// where live captions have two models and samples.
 ///
 /// The one recipe for voice profiles on every device: the Mac's final pipeline embeds speakers with
 /// it (Community1VoiceEmbedder.swift), and live captions embed voices with it on the Mac and the
