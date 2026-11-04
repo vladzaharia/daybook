@@ -91,8 +91,13 @@ final class CallPolicyTests: XCTestCase {
         start(declined)
         XCTAssertFalse(declined.isMeetingActive)
         XCTAssertEqual(declined.statusText, MeetingMonitor.paused)
+        XCTAssertTrue(declined.isLeavingCallAlone)
         declined.apply(.seen([zoom], windowsReadable: true), at: epoch.addingTimeInterval(30))
         XCTAssertFalse(declined.isMeetingActive, "not asked about again while it goes on")
+        declined.apply(.seen([], windowsReadable: true), at: epoch.addingTimeInterval(40))
+        XCTAssertTrue(declined.isLeavingCallAlone)
+        declined.apply(.seen([], windowsReadable: true), at: epoch.addingTimeInterval(86))
+        XCTAssertFalse(declined.isLeavingCallAlone, "until it has ended")
     }
 
     func testBehaviorTheEndOfACallSaysWhichCallItWas() {
@@ -152,9 +157,9 @@ final class CallPolicyTests: XCTestCase {
     // MARK: The prompt
 
     func testBehaviorThePromptLeavesACallAloneAndARecordingGoingWhenItsTimeRunsOut() {
-        XCTAssertEqual(CallPromptQuestion.record(zoom).unanswered, .notNow)
+        XCTAssertEqual(CallPromptQuestion.record(zoom, event: nil).unanswered, .notNow)
         XCTAssertEqual(CallPromptQuestion.ended(zoom).unanswered, .keepRecording, "a recording the person started is never stopped for them")
-        XCTAssertEqual(CallPromptQuestion.record(zoom).announcement, "Zoom call started. Record it?")
+        XCTAssertEqual(CallPromptQuestion.record(zoom, event: nil).announcement, "Zoom call started. Record it?")
         XCTAssertEqual(CallPromptQuestion.ended(zoom).announcement, "The Zoom call ended. Stop recording?")
         let notes = NSRect(x: 1000, y: 300, width: 360, height: 560)
         let prompt = CallPromptWindow.frame(under: notes)

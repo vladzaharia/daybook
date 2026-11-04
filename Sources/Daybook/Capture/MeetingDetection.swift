@@ -191,6 +191,8 @@ final class MeetingMonitor {
     /// Daybook is asking whether to record the active call.
     @ObservationIgnored private var asking = false
     @ObservationIgnored private var machine = MeetingDetectionStateMachine()
+    /// A call goes on that the person said not to record (Not Now, Never), until it ends.
+    var isLeavingCallAlone: Bool { machine.suppressedBundleID != nil }
     @ObservationIgnored private var sampling: Task<Void, Never>?
     /// Looks in a row that couldn't be made.
     @ObservationIgnored private var failures = 0

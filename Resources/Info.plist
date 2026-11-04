@@ -13,6 +13,7 @@
 <key>NSBluetoothAlwaysUsageDescription</key><string>Daybook connects to your Soundcore Work to import its recordings.</string>
 <key>NSMicrophoneUsageDescription</key><string>Daybook records your voice in the conversations you record.</string>
 <key>NSAudioCaptureUsageDescription</key><string>Daybook records call audio so both sides of a conversation are transcribed.</string>
+<key>NSCalendarsFullAccessUsageDescription</key><string>Daybook names recordings after their meeting and asks to record a meeting when it starts.</string>
 <key>NSSpeechRecognitionUsageDescription</key><string>Daybook shows live captions while it records.</string>
 <key>NSScreenCaptureUsageDescription</key><string>Daybook records call audio. No screen video is saved.</string>
 <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>

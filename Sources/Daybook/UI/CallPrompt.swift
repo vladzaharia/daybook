@@ -1,6 +1,7 @@
 import AppKit
 import DaybookCore
 import DaybookDesign
+import DaybookKit
 import SwiftUI
 
 // The call prompt (docs/capture.md, "Calls"; docs/interface.md, "Call prompt"): a small panel where Floating Notes
@@ -16,26 +17,60 @@ enum CallPromptAnswer: Equatable, Sendable {
 
 /// What the prompt asks.
 enum CallPromptQuestion: Equatable, Sendable {
-    /// A call has started: record it?
-    case record(MeetingCandidate)
+    /// A call has started, in the calendar's meeting when it has one: record it?
+    case record(MeetingCandidate, event: MeetingEvent?)
     /// The call ended while a recording the person started went on: stop it?
     case ended(MeetingCandidate)
+    /// A meeting with other people is starting, with no call announcing it: record it?
+    case meetingStarts(MeetingEvent)
+    /// The meeting recorded from its start has ended: stop it?
+    case meetingEnded(MeetingEvent)
 
-    var call: MeetingCandidate {
+    /// Whether it asks to start a recording, rather than whether to stop one.
+    var asksToRecord: Bool {
         switch self {
-        case .record(let call), .ended(let call): call
+        case .record, .meetingStarts: true
+        case .ended, .meetingEnded: false
+        }
+    }
+
+    /// The call's app, whose icon it shows; none for a meeting, which shows the calendar's.
+    var app: String? {
+        switch self {
+        case .record(let call, _), .ended(let call): call.bundleID
+        case .meetingStarts, .meetingEnded: nil
         }
     }
 
     /// How long it waits for an answer, and the one it gives itself then: a call is left alone, a recording goes on.
-    var wait: TimeInterval { if case .record = self { 15 } else { 30 } }
-    var unanswered: CallPromptAnswer { if case .record = self { .notNow } else { .keepRecording } }
+    var wait: TimeInterval { asksToRecord ? 15 : 30 }
+    var unanswered: CallPromptAnswer { asksToRecord ? .notNow : .keepRecording }
+
+    var title: String {
+        switch self {
+        case .record(let call, _): call.callName.prefix(1).uppercased() + call.callName.dropFirst()
+        case .ended(let call): "The \(call.callName) ended"
+        case .meetingStarts(let event): event.title
+        case .meetingEnded(let event): "\(event.title) ended"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .record(let call, let event?): [event.title, event.peopleLine].compactMap { $0 }.joined(separator: " · ")
+        case .record(let call, nil): call.windowTitle == call.appName ? "Record it?" : call.windowTitle
+        case .meetingStarts(let event): ["Starting now", event.peopleLine].compactMap { $0 }.joined(separator: " · ")
+        case .ended, .meetingEnded: "Stop recording?"
+        }
+    }
 
     /// What VoiceOver says as it appears.
     var announcement: String {
         switch self {
-        case .record(let call): "\(call.callName.prefix(1).uppercased() + call.callName.dropFirst()) started. Record it?"
+        case .record: "\(title) started. Record it?"
         case .ended(let call): "The \(call.callName) ended. Stop recording?"
+        case .meetingStarts(let event): "\(event.title) is starting. Record it?"
+        case .meetingEnded(let event): "\(event.title) ended. Stop recording?"
         }
     }
 }
@@ -98,12 +133,12 @@ final class CallPromptWindow {
 
     /// The call it asks about to record has ended: the question goes with it, answered Not Now.
     func callEnded() {
-        if case .record? = question { finish(.notNow) }
+        if let question, case .record = question { finish(.notNow) }
     }
 
     /// The recording it asks about stopping has ended some other way: the question goes, unanswered.
     func recordingEnded() {
-        if case .ended? = question { dismiss() }
+        if let question, !question.asksToRecord { dismiss() }
     }
 
     /// Where it shows: the top-trailing corner of where Floating Notes opens, so Record can grow it into the notes.
@@ -203,19 +238,24 @@ struct CallPromptView: View {
     let model: CallPromptModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var call: MeetingCandidate { model.question.call }
-    private var appName: String { CallPolicy.appName(for: call.bundleID) }
+    private var title: String { model.question.title }
+    private var subtitle: String { model.question.subtitle }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s3) {
             HStack(alignment: .top, spacing: Space.s3) {
-                AppIcon(bundleID: call.bundleID)
+                if let app = model.question.app {
+                    AppIcon(bundleID: app)
+                } else {
+                    CalendarIcon()
+                }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title).font(.headline).lineLimit(1)
                     Text(subtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 0)
-                if case .record = model.question {
+                if case .record(let call, _) = model.question {
+                    let appName = CallPolicy.appName(for: call.bundleID)
                     Menu {
                         Button("Always Record \(appName) Calls") { model.answer(.alwaysRecord) }
                         Button("Never for \(appName)") { model.answer(.never) }
@@ -230,8 +270,7 @@ struct CallPromptView: View {
             }
             HStack(spacing: Space.s2) {
                 Spacer(minLength: 0)
-                switch model.question {
-                case .record:
+                if model.question.asksToRecord {
                     Button("Not Now") { model.answer(.notNow) }
                     // The panel is never active, so a prominent button would draw grey: the record dot keeps its red.
                     Button { model.answer(.record) } label: {
@@ -241,7 +280,7 @@ struct CallPromptView: View {
                             Image(systemName: "record.circle.fill").foregroundStyle(DaybookPalette.Ink.record)
                         }
                     }
-                case .ended:
+                } else {
                     Button("Keep Recording") { model.answer(.keepRecording) }
                     Button("Stop") { model.answer(.stop) }
                         .buttonStyle(.borderedProminent)
@@ -272,18 +311,17 @@ struct CallPromptView: View {
         .accessibilityLabel(title)
     }
 
-    private var title: String {
-        switch model.question {
-        case .record: call.callName.prefix(1).uppercased() + call.callName.dropFirst()
-        case .ended: "The \(call.callName) ended"
-        }
-    }
+}
 
-    private var subtitle: String {
-        switch model.question {
-        case .record: call.windowTitle == call.appName ? "Record it?" : call.windowTitle
-        case .ended: "Stop recording?"
-        }
+/// A meeting's icon, in the calendar's red.
+private struct CalendarIcon: View {
+    var body: some View {
+        Image(systemName: "calendar")
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 32, height: 32)
+            .background(Color.red.gradient, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .accessibilityHidden(true)
     }
 }
 
@@ -310,9 +348,31 @@ extension AppState {
     /// Asks whether to record `call`, which has just started (When a call starts: Ask, or the app's own Ask). Record
     /// grows the prompt into Floating Notes as the recording starts; Not Now, or no answer in time, leaves the call alone
     /// until it ends; Always Record and Never are the app's from then on.
-    func askToRecord(_ call: MeetingCandidate) {
-        CallPromptWindow.shared.ask(.record(call)) { [weak self] answer in
-            self?.answered(answer, about: call)
+    func askToRecord(_ call: MeetingCandidate, in event: MeetingEvent? = nil) {
+        CallPromptWindow.shared.ask(.record(call, event: event)) { [weak self] answer in
+            self?.answered(answer, about: call, in: event)
+        }
+    }
+
+    /// Asks whether to record a meeting with other people that's starting with no call to announce it (Use Calendar).
+    /// Record records it under its title, as the person's own recording, and asks again once it's over whether to stop.
+    func askToRecord(_ meeting: MeetingEvent) {
+        askedMeetings.insert(meeting.id)
+        CallPromptWindow.shared.ask(.meetingStarts(meeting)) { [weak self] answer in
+            guard let self, answer == .record, self.recordingID == nil, !self.isStartingRecording else { return }
+            Task {
+                await self.startRecording(title: meeting.title)
+                if let id = self.recordingID { self.calendarMeeting = (id, meeting) }
+            }
+        }
+    }
+
+    /// The meeting recorded from its start is over: asked whether to stop, never stopped.
+    func askToStop(after meeting: MeetingEvent) {
+        let recording = recordingID
+        CallPromptWindow.shared.ask(.meetingEnded(meeting)) { [weak self] answer in
+            guard answer == .stop, let self, self.recordingID == recording else { return }
+            Task { await self.stopRecording(manual: true) }
         }
     }
 
@@ -327,7 +387,7 @@ extension AppState {
         }
     }
 
-    func answered(_ answer: CallPromptAnswer, about call: MeetingCandidate) {
+    func answered(_ answer: CallPromptAnswer, about call: MeetingCandidate, in event: MeetingEvent? = nil) {
         switch answer {
         case .record, .alwaysRecord:
             if answer == .alwaysRecord { callAppChoices[call.bundleID] = .always }
@@ -336,7 +396,7 @@ extension AppState {
             monitor.callRecordingStarted()
             guard recordingID == nil, !isStartingRecording else { return }
             // Started for a call, it stops when the call ends, as one recorded automatically does.
-            Task { await startRecording(title: call.windowTitle, automatic: true) }
+            Task { await startRecording(title: event?.title ?? call.windowTitle, automatic: true) }
         case .never:
             callAppChoices[call.bundleID] = .never
             monitor.suppressCurrentMeeting()
@@ -350,15 +410,23 @@ extension AppState {
 
 // MARK: - Demo
 
-/// `--call-prompt-demo record|ended` (debug builds): the prompt about a Zoom call, for screenshots, answering nothing.
+/// `--call-prompt-demo record|ended|meeting|meeting-ended` (debug builds): the prompt about a Zoom call or a calendar
+/// meeting, for screenshots, answering nothing.
 @MainActor
 enum CallPromptDemo {
     static func apply(to state: AppState) {
         #if DEBUG
         guard let kind = LaunchOptions.value(after: "--call-prompt-demo") else { return }
-        let call = MeetingCandidate(bundleID: "us.zoom.xos", appName: "Zoom", windowTitle: "Weekly product sync",
+        let call = MeetingCandidate(bundleID: "us.zoom.xos", appName: "Zoom", windowTitle: "Zoom Meeting",
                                     hasInputActivity: true, hasOutputActivity: true, hasMeetingWindow: true, isBrowser: false)
-        CallPromptWindow.shared.ask(kind == "ended" ? .ended(call) : .record(call)) { _ in }
+        let meeting = MeetingEvent(id: "demo", title: "Weekly product sync", start: Date(), end: Date().addingTimeInterval(1800), attendees: 4)
+        let question: CallPromptQuestion = switch kind {
+        case "ended": .ended(call)
+        case "meeting": .meetingStarts(meeting)
+        case "meeting-ended": .meetingEnded(meeting)
+        default: .record(call, event: meeting)
+        }
+        CallPromptWindow.shared.ask(question) { _ in }
         #endif
     }
 }

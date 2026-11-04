@@ -76,6 +76,7 @@ Store build takes a Developer ID release from after it.
 | Call audio: process tap | `ProcessTapSource` (`CATapDescription`, `AudioHardwareCreateProcessTap`, a private aggregate device) | `device.audio-input`, `NSAudioCaptureUsageDescription`. Unverified sandboxed: run the probe |
 | Call audio: ScreenCaptureKit fallback | `CaptureSources` | Screen & System Audio Recording permission (no entitlement) |
 | Call detection | `MeetingDetection` (window list, Core Audio process list, `NSRunningApplication`) | none; window titles need Screen Recording, as now |
+| Use Calendar | `EventKitMeetingCalendar` (EventKit) | `com.apple.security.personal-information.calendars`, `NSCalendarsFullAccessUsageDescription`; in every build, since the hardened runtime needs it too |
 | Soundcore over Bluetooth | `SoundcoreTransport` | `com.apple.security.device.bluetooth` |
 | Link to iPhone, Bonjour | `LinkService` | `com.apple.security.network.server` and `.client` |
 | Model downloads | `ModelHubClient`, `ModelArtifactFetcher` | `com.apple.security.network.client` |
@@ -152,7 +153,7 @@ manifest wouldn't run again. Remove it in Finder, or rehearse again under a new 
 
 `Resources/Daybook-Local.entitlements` (ad hoc and rehearsal builds) is sandboxed: `app-sandbox`, `device.audio-input`,
 `device.microphone`, `device.bluetooth`, `network.client`, `network.server`, `files.user-selected.read-write`,
-`files.bookmarks.app-scope`, and one temporary exception, read-write `/private/tmp/daybook/`, so the debug flags have a
+`files.bookmarks.app-scope`, `personal-information.calendars`, and one temporary exception, read-write `/private/tmp/daybook/`, so the debug flags have a
 place outside the container that a person can find (`--library /tmp/daybook/ui --snapshot /tmp/daybook/shots`).
 
 `Resources/Daybook-Sandbox.entitlements` (signed builds with `DAYBOOK_SANDBOX = YES`) is exactly

@@ -135,6 +135,7 @@ extension NSPasteboard: LocalPasteboardWriting {}
 enum PrivacySettings {
     enum Pane: String {
         case microphone = "Privacy_Microphone", screenCapture = "Privacy_ScreenCapture", bluetooth = "Privacy_Bluetooth"
+        case calendars = "Privacy_Calendars"
     }
     static func open(_ pane: Pane) {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane.rawValue)") { NSWorkspace.shared.open(url) }
