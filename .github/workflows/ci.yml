@@ -90,15 +90,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # A checkout dates every file now, and SwiftPM and Xcode rebuild what's newer than their records: dated by
+      # their content instead, unchanged files match the restored build's and aren't compiled again.
+      - name: Date the files by their content
+        run: scripts/ci/stable-mtimes.sh
       - name: Select Xcode
         run: scripts/ci/select-xcode.sh --metal
       - name: Cache key
         id: key
-        env:
-          PACKAGE_HASH: ${{ hashFiles('Package.resolved', 'Package.swift') }}
-        run: echo "build=swiftpm-${RUNNER_OS}-${DAYBOOK_XCODE_BUILD}-${PACKAGE_HASH}" >> "$GITHUB_OUTPUT"
-      # MLX, WhisperKit, and FluidAudio dominate the build. The cache holds .build for the pinned
-      # dependencies; only main saves it, so pull requests restore without filling the cache quota.
+        run: echo "build=swiftpm-${RUNNER_OS}-${DAYBOOK_XCODE_BUILD}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+      # The newest build main saved: every push to main saves its own (the caches job then deletes the older),
+      # and pull requests only restore, so they don't fill the cache quota.
       - name: Restore the SwiftPM build
         id: restore
         if: ${{ !inputs.clean }}
@@ -183,8 +185,8 @@ jobs:
   iphone:
     name: iPhone app
     runs-on: xcode-27
-    # About 45 minutes on a quick runner now that the app compiles MLX; a slow one takes 1.6 times as long.
-    timeout-minutes: 100
+    # A few minutes when the restored cache is current; a cold one compiles MLX and the rest, about 20 minutes.
+    timeout-minutes: 90
     permissions:
       contents: read
     outputs:
@@ -193,15 +195,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Date the files by their content
+        run: scripts/ci/stable-mtimes.sh
       - name: Select Xcode
         run: scripts/ci/select-xcode.sh --sdk iphoneos27.1 --sdk iphonesimulator27.1
       - name: Install XcodeGen
         run: scripts/ci/install-xcodegen.sh
       - name: Cache key
         id: key
-        env:
-          PROJECT_HASH: ${{ hashFiles('Package.resolved', 'Package.swift', 'Apps/iOS/project.yml') }}
-        run: echo "build=ios-dd-${RUNNER_OS}-${DAYBOOK_XCODE_BUILD}-${PROJECT_HASH}" >> "$GITHUB_OUTPUT"
+        run: echo "build=ios-dd-${RUNNER_OS}-${DAYBOOK_XCODE_BUILD}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
       - name: Restore derived data
         id: restore
         if: ${{ !inputs.clean }}
@@ -220,18 +222,24 @@ jobs:
           cat "$RUNNER_TEMP/simulator.txt"
           echo "udid=$udid" >> "$GITHUB_OUTPUT"
           { echo "### iPhone simulator"; tail -1 "$RUNNER_TEMP/simulator.txt"; } >> "$GITHUB_STEP_SUMMARY"
-          # Boot it now, so the test run doesn't spend its launch timeout on a cold boot.
-          xcrun simctl bootstatus "$udid" -b
+          # Start it booting now, while the app builds; the test step waits for it, so the tests don't spend their
+          # launch timeout on a cold boot.
+          xcrun simctl boot "$udid" || xcrun simctl bootstatus "$udid" -b
+      # Once, for the runner's architecture; both test steps run on what it made.
+      - name: Build for testing
+        id: build
+        run: scripts/build-ios.sh --build-for-testing
       # xcodebuild hands TEST_RUNNER_-prefixed variables to the test runner without the prefix: every
       # test wait doubles (DaybookPhoneTests/TestSupport.swift). The encoder timing step keeps its own.
-      - name: Build and test
+      - name: Test
         id: test
         env:
           UDID: ${{ steps.simulator.outputs.udid }}
           TEST_RUNNER_DAYBOOK_TEST_TIMEOUT_SCALE: "2"
         run: |
           mkdir -p build/test-results
-          scripts/build-ios.sh --test --simulator "$UDID" \
+          xcrun simctl bootstatus "$UDID" -b
+          scripts/build-ios.sh --test --skip-build --simulator "$UDID" \
             --test-arg -parallel-testing-enabled --test-arg NO \
             --test-arg -skip-testing:DaybookPhoneTests/PhoneRecorderTests/testCrashRecoveryProducesAudioNotesAndBookmarks \
             --test-arg -skip-testing:DaybookPhoneTests/PhoneRecorderTests/testRealTimeSegmentsReachTheDiskAtEachFragmentInterval \
@@ -241,12 +249,12 @@ jobs:
       # tests, with one retry (xcodebuild reruns only a failed test). xcodebuild calls a pass on the
       # retry a pass, so xcresult-retries.sh reads the result bundle and leaves a warning for it.
       - name: Encoder timing tests (alone, one retry)
-        if: ${{ !cancelled() && steps.test.outcome != 'skipped' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         env:
           UDID: ${{ steps.simulator.outputs.udid }}
         run: |
           status=0
-          scripts/build-ios.sh --test --simulator "$UDID" \
+          scripts/build-ios.sh --test --skip-build --simulator "$UDID" \
             --test-arg -only-testing:DaybookPhoneTests/PhoneRecorderTests/testCrashRecoveryProducesAudioNotesAndBookmarks \
             --test-arg -only-testing:DaybookPhoneTests/PhoneRecorderTests/testRealTimeSegmentsReachTheDiskAtEachFragmentInterval \
             --test-arg -retry-tests-on-failure --test-arg -test-iterations --test-arg 2 \
@@ -254,7 +262,7 @@ jobs:
           scripts/ci/xcresult-retries.sh build/test-results/EncoderTiming.xcresult || true
           exit "$status"
       - name: Save derived data
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.restore.outputs.cache-hit != 'true' && steps.test.outcome == 'success'
+        if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.restore.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -262,15 +270,6 @@ jobs:
             !Apps/iOS/build/DerivedData/Logs
             !Apps/iOS/build/DerivedData/Index.noindex
           key: ${{ steps.key.outputs.build }}
-      - name: Archive for a device (unsigned, Release)
-        id: archive
-        if: ${{ !cancelled() }}
-        run: scripts/build-ios.sh --archive --no-sign --marketing-version 0.0.0 --build-number "${GITHUB_RUN_NUMBER}"
-      # What release.yml enforces before uploading. Reported, not blocking, until the app has an icon.
-      - name: Check the archive as a release would
-        if: ${{ !cancelled() && steps.archive.outcome == 'success' }}
-        continue-on-error: true
-        run: scripts/ci/check-ios-archive.sh Apps/iOS/build/DaybookPhone.xcarchive --version 0.0.0 --build "${GITHUB_RUN_NUMBER}"
       - name: Upload test results
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -279,6 +278,65 @@ jobs:
           path: |
             build/test-results/
             Apps/iOS/build/DerivedData/Logs/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # The Release archive a release builds, unsigned, beside the tests rather than after them. Its cache is
+  # the one release.yml's iphone job restores for the signed archive.
+  iphone-archive:
+    name: iPhone archive (Release)
+    runs-on: xcode-27
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    outputs:
+      cache_key: ${{ steps.key.outputs.build }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Date the files by their content
+        run: scripts/ci/stable-mtimes.sh
+      - name: Select Xcode
+        run: scripts/ci/select-xcode.sh --sdk iphoneos27.1
+      - name: Install XcodeGen
+        run: scripts/ci/install-xcodegen.sh
+      - name: Cache key
+        id: key
+        run: echo "build=ios-release-dd-${RUNNER_OS}-${DAYBOOK_XCODE_BUILD}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+      - name: Restore derived data
+        id: restore
+        if: ${{ !inputs.clean }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            Apps/iOS/build/DerivedData
+            !Apps/iOS/build/DerivedData/Logs
+            !Apps/iOS/build/DerivedData/Index.noindex
+          key: ${{ steps.key.outputs.build }}
+          restore-keys: ios-release-dd-${{ runner.os }}-${{ env.DAYBOOK_XCODE_BUILD }}-
+      - name: Archive for a device (unsigned, Release)
+        id: archive
+        run: scripts/build-ios.sh --archive --no-sign --marketing-version 0.0.0 --build-number "${GITHUB_RUN_NUMBER}"
+      # What release.yml enforces before uploading. Reported, not blocking, until the app has an icon.
+      - name: Check the archive as a release would
+        continue-on-error: true
+        run: scripts/ci/check-ios-archive.sh Apps/iOS/build/DaybookPhone.xcarchive --version 0.0.0 --build "${GITHUB_RUN_NUMBER}"
+      - name: Save derived data
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.restore.outputs.cache-hit != 'true' && steps.archive.outcome == 'success'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            Apps/iOS/build/DerivedData
+            !Apps/iOS/build/DerivedData/Logs
+            !Apps/iOS/build/DerivedData/Index.noindex
+          key: ${{ steps.key.outputs.build }}
+      - name: Upload build logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: iphone-archive-logs
+          path: Apps/iOS/build/DerivedData/Logs/
           retention-days: 14
           if-no-files-found: ignore
 
@@ -302,6 +360,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Date the files by their content
+        run: scripts/ci/stable-mtimes.sh
       - name: Select Xcode
         run: scripts/ci/select-xcode.sh --metal
       # The release helpers' tests again, on macOS, where every group runs: CryptoKit's JWT check, the
@@ -312,9 +372,7 @@ jobs:
         run: scripts/ci/install-xcodegen.sh
       - name: Cache key
         id: key
-        env:
-          PROJECT_HASH: ${{ hashFiles('Package.resolved', 'Package.swift', 'Apps/macOS/project.yml') }}
-        run: echo "build=mac-dd-${RUNNER_OS}-${DAYBOOK_XCODE_BUILD}-${CONFIGURATION}-${PROJECT_HASH}" >> "$GITHUB_OUTPUT"
+        run: echo "build=mac-dd-${RUNNER_OS}-${DAYBOOK_XCODE_BUILD}-${CONFIGURATION}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
       - name: Restore derived data
         id: restore
         if: ${{ !inputs.clean }}
@@ -363,13 +421,12 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
-  # After a push to main has saved its caches, the older caches of the same families (superseded
-  # Package.resolved, Package.swift, or project hashes) go, so they don't crowd the 10 GB quota. A
-  # family whose new cache wasn't saved is left alone. The only job that can write to Actions; it
+  # After a push to main has saved its caches (each job's key ends in the commit), the older caches of the
+  # same families go, so they don't crowd the 10 GB quota. A family whose new cache wasn't saved is left alone. The only job that can write to Actions; it
   # builds nothing and runs only scripts/ci/prune-caches.sh.
   caches:
     name: Prune superseded caches
-    needs: [package, iphone, mac]
+    needs: [package, iphone, iphone-archive, mac]
     if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -384,7 +441,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          KEYS: ${{ needs.package.outputs.cache_key }} ${{ needs.iphone.outputs.cache_key }} ${{ needs.mac.outputs.cache_key }}
+          KEYS: >-
+            ${{ needs.package.outputs.cache_key }} ${{ needs.iphone.outputs.cache_key }}
+            ${{ needs.iphone-archive.outputs.cache_key }} ${{ needs.mac.outputs.cache_key }}
         run: |
           read -r -a keys <<< "$KEYS"
           scripts/ci/prune-caches.sh --repo "$REPO" --ref refs/heads/main ${keys[@]+"${keys[@]}"}

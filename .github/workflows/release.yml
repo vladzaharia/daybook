@@ -4,7 +4,9 @@
 # bundle ID"). Runs for a pushed v* tag, or by hand from main or a v* tag.
 # Each distribution channel is an environment of its own (`iOS TestFlight`, `Mac TestFlight`, `Mac download`),
 # holding the secrets its job needs; approving a run ticks the channels it ships to, and an unticked one is
-# rejected (scripts/approve-release.sh approves them all at once, or all but those skipped).
+# rejected (scripts/approve-release.sh approves them all at once, or all but those skipped). The signing jobs
+# ask for approval as soon as the run starts and build meanwhile; before anything leaves the runner they wait
+# for the commit's tests: CI's run on main, or this run's own (validate) when main has none.
 # docs/release.md covers the setup, the secrets, and how to cut a release.
 name: Release
 
@@ -58,8 +60,11 @@ env:
   NSUnbufferedIO: "YES"
 
 jobs:
+  # Only when main has no CI run for the commit (prepare): otherwise the signing jobs wait for that one.
   validate:
     name: Validate the release commit
+    needs: prepare
+    if: needs.prepare.outputs.ci_run == ''
     uses: ./.github/workflows/ci.yml
     with:
       # The full unsigned Release archive, as the mac job builds it, not CI's usual Debug build.
@@ -77,7 +82,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      actions: read # the run's creation time, below
+      actions: read # the run's creation time, and CI's run for the commit, below
     # No build number here: "Re-run failed jobs" doesn't re-run this job, so the iphone and mac jobs
     # work theirs out from their own github.run_attempt.
     outputs:
@@ -91,6 +96,7 @@ jobs:
       mac: ${{ steps.apps.outputs.mac }}
       mac_testflight: ${{ steps.apps.outputs.mac_testflight }}
       testflight_group: ${{ steps.apps.outputs.testflight_group }}
+      ci_run: ${{ steps.ci.outputs.ci_run }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -147,6 +153,23 @@ jobs:
           created="$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq .created_at)"
           [[ "$created" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$ ]] || { echo "::error::Unexpected creation time '$created'"; exit 1; }
           echo "created_at=$created" | tee -a "$GITHUB_OUTPUT"
+      # The push to main that brought the commit ran CI on it (a tag must point at a commit on main): the signing
+      # jobs wait for that run rather than this one testing the commit again. Its newest run that wasn't
+      # cancelled; one that failed fails the release until it's re-run.
+      - name: CI on main for this commit
+        id: ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          run="$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&branch=main&per_page=20" \
+            --jq '[.workflow_runs[] | select(.conclusion != "cancelled")] | first | .id // empty')"
+          if [[ -n "$run" ]]; then
+            echo "::notice title=Tests::CI on main tests this commit: https://github.com/$REPO/actions/runs/$run"
+          else
+            echo "::notice title=Tests::main has no CI run for this commit, so this run tests it (validate)"
+          fi
+          echo "ci_run=$run" | tee -a "$GITHUB_OUTPUT"
       # The Mac on TestFlight: a manual run's mac_testflight input, or the DAYBOOK_MAC_TESTFLIGHT
       # repository variable (true) for every run that releases the Mac app.
       - name: Apps and TestFlight group
@@ -206,13 +229,14 @@ jobs:
 
   iphone:
     name: iPhone to TestFlight
-    needs: [prepare, validate]
+    needs: prepare
     if: needs.prepare.outputs.iphone == 'true'
     runs-on: xcode-27
-    timeout-minutes: 120
+    timeout-minutes: 180
     environment: iOS TestFlight
     permissions:
       contents: read
+      actions: read # the commit's tests (await-validation.sh)
     env:
       DAYBOOK_TEAM_ID: ${{ vars.DAYBOOK_TEAM_ID }}
       VERSION: ${{ needs.prepare.outputs.marketing_version }}
@@ -244,6 +268,8 @@ jobs:
         with:
           name: release-notes
           path: notes
+      - name: Date the files by their content
+        run: scripts/ci/stable-mtimes.sh
       - name: Select Xcode
         run: scripts/ci/select-xcode.sh --sdk iphoneos27.1 --expect-build "$DAYBOOK_RELEASE_XCODE_BUILD"
       - name: Install XcodeGen
@@ -266,6 +292,18 @@ jobs:
             echo "BUILD=$found" >> "$GITHUB_ENV"
             echo "::notice title=Already uploaded::Daybook $VERSION ($found) is in App Store Connect from an earlier attempt; skipping the archive and upload"
           fi
+      # The Release build CI's iphone-archive job saved from main, so the archive compiles only what changed since.
+      # Only pushes to main write caches a release can restore.
+      - name: Restore the Release build CI saved
+        if: steps.earlier.outputs.build == ''
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            Apps/iOS/build/DerivedData
+            !Apps/iOS/build/DerivedData/Logs
+            !Apps/iOS/build/DerivedData/Index.noindex
+          key: ios-release-dd-${{ runner.os }}-${{ env.DAYBOOK_XCODE_BUILD }}-${{ github.sha }}
+          restore-keys: ios-release-dd-${{ runner.os }}-${{ env.DAYBOOK_XCODE_BUILD }}-
       # Package checkouts and manifests run before any secret exists.
       - name: Fetch the packages at their pinned versions
         if: steps.earlier.outputs.build == ''
@@ -286,6 +324,16 @@ jobs:
       - name: Check the archive (export compliance, icon, versions, entitlements)
         if: steps.earlier.outputs.build == ''
         run: scripts/ci/check-ios-archive.sh Apps/iOS/build/DaybookPhone.xcarchive --version "$VERSION" --build "$BUILD"
+      # The commit's tests, before anything leaves the runner: CI's run on main, or this run's validate jobs. The
+      # job didn't wait for them to start, so it asked for approval at once and built meanwhile.
+      - name: Wait for the release commit's tests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CI_RUN: ${{ needs.prepare.outputs.ci_run }}
+        run: |
+          if [[ -n "$CI_RUN" ]]; then which=(--ci-run "$CI_RUN"); else which=(--run "$GITHUB_RUN_ID"); fi
+          scripts/ci/await-validation.sh --repo "$REPO" "${which[@]}"
       - name: Export and upload to App Store Connect (unless the build is there already)
         if: steps.earlier.outputs.build == ''
         env:
@@ -335,13 +383,14 @@ jobs:
 
   mac:
     name: Mac, Developer ID and notarized
-    needs: [prepare, validate]
+    needs: prepare
     if: needs.prepare.outputs.mac == 'true'
     runs-on: xcode-27
-    timeout-minutes: 150
+    timeout-minutes: 180
     environment: Mac download
     permissions:
       contents: read
+      actions: read # the commit's tests (await-validation.sh)
       id-token: write # build provenance: the Sigstore certificate for the attestation
       attestations: write
     env:
@@ -415,6 +464,16 @@ jobs:
           DEVELOPMENT_P12_BASE64: ${{ secrets.DEVELOPMENT_P12_BASE64 }}
           DEVELOPMENT_P12_PASSWORD: ${{ secrets.DEVELOPMENT_P12_PASSWORD }}
         run: scripts/ci/secrets.sh run -- scripts/build-app.sh --archive-only --marketing-version "$VERSION" --build-number "$BUILD"
+      # The commit's tests, before anything leaves the runner: CI's run on main, or this run's validate jobs. The
+      # job didn't wait for them to start, so it asked for approval at once and built meanwhile.
+      - name: Wait for the release commit's tests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CI_RUN: ${{ needs.prepare.outputs.ci_run }}
+        run: |
+          if [[ -n "$CI_RUN" ]]; then which=(--ci-run "$CI_RUN"); else which=(--run "$GITHUB_RUN_ID"); fi
+          scripts/ci/await-validation.sh --repo "$REPO" "${which[@]}"
       # The .p12 is optional: without it, -exportArchive signs with Xcode's cloud-managed Developer ID
       # certificate, which the API key's role may not allow (docs/release.md, Signing). With it, the
       # export signs manually with its identity and the Developer ID profile (scripts/ci/mac-export.sh).
@@ -486,13 +545,14 @@ jobs:
   # GitHub Release doesn't wait for it.
   mac-testflight:
     name: Mac to TestFlight
-    needs: [prepare, validate]
+    needs: prepare
     if: needs.prepare.outputs.mac_testflight == 'true'
     runs-on: xcode-27
-    timeout-minutes: 150
+    timeout-minutes: 180
     environment: Mac TestFlight
     permissions:
       contents: read
+      actions: read # the commit's tests (await-validation.sh)
     env:
       DAYBOOK_TEAM_ID: ${{ vars.DAYBOOK_TEAM_ID }}
       VERSION: ${{ needs.prepare.outputs.marketing_version }}
@@ -563,6 +623,16 @@ jobs:
       - name: Check the archive
         if: steps.earlier.outputs.build == ''
         run: scripts/ci/check-mac-app.sh --app build/macOS/Daybook.xcarchive/Products/Applications/Daybook.app --kind signed-sandbox
+      # The commit's tests, before anything leaves the runner: CI's run on main, or this run's validate jobs. The
+      # job didn't wait for them to start, so it asked for approval at once and built meanwhile.
+      - name: Wait for the release commit's tests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CI_RUN: ${{ needs.prepare.outputs.ci_run }}
+        run: |
+          if [[ -n "$CI_RUN" ]]; then which=(--ci-run "$CI_RUN"); else which=(--run "$GITHUB_RUN_ID"); fi
+          scripts/ci/await-validation.sh --repo "$REPO" "${which[@]}"
       - name: Export and upload to App Store Connect (unless the build is there already)
         if: steps.earlier.outputs.build == ''
         env:
