@@ -88,6 +88,19 @@ final class CalendarCallTests: XCTestCase {
         state.recordingID = nil
     }
 
+    func testBehaviorACallsOwnMeetingIsntAskedAboutAgainAsItStarts() async {
+        // Its call was asked about, or its app's answer stands (Never for Zoom, here, so nothing shows).
+        let start = Date()
+        let review = MeetingEvent(id: "Design review", title: "Design review", start: start, end: start.addingTimeInterval(1800),
+                                  attendees: 3, callHost: "acme.zoom.us")
+        let state = await state(FakeMeetingCalendar(meetings: [review]))
+        state.usesCalendar = true
+        state.callAppChoices = ["us.zoom.xos": .never]
+        XCTAssertEqual(state.meetingToAsk(at: start)?.title, "Design review")
+        XCTAssertEqual(state.monitor.onMeetingStarted?(zoom), .notRecorded)
+        XCTAssertNil(state.meetingToAsk(at: start), "Zoom's answer stands for its meeting")
+    }
+
     func testBehaviorTheMeetingRecordedFromItsStartAsksWhetherToStopOnceOver() async {
         let planning = meeting("Planning", starts: -10)
         let state = await state(FakeMeetingCalendar(meetings: [planning]))

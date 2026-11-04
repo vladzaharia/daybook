@@ -91,8 +91,13 @@ final class CallPolicyTests: XCTestCase {
         start(declined)
         XCTAssertFalse(declined.isMeetingActive)
         XCTAssertEqual(declined.statusText, MeetingMonitor.paused)
+        XCTAssertTrue(declined.isLeavingCallAlone)
         declined.apply(.seen([zoom], windowsReadable: true), at: epoch.addingTimeInterval(30))
         XCTAssertFalse(declined.isMeetingActive, "not asked about again while it goes on")
+        declined.apply(.seen([], windowsReadable: true), at: epoch.addingTimeInterval(40))
+        XCTAssertTrue(declined.isLeavingCallAlone)
+        declined.apply(.seen([], windowsReadable: true), at: epoch.addingTimeInterval(86))
+        XCTAssertFalse(declined.isLeavingCallAlone, "until it has ended")
     }
 
     func testBehaviorTheEndOfACallSaysWhichCallItWas() {
