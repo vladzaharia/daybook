@@ -949,10 +949,8 @@ final class AppState {
         }
         try Task.checkCancellation()
         let current = placed.meeting, generated = placed.output
-        let inputsChanged = meetings.first(where: { $0.id == id }).map {
-            $0.notes != current.notes || $0.kind != current.kind || $0.templateID != current.templateID || $0.tracks != current.tracks ||
-            $0.unifiedTranscript != current.unifiedTranscript || $0.speakers != current.speakers || $0.highlights != current.highlights || $0.timedNotes != current.timedNotes || $0.photos != current.photos
-        } ?? false
+        // What was said, written, or chosen meanwhile is summarized again; a speaker's new name follows into this one.
+        let inputsChanged = meetings.first(where: { $0.id == id })?.summaryInputsChanged(since: current) ?? false
         // A summary another device wrote meanwhile stays: one summary per conversation.
         if meetings.first(where: { $0.id == id })?.summaryWrittenElsewhere(after: placed.started, excluding: library.thisDevice.id) == true {
             update(id) { $0.status = .ready }
@@ -960,7 +958,7 @@ final class AppState {
         }
         let summary = generated.summary.placed(placed.place, by: library.thisDevice, inputs: current.modelsBehindTranscript)
         update(id) { meeting in
-            meeting.setSummary(summary)
+            meeting.setSummary(summary, writtenFrom: current)
             // Keep Auto selected so a new source or revised context can change the inferred kind.
             meeting.status = .ready
             meeting.errorMessage = generated.warnings.isEmpty ? nil : generated.warnings.joined(separator: "\n")

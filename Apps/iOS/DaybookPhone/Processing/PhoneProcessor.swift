@@ -346,7 +346,7 @@ final class PhoneProcessor {
         }
         try Task.checkCancellation()
         // With where it ran ("Summarized on this iPhone"), unless another device's summary arrived meanwhile.
-        guard library.applyPlacedSummary(output.summary, to: id, place: .thisDevice, started: started) else { return }
+        guard library.applyPlacedSummary(output.summary, to: id, place: .thisDevice, started: started, writtenFrom: meeting) else { return }
         library.update(id) { $0.errorMessage = output.warnings.isEmpty ? nil : output.warnings.joined(separator: "\n") }
         try? await library.proposeTerms(output.suggestedTerms, for: id)
     }

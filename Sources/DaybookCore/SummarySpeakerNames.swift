@@ -50,6 +50,31 @@ extension Meeting {
         updatedAt = Date()
         return true
     }
+
+    // MARK: Names given while a summary is written
+
+    /// Whether what a summary reads has changed since `written`, the conversation as the summary read it: its
+    /// recordings, what was said, the notes, bookmarks, and photos, the kind or template, or who spoke. A speaker's new
+    /// name isn't such a change: it follows into the summary (`setSummary(_:writtenFrom:)`), as it does when nothing
+    /// is being written, instead of the summary being written again.
+    public func summaryInputsChanged(since written: Meeting) -> Bool {
+        notes != written.notes || kind != written.kind || templateID != written.templateID || tracks != written.tracks
+            || unifiedTranscript != written.unifiedTranscript || speakers.map(\.id) != written.speakers.map(\.id)
+            || highlights != written.highlights || timedNotes != written.timedNotes || photos != written.photos
+    }
+
+    /// Sets a summary written from `written`. The names speakers were given meanwhile follow into it first, where
+    /// they replace one Daybook gave (`summaryFollowsRename`), so Version History has the one summary.
+    public mutating func setSummary(_ value: MeetingSummary, writtenFrom written: Meeting) {
+        var followed = self
+        followed.summary = value
+        for speaker in speakers {
+            guard let before = written.speakers.first(where: { $0.id == speaker.id }), before.name != speaker.name,
+                  written.isDaybooksName(before.name, for: speaker.id, identity: written.speakerIdentity(speaker.id)) else { continue }
+            followed.summaryFollowsRename(of: speaker.id, from: before.name, to: speaker.name)
+        }
+        setSummary(followed.summary ?? value)
+    }
 }
 
 /// Names in a summary's text.
