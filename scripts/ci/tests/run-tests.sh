@@ -657,6 +657,34 @@ git -C "$work/mtimes-clone" add Sources/A.swift
 expect_ok "and once added, gets its new content's" test "$a_time" != "$(mtime "$work/mtimes-clone/Sources/A.swift")"
 expect_fail "outside a checkout it fails" "$ci/stable-mtimes.sh" "$work/approve-bin"
 
+# --- changes.sh, on a scratch repository: what a pull request changed ---------------------------------
+echo "changes.sh"
+changes_repo="$work/changes"
+mkdir -p "$changes_repo/docs" "$changes_repo/Sources/App"
+git -C "$changes_repo" init -q
+commit_changes() { git -C "$changes_repo" add -A && git -C "$changes_repo" -c user.name=t -c user.email=t@example.com commit -qm "$1"; }
+printf 'one\n' > "$changes_repo/docs/guide.md"
+printf 'let a = 1\n' > "$changes_repo/Sources/App/A.swift"
+commit_changes base
+changes() { (cd "$changes_repo" && "$ci/changes.sh" "$@" 2>/dev/null); }
+printf 'two\n' >> "$changes_repo/docs/guide.md"
+printf '# Notes\n' > "$changes_repo/CHANGELOG.md"
+commit_changes docs
+expect_eq "a pull request that changes only documentation skips the builds" "code=false" "$(changes --event pull_request)"
+expect_eq "a push never does" "code=true" "$(changes --event push)"
+expect_eq "nor a release's validation" "code=true" "$(changes --event workflow_call)"
+printf 'Licenses\n' > "$changes_repo/THIRD_PARTY_NOTICES.md"
+commit_changes notices
+expect_eq "the notices the apps bundle are code" "code=true" "$(changes --event pull_request)"
+printf 'Read me\n' > "$changes_repo/Sources/App/README.md"
+commit_changes source-markdown
+expect_eq "so is Markdown among the sources" "code=true" "$(changes --event pull_request)"
+printf 'let a = 2\n' > "$changes_repo/Sources/App/A.swift"
+commit_changes code
+expect_eq "and code is" "code=true" "$(changes --event pull_request)"
+expect_eq "a base it can't compare with checks everything" "code=true" "$(changes --event pull_request --base no-such-ref)"
+expect_fail "--event is required" "$ci/changes.sh"
+
 # --- build-ios.sh upload retry, with a stand-in xcodebuild --------------------------------------------
 echo "build-ios.sh upload retry"
 if macos; then

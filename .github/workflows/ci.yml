@@ -78,8 +78,30 @@ jobs:
       - name: Release helper tests
         run: scripts/ci/tests/run-tests.sh
 
+  # A pull request that changes only documentation skips the builds; every push to main runs them.
+  changes:
+    name: What changed
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Code or documentation
+        id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+        run: scripts/ci/changes.sh --event "$EVENT" | tee -a "$GITHUB_OUTPUT"
+
   package:
     name: Swift package tests
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: xcode-27
     timeout-minutes: 90
     permissions:
@@ -184,6 +206,8 @@ jobs:
 
   iphone:
     name: iPhone app
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: xcode-27
     # A few minutes when the restored cache is current; a cold one compiles MLX and the rest, about 20 minutes.
     timeout-minutes: 90
@@ -285,6 +309,8 @@ jobs:
   # the one release.yml's iphone job restores for the signed archive.
   iphone-archive:
     name: iPhone archive (Release)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: xcode-27
     timeout-minutes: 90
     permissions:
@@ -342,6 +368,8 @@ jobs:
 
   mac:
     name: Mac app (Xcode, ad hoc)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: xcode-27
     timeout-minutes: 90
     permissions:
