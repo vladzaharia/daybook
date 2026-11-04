@@ -224,6 +224,7 @@ final class AppState {
             } else {
                 startCallMonitoring()
             }
+            watchCalendar()
         }
     }
     /// Apps whose calls get their own answer, ahead of `callPolicy` (Always Record, Never, Ask).
@@ -232,6 +233,21 @@ final class AppState {
     }
     /// Whether every call is recorded as soon as it starts: Record Automatically.
     var automaticRecording: Bool { callPolicy == .record }
+    /// Use Calendar (Settings › Recording): a call takes its meeting's title, and a meeting with other people asks to
+    /// be recorded when it starts (`AppState+Calendar.swift`). Off until the person turns it on, which asks for access.
+    var usesCalendar: Bool {
+        didSet {
+            preferences.set(usesCalendar, forKey: Preference.usesCalendar)
+            watchCalendar()
+        }
+    }
+    /// The calendars here; tests stand in their own.
+    @ObservationIgnored var meetingCalendar: any MeetingCalendarReading = EventKitMeetingCalendar()
+    /// Meetings already asked about at their start, so each is asked once.
+    @ObservationIgnored var askedMeetings: Set<String> = []
+    /// The recording started from a meeting's prompt, and the meeting: asked about stopping once it's over.
+    @ObservationIgnored var calendarMeeting: (recording: UUID, event: MeetingEvent)?
+    @ObservationIgnored var calendarWatch: Task<Void, Never>?
 
     /// Looks at this Mac for calls, except under XCTest, whose AppStates must never read the real audio server or ask
     /// about a call the developer is on (the monitor's own tests drive it with scripted looks).
@@ -456,6 +472,7 @@ final class AppState {
         sources = MultiSourceCoordinator(defaults: defaults)
         callPolicy = CallPolicy.stored(in: defaults)
         callAppChoices = CallPolicy.storedChoices(in: defaults)
+        usesCalendar = defaults.bool(forKey: Preference.usesCalendar)
         includeComputerAudio = defaults.object(forKey: Preference.includeComputerAudio) as? Bool ?? true
         processSyncedAudio = defaults.object(forKey: Preference.processSyncedAudio) as? Bool ?? true
         detectSpeakers = defaults.object(forKey: Preference.detectSpeakers) as? Bool ?? true
@@ -471,13 +488,16 @@ final class AppState {
         sync.onSyncRequested = { [weak self] in await self?.synchronizeLibrary() }
         monitor.onMeetingStarted = { [weak self] candidate in
             guard let self else { return .notRecorded }
-            switch CallPolicy.decision(for: candidate.bundleID, policy: self.callPolicy, choices: self.callAppChoices,
-                                       busy: self.recordingID != nil || self.isStartingRecording) {
+            let decision = CallPolicy.decision(for: candidate.bundleID, policy: self.callPolicy, choices: self.callAppChoices,
+                                               busy: self.recordingID != nil || self.isStartingRecording)
+            // The calendar's meeting, when there is one, names the recording.
+            let meeting = decision == .ignore ? nil : self.meeting(for: candidate)
+            switch decision {
             case .record:
-                Task { await self.startRecording(title: candidate.windowTitle, automatic: true) }
+                Task { await self.startRecording(title: meeting?.title ?? candidate.windowTitle, automatic: true) }
                 return .recording
             case .ask:
-                self.askToRecord(candidate)
+                self.askToRecord(candidate, in: meeting)
                 return .asking
             case .ignore:
                 // A recording already under way carries on as it is; a call its app says Never to is left alone.
@@ -524,6 +544,7 @@ final class AppState {
         static let legacyTranscriptionModel = "transcriptionModel"
         static let legacySummaryModel = "summaryModel"
         static let automaticRecording = "automaticRecording"
+        static let usesCalendar = "usesCalendar"
         static let includeComputerAudio = "includeComputerAudio"
         static let processSyncedAudio = "processSyncedAudio"
         static let detectSpeakers = "detectSpeakers"
@@ -744,6 +765,7 @@ final class AppState {
             devices.start()
             sync.restore()
             if callPolicy != .off { startCallMonitoring() }
+            watchCalendar()
             await startPhoneLinkIfPaired()
             closeRecoveredLinks()
             // Requests this Mac held when it last quit or crashed run again (or are given back), and so does its own
@@ -1455,6 +1477,7 @@ extension AppState {
         finishCaptions()
         recordingWillFinish(id, at: result.endedAt)
         recordingID = nil; recordingStartedAt = nil; recordingWasAutomatic = false
+        calendarMeeting = nil
         sync.publishActivity(recording: nil)
         phones.recordingEnded(id)
         do {

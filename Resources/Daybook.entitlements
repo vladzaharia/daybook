@@ -16,6 +16,8 @@
      Daybook-Sandbox.entitlements is this file plus the App Sandbox's keys (docs/sandbox.md): change both together. -->
 <plist version="1.0"><dict>
 <key>com.apple.security.device.audio-input</key><true/>
+<!-- Use Calendar: a call takes its meeting's title, and a meeting asks to be recorded when it starts. -->
+<key>com.apple.security.personal-information.calendars</key><true/>
 <key>com.apple.developer.icloud-services</key><array><string>CloudDocuments</string><string>CloudKit</string></array>
 <key>com.apple.developer.icloud-container-identifiers</key><array><string>$(DAYBOOK_ICLOUD_CONTAINER)</string></array>
 <key>com.apple.developer.ubiquity-container-identifiers</key><array><string>$(DAYBOOK_ICLOUD_CONTAINER)</string></array>

@@ -65,7 +65,8 @@ expect_sandboxed() {
     local key
     for key in com.apple.security.device.audio-input com.apple.security.device.microphone com.apple.security.device.bluetooth \
                com.apple.security.network.client com.apple.security.network.server \
-               com.apple.security.files.user-selected.read-write com.apple.security.files.bookmarks.app-scope; do
+               com.apple.security.files.user-selected.read-write com.apple.security.files.bookmarks.app-scope \
+               com.apple.security.personal-information.calendars; do
         [[ "$(value "$key")" == true ]] || problem "$key isn't true"
     done
 }

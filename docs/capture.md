@@ -78,6 +78,7 @@ The path used is saved in two places:
 |---|---|---|
 | Microphone (`NSMicrophoneUsageDescription`) | The first recording, through `AVCaptureDevice.requestAccess` | You |
 | System Audio Recording Only (`NSAudioCaptureUsageDescription`) | The first time a process tap starts, so the first recording of a known call app. macOS shows the prompt itself. | The call app's audio |
+| Calendars, full access (`NSCalendarsFullAccessUsageDescription`) | Turning on Settings › Recording › Use Calendar, through `EKEventStore.requestFullAccessToEvents` | Naming a call's recording after its meeting, and asking at a meeting's start (Calendar, below) |
 | Screen & System Audio Recording (`NSScreenCaptureUsageDescription`) | The first recording that falls back to ScreenCaptureKit, through `SCShareableContent` | All Mac audio. Also needed by `MeetingMonitor` to read window titles for automatic detection. |
 
 Call audio starts before the microphone, so any prompt comes before your voice is being recorded.
@@ -541,6 +542,34 @@ call ends, as before.
 **Under test** the app's own monitor never starts (`MacCaptioners.isRunningTests`): an `AppState` in
 a test must not read this Mac's audio server or ask about a call the developer is on. The monitor's
 tests drive it with scripted looks.
+
+## Calendar
+
+**Use Calendar** (Settings › Recording, under When a call starts; off by default, and unavailable while
+When a call starts is Off) reads the calendars on this Mac through EventKit (`MeetingCalendar.swift`).
+Turning it on asks for full access to events; without it, the switch stays off and the page says so,
+with Open System Settings… (Privacy & Security › Calendars). Events are read on this Mac and never
+leave it. Only a meeting's title is kept, as its conversation's title, as a typed one would be.
+
+- **A call takes its meeting's name.** When a call starts, `CalendarMeetings.current` picks the
+  meeting it belongs to: one going on, or starting within 10 minutes, that the person hasn't declined
+  and that isn't all day. One whose link (from its URL, location, or notes) is on the call's service
+  comes first (a Zoom call and the event with a zoom.us link), then the one that started closest to
+  now. The prompt shows "Weekly product sync · 4 people" under "Zoom call", and the recording, by
+  whichever answer, is named after the meeting.
+- **A meeting with other people asks as it starts.** A meeting with two or more people invited,
+  starting from 30 seconds ahead to two minutes late, asks "Weekly product sync · Starting now ·
+  4 people" with the calendar's icon, once per occurrence (`CalendarMeetings.startingNow`). That
+  catches a meeting in a room, which no call announces. It's only asked while nothing is recording,
+  no call is under way, and the prompt isn't asking something else. A meeting is always asked about,
+  never recorded on its own, and Record Automatically doesn't change that. Unanswered is Not Now.
+- **Once it's over** (its end time, while the recording it started still goes on), the prompt asks
+  "Weekly product sync ended · Stop recording?" once, and keeps recording without an answer.
+
+`AppState.checkCalendar(at:)` is the whole of it, called every 30 seconds while Use Calendar is on
+and never under XCTest. Tests stand in their own calendar (`MeetingCalendarReading`). The calendars
+entitlement (`com.apple.security.personal-information.calendars`) is in all three entitlements files,
+since the hardened runtime needs it as much as the App Sandbox does.
 
 ## Automatic meeting detection
 
