@@ -15,12 +15,16 @@ enum AppDestination: Equatable, Sendable {
     case recording
     /// A new conversation that's only notes, open with the keyboard on them.
     case newNote
+    /// A recording named after a meeting, started once Daybook is in front: a meeting's notification, tapped or
+    /// its Record (`PhoneCalendar.swift`).
+    case recordMeeting(String)
 
     // A notification carries its destination in `userInfo`, in the keys DaybookDevices' device
     // notifications use (`DeviceNotificationDestination`), so one delegate reads them all.
     static let placeKey = "daybook.place"
     static let deviceKey = "daybook.deviceID"
     static let conversationKey = "daybook.conversationID"
+    static let meetingKey = "daybook.meetingTitle"
 
     /// What a notification carries.
     var userInfo: [String: String] {
@@ -30,6 +34,7 @@ enum AppDestination: Equatable, Sendable {
         case .device(let id): return [Self.placeKey: "device", Self.deviceKey: id]
         case .recording: return [Self.placeKey: "recording"]
         case .newNote: return [Self.placeKey: "new-note"]
+        case .recordMeeting(let title): return [Self.placeKey: "record-meeting", Self.meetingKey: title]
         }
     }
 
@@ -45,6 +50,9 @@ enum AppDestination: Equatable, Sendable {
         case "library": self = .library
         case "recording": self = .recording
         case "new-note": self = .newNote
+        case "record-meeting":
+            guard let title = userInfo[Self.meetingKey] as? String, !title.isEmpty else { return nil }
+            self = .recordMeeting(title)
         default: return nil
         }
     }
@@ -83,7 +91,7 @@ enum DestinationRouter {
             uncover(session)
             session.newNote(in: library)
             return true
-        case .recording:
+        case .recording, .recordMeeting:
             // The recorder replaces the library while anything records; nothing to open.
             uncover(session)
             return true

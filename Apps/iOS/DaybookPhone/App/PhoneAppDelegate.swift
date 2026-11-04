@@ -9,6 +9,7 @@ final class PhoneAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificatio
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         // Before launch finishes, so the tap that launched the app reaches it.
         UNUserNotificationCenter.current().delegate = self
+        UNUserNotificationCenter.current().setNotificationCategories([PhoneNotices.meetingCategory])
         return true
     }
 
@@ -19,9 +20,10 @@ final class PhoneAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificatio
         if !PhoneModels.downloads.handleEvents(for: identifier, completion: completionHandler) { completionHandler() }
     }
 
-    /// A notification was opened: Daybook goes where it says, or just opens when it says nowhere.
+    /// A notification was opened, or a meeting's Record tapped: Daybook goes where it says, or just opens when it says
+    /// nowhere.
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier,
+        guard [UNNotificationDefaultActionIdentifier, PhoneNotices.recordAction].contains(response.actionIdentifier),
               let destination = AppDestination(userInfo: response.notification.request.content.userInfo) else { return }
         AppDestinations.open(destination)
     }
@@ -30,7 +32,10 @@ final class PhoneAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificatio
     /// as anywhere else.
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
-        [.banner, .list, .sound]
+        // A meeting starting while this iPhone already records has nothing to ask.
+        if notification.request.content.categoryIdentifier == PhoneNotices.meetingCategory.identifier,
+           await AppDestinations.isRecording { return [] }
+        return [.banner, .list, .sound]
     }
 }
 
@@ -42,4 +47,6 @@ enum AppDestinations {
     static func open(_ destination: AppDestination) {
         model?.open(destination)
     }
+
+    static var isRecording: Bool { model?.isRecordingActive == true }
 }

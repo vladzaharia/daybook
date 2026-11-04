@@ -553,8 +553,8 @@ with Open System Settings… (Privacy & Security › Calendars). Events are read
 leave it. Only a meeting's title is kept, as its conversation's title, as a typed one would be.
 
 - **A call takes its meeting's name.** When a call starts, `CalendarMeetings.current` picks the
-  meeting it belongs to: one going on, or starting within 10 minutes, that the person hasn't declined
-  and that isn't all day. One whose link (from its URL, location, or notes) is on the call's service
+  meeting it belongs to: one going on, or starting within 10 minutes, that the person hasn't declined,
+  that isn't all day, and that has a title. One whose link (from its URL, location, or notes) is on the call's service
   comes first (a Zoom call and the event with a zoom.us link), then the one that started closest to
   now. The prompt shows "Weekly product sync · 4 people" under "Zoom call", and the recording, by
   whichever answer, is named after the meeting.

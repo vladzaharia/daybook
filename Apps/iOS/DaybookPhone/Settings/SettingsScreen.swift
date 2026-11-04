@@ -332,6 +332,9 @@ private struct SettingsScrollEnd: ViewModifier {
 
 struct RecordingSettingsScreen: View {
     @Environment(PhoneAppModel.self) private var model
+    @Environment(\.openURL) private var openURL
+    /// Use Calendar was turned on and iOS said no.
+    @State private var calendarRefused = false
 
     var body: some View {
         @Bindable var settings = model.settings
@@ -343,6 +346,20 @@ struct RecordingSettingsScreen: View {
             CaptionSettingsSection()
             Section {
                 Toggle("Lock Screen and Dynamic Island", isOn: $settings.showsLiveActivity)
+            }
+            Section {
+                Toggle("Use Calendar", isOn: Binding(get: { settings.usesCalendar }, set: { on in
+                    Task {
+                        await model.setUsesCalendar(on)
+                        calendarRefused = on && !settings.usesCalendar
+                    }
+                }))
+                // Refused just now, or taken away in Settings since.
+                if calendarRefused || (settings.usesCalendar && model.environment.calendar.access == .denied) {
+                    Button("Allow Calendars in Settings") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                    }
+                }
             }
             Section {
                 LabeledContent("Format", value: "AAC, 48 kHz mono")

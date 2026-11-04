@@ -26,6 +26,10 @@ struct PhoneNotices {
         var destination: AppDestination
         /// Delivered at once, through Focus (a recording that stopped by itself).
         var timeSensitive = false
+        /// When it's delivered, for one scheduled ahead (a meeting starting); nil is now.
+        var at: Date?
+        /// Its actions (`meetingCategory`'s Record); nil has none.
+        var category: String?
     }
 
     /// Shows a notification (the app's own in the app; none in tests).
@@ -35,6 +39,8 @@ struct PhoneNotices {
     /// Asks once whether Daybook may post, with Daybook in front and recording: the moment its reason
     /// is at hand. Later calls do nothing.
     var askPermission: () -> Void
+    /// Puts these meeting reminders in place of every one scheduled before (none takes them all away).
+    var remind: (_ meetings: [Notice]) -> Void = { _ in }
 
     // MARK: A recorder recording without this iPhone
 
@@ -105,6 +111,27 @@ struct PhoneNotices {
         post(Notice(id: Self.recordingStoppedID, title: text.title, body: text.body, destination: destination, timeSensitive: true))
     }
 
+    // MARK: A meeting starting
+
+    static let meetingPrefix = "meeting."
+    static let recordAction = "meeting.record"
+    /// A meeting's notification carries Record, which opens Daybook recording.
+    static let meetingCategory = UNNotificationCategory(
+        identifier: "meeting", actions: [UNNotificationAction(identifier: recordAction, title: "Record", options: [.foreground])],
+        intentIdentifiers: [])
+
+    /// The words for a meeting with other people starting: its title, then who's in it.
+    static func meetingStartsText(_ meeting: MeetingEvent) -> (title: String, body: String) {
+        (meeting.title, (["Starting now", meeting.peopleLine].compactMap { $0 }.joined(separator: " · ")) + ". Tap to record.")
+    }
+
+    /// A meeting's reminder, delivered as it starts; opening it records, named after the meeting.
+    static func meetingStarts(_ meeting: MeetingEvent) -> Notice {
+        let text = meetingStartsText(meeting)
+        return Notice(id: meetingPrefix + meeting.id, title: text.title, body: text.body, destination: .recordMeeting(meeting.title),
+                      at: meeting.start, category: meetingCategory.identifier)
+    }
+
     // MARK: Delivery
 
     /// Through the notification center, once Daybook may post.
@@ -129,7 +156,33 @@ struct PhoneNotices {
             guard await center.notificationSettings().authorizationStatus == .notDetermined else { return }
             _ = try? await center.requestAuthorization(options: [.alert, .sound])
         }
+    }, remind: { meetings in
+        let center = UNUserNotificationCenter.current()
+        // Each pass after the one before, so an older list's reminders never land after a newer one took them away.
+        let before = PhoneNotices.reminding
+        PhoneNotices.reminding = Task {
+            await before?.value
+            let earlier = await center.pendingNotificationRequests().map(\.identifier).filter { $0.hasPrefix(PhoneNotices.meetingPrefix) }
+            center.removePendingNotificationRequests(withIdentifiers: earlier)
+            for meeting in meetings {
+                guard let at = meeting.at else { continue }
+                let content = UNMutableNotificationContent()
+                content.title = meeting.title
+                content.body = meeting.body
+                content.userInfo = meeting.destination.userInfo
+                content.categoryIdentifier = meeting.category ?? ""
+                content.sound = .default
+                // With its time zone, so it comes at the meeting's moment wherever the iPhone is by then.
+                var when = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute, .second], from: at)
+                when.timeZone = .current
+                try? await center.add(UNNotificationRequest(identifier: meeting.id, content: content,
+                                                            trigger: UNCalendarNotificationTrigger(dateMatching: when, repeats: false)))
+            }
+        }
     })
+
+    /// The meeting reminders' latest pass.
+    private static var reminding: Task<Void, Never>?
 
     static let silent = PhoneNotices(post: { _ in }, remove: { _ in }, askPermission: {})
 }

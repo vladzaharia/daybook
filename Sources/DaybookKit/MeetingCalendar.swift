@@ -41,7 +41,7 @@ public enum CalendarMeetings {
     /// hasn't declined, not all day. One whose call link is the call's app's comes first, then the one that started
     /// closest to now.
     public static func current(_ events: [MeetingEvent], at now: Date, callHosts: [String] = []) -> MeetingEvent? {
-        let going = events.filter { !$0.isAllDay && !$0.declined && $0.start.addingTimeInterval(-earlyCall) <= now && now < $0.end }
+        let going = events.filter { counts($0) && $0.start.addingTimeInterval(-earlyCall) <= now && now < $0.end }
         let hosts = callHosts.map { $0.lowercased() }
         func matches(_ event: MeetingEvent) -> Bool {
             guard let host = event.callHost?.lowercased() else { return false }
@@ -58,10 +58,22 @@ public enum CalendarMeetings {
     /// about: the person hasn't declined them, and they aren't all day. Earliest first.
     public static func startingNow(_ events: [MeetingEvent], at now: Date, asked: Set<String>) -> [MeetingEvent] {
         events.filter { event in
-            !event.isAllDay && !event.declined && event.attendees >= 2 && !asked.contains(event.id)
+            counts(event) && event.attendees >= 2 && !asked.contains(event.id)
                 && event.start <= now.addingTimeInterval(earlyStart) && now.timeIntervalSince(event.start) <= lateStart && now < event.end
         }
         .sorted { $0.start < $1.start }
+    }
+
+    /// Meetings with other people that start after `now`, earliest first, at most `limit`: the iPhone's reminders,
+    /// which it schedules ahead since it can't look at the calendar as each starts.
+    public static func upcoming(_ events: [MeetingEvent], after now: Date, limit: Int) -> [MeetingEvent] {
+        Array(events.filter { counts($0) && $0.attendees >= 2 && $0.start > now }.sorted { $0.start < $1.start }.prefix(limit))
+    }
+
+    /// An event that can be a meeting: the person hasn't declined it, it isn't all day, and it has a title to name a
+    /// recording or a question with.
+    private static func counts(_ event: MeetingEvent) -> Bool {
+        !event.isAllDay && !event.declined && !event.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// The call service a text names: the host of the first link to one ("https://acme.zoom.us/j/123" is "acme.zoom.us").
