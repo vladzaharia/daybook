@@ -328,7 +328,7 @@ final class PhoneSummaryPlacement {
             do {
                 let output = try await cloud.summaryOutput(meeting, template: template, vocabulary: vocabulary, model: model, effort: effort) { _ in }
                 try Task.checkCancellation()
-                await self?.finished(id, request: claimed.id, output: output, place: place, started: started)
+                await self?.finished(id, request: claimed.id, output: output, place: place, started: started, writtenFrom: meeting)
             } catch is CancellationError {
                 self?.stopped(id, request: claimed.id, failure: nil)
             } catch {
@@ -338,10 +338,11 @@ final class PhoneSummaryPlacement {
         running[id] = (claimed.id, task)
     }
 
-    private func finished(_ id: UUID, request: UUID, output: SummaryProcessingOutput, place: SummaryPlace, started: Date) async {
+    private func finished(_ id: UUID, request: UUID, output: SummaryProcessingOutput, place: SummaryPlace, started: Date,
+                          writtenFrom meeting: Meeting) async {
         running[id] = nil
         runs[id] = nil
-        let applied = library.applyPlacedSummary(output.summary, to: id, place: place, started: started)
+        let applied = library.applyPlacedSummary(output.summary, to: id, place: place, started: started, writtenFrom: meeting)
         library.completeProcessingRequest(request, in: id, at: clock())
         guard applied else { return }
         library.update(id) { $0.errorMessage = output.warnings.isEmpty ? nil : output.warnings.joined(separator: "\n") }

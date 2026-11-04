@@ -153,15 +153,17 @@ extension LibraryController {
     }
 
     /// Applies a summary this device made (here or in the cloud) with where it ran, unless another device's
-    /// summary arrived after `started`, which is kept: one summary per conversation. True when applied.
+    /// summary arrived after `started`, which is kept: one summary per conversation. With `written`, the conversation
+    /// as the summary read it, the names speakers were given meanwhile follow into it. True when applied.
     @discardableResult
-    public func applyPlacedSummary(_ summary: MeetingSummary, to id: UUID, place: SummaryPlace, started: Date) -> Bool {
+    public func applyPlacedSummary(_ summary: MeetingSummary, to id: UUID, place: SummaryPlace, started: Date,
+                                   writtenFrom written: Meeting? = nil) -> Bool {
         guard let meeting = meeting(id) else { return false }
         let me = thisDevice
         guard !meeting.summaryWrittenElsewhere(after: started, excluding: me.id) else { return false }
         let placed = summary.placed(place, by: me, inputs: meeting.modelsBehindTranscript)
         update(id) { meeting in
-            meeting.setSummary(placed)
+            if let written { meeting.setSummary(placed, writtenFrom: written) } else { meeting.setSummary(placed) }
             meeting.status = .ready
         }
         return true
