@@ -535,7 +535,8 @@ until it ends (`suppressCurrentMeeting`).
 
 **Ending a recording the person started.** A call ending during a recording someone started
 themselves never stops it: the prompt asks "The Zoom call ended · Stop recording?", with Keep
-Recording and Stop, and after 30 seconds without an answer the recording goes on. A recording the
+Recording and Stop, and after 30 seconds without an answer the recording goes on. The question goes if the recording stops
+some other way first, and its Stop only ever stops the recording it asked about. A recording the
 call started (Record Automatically, Always Record, or Record in the prompt) stops 45 seconds after the
 call ends, as before.
 
@@ -561,7 +562,8 @@ leave it. Only a meeting's title is kept, as its conversation's title, as a type
   starting from 30 seconds ahead to two minutes late, asks "Weekly product sync · Starting now ·
   4 people" with the calendar's icon, once per occurrence (`CalendarMeetings.startingNow`). That
   catches a meeting in a room, which no call announces. It's only asked while nothing is recording,
-  no call is under way, and the prompt isn't asking something else. A meeting is always asked about,
+  no call is under way (nor one the person said not to record), and the prompt isn't asking something
+  else, and never about a meeting whose call was already asked about or answered by its app's choice. A meeting is always asked about,
   never recorded on its own, and Record Automatically doesn't change that. Unanswered is Not Now.
 - **Once it's over** (its end time, while the recording it started still goes on), the prompt asks
   "Weekly product sync ended · Stop recording?" once, and keeps recording without an answer.

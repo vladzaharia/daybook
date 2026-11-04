@@ -14,10 +14,11 @@ extension AppState {
     }
 
     /// The meeting to ask about now, if any: one with other people starting now, not asked about yet, while nothing is
-    /// recording, no call is under way, and the prompt isn't asking something else.
+    /// recording, no call is under way (nor one the person said not to record), and the prompt isn't asking something
+    /// else.
     func meetingToAsk(at now: Date = Date()) -> MeetingEvent? {
         guard usesCalendar, callPolicy != .off, meetingCalendar.access == .allowed, recordingID == nil, !isStartingRecording,
-              !monitor.isMeetingActive, CallPromptWindow.shared.question == nil else { return nil }
+              !monitor.isMeetingActive, !monitor.isLeavingCallAlone, CallPromptWindow.shared.question == nil else { return nil }
         return CalendarMeetings.startingNow(meetingCalendar.events(from: now.addingTimeInterval(-3600), to: now.addingTimeInterval(3600)),
                                             at: now, asked: askedMeetings).first
     }
