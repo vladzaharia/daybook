@@ -22,3 +22,6 @@ AuthKey_*
 *.mobileprovision
 *.provisionprofile
 *.cer
+
+# Design notes kept on this Mac only (they describe other, private projects).
+docs/superpowers/
