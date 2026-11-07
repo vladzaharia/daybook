@@ -32,6 +32,13 @@ final class ReadingSession {
     /// The conversation in the Trash that the notebook's right page shows, read only, beside the Trash.
     var trashedID: UUID?
 
+    /// Only a conversation opened across both pages gets a spine rail, and never under a sheet.
+    var spineMeetingID: UUID? {
+        guard reading, sheet == nil, !showsSummarySettingsSheet,
+              !showsRecordingPicker, cameraFor == nil else { return nil }
+        return openID
+    }
+
     /// The top of what's visible on each page, so a page reopens where it was left.
     var summaryAnchor: String?
     var transcriptAnchor: String?
@@ -56,6 +63,8 @@ final class ReadingSession {
 
     // Sheets
     var sheet: ReadingSheet?
+    /// The summary's status can present Settings in a system sheet of its own.
+    var showsSummarySettingsSheet = false
     /// The camera is open to add a photo to this conversation.
     var cameraFor: UUID?
     /// Files is open to add a recording to a conversation (Add Recording…; `addRecording(to:)`).

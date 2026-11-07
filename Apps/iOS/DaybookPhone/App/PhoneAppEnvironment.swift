@@ -3,6 +3,7 @@ import DaybookLink
 import DaybookModelStore
 import Foundation
 import UserNotifications
+import WidgetKit
 
 /// What the app model reaches in the system: the keychain, this iPhone's preferences, the models' folder
 /// and downloads, the network, recorders over Bluetooth, notifications, the system's background work, and
@@ -41,11 +42,18 @@ struct PhoneAppEnvironment {
     var startsLink: Bool
     /// What Spotlight lists of the library (`ConversationIndex`).
     var spotlight: ConversationIndex.Indexer
+    /// Publishes the loaded library's bounded widget snapshots.
+    var publishRecentConversations: (SharedRecentConversations) -> Void
+    var publishNextSteps: (SharedNextSteps) -> Void
 
     /// The app's: the keychain, `UserDefaults.standard`, Application Support's models with background
     /// downloads, the shared Wi‑Fi monitor, Bluetooth (or the simulated recorder), notifications, and Spotlight.
     static func live(_ options: DebugLaunch) -> PhoneAppEnvironment {
-        PhoneAppEnvironment(
+        // Remove plaintext widget metadata written by versions that stored it in group preferences.
+        if SharedRecentConversations.removeLegacySnapshot() {
+            WidgetCenter.shared.reloadTimelines(ofKind: SharedRecentConversations.widgetKind)
+        }
+        return PhoneAppEnvironment(
             defaults: .standard,
             linkKeys: { KeychainLinkKeyStore() },
             cloudKeys: { KeychainCloudKeyStore.system },
@@ -58,7 +66,15 @@ struct PhoneAppEnvironment {
             continuedProcessing: { SystemContinuedProcessingScheduler() },
             makesCaptioners: true,
             startsLink: true,
-            spotlight: .system)
+            spotlight: .system,
+            publishRecentConversations: { snapshot in
+                guard snapshot != SharedRecentConversations.load(), snapshot.save() else { return }
+                WidgetCenter.shared.reloadTimelines(ofKind: SharedRecentConversations.widgetKind)
+            },
+            publishNextSteps: { snapshot in
+                guard snapshot != SharedNextSteps.load(), snapshot.save() else { return }
+                WidgetCenter.shared.reloadTimelines(ofKind: SharedNextSteps.widgetKind)
+            })
     }
 
     /// Nothing real: memory key stores, a scratch suite and models folder for this process, no downloads, no
@@ -78,7 +94,9 @@ struct PhoneAppEnvironment {
             continuedProcessing: { nil },
             makesCaptioners: false,
             startsLink: false,
-            spotlight: .none)
+            spotlight: .none,
+            publishRecentConversations: { _ in },
+            publishNextSteps: { _ in })
     }
 }
 
@@ -87,13 +105,18 @@ struct PhoneAppEnvironment {
 /// tests remove this process's when they finish (TestSupport).
 enum InertScratch {
     /// Every process's scratch folder.
-    nonisolated static let root = FileManager.default.temporaryDirectory.appendingPathComponent("Daybook Test Host", isDirectory: true)
+    nonisolated static let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+        "Daybook Test Host", isDirectory: true)
 
     /// This process's.
     nonisolated static let folder: URL = {
         let fileManager = FileManager.default
-        let mine = root.appendingPathComponent("\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
-        for earlier in (try? fileManager.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? [] where earlier != mine {
+        let mine = root.appendingPathComponent(
+            "\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+        for earlier
+            in (try? fileManager.contentsOfDirectory(at: root, includingPropertiesForKeys: nil))
+            ?? [] where earlier != mine
+        {
             try? fileManager.removeItem(at: earlier)
         }
         try? fileManager.createDirectory(at: mine, withIntermediateDirectories: true)
@@ -123,7 +146,9 @@ extension PhoneNetwork {
     /// The app's one Wi‑Fi monitor (`NetworkConditionMonitor.shared`), which sync's sealing hears too.
     static var shared: PhoneNetwork {
         let network = NetworkListeners.shared
-        return PhoneNetwork(condition: { network.condition }, onChange: { handler in network.add { _ in handler() } })
+        return PhoneNetwork(
+            condition: { network.condition },
+            onChange: { handler in network.add { _ in handler() } })
     }
 
     /// Always on Wi‑Fi, and never changing: for tests and the test host.

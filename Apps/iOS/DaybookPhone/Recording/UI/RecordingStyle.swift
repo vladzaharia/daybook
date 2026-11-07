@@ -16,8 +16,10 @@ extension PhoneStyle {
     enum Page {
         /// Side gutter of a page.
         static let gutter = ReadingGeometry.gutters(density: .touch, hangs: false).leading
-        /// Room kept clear on each side of the iPhone Duo's crease.
+        /// Room kept clear for controls on each side of the iPhone Duo's crease.
         static let creaseClearance = ReadingGeometry.creaseClearance
+        /// The reading column and list cards' smaller crease clearance.
+        static let readingCreaseClearance = ReadingGeometry.readingCreaseClearance
         /// The widest a column of text gets, as on the Mac.
         static let measure = ReadingGeometry.measure
         /// The lane of times beside timed notes and bookmarks, at the default text size.

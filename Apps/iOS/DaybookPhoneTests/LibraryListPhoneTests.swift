@@ -116,9 +116,13 @@ final class LibraryListPhoneTests: XCTestCase {
 
     func testBehaviorResultsAndTheTrashKeepTheListsInsetsClearOfTheCrease() {
         XCTAssertNil(PageRows.inset(.leading, twoPage: false, creaseEdge: nil), "one page: the list's own")
-        XCTAssertEqual(PageRows.inset(.trailing, twoPage: true, creaseEdge: .trailing), ReadingGeometry.creaseClearance)
+        XCTAssertEqual(PageRows.inset(.trailing, twoPage: true, creaseEdge: .trailing), 16)
         XCTAssertEqual(PageRows.inset(.leading, twoPage: true, creaseEdge: .trailing), PageRows.pageInset)
-        XCTAssertGreaterThanOrEqual(ReadingGeometry.creaseClearance, 24)
+        XCTAssertEqual(PageRows.inset(.leading, twoPage: true, creaseEdge: .leading), 16)
+        XCTAssertEqual(PageRows.washInset(.trailing, creaseEdge: .trailing), 16, "the card also stays 16 pt from the crease")
+        XCTAssertEqual(PageRows.washInset(.leading, creaseEdge: .leading), 16)
+        XCTAssertEqual(PageRows.washInset(.leading, creaseEdge: .trailing), 10, "the wash reaches toward the outer edge")
+        XCTAssertEqual(ReadingGeometry.creaseClearance, 24, "controls keep their own clearance")
     }
 
     func testBehaviorTheTrashHasOneNameTheLibrarysOwn() {

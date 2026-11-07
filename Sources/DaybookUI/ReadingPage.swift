@@ -21,8 +21,8 @@ public enum ReadingWidth: Hashable, Sendable {
 extension EnvironmentValues {
     /// The page's width class (`ReadingWidth`), set by `ReadingPage`.
     @Entry public var readingWidth: ReadingWidth = .regular
-    /// The side of this page that meets the iPhone Duo's crease, if any. Pages keep their content clear
-    /// of it (`ReadingGeometry.creaseClearance`).
+    /// The side of this page that meets the iPhone Duo's crease, if any. Reading columns and controls
+    /// keep their respective clearances from it (`ReadingGeometry`).
     @Entry public var creaseEdge: Edge? = nil
 }
 
@@ -35,8 +35,10 @@ public enum ReadingGeometry {
     public static let marginGap: CGFloat = 8
     /// Below this width, times move into a lane and the measure fills the column.
     public static let narrowBelow: CGFloat = 600
-    /// Room kept clear on each side of the iPhone Duo's crease.
+    /// Room kept clear for controls on each side of the iPhone Duo's crease.
     public static let creaseClearance: CGFloat = 24
+    /// The reading column's crease clearance; the page gutter already covers 8 pt of it.
+    public static let readingCreaseClearance: CGFloat = 16
     /// The lane of times beside timed blocks on a narrow page, at the default text size; it grows with
     /// Dynamic Type up to `laneGrowth` times.
     public static let lane: CGFloat = 50
@@ -67,11 +69,13 @@ public enum ReadingGeometry {
         public var textLeading: CGFloat { leading + margin }
     }
 
-    /// The page's column in a container `width` wide.
-    public static func frame(width: CGFloat, density: DaybookDensity, creaseEdge: Edge? = nil) -> Frame {
+    /// The page's column in a container `width` wide. Control-oriented pages can keep the larger
+    /// control clearance instead of the default reading clearance.
+    public static func frame(width: CGFloat, density: DaybookDensity, creaseEdge: Edge? = nil,
+                             creaseClearance: CGFloat = ReadingGeometry.readingCreaseClearance) -> Frame {
         let hangs = width >= narrowBelow
         var (leading, trailing) = gutters(density: density, hangs: hangs)
-        // On the Duo, the side at the crease keeps its clearance (the gutter already covers 8 pt of it).
+        // On the Duo, the gutter already covers 8 pt of the clearance.
         if creaseEdge == .leading { leading += creaseClearance - 8 }
         if creaseEdge == .trailing { trailing += creaseClearance - 8 }
         guard hangs else {

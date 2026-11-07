@@ -108,6 +108,12 @@ targets:
         # The keychain group above, as signing expands it, for KeychainLibraryKeyStore.
         DaybookKeychainSharedGroup: $(AppIdentifierPrefix)local.daybook.shared
         CFBundleShortVersionString: $(MARKETING_VERSION)
+        # A Recent Conversations widget opens the library or a conversation by ID.
+        CFBundleURLTypes:
+          - CFBundleTypeRole: Viewer
+            CFBundleURLName: local.daybook.phone.widgets
+            CFBundleURLSchemes:
+              - daybook
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         ITSAppUsesNonExemptEncryption: false
         LSApplicationCategoryType: public.app-category.productivity

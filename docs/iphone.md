@@ -41,6 +41,7 @@ Everything below is in v1:
 - **Settings.** iCloud (sync, the library's devices, encryption), Macs and pairing, recorders, recording, storage, templates, vocabulary, speaker profiles, and About. Speaker Profiles is the Mac's window as screens (DaybookUI's `SpeakerProfileList` and `SpeakerProfileDetail`): the profiles, and for each its name (another profile's name offers Merge Into <name>), its voiceprints (swipe to remove), Forget Learned Voiceprints…, its conversations (one closes Settings and opens on the page), Merge Into, and Delete Profile…. Deleting a profile (also its row's swipe, never a full swipe), removing a voiceprint, and forgetting what a profile learned ask first with what they cost, and can be undone. Every row has its symbol on a neutral tile in one column (teal while a Mac or recorder is connected), and each device page opens with the same header: tile, name, status. In the hand it's a sheet. Open on the iPhone Duo, where a sheet would be a card centred across the crease, it takes the display as two pages, as pairing does (`settingsSheet`): the list on the left, the chosen screen (iCloud at first, Add Recorder too) on the right. Folded shut while shown it's one column; shown in the hand and then opened, the sheet splits into the same two pages at the crease (`SheetCreaseSplit`), as Add Recorder over the status panel does. What a Settings screen shows over itself (Add Term and Edit Term, the encryption sheets, Details) is a sheet in the hand and, open, a card on the right page clear of the crease (`pageSheet`), as the reading sheets are; like a sheet, the card closes with a drag down on its handle and with VoiceOver's escape. A form with changes to lose (`guardingDismissal`) can't be swiped or dragged away, and its Cancel asks first (Discard Changes, Keep Editing).
 - **File protection.** Recording segments, the capture journal, photos taken while recording, and live captions are `completeUntilFirstUserAuthentication`, like the library. `completeUnlessOpen` was weighed and kept out: it lets a locked phone create files and keep writing ones already open, but not reopen a closed one, and Daybook reopens its own closed files while locked in everyday use. Stop from the Lock Screen, Siri, or a Mac reads every segment back to assemble the recording (`RecordingAssembler` opens even a single clean segment to check it) and copies the result into the library; an interruption closes one segment and opens another, so both are read at Stop; filing reads the photos taken while recording, and recovering after a quit reads the journal; and live captions reread their file to keep its track. Under `completeUnlessOpen` each of those fails until the phone is unlocked. Finished library items stay at the same class because background sync reads them while locked.
 - **Backups.** iPhone backups (iCloud and computer) never hold copies Daybook can rebuild: the courier's inbox and outbox (`Sync/Inbox`, `Sync/Courier`; iCloud Drive carries the same files), audio downloaded for playback, imports being copied in, and `Documents/Inbox` (`BackupExclusion`, applied at launch and after each download). The library itself goes in unless Settings › Storage › Include in iPhone Backups is off (default on), which keeps the whole library folder out, for someone who doesn't want recordings in a backup, with or without sync.
+  - The Recent Conversations and Next Steps widgets' rebuildable app-group snapshot cache is excluded regardless of the library backup setting.
   - **An encrypted library** (this iPhone syncs it encrypted, waits for its key, or synced it so before; docs/icloud-sync.md, "Encryption") keeps its conversations, Trash, sync state, and saved captions (`Meetings/`, `Trash/`, `Sync/`, `LiveCaptions/`) out of backups by itself: the sealed journal in iCloud is their backup, and an iPhone backup isn't encrypted end to end unless Advanced Data Protection is on. Recordings in progress (`Staging/`) and recorder state stay in. The same toggle, Include in iPhone Backups, then shows a choice of its own, off by default (`includesEncryptedLibraryInBackups`); turning it on includes the library again. How the two combine: a plaintext library follows the first choice as before; an encrypted one is included only when its own choice is on; otherwise, if the first choice is off, the whole library folder stays out as before, and if it's on, only those four folders do. A choice made for the plaintext library never carries over as on, so turning encryption on doesn't leave plaintext in backups because of an old setting; someone who wants an encrypted library in their backups turns it on again. Applied at launch, when either choice or the library's encryption changes, and after each sync pass.
   - *Why out by default.* Without Advanced Data Protection, Apple holds the keys to an iCloud Backup, so a backup with these folders in it would hand Apple, in plaintext, exactly what the library's encryption keeps from it; the sealed journal already restores them to a new or erased iPhone. Recordings still being made (`Staging/`) stay in, since they aren't in iCloud yet. What remains is a narrow window: a conversation recorded or edited on this iPhone that hasn't reached iCloud (iCloud Drive off on cellular, or offline) when the iPhone is lost. The courier usually has a recording on the Mac within seconds, and iCloud Backup runs on Wi‑Fi, when iCloud Drive uploads too. Keeping such conversations in backups until they're uploaded was weighed and left out: it would put plaintext into the backup during exactly that window, which is the choice Include in iPhone Backups already offers.
 - **Export.** Markdown, the full data (JSON), and audio through the share sheet, named after the conversation by DaybookKit's `ExportFiles`, which the Mac's Share menu uses too. Copy (a passage, a summary line, Copy Summary) stays on the device that copied it, on the Mac too: never Universal Clipboard (`LocalPasteboard`). Exports wait in `tmp/Daybook Export/` only until the share sheet is done with them, and anything left there is cleared at launch. A file another app opens in Daybook (iOS copies it to `Documents/Inbox/`) is removed once it's imported; a failed import keeps it.
@@ -260,6 +261,20 @@ Confirmed in the iOS 27.1 SDK: SwiftUI `onHingeChange { old, new in }` gives `De
 | **Partly open on a table** while recording | *Table mode*, in landscape (flex mode): the phone is turned a quarter, hinge horizontal, the bottom half flat and the top half standing. The top half shows live captions in large type with the elapsed time and level, readable from across the table. The bottom half has large Bookmark and Stop targets, Write Notes, and the camera. Writing, the notes take the standing half and the keyboard the flat one; it doesn't dim until Done. Dimmed between interactions to save battery: a slow dim, a quick wake, a short fade under Reduce Motion. A touch anywhere wakes it; while it's dimmed that touch reaches Bookmark, never Stop or Write Notes. It keeps the screen on while Daybook is in front (Auto-Lock would otherwise lock a phone nobody touches), until ten minutes pass without a touch. |
 | **Folding or unfolding** | Context carries over: unfold while reading a summary and the transcript opens beside it; fold mid-recording and the pocket recorder takes over without interrupting anything. |
 
+The playback bar stays on the transcript page. On the unfolded Duo its glass card has a paper backdrop, so transcript text doesn't show through the controls; one-column playback keeps its existing glass treatment.
+
+An open conversation's spine is a passive 24 pt context rail: a thin timeline with amber ticks for
+aligned bookmarks and a mint playhead for the loaded player (including while paused). Its extent is
+the furthest unified-transcript or placed-recording end; an unaligned source's local bookmarks and
+playhead are never given a meeting-timeline position. The rail appears only on the conversation spread,
+not its library preview or while a reading or share sheet is open. It has no hit targets or separate
+VoiceOver elements; the pages and their player remain the interactive controls. Only timeline numbers
+are derived for the rail, with no content, audio, or transcript copied or persisted.
+
+The reading column uses 16 pt of crease clearance, overlapping the 20 pt page gutter by 8 pt (so
+its text starts 28 pt from the crease). Library row words and the selected-card wash stay 16 pt away.
+Controls, the player, recorder, and sheets keep their 24 pt clearance.
+
 **While recording**, every posture shows the recorder Floating Notes shows on the Mac (DaybookUI's `RecorderSurface`, in `Recording/UI/RecordingSurface.swift`'s `RecorderScreen`; docs/interface.md, "Floating Notes"): the phase, a chip for each recorder and Mac recording along ("Soundcore · 80%" and "Studio Mac" with the red dot, "Not recording" in warning ink when one asked to record along didn't start; a connected Mac's menu offers Record on Studio Mac Too), the clock, a meter for the microphone and for each recorder recording along, your notes in the editor the page uses (bookmarks and photos as ticks in its lane), live captions, and Bookmark and Stop. The camera, the live timeline, and the bookmark log are the iPhone's own. After a Stop seen on it, the recorder stays about ten seconds (longer while you write): Saved with the conversation's length (the checkmark drawn on, and the hand feels whether it saved), its title and notes, Open, and Keep Recording, which records into the same conversation after what was saved, so a Stop pressed by mistake doesn't split a meeting in two. A recording that couldn't be added says so for the same ten seconds, with Record; its notice stays over Record in the library. Then the library comes back.
 
 Accessibility: Dynamic Type, VoiceOver order across both pages, Reduce Motion for posture transitions, and everything reachable with one hand when closed. At the accessibility text sizes Bookmark and Stop keep their glyphs (and Bookmark its count) with their names in the large content viewer, the recorder's header holds its size and the captions keep only their newest line (none while paused) so the notes keep at least two lines, and each note's time sits on a line of its own above it rather than in a lane. As recording starts VoiceOver is told the screen changed and starts on the clock; a pause, a resume, a silent microphone, a notice, and Saved are announced.
@@ -332,12 +347,35 @@ background relaunch that never reaches `launch`), so each says what it can still
 - **The recording's Live Activity** has a rolling stale date (90 s while recording, two hours while
   paused) that the app refreshes at least once a minute while it records. Stale, it says "Open
   Daybook to check", with no running clock and only Stop.
-- **Widgets and the Control Center control** read `SharedRecordingState`, which carries `asOf`; the
+- **Recorder widget and the Control Center control** read `SharedRecordingState`, which carries `asOf`; the
   app writes it at least once a minute while recording (`SharedStatePublisher`). The timeline adds an
   entry where an unconfirmed recording turns into "Open Daybook to check", and the control is on only while
-  it's confirmed. Paused, the clock is frozen ("Paused · 12:03").
+  it's confirmed. Paused, the clock is frozen ("Paused · 12:03"). The Recorder's Lock Screen sizes are unchanged.
+- **Recent Conversations** is a Home Screen widget: small opens the latest conversation, medium lists three,
+  and large lists six, each linked to its own page. An empty widget opens the library; a conversation
+  deleted or not yet synced here also returns there. Like Spotlight, it excludes Trash and conversations
+  whose placement or detected kind is Personal; an unclassified conversation can appear until classified.
+  Once the library has loaded, the app publishes at most six IDs, titles, and dates to an app-group file
+  and asks WidgetKit to reload when those rows change.
+- **Next Steps** is also Home Screen only. Small opens the conversation of the first unfinished action;
+  medium shows up to three and large up to six, grouped by conversation, with each row linked to that
+  conversation. Actions come from summaries, newest conversation first and in summary order within each
+  conversation. The same Personal and Trash exclusions apply. After the library loads, the app publishes
+  at most six conversation IDs, titles, dates, and action texts, and reloads only when those rows change.
+- **New Note** is a data-free shortcut in the small Home Screen, circular Lock Screen, and inline Lock
+  Screen sizes. Its single tap opens `daybook://new-note`, routed to the existing New Note destination,
+  which waits for the library and creates a fresh note without starting a recording.
+- **Widget snapshots.** Recent Conversations and Next Steps share a file-backed app-group cache
+  (`SharedWidgetCache`), not the library or EventKit. Each snapshot file and its directory are excluded
+  from backups regardless of the library setting; an unexcluded or unreadable snapshot isn't used.
+  The cache is separate from library encryption. No notes, transcript, audio, action owners, or other
+  summary contents go to the widgets. The last good snapshot remains until the app loads or updates the
+  library; WidgetKit controls when a reload appears. Before a snapshot is available, the widget asks
+  the person to open Daybook.
 - **Every launch** clears a recording state and activities an earlier run left (`App.init`).
-- **Privacy.** Conversation titles are `privacySensitive`: hidden on the Lock Screen while locked.
+- **Privacy.** Conversation titles and Next Steps action texts are `privacySensitive`: redacted when the
+  system hides sensitive widget content. Recent Conversations and Next Steps have no Lock Screen sizes.
+  New Note carries no library data.
 - **Live caption.** While live captions are on and showing for the recording, the activity adds a
   line with the newest caption (`ContentState.caption`): at most 80 characters, ending with the newest
   words, two lines on the Lock Screen and one in the expanded Dynamic Island. A new caption alone
@@ -350,9 +388,10 @@ background relaunch that never reaches `launch`), so each says what it can still
   of 10:07 AM" after it lets the recorder go, and "Open Daybook to check" once that's 20 minutes old. Its updates
   and its end reach ActivityKit in the order they were made (`RecorderActivityController`), so an older
   state never lands after a newer one, or after the end.
-- Tests (`RecordingSurfacesTests`, `RecorderActivityTests`) cover the state and timeline logic, the
-  Live Activity buttons' contrast (4.5:1 in light, dark, and Increase Contrast), and the recorder
-  activity against the simulated recorder, not pixels.
+- Tests (`RecordingSurfacesTests`, `RecorderActivityTests`, `RecentConversationsWidgetTests`,
+  `NextStepsWidgetTests`) cover the recording state and timelines, the Live Activity buttons' contrast
+  (4.5:1 in light, dark, and Increase Contrast), the recorder activity against the simulated recorder,
+  widget snapshot privacy, backup exclusions, publishing, and routing, not pixels.
 
 ## Design language
 

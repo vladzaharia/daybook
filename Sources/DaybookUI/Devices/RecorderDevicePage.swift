@@ -65,7 +65,8 @@ public struct RecorderPageColumn<Content: View>: View {
 
     public var body: some View {
         #if os(iOS)
-        let frame = ReadingGeometry.frame(width: width, density: density, creaseEdge: creaseEdge)
+        let frame = ReadingGeometry.frame(width: width, density: density, creaseEdge: creaseEdge,
+                                          creaseClearance: ReadingGeometry.creaseClearance)
         List {
             Group { content }
                 .listRowInsets(EdgeInsets(top: 0, leading: frame.textLeading, bottom: 0, trailing: frame.trailing))

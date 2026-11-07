@@ -121,6 +121,8 @@ struct SummaryPage: View {
                 SettingsDestination(route: page.route)
                     .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { settings = nil } } }
             }
+            .onAppear { session.showsSummarySettingsSheet = true }
+            .onDisappear { session.showsSummarySettingsSheet = false }
         }
         .daybookMotion(DaybookMotion.page, value: meeting.summary?.createdAt)
         .daybookMotion(DaybookMotion.dim, value: isResummarizing)
