@@ -447,7 +447,7 @@ struct LibraryPage: View {
         } else if !place.isTrash {
           // One row at the thumb: Record, Import, and Search, the same size and spacing as on
           // the status sheet's row.
-          HStack(alignment: .bottom, spacing: PhoneStyle.Space.s2) {
+          HStack(alignment: .bottom, spacing: StatusQuickActionLayout.spacing) {
             RecordStartButton()
             Button {
               session.isSearchPresented = true

@@ -733,6 +733,11 @@ enum StatusSheetInputs {
 
 // MARK: Compact
 
+enum StatusQuickActionLayout {
+  /// One gap for Record–Import and Import–Search in the folded row and the Duo tray.
+  static let spacing = PhoneStyle.Space.s2
+}
+
 /// Record, Import, and Search, at the thumb (they move here from the library's foot while the
 /// sheet is up, so there's one bottom surface rather than two stacked). Their glass is one layer
 /// (`GlassEffectContainer`), so the three read and blend as one bar. Past `recordLargestSize` the
@@ -742,7 +747,7 @@ private struct StatusQuickActions: View {
 
   var body: some View {
     GlassEffectContainer(spacing: PhoneStyle.Space.s3) {
-      HStack(alignment: .bottom, spacing: PhoneStyle.Space.s2) {
+      HStack(alignment: .bottom, spacing: StatusQuickActionLayout.spacing) {
         RecordStartButton()
         Button {
           session.isSearchPresented = true

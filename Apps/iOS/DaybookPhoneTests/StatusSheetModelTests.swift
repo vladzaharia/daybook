@@ -895,6 +895,10 @@ final class StatusSheetModelTests: XCTestCase {
       "Trash keeps status but has no Record, Import, or Search actions")
   }
 
+  func testQuickActionGapIsEightPoints() {
+    XCTAssertEqual(StatusQuickActionLayout.spacing, 8)
+  }
+
   // MARK: This iPhone's own work
 
   /// rd-10, ux-iphone-21: while this iPhone transcribes its own recording, or pauses it, the sheet says so in the

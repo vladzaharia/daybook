@@ -32,7 +32,7 @@ struct RecordStartButton: View {
                 }
                 .transition(.opacity)
             }
-            HStack(spacing: PhoneStyle.Space.s3) {
+            HStack(spacing: StatusQuickActionLayout.spacing) {
                 Button {
                     presses += 1
                     // While only a recorder records the shared recording, this iPhone joins it.
