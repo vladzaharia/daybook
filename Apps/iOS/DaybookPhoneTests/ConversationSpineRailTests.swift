@@ -46,6 +46,36 @@ final class ConversationSpineRailTests: XCTestCase {
   XCTAssertEqual(longerTranscript.bookmarks[1], 65.0 / 300.0, accuracy: 0.000_001)
  }
 
+ func testStoredPlacementWithoutReportPlacesBookmarkAtPlayhead() throws {
+  let recording = track(
+   "manual", duration: 100, alignment: .init(method: .manual, offset: 20, rate: 2))
+  let meeting = Meeting(
+   tracks: [recording], highlights: [.init(trackID: recording.id, time: 15)])
+  let player = ConversationSpineRailData.Player(
+   meetingID: meeting.id, trackID: recording.id, duration: 100)
+  let rail = try XCTUnwrap(ConversationSpineRailData(meeting: meeting, player: player))
+  XCTAssertEqual(rail.bookmarks.count, 1)
+  let bookmark = try XCTUnwrap(rail.bookmarks.first)
+  XCTAssertEqual(bookmark, 50.0 / 220.0, accuracy: 0.000_001)
+  XCTAssertEqual(try XCTUnwrap(rail.playhead(at: 15)), bookmark, accuracy: 0.000_001)
+ }
+
+ func testStoredPlacementTakesPrecedenceOverStaleReportForBookmark() throws {
+  let recording = track(
+   "manual", duration: 100, alignment: .init(method: .manual, offset: 20, rate: 2))
+  let meeting = Meeting(
+   tracks: [recording],
+   alignmentReports: [.init(trackID: recording.id, method: .anchors, offset: 5, rate: 1)],
+   highlights: [.init(trackID: recording.id, time: 15)])
+  let player = ConversationSpineRailData.Player(
+   meetingID: meeting.id, trackID: recording.id, duration: 100)
+  let rail = try XCTUnwrap(ConversationSpineRailData(meeting: meeting, player: player))
+  XCTAssertEqual(rail.bookmarks.count, 1)
+  let bookmark = try XCTUnwrap(rail.bookmarks.first)
+  XCTAssertEqual(bookmark, 50.0 / 220.0, accuracy: 0.000_001)
+  XCTAssertEqual(try XCTUnwrap(rail.playhead(at: 15)), bookmark, accuracy: 0.000_001)
+ }
+
  func testUnalignedMissingInvalidAndRemovedSourcesAreExcluded() throws {
   let reference = track("reference", duration: 100)
   let unaligned = track("unaligned", duration: 10_000, offset: 0)
@@ -78,7 +108,7 @@ final class ConversationSpineRailTests: XCTestCase {
   let rail = try XCTUnwrap(ConversationSpineRailData(meeting: meeting))
   XCTAssertEqual(rail.duration, 100)
   XCTAssertEqual(
-   rail.bookmarks, [0.5], "a source-local bookmark never gets an invented timeline position")
+   rail.bookmarks, [0.5, 0.05], "only placed source-local bookmarks get timeline positions")
 
   // Even the first track must not acquire the usual reference-at-zero fallback if fusion says unaligned.
   let firstUnaligned = Meeting(

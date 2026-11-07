@@ -29,6 +29,7 @@ struct ConversationSpineRailData {
   }
 
   var activePlacement: Placement?
+  var placements: [UUID: Placement] = [:]
   for track in meeting.tracks where !track.isRemoved {
    // In particular, a first recording explicitly reported unaligned is not a reference
    // just because timelinePlacement can otherwise default the first recording to zero.
@@ -37,6 +38,7 @@ struct ConversationSpineRailData {
     placed.offset.isFinite, placed.rate.isFinite, placed.rate > 0
    else { continue }
    let placement = Placement(offset: placed.offset, rate: placed.rate)
+   placements[track.id] = placement
    if activePlayer?.trackID == track.id { activePlacement = placement }
 
    func includeEnd(_ length: TimeInterval?) {
@@ -53,19 +55,14 @@ struct ConversationSpineRailData {
   playerPlacement = activePlacement
   bookmarks = meeting.presentHighlights.compactMap { bookmark in
    guard bookmark.time.isFinite, bookmark.time >= 0 else { return nil }
+   let time: TimeInterval
    if let trackID = bookmark.trackID {
-    // Match the bookmark's own fused-timeline rule, and reject invalid transforms.
-    guard let report = meeting.alignmentReports.first(where: { $0.trackID == trackID }),
-     report.method != .unaligned, report.offset.isFinite,
-     report.rate.isFinite, report.rate > 0
-    else { return nil }
-    if let track = meeting.tracks.first(where: { $0.id == trackID }),
-     RecordingWords.isUnaligned(track, in: meeting)
-    {
-     return nil
-    }
+    guard let placement = placements[trackID] else { return nil }
+    time = placement.offset + bookmark.time * placement.rate
+   } else {
+    time = bookmark.time
    }
-   guard let time = meeting.alignedTime(for: bookmark), time.isFinite, time >= 0 else { return nil }
+   guard time.isFinite, time >= 0 else { return nil }
    return min(1, time / end)
   }
  }
