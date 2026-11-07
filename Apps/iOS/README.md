@@ -66,8 +66,8 @@ Nothing here does it: the build script never passes `-allowProvisioningUpdates`.
 | `DaybookPhone/Posture` | `DevicePosture` (closed, partly open, open, angle) fed by `onHingeChange` |
 | `DaybookPhone/App` | the app model (`PhoneAppModel`) that ties recorder, library, sync (`PhoneSync`), the link, recorders, Live Activity, and widgets together, with what it reaches in the system injected (`PhoneAppEnvironment`: `.live` in the app, inert in tests); recording with Macs and recorders (`MultipointCoordinator`), what goes to the Macs while recording (`LinkSharing`), filing (`PhoneAppModel+Filing`), and the debug scripts (`PhoneAppModel+Demos`, debug builds only); `MacPresence`, `LiveProgress`; the debug launch arguments (`DebugLaunch`); notifications (`PhoneNotices`) and where opening one goes (`AppDestination`); Siri phrases, Open Conversation, New Note, and Spotlight (`ConversationEntity`) |
 | `DaybookPhone/UI` | the shell's interface |
-| `DaybookPhoneWidgets` | the Live Activity and Dynamic Island, the Control Center control, the Recorder widget |
-| `Shared` | compiled into both app and extension: App Intents, Live Activity attributes, the app-group state, design tokens |
+| `DaybookPhoneWidgets` | the Live Activity and Dynamic Island, the Control Center control, the Recorder, Recent Conversations, Next Steps, and New Note widgets |
+| `Shared` | compiled into both app and extension: App Intents, Live Activity attributes, app-group recording state and backup-excluded widget snapshots, design tokens |
 | `DaybookPhoneTests` | XCTest, hosted in the app |
 | `Tools/duo-fold` | folds and unfolds an iPhone Duo simulator from the command line (simulator-only, private SpringBoard SPI) |
 

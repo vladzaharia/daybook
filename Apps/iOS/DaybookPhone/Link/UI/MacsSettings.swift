@@ -314,7 +314,7 @@ struct PairingSheet: View {
         ScrollView {
             VStack(alignment: .leading, spacing: PhoneStyle.Space.s5, content: content)
                 .padding(.vertical, PhoneStyle.Space.s5)
-                .pageColumn()
+                .pageColumn(creaseClearance: PhoneStyle.Page.creaseClearance)
         }
     }
 

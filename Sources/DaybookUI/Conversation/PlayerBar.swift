@@ -55,8 +55,10 @@ public struct PlayerBar<Player: PlaybackControlling>: View {
     /// - Parameters:
     ///   - isRecording: This device is recording, so Play is off (the microphone would record it).
     ///   - addBookmark: Adds a bookmark in the recording playing, at a time in it.
-    public init(player: Player, meeting: Meeting, isRecording: Bool = false,
-                addBookmark: @escaping @MainActor (_ trackID: UUID, _ seconds: TimeInterval) -> Void) {
+    public init(
+        player: Player, meeting: Meeting, isRecording: Bool = false,
+        addBookmark: @escaping @MainActor (_ trackID: UUID, _ seconds: TimeInterval) -> Void
+    ) {
         self.player = player
         self.meeting = meeting
         self.isRecording = isRecording
@@ -77,7 +79,10 @@ public struct PlayerBar<Player: PlaybackControlling>: View {
             .frame(maxWidth: touch ? 560 : ReadingGeometry.measure)
             .padding(.horizontal, touch ? DaybookSpacing.s3 : DaybookSpacing.s5)
             // On the open Duo, clear of the crease, as the page is.
-            .padding(Edge.Set(creaseEdge ?? .leading), creaseEdge == nil ? 0 : ReadingGeometry.creaseClearance - DaybookSpacing.s3)
+            .padding(
+                Edge.Set(creaseEdge ?? .leading),
+                creaseEdge == nil ? 0 : ReadingGeometry.creaseClearance - DaybookSpacing.s3
+            )
             .padding(.bottom, touch ? DaybookSpacing.s2 : DaybookSpacing.s3)
             .daybookTransition(.move(edge: .bottom).combined(with: .opacity))
         }
@@ -105,7 +110,11 @@ public struct PlayerBar<Player: PlaybackControlling>: View {
                 playButton
                 if skips { skipButton(back: false) }
                 VStack(spacing: 0) {
-                    if let caption { Text(caption).font(.system(size: touch ? 12 : 10)).foregroundStyle(DaybookPalette.Ink.secondary).lineLimit(1) }
+                    if let caption {
+                        Text(caption).font(.system(size: touch ? 12 : 10)).foregroundStyle(
+                            DaybookPalette.Ink.secondary
+                        ).lineLimit(1)
+                    }
                     HStack(spacing: 8) {
                         // Equal widths either side keep the slider centred.
                         playedTime.frame(minWidth: 44, alignment: .trailing)
@@ -119,7 +128,8 @@ public struct PlayerBar<Player: PlaybackControlling>: View {
             }
         }
         .padding(.horizontal, 14).padding(.vertical, touch ? 6 : 8)
-        .floatingGlass(in: Capsule(style: .circular))
+        .floatingGlass(
+            in: Capsule(style: .circular), backdrop: creaseEdge == nil ? nil : DaybookPalette.paper)
     }
 
     /// The buttons on a row, then the position under them with the times at its ends, as Podcasts does: the row keeps
@@ -140,29 +150,40 @@ public struct PlayerBar<Player: PlaybackControlling>: View {
             HStack(alignment: .firstTextBaseline, spacing: DaybookSpacing.s2) {
                 playedTime
                 Spacer(minLength: 0)
-                if let caption { Text(caption).font(timeFont).foregroundStyle(DaybookPalette.Ink.secondary).lineLimit(1) }
+                if let caption {
+                    Text(caption).font(timeFont).foregroundStyle(DaybookPalette.Ink.secondary)
+                        .lineLimit(1)
+                }
                 Spacer(minLength: 0)
                 remainingTime
             }
             .accessibilityElement(children: .combine)
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
-        .floatingGlass(in: DaybookRadius.shape(DaybookRadius.panel))
+        .floatingGlass(
+            in: DaybookRadius.shape(DaybookRadius.panel),
+            backdrop: creaseEdge == nil ? nil : DaybookPalette.paper)
     }
 
     /// A sentence in place of the controls, while there's nothing to play yet.
     private func message(@ViewBuilder _ content: () -> some View) -> some View {
         content()
-            .padding(.leading, 14).padding(.trailing, touch ? 4 : 10).padding(.vertical, touch ? 4 : 8)
+            .padding(.leading, 14).padding(.trailing, touch ? 4 : 10).padding(
+                .vertical, touch ? 4 : 8
+            )
             .frame(maxWidth: .infinity, alignment: .leading)
-            .floatingGlass(in: DaybookRadius.shape(DaybookRadius.panel))
+            .floatingGlass(
+                in: DaybookRadius.shape(DaybookRadius.panel),
+                backdrop: creaseEdge == nil ? nil : DaybookPalette.paper)
     }
 
     // MARK: Pieces
 
     /// Which recording plays, when the conversation has several: its name, as Info › Audio says it.
     private var caption: String? {
-        guard meeting.tracks.count > 1, let track = meeting.tracks.first(where: { $0.id == player.trackID }) else { return nil }
+        guard meeting.tracks.count > 1,
+            let track = meeting.tracks.first(where: { $0.id == player.trackID })
+        else { return nil }
         return RecordingWords.name(track, in: meeting)
     }
 
@@ -199,19 +220,25 @@ public struct PlayerBar<Player: PlaybackControlling>: View {
 
     @ViewBuilder private var positionControl: some View {
         #if os(macOS)
-        Slider(value: Binding(get: { player.position }, set: { player.seek(to: $0) }), in: 0...max(1, player.duration))
+            Slider(
+                value: Binding(get: { player.position }, set: { player.seek(to: $0) }),
+                in: 0...max(1, player.duration)
+            )
             .controlSize(.mini)
             .tint(DaybookPalette.neonMint)
             .accessibilityLabel("Playback position")
-            .accessibilityValue("\(SpokenTime.format(player.position)) of \(SpokenTime.format(player.duration))")
+            .accessibilityValue(
+                "\(SpokenTime.format(player.position)) of \(SpokenTime.format(player.duration))")
         #else
-        Scrubber(position: player.position, duration: player.duration) { player.seek(to: $0) }
+            Scrubber(position: player.position, duration: player.duration) { player.seek(to: $0) }
         #endif
     }
 
     private var playButton: some View {
         let side: CGFloat = touch ? 44 : 28
-        return Button { player.toggle() } label: {
+        return Button {
+            player.toggle()
+        } label: {
             Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
                 .font(touch ? .body.weight(.semibold) : .system(size: 12, weight: .semibold))
                 .foregroundStyle(DaybookPalette.onPlayFill)
@@ -229,8 +256,11 @@ public struct PlayerBar<Player: PlaybackControlling>: View {
     }
 
     private func skipButton(back: Bool) -> some View {
-        SkipButton(back: back, presses: back ? player.backSkips : player.forwardSkips, touch: touch) {
-            withAnimation(DaybookMotion.resolved(DaybookMotion.state, reduceMotion: reduceMotion)) { player.skip(back ? -15 : 15) }
+        SkipButton(back: back, presses: back ? player.backSkips : player.forwardSkips, touch: touch)
+        {
+            withAnimation(DaybookMotion.resolved(DaybookMotion.state, reduceMotion: reduceMotion)) {
+                player.skip(back ? -15 : 15)
+            }
         }
     }
 
@@ -242,7 +272,11 @@ public struct PlayerBar<Player: PlaybackControlling>: View {
             .pickerStyle(.inline)
         } label: {
             Text(player.rate.formatted() + "×")
-                .font(touch ? .footnote.weight(.semibold).monospacedDigit() : .system(size: 11, weight: .medium).monospacedDigit())
+                .font(
+                    touch
+                        ? .footnote.weight(.semibold).monospacedDigit()
+                        : .system(size: 11, weight: .medium).monospacedDigit()
+                )
                 .foregroundStyle(DaybookPalette.Ink.body)
                 .padding(.horizontal, touch ? 7 : 6).padding(.vertical, touch ? 3 : 2)
                 .background(DaybookPalette.quietFill, in: Capsule())
@@ -252,8 +286,8 @@ public struct PlayerBar<Player: PlaybackControlling>: View {
         .menuIndicator(.hidden)
         .fixedSize()
         #if os(macOS)
-        .menuStyle(.button)
-        .buttonStyle(.plain)
+            .menuStyle(.button)
+            .buttonStyle(.plain)
         #endif
         .help("Playback Speed")
         .accessibilityLabel("Playback speed, \(player.rate.formatted()) times")
@@ -278,7 +312,9 @@ public struct PlayerBar<Player: PlaybackControlling>: View {
 
     private var closeButton: some View {
         Button {
-            withAnimation(DaybookMotion.resolved(DaybookMotion.state, reduceMotion: reduceMotion)) { player.close() }
+            withAnimation(DaybookMotion.resolved(DaybookMotion.state, reduceMotion: reduceMotion)) {
+                player.close()
+            }
         } label: {
             Image(systemName: "xmark")
                 .font(touch ? .footnote.weight(.semibold) : nil)
@@ -306,12 +342,16 @@ public struct PlayerBar<Player: PlaybackControlling>: View {
 
     private func loading(_ fraction: Double?) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: "icloud.and.arrow.down").foregroundStyle(DaybookPalette.Ink.secondary).accessibilityHidden(true)
+            Image(systemName: "icloud.and.arrow.down").foregroundStyle(DaybookPalette.Ink.secondary)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 6) {
-                Text(fraction.map { "Downloading the audio · \(Int(($0 * 100).rounded(.down)))%" } ?? "Getting the audio…")
-                    .font(touch ? .subheadline : .system(size: 12))
-                    .foregroundStyle(DaybookPalette.Ink.secondary)
-                    .contentTransition(reduceMotion ? .identity : .numericText())
+                Text(
+                    fraction.map { "Downloading the audio · \(Int(($0 * 100).rounded(.down)))%" }
+                        ?? "Getting the audio…"
+                )
+                .font(touch ? .subheadline : .system(size: 12))
+                .foregroundStyle(DaybookPalette.Ink.secondary)
+                .contentTransition(reduceMotion ? .identity : .numericText())
                 // A download's bar; until there's a figure, a faint start of one.
                 WorkProgress(fraction: fraction ?? 0.05, style: .bar)
                     .opacity(fraction == nil ? 0.5 : 1)
@@ -323,7 +363,8 @@ public struct PlayerBar<Player: PlaybackControlling>: View {
 
     private func unavailable(_ words: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Image(systemName: "speaker.slash").foregroundStyle(DaybookPalette.Ink.secondary).accessibilityHidden(true)
+            Image(systemName: "speaker.slash").foregroundStyle(DaybookPalette.Ink.secondary)
+                .accessibilityHidden(true)
             Text(words)
                 .font(touch ? .subheadline : .system(size: 12))
                 .foregroundStyle(DaybookPalette.Ink.secondary)
@@ -382,7 +423,9 @@ public struct Scrubber: View {
     @State private var width: CGFloat = 1
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    public init(position: TimeInterval, duration: TimeInterval, seek: @escaping (TimeInterval) -> Void) {
+    public init(
+        position: TimeInterval, duration: TimeInterval, seek: @escaping (TimeInterval) -> Void
+    ) {
         self.position = position
         self.duration = duration
         self.seek = seek
@@ -397,25 +440,36 @@ public struct Scrubber: View {
         let fraction = dragging ?? Self.fraction(position: position, duration: duration)
         ZStack(alignment: .leading) {
             Capsule().fill(Color.primary.opacity(0.12)).frame(height: 4)
-            Capsule().fill(DaybookPalette.neonMint).frame(width: max(4, width * fraction), height: 4)
-                .daybookGlow(DaybookPalette.neonMint, radius: 3)
+            Capsule().fill(DaybookPalette.neonMint).frame(
+                width: max(4, width * fraction), height: 4
+            )
+            .daybookGlow(DaybookPalette.neonMint, radius: 3)
             Circle().fill(DaybookPalette.neonMint)
                 .frame(width: dragging == nil ? 12 : 20, height: dragging == nil ? 12 : 20)
                 .shadow(color: .black.opacity(0.18), radius: 2, y: 1)
                 .offset(x: width * fraction - (dragging == nil ? 6 : 10))
         }
         .frame(maxWidth: .infinity, minHeight: 22, maxHeight: 22)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = max(1, $0) }
+        .onGeometryChange(for: CGFloat.self) {
+            $0.size.width
+        } action: {
+            width = max(1, $0)
+        }
         // A finger's height to grab, without making the bar taller.
         .daybookHitTarget()
         .contentShape(Rectangle())
-        .gesture(DragGesture(minimumDistance: 0)
-            .onChanged { value in dragging = min(1, max(0, value.location.x / width)) }
-            .onEnded { _ in
-                if let dragging { seek(dragging * duration) }
-                dragging = nil
-            })
-        .animation(DaybookMotion.resolved(.snappy(duration: 0.15), reduceMotion: reduceMotion), value: dragging == nil)
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in dragging = min(1, max(0, value.location.x / width)) }
+                .onEnded { _ in
+                    if let dragging { seek(dragging * duration) }
+                    dragging = nil
+                }
+        )
+        .animation(
+            DaybookMotion.resolved(.snappy(duration: 0.15), reduceMotion: reduceMotion),
+            value: dragging == nil
+        )
         .accessibilityElement()
         .accessibilityLabel("Playback position")
         .accessibilityValue("\(SpokenTime.format(position)) of \(SpokenTime.format(duration))")

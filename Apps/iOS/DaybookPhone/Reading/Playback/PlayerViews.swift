@@ -37,27 +37,47 @@ struct MiniPlayer: View {
                 HStack(spacing: 10) {
                     Image(systemName: "waveform")
                         .foregroundStyle(PhoneStyle.neonMint)
-                        .symbolEffect(.variableColor.iterative, options: .repeating, isActive: player.isPlaying && !reduceMotion)
+                        .symbolEffect(
+                            .variableColor.iterative, options: .repeating,
+                            isActive: player.isPlaying && !reduceMotion
+                        )
                         .neonGlow(PhoneStyle.neonMint, radius: 3)
                     VStack(alignment: .leading, spacing: 0) {
-                        Text(meeting.title.isEmpty ? "Untitled Conversation" : meeting.title).font(.subheadline.weight(.semibold)).lineLimit(1)
-                        Text(TimeLabel.short(player.position) + " / " + TimeLabel.short(player.duration))
-                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        Text(meeting.title.isEmpty ? "Untitled Conversation" : meeting.title).font(
+                            .subheadline.weight(.semibold)
+                        ).lineLimit(1)
+                        Text(
+                            TimeLabel.short(player.position) + " / "
+                                + TimeLabel.short(player.duration)
+                        )
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 0)
                 }
                 .contentShape(Rectangle())
             }
-            .accessibilityLabel("Now playing: \(meeting.title.isEmpty ? "Untitled Conversation" : meeting.title)")
+            .accessibilityLabel(
+                "Now playing: \(meeting.title.isEmpty ? "Untitled Conversation" : meeting.title)"
+            )
             .accessibilityHint("Opens the conversation")
-            Button { player.toggle() } label: {
-                Image(systemName: player.isPlaying ? "pause.fill" : "play.fill").contentTransition(.symbolEffect(.replace))
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
+            Button {
+                player.toggle()
+            } label: {
+                Image(systemName: player.isPlaying ? "pause.fill" : "play.fill").contentTransition(
+                    .symbolEffect(.replace)
+                )
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
             }
             .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
-            Button { player.close() } label: { Image(systemName: "xmark").font(.footnote.weight(.semibold)).frame(width: 44, height: 44).contentShape(Rectangle()) }
-                .accessibilityLabel("Close player")
+            Button {
+                player.close()
+            } label: {
+                Image(systemName: "xmark").font(.footnote.weight(.semibold)).frame(
+                    width: 44, height: 44
+                ).contentShape(Rectangle())
+            }
+            .accessibilityLabel("Close player")
         }
         .buttonStyle(.plain)
         .foregroundStyle(.primary)
@@ -88,13 +108,16 @@ struct PlayPill: View {
                 Group {
                     if playing {
                         Image(systemName: "waveform")
-                            .symbolEffect(.variableColor.iterative.dimInactiveLayers.nonReversing, options: .repeating, isActive: !reduceMotion)
+                            .symbolEffect(
+                                .variableColor.iterative.dimInactiveLayers.nonReversing,
+                                options: .repeating, isActive: !reduceMotion)
                     } else {
                         Image(systemName: "play.fill").imageScale(.small)
                     }
                 }
                 .contentTransition(.symbolEffect(.replace))
-                Text(here ? TimeLabel.short(player.position) : DurationLabel.format(duration)).monospacedDigit()
+                Text(here ? TimeLabel.short(player.position) : DurationLabel.format(duration))
+                    .monospacedDigit()
                     .contentTransition(.numericText())
             }
             .font(.subheadline.weight(.medium))

@@ -8,5 +8,8 @@ struct DaybookPhoneWidgets: WidgetBundle {
         RecorderLiveActivity()
         RecordConversationControl()
         RecorderWidget()
+        RecentConversationsWidget()
+        NextStepsWidget()
+        NewNoteWidget()
     }
 }

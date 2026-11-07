@@ -16,19 +16,26 @@ extension EnvironmentValues {
 /// A page's column: centred, at most the Mac's measure wide, with the gutters a phone page needs and
 /// extra room on the side that meets the crease.
 struct PageColumn: ViewModifier {
+    let creaseClearance: CGFloat
     @Environment(\.creaseEdge) private var creaseEdge
+
+    init(creaseClearance: CGFloat) {
+        self.creaseClearance = creaseClearance
+    }
 
     func body(content: Content) -> some View {
         content
             .frame(maxWidth: PhoneStyle.Page.measure, alignment: .leading)
-            .padding(.leading, PhoneStyle.Page.gutter + (creaseEdge == .leading ? PhoneStyle.Page.creaseClearance - 8 : 0))
-            .padding(.trailing, PhoneStyle.Page.gutter + (creaseEdge == .trailing ? PhoneStyle.Page.creaseClearance - 8 : 0))
+            .padding(.leading, PhoneStyle.Page.gutter + (creaseEdge == .leading ? creaseClearance - 8 : 0))
+            .padding(.trailing, PhoneStyle.Page.gutter + (creaseEdge == .trailing ? creaseClearance - 8 : 0))
             .frame(maxWidth: .infinity)
     }
 }
 
 extension View {
-    func pageColumn() -> some View { modifier(PageColumn()) }
+    func pageColumn(creaseClearance: CGFloat = PhoneStyle.Page.readingCreaseClearance) -> some View {
+        modifier(PageColumn(creaseClearance: creaseClearance))
+    }
 }
 
 /// A time that plays from there: meta ink, monospaced digits.

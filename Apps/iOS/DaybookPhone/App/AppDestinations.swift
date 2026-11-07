@@ -56,6 +56,16 @@ enum AppDestination: Equatable, Sendable {
         default: return nil
         }
     }
+
+    /// Read a widget link; other URLs don't request a destination.
+    init?(widgetURL: URL) {
+        guard let link = WidgetLink(url: widgetURL) else { return nil }
+        switch link {
+        case .library: self = .library
+        case .conversation(let id): self = .conversation(id)
+        case .newNote: self = .newNote
+        }
+    }
 }
 
 /// A destination the interface hasn't gone to yet (`PhoneAppModel.destination`): each request is its

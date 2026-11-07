@@ -221,6 +221,20 @@ final class PhoneAppModel: RecordingCommandHandling {
                 if let entries { index.update(entries) }
             })
         }
+        // A background launch may not load the library at all; leave the last valid widget snapshot
+        // in place until it has. The projection changes only when one of the six visible rows does.
+        let publishRecentConversations = environment.publishRecentConversations
+        watches.append(ObservationWatch.distinctValues(of: {
+            controller.isLoaded ? SharedRecentConversations(meetings: controller.meetings) : nil
+        }) { snapshot in
+            if let snapshot { publishRecentConversations(snapshot) }
+        })
+        let publishNextSteps = environment.publishNextSteps
+        watches.append(ObservationWatch.distinctValues(of: {
+            controller.isLoaded ? SharedNextSteps(meetings: controller.meetings) : nil
+        }) { snapshot in
+            if let snapshot { publishNextSteps(snapshot) }
+        })
         wireProcessing()
     }
 

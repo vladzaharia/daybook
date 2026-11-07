@@ -93,10 +93,14 @@ struct DaybookPhoneApp: App {
             .environment(\.summaryPlacement, model.placement)
             .environment(\.upgrades, model.upgrades)
             .task { await model.launch() }
-            // Files shared to Daybook (Voice Memos, call recordings saved from Notes, Files' Share).
+            // Files shared to Daybook (Voice Memos, call recordings saved from Notes, Files' Share),
+            // or a widget opening the library, a conversation, or a new note.
             .onOpenURL { url in
-                guard url.isFileURL else { return }
-                Task { await model.importFiles([url]) }
+                if url.isFileURL {
+                    Task { await model.importFiles([url]) }
+                } else if let destination = AppDestination(widgetURL: url) {
+                    AppDestinations.open(destination)
+                }
             }
         }
         .onChange(of: scenePhase) { _, phase in model.scenePhaseChanged(phase) }

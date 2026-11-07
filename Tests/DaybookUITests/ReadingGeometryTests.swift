@@ -43,12 +43,17 @@ final class ReadingGeometryTests: XCTestCase {
         // The left page meets the crease on its trailing side, the right page on its leading side.
         let left = ReadingGeometry.frame(width: 475.5, density: .touch, creaseEdge: .trailing)
         XCTAssertEqual(left.leading, 20)
-        XCTAssertEqual(left.trailing, 36, "The gutter and the crease's clearance")
-        XCTAssertEqual(left.measure, 419.5)
+        XCTAssertEqual(left.trailing, 28, "The gutter and 16 pt reading clearance, overlapping by 8 pt")
+        XCTAssertEqual(left.measure, 427.5)
         let right = ReadingGeometry.frame(width: 391.5, density: .touch, creaseEdge: .leading)
-        XCTAssertEqual(right.leading, 36)
-        XCTAssertEqual(right.measure, 335.5)
+        XCTAssertEqual(right.leading, 28)
+        XCTAssertEqual(right.measure, 343.5)
         XCTAssertFalse(left.hangsMargin || right.hangsMargin, "Each page is a phone-sized column")
+        XCTAssertEqual(ReadingGeometry.readingCreaseClearance, 16)
+        XCTAssertEqual(ReadingGeometry.creaseClearance, 24, "Controls keep their own clearance")
+        let controls = ReadingGeometry.frame(width: 391.5, density: .touch, creaseEdge: .leading,
+                                             creaseClearance: ReadingGeometry.creaseClearance)
+        XCTAssertEqual(controls.leading, 36, "control-oriented pages retain the previous inset")
     }
 
     func testTheOpenDuoAsOnePageHangsItsMarginAsTheMacDoes() {

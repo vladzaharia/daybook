@@ -752,17 +752,23 @@ private struct SelectionBar: View {
   }
 }
 
-/// A list row's side insets on the open Duo's left page: 20 pt, and on the side that meets the crease, clear of it.
+/// A list row's side insets on the open Duo's left page: 20 pt, and 16 pt on the side meeting the crease.
 /// The library's rows, search's results, and the Trash's line up. On one page, the list's own.
 enum PageRows {
   static func inset(_ edge: Edge, twoPage: Bool, creaseEdge: Edge?) -> CGFloat? {
     guard twoPage else { return nil }
-    return creaseEdge == edge ? PhoneStyle.Page.creaseClearance : pageInset
+    return creaseEdge == edge ? PhoneStyle.Page.readingCreaseClearance : pageInset
   }
 
   static let pageInset: CGFloat = 20
   /// How far the shown row's wash reaches past its words.
   static let washOutset: CGFloat = 10
+
+  /// The wash can extend toward the outside of the page, but never inside the crease clearance.
+  static func washInset(_ edge: Edge, creaseEdge: Edge?) -> CGFloat {
+    let inset = inset(edge, twoPage: true, creaseEdge: creaseEdge) ?? pageInset
+    return creaseEdge == edge ? inset : inset - washOutset
+  }
 }
 
 extension View {
@@ -783,8 +789,7 @@ private struct PageRowInsets: ViewModifier {
   }
 }
 
-/// A row's background on paper. The one the right page shows, on two pages, has a wash 10 pt outside its words on
-/// both sides, so it keeps clear of the crease as they do.
+/// A row's background on paper. The shown row's wash extends 10 pt past its words except at the crease.
 struct PageRowBackground: View {
   let shown: Bool
   @Environment(\.creaseEdge) private var creaseEdge
@@ -794,13 +799,11 @@ struct PageRowBackground: View {
       RoundedRectangle(cornerRadius: 14, style: .continuous).fill(PhoneStyle.accent.opacity(0.14))
         .padding(
           .leading,
-          (PageRows.inset(.leading, twoPage: true, creaseEdge: creaseEdge) ?? 0)
-            - PageRows.washOutset
+          PageRows.washInset(.leading, creaseEdge: creaseEdge)
         )
         .padding(
           .trailing,
-          (PageRows.inset(.trailing, twoPage: true, creaseEdge: creaseEdge) ?? 0)
-            - PageRows.washOutset)
+          PageRows.washInset(.trailing, creaseEdge: creaseEdge))
     } else {
       PhoneStyle.paper
     }
