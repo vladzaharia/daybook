@@ -272,8 +272,8 @@ sheet is open. It has no hit targets or separate
 VoiceOver elements; the pages and their player remain the interactive controls. Only timeline numbers
 are derived for the rail, with no content, audio, or transcript copied or persisted.
 
-The reading column uses 16 pt of crease clearance, overlapping the 20 pt page gutter by 8 pt (so
-its text starts 28 pt from the crease). Library row words and the selected-card wash stay 16 pt away.
+The reading column's crease-side inset is the full 16 pt clearance, not an addition to the normal
+20 pt page gutter. Library row words and the selected-card wash use the same 16 pt clearance.
 Controls, the player, recorder, and sheets keep their 24 pt clearance.
 
 **While recording**, every posture shows the recorder Floating Notes shows on the Mac (DaybookUI's `RecorderSurface`, in `Recording/UI/RecordingSurface.swift`'s `RecorderScreen`; docs/interface.md, "Floating Notes"): the phase, a chip for each recorder and Mac recording along ("Soundcore · 80%" and "Studio Mac" with the red dot, "Not recording" in warning ink when one asked to record along didn't start; a connected Mac's menu offers Record on Studio Mac Too), the clock, a meter for the microphone and for each recorder recording along, your notes in the editor the page uses (bookmarks and photos as ticks in its lane), live captions, and Bookmark and Stop. The camera, the live timeline, and the bookmark log are the iPhone's own. After a Stop seen on it, the recorder stays about ten seconds (longer while you write): Saved with the conversation's length (the checkmark drawn on, and the hand feels whether it saved), its title and notes, Open, and Keep Recording, which records into the same conversation after what was saved, so a Stop pressed by mistake doesn't split a meeting in two. A recording that couldn't be added says so for the same ten seconds, with Record; its notice stays over Record in the library. Then the library comes back.

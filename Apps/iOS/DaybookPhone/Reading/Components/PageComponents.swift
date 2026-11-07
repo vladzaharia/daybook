@@ -14,7 +14,7 @@ extension EnvironmentValues {
 }
 
 /// A page's column: centred, at most the Mac's measure wide, with the gutters a phone page needs and
-/// extra room on the side that meets the crease.
+/// the specified full clearance on the side that meets it.
 struct PageColumn: ViewModifier {
     let creaseClearance: CGFloat
     @Environment(\.creaseEdge) private var creaseEdge
@@ -26,9 +26,13 @@ struct PageColumn: ViewModifier {
     func body(content: Content) -> some View {
         content
             .frame(maxWidth: PhoneStyle.Page.measure, alignment: .leading)
-            .padding(.leading, PhoneStyle.Page.gutter + (creaseEdge == .leading ? creaseClearance - 8 : 0))
-            .padding(.trailing, PhoneStyle.Page.gutter + (creaseEdge == .trailing ? creaseClearance - 8 : 0))
+            .padding(.leading, Self.inset(for: .leading, creaseEdge: creaseEdge, creaseClearance: creaseClearance))
+            .padding(.trailing, Self.inset(for: .trailing, creaseEdge: creaseEdge, creaseClearance: creaseClearance))
             .frame(maxWidth: .infinity)
+    }
+
+    static func inset(for edge: Edge, creaseEdge: Edge?, creaseClearance: CGFloat) -> CGFloat {
+        edge == creaseEdge ? creaseClearance : PhoneStyle.Page.gutter
     }
 }
 

@@ -609,6 +609,16 @@ final class ReadingTests: XCTestCase {
         XCTAssertEqual(CreaseGeometry.crease(width: 300, leadingInset: 0, trailingInset: 400), 300, "never outside the view")
     }
 
+    func testPageColumnUsesTheFullCreaseClearance() {
+        XCTAssertEqual(PageColumn.inset(for: .trailing, creaseEdge: .trailing, creaseClearance: 16), 16)
+        XCTAssertEqual(PageColumn.inset(for: .leading, creaseEdge: .trailing, creaseClearance: 16), 20)
+        XCTAssertEqual(PageColumn.inset(for: .leading, creaseEdge: .leading, creaseClearance: 24), 24)
+        let left = ReadingGeometry.frame(width: 475.5, density: .touch, creaseEdge: .trailing)
+        XCTAssertEqual(left.trailing, 16)
+        let right = ReadingGeometry.frame(width: 391.5, density: .touch, creaseEdge: .leading)
+        XCTAssertEqual(right.leading, 16)
+    }
+
     func testLaunchArgumentsAreReadInDebugBuilds() {
         let launch = ReadingLaunch(arguments: ["app", "--select", "Weekly", "--page", "transcript", "--play", "--sheet", "history"])
         XCTAssertEqual(launch.select, "Weekly")

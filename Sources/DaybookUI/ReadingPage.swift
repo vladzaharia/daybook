@@ -37,7 +37,7 @@ public enum ReadingGeometry {
     public static let narrowBelow: CGFloat = 600
     /// Room kept clear for controls on each side of the iPhone Duo's crease.
     public static let creaseClearance: CGFloat = 24
-    /// The reading column's crease clearance; the page gutter already covers 8 pt of it.
+    /// The reading column's crease clearance, measured from the crease to its edge.
     public static let readingCreaseClearance: CGFloat = 16
     /// The lane of times beside timed blocks on a narrow page, at the default text size; it grows with
     /// Dynamic Type up to `laneGrowth` times.
@@ -75,9 +75,9 @@ public enum ReadingGeometry {
                              creaseClearance: CGFloat = ReadingGeometry.readingCreaseClearance) -> Frame {
         let hangs = width >= narrowBelow
         var (leading, trailing) = gutters(density: density, hangs: hangs)
-        // On the Duo, the gutter already covers 8 pt of the clearance.
-        if creaseEdge == .leading { leading += creaseClearance - 8 }
-        if creaseEdge == .trailing { trailing += creaseClearance - 8 }
+        // `creaseClearance` is the entire inset at the crease, not extra to the page gutter.
+        if creaseEdge == .leading { leading = creaseClearance }
+        if creaseEdge == .trailing { trailing = creaseClearance }
         guard hangs else {
             let measure = min(Self.measure, max(0, width - leading - trailing))
             return Frame(leading: leading, margin: 0, measure: measure, trailing: max(0, width - leading - measure))
