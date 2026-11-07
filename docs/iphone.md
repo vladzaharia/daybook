@@ -264,10 +264,11 @@ Confirmed in the iOS 27.1 SDK: SwiftUI `onHingeChange { old, new in }` gives `De
 The playback bar stays on the transcript page. On the unfolded Duo its glass card has a paper backdrop, so transcript text doesn't show through the controls; one-column playback keeps its existing glass treatment.
 
 An open conversation's spine is a passive 24 pt context rail: a thin timeline with amber ticks for
-aligned bookmarks and a mint playhead for the loaded player (including while paused). Its extent is
-the furthest unified-transcript or placed-recording end; an unaligned source's local bookmarks and
-playhead are never given a meeting-timeline position. The rail appears only on the conversation spread,
-not its library preview or while a reading or share sheet is open. It has no hit targets or separate
+bookmarks on the effective placed timeline and a mint playhead for the loaded player (including while
+paused). Its extent is the furthest unified-transcript or placed-recording end; explicitly unaligned
+source bookmarks are omitted, and unplaced sources have no invented bookmark or playhead position.
+The rail appears only on the conversation spread, not its library preview or while a reading or share
+sheet is open. It has no hit targets or separate
 VoiceOver elements; the pages and their player remain the interactive controls. Only timeline numbers
 are derived for the rail, with no content, audio, or transcript copied or persisted.
 
