@@ -379,12 +379,17 @@ struct RecordingNotes: View {
 
     var body: some View {
         let recorder = model.recorder
-        MarginNotesEditor(
-            text: Binding(get: { recorder.notes }, set: { model.editNotes($0) }),
-            times: NoteTimeline.paragraphTimes(anchors: recorder.timedNotes, text: recorder.notes),
-            marks: NotesTimeline.marks(bookmarks: recorder.highlights, photos: recorder.photos),
-            scrolls: true,
-            focusOnAppear: focusOnAppear,
-            bottomInset: DaybookSpacing.s3)
+        let notes = Binding(get: { recorder.notes }, set: { model.editNotes($0) })
+        HStack(alignment: .top, spacing: 0) {
+            MarginNotesEditor(
+                text: notes,
+                times: NoteTimeline.paragraphTimes(anchors: recorder.timedNotes, text: recorder.notes),
+                marks: NotesTimeline.marks(bookmarks: recorder.highlights, photos: recorder.photos),
+                scrolls: true,
+                focusOnAppear: focusOnAppear,
+                bottomInset: DaybookSpacing.s3)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            HandwritingButton(text: notes, canInsert: { recorder.isCapturing })
+        }
     }
 }

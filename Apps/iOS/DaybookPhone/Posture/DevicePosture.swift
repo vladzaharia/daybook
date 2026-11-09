@@ -2,12 +2,11 @@ import Observation
 import SwiftUI
 import UIKit
 
-/// How the iPhone Duo is folded, for layouts to follow: closed is the pocket recorder, open is the
-/// two-page notebook, partly open while recording is table mode (docs/iphone.md). Phones without a
-/// hinge report `.none` and get the closed layout, or the open one at regular width. Turned on its
-/// side (a compact height), any iPhone that isn't open gets the two pages: one column with the status
-/// sheet would be a sheet over the whole window, which iOS shows at full height there.
-///
+/// How the iPhone Duo is folded, for layouts to follow: closed is the pocket recorder in portrait, open is the
+/// two-page notebook, partly open while recording is table mode (docs/iphone.md). Phones without a hinge report
+/// `.none` and get the closed layout, or the open one at regular width. Turned on its side, a closed Duo stays a
+/// single-column pocket layout; an open device uses the two-page notebook.
+
 /// Fed by SwiftUI's `onHingeChange` (iOS 27.1) through `HingeObserver`. A launch argument forces a
 /// posture in the simulator and in screenshots: `--posture closed|open|partial[:degrees]`.
 @MainActor
@@ -71,15 +70,17 @@ final class DevicePosture {
     }
 
     /// The layout for the posture and the window. `verticalSizeClass` is the window's height class; nil reads the
-    /// one the root reported (`heightClass`). A compact height (on its side) is two pages unless the Duo stands
-    /// partly open for table mode: a one-column library would put the status sheet over the whole window.
-    func layout(isRecording: Bool, horizontalSizeClass: UserInterfaceSizeClass?,
-                verticalSizeClass: UserInterfaceSizeClass? = nil) -> Layout {
+    /// one the root reported (`heightClass`). Compact height is two pages unless the Duo is closed, where the
+    /// cover stays a single-column pocket layout rather than showing the cramped two-page notebook.
+    func layout(
+        isRecording: Bool, horizontalSizeClass: UserInterfaceSizeClass?,
+        verticalSizeClass: UserInterfaceSizeClass? = nil
+    ) -> Layout {
         let onItsSide = (verticalSizeClass ?? heightClass) == .compact
         switch fold {
         case .open: return .notebook
         case .partiallyOpen: return isRecording ? .table : .notebook
-        case .closed: return onItsSide ? .notebook : .pocket
+        case .closed: return .pocket
         case .none: return horizontalSizeClass == .regular || onItsSide ? .notebook : .pocket
         }
     }
@@ -98,8 +99,11 @@ final class DevicePosture {
 
     static func override(in arguments: [String]) -> (fold: Fold, angle: Double?)? {
         let keys = ["--posture", "-DaybookPosture"]
-        guard let index = arguments.firstIndex(where: keys.contains), arguments.indices.contains(index + 1) else { return nil }
-        let parts = arguments[index + 1].lowercased().split(separator: ":", maxSplits: 1).map(String.init)
+        guard let index = arguments.firstIndex(where: keys.contains),
+            arguments.indices.contains(index + 1)
+        else { return nil }
+        let parts = arguments[index + 1].lowercased().split(separator: ":", maxSplits: 1).map(
+            String.init)
         let fold: Fold
         switch parts.first {
         case "closed": fold = .closed
@@ -136,7 +140,10 @@ struct HingeObserver: ViewModifier {
             .task {
                 // `--interface-orientation landscape` (debug): the library on its side, as the person would
                 // turn it (the simulator has no command to). The scene takes it once it allows landscape.
-                guard let orientation = LaunchOptions.value(after: "--interface-orientation", in: CommandLine.arguments) else { return }
+                guard
+                    let orientation = LaunchOptions.value(
+                        after: "--interface-orientation", in: CommandLine.arguments)
+                else { return }
                 try? await Task.sleep(for: .seconds(1.5))
                 InterfaceOrientation.apply(orientation)
             }
@@ -161,7 +168,8 @@ extension DevicePosture {
     func apply(_ hinge: DeviceHinge?, from source: String) {
         reports[source, default: 0] += 1
         guard let hinge else { return hingeUnavailable() }
-        let fold: Fold = hinge.status == .closed ? .closed : hinge.status == .fullyOpen ? .open : .partiallyOpen
+        let fold: Fold =
+            hinge.status == .closed ? .closed : hinge.status == .fullyOpen ? .open : .partiallyOpen
         update(fold: fold, angle: hinge.angle.degrees)
     }
 
@@ -186,9 +194,10 @@ private struct HingeInteractionReader: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
         view.isUserInteractionEnabled = false
-        view.addInteraction(UIHingeInteraction { [posture] _, update in
-            posture.apply(update.hinge)
-        })
+        view.addInteraction(
+            UIHingeInteraction { [posture] _, update in
+                posture.apply(update.hinge)
+            })
         return view
     }
 

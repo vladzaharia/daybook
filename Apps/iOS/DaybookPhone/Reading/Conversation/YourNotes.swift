@@ -15,19 +15,24 @@ struct PhoneNotes: View {
     var body: some View {
         let times = meeting.paragraphTimes()
         let timed = times.contains { $0 != nil }
+        let notes = Binding(get: { library.meeting(meeting.id)?.notes ?? meeting.notes },
+                            set: { library.editNotes(meeting.id, text: $0) })
         YourNotes(meeting: meeting, library: library, canPlay: !meeting.presentTracks.isEmpty, play: play, passages: passages,
                   bookmarksID: SummaryBlockID.bookmarks) {
-            MarginNotesEditor(
-                text: Binding(get: { meeting.notes }, set: { library.editNotes(meeting.id, text: $0) }),
-                times: times,
-                placeholder: "Add a note…",
-                // The lane appears only when a note has a recording time; notes typed while reading have none. It's the
-                // bookmarks' lane, so their times line up.
-                lane: timed ? PhoneStyle.Page.lane : 0,
-                focusOnAppear: session.focusNotesFor == meeting.id,
-                playTime: meeting.tracks.isEmpty ? nil : { play(.timeline($0)) },
-                onFocusChange: { focused in if focused, session.focusNotesFor == meeting.id { session.focusNotesFor = nil } })
-                .padding(.top, PhoneStyle.Space.s2)
+            HStack(alignment: .top, spacing: 0) {
+                MarginNotesEditor(
+                    text: notes,
+                    times: times,
+                    placeholder: "Add a note…",
+                    // The lane appears only when a note has a recording time; notes typed while reading have none. It's the
+                    // bookmarks' lane, so their times line up.
+                    lane: timed ? PhoneStyle.Page.lane : 0,
+                    focusOnAppear: session.focusNotesFor == meeting.id,
+                    playTime: meeting.tracks.isEmpty ? nil : { play(.timeline($0)) },
+                    onFocusChange: { focused in if focused, session.focusNotesFor == meeting.id { session.focusNotesFor = nil } })
+                HandwritingButton(text: notes, canInsert: { library.meeting(meeting.id) != nil })
+            }
+            .padding(.top, PhoneStyle.Space.s2)
         }
     }
 }
