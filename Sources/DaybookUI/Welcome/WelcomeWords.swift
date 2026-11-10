@@ -73,16 +73,20 @@ public enum WelcomeWords {
     public static let openAtLogin = "Open Daybook at login"
     public static let openAtLoginReason = "So Daybook can notice calls."
 
-    /// The Ready page's line: what happens to a recording made now. `transcribesElsewhere`: a Mac known to transcribe
-    /// this library transcribes what this iPhone records. `waitsForWiFi`: the download is asked for and waits for Wi‑Fi,
-    /// so the transcript waits for it too.
+    /// The Ready page's line: what happens to a recording made now. `canTranscribe`: it's transcribed now, by the models
+    /// here or, while they download, the system's speech model standing in, so nothing more needs saying.
+    /// `transcribesElsewhere`: a Mac known to transcribe this library transcribes what this iPhone records.
+    /// `waitsForWiFi`: the download is asked for and waits for Wi‑Fi, so the transcript waits for it too.
+    /// `transcriptFirst`: the models that transcribe arrive first and a transcript waits only for them, the summary
+    /// following the rest (the Mac).
     public static func readyMessage(downloading: Bool, canTranscribe: Bool, transcribesElsewhere: Bool = false,
-                                    waitsForWiFi: Bool = false) -> String {
+                                    waitsForWiFi: Bool = false, transcriptFirst: Bool = false) -> String {
+        if canTranscribe { return "Start a conversation now." }
         if downloading {
+            if transcriptFirst, !waitsForWiFi { return "Start a conversation now. It’s transcribed in minutes." }
             return waitsForWiFi ? "Start a conversation now. It’s transcribed once the models download on Wi‑Fi."
                 : "Start a conversation now. It’s transcribed once the models download."
         }
-        if canTranscribe { return "Start a conversation now." }
         if transcribesElsewhere { return "Start a conversation now. Your Mac transcribes it." }
         return "Start a conversation now. Download models in Settings to transcribe it."
     }

@@ -30,6 +30,16 @@ final class WelcomeWordsTests: XCTestCase {
         XCTAssertEqual(WelcomeWords.readyMessage(downloading: true, canTranscribe: false, waitsForWiFi: true),
                        "Start a conversation now. It’s transcribed once the models download on Wi‑Fi.")
         XCTAssertEqual(WelcomeWords.readyMessage(downloading: false, canTranscribe: true), "Start a conversation now.")
+        // The Mac transcribes as soon as what transcribes is here, and summarizes once the rest arrives (uxf-01).
+        XCTAssertEqual(WelcomeWords.readyMessage(downloading: true, canTranscribe: false, transcriptFirst: true),
+                       "Start a conversation now. It’s transcribed in minutes.")
+        XCTAssertEqual(WelcomeWords.readyMessage(downloading: true, canTranscribe: false, waitsForWiFi: true, transcriptFirst: true),
+                       "Start a conversation now. It’s transcribed once the models download on Wi‑Fi.")
+        // It transcribes now (its models are here, or the system's speech model stands in while they download): nothing
+        // more to say, on either device.
+        XCTAssertEqual(WelcomeWords.readyMessage(downloading: true, canTranscribe: true, transcriptFirst: true), "Start a conversation now.")
+        XCTAssertEqual(WelcomeWords.readyMessage(downloading: true, canTranscribe: true), "Start a conversation now.")
+        XCTAssertEqual(WelcomeWords.readyMessage(downloading: true, canTranscribe: true, waitsForWiFi: true), "Start a conversation now.")
         XCTAssertEqual(WelcomeWords.readyMessage(downloading: false, canTranscribe: false, transcribesElsewhere: true),
                        "Start a conversation now. Your Mac transcribes it.")
         XCTAssertEqual(WelcomeWords.readyMessage(downloading: false, canTranscribe: false),

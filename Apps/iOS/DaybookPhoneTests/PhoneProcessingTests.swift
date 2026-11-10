@@ -683,6 +683,56 @@ final class PhoneProcessingTests: XCTestCase {
         XCTAssertTrue(simulator.capabilities(enabled: true).transcribes)
     }
 
+    /// Transcripts without a download: while the chosen transcription model isn't on this iPhone, the system's speech model
+    /// stands in (here a system model on Apple Vision's engine, since Simulator has no transcriber), with no speakers until
+    /// their models are downloaded and with them after; once the chosen model is here, it transcribes again.
+    func testBehaviorTheSystemsSpeechModelStandsInWhileTheChosenModelDownloads() async throws {
+        let root = try temporaryDirectory()
+        let json = """
+            {"schemaVersion": 1, "minimumReaderVersion": 1, "families": [{"id": "system-speech", "name": "System Speech",
+             "engine": "appleVision", "roles": ["transcription"],
+             "variants": [{"id": "system", "name": "System Speech", "systemProvided": true, "revisions": []}]}]}
+            """
+        var manifest = try ModelCatalog.readBuiltInManifest().manifest
+        manifest.families += try ModelManifestReader.read(Data(json.utf8)).manifest.families
+        let catalog = ModelCatalog(builtIn: manifest)
+        func models() async -> PhoneModels {
+            let models = PhoneModels(root: root, defaults: makeTestDefaults("PhoneProcessingTests"), catalog: catalog,
+                                     fetcher: PhoneModelsTests.RecordingFetcher(), network: PhoneModelsTests.ScriptedNetwork().network,
+                                     physicalMemory: 12_000_000_000, memoryLimit: 8_400_000_000, runsLanguageModels: true)
+            await models.refresh()
+            return models
+        }
+        let standIn = "system-speech/system"
+
+        let fresh = await models()
+        XCTAssertEqual(fresh.choice(for: .transcription)?.key, "parakeet/ultra", "The choice is unchanged")
+        XCTAssertEqual(fresh.transcriptionStandIn?.key, standIn)
+        XCTAssertEqual(fresh.capabilities(enabled: true), ProcessingCapabilities(transcribes: true, findsSpeakers: false, summarizes: false,
+                                                                                models: ["transcription": standIn]))
+        let alone = try XCTUnwrap(fresh.processingEngine(), "It transcribes with nothing downloaded")
+        XCTAssertEqual(alone.configuration.transcriptionModel.id, standIn)
+        XCTAssertFalse(alone.configuration.detectSpeakers, "No speakers until their models are here")
+        XCTAssertNil(alone.configuration.voiceEmbeddingModel)
+        XCTAssertTrue(fresh.processingMissing.contains { $0.key == "parakeet/ultra" }, "The chosen model still downloads")
+
+        for key in ["nemotron-3-diarization/offline", "community-1/offline"] { try installSynthetic(key, in: root, catalog: catalog) }
+        let speakers = await models()
+        let withSpeakers = try XCTUnwrap(speakers.processingEngine())
+        XCTAssertEqual(withSpeakers.configuration.transcriptionModel.id, standIn)
+        XCTAssertTrue(withSpeakers.configuration.detectSpeakers)
+        XCTAssertEqual(withSpeakers.configuration.speakerModel.id, "nemotron-3-diarization/offline")
+        XCTAssertEqual(withSpeakers.configuration.voiceEmbeddingModel?.id, "community-1/offline")
+        XCTAssertTrue(speakers.capabilities(enabled: true).findsSpeakers)
+
+        try installSynthetic("parakeet/ultra", in: root, catalog: catalog)
+        let chosen = await models()
+        XCTAssertNil(chosen.transcriptionStandIn, "Nothing stands in once the chosen model is here")
+        XCTAssertEqual(try XCTUnwrap(chosen.processingEngine()).configuration.transcriptionModel.id, "parakeet/ultra")
+        XCTAssertEqual(chosen.capabilities(enabled: true).models?["transcription"], "parakeet/ultra")
+        XCTAssertEqual(chosen.capabilities(enabled: false), ProcessingCapabilities(transcribes: false, findsSpeakers: false, summarizes: false))
+    }
+
     /// A verified-looking install: the receipt the store writes, and sparse files of the catalog's sizes.
     private func installSynthetic(_ key: String, in root: URL, catalog: ModelCatalog) throws {
         let model = try XCTUnwrap(catalog.model(key))

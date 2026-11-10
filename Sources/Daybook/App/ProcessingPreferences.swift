@@ -119,17 +119,22 @@ struct ProcessingJob: Codable, Equatable, Identifiable, Sendable {
     /// Set when the person chose Summarize on This Mac (after the cloud couldn't): stored only then, so earlier jobs
     /// decode and compare as before.
     private let summaryHere: Bool?
+    /// Set when the person chose Use the Cloud for a summary waiting for this Mac's summary model: stored only then.
+    private let summaryInCloud: Bool?
 
     /// Its summary runs on this Mac whatever the cloud preferences say. It's placed there as the summary step starts and
     /// ends with it, so a job cancelled, paused, or skipped before then leaves no placement behind.
     var summarizesHere: Bool { summaryHere == true }
+    /// Its summary goes to the cloud with no countdown, while the cloud is on offer: the person chose it for a summary
+    /// that waited for this Mac's summary model (Use the Cloud).
+    var summarizesInCloud: Bool { summaryInCloud == true }
 
     init(id: UUID = UUID(), meetingID: UUID, createdAt: Date = Date(), mode: Mode = .newAudio,
          transcriptionModelID: String, summaryModelID: String, detectSpeakers: Bool = true,
          preferences: ProcessingPreferences = .init(), requestID: UUID? = nil, templateID: String? = nil,
          revisions: [String: String]? = nil, voiceEmbeddingModelID: String? = nil, languageFallbackModelID: String? = nil,
          smallTasksModelID: String? = nil, photoModelID: String? = nil, upgrade: ProcessingRequest.Upgrade? = nil,
-         summarizesHere: Bool = false) {
+         summarizesHere: Bool = false, summarizesInCloud: Bool = false) {
         self.id = id; self.meetingID = meetingID; self.createdAt = createdAt; self.mode = mode
         self.transcriptionModelID = transcriptionModelID; self.summaryModelID = summaryModelID
         self.detectSpeakers = detectSpeakers; self.preferences = preferences.normalized
@@ -141,6 +146,7 @@ struct ProcessingJob: Codable, Equatable, Identifiable, Sendable {
         self.photoModelID = photoModelID
         self.upgrade = upgrade
         summaryHere = summarizesHere ? true : nil
+        summaryInCloud = summarizesInCloud ? true : nil
     }
 
     /// The same job, carrying out `request`.
@@ -150,7 +156,16 @@ struct ProcessingJob: Codable, Equatable, Identifiable, Sendable {
                       requestID: request.id, templateID: request.templateID ?? templateID, revisions: revisions,
                       voiceEmbeddingModelID: voiceEmbeddingModelID, languageFallbackModelID: languageFallbackModelID,
                       smallTasksModelID: smallTasksModelID, photoModelID: photoModelID, upgrade: request.upgrade ?? upgrade,
-                      summarizesHere: summarizesHere)
+                      summarizesHere: summarizesHere, summarizesInCloud: summarizesInCloud)
+    }
+
+    /// The same job, no longer carrying out a request: it gave the request back.
+    var withoutRequest: ProcessingJob {
+        ProcessingJob(id: id, meetingID: meetingID, createdAt: createdAt, mode: mode, transcriptionModelID: transcriptionModelID,
+                      summaryModelID: summaryModelID, detectSpeakers: detectSpeakers, preferences: preferences, templateID: templateID,
+                      revisions: revisions, voiceEmbeddingModelID: voiceEmbeddingModelID, languageFallbackModelID: languageFallbackModelID,
+                      smallTasksModelID: smallTasksModelID, photoModelID: photoModelID, upgrade: upgrade,
+                      summarizesHere: summarizesHere, summarizesInCloud: summarizesInCloud)
     }
 
     /// The models the job runs, each with the revision it froze.
@@ -162,9 +177,12 @@ struct ProcessingJob: Codable, Equatable, Identifiable, Sendable {
 
     func reference(_ id: String) -> ModelReference { ModelReference(id, revision: revisions?[id]) }
 
-    /// Summary refresh works with saved transcripts even after the ASR model is removed.
-    func requiredModelIDs(hasUntranscribedAudio: Bool) -> Set<String> {
-        var models: Set<String> = [summaryModelID]
+    /// The models the job needs before it can start: what transcribes, finds speakers, and makes their voice profiles, for
+    /// the work it does. The summary model isn't one: a transcript never waits for it (docs/models.md, "Routing"), and
+    /// the job's summary waits for it at the summary step, unless the cloud takes the summary. Summary refresh works with
+    /// saved transcripts even after the ASR model is removed.
+    func transcribingModelIDs(hasUntranscribedAudio: Bool) -> Set<String> {
+        var models: Set<String> = []
         let transcribe = mode == .fullRetranscription || (mode != .summaryOnly && hasUntranscribedAudio)
         if transcribe { models.insert(transcriptionModelID) }
         if detectSpeakers && (transcribe || mode == .speakerRefresh) {
@@ -172,6 +190,11 @@ struct ProcessingJob: Codable, Equatable, Identifiable, Sendable {
             if let embedder = voiceEmbeddingModelID { models.insert(embedder) }
         }
         return models
+    }
+
+    /// Every model the job runs with here: the transcribing ones and the summary model.
+    func requiredModelIDs(hasUntranscribedAudio: Bool) -> Set<String> {
+        transcribingModelIDs(hasUntranscribedAudio: hasUntranscribedAudio).union([summaryModelID])
     }
 
     /// Excludes request IDs, dates, mode, and meeting identity so equivalent model

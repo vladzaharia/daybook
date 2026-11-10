@@ -112,7 +112,10 @@ extension FloatingStatusInputs {
         case .requested(.device(let request)): return .requested(device: request.requestedBy.name)
         case .failed(let failure): return .failed(FailureWords(failure, words: .mac(id: state.library.thisDevice.id)))
         case .recorded: return nil
-        case .transcribed: return .ready(summary: false)
+        case .transcribed:
+            // Transcript first: its summary waits for this Mac's summary model, as the page says.
+            guard state.summaryWaitsForModel(meeting), let models = state.modelDownloadState else { return .ready(summary: false) }
+            return .transcriptReady(waiting: ProcessingWords.summaryWaitsLine(models))
         case .awaitingRecordings(let recordings): return .awaiting(ProcessingStatus.awaitingLine(recordings))
         case .done:
             if meeting.summary != nil { return .ready(summary: true) }

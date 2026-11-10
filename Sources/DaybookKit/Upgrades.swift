@@ -162,10 +162,12 @@ public struct UpgradeOffer: Equatable, Sendable {
 public enum Upgrades {
     /// The one offer a conversation's page makes now, or nil: only for a conversation with nothing working or waiting
     /// (`status` is done), for the most upstream step a clearly better model could redo (it redoes the rest anyway), and
-    /// never for a step whose provenance is unknown, or an offer the person dismissed (nor any no better than it).
+    /// never for a step whose provenance is unknown, or an offer the person dismissed (nor any no better than it). A
+    /// transcript with no summary yet is never an upgrade: its summary is still to come (a Mac transcribes first and
+    /// summarizes once its summary model is here), and the first summary isn't a better one.
     public static func offer(for meeting: Meeting, status: ProcessingStatus, candidates: UpgradeCandidates,
                              ranks: UpgradeRanks = .builtIn) -> UpgradeOffer? {
-        guard status == .done else { return nil }
+        guard status == .done, meeting.summary != nil || meeting.unifiedTranscript.isEmpty else { return nil }
         for role in UpgradeRole.allCases {
             if let offer = offer(role, for: meeting, candidates: candidates, ranks: ranks) { return offer }
         }

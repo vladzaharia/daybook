@@ -247,6 +247,13 @@ struct ConversationStatus: View {
         inputs.runningTitle = state.processingID.flatMap { id in state.meetings.first { $0.id == id }?.title }
         inputs.queueWaitsForDownload = state.downloadingID != nil && state.processingID == nil
         inputs.queuedMode = state.processingQueue.first { $0.meetingID == meeting.id }?.mode
+        // Transcript first: "Waiting to summarize after the download · 38%", with Use the Cloud when it's on offer.
+        var summaryMayWait = status == .transcribed
+        if case .requested(.device) = status { summaryMayWait = true }
+        if summaryMayWait, state.summaryWaitsForModel(meeting) {
+            inputs.summaryWaitsForModel = true
+            inputs.placement.cloudOffered = state.cloudOnOffer
+        }
         if status == .done { inputs.upgrade = state.upgradeOffer(for: meeting) }
         if case .failed(let failure) = status, case .cloud = failure.kind, state.hasCloudSetup {
             inputs.cloudModel = state.cloud.resolved?.model.name

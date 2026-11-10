@@ -199,8 +199,10 @@ struct SummaryPage: View {
             if case .downloading(let fraction) = model.models.status(of: choice) { return .init(name: choice.name, fraction: fraction) }
             return nil
         }.first
+        // While the system's speech model stands in, transcribing waits for no download: nothing to offer one for.
+        let standsIn = model.models.transcriptionStandIn != nil
         return .iPhone(processesHere: processesHere, summarizes: processesHere && model.processingCapabilities.summarizes,
-                       missingModelBytes: model.models.processingMissingBytes, download: downloading)
+                       missingModelBytes: standsIn ? 0 : model.models.processingMissingBytes, download: standsIn ? nil : downloading)
     }
 
     /// The models transcribing here needs (`PhoneModels.processingMissing`).

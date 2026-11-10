@@ -172,8 +172,14 @@ final class AppState {
             presenceChanged()
         }
     }
-    /// Variant keys ("whisper/base") with a verified revision on this Mac.
-    var installedModels: Set<String> = [] { didSet { presenceChanged() } }
+    /// Variant keys ("whisper/base") with a verified revision on this Mac. The summary model arriving takes up what waited
+    /// for it (`summaryModelArrived`).
+    var installedModels: Set<String> = [] {
+        didSet {
+            presenceChanged()
+            if !oldValue.contains(summaryModel), installedModels.contains(summaryModel) { summaryModelArrived() }
+        }
+    }
     /// The devices in the library's presence records, as of the last sync pass: other Macs and the models they run, for
     /// "Upgrade" offers (AppState+Upgrade.swift).
     var syncDevices: [KnownSyncDevice] = []
@@ -181,10 +187,10 @@ final class AppState {
     var installedRevisions: [String: String] = [:]
     /// Every model Daybook knows here: built in plus the ones the person added.
     var modelCatalog: ModelCatalog = .builtIn { didSet { catalogRevision &+= 1 } }
-    /// Bumped whenever the catalog changes: part of the key for the routed models (`routedRequiredModelIDs`).
+    /// Bumped whenever the catalog changes: part of the key for the routed models (`routedTranscribingModelIDs`).
     private(set) var catalogRevision = 0
     /// The routed models and what they were worked out from (AppState+SpeechRouting.swift).
-    @ObservationIgnored var routeMemo: (key: SpeechRoute.Inputs, models: [String])?
+    @ObservationIgnored var routeMemo: (key: SpeechRoute.Inputs, route: SpeechRoute)?
     /// The model chosen for each role, by family and variant (docs/models.md).
     var modelSelections: ModelSelections {
         didSet {
@@ -193,6 +199,8 @@ final class AppState {
                 processingPreferences.speakerModelID = speaker
             }
             presenceChanged()
+            // A summary model chosen that's here already: what waited for one goes on.
+            if oldValue[.summarization] != summaryModel, installedModels.contains(summaryModel) { summaryModelArrived() }
         }
     }
     /// The model downloading now (`ProcessingQueue`).
@@ -268,6 +276,9 @@ final class AppState {
     var includeComputerAudio: Bool { didSet { preferences.set(includeComputerAudio, forKey: Preference.includeComputerAudio) } }
     var processSyncedAudio: Bool { didSet { preferences.set(processSyncedAudio, forKey: Preference.processSyncedAudio); presenceChanged() } }
     var detectSpeakers: Bool { didSet { preferences.set(detectSpeakers, forKey: Preference.detectSpeakers); presenceChanged() } }
+    /// The system's speech model may stand in while the chosen transcription model downloads (`speechRoute`; on unless
+    /// `Preference.transcriptionStandIn` says otherwise).
+    var transcriptionStandsIn: Bool { didSet { presenceChanged() } }
     let sync: LibrarySyncController
     /// Daybook's local link to paired iPhones: pairing, record control, live progress.
     let phoneLink: PhoneLink
@@ -308,8 +319,12 @@ final class AppState {
     @discardableResult
     private func adopt(_ setup: CloudSetup) -> CloudSetup {
         cloudSetup = setup
-        // A key, the models offered, or the preferences changed: every countdown follows.
-        setup.onChange = { [weak self] in self?.placementOptionsChanged() }
+        // A key, the models offered, or the preferences changed: every countdown follows, and a summary that waited for
+        // the summary model goes to the cloud if it now takes it at once.
+        setup.onChange = { [weak self] in
+            self?.placementOptionsChanged()
+            self?.takeUpWaitingSummaries()
+        }
         placementOptionsChanged()
         return setup
     }
@@ -488,6 +503,7 @@ final class AppState {
         includeComputerAudio = defaults.object(forKey: Preference.includeComputerAudio) as? Bool ?? true
         processSyncedAudio = defaults.object(forKey: Preference.processSyncedAudio) as? Bool ?? true
         detectSpeakers = defaults.object(forKey: Preference.detectSpeakers) as? Bool ?? true
+        transcriptionStandsIn = defaults.object(forKey: Preference.transcriptionStandIn) as? Bool ?? true
         readingScale = defaults.object(forKey: Preference.readingScale) as? Double ?? 1
         runtime = LocalIntelligenceRuntime(modelsDirectory: libraryURL.appendingPathComponent("Models"), fetcher: ModelDemo.fetcher)
         let captionSettings = LiveCaptionSettings(defaults: defaults)
@@ -567,6 +583,11 @@ final class AppState {
         static let includeComputerAudio = "includeComputerAudio"
         static let processSyncedAudio = "processSyncedAudio"
         static let detectSpeakers = "detectSpeakers"
+        /// Whether the system's speech model may stand in while the chosen transcription model downloads
+        /// (`transcriptionStandsIn`): on unless set off, and not in Settings. Test suites set it off
+        /// (DaybookTestSupport's `TestDefaults.transcriptionStandInKey`), so a test's "no models" means none, whatever
+        /// the Mac running it has.
+        static let transcriptionStandIn = "transcriptionStandIn"
         static let showsFloatingNotesWhileRecording = "showsFloatingNotesWhileRecording"
         static let isInspectorPresented = "isInspectorPresented"
         static let showsMenuBarExtra = "showsMenuBarExtra"
@@ -693,7 +714,10 @@ final class AppState {
 
     var selectedMeeting: Meeting? { meetings.first { $0.id == selectedID } }
     var isRecording: Bool { recordingID != nil }
-    var canProcess: Bool { routedRequiredModelIDs.allSatisfy(installedModels.contains) }
+    /// This Mac transcribes now: the models that transcribe and find speakers are here. What picks up recordings and
+    /// requests, and what presence says, goes by it; the summary model isn't one of them, since a summary waits for it
+    /// (or goes to the cloud) on its own.
+    var canProcess: Bool { routedTranscribingModelIDs.allSatisfy(installedModels.contains) }
 
     /// Selections from `modelSelections`, or, on the first launch after the model system arrived,
     /// migrated from the catalog IDs Daybook stored before ("whisper-base", "qwen-7b",
@@ -1016,6 +1040,15 @@ final class AppState {
         guard let before = meetings.first(where: { $0.id == id }) else { return }
         let transcript = MeetingEvidence.transcript(before)
         guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AppError.noSpeech }
+        // Transcript first: without the summary model here, and with the cloud not taking the summary at once, the job ends
+        // with the transcript, and the summary waits for the model or the person's Use the Cloud
+        // (AppState+SummaryPlacement.swift).
+        let job = runningJob.flatMap { $0.meetingID == id ? $0 : nil } ?? request
+        if await summaryWaitsForModelAtStep(job, in: before) {
+            try Task.checkCancellation()
+            leaveSummaryForModel(id, after: job)
+            return
+        }
         update(id) { $0.status = .summarizing }
         processingActivity.enter(.summarizing)
         renewRunningClaim(force: false)

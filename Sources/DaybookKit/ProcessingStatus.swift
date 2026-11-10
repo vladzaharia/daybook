@@ -15,8 +15,8 @@ public enum ProcessingStatus: Equatable, Sendable {
     case requested(Waiting)
     /// Being processed, on this device or another one.
     case processing(Progress)
-    /// Transcribed, with no summary, and nothing has asked for one (a summary stopped partway, say):
-    /// the transcript reads, and Summarize asks for the rest.
+    /// Transcribed, with no summary, and nothing has asked for one (a summary stopped partway, say, or a
+    /// Mac's summary waiting for its summary model): the transcript reads, and Summarize asks for the rest.
     case transcribed
     /// Nothing waits: transcripts and summary are in, or there's no audio to process.
     case done
@@ -91,7 +91,8 @@ public enum ProcessingStatus: Equatable, Sendable {
         public var paused: Set<UUID>
         /// Waiting for models to download before they start.
         public var awaitingModels: Set<UUID>
-        /// The models automatic processing needs are installed.
+        /// The models that transcribe are installed: audio with no transcript waits for models only without them. A
+        /// summary doesn't wait for them (a Mac transcribes first, and its summary follows the summary model).
         public var canProcess: Bool
         /// The running conversation's step, when the queue knows it; nil reads it from the conversation
         /// (the Mac marks one being summarized).

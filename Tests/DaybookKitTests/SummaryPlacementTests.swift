@@ -36,6 +36,31 @@ final class SummaryPlacementTests: XCTestCase {
         XCTAssertEqual(planner.secondsLeft(at: at(2.5)), 13)
     }
 
+    /// A Mac without its summary model (transcript first, uxf-03): Always sends its summary to the cloud with nothing
+    /// here; a Personal one, or Offer First, would wait for a Mac with Use the Cloud, which the Mac never lets hold its
+    /// queue (it ends the job and waits for its model); Use the Cloud and asking for it still start in the cloud.
+    func testBehaviorAMacThatCantSummarizeItselfSendsAlwaysToTheCloudAndOtherwiseWaits() {
+        let always = SummaryPlacementPlanner(options: options(local: false), preferences: preferences(.always), at: start)
+        XCTAssertEqual(always.phase, .started(.cloud(sonnet)), "No summary model needed")
+        let personal = SummaryPlacementPlanner(options: options(local: false), preferences: preferences(.always), at: start, personal: true)
+        XCTAssertEqual(personal.phase, .waitingForMac)
+        XCTAssertEqual(personal.actions, [.useCloud])
+        var offered = SummaryPlacementPlanner(options: options(local: false), preferences: preferences(), at: start)
+        XCTAssertEqual(offered.phase, .waitingForMac)
+        XCTAssertFalse(offered.waitsForMacs, "A Mac never offers Wait for a Mac")
+        XCTAssertTrue(offered.perform(.useCloud, at: at(1)))
+        XCTAssertEqual(offered.started, .cloud(sonnet))
+        let asked = SummaryPlacementPlanner(options: options(local: false), preferences: preferences(), at: start, immediately: true)
+        XCTAssertEqual(asked.phase, .waitingForMac, "Asked for, it still has nowhere here to run")
+        let noKey = SummaryPlacementPlanner(options: options(local: false, cloud: false), preferences: preferences(.always), at: start)
+        XCTAssertEqual(noKey.phase, .waiting, "Without a key, nothing to place it with")
+
+        // The summary model arriving mid-wait starts it here.
+        offered = SummaryPlacementPlanner(options: options(local: false), preferences: preferences(), at: start)
+        offered.update(options: options(local: true), at: at(5))
+        XCTAssertEqual(offered.phase, .countingDown(to: .thisDevice, until: at(20)))
+    }
+
     func testBehaviorTheCountdownLastsTheSetting() {
         let planner = SummaryPlacementPlanner(options: options(local: true), preferences: preferences(seconds: 30), at: start)
         XCTAssertEqual(planner.deadline, at(30))
