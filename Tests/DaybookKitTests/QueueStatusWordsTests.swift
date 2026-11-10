@@ -56,4 +56,26 @@ final class QueueStatusWordsTests: XCTestCase {
         XCTAssertEqual(download?.text, "Downloading Parakeet Ultra · 40%")
         XCTAssertEqual(download?.progress, 0.4)
     }
+
+    /// VM-06: the Mac list's subtitle says the queue in the fewest words: the step that runs, by its name, and what
+    /// waits, never the figure the row's line shows; a countdown's seconds; a download's percent; else nothing.
+    func testBehaviorTheListSubtitleNamesTheRunningStepAndWhatWaits() {
+        func subtitle(_ queue: Queue, at offset: TimeInterval = 0) -> String? {
+            QueueStatusWords.subtitle(queue, now: now.addingTimeInterval(offset))
+        }
+        XCTAssertEqual(subtitle(Queue(running: .transcribing, fraction: 0.4, waiting: 1)), "Transcribing · 1 waiting")
+        XCTAssertEqual(subtitle(Queue(running: .summarizing, waiting: 1)), "Summarizing · 1 waiting", "the step that runs, not always Transcribing")
+        XCTAssertEqual(subtitle(Queue(running: .identifyingSpeakers, fraction: 0.63)), "Identifying speakers")
+        XCTAssertEqual(subtitle(Queue(running: .summarizing, cloudModel: "Claude Sonnet 5.5", waiting: 2)), "Summarizing · 2 waiting")
+        let countdown = Queue(running: .summarizing, countdown: now.addingTimeInterval(12), waiting: 1)
+        XCTAssertEqual(subtitle(countdown), "Summarizing in 12 s · 1 waiting")
+        XCTAssertEqual(subtitle(countdown, at: 3.5), "Summarizing in 9 s · 1 waiting", "rounded up, as the row says it")
+        XCTAssertEqual(subtitle(Queue(running: .summarizing, countdown: now.addingTimeInterval(7))),
+                       ConversationRowStatus(kind: .waiting, text: nil, countdownUntil: now.addingTimeInterval(7)).text(at: now),
+                       "the row's words for the same moment")
+        XCTAssertEqual(subtitle(Queue(waiting: 1, download: .init(name: "Parakeet Ultra", fraction: 0.4))), "Downloading Parakeet Ultra · 40%")
+        XCTAssertNil(subtitle(Queue(waiting: 3)), "nothing works: nothing to say")
+        XCTAssertNil(subtitle(Queue(awaitingModels: 1)))
+        XCTAssertNil(subtitle(Queue()))
+    }
 }

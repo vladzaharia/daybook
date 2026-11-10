@@ -19,7 +19,9 @@ final class LibraryPlaceWordsTests: XCTestCase {
     }
 
     func testBehaviorAnEmptyLibrarySaysSoOnce() {
-        XCTAssertNil(LibraryWords.emptyPlace(.section(.all), libraryIsEmpty: true, platform: .mac), "the Mac's page says it")
+        // VM-18: the Mac's page welcomes it with the mark; its list column says what any empty place says, never blank.
+        XCTAssertEqual(LibraryWords.emptyPlace(.section(.all), libraryIsEmpty: true, platform: .mac),
+                       LibraryWords.EmptyPlace(title: "No Conversations", symbol: LibrarySection.all.systemImage))
         XCTAssertEqual(LibraryWords.emptyPlace(.section(.all), libraryIsEmpty: true, platform: .iPhone),
                        LibraryWords.EmptyPlace(title: "No Conversations Yet", symbol: "waveform", showsMark: true))
         XCTAssertEqual(LibraryWords.emptyPlace(.section(.all), libraryIsEmpty: false, platform: .iPhone)?.title, "No Conversations")

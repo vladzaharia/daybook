@@ -10,7 +10,7 @@ import Foundation
 ///
 /// | Status | Page | Row |
 /// |---|---|---|
-/// | Recorded | box (accent): "Not transcribed yet" + Transcribe | "Not transcribed yet" + dot |
+/// | Recorded | box (accent): "Not transcribed yet" + Transcribe | "Not transcribed yet" + waveform |
 /// | Transcribed | line: "Not summarized yet" + Summarize | the preview |
 /// | Queued here | line: "Waiting to transcribe after “Roadmap review”" + Cancel | "Waiting to transcribe" + clock |
 /// | Waiting for models | box (accent): "Download models to transcribe this conversation" + Choose Models…, Download | "Waiting for models" |
@@ -637,11 +637,14 @@ public struct ConversationRowStatus: Equatable, Sendable {
     public enum Kind: Equatable, Sendable {
         case recording, processing, waiting, waitingForModels, paused, failed, notTranscribed, playing, justFinished
 
-        /// The row's glyph: nil for processing (the 2 pt gradient line) and not transcribed (the accent dot).
+        /// The row's glyph: nil for processing (the 2 pt gradient line). Waiting states are secondary symbols, audio
+        /// not transcribed yet among them (a waveform, never a dot that reads as "unread"); red only recording, orange
+        /// only a failure, mint only playing.
         public var symbol: String? {
             switch self {
             case .recording: return "record.circle.fill"
-            case .processing, .notTranscribed: return nil
+            case .processing: return nil
+            case .notTranscribed: return "waveform"
             case .waiting: return "clock"
             case .waitingForModels: return "arrow.down.circle"
             case .paused: return "pause.circle"

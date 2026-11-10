@@ -43,6 +43,7 @@ final class ConversationStatusPresentationTests: XCTestCase {
                                                actions: [.transcribe(newAudio: false)]), "\(inputs.words.here)")
             XCTAssertEqual(row(.recorded, nil, inputs), ConversationRowStatus(kind: .notTranscribed, text: "Not transcribed yet"))
         }
+        XCTAssertEqual(ConversationRowStatus.Kind.notTranscribed.symbol, "waveform", "a waiting state's secondary symbol, not an unread dot")
         XCTAssertEqual(page(.recorded, recorded(transcribed: true), mac)?.title, "A new recording isn’t transcribed yet")
         XCTAssertEqual(page(.recorded, recorded(transcribed: true), mac)?.actions.first?.title, "Transcribe New Audio")
         XCTAssertNil(page(.recorded, Meeting(title: "Notes"), mac), "nothing to transcribe")

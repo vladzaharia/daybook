@@ -18,16 +18,16 @@ extension LibraryWords {
 
     /// An empty place: "No Conversations" with the section's glyph, a folder with how to fill it ("Drag
     /// conversations here, or choose Move to Folder." on a Mac; "Choose Move to Folder… on a conversation." on an
-    /// iPhone, which has no drag), and the Trash with its own. An empty library says so once: on a Mac the page
-    /// does, so its list says nothing (nil); an iPhone's one-column list is where it's said. A recorder's page lists
-    /// recordings, not conversations.
+    /// iPhone, which has no drag), and the Trash with its own. An empty library is welcomed with the mark once: on a
+    /// Mac by the page, its list saying "No Conversations" as any empty place does; on an iPhone by its one-column
+    /// list. A recorder's page lists recordings, not conversations.
     public static func emptyPlace(_ place: LibraryPlace, libraryIsEmpty: Bool, platform: ConversationAction.Platform) -> EmptyPlace? {
         switch place {
         case .device:
             return nil
         case .section(let section):
-            if section == .all && libraryIsEmpty {
-                return platform == .mac ? nil : EmptyPlace(title: "No Conversations Yet", symbol: "waveform", showsMark: true)
+            if section == .all && libraryIsEmpty && platform != .mac {
+                return EmptyPlace(title: "No Conversations Yet", symbol: "waveform", showsMark: true)
             }
             return EmptyPlace(title: "No Conversations", symbol: section.systemImage)
         case .folder:
