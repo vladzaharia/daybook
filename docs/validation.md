@@ -175,6 +175,13 @@ not Daybook's.
   ScrubberBookmarksTests, ModelRowsTests, ConversationPageRulesTests, LibraryListTests; the iPhone's ReadingTests,
   PhoneModelsTests, TranscriptPageTests; 18 Pro and open-Duo screenshots (light, dark, accessibility sizes); Mac
   snapshots at 1440 and 760 unchanged from W1-C.
+- **W2-M, the iPhone's first week.** Welcome offers the iPhone's summary model beside the transcription models only
+  where one fits (two checked rows, the total on the button); the summary download waits behind the transcription
+  models. "Needs your Mac to summarize" offers "Download · 3.6 GB" where the iPhone could summarize, and the page's
+  and Settings › Models' download words read as one set. The iPhone's own transcripts and summaries no longer count as
+  a Mac sighting. PhoneWelcomeTests, PhoneModelsTests, ReadingTests, SettingsWordsTests,
+  ConversationStatusPresentationTests, WelcomeWordsTests, and 18 Pro screenshots of Welcome and the needs-Mac page (a
+  capable phone simulated with `--demo-iphone-memory 12`).
 - **W2-O, microphone choice.** Mac: `MicrophoneChoice` resolves the input (Automatic leaves an idle Bluetooth headset
   for the built-in microphone, records one a call app already uses; a chosen input is used when it's there);
   `MicrophoneSource` sets it on the engine before start and follows input changes, the input in use dying, and new
