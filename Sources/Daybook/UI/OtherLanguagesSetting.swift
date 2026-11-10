@@ -3,21 +3,15 @@ import DaybookKit
 import DaybookUI
 import SwiftUI
 
-/// The transcription language rows in Settings › Models, placed under the transcription model:
-/// the language, and the model for languages the selected one doesn't cover. Speech routing fills
-/// them in; the model manager places them.
-struct TranscriptionLanguageSettings: View {
+/// Settings › Models › Transcription's Other languages row, under the library's language (DaybookUI's
+/// `TranscriptionLanguageSettings`): the model for languages the selected one doesn't cover. It's this Mac's
+/// (`ProcessingPreferences.otherLanguagesModelID`), because it names a model this Mac downloads. Speech routing fills it
+/// in; the model manager places it.
+struct OtherLanguagesSetting: View {
     let state: AppState
     let manager: ModelManager
 
     var body: some View {
-        Picker("Language", selection: language) {
-            Text("Automatic").tag("")
-            Divider()
-            ForEach(languages, id: \.self) { code in
-                Text(TranscriptionLanguages.name(code)).tag(code)
-            }
-        }
         if showsOtherLanguages, let other = otherLanguagesModel {
             // A model row like the ones above (DaybookUI's): its state under the label, what to do, then the pop-up.
             ActivityReader {
@@ -31,30 +25,14 @@ struct TranscriptionLanguageSettings: View {
         }
     }
 
-    // MARK: Language
-
     private var catalog: ModelCatalog { state.modelCatalog }
     private var selectedLanguages: [String]? { catalog.model(state.transcriptionModel)?.capabilities.languages }
-
-    /// Every language a transcription model here covers, plus the stored choice.
-    private var languages: [String] {
-        var codes = TranscriptionLanguages.choices(in: catalog, engines: state.runtime.engines)
-        if let stored = state.processingPreferences.transcriptionLanguage, !codes.contains(stored) { codes.append(stored) }
-        return codes
-    }
-
-    private var language: Binding<String> {
-        Binding(get: { state.processingPreferences.transcriptionLanguage ?? "" },
-                set: { state.processingPreferences.transcriptionLanguage = $0.isEmpty ? nil : $0 })
-    }
-
-    // MARK: Other languages
 
     /// Shown when some speech can go to another model: Automatic with a model that covers only some
     /// languages, or a chosen language the selected model doesn't cover.
     private var showsOtherLanguages: Bool {
         guard !TranscriptionLanguages.coversEverything(selectedLanguages) else { return false }
-        guard let chosen = state.processingPreferences.transcriptionLanguage else { return true }
+        guard let chosen = state.transcriptionLanguage else { return true }
         return !TranscriptionLanguages.covers(selectedLanguages, chosen)
     }
 

@@ -733,6 +733,51 @@ final class PhoneProcessingTests: XCTestCase {
         XCTAssertEqual(chosen.capabilities(enabled: false), ProcessingCapabilities(transcribes: false, findsSpeakers: false, summarizes: false))
     }
 
+    /// xdev-settings-08: the iPhone transcribes in the library's language, which any device may change; a job keeps the
+    /// language it started with. No model for other languages runs here, so a language Parakeet doesn't cover goes to it
+    /// as a hint, as on a Mac without one.
+    func testBehaviorTheIPhoneTranscribesInTheLibrarysLanguage() async throws {
+        let root = try temporaryDirectory()
+        let catalog = ModelCatalog.builtIn
+        for key in ["parakeet/ultra", "nemotron-3-diarization/offline", "community-1/offline"] {
+            try installSynthetic(key, in: root, catalog: catalog)
+        }
+        let models = PhoneModels(root: root, defaults: makeTestDefaults("PhoneProcessingTests"), fetcher: PhoneModelsTests.RecordingFetcher(),
+                                 network: PhoneModelsTests.ScriptedNetwork().network, physicalMemory: 12_000_000_000,
+                                 memoryLimit: 8_400_000_000, runsLanguageModels: true)
+        await models.refresh()
+        let automatic = try XCTUnwrap(models.processingEngine()).configuration
+        XCTAssertNil(automatic.transcriptionLanguage, "Automatic")
+        XCTAssertNil(automatic.languageFallbackModel, "no model for other languages on an iPhone")
+
+        var language: String? = "de"
+        models.transcriptionLanguage = { language }
+        let german = try XCTUnwrap(models.processingEngine())
+        XCTAssertEqual(german.configuration.transcriptionLanguage, "de")
+        XCTAssertEqual(german.configuration.transcriptionModel.id, "parakeet/ultra")
+        XCTAssertTrue(german.configuration.detectSpeakers)
+        XCTAssertNotEqual(german.configuration.fingerprint, automatic.fingerprint, "the language is part of how it was made")
+        XCTAssertEqual(german.configuration.speakerMatchThreshold, ProcessingPreferences().speakerMatchThreshold,
+                       "the speaker settings' defaults, which only a Mac changes")
+
+        language = "fr"
+        XCTAssertEqual(german.configuration.transcriptionLanguage, "de", "a job keeps the language it started with")
+        XCTAssertEqual(try XCTUnwrap(models.processingEngine()).configuration.transcriptionLanguage, "fr", "the next one takes the new one")
+        language = "ja"
+        XCTAssertEqual(models.transcriptionRoute, TranscriptionRoute(model: "parakeet/ultra", language: "ja"))
+        XCTAssertEqual(models.capabilities(enabled: true).models?["transcription"], "parakeet/ultra")
+
+        // The app's models read the library's setting, where a Mac's change arrives through sync.
+        let library = PhoneLibrary(rootURL: try temporaryDirectory("language-library"), installation: "INSTALL-1")
+        let app = PhoneAppModel(recorder: RecorderRig().recorder, library: library, posture: DevicePosture(),
+                                options: DebugLaunch(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]),
+                                environment: try PhoneAppEnvironment.test(self))
+        try await library.controller.load()
+        XCTAssertNil(app.models.transcriptionLanguage())
+        library.controller.setTranscriptionLanguage("pt-BR")
+        XCTAssertEqual(app.models.transcriptionLanguage(), "pt")
+    }
+
     /// A verified-looking install: the receipt the store writes, and sparse files of the catalog's sizes.
     private func installSynthetic(_ key: String, in root: URL, catalog: ModelCatalog) throws {
         let model = try XCTUnwrap(catalog.model(key))

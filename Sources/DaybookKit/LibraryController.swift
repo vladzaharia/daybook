@@ -557,6 +557,37 @@ public final class LibraryController {
         metadata.templates.append(.edit(id, value: nil, replacing: stored)); persistMetadata()
     }
 
+    // MARK: The library's choices
+
+    /// The language the library's conversations are transcribed in ("de"), nil for Automatic: a synced library setting
+    /// (`LibraryMetadata.choices`), so a change on one device changes what every device transcribes with once it syncs.
+    public var transcriptionLanguage: String? { TranscriptionLanguages.normalize(metadata.transcriptionLanguage) }
+
+    /// The library's transcription language, chosen on this device (nil for Automatic). The later change wins everywhere.
+    public func setTranscriptionLanguage(_ code: String?, at now: Date = Date()) {
+        choose(.transcriptionLanguage, TranscriptionLanguages.normalize(code), at: now)
+    }
+
+    /// A language this device chose before it was the library's, written only while the library has none (no device
+    /// has chosen one, Automatic included). Returns whether it was written.
+    @discardableResult
+    public func adoptTranscriptionLanguage(_ code: String?, at now: Date = Date()) -> Bool {
+        guard metadata.choice(.transcriptionLanguage) == nil, let code = TranscriptionLanguages.normalize(code) else { return false }
+        choose(.transcriptionLanguage, code, at: now)
+        return true
+    }
+
+    private func choose(_ name: LibraryChoice.Name, _ selection: String?, at now: Date) {
+        let stored = metadata.choice(name)
+        // The choice the library holds already: nothing new to save or sync.
+        if let stored, !stored.isDeletion, stored.unreadableValue == nil, stored.value?.selection == selection { return }
+        var choices = metadata.choices ?? []
+        choices.removeAll { $0.id == name.rawValue }
+        choices.append(.edit(name.rawValue, value: LibraryChoice(selection: selection), replacing: stored, at: now))
+        metadata.choices = choices
+        persistMetadata()
+    }
+
     // MARK: Recorder ownership
 
     /// Recorders a device manages over Bluetooth. Synced library settings, like folders and templates.

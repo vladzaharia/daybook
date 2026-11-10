@@ -158,7 +158,7 @@ private struct LibrarySchemaHeader: Decodable { var schemaVersion: Int }
 private struct LenientLibraryMetadata: Decodable {
     var value = LibraryMetadata()
 
-    private enum Keys: String, CodingKey { case folders, templates, vocabulary, recorders, handoffs, speakerProfiles, voiceprints }
+    private enum Keys: String, CodingKey { case folders, templates, vocabulary, recorders, handoffs, speakerProfiles, voiceprints, choices }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: Keys.self)
@@ -169,6 +169,7 @@ private struct LenientLibraryMetadata: Decodable {
         value.handoffs = Self.entries(container, .handoffs)
         value.speakerProfiles = Self.entries(container, .speakerProfiles)
         value.voiceprints = Self.entries(container, .voiceprints)
+        value.choices = Self.entries(container, .choices)
     }
 
     private static func entries<Value: Codable & Equatable & Sendable>(_ container: KeyedDecodingContainer<Keys>, _ key: Keys) -> [LibraryValue<Value>]? {

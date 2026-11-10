@@ -245,4 +245,44 @@ final class ModelPreferenceMigrationTests: XCTestCase {
         XCTAssertNil(older.engineConfiguration.transcriptionModel.revision, "Jobs without frozen revisions use the newest installed one")
         XCTAssertNotEqual(job.configurationFingerprint, older.configurationFingerprint)
     }
+
+    /// xdev-settings-08: the transcription language moved from this Mac's preferences into the library. A Mac that chose
+    /// one writes it into the library once at launch, when the library has none, and from then on follows the library;
+    /// the model for other languages and the speaker settings stay this Mac's.
+    func testBehaviorAStoredLanguageMovesIntoTheLibraryOnceAndTheMacThenFollowsIt() async throws {
+        let defaults = defaults(), root = try library()
+        defaults.set(Data(#"{"speakerModelID":"community-1/offline","transcriptionLanguage":"de","otherLanguagesModelID":"whisper/small"}"#.utf8),
+                     forKey: "processingPreferences")
+        let state = AppState(libraryURL: root, defaults: defaults)
+        await state.initialize()
+        XCTAssertEqual(state.transcriptionLanguage, "de", "carried into the library")
+        XCTAssertNotNil(state.library.metadata.choice(.transcriptionLanguage))
+        XCTAssertNil(state.processingPreferences.transcriptionLanguage, "no longer this Mac's")
+        XCTAssertEqual(state.processingPreferences.otherLanguagesModelID, "whisper/small", "the model for other languages stays this Mac's")
+        XCTAssertEqual(state.processingPreferences.speakerModelID, "community-1/offline")
+        let stored = try JSONDecoder().decode(ProcessingPreferences.self, from: XCTUnwrap(defaults.data(forKey: "processingPreferences")))
+        XCTAssertNil(stored.transcriptionLanguage, "carried over once")
+        XCTAssertEqual(stored.otherLanguagesModelID, "whisper/small")
+
+        // From then on the Mac follows the library.
+        state.transcriptionLanguage = "fr"
+        await state.flush()
+        let relaunched = AppState(libraryURL: root, defaults: defaults)
+        await relaunched.initialize()
+        XCTAssertEqual(relaunched.transcriptionLanguage, "fr")
+
+        // A library that has a language already keeps it: another Mac's stored one isn't carried over, and is let go.
+        let other = self.defaults()
+        other.set(Data(#"{"transcriptionLanguage":"es"}"#.utf8), forKey: "processingPreferences")
+        let second = AppState(libraryURL: root, defaults: other)
+        await second.initialize()
+        XCTAssertEqual(second.transcriptionLanguage, "fr", "the library's")
+        XCTAssertNil(second.processingPreferences.transcriptionLanguage)
+
+        // A Mac that never chose one carries nothing: the library stays without a choice (Automatic).
+        let fresh = AppState(libraryURL: try library(), defaults: self.defaults())
+        await fresh.initialize()
+        XCTAssertNil(fresh.transcriptionLanguage)
+        XCTAssertNil(fresh.library.metadata.choice(.transcriptionLanguage))
+    }
 }

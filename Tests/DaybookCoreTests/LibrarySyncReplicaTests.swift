@@ -777,6 +777,28 @@ final class LibrarySyncReplicaTests: XCTestCase {
                       "a restore right now must know the deletion was published")
     }
 
+    /// xdev-settings-08: the transcription language is one of the library's settings, so the phone's choice reaches a Mac
+    /// in the pass's settings versions, beside the Mac's own, and the later of the two is what both end on.
+    func testTheTranscriptionLanguageTravelsWithTheLibrarysSettings() async throws {
+        let mac = try mac(), phone = try phone()
+        try await pass(mac, "Mac"); try await pass(phone, "Phone")
+        func language(_ code: String?, at seconds: TimeInterval) -> LibraryMetadata {
+            var settings = LibraryMetadata()
+            settings.choices = [.init(id: LibraryChoice.Name.transcriptionLanguage.rawValue, value: LibraryChoice(selection: code),
+                                      modifiedAt: Date(timeIntervalSince1970: seconds))]
+            return settings
+        }
+        let onMac = language("de", at: 100), onPhone = language("ja", at: 200)
+        let phoneSettings = try JSONEncoder().encode(onPhone)
+        let published = try await phone.synchronize(meetings: [], libraryMetadata: phoneSettings)
+        try await phone.acknowledge(published.checkpointID)
+        let received = try await mac.synchronize(meetings: [], libraryMetadata: try JSONEncoder().encode(onMac), scope: .metadataOnly)
+        try await mac.acknowledge(received.checkpointID)
+        XCTAssertTrue(received.metadataVersions.contains(phoneSettings), "it travels even in a settings-only pass, while the Mac records")
+        let merged = try received.metadataVersions.reduce(onMac) { try $0.merging(JSONDecoder().decode(LibraryMetadata.self, from: $1)) }
+        XCTAssertEqual(merged.transcriptionLanguage, "ja", "the phone's, chosen later")
+    }
+
     func testASettingsOnlyPassAppliesRecorderOwnershipWithoutTouchingConversations() async throws {
         let mac = try mac(), phone = try phone()
         let meeting = Meeting(title: "Being recorded on the Mac")

@@ -1,4 +1,5 @@
 import DaybookKit
+import DaybookUI
 import SwiftUI
 import XCTest
 @testable import DaybookPhone
@@ -57,6 +58,23 @@ final class SettingsWordsTests: XCTestCase {
         XCTAssertEqual(RecorderStatusWords.storageFigure(hours: 213, low: false), "210 hr")
         XCTAssertEqual(RecorderStatusWords.storageFigure(hours: 6.2, low: true), "6 hr left")
         XCTAssertEqual(RecorderStatusWords.storageFigure(hours: 0.4, low: true), "< 1 hr")
+    }
+
+    // MARK: Models
+
+    /// Settings › Models › Transcription › Language is the Mac's row (DaybookUI's `TranscriptionLanguageSettings`), in the
+    /// same words and with the same list, though no model for some of its languages runs on an iPhone (xdev-settings-08).
+    func testTheLanguageRowIsTheMacsWithTheSameList() throws {
+        let english = Locale(identifier: "en_US")
+        XCTAssertEqual(SettingsWords.titleCased(SettingsWords.languageLabel), "Language")
+        let models = PhoneModels(root: try temporaryDirectory(), defaults: makeTestDefaults("SettingsWordsTests"),
+                                 fetcher: PhoneModelsTests.RecordingFetcher(), network: PhoneModelsTests.ScriptedNetwork().network,
+                                 backgroundTime: PhoneModelsTests.FakeBackgroundTime())
+        let items = TranscriptionLanguageSettings.items(in: models.catalog, keeping: nil, locale: english)
+        XCTAssertEqual(items, TranscriptionLanguageSettings.items(in: .builtIn, keeping: nil, locale: english), "the Mac's list")
+        XCTAssertEqual(items.first, .init(id: "", title: "Automatic"))
+        XCTAssertTrue(items.contains(.init(id: "ja", title: "Japanese")))
+        XCTAssertFalse(models.engines.contains { $0.id == .whisperKit }, "Japanese's model doesn't run here")
     }
 
     // MARK: Storage

@@ -186,6 +186,8 @@ final class PhoneAppModel: RecordingCommandHandling {
                                           makeCaptioner: Self.captioner(settings: settings, options: options, models: models,
                                                                         makesCaptioners: environment.makesCaptioners))
         models.voices.metadata = { [weak library] in library?.controller.metadata ?? LibraryMetadata() }
+        // A job here transcribes in the library's language, which any device may change.
+        models.transcriptionLanguage = { [weak library] in library?.controller.transcriptionLanguage }
         // Live recognizers are biased toward the library's approved vocabulary, as it changes.
         let controller = library.controller
         watches.append(ObservationWatch.distinctValues(of: { controller.glossary.filter(\.approved).map(\.term) }) { [weak models] terms in

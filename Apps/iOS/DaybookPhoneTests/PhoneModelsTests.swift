@@ -153,6 +153,37 @@ final class PhoneModelsTests: XCTestCase {
         XCTAssertNotEqual(models.status(of: speech), .notDownloaded, "The real one is built in, or unavailable here, never Not downloaded")
     }
 
+    /// xdev-settings-08: while the chosen transcription model downloads, the system's speech model stands in only for a
+    /// library language it covers (here a stand-in on Apple Vision's engine that covers English and German), and in it.
+    func testBehaviorTheStandInTranscribesInTheLibrarysLanguageOrNotAtAll() throws {
+        let json = """
+            {"schemaVersion": 1, "minimumReaderVersion": 1, "families": [{"id": "system-speech", "name": "System Speech",
+             "engine": "appleVision", "roles": ["transcription"],
+             "variants": [{"id": "system", "name": "System Speech", "systemProvided": true, "revisions": [],
+                           "capabilities": {"languages": ["en", "de"]}}]}]}
+            """
+        var manifest = try ModelCatalog.readBuiltInManifest().manifest
+        manifest.families += try ModelManifestReader.read(Data(json.utf8)).manifest.families
+        let catalog = ModelCatalog(builtIn: manifest)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("PhoneModelsTests-\(UUID())", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let models = PhoneModels(root: root, defaults: makeTestDefaults("PhoneModelsTests"), catalog: catalog, fetcher: RecordingFetcher(),
+                                 network: ScriptedNetwork().network, physicalMemory: 12 * 1_073_741_824, backgroundTime: FakeBackgroundTime())
+        var language: String? = "de"
+        models.transcriptionLanguage = { language }
+        XCTAssertEqual(models.transcriptionStandIn?.key, "system-speech/system")
+        let german = try XCTUnwrap(models.processingEngine(), "it transcribes German with nothing downloaded")
+        XCTAssertEqual(german.configuration.transcriptionModel.id, "system-speech/system")
+        XCTAssertEqual(german.configuration.transcriptionLanguage, "de")
+        XCTAssertEqual(models.capabilities(enabled: true).transcribes, true)
+
+        language = "ja"
+        XCTAssertNil(models.transcriptionStandIn, "it doesn't transcribe Japanese: the job waits for Parakeet")
+        XCTAssertNil(models.processingEngine())
+        XCTAssertFalse(models.capabilities(enabled: true).transcribes)
+        XCTAssertEqual(models.transcriptionRoute, TranscriptionRoute(model: "parakeet/ultra", language: "ja"))
+    }
+
     func testASmallPhoneDoesntOfferTheRecognizer() throws {
         let models = makeModels(network: ScriptedNetwork().network, memoryGB: 4)
         let recognizer = try XCTUnwrap(models.choice(for: .liveTranscription))

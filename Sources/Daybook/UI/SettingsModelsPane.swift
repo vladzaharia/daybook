@@ -189,8 +189,9 @@ private struct ModelRoleSetting: View {
     }
 }
 
-/// Settings › Models › Transcription: the model, the language and the model for other languages, live captions' models
-/// where this Mac has a choice of them, and the vocabulary every transcript and summary is given.
+/// Settings › Models › Transcription: the model, the library's language (the iPhone's row too) and this Mac's model for
+/// other languages, live captions' models where this Mac has a choice of them, and the vocabulary every transcript and
+/// summary is given.
 private struct TranscriptionModelsPage: View {
     let state: AppState
     let manager: ModelManager
@@ -201,7 +202,10 @@ private struct TranscriptionModelsPage: View {
             if let choice = choices.first(where: { $0.role == .transcription }) {
                 Section {
                     ModelRoleSetting(choice: choice, label: "Model", manager: manager)
-                    TranscriptionLanguageSettings(state: state, manager: manager)
+                    TranscriptionLanguageSettings(language: Binding(get: { state.transcriptionLanguage },
+                                                                    set: { state.transcriptionLanguage = $0 }),
+                                                  catalog: state.modelCatalog)
+                    OtherLanguagesSetting(state: state, manager: manager)
                 }
             }
             let live = choices.filter(\.role.isLiveOnly)
