@@ -291,7 +291,7 @@ private struct WelcomeReady: View {
         // The actions sit where the other steps put Continue, rather than floating mid-window; the mark again, closing
         // the welcome it opened.
         WelcomeStepPage(title: WelcomeWords.readyTitle,
-                        message: WelcomeWords.readyMessage(downloading: isDownloading, canTranscribe: state.canProcess),
+                        message: WelcomeWords.readyMessage(downloading: isDownloading, canTranscribe: state.canProcess, transcriptFirst: true),
                         showsMark: true) {
             if isDownloading {
                 let total = ModelSize.bytes(ids, in: state.modelCatalog), done = ModelSize.downloaded(ids, in: state)

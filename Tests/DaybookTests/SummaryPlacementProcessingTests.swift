@@ -605,4 +605,64 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         XCTAssertNil(rig.state.processingCapabilities.models?["summarization"])
         await phone.tearDown(rig.state)
     }
+
+    // MARK: Transcript first (uxf-01, uxf-03)
+
+    /// Under Always with a key, no summary model is needed on this Mac at all: the transcript is made here and the
+    /// summary goes to the cloud, with nothing waiting for a download.
+    func testBehaviorUnderAlwaysTheCloudSummarizesWithNoSummaryModelHere() async throws {
+        let cloud = FakeCloud()
+        let rig = try await rig(cloud: cloud, policy: .always)
+        rig.state.installedModels.remove(rig.state.summaryModel)
+        XCTAssertFalse(rig.state.summaryOptions.thisDeviceCanSummarize, "No summary model here")
+        let id = try await conversation(rig, "Always, no model", frequency: 385)
+        XCTAssertFalse(rig.state.summaryWaitsForModel(try XCTUnwrap(rig.meeting(id))), "The cloud takes it at once")
+        rig.state.enqueue(id)
+        XCTAssertTrue(rig.state.awaitingModels.isEmpty, "Nothing waits for the summary model")
+        try await rig.processed(id)
+        XCTAssertEqual(cloud.summarized, [id])
+        XCTAssertTrue(rig.inference.summarized.isEmpty)
+        XCTAssertTrue(rig.state.queue.awaitingSummaryModel.isEmpty)
+        XCTAssertEqual(rig.meeting(id)?.summary?.origin.cloudModel, "Claude Sonnet 5.5")
+
+        // A Personal conversation isn't sent on its own: it waits for the model here, with Use the Cloud.
+        let personal = try await conversation(rig, "Personal, no model", frequency: 395)
+        rig.state.library.update(personal) { $0.placement = .personal }
+        rig.state.enqueue(personal)
+        try await rig.processed(personal)
+        XCTAssertEqual(rig.state.queue.awaitingSummaryModel, [personal])
+        XCTAssertEqual(cloud.summarized, [id], "Never sent on its own")
+    }
+
+    /// Offer First with a key and no summary model: the transcript is done and the summary waits for the model, the page
+    /// saying so with Use the Cloud, which sends it there now (from the page or a phone).
+    func testBehaviorASummaryWaitingForTheModelOffersUseTheCloud() async throws {
+        let cloud = FakeCloud()
+        let rig = try await rig(cloud: cloud, seconds: 30)
+        rig.state.installedModels.remove(rig.state.summaryModel)
+        let id = try await conversation(rig, "Waiting for the model", frequency: 405)
+        rig.state.enqueue(id)
+        try await rig.processed(id)
+        XCTAssertEqual(rig.state.queue.awaitingSummaryModel, [id], "No countdown holds the queue: it waits for the model")
+        XCTAssertNil(rig.state.placements[id])
+        let meeting = try XCTUnwrap(rig.meeting(id))
+        let status = rig.state.processingStatus(for: meeting)
+        XCTAssertEqual(status, .transcribed)
+        // The page as the Mac draws it, while the summary model downloads.
+        var inputs = ConversationStatusPresentation.Inputs(words: rig.state.statusWords,
+                                                           local: .mac(summarizes: false, models: .downloading(done: 385, total: 1_000)))
+        inputs.summaryWaitsForModel = rig.state.summaryWaitsForModel(meeting)
+        inputs.placement.cloudOffered = rig.state.cloudOnOffer
+        XCTAssertEqual(ConversationStatusPresentation.page(status, meeting: meeting, inputs: inputs),
+                       ConversationStatusPresentation(kind: .line, symbol: "clock", title: "Waiting to summarize after the download · 38%",
+                                                      progress: 0.385, actions: [.placement(.useCloud)]))
+        XCTAssertEqual(FloatingStatusInputs.work(for: meeting, state: rig.state), .ready(summary: false), "Nothing downloading: no wait to name")
+
+        rig.state.chooseSummaryPlacement(.useCloud, for: id)
+        try await rig.processed(id)
+        XCTAssertEqual(cloud.summarized, [id])
+        XCTAssertTrue(rig.inference.summarized.isEmpty)
+        XCTAssertTrue(rig.state.queue.awaitingSummaryModel.isEmpty)
+        XCTAssertFalse(rig.state.queue.isOwed(id))
+    }
 }

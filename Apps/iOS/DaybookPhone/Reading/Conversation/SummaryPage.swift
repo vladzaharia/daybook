@@ -204,8 +204,10 @@ struct SummaryPage: View {
 
     static func local(_ models: PhoneModels, processesHere: Bool, summarizes: Bool) -> ConversationStatusPresentation.LocalCapabilities {
         let summaryBytes = models.summaryModelBytes
+        // While the system's speech model stands in, transcribing waits for no download: nothing to offer one for.
+        let standsIn = models.transcriptionStandIn != nil
         return .iPhone(processesHere: processesHere, summarizes: processesHere && summarizes,
-                       missingModelBytes: models.processingMissingBytes, download: models.transcribingDownload,
+                       missingModelBytes: standsIn ? 0 : models.processingMissingBytes, download: standsIn ? nil : models.transcribingDownload,
                        models: models.processingDownloadState,
                        summaryModelBytes: models.space.fits(summaryBytes) ? summaryBytes : 0, summaryModelAsked: models.summaryModelAsked)
     }

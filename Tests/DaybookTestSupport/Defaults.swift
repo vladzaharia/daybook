@@ -11,10 +11,12 @@ import XCTest
 
 extension XCTestCase {
     /// A new suite name for this test: `<folder>/<prefix>.<UUID>`, an absolute path. Its file is
-    /// deleted when the test ends, and the folder when the bundle does.
+    /// deleted when the test ends, and the folder when the bundle does. The system's speech model
+    /// doesn't stand in for a missing transcription model in it (`TestDefaults.transcriptionStandInKey`).
     public func makeTestSuite(_ prefix: String = "local.daybook.tests") -> String {
         let name = TestDefaults.folder.appendingPathComponent("\(prefix).\(UUID().uuidString)").path
         removeTestSuiteAtTeardown(name)
+        UserDefaults(suiteName: name)?.set(false, forKey: TestDefaults.transcriptionStandInKey)
         return name
     }
 
@@ -34,6 +36,10 @@ extension XCTestCase {
 }
 
 public enum TestDefaults {
+    /// The Mac's `AppState.Preference.transcriptionStandIn`, set off in every test suite: a test's "no models" means
+    /// none, whatever system speech model the Mac running it has. A test of the stand-in turns it on.
+    public static let transcriptionStandInKey = "transcriptionStandIn"
+
     /// This process's suites: a folder of its own in the temporary directory.
     public static let folder: URL = {
         let url = FileManager.default.temporaryDirectory

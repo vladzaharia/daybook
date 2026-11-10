@@ -5,7 +5,7 @@ import Foundation
 import Observation
 
 /// This Mac's processing queue and its model downloads: what waits, what runs, what the person paused, what waits for
-/// models, and the work this Mac still owes. `AppState` drives it (`enqueue`, `runQueue`, below, and `process`); this
+/// models (a summary only for the summary model: transcript first), and the work this Mac still owes. `AppState` drives it (`enqueue`, `runQueue`, below, and `process`); this
 /// keeps the state and the rules between its parts, so the rest of the app changes it only through them.
 ///
 /// **Owed work.** A conversation queued here stays owed until its work finishes, fails, the person pauses or cancels
@@ -33,6 +33,9 @@ final class ProcessingQueue {
     var paused: Set<UUID> = []
     /// Conversations that start as soon as the models they need finish downloading.
     var awaitingModels: Set<UUID> = []
+    /// Conversations transcribed here whose summary waits for this Mac's summary model (transcript first): owed a
+    /// Summarize, which runs once the model is here, or the cloud takes it (`AppState.takeUpWaitingSummaries`).
+    var awaitingSummaryModel: Set<UUID> = []
     /// Conversations whose running job stopped because another device took its request over.
     var claimsLost: Set<UUID> = []
     /// What the last failure of each conversation's own job was, as the error said it where the job caught it: a job
@@ -63,7 +66,8 @@ final class ProcessingQueue {
 
     // MARK: Model downloads
 
-    /// The model downloading now. A download holds the queue (the models run one at a time).
+    /// The model downloading now, one at a time. The queue runs beside it (its jobs have their models); a download waits
+    /// for the job running when it's asked for.
     var downloadingID: String?
     /// The current download's progress, throttled like `activity`.
     let downloadActivity = ActivityProgress(IntelligenceProgress(0, ""))
@@ -125,6 +129,7 @@ final class ProcessingQueue {
     /// A job joins the end of the queue: its conversation no longer waits for models and isn't paused.
     func add(_ job: ProcessingJob) {
         awaitingModels.remove(job.meetingID)
+        awaitingSummaryModel.remove(job.meetingID)
         paused.remove(job.meetingID)
         jobs.append(job)
     }
@@ -132,6 +137,12 @@ final class ProcessingQueue {
     /// The conversation waits for its models: it starts once they've downloaded.
     func awaitModels(_ id: UUID) {
         awaitingModels.insert(id)
+    }
+
+    /// The conversation is transcribed, and its summary waits for this Mac's summary model: owed a Summarize until then.
+    func awaitSummaryModel(_ id: UUID) {
+        awaitingSummaryModel.insert(id)
+        owe(id, mode: .summaryOnly, upgrade: nil)
     }
 
     /// The next job, taken off the queue.
@@ -159,11 +170,13 @@ final class ProcessingQueue {
         runningID = nil
     }
 
-    /// Takes a conversation's waiting jobs out of the queue and returns them.
+    /// Takes a conversation's waiting jobs out of the queue, and its summary waiting for the summary model, and returns
+    /// the jobs.
     @discardableResult
     func removeJobs(for id: UUID) -> [ProcessingJob] {
         let removed = jobs.filter { $0.meetingID == id }
         jobs.removeAll { $0.meetingID == id }
+        awaitingSummaryModel.remove(id)
         return removed
     }
 
@@ -231,14 +244,18 @@ final class ProcessingQueue {
     }
 
     /// Nothing is owed `id` any more, unless it's queued or running again (a job that queued its conversation again
-    /// as it finished).
+    /// as it finished), or its summary waits for the summary model.
     func settle(_ id: UUID) {
-        guard runningID != id || running == nil, !isQueued(id), owed.contains(where: { $0.meetingID == id }) else { return }
+        guard runningID != id || running == nil, !isQueued(id), !awaitingSummaryModel.contains(id),
+              owed.contains(where: { $0.meetingID == id }) else { return }
         owed.removeAll { $0.meetingID == id }
         saveOwed()
     }
 
     func isOwed(_ id: UUID) -> Bool { owed.contains { $0.meetingID == id } }
+
+    /// What's owed `id`, as it was asked for.
+    func owedWork(_ id: UUID) -> OwedWork? { owed.first { $0.meetingID == id } }
 
     /// The running job's run ended here, whichever way: it no longer counts as one that never ended.
     private func runEnded() {
@@ -332,19 +349,24 @@ final class ProcessingQueue {
 
 // MARK: - AppState's queue
 
-/// The queue as `AppState` runs it: jobs are queued (`enqueue`), run one at a time (`runQueue`), paused, cancelled,
-/// and given way to by model downloads.
+/// The queue as `AppState` runs it: jobs are queued (`enqueue`), run one at a time (`runQueue`) beside a model download,
+/// paused, and cancelled.
 extension AppState {
-    func enqueue(_ id: UUID, mode: ProcessingRequest.Mode = .newAudio, upgrade: ProcessingRequest.Upgrade? = nil, summarizesHere: Bool = false) {
+    /// Queues `id`'s work. A job waits only for what transcribes (transcript first): new audio starts once the models
+    /// that transcribe and find speakers are here, and its summary waits at the summary step if it has to. A Summarize,
+    /// which transcribes nothing, waits for the summary model unless the cloud takes it at once.
+    func enqueue(_ id: UUID, mode: ProcessingRequest.Mode = .newAudio, upgrade: ProcessingRequest.Upgrade? = nil, summarizesHere: Bool = false,
+                 summarizesInCloud: Bool = false) {
         guard id != recordingID, !queue.isQueued(id), let meeting = meetings.first(where: { $0.id == id }) else { return }
         // A conversation of an iPhone's own, queued only to check where its recording belongs, isn't owed: its mark
         // lives only while Daybook runs, and the next sync pass finds it again (`phoneTranscriptsToCheck`).
         if !checkingPhoneTranscripts.contains(id) { queue.owe(id, mode: mode, upgrade: upgrade) }
-        let job = makeJob(meetingID: id, mode: mode, upgrade: upgrade, summarizesHere: summarizesHere)
+        let job = makeJob(meetingID: id, mode: mode, upgrade: upgrade, summarizesHere: summarizesHere, summarizesInCloud: summarizesInCloud)
         let hasNew = meeting.hasUntranscribedTranscribableAudio
-        let missing = job.requiredModelIDs(hasUntranscribedAudio: hasNew).subtracting(installedModels)
-        guard missing.isEmpty else {
-            queue.awaitModels(id)
+        let missing = job.transcribingModelIDs(hasUntranscribedAudio: hasNew).subtracting(installedModels)
+        let waitsForSummaryModel = missing.isEmpty && job.mode == .summaryOnly && summaryWaitsForModel(job, in: meeting)
+        guard missing.isEmpty, !waitsForSummaryModel else {
+            if waitsForSummaryModel { queue.awaitSummaryModel(id) } else { queue.awaitModels(id) }
             update(id) { $0.errorMessage = nil }
             // Missing models leave another device's request unclaimed, for a Mac that has them.
             releaseRequests(in: id)
@@ -360,7 +382,9 @@ extension AppState {
     func runQueue() {
         // Giving speakers voices gives way to real work: it stops, and starts the queue when it has.
         if voicingID != nil, !queue.jobs.isEmpty { voicingTask?.cancel(); return }
-        guard queue.task == nil, readingPhotoID == nil, queue.downloadingID == nil, !library.isApplyingSync, !queue.jobs.isEmpty else { return }
+        // A model download doesn't hold it: every job queued has the models it needs here, with their revisions frozen,
+        // so a transcript doesn't wait for the summary model's download (transcript first).
+        guard queue.task == nil, readingPhotoID == nil, !library.isApplyingSync, !queue.jobs.isEmpty else { return }
         queue.task = Task { [weak self] in
             guard let self else { return }
             let queue = self.queue
@@ -379,7 +403,8 @@ extension AppState {
                 do {
                     try await work.value
                     self.finishRequests(of: queue.running ?? job, failure: nil)
-                    self.reportToPhones(id, phase: .finished)
+                    // Its summary may wait for the summary model here (transcript first).
+                    self.reportToPhones(id, phase: queue.awaitingSummaryModel.contains(id) ? .waitingForModels : .finished)
                     queue.finishRunning()
                     queue.settle(id)
                 }
@@ -560,16 +585,30 @@ extension AppState {
             guard !queue.isStopping else { return }
             if !stopped, !queue.pendingDownloads.isEmpty {
                 self.download(queue.pendingDownloads.removeFirst())
+                // What waited for the models here now goes on beside the rest of the download (transcript first).
+                self.takeUpWorkWaitingForModels()
             } else {
                 // Done, cancelled, or stopped by a failure, which doesn't run on into the next: what's left stays owed.
                 queue.pendingDownloads.removeAll()
                 queue.downloadBatch.removeAll()
-                if self.canProcess { for id in queue.awaitingModels.sorted(by: { $0.uuidString < $1.uuidString }) { self.enqueue(id) } }
+                self.takeUpWorkWaitingForModels()
                 self.runQueue()
                 self.readNextPhotosWhenIdle()
                 self.listenToEarlierRecordingsWhenIdle()
             }
         }
+    }
+
+    /// Work that waited for models goes on as each download arrives, not after the whole set: what waited to be
+    /// transcribed, as it was asked for, once what transcribes is here, then summaries that waited for the summary model.
+    func takeUpWorkWaitingForModels() {
+        if canProcess {
+            for id in queue.awaitingModels.sorted(by: { $0.uuidString < $1.uuidString }) {
+                let owed = queue.owedWork(id)
+                enqueue(id, mode: owed?.mode ?? .newAudio, upgrade: owed?.upgrade)
+            }
+        }
+        takeUpWaitingSummaries()
     }
 
     /// A download stopped on its own: it says so where the models show ("Couldn’t download Gemma 4 12B" with Try Again),
@@ -683,10 +722,10 @@ extension AppState {
         return Set(Self.modelKeys(queue.owedDownloads)).subtracting(queue.downloadFailures.keys)
     }
 
-    /// What this Mac can do about a conversation's processing, for its page and row: what its choices still need to
-    /// download, and how its downloads stand.
+    /// What this Mac can do about a conversation's processing, for its page and row: whether its summary model is here,
+    /// what its choices still need to download, and how its downloads stand.
     var localCapabilities: ConversationStatusPresentation.LocalCapabilities {
-        .mac(missingModelBytes: ModelSize.bytes(missingSelectedModels, in: modelCatalog), models: modelDownloadState)
+        .mac(summarizes: summarizesLocally, missingModelBytes: ModelSize.bytes(missingSelectedModels, in: modelCatalog), models: modelDownloadState)
     }
 
     /// What downloading the models the choices still need takes, or nil when they're here: Floating Notes' "Download ·

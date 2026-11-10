@@ -132,8 +132,16 @@ public enum ProcessingWords {
         }
     }
 
-    /// The short form, for a row or a chip: "Waiting to transcribe".
-    public static func waitingHereShort(_ mode: ProcessingRequest.Mode? = nil) -> String { "Waiting to \(infinitive(mode))" }
+    /// The short form, for a row or a chip: "Waiting to transcribe", "Waiting to summarize again".
+    public static func waitingHereShort(_ mode: ProcessingRequest.Mode? = nil, summarized: Bool = false) -> String {
+        "Waiting to \(infinitive(mode, summarized: summarized))"
+    }
+
+    /// A summary waiting for this device's summary model to download, while the transcript reads (transcript first):
+    /// "Waiting to summarize after the download · 38%", with the whole set's figure while it arrives.
+    public static func summaryWaitsForDownload(summarized: Bool = false, fraction: Double? = nil) -> String {
+        "Waiting to \(infinitive(.summaryOnly, summarized: summarized)) after the download" + (fraction.map { " · \(percentText($0))" } ?? "")
+    }
 
     /// A request waiting for a device that processes: "Waiting for your Mac", "Waiting for Studio Mac to summarize
     /// again". `device` is the Mac it waits for, when one is known to be around; nil says "your Mac".
@@ -242,6 +250,14 @@ extension ProcessingWords {
         case .downloading(let done, let total): return total > 0 ? ByteSize.progress(done, of: total) : nil
         case .waitingForWiFi(let bytes), .failed(_, let bytes): return bytes > 0 ? ByteSize.format(bytes) : nil
         }
+    }
+
+    /// A summary waiting for this device's summary model, by how its download stands: "Waiting to summarize after the
+    /// download · 38%" while it arrives, else the download's own line ("Downloading models · Waiting for Wi‑Fi",
+    /// "Couldn’t download Gemma 4 12B").
+    public static func summaryWaitsLine(_ state: ModelDownloadState, summarized: Bool = false) -> String {
+        if case .downloading = state { return summaryWaitsForDownload(summarized: summarized, fraction: state.fraction) }
+        return modelDownloadLine(state)
     }
 
     /// Short, for a narrow chip: "40%", "Wi‑Fi", "Models".

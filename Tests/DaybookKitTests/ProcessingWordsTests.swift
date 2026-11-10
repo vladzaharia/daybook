@@ -88,6 +88,20 @@ final class ProcessingWordsTests: XCTestCase {
         XCTAssertEqual(ProcessingWords.download(0), "Download")
     }
 
+    /// Transcript first (uxf-01): a summary waiting for the summary model, in the queue's words for a wait behind the
+    /// download, with the whole set's figure while it arrives, else the download's own line.
+    func testBehaviorASummaryWaitingForTheSummaryModelSaysTheDownload() {
+        XCTAssertEqual(ProcessingWords.summaryWaitsForDownload(), ProcessingWords.waitingHere(.summaryOnly, behind: .download))
+        XCTAssertEqual(ProcessingWords.summaryWaitsForDownload(fraction: 0.385), "Waiting to summarize after the download · 38%")
+        XCTAssertEqual(ProcessingWords.summaryWaitsForDownload(summarized: true), "Waiting to summarize again after the download")
+        XCTAssertEqual(ProcessingWords.phrase(ProcessingWords.summaryWaitsForDownload(fraction: 0.4)), "Waiting to summarize after the download")
+        XCTAssertEqual(ProcessingWords.summaryWaitsLine(.downloading(done: 385, total: 1_000)), "Waiting to summarize after the download · 38%")
+        XCTAssertEqual(ProcessingWords.summaryWaitsLine(.waitingForWiFi(bytes: 6_770_000_000)), "Downloading models · Waiting for Wi‑Fi")
+        XCTAssertEqual(ProcessingWords.summaryWaitsLine(.failed(model: "Gemma 4 12B 4-bit", bytes: 1)), "Couldn’t download Gemma 4 12B 4-bit")
+        XCTAssertEqual(ProcessingWords.waitingHereShort(.summaryOnly), "Waiting to summarize")
+        XCTAssertEqual(ProcessingWords.waitingHereShort(.summaryOnly, summarized: true), "Waiting to summarize again")
+    }
+
     func testBehaviorDeviceWordsTellThisDeviceFromAnother() {
         let mac = DeviceWords.mac(id: "m"), phone = DeviceWords.iPhone(id: "p")
         let studio = ProcessingRequest.Device(id: "s", name: "Studio Mac")

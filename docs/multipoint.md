@@ -611,10 +611,22 @@ line ("Summarizing on this Mac in 12 s · Use the Cloud · Start Now", then "Sum
 5.5" with Stop), the list row ("Summarizing in 12 s") and the list's subtitle, the inspector's Processing, and
 Floating Notes (the chip, whose menu has the choices, and the home's line for this Mac). Connected phones see the countdown too
 (`processing.progress`, phase `summaryCountdown`) and may choose; their choice arrives as
-`processing.choice` and acts as if it had been made here. A Mac's own summarizer is always available to a
-job (a job reaches the summary step only with the summary model), so a Mac never waits for another Mac. A
-request another device makes that joins a job counting down (its own countdown for that conversation ran
-out) starts it at once.
+`processing.choice` and acts as if it had been made here. A Mac never waits for another Mac. A request
+another device makes that joins a job counting down (its own countdown for that conversation ran out)
+starts it at once.
+
+**Transcript first, on the Mac.** A job doesn't wait for the summary model to start: it transcribes with what
+transcribes, and at the summary step, when the summary model isn't here (`summarizesLocally`; the options
+say so, `thisDeviceCanSummarize`), the summary goes to the cloud at once under Always, unless the
+conversation is Personal. Otherwise the job ends with the transcript rather than holding the queue for a
+wait, and the summary is owed until the model arrives (`AppState+SummaryPlacement.swift`): the page reads
+"Waiting to summarize after the download · 38%" with the bar, and Use the Cloud while the cloud is on offer,
+which sends it there with no countdown (`ProcessingJob.summarizesInCloud`), from the page or a phone. When
+the model arrives, every conversation waiting for it is summarized, oldest first. Another device's request
+is done as far as its transcript goes, and a Summarize stays open in this Mac's name, so the iPhone reads
+"Waiting for your Mac to summarize" and whichever Mac summarizes first takes it (this one once its model is
+here, whatever Transcribe synced recordings says). So under Always no summary model is needed here at all,
+and Settings › Models › Summaries can read "Not downloaded" without blocking anything.
 
 **On the iPhone.** The same planner, with "this iPhone":
 

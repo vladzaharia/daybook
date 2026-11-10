@@ -29,6 +29,9 @@ struct FloatingStatusInputs: Equatable {
         /// Couldn't finish, in the words both apps use for the failure.
         case failed(FailureWords)
         case ready(summary: Bool)
+        /// Transcribed, its summary waiting for this Mac's summary model (transcript first): what it waits for, in the
+        /// page's words ("Waiting to summarize after the download · 38%").
+        case transcriptReady(waiting: String)
         /// Done with this Mac's audio; a recording made alongside it hasn't arrived ("Waiting for iPhone audio").
         case awaiting(String)
         /// Its summary starts on this Mac at `until`, unless the person chooses the cloud first (`cloud`: on offer).
@@ -137,6 +140,9 @@ enum FloatingStatus {
         case .paused: return chip("pause.circle", "Transcription paused", short: "Paused", .calm)
         case .failed(let words): return chip("exclamationmark.triangle.fill", "Couldn’t finish", .attention, detail: words.message)
         case .ready(let summary): return chip("checkmark.circle.fill", summary ? "Summary ready" : "Transcript ready", short: "Ready", .linked)
+        // The transcript reads now; the summary follows the summary model, as the menu's first line says.
+        case .transcriptReady(let waiting):
+            return chip("checkmark.circle.fill", "Transcript ready", short: "Ready", .linked, detail: "Transcript ready · \(waiting)")
         case .awaiting(let line): return chip("clock", line, short: "Waiting", .calm)
         // Where its summary runs (docs/multipoint.md, "Where summaries run"): Use the Cloud and Start Now are in its menu.
         case .summaryCountdown(let until, _):

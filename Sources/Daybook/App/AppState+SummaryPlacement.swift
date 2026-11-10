@@ -16,6 +16,14 @@ import Foundation
 ///
 /// A Personal conversation (placed there, or its template or kind says so) is never sent to the cloud on its own:
 /// under Always it counts down as Offer First does, and the cloud is the person's choice for it (Use the Cloud).
+///
+/// **Transcript first.** A job never waits for the summary model to start: it transcribes with what transcribes, and at
+/// the summary step, when the summary model isn't here and the cloud wouldn't take the summary at once (Always, unless
+/// the conversation is Personal), it ends with the transcript. The summary is owed (`ProcessingQueue.awaitingSummaryModel`,
+/// kept with the owed work), and the page says "Waiting to summarize after the download · 38%", with Use the Cloud when
+/// the cloud is on offer. When the model arrives, every conversation waiting for it is summarized, oldest first. Another
+/// device's request is done as far as its transcript goes, and a Summarize request stays open in this Mac's name, so the
+/// device reads "Waiting for your Mac to summarize" and whichever Mac summarizes first takes it.
 extension AppState {
     /// "this Mac" in the countdown's words.
     nonisolated static let thisDeviceWords = "this Mac"
@@ -29,12 +37,22 @@ extension AppState {
 
     // MARK: What this Mac offers
 
-    /// A job reaches the summary step only with the summary model here, so this Mac can always summarize its
-    /// own; the choice is whether to use the cloud first: the model Settings › Cloud resolves to (`cloud`), none
-    /// without a key. It never waits for another Mac.
+    /// Whether this Mac summarizes with its own model (`summarizesLocally`), and the model Settings › Cloud resolves to
+    /// (`cloud`), none without a key. It never waits for another Mac: a summary it can't place at once waits for its own
+    /// model (`summaryWaitsForModel`), so under Always the cloud needs no summary model here at all.
     var summaryOptions: SummaryOptions {
-        SummaryOptions(thisDeviceCanSummarize: true, reachableMacs: [], cloud: cloud.resolved?.model)
+        SummaryOptions(thisDeviceCanSummarize: summarizesLocally, reachableMacs: [], cloud: cloud.resolved?.model)
     }
+
+    /// This Mac's summary model is here: the running job's, else the one chosen now. Whether it fits this Mac's memory is
+    /// what other devices are told (`processingCapabilities`); this Mac's own work runs the model the person chose.
+    var summarizesLocally: Bool {
+        let model = runningJob?.summaryModelID ?? summaryModel
+        return !model.isEmpty && installedModels.contains(model)
+    }
+
+    /// The cloud is on offer for a summary: a key, a model it reaches, and not Never.
+    var cloudOnOffer: Bool { cloud.preferences.policy != .never && cloud.resolved != nil }
 
     /// A key, the models offered, or the preferences changed (`CloudSetup.onChange`), or a summary is about to be
     /// placed: every countdown follows. Nothing to do before the cloud is first needed.
@@ -68,6 +86,67 @@ extension AppState {
     /// recordings on this Mac), nothing otherwise.
     var advertisedCapabilities: ProcessingCapabilities {
         processSyncedAudio ? processingCapabilities : .none
+    }
+
+    // MARK: Waiting for the summary model
+
+    /// Whether a summary of `meeting` made now would wait for this Mac's summary model: `model` (the one chosen, unless a
+    /// job froze another) isn't here, and the cloud wouldn't take the summary at once. It does under Always, unless the
+    /// conversation is Personal, and whenever the person chose it for this summary (`toCloud`: Use the Cloud, an upgrade to
+    /// the cloud's model); never for one they asked to run here (`here`: Summarize on This Mac).
+    func summaryWaitsForModel(_ meeting: Meeting, model: String? = nil, toCloud: Bool = false, here: Bool = false) -> Bool {
+        let model = model ?? summaryModel
+        if !model.isEmpty, installedModels.contains(model) { return false }
+        guard !here, cloudOnOffer else { return true }
+        return !toCloud && (cloud.preferences.policy != .always || meeting.effectivePlacement == .personal)
+    }
+
+    /// The same for a job's summary, by what the job froze and what the person chose for it.
+    func summaryWaitsForModel(_ job: ProcessingJob, in meeting: Meeting) -> Bool {
+        let toCloud = job.summarizesInCloud || job.upgrade.map { UpgradeRanks.isCloud($0.model) } == true
+        return summaryWaitsForModel(meeting, model: job.summaryModelID, toCloud: toCloud, here: job.summarizesHere)
+    }
+
+    /// At the job's summary step: the same, with the keys read again first, as placing it would (a key added on another
+    /// device arrives through iCloud Keychain).
+    func summaryWaitsForModelAtStep(_ job: ProcessingJob, in meeting: Meeting) async -> Bool {
+        guard summaryWaitsForModel(job, in: meeting) else { return false }
+        await cloud.reload()
+        return summaryWaitsForModel(job, in: meeting)
+    }
+
+    /// The job ends with the transcript, its summary waiting for the summary model. This Mac's own work owes it
+    /// (`ProcessingQueue.awaitSummaryModel`). Another device's request is done as far as the transcript goes, and its
+    /// summary stays asked for in the library, in this Mac's name, so the device reads "Waiting for your Mac to
+    /// summarize" and whichever Mac summarizes first takes it (this one too, once its model is here); a Summarize request
+    /// the job carried goes back as it was.
+    func leaveSummaryForModel(_ id: UUID, after job: ProcessingJob) {
+        update(id) { $0.status = $0.summary == nil ? .imported : .ready; $0.errorMessage = nil }
+        guard let requestID = job.requestID, let request = request(requestID, in: id) else {
+            queue.awaitSummaryModel(id)
+            return
+        }
+        if request.mode == .summaryOnly {
+            library.releaseProcessingRequest(requestID, in: id)
+            // Finishing the job then leaves the request open.
+            runningJob = job.withoutRequest
+        } else {
+            library.requestProcessing(id, mode: .summaryOnly, templateID: job.templateID, by: library.thisDevice)
+        }
+    }
+
+    /// The summary model arrived, or a model that's here was chosen: what waited for one goes on.
+    func summaryModelArrived() {
+        takeUpWaitingSummaries()
+        pickUpRequests()
+    }
+
+    /// The summaries owed for the summary model go on once they can start (the model is here, or the cloud now takes
+    /// them at once), the oldest conversation first.
+    func takeUpWaitingSummaries() {
+        guard library.isLoaded, !queue.awaitingSummaryModel.isEmpty else { return }
+        let waiting = meetings.filter { queue.awaitingSummaryModel.contains($0.id) }.sorted { $0.date < $1.date }
+        for meeting in waiting where !summaryWaitsForModel(meeting) { enqueue(meeting.id, mode: .summaryOnly) }
     }
 
     // MARK: The summary step
@@ -109,9 +188,9 @@ extension AppState {
             // Summarize on This Mac: here, whatever the cloud preferences say. Placed only now, so it lasts as long as
             // this step does.
             placements.beginHere(id)
-        } else if let upgrade = job.upgrade, UpgradeRanks.isCloud(upgrade.model) {
-            // The person chose the cloud's better summary: no countdown. Without the cloud on offer now (the key went), it
-            // places as any due summary does.
+        } else if job.summarizesInCloud || job.upgrade.map({ UpgradeRanks.isCloud($0.model) }) == true {
+            // The person chose the cloud (Use the Cloud for a summary that waited for the summary model, or the cloud's
+            // better summary): no countdown. Without the cloud on offer now (the key went), it places as any due summary does.
             placements.beginInCloud(id)
         }
         guard let place = await placements.place(id, immediately: summaryIsAskedFor(job)) else { throw CancellationError() }
@@ -157,9 +236,20 @@ extension AppState {
         enqueue(id, mode: .summaryOnly, summarizesHere: true)
     }
 
-    /// Use the Cloud or Start Now, from the page, the inspector, Floating Notes, or a phone.
+    /// Use the Cloud or Start Now, from the page, the inspector, Floating Notes, or a phone. A summary waiting for the
+    /// summary model has no countdown: Use the Cloud summarizes it there now (`summarizeInCloud`).
     func chooseSummaryPlacement(_ action: SummaryPlacementPlanner.Action, for id: UUID) {
+        if action == .useCloud, placements[id] == nil, processingID != id, !queue.isQueued(id) {
+            summarizeInCloud(id)
+            return
+        }
         placements.perform(action, for: id)
+    }
+
+    /// Use the Cloud for a summary waiting for this Mac's summary model: a Summarize that goes to the cloud with no
+    /// countdown (`ProcessingJob.summarizesInCloud`), carrying out a Summarize request left open for it.
+    func summarizeInCloud(_ id: UUID) {
+        enqueue(id, mode: .summaryOnly, summarizesInCloud: true)
     }
 
     /// A paired phone chose for a countdown this Mac shows it.

@@ -314,7 +314,8 @@ public enum LibraryDeviceWords {
     public static func detail(_ device: KnownSyncDevice, now: Date = Date()) -> String? {
         var parts: [String] = device.isCurrentDevice ? ["This \(ICloudSyncShown.device)"] : []
         if device.deviceClass == .mac, device.isRecording(at: now) { parts.append("Recording now") }
-        if device.canProcess == true { parts.append("Transcribes and summarizes") }
+        // A Mac transcribes as soon as it can, and summarizes once its summary model is here.
+        if device.canProcess == true { parts.append(device.capabilities?.summarizes == false ? "Transcribes" : "Transcribes and summarizes") }
         if let seen = device.lastSeen {
             parts.append(device.isCurrentDevice ? "Synced \(DeviceDateFormat.lastSeen(seen, now: now))" : RecorderStatusWords.lastSeen(seen, now: now))
         } else if device.isCurrentDevice {

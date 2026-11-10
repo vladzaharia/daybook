@@ -474,4 +474,51 @@ final class ProcessingRequestQueueTests: XCTestCase {
         XCTAssertEqual(relaunched.meetings.first { $0.id == id }?.processingRequests?.first?.outcome?.result, .completed)
         await relaunched.flush()
     }
+
+    /// Transcript first (uxf-01): a Mac with what transcribes and no summary model takes a phone's Transcribe, completes
+    /// it with the transcript, and leaves a Summarize open in its own name, so the phone reads "Waiting for your Mac to
+    /// summarize" rather than nothing. Once the model arrives this Mac takes that request, whatever "Transcribe synced
+    /// recordings" says, and summarizes.
+    func testBehaviorATranscriptOnlyMacLeavesAPhonesSummaryAskedFor() async throws {
+        let rig = try await rig()
+        let summaryModel = rig.state.summaryModel
+        rig.state.installedModels.remove(summaryModel)
+        let audio = try rig.audio("transcript-first.wav", frequency: 1_410)
+        let id = try await rig.waitingConversation("From the phone, first", audio: audio, script: [(0, "Book the venue.")])
+        rig.state.library.requestProcessing(id, mode: .newAudio, by: .phone)
+        rig.state.pickUpRequests()
+        try await waitUntil("the transcript") {
+            rig.meeting(id)?.processingRequests?.contains { $0.mode == .newAudio && $0.outcome != nil } == true
+                && rig.state.processingID == nil && rig.state.queuedIDs.isEmpty
+        }
+        await rig.state.flush()
+        let me = rig.state.library.thisDevice
+        let requests = try XCTUnwrap(rig.meeting(id)?.processingRequests)
+        XCTAssertEqual(requests.first { $0.mode == .newAudio }?.outcome?.result, .completed, "Its transcript is done")
+        let summarize = try XCTUnwrap(requests.first { $0.mode == .summaryOnly })
+        XCTAssertTrue(summarize.isOpen)
+        XCTAssertNil(summarize.claim, "Left for whichever Mac summarizes first")
+        XCTAssertEqual(summarize.requestedBy, me)
+        XCTAssertTrue(rig.inference.summarized.isEmpty)
+        XCTAssertFalse(rig.state.queue.isOwed(id), "The library keeps it, not this Mac's queue")
+
+        // What the phone reads through sync, and what this Mac's own page and row say.
+        let meeting = try XCTUnwrap(rig.meeting(id))
+        XCTAssertFalse(meeting.unifiedTranscript.isEmpty)
+        let status = ProcessingStatus(meeting)
+        XCTAssertEqual(status, .requested(.device(summarize)))
+        let phone = ConversationStatusPresentation.Inputs(words: .iPhone(id: ProcessingRequest.Device.phone.id), local: .iPhone())
+        XCTAssertEqual(ConversationStatusPresentation.page(status, meeting: meeting, inputs: phone)?.title, "Waiting for your Mac to summarize")
+        XCTAssertTrue(rig.state.summaryWaitsForModel(meeting))
+        XCTAssertEqual(MacRowStatus.make(rig.state, meeting)?.text, "Waiting to summarize")
+
+        // The model arrives: this Mac takes it, whatever the setting, and summarizes.
+        rig.state.processSyncedAudio = false
+        rig.state.installedModels.insert(summaryModel)
+        try await answered(rig, id)
+        XCTAssertEqual(rig.meeting(id)?.processingRequests?.first { $0.mode == .summaryOnly }?.outcome?.result, .completed)
+        XCTAssertEqual(rig.inference.summarized.count, 1)
+        XCTAssertNotNil(rig.meeting(id)?.summary)
+        XCTAssertEqual(ProcessingStatus(try XCTUnwrap(rig.meeting(id))), .done)
+    }
 }

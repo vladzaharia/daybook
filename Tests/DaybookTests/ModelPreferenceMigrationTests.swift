@@ -163,7 +163,9 @@ final class ModelPreferenceMigrationTests: XCTestCase {
                                                                  catalog: state.modelCatalog, engines: state.runtime.engines).model(for: .summarization))
         XCTAssertEqual(state.summaryModel, expected)
         XCTAssertTrue(expected.hasPrefix("gemma-4/"))
-        XCTAssertFalse(state.canProcess, "Processing waits for its download rather than running the old model")
+        XCTAssertTrue(state.canProcess, "It transcribes as before (transcript first)")
+        XCTAssertFalse(state.summarizesLocally, "Summaries wait for its download rather than running the old model")
+        XCTAssertEqual(state.missingSelectedModels, [expected])
         XCTAssertEqual(state.notice, "Qwen 2.5 · 1.5B no longer works for summaries. Summaries now use \(state.modelCatalog.name(for: expected)): download it in Settings › Models.")
         XCTAssertEqual(AppState(libraryURL: try library(), defaults: defaults).summaryModel, expected, "Saved")
 

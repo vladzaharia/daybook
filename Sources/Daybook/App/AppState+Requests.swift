@@ -16,9 +16,10 @@ struct RequestTiming {
 /// - **Pick up.** After every sync pass, a finished job, a model download, and at launch, each open
 ///   request this Mac may take (unclaimed, its own, or with an expired claim) is queued, when this
 ///   Mac transcribes synced recordings (or the request brings a recording the conversation was
-///   waiting for: Mac first) and has the models for that work. Otherwise it stays unclaimed (and a
-///   claim this Mac held goes back). One job per conversation: a job already
-///   queued or running for it takes the request on.
+///   waiting for: Mac first; or it's a Summarize this Mac left asked for) and has the models for
+///   that work (`hasModels`: what transcribes, and for a Summarize the summary model unless the
+///   cloud takes it). Otherwise it stays unclaimed (and a claim this Mac held goes back). One job
+///   per conversation: a job already queued or running for it takes the request on.
 /// - **Claim.** When its job starts, the request is claimed with a lease, unless another device
 ///   holds it, in which case the job is dropped: a request another live Mac holds never runs here.
 ///   Claiming at the start, not in the queue, means the phone reads "Waiting" while it waits here,
@@ -35,7 +36,9 @@ struct RequestTiming {
 ///
 /// This Mac writes no requests for its own work. Its queue is live on this Mac, phones see it
 /// over the link, and a request per job would double every job's sync traffic. It only completes
-/// requests its own work satisfied, so their status stays consistent everywhere.
+/// requests its own work satisfied, so their status stays consistent everywhere. The one it writes
+/// is the rest of another device's: a request it transcribed without its summary model leaves a
+/// Summarize open in this Mac's name (`leaveSummaryForModel`), for whichever Mac summarizes first.
 extension AppState {
     // MARK: Picking up
 
@@ -55,9 +58,10 @@ extension AppState {
                     continue
                 }
                 let job = job(for: request, in: meeting)
-                let models = job.requiredModelIDs(hasUntranscribedAudio: meeting.hasUntranscribedTranscribableAudio)
-                // A recording the conversation was waiting for is added whatever the setting (Mac first).
-                guard processSyncedAudio || meeting.hasAwaitedRecordingToAdd(now: now), models.isSubset(of: installedModels), meeting.id != recordingID,
+                // A recording the conversation was waiting for is added whatever the setting (Mac first), and so is a summary
+                // this Mac left asked for when it transcribed without its summary model.
+                guard processSyncedAudio || meeting.hasAwaitedRecordingToAdd(now: now) || request.requestedBy.id == me.id,
+                      hasModels(for: job, in: meeting), meeting.id != recordingID,
                       !pausedIDs.contains(meeting.id), !movedPhoneRecordings.contains(meeting.id) else {
                     if held { library.releaseProcessingRequest(request.id, in: meeting.id, at: now) }
                     continue
@@ -92,6 +96,14 @@ extension AppState {
     /// A job carrying out `request`, frozen with this Mac's models and preferences.
     func job(for request: ProcessingRequest, in meeting: Meeting) -> ProcessingJob {
         makeJob(meetingID: meeting.id, mode: request.mode, templateID: request.templateID)
+    }
+
+    /// Whether this Mac has what `job` needs to start, as `enqueue` gates its own work (transcript first): the models that
+    /// transcribe and find speakers for what it does, and, for a Summarize, the summary model unless the cloud takes the
+    /// summary at once. Any other job's summary waits at its summary step if it has to.
+    func hasModels(for job: ProcessingJob, in meeting: Meeting) -> Bool {
+        guard job.transcribingModelIDs(hasUntranscribedAudio: meeting.hasUntranscribedTranscribableAudio).isSubset(of: installedModels) else { return false }
+        return job.mode != .summaryOnly || !summaryWaitsForModel(job, in: meeting)
     }
 
     /// A local job for `meeting` takes on an open request it also satisfies; it's claimed when the job starts.
@@ -150,8 +162,7 @@ extension AppState {
         guard let requestID = job.requestID else { return true }
         guard let request = request(requestID, in: job.meetingID), request.isOpen else { return false }
         let me = library.thisDevice, now = Date()
-        guard let meeting = meetings.first(where: { $0.id == job.meetingID }),
-              job.requiredModelIDs(hasUntranscribedAudio: meeting.hasUntranscribedTranscribableAudio).isSubset(of: installedModels) else {
+        guard let meeting = meetings.first(where: { $0.id == job.meetingID }), hasModels(for: job, in: meeting) else {
             if request.isClaimed(by: me, at: now) { library.releaseProcessingRequest(requestID, in: job.meetingID, at: now) }
             return false
         }
@@ -264,8 +275,8 @@ extension AppState {
     // MARK: Presence
 
     /// Other devices see this Mac in its presence record and over the link, with whether it can
-    /// process (it has the models automatic processing needs and transcribes synced recordings) and
-    /// what it does for them with which models (`advertisedCapabilities`).
+    /// process (it has the models that transcribe, `canProcess`, and transcribes synced recordings)
+    /// and what it does for them with which models (`advertisedCapabilities`: whether it summarizes too).
     func presenceChanged() {
         let processes = canProcess && processSyncedAudio
         // What it does for other devices, role by role, with the models it would use (docs/multipoint.md,

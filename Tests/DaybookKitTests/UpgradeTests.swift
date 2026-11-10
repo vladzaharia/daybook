@@ -242,6 +242,24 @@ final class UpgradeTests: XCTestCase {
         }
     }
 
+    /// Transcript first (uxf-01): a transcript whose summary is still to come (a Mac waiting for its summary model) is
+    /// never an upgrade, however much better a model within reach is, whatever the status says: the first summary isn't
+    /// a better one. Once it has a summary, upgrades are offered as before.
+    func testBehaviorNoSummaryYetIsNeverAnUpgrade() {
+        let waiting = conversation(transcription: ["parakeet/redux"], summary: nil)
+        let transcriptOnly = mac(speakers: nil, summary: nil)
+        XCTAssertFalse(transcriptOnly.capabilities.summarizes)
+        for status: ProcessingStatus in [.transcribed, .done] {
+            XCTAssertNil(offer(waiting, status: status, here: capabilities(transcription: "parakeet/ultra", summary: "gemma-4/26b-a4b-qat-4bit"),
+                               macs: [mac()], cloud: sonnet), "\(status)")
+        }
+        XCTAssertNil(Upgrades.offer(.summarization, for: waiting, candidates: UpgradeCandidates(thisDevice: .none, cloud: sonnet)))
+        // Summarized now, with a weak model: the summary's upgrade is offered, never on the Mac that can't summarize.
+        let summarized = conversation(transcription: ["parakeet/ultra"], speakers: "nemotron-3-diarization/offline", summary: "gemma-4/e2b-4bit")
+        XCTAssertEqual(offer(summarized, macs: [transcriptOnly], cloud: sonnet)?.place, .cloud(sonnet))
+        XCTAssertNil(offer(summarized, macs: [transcriptOnly]), "A Mac without its summary model offers no summary")
+    }
+
     func testBehaviorASummaryAnotherDeviceHoldsIsWorkUnderWay() throws {
         // An iPhone holds the summary while it counts down (a claimed Summarize request): every device reads it as work.
         var meeting = conversation(transcription: ["parakeet/redux"])

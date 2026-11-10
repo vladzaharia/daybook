@@ -397,6 +397,7 @@ struct MultiSourceRig {
             state.processingID == nil && state.queuedIDs.isEmpty && ids.allSatisfy { id in
                 guard let meeting = meeting(id) else { return true }
                 let settled = meeting.status == .ready || meeting.status == .failed || state.awaitingModels.contains(id)
+                    || state.queue.awaitingSummaryModel.contains(id)
                 return settled && (meeting.processingRequests ?? []).allSatisfy { $0.outcome != nil }
             }
         }

@@ -268,6 +268,13 @@ final class FloatingNotesStatusTests: XCTestCase {
         XCTAssertEqual(FloatingStatus.workChip(.requested(device: "Alex’s iPhone"))?.label, "Requested from Alex’s iPhone",
                        "the iPhone asked; it isn't what the conversation waits for")
         XCTAssertEqual(FloatingStatus.workChip(.ready(summary: true))?.label, "Summary ready")
+        // Transcript first (uxf-01): the transcript is ready, and the menu's first line says what the summary waits for.
+        let transcript = FloatingStatus.workChip(.transcriptReady(waiting: "Waiting to summarize after the download · 38%"))
+        XCTAssertEqual(transcript?.label, "Transcript ready")
+        XCTAssertEqual(transcript?.shortLabel, "Ready")
+        XCTAssertEqual(transcript?.tone, .linked)
+        XCTAssertNil(transcript?.progress, "A finished state, not a bar")
+        XCTAssertEqual(transcript?.detail, "Transcript ready · Waiting to summarize after the download · 38%")
         let failed = FailureWords(kind: .modelsMissing, reason: "", hadTranscripts: false, device: "this Mac")
         let chip = FloatingStatus.workChip(.failed(failed))
         XCTAssertEqual(chip?.tone, .attention)

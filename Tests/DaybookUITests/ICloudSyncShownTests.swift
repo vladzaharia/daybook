@@ -195,6 +195,10 @@ final class ICloudSyncShownTests: XCTestCase {
         XCTAssertEqual(LibraryDeviceWords.detail(studio, now: now),
                        "Recording now · Transcribes and summarizes · \(RecorderStatusWords.lastSeen(now, now: now))")
         XCTAssertNil(LibraryDeviceWords.detail(journalOnly, now: now))
+        // A Mac transcribes as soon as it can (transcript first); it summarizes once its summary model is here.
+        var transcribing = KnownSyncDevice(id: "laptop", deviceClass: .mac, displayName: "Laptop", canProcess: true, lastSeen: now)
+        transcribing.capabilities = SyncDeviceCapabilities(transcribes: true, findsSpeakers: true, summarizes: false)
+        XCTAssertEqual(LibraryDeviceWords.detail(transcribing, now: now), "Transcribes · \(RecorderStatusWords.lastSeen(now, now: now))")
         XCTAssertEqual(me.systemImage, "laptopcomputer", "a MacBook is a laptop, in the list and the encryption sheet")
         XCTAssertEqual(studio.systemImage, "desktopcomputer")
         XCTAssertEqual(phone.systemImage, "iphone")

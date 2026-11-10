@@ -79,18 +79,22 @@ public enum WelcomeWords {
     public static let openAtLogin = "Open Daybook at login"
     public static let openAtLoginReason = "So Daybook can notice calls."
 
-    /// The Ready page's line: what happens to a recording made now. `transcribesElsewhere`: a Mac known to transcribe
-    /// this library transcribes what this iPhone records. `waitsForWiFi`: the download is asked for and waits for Wi‑Fi,
-    /// so the transcript waits for it too. `summarizesElsewhere`: this iPhone won't summarize it and a Mac known to this
+    /// The Ready page's line: what happens to a recording made now. `canTranscribe`: it's transcribed now, by the models
+    /// here or, while they download, the system's speech model standing in, so nothing more needs saying of it.
+    /// `transcribesElsewhere`: a Mac known to transcribe this library transcribes what this iPhone records.
+    /// `waitsForWiFi`: the download is asked for and waits for Wi‑Fi, so the transcript waits for it too.
+    /// `transcriptFirst`: the models that transcribe arrive first and a transcript waits only for them, the summary
+    /// following the rest (the Mac). `summarizesElsewhere`: this iPhone won't summarize it and a Mac known to this
     /// library will; with neither, the line says nothing of a summary.
     public static func readyMessage(downloading: Bool, canTranscribe: Bool, transcribesElsewhere: Bool = false,
-                                    waitsForWiFi: Bool = false, summarizesElsewhere: Bool = false) -> String {
+                                    waitsForWiFi: Bool = false, transcriptFirst: Bool = false, summarizesElsewhere: Bool = false) -> String {
         let summary = summarizesElsewhere ? " Your Mac summarizes it." : ""
+        if canTranscribe { return "Start a conversation now." + summary }
         if downloading {
+            if transcriptFirst, !waitsForWiFi { return "Start a conversation now. It’s transcribed in minutes." + summary }
             return (waitsForWiFi ? "Start a conversation now. It’s transcribed once the models download on Wi‑Fi."
                 : "Start a conversation now. It’s transcribed once the models download.") + summary
         }
-        if canTranscribe { return "Start a conversation now." + summary }
         if transcribesElsewhere {
             return summarizesElsewhere ? "Start a conversation now. Your Mac transcribes and summarizes it."
                 : "Start a conversation now. Your Mac transcribes it."

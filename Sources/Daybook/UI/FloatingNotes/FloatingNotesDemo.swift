@@ -17,6 +17,8 @@ import Foundation
 /// - `processing`: after Stop, the conversation transcribing on this Mac at 40%.
 /// - `models`, `models-failed`, `models-wifi`: after Stop, the conversation waiting for this Mac's models while they
 ///   download (a download that reports 42% and waits, never the network), after one stopped, or waiting for Wi‑Fi.
+/// - `summary-waits`: after Stop, the conversation transcribed, its summary waiting for this Mac's summary model while
+///   it downloads (transcript first; with `--cloud-demo anthropic`, Use the Cloud too).
 /// - `stopped`: after Stop, the recording itself failed. `failed`: transcription couldn't finish.
 /// - `slept`: this Mac went to sleep mid-recording and the Soundcore and the iPhone kept recording.
 /// - `home`: the panel opened from the menu bar, nothing recording, this Mac transcribing another.
@@ -33,6 +35,7 @@ enum FloatingNotesDemo {
     enum Scenario: String {
         case multipoint, paused, trouble, processing, stopped, slept, failed, home
         case models, modelsFailed = "models-failed", modelsWiFi = "models-wifi"
+        case summaryWaits = "summary-waits"
     }
 
     static let scenario = LaunchOptions.value(after: "--notes-demo").flatMap(Scenario.init(rawValue:))
@@ -84,6 +87,26 @@ enum FloatingNotesDemo {
             state.queue.awaitModels(id)
             let demo: AppState.DownloadDemo = scenario == .models ? .downloading : scenario == .modelsFailed ? .failed : .waitingForWiFi
             state.demoDownloads(state.missingSelectedModels, demo)
+            show(state, id, afterStop: true)
+        case .summaryWaits:
+            let id = conversation(state, title: "Design review", notes: notes)
+            let lines = ["Ship the status bar first.", "Captions follow next week.", "Priya owns the handoff copy."]
+            let track = UUID()
+            state.update(id) { meeting in
+                meeting.date = Date().addingTimeInterval(-900)
+                meeting.unifiedTranscript = lines.enumerated().map { TranscriptSegment(trackID: track, start: Double($0) * 6, end: Double($0) * 6 + 5, text: $1) }
+                meeting.status = .imported
+            }
+            // The queue never runs, and the summary model isn't here, whatever the launch's own look at the models finds.
+            state.processingTask = Task { try? await Task.sleep(for: .seconds(86_400)) }
+            func waitForSummaryModel() {
+                state.installedModels.remove(state.summaryModel)
+                state.queue.removeJobs(for: id)
+                state.queue.awaitSummaryModel(id)
+            }
+            waitForSummaryModel()
+            for delay in [1.0, 2.5] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { waitForSummaryModel() } }
+            state.demoDownloads([state.summaryModel], .downloading)
             show(state, id, afterStop: true)
         case .stopped:
             let id = conversation(state, title: "Design review", notes: notes)
