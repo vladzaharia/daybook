@@ -8,8 +8,11 @@ struct MacSighting: Equatable {
     var name: String?
     var date: Date
 
-    /// The latest sign of a Mac at work in any conversation, other than this device's own requests.
-    static func latest(in meetings: [Meeting], excluding deviceID: String?) -> MacSighting? {
+    /// The latest sign of a Mac at work in any conversation, other than this device's own: its requests, the summaries
+    /// it made, and the transcripts of the recordings it `owns`, which it transcribes itself or a Mac does through a
+    /// request whose claim says so. An iPhone that transcribed alone has seen no Mac.
+    static func latest(in meetings: [Meeting], excluding deviceID: String?,
+                       owns: (RecordingTrack) -> Bool = { _ in false }) -> MacSighting? {
         var best: MacSighting?
         func consider(_ date: Date, _ name: String?) {
             if best == nil || date > best!.date { best = MacSighting(name: name, date: date) }
@@ -19,8 +22,10 @@ struct MacSighting: Equatable {
                 if let claim = request.claim, claim.device.id != deviceID { consider(claim.heartbeat, claim.device.name) }
                 if let outcome = request.outcome, outcome.device.id != deviceID { consider(outcome.finishedAt, outcome.device.name) }
             }
-            for run in meeting.transcripts { consider(run.createdAt, nil) }
-            if let summary = meeting.summary { consider(summary.createdAt, nil) }
+            for run in meeting.transcripts where !(meeting.tracks.first { $0.id == run.trackID }.map(owns) ?? false) {
+                consider(run.createdAt, nil)
+            }
+            if let summary = meeting.summary, deviceID == nil || summary.origin.deviceID != deviceID { consider(summary.createdAt, nil) }
         }
         return best
     }

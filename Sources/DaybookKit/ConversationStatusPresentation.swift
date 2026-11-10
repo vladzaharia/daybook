@@ -18,7 +18,7 @@ import Foundation
 /// | Paused here | line: "Paused" + Resume, or why ("Continues when Daybook is open") | "Paused" + pause glyph |
 /// | Requested, waiting for a Mac | line: "Waiting for your Mac" + "Last seen 2 h ago", Cancel for its own | the same |
 /// | Requested, this iPhone could do it | box (accent): "Download models to transcribe this conversation" + Download | the same |
-/// | Requested, no device can summarize | line: "Needs your Mac to summarize" | the same |
+/// | Requested, no device can summarize | line: "Needs your Mac to summarize"; "Download · 3.6 GB" where this iPhone could after a download | the same |
 /// | Processing | line: "Transcribing · 40%" (here), "Transcribing on Studio Mac · 40%" + bar | the same + 2 pt line |
 /// | Couldn't finish | box (problem): `FailureWords` + Details…, the fix ("Couldn’t summarize with Claude Sonnet 5.5" + Cloud Settings…, Summarize on This Mac) | "Couldn’t finish" + warning |
 /// | Waiting for a recording | line: "Waiting for audio from Alex's iPhone" (" · Sending 40%", " · Last online 10:02", when known) + Don’t Wait | "Waiting for iPhone audio" |
@@ -59,6 +59,8 @@ public struct ConversationStatusPresentation: Equatable, Sendable {
         case cancelDownload
         /// Download the models the work needs (this many bytes); `again` after a download stopped ("Try Again").
         case downloadModels(bytes: Int64, again: Bool = false)
+        /// Download this device's own summary model (this many bytes), so it summarizes what no Mac is around to.
+        case downloadSummaryModel(bytes: Int64)
         case chooseModels
         case cloudSettings
         /// Summarize on this device instead ("This Mac", "This iPhone"), or ask your Mac.
@@ -84,6 +86,7 @@ public struct ConversationStatusPresentation: Equatable, Sendable {
             case .dontWait: return "Don’t Wait"
             case .waitAgain: return "Wait Again"
             case .downloadModels(_, let again): return again ? "Try Again" : "Download"
+            case .downloadSummaryModel(let bytes): return ProcessingWords.download(bytes)
             case .chooseModels: return "Choose Models…"
             case .cloudSettings: return "Cloud Settings…"
             case .summarizeHere(let device): return "Summarize on \(device)"
@@ -155,9 +158,14 @@ extension ConversationStatusPresentation {
         public var missingModelBytes: Int64
         /// The download the work waits for, under way.
         public var download: Download?
-        /// How the downloads this device manages stand (a Mac's queue): the whole set arriving, waiting for Wi‑Fi, or
-        /// stopped. Said for the work that waits for them before `download`.
+        /// How this device's downloads stand, over the whole set asked for (a Mac's queue, an iPhone's processing
+        /// models): arriving, waiting for Wi‑Fi, or stopped. Said for the work that waits for them before `download`.
         public var models: ModelDownloadState?
+        /// What downloading this device's own summary model takes, where it could summarize once that's here and no
+        /// one has asked for it yet (an iPhone with the memory for one); 0 otherwise.
+        public var summaryModelBytes: Int64
+        /// That summary model is asked for: arriving, waiting, or stopped (`models` says how).
+        public var summaryModelAsked: Bool
 
         public struct Download: Equatable, Sendable {
             public var name: String
@@ -166,10 +174,12 @@ extension ConversationStatusPresentation {
         }
 
         public init(processesHere: Bool, transcribes: Bool, summarizes: Bool, controlsQueue: Bool, managesModels: Bool,
-                    missingModelBytes: Int64 = 0, download: Download? = nil, models: ModelDownloadState? = nil) {
+                    missingModelBytes: Int64 = 0, download: Download? = nil, models: ModelDownloadState? = nil,
+                    summaryModelBytes: Int64 = 0, summaryModelAsked: Bool = false) {
             self.processesHere = processesHere; self.transcribes = transcribes; self.summarizes = summarizes
             self.controlsQueue = controlsQueue; self.managesModels = managesModels
             self.missingModelBytes = missingModelBytes; self.download = download; self.models = models
+            self.summaryModelBytes = summaryModelBytes; self.summaryModelAsked = summaryModelAsked
         }
 
         /// A Mac: it does it all.
@@ -179,16 +189,27 @@ extension ConversationStatusPresentation {
         }
 
         /// An iPhone: its own recordings when processing here is on, and summaries when its model is here.
-        /// `missingModelBytes` is what transcribing here still needs to download, with processing here on.
+        /// `missingModelBytes` is what transcribing here still needs to download; `download`, a transcribing model on its
+        /// way, with the whole set's figure; `models`, the set; `summaryModelBytes`, its summary model where it could run
+        /// one and no one has asked for it. All only with processing here on.
         public static func iPhone(processesHere: Bool = false, summarizes: Bool = false, missingModelBytes: Int64 = 0,
-                                  download: Download? = nil) -> LocalCapabilities {
+                                  download: Download? = nil, models: ModelDownloadState? = nil, summaryModelBytes: Int64 = 0,
+                                  summaryModelAsked: Bool = false) -> LocalCapabilities {
             LocalCapabilities(processesHere: processesHere, transcribes: false, summarizes: summarizes, controlsQueue: false, managesModels: false,
-                              missingModelBytes: processesHere ? missingModelBytes : 0, download: processesHere ? download : nil)
+                              missingModelBytes: processesHere ? missingModelBytes : 0, download: processesHere ? download : nil,
+                              models: processesHere ? models : nil, summaryModelBytes: processesHere ? summaryModelBytes : 0,
+                              summaryModelAsked: processesHere && summaryModelAsked)
         }
 
         /// This device would transcribe its own recordings once its models are here: an iPhone with processing on
         /// and models still to download. A Mac's own downloads are its queue's (`requested(.models)`).
         var transcribesOwnAfterDownload: Bool { processesHere && !managesModels && (missingModelBytes > 0 || download != nil) }
+
+        /// This device would summarize once its own summary model is here: an iPhone with processing on and the memory
+        /// for one, whose model isn't downloaded yet. A Mac's summarizer is its queue's.
+        var summarizesOwnAfterDownload: Bool {
+            processesHere && !managesModels && !summarizes && (summaryModelBytes > 0 || summaryModelAsked)
+        }
     }
 
     /// A Mac's live progress on this conversation over the local link: finer and sooner than the claim that syncs.
@@ -449,13 +470,15 @@ extension ConversationStatusPresentation {
             }
             if request.mode == .summaryOnly, !local.summarizes, inputs.mac?.isNoMac == true {
                 // Nothing here or anywhere it can reach summarizes: a fact, not a wait.
-                return ConversationStatusPresentation(kind: .line, symbol: "desktopcomputer", title: Self.needsMacToSummarize,
-                                                      detail: inputs.mac?.detail(at: now), actions: cancel)
+                return needsMac(local, detail: inputs.mac?.detail(at: now), actions: cancel)
             }
+            // Asked of a Mac before this device could summarize: with its own model here now and no Mac around, it can.
+            let here: [Action] = request.mode == .summaryOnly && mine && local.summarizes && inputs.mac?.isNoMac == true
+                ? [.summarizeHere(words.hereTitle)] : []
             return ConversationStatusPresentation(kind: .line, symbol: "clock",
                                                   title: ProcessingWords.waitingForMac(request.mode, summarized: meeting.summary != nil, device: mac),
                                                   detail: inputs.mac?.detail(at: now),
-                                                  actions: cancel)
+                                                  actions: here + cancel)
 
         case .failed(let failure):
             return failed(failure, meeting: meeting, inputs: inputs)
@@ -471,8 +494,7 @@ extension ConversationStatusPresentation {
         case .transcribed:
             if !local.summarizes, !inputs.placement.cloudOffered, inputs.mac?.isNoMac == true {
                 // Summarize would only wait: nothing here, no Mac, and no cloud summarizes.
-                return ConversationStatusPresentation(kind: .line, symbol: "desktopcomputer", title: needsMacToSummarize,
-                                                      detail: inputs.mac?.detail(at: now))
+                return needsMac(local, detail: inputs.mac?.detail(at: now))
             }
             return ConversationStatusPresentation(kind: .line, symbol: "text.alignleft", title: "Not summarized yet", actions: [.summarize])
 
@@ -555,6 +577,16 @@ extension ConversationStatusPresentation {
     /// "Needs your Mac to summarize": no device this one can reach summarizes, and no cloud model is on offer.
     public static let needsMacToSummarize = "Needs your Mac to summarize"
 
+    /// "Needs your Mac to summarize", a fact with `actions`, and "Download · 3.6 GB" first where this device could
+    /// summarize once its own summary model is here. Once that's asked for, how the download stands instead.
+    static func needsMac(_ local: LocalCapabilities, detail: String?, actions: [Action] = []) -> ConversationStatusPresentation {
+        if local.summarizesOwnAfterDownload, local.summaryModelAsked, let models = local.models { return ownModels(models) }
+        let download: [Action] = local.summarizesOwnAfterDownload && local.summaryModelBytes > 0
+            ? [.downloadSummaryModel(bytes: local.summaryModelBytes)] : []
+        return ConversationStatusPresentation(kind: .line, symbol: "desktopcomputer", title: needsMacToSummarize, detail: detail,
+                                              actions: download + actions)
+    }
+
     /// The downloads a Mac's work waits for, in the words every surface says them with (`ProcessingWords`): the whole
     /// set arriving ("Downloading models · 40%", with what's here of the total) and Cancel; waiting for Wi‑Fi, with
     /// Download to go on over this network now; or a download that stopped on its own ("Couldn’t download Gemma 4 12B")
@@ -575,13 +607,25 @@ extension ConversationStatusPresentation {
         }
     }
 
-    /// A download this device makes to do the work itself: under way, a line with its figure and Cancel; else a box
-    /// with Download and its size.
+    /// The downloads a device makes for its own work, without a queue of its own (an iPhone's), as the one set: arriving
+    /// or stopped as a Mac's (`modelsHere`); waiting for Wi‑Fi with Cancel, since they keep to Wi‑Fi unless its
+    /// Settings › Models allows cellular data.
+    static func ownModels(_ models: ModelDownloadState) -> ConversationStatusPresentation {
+        var line = modelsHere(models)
+        if case .waitingForWiFi = models { line.actions = [.cancelDownload] }
+        return line
+    }
+
+    /// A download this device makes to do the work itself: under way, a line with the whole set's figure and Cancel
+    /// (with what's here of the total, where the device says how the set stands); stopped, Try Again; else a box with
+    /// Download and its size.
     static func downloadHere(_ local: LocalCapabilities) -> ConversationStatusPresentation {
         if let download = local.download {
+            if let models = local.models { return ownModels(models) }
             return ConversationStatusPresentation(kind: .line, symbol: "arrow.down.circle", title: ProcessingWords.downloadingModels(download.fraction),
                                                   progress: download.fraction, actions: [.cancelDownload])
         }
+        if let models = local.models, models.needsAttention { return ownModels(models) }
         return ConversationStatusPresentation(kind: .box(.accent), symbol: "arrow.down.circle.fill",
                                               title: "Download models to transcribe this conversation",
                                               detail: local.missingModelBytes > 0 ? ByteSize.format(local.missingModelBytes) : nil,
@@ -786,6 +830,10 @@ extension ConversationStatusPresentation {
                 return ConversationRowStatus(kind: .waitingForModels, text: "Waiting for models")
             }
             if request.mode == .summaryOnly, !inputs.local.summarizes, inputs.mac?.isNoMac == true {
+                // Its own summary model on its way: the summary waits for that, as the page says.
+                if inputs.local.summarizesOwnAfterDownload, inputs.local.summaryModelAsked, inputs.local.models != nil {
+                    return ConversationRowStatus(kind: .waitingForModels, text: "Waiting for models")
+                }
                 return ConversationRowStatus(kind: .waiting, text: needsMacToSummarize)
             }
             return ConversationRowStatus(kind: .waiting, text: ProcessingWords.waitingForMac(request.mode, summarized: meeting.summary != nil))

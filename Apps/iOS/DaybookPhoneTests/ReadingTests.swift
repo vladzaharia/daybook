@@ -132,6 +132,76 @@ final class ReadingTests: XCTestCase {
         XCTAssertEqual(pageStatus(.transcribed, meeting, mac: .noMac)?.title, "Needs your Mac to summarize")
     }
 
+    /// An iPhone with `gigabytes` of memory and language models running or not, its downloads held halfway.
+    private func phoneModels(_ gigabytes: Double, limit: UInt64? = nil, runsLanguageModels: Bool = true,
+                             network: PhoneModelsTests.ScriptedNetwork = .init(),
+                             fetcher: PhoneModelsTests.HalfwayFetcher = .init()) throws -> PhoneModels {
+        PhoneModels(root: try temporaryDirectory("Models"), defaults: makeTestDefaults("ReadingTests"), fetcher: fetcher,
+                    network: network.network, physicalMemory: UInt64(gigabytes * 1e9), memoryLimit: limit,
+                    runsLanguageModels: runsLanguageModels)
+    }
+
+    /// "Needs your Mac to summarize" offers the summary model only where this iPhone could run it (P3, uxf-09): an
+    /// 18 Pro gets "Download · 3.6 GB"; an iPhone without the memory, or language models, keeps the bare fact.
+    func testNeedsYourMacOffersTheSummaryModelOnlyWhereThisIPhoneCouldRunIt() async throws {
+        var meeting = recorded()
+        let words = TranscriptSegment(trackID: meeting.tracks[0].id, start: 0, end: 2, text: "Come back in six months.")
+        meeting.transcripts = [TrackTranscript(trackID: meeting.tracks[0].id, segments: [words], createdAt: now)]
+        meeting.unifiedTranscript = [words]
+
+        let capable = try phoneModels(12, limit: 5_400_000_000)
+        let summary = try XCTUnwrap(capable.summaryModel)
+        let page = pageStatus(.transcribed, meeting, mac: .noMac, local: SummaryPage.local(capable, processesHere: true, summarizes: false))
+        XCTAssertEqual(page?.title, "Needs your Mac to summarize")
+        XCTAssertEqual(page?.actions, [.downloadSummaryModel(bytes: summary.approximateBytes)])
+        XCTAssertEqual(page?.actions.first?.title, "Download · 3.6 GB")
+        XCTAssertEqual(pageStatus(.transcribed, meeting, mac: .noMac, local: SummaryPage.local(capable, processesHere: false, summarizes: false))?.actions,
+                       [], "processing here off: the model wouldn't be used")
+
+        // Too little room for it: the fact stays bare (Settings › Models says what it needs).
+        capable.readSpace = { _ in ModelSpace(free: 1_000_000_000) }
+        await capable.refresh()
+        XCTAssertEqual(pageStatus(.transcribed, meeting, mac: .noMac, local: SummaryPage.local(capable, processesHere: true, summarizes: false))?.actions, [])
+
+        for incapable in [try phoneModels(6), try phoneModels(12, limit: 5_400_000_000, runsLanguageModels: false)] {
+            let bare = pageStatus(.transcribed, meeting, mac: .noMac, local: SummaryPage.local(incapable, processesHere: true, summarizes: false))
+            XCTAssertEqual(bare?.title, "Needs your Mac to summarize")
+            XCTAssertEqual(bare?.actions, [], "never a summary it can't make")
+        }
+    }
+
+    /// The page's download reads the whole set this iPhone asked for (W1-E's leftover), never one model's figure: its
+    /// fraction, and what's here of the total, the summary model waiting its turn included.
+    func testTheOwnDownloadReadsTheWholeSetsFigure() async throws {
+        let network = PhoneModelsTests.ScriptedNetwork(), fetcher = PhoneModelsTests.HalfwayFetcher()
+        network.set(.unrestricted)
+        let models = try phoneModels(12, limit: 5_400_000_000, network: network, fetcher: fetcher)
+        let transcribing = models.processingMissing
+        for model in transcribing { models.download(model) }
+        let summary = try XCTUnwrap(models.summaryModel)
+        models.download(summary)
+        try await waitUntil("each transcribing model halfway") {
+            transcribing.allSatisfy { if case .downloading(let fraction) = models.status(of: $0) { return fraction > 0 } else { return false } }
+        }
+
+        var meeting = recorded()
+        meeting.upsertProcessingRequest(ProcessingRequest(meetingID: meeting.id, mode: .newAudio, requestedBy: phone, createdAt: now))
+        let status = ProcessingStatus(meeting, now: now)
+        let page = pageStatus(status, meeting, mac: .noMac, local: SummaryPage.local(models, processesHere: true, summarizes: false))
+        guard case .downloading(let done, let total)? = models.processingDownloadState else { return XCTFail("the set arrives") }
+        XCTAssertEqual(total, (transcribing + [summary]).reduce(0) { $0 + $1.approximateBytes }, "the summary model in the total")
+        let fraction = Double(done) / Double(total)
+        XCTAssertEqual(page?.title, ProcessingWords.downloadingModels(fraction))
+        XCTAssertEqual(try XCTUnwrap(page?.progress), fraction, accuracy: 1e-9)
+        XCTAssertEqual(page?.detail, ByteSize.progress(done, of: total))
+        XCTAssertEqual(page?.actions, [.cancelDownload])
+        guard case .downloading(let one) = models.status(of: transcribing[0]) else { return XCTFail() }
+        XCTAssertNotEqual(page?.progress, one, "not one model's figure")
+        // Settings › Models' row agrees.
+        XCTAssertEqual(SettingsScreen.modelsDetail(models, processesHere: true, transcribes: false), ModelStatus.downloading(fraction).label)
+        fetcher.held.release()
+    }
+
     func testWaitingSaysWhenAMacWasLastSeen() {
         var meeting = recorded()
         let request = ProcessingRequest(meetingID: meeting.id, mode: .newAudio, requestedBy: phone, createdAt: now)
@@ -257,6 +327,28 @@ final class ReadingTests: XCTestCase {
         XCTAssertEqual(sighting, MacSighting(name: "Studio", date: now.addingTimeInterval(-300)))
         XCTAssertNil(MacSighting.latest(in: [recorded()], excluding: phone.id))
         XCTAssertEqual(ConversationStatusPresentation.MacStanding.ago(3 * 86_400), "3 days ago")
+    }
+
+    /// This iPhone's own work is no sign of a Mac: a transcript of a recording it owns, and a summary it made. So an
+    /// iPhone that transcribed alone reads "Needs your Mac to summarize", with its own summary model where it fits.
+    func testThisIPhonesOwnTranscriptsAndSummariesAreNoSignOfAMac() {
+        var meeting = recorded()
+        let words = TranscriptSegment(trackID: trackID, start: 0, end: 2, text: "Come back in six months.")
+        meeting.transcripts = [TrackTranscript(trackID: trackID, segments: [words], createdAt: now)]
+        meeting.unifiedTranscript = [words]
+        XCTAssertEqual(MacSighting.latest(in: [meeting], excluding: phone.id), MacSighting(name: nil, date: now), "whose, unknown: a Mac's")
+        XCTAssertNil(MacSighting.latest(in: [meeting], excluding: phone.id, owns: { $0.id == self.trackID }), "its own recording")
+        let standing = ConversationStatusPresentation.MacStanding.phone(
+            presence: .noMac, sighting: MacSighting.latest(in: [meeting], excluding: phone.id, owns: { $0.id == self.trackID }),
+            connected: [], liveProgress: [:], meetingID: meeting.id, now: now)
+        XCTAssertEqual(standing, .noMac)
+        XCTAssertEqual(pageStatus(.transcribed, meeting, mac: standing, local: .iPhone(processesHere: true, summaryModelBytes: 3_580_000_000))?.actions,
+                       [.downloadSummaryModel(bytes: 3_580_000_000)])
+
+        meeting.summary = MeetingSummary(overview: "Come back in six months.", createdAt: now.addingTimeInterval(60))
+            .placed(.thisDevice, by: phone, inputs: [:])
+        XCTAssertEqual(meeting.summary?.origin.deviceID, phone.id)
+        XCTAssertNil(MacSighting.latest(in: [meeting], excluding: phone.id, owns: { $0.id == self.trackID }), "a summary it made")
     }
 
     // MARK: Evidence

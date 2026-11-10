@@ -104,6 +104,15 @@ final class SettingsWordsTests: XCTestCase {
         let transcribing = SettingsScreen.missingModelBytes(models, processesHere: true)
         XCTAssertEqual(transcribing, models.processingMissingBytes,
                        "transcribing here: Welcome's figure (Transcription and speakers), live captions' models aside (uxf-18)")
+        XCTAssertEqual(SettingsScreen.modelsDetail(models, processesHere: true, transcribes: false),
+                       "\(ByteSize.format(transcribing)) to download")
+
+        // Asked for, off Wi‑Fi: how the whole set stands, as the page says it; and nothing of it with processing off.
+        for model in models.processingMissing { models.download(model) }
+        XCTAssertEqual(SettingsScreen.modelsDetail(models, processesHere: true, transcribes: false), "Waiting for Wi‑Fi")
+        XCTAssertEqual(SettingsScreen.modelsDetail(models, processesHere: false, transcribes: false),
+                       "\(ByteSize.format(models.missingBytes)) to download")
+        models.cancelProcessingDownloads()
     }
 
     // MARK: Library

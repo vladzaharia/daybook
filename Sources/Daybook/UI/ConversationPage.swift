@@ -272,7 +272,7 @@ struct ConversationStatus: View {
         case .dontWait: state.library.stopWaitingForRecordings(in: id, undoManager: undoManager)
         case .waitAgain: state.library.waitAgainForMissingRecordings(in: id, undoManager: undoManager)
         case .cancelDownload: state.cancelDownload()
-        case .downloadModels:
+        case .downloadModels, .downloadSummaryModel:
             state.enqueue(id)
             state.downloadModels(state.missingSelectedModels)
         case .chooseModels: openSettingsPane("models")

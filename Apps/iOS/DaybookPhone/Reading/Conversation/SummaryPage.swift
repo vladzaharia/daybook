@@ -170,8 +170,10 @@ struct SummaryPage: View {
 
     private func inputs(for processing: ProcessingStatus, now: Date) -> ConversationStatusPresentation.Inputs {
         var inputs = ConversationStatusPresentation.Inputs(words: .iPhone(id: library.thisDevice.id), local: local)
+        let ownsTrack = model?.library.ownsTrack ?? { _ in false }
         inputs.mac = ConversationStatusPresentation.MacStanding.phone(
-            presence: model?.macPresence, sighting: sightingOverride ?? MacSighting.latest(in: library.meetings, excluding: library.thisDevice.id),
+            presence: model?.macPresence,
+            sighting: sightingOverride ?? MacSighting.latest(in: library.meetings, excluding: library.thisDevice.id, owns: ownsTrack),
             override: sightingOverride != nil, connected: model?.link.connectedMacs ?? [], liveProgress: model?.liveProgress ?? [:],
             meetingID: meeting.id, now: now)
         inputs.link = model?.liveProgress[meeting.id].map(ConversationStatusPresentation.LinkWork.init(live:))
@@ -191,20 +193,22 @@ struct SummaryPage: View {
         return inputs
     }
 
-    /// What this iPhone does itself: its own recordings when processing here is on, with what the models still need.
+    /// What this iPhone does itself: its own recordings when processing here is on, with what the models still need,
+    /// how the whole set asked for is coming (one figure over all of it, as every surface says it), and the summary model
+    /// it could download where it has the memory for one and the room.
     private var local: ConversationStatusPresentation.LocalCapabilities {
         guard let model else { return .iPhone() }
-        let processesHere = model.settings.processesOnThisIPhone
-        let downloading = Self.processingRoles.compactMap(model.models.choice(for:)).lazy.compactMap { choice -> ConversationStatusPresentation.LocalCapabilities.Download? in
-            if case .downloading(let fraction) = model.models.status(of: choice) { return .init(name: choice.name, fraction: fraction) }
-            return nil
-        }.first
-        return .iPhone(processesHere: processesHere, summarizes: processesHere && model.processingCapabilities.summarizes,
-                       missingModelBytes: model.models.processingMissingBytes, download: downloading)
+        return Self.local(model.models, processesHere: model.settings.processesOnThisIPhone,
+                          summarizes: model.processingCapabilities.summarizes)
     }
 
-    /// The models transcribing here needs (`PhoneModels.processingMissing`).
-    private static let processingRoles: [ModelRole] = [.transcription, .diarization, .speakerEmbedding]
+    static func local(_ models: PhoneModels, processesHere: Bool, summarizes: Bool) -> ConversationStatusPresentation.LocalCapabilities {
+        let summaryBytes = models.summaryModelBytes
+        return .iPhone(processesHere: processesHere, summarizes: processesHere && summarizes,
+                       missingModelBytes: models.processingMissingBytes, download: models.transcribingDownload,
+                       models: models.processingDownloadState,
+                       summaryModelBytes: models.space.fits(summaryBytes) ? summaryBytes : 0, summaryModelAsked: models.summaryModelAsked)
+    }
 
     /// Recorded and nothing asked yet: two pages say so on the transcript's page, with Transcribe.
     private var isRecordedOnly: Bool {
@@ -238,12 +242,11 @@ struct SummaryPage: View {
             library.update(id) { $0.withdrawProcessingRequest(request, by: device, at: Date()) }
         case .dontWait: library.stopWaitingForRecordings(in: id, undoManager: undoManager)
         case .waitAgain: library.waitAgainForMissingRecordings(in: id, undoManager: undoManager)
-        case .cancelDownload:
-            guard let models = model?.models else { return }
-            for role in Self.processingRoles { if let choice = models.choice(for: role) { models.cancel(choice) } }
-        case .downloadModels:
-            guard let models = model?.models else { return }
-            for missing in models.processingMissing { models.download(missing) }
+        case .cancelDownload: model?.models.cancelProcessingDownloads()
+        case .downloadModels: model?.models.downloadProcessingSet()
+        case .downloadSummaryModel:
+            guard let models = model?.models, let summary = models.summaryModel else { return }
+            models.downloadIfItFits(summary)
         case .chooseModels: settings = PageSettings(route: .models)
         case .cloudSettings: settings = PageSettings(route: .cloud)
         case .summarizeHere: placement?.placements.beginHere(id)
