@@ -148,17 +148,43 @@ public actor InMemoryCourier: SyncCourier {
         publish()
     }
 
+    /// What other devices sent since the last fetch, and again what the receiver couldn't settle before, as
+    /// `CloudKitCourier` fetches it by name.
     public func fetch() async {
         guard availability == .available else { return }
-        let now = clock()
+        let earlier = role.contains(.receive) ? outbox.unsettledIDs : []
         let (changes, next) = service.changes(since: token)
         token = next
+        let fetched = Set(changes.map(\.0.id))
+        await receive(changes + stored(earlier.filter { !fetched.contains($0) }))
+    }
+
+    public func redeliverUnsettled() async {
+        guard availability == .available, role.contains(.receive) else { return }
+        await receive(stored(outbox.unsettledIDs))
+    }
+
+    /// Files still on the server, by ID, among those the receiver couldn't settle; one that's gone is forgotten.
+    private func stored(_ ids: [String]) -> [(CourierFile, Data)] {
+        let now = clock()
+        return ids.filter { outbox.isUnsettled($0, now: now) }.compactMap { id in
+            guard let file = service.file(id), let data = service.data(id) else { outbox.forget(id); return nil }
+            return (file, data)
+        }
+    }
+
+    /// As `CloudKitCourier.receive`: delivered first however old, deleted once settled, kept and offered again until
+    /// `CourierPolicy.unsettledMemory` otherwise.
+    private func receive(_ changes: [(CourierFile, Data)]) async {
+        let now = clock()
         var incoming: [CourierIncomingFile] = []
         let scratch = directory.appendingPathComponent("Fetched-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: scratch) }
         for (file, data) in changes where zones.contains(zone(of: file.id)) {
-            if now.timeIntervalSince(file.createdAt) >= policy.expiry { service.delete(file.id); outbox.forget(file.id); continue }
-            guard role.contains(.receive), receiver != nil, file.deviceID != deviceID else { continue }
+            guard role.contains(.receive), receiver != nil, file.deviceID != deviceID else {
+                if now.timeIntervalSince(file.createdAt) >= policy.expiry { service.delete(file.id); outbox.forget(file.id) }
+                continue
+            }
             outbox.noteKnown(file.id, createdAt: file.createdAt)
             let url = scratch.appendingPathComponent(file.id)
             do {
@@ -170,7 +196,15 @@ public actor InMemoryCourier: SyncCourier {
         if let receiver, !incoming.isEmpty {
             delivered += incoming.map(\.file.id)
             let settled = await receiver(incoming)
-            for id in settled { service.delete(id); outbox.forget(id) }
+            for file in incoming.map(\.file) {
+                if settled.contains(file.id) {
+                    service.delete(file.id); outbox.forget(file.id)
+                } else if now.timeIntervalSince(file.createdAt) >= policy.unsettledMemory {
+                    service.delete(file.id); outbox.forget(file.id)
+                } else {
+                    outbox.noteUnsettled(file.id, createdAt: file.createdAt)
+                }
+            }
         }
         outbox.save(now: now)
         publish()

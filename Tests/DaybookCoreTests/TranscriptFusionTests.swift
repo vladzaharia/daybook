@@ -8,9 +8,11 @@ final class TranscriptFusionTests: XCTestCase {
     func segment(_ track: UUID, _ time: Double, _ text: String, confidence: Double = 0.7) -> TranscriptSegment {
         TranscriptSegment(trackID: track, start: time, end: time + 4, text: text, speakerID: "\(track)-speaker-1", confidence: confidence)
     }
+    /// Phrases spread over twelve minutes measure a wearable's clock running 800 ppm slow (from fusion version 2 a
+    /// rate is measured only over at least ten minutes, and only within 1000 ppm).
     func testOffsetAndDriftAlignmentDeduplicatesAndPreservesProvenance() throws {
-        let original = phrases.enumerated().map { segment(a, Double($0.offset) * 100 + 15, $0.element) }
-        let wearable = phrases.enumerated().map { segment(b, Double($0.offset) * 100 / 1.012, $0.element, confidence: 0.95) }
+        let original = phrases.enumerated().map { segment(a, Double($0.offset) * 250 + 15, $0.element) }
+        let wearable = phrases.enumerated().map { segment(b, Double($0.offset) * 250 / 1.0008, $0.element, confidence: 0.95) }
         let result = TranscriptFusion.fuse([
             TrackTranscript(trackID: a, segments: original, knownOffset: 0),
             TrackTranscript(trackID: b, segments: wearable)
@@ -19,7 +21,7 @@ final class TranscriptFusionTests: XCTestCase {
         let alignment = try XCTUnwrap(result.alignments.first { $0.trackID == b })
         XCTAssertEqual(alignment.method, .anchors)
         XCTAssertEqual(alignment.offset, 15, accuracy: 0.01)
-        XCTAssertEqual(alignment.rate, 1.012, accuracy: 0.0001)
+        XCTAssertEqual(alignment.rate, 1.0008, accuracy: 0.000_01)
         XCTAssertTrue(result.segments.allSatisfy { $0.provenance.count == 2 && $0.trackID == b })
         XCTAssertEqual(original[0].start, 15)
         XCTAssertEqual(wearable[0].start, 0)

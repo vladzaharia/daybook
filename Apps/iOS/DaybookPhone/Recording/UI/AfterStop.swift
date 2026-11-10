@@ -234,12 +234,16 @@ struct PhoneAfterStop: View {
       NoteMark(id: $0.id.uuidString, kind: .bookmark, time: meeting.alignedTime(for: $0) ?? $0.time)
      },
      scrolls: true,
-     bottomInset: WritableNotes<EmptyView>.toolsHeight,
      onFocusChange: { writing = $0 },
      ink: .conversation(meeting.id, library: library, session: inkSession))
    }
    // Inset as the recording's notes are in the column, so they stay put as Stop lands.
    .padding(.horizontal, style == .notebook ? 0 : DaybookSpacing.s4)
+  } else if outcome == .saving {
+   // While it's being saved, the notes just written stay, read only, ink and marks too, until the conversation's
+   // editor takes over.
+   RecordingNotes(session: inkSession, isEditable: false)
+    .padding(.horizontal, style == .notebook ? 0 : DaybookSpacing.s4)
   } else {
    Color.clear
   }

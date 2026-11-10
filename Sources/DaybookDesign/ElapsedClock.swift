@@ -105,7 +105,7 @@ private struct NumberRoll<Value: Equatable>: ViewModifier {
     }
 }
 
-/// "● RECORDING · MacBook Pro Microphone": the phase in small capitals, then what it records from.
+/// "● Recording · MacBook Pro Microphone": the phase in sentence case, semibold, then what it records from.
 /// The dot is the one red mark besides the clock and Stop; other phases trade it for their glyph.
 public struct RecordingPhaseLabel: View {
     public enum Phase: Equatable, Sendable {
@@ -115,19 +115,17 @@ public struct RecordingPhaseLabel: View {
     public struct Metrics: Equatable, Sendable {
         public var size: CGFloat
         public var dot: CGFloat
-        public var tracking: CGFloat
         /// Follows Dynamic Type at this style (iPhone); nil keeps `size` (Mac chrome).
         public var textStyle: Font.TextStyle?
-        public init(size: CGFloat, dot: CGFloat, tracking: CGFloat, textStyle: Font.TextStyle? = nil) {
+        public init(size: CGFloat, dot: CGFloat, textStyle: Font.TextStyle? = nil) {
             self.size = size
             self.dot = dot
-            self.tracking = tracking
             self.textStyle = textStyle
         }
         /// The iPhone's recording header: footnote, a 9 pt dot.
-        public static let phone = Metrics(size: 13, dot: 9, tracking: 0.6, textStyle: .footnote)
+        public static let phone = Metrics(size: 13, dot: 9, textStyle: .footnote)
         /// Floating Notes' title band.
-        public static let panel = Metrics(size: 10.5, dot: 7, tracking: 0.5)
+        public static let panel = Metrics(size: 11.5, dot: 7)
 
         /// A density's metrics: the iPhone's header under touch, the title band's on the Mac.
         public static func `for`(_ density: DaybookDensity) -> Metrics { density == .touch ? .phone : .panel }
@@ -165,7 +163,7 @@ public struct RecordingPhaseLabel: View {
     private var metrics: Metrics { override ?? .for(density) }
 
     /// Under touch at the accessibility sizes the detail takes a line of its own under the phase, so
-    /// neither is cut off ("RECORDING · S…").
+    /// neither is cut off ("Recording · S…").
     private var stacks: Bool { metrics.textStyle != nil && typeSize.isAccessibilitySize && detail != nil }
 
     public var body: some View {
@@ -192,8 +190,6 @@ public struct RecordingPhaseLabel: View {
         Text(title)
             .font(metrics.font(weight: .semibold))
             .foregroundStyle(ink)
-            .textCase(.uppercase)
-            .tracking(metrics.tracking)
             .lineLimit(1)
             .fixedSize()
     }

@@ -353,6 +353,10 @@ struct ChipMenuItems: View {
                 Button("Show \(session.device.name)") { context.showDevice(id) }
             }
         case .peer(let id):
+            // The phone this recording follows is out of reach: this Mac keeps recording until it's stopped here.
+            if state.phones.leadOutOfReach?.sessionID == id, state.recordingID != nil {
+                Button("Stop Recording") { Task { await state.stopRecording() } }
+            }
             if let session = state.devices.session(id) {
                 Button("Show \(session.device.name)") { context.showDevice(id) }
             }

@@ -129,6 +129,7 @@ struct SettingsScreen: View {
             } header: {
                 Text("Library")
             }
+            PersonalLockSection()
             Section {
                 SettingsLink(route: .about) {
                     SettingsRow(title: "About Daybook", detail: nil, systemImage: "info.circle")
@@ -149,14 +150,30 @@ struct SettingsScreen: View {
     private var storageSummary: String { StatusSheetModel.audioOnThisIPhone(bytes: model.audio.usage.bytes) }
 
     private var modelsSummary: String {
-        let missing = Self.missingModelBytes(model.models, processesHere: model.settings.processesOnThisIPhone)
+        Self.modelsDetail(model.models, processesHere: model.settings.processesOnThisIPhone,
+                          transcribes: model.processingCapabilities.transcribes)
+    }
+
+    /// The Models row's words. While this iPhone transcribes its own recordings and the processing models asked for are
+    /// coming, how that whole set stands, the page's figure ("Downloading · 40%", "Waiting for Wi‑Fi", "Couldn’t
+    /// download"); else what's still to download (`missingModelBytes`); else what it does.
+    static func modelsDetail(_ models: PhoneModels, processesHere: Bool, transcribes: Bool) -> String {
+        if processesHere, let state = models.processingDownloadState {
+            switch state {
+            case .downloading: return ModelStatus.downloading(state.fraction ?? 0).label
+            case .waitingForWiFi: return ModelStatus.waitingForWiFi.label
+            case .failed: return ProcessingWords.downloadStopped
+            }
+        }
+        let missing = missingModelBytes(models, processesHere: processesHere)
         if missing > 0 { return "\(ByteSize.format(missing)) to download" }
-        return model.processingCapabilities.transcribes ? "Transcribes on this iPhone" : "Live transcription on this iPhone"
+        return transcribes ? "Transcribes on this iPhone" : "Live transcription on this iPhone"
     }
 
     /// What the row's figure counts (uxf-18): while this iPhone transcribes its own recordings, only what transcribing
-    /// still needs, the figure Welcome offered ("Transcription and speakers · 852 MB"); live captions' models are listed
-    /// inside Models with their own sizes. Otherwise, live transcription's, the only models it uses.
+    /// still needs, the figure Welcome offered ("Transcription and speakers · 852 MB"); the summary model and live
+    /// captions' models are listed inside Models with their own sizes. Otherwise, live transcription's, the only models
+    /// it uses.
     static func missingModelBytes(_ models: PhoneModels, processesHere: Bool) -> Int64 {
         processesHere ? models.processingMissingBytes : models.missingBytes
     }
@@ -203,6 +220,25 @@ struct SettingsScreen: View {
             if screen.hasPrefix("speaker-profile:"),
                let profile = model.library.controller.speakerProfiles.first(where: { $0.name == screen.dropFirst("speaker-profile:".count) }) {
                 path = [.speakerProfiles, .speakerProfile(profile.id)]
+            }
+        }
+    }
+}
+
+/// Require Face ID for Personal (or the passcode, on an iPhone without Face ID), and its one line (`PersonalLock`).
+/// Off by default; turning it off asks first, as unlocking does.
+private struct PersonalLockSection: View {
+    @Environment(PersonalLock.self) private var personalLock: PersonalLock?
+
+    var body: some View {
+        if let personalLock {
+            Section {
+                Toggle(isOn: Binding(get: { personalLock.isRequired }, set: { on in Task { await personalLock.setRequired(on) } })) {
+                    SettingsRow(title: SettingsWords.titleCased(PersonalLockWords.requirement(personalLock.method)), detail: nil,
+                                systemImage: PersonalLockWords.symbol)
+                }
+            } footer: {
+                SettingsFooter(PersonalLockWords.footer)
             }
         }
     }

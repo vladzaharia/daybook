@@ -177,6 +177,9 @@ struct LibraryView: View {
                 .equatable()
                 .id(meeting.id)
                 .modifier(AddRecordingDrop(state: state, meeting: meeting))
+        } else if state.place == .section(.personal), state.personalLock.isLocked, !state.isSearching, !state.visibleMeetings.isEmpty {
+            // Personal, locked: its page waits for the person to unlock it.
+            LockedConversationPage { Task { await state.unlockPersonal() } }
         } else if state.isReady && state.meetings.isEmpty {
             EmptyLibraryView(state: state)
         } else if !state.isSearching && state.visibleMeetings.isEmpty {
@@ -213,7 +216,7 @@ struct LibraryView: View {
         let visible = state.visibleMeetings
         if let selected = state.selectedID, visible.contains(where: { $0.id == selected }) { return }
         state.multiSelection = []
-        state.selectedID = visible.first?.id
+        state.selectQuietly(visible.first?.id)
     }
 
     /// Typing "#tag " turns the tag into a token.
@@ -328,7 +331,7 @@ struct LibraryView: View {
         }
         if let id = LibraryRestoration.selection(storedSelection, in: state.place.isDevice ? [] : state.visibleMeetings) {
             state.multiSelection = []
-            state.selectedID = id
+            state.selectQuietly(id)
         }
         if let page = PageMode(rawValue: storedPage) { state.pageMode = page }
         state.pageSpreadChosen = storedSpread
@@ -629,9 +632,11 @@ private struct BatchSelectionView: View {
     var body: some View {
         VStack(spacing: Space.s3) {
             Text("\(meetings.count) Conversations").font(TypeStyle.docTitleSmall).foregroundStyle(Ink.title)
-            // Up to four names; "and 1 more" would take the place of the one name it hides.
-            Text(meetings.count > 4 ? meetings.prefix(3).map(\.title).joined(separator: ", ") + ", and \(meetings.count - 3) more"
-                 : meetings.map(\.title).formatted(.list(type: .and)))
+            // Up to four names; "and 1 more" would take the place of the one name it hides. One the Personal lock hides
+            // is "Personal conversation".
+            let titles = meetings.map { state.personalLock.hides($0) ? PersonalLockWords.hiddenTitle : $0.title }
+            Text(titles.count > 4 ? titles.prefix(3).joined(separator: ", ") + ", and \(titles.count - 3) more"
+                 : titles.formatted(.list(type: .and)))
                 .foregroundStyle(Ink.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 420)

@@ -357,6 +357,48 @@ final class NotesInkEditorTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(view.inkTailCanvas).drawingPolicy, .pencilOnly, "Apple Pencil still writes, fingers scroll")
     }
 
+    /// Regression: handwriting sometimes drew blank on the Duo, and came back after a relayout: a canvas handed its
+    /// strokes before it had a size, or scaled as the Duo folds, could draw nothing. At rest each block is drawn as a
+    /// picture of its strokes once it has a size and again at each new scale; the canvas draws while writing.
+    func testBehaviorInkAtRestIsDrawnOnceItHasASizeAndAgainAtANewScale() throws {
+        let (view, _) = makeEditor(width: 400)
+        view.baseLane = 0
+        view.ink = model(view.ink?.session, placements: [ink(drawing: SyntheticInk.drawing("hello"), recognized: "hello", width: 400, height: 120)])
+        view.setText("hello")
+        let wide = try XCTUnwrap(view.inkPictures.first ?? nil, "drawn as soon as the block is laid out")
+        XCTAssertGreaterThan(inkFraction(wide), 0.005, "the strokes are in the picture")
+
+        view.frame.size.width = 200
+        let narrow = try XCTUnwrap(view.inkPictures.first ?? nil, "drawn again at the folded width")
+        XCTAssertLessThan(narrow.width, wide.width, "at the new scale")
+        XCTAssertGreaterThan(inkFraction(narrow), 0.005)
+
+        let session = try XCTUnwrap(view.ink?.session)
+        session.isWriting = true
+        XCTAssertNil(view.inkPictures.first ?? nil, "while writing, the canvas draws its own strokes")
+        session.isWriting = false
+        XCTAssertNotNil(view.inkPictures.first ?? nil, "and at rest the picture again")
+    }
+
+    /// Write by Hand is in the keyboard's bar beside Done, not floating over the notes; a page that can't be written
+    /// in has neither.
+    func testBehaviorTheKeyboardsBarHasWriteByHandBesideDone() throws {
+        let (view, _) = makeEditor()
+        view.setText("Before")
+        let bar = try XCTUnwrap(view.inputAccessoryView as? UIToolbar)
+        let items = try XCTUnwrap(bar.items)
+        XCTAssertEqual(items.count, 3, "Write by Hand, space, Done")
+        let write = try XCTUnwrap(items.first?.customView as? UIButton)
+        XCTAssertEqual(write.configuration?.title, InkWords.writeByHand)
+        write.sendActions(for: .primaryActionTriggered)
+        XCTAssertEqual(view.ink?.session.isWriting, true, "a finger writes")
+
+        view.isEditable = false
+        let same = view.ink
+        view.ink = same
+        XCTAssertNil(view.inputAccessoryView, "nothing over notes that can't be written in")
+    }
+
     func testBehaviorThePageWithoutAPencilAddsNoRoomInsideAPage() {
         let (view, _) = makeEditor()
         view.isScrollEnabled = false
@@ -482,6 +524,18 @@ final class NotesInkEditorTests: XCTestCase {
         window.addSubview(view)
         window.makeKeyAndVisible()
         return window
+    }
+
+    /// How much of a picture with a clear ground has ink on it.
+    private func inkFraction(_ image: CGImage) -> Double {
+        let width = image.width, height = image.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let context = CGContext(data: &pixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        context?.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        var inked = 0
+        for index in stride(from: 3, to: pixels.count, by: 4) where pixels[index] > 128 { inked += 1 }
+        return Double(inked) / Double(width * height)
     }
 
     private func darkFraction(_ image: CGImage) -> Double {

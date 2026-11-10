@@ -78,6 +78,8 @@
 	<string>Daybook names recordings after their meeting and reminds you to record a meeting when it starts.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Daybook takes photos of whiteboards, slides, and notes for your conversations.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Daybook uses Face ID to show your Personal conversations.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Daybook finds your Mac on this network to record together.</string>
 	<key>NSMicrophoneUsageDescription</key>

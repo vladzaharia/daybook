@@ -63,6 +63,15 @@ final class PhoneModelsTests: XCTestCase {
         }
     }
 
+    /// Reports half of each file arrived, then holds it as `HeldFetcher` does.
+    final class HalfwayFetcher: ModelArtifactFetcher {
+        let held = HeldFetcher()
+        func fetch(_ artifact: ModelArtifact, into directory: URL, progress: @escaping @Sendable (Double) -> Void) async throws -> URL {
+            progress(0.5)
+            return try await held.fetch(artifact, into: directory, progress: progress)
+        }
+    }
+
     /// Background time that's granted at once and runs out when the test says so.
     final class FakeBackgroundTime: BackgroundTime {
         private var next = 1
@@ -89,11 +98,18 @@ final class PhoneModelsTests: XCTestCase {
     }
 
     private func makeModels(network: PhoneNetwork, fetcher: any ModelArtifactFetcher = RecordingFetcher(),
-                            memoryGB: UInt64 = 12, backgroundTime: (any BackgroundTime)? = nil) -> PhoneModels {
+                            memoryGB: UInt64 = 12, memoryLimit: UInt64? = nil, runsLanguageModels: Bool = PhoneMemory.runsLanguageModels,
+                            backgroundTime: (any BackgroundTime)? = nil) -> PhoneModels {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("PhoneModelsTests-\(UUID())", isDirectory: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         return PhoneModels(root: root, defaults: makeTestDefaults("PhoneModelsTests"), fetcher: fetcher, network: network,
-                           physicalMemory: memoryGB * 1_073_741_824, backgroundTime: backgroundTime ?? FakeBackgroundTime())
+                           physicalMemory: memoryGB * 1_073_741_824, memoryLimit: memoryLimit, runsLanguageModels: runsLanguageModels,
+                           backgroundTime: backgroundTime ?? FakeBackgroundTime())
+    }
+
+    /// An 18 Pro: 12 GB, and Gemma 4 E2B within what iOS lets Daybook use without the larger limit.
+    private func makeCapableModels(network: PhoneNetwork, fetcher: any ModelArtifactFetcher = RecordingFetcher()) -> PhoneModels {
+        makeModels(network: network, fetcher: fetcher, memoryLimit: 5_400_000_000, runsLanguageModels: true)
     }
 
     func testTheiPhoneStartsWithStreamingModelsAndTheMacsVoiceProfiles() {
@@ -216,6 +232,73 @@ final class PhoneModelsTests: XCTestCase {
         XCTAssertEqual(defaults.stringArray(forKey: PhoneModels.Keys.downloading), ["nemotron-3-diarization/live"])
         models.cancel(speakers)
         XCTAssertEqual(defaults.stringArray(forKey: PhoneModels.Keys.downloading), [])
+    }
+
+    // MARK: The summary model, and the set (P3, uxf-09)
+
+    /// The summary model Welcome asks for lands after what transcribing needs, so it never delays a transcript: it
+    /// waits its turn, counted in the set's one figure, and goes once they've stopped arriving.
+    func testBehaviorTheSummaryModelWaitsItsTurnBehindTranscribing() async throws {
+        let scripted = ScriptedNetwork(), fetcher = HeldFetcher()
+        scripted.set(.unrestricted)
+        let models = makeCapableModels(network: scripted.network, fetcher: fetcher)
+        let summary = try XCTUnwrap(models.summaryModel)
+        XCTAssertEqual(models.summaryModelBytes, summary.approximateBytes)
+        XCTAssertFalse(models.summaryModelAsked)
+        let transcribing = models.processingMissing
+        XCTAssertEqual(transcribing.count, 3)
+        for model in transcribing { models.download(model) }
+        models.download(summary)
+        XCTAssertEqual(models.status(of: summary), .waiting, "its turn comes after theirs")
+        XCTAssertEqual(models.roleChoice(for: .summarization)?.status, .waiting, "Settings › Models says so too")
+        XCTAssertTrue(models.summaryModelAsked)
+        XCTAssertEqual(models.summaryModelBytes, 0, "asked for: nothing more to offer")
+        let total = (transcribing + [summary]).reduce(0) { $0 + $1.approximateBytes }
+        XCTAssertEqual(models.processingDownloadState, .downloading(done: 0, total: total), "one set, the summary model in its total")
+        XCTAssertEqual(models.transcribingDownload?.fraction, 0, "the transcript's wait reads the set's figure")
+
+        try await waitUntil("the fetches held") { fetcher.isHolding }
+        XCTAssertEqual(models.status(of: summary), .waiting, "nothing of it fetched while they arrive")
+        fetcher.release()
+        // They stop (offline here); then its turn comes, and it stops too.
+        try await waitUntil("the summary model's turn") { models.status(of: summary).isFailed }
+        for model in transcribing { XCTAssertTrue(models.status(of: model).isFailed, model.name) }
+        guard case .failed(_, let bytes)? = models.processingDownloadState else { return XCTFail("the set stopped") }
+        XCTAssertEqual(bytes, total, "Try Again downloads everything the set still misses")
+        XCTAssertTrue(models.summaryModelAsked, "stopped: Try Again, not a fresh offer")
+        XCTAssertNil(models.transcribingDownload)
+    }
+
+    /// Off Wi‑Fi the set waits as one; its Cancel takes back all of it, the summary model waiting its turn included,
+    /// without starting it on the way.
+    func testBehaviorTheSetWaitsForWiFiAndCancelsAsOne() throws {
+        let models = makeCapableModels(network: ScriptedNetwork().network)
+        let summary = try XCTUnwrap(models.summaryModel)
+        let transcribing = models.processingMissing
+        for model in transcribing { models.download(model) }
+        models.download(summary)
+        XCTAssertEqual(models.status(of: summary), .waiting)
+        let total = (transcribing + [summary]).reduce(0) { $0 + $1.approximateBytes }
+        XCTAssertEqual(models.processingDownloadState, .waitingForWiFi(bytes: total))
+        XCTAssertNotNil(models.transcribingDownload, "a recording of its own waits for it")
+        models.cancelProcessingDownloads()
+        XCTAssertNil(models.processingDownloadState)
+        XCTAssertEqual(models.status(of: summary), .notDownloaded)
+        XCTAssertEqual(models.summaryModelBytes, summary.approximateBytes, "offered again")
+    }
+
+    /// After a relaunch the summary model takes its turn behind what transcribing needs again.
+    func testBehaviorTheSummaryModelKeepsItsTurnAcrossARelaunch() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("PhoneModelsTests-\(UUID())", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let defaults = makeTestDefaults("PhoneModelsTests")
+        defaults.set(["gemma-4/e2b-4bit", "parakeet/ultra"], forKey: PhoneModels.Keys.downloading)
+        let models = PhoneModels(root: root, defaults: defaults, fetcher: RecordingFetcher(), network: ScriptedNetwork().network,
+                                 physicalMemory: 12 * 1_073_741_824, memoryLimit: 5_400_000_000, runsLanguageModels: true)
+        let summary = try XCTUnwrap(models.summaryModel)
+        let transcription = try XCTUnwrap(models.choice(for: .transcription))
+        try await waitUntil("picked up again") { models.status(of: summary) == .waiting }
+        XCTAssertEqual(models.status(of: transcription), .waitingForWiFi)
     }
 
     func testAnotherSessionsEventsAreFinishedAtOnce() {

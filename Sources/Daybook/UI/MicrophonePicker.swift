@@ -4,7 +4,7 @@ import DaybookUI
 import SwiftUI
 
 // Where the person chooses the Mac's microphone (`MicrophoneChoice`; docs/interface.md, "Floating Notes" and
-// "Settings"): Floating Notes' phase while recording, "● RECORDING · MacBook Pro Microphone ▾", is a menu of
+// "Settings"): Floating Notes' phase while recording, "● Recording · MacBook Pro Microphone ▾", is a menu of
 // Automatic and each input, and Settings › Recording has the same choice as a pop-up. A recording under way moves to
 // the new input at once.
 

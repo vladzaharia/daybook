@@ -96,6 +96,65 @@ final class PhoneWelcomeTests: XCTestCase {
         XCTAssertFalse(PhoneWelcome.macTranscribes(.unavailable("iCloud is off")))
     }
 
+    // MARK: The Models page (P3, uxf-09)
+
+    /// An iPhone with `gigabytes` of memory, iOS letting Daybook use `limit`, and language models running or not.
+    private func models(_ gigabytes: Double, limit: UInt64? = nil, runsLanguageModels: Bool = true,
+                        network: PhoneModelsTests.ScriptedNetwork = .init()) throws -> PhoneModels {
+        let root = try temporaryDirectory("Models")
+        return PhoneModels(root: root, defaults: makeTestDefaults("PhoneWelcomeTests"), fetcher: PhoneModelsTests.RecordingFetcher(),
+                           network: network.network, physicalMemory: UInt64(gigabytes * 1e9), memoryLimit: limit,
+                           runsLanguageModels: runsLanguageModels)
+    }
+
+    /// Where this iPhone can summarize (an 18 Pro: 12 GB, Gemma 4 E2B without the larger memory limit), two rows, both
+    /// checked, the total on the button; with too little room for both, the summary starts unchecked and says what
+    /// checking it would need.
+    func testBehaviorACapableIPhoneOffersTranscriptionAndSummariesBothChecked() throws {
+        let capable = try models(12, limit: 5_400_000_000)
+        let summary = try XCTUnwrap(capable.summaryModel)
+        XCTAssertEqual(summary.key, "gemma-4/e2b-4bit")
+        let offer = PhoneWelcomeOffer(models: capable)
+        XCTAssertEqual(offer.rows, [.init(part: .transcription, bytes: capable.processingMissingBytes),
+                                    .init(part: .summaries, bytes: summary.approximateBytes)])
+        XCTAssertEqual(ByteSize.format(offer.rows[1].bytes), "3.6 GB")
+        XCTAssertTrue(offer.choosesRows)
+        XCTAssertEqual(offer.initialChoice(free: nil), [.transcription, .summaries])
+        XCTAssertEqual(offer.bytes([.transcription, .summaries]), capable.processingMissingBytes + summary.approximateBytes)
+        XCTAssertEqual(offer.bytes([.transcription]), capable.processingMissingBytes)
+
+        let free = summary.approximateBytes + 100_000_000
+        XCTAssertEqual(offer.initialChoice(free: free), [.transcription], "what transcribing needs first")
+        XCTAssertEqual(offer.shortfall(offer.rows[1], chosen: [.transcription], free: free), offer.bytes([.transcription, .summaries]))
+        XCTAssertNil(offer.shortfall(offer.rows[1], chosen: [], free: free), "alone, it fits")
+        XCTAssertNil(offer.shortfall(offer.rows[0], chosen: [.transcription], free: free))
+    }
+
+    /// Where it can't (no summary model fits its memory, or language models don't run), one row, as before: never a
+    /// summary it can't make.
+    func testBehaviorAnIPhoneThatCantSummarizeOffersOnlyTranscription() throws {
+        for incapable in [try models(6), try models(12, limit: 5_400_000_000, runsLanguageModels: false)] {
+            XCTAssertNil(incapable.summaryModel)
+            let offer = PhoneWelcomeOffer(models: incapable)
+            XCTAssertEqual(offer.rows.map(\.part), [.transcription])
+            XCTAssertFalse(offer.choosesRows, "one row: nothing to leave out")
+            XCTAssertEqual(offer.initialChoice(free: nil), [.transcription])
+        }
+    }
+
+    /// Ready says "Your Mac summarizes it" only while this iPhone won't: once its summary model is asked for, it will.
+    func testBehaviorThisIPhoneSummarizesOnceItsSummaryModelIsAskedFor() throws {
+        let capable = try models(12, limit: 5_400_000_000)
+        XCTAssertFalse(PhoneWelcome.summarizesHere(capable, processesHere: true))
+        let summary = try XCTUnwrap(capable.summaryModel)
+        capable.download(summary)
+        XCTAssertEqual(capable.status(of: summary), .waitingForWiFi)
+        XCTAssertTrue(PhoneWelcome.summarizesHere(capable, processesHere: true))
+        XCTAssertFalse(PhoneWelcome.summarizesHere(capable, processesHere: false), "processing here off: a Mac's")
+        capable.cancel(summary)
+        XCTAssertFalse(PhoneWelcome.summarizesHere(try models(6), processesHere: true))
+    }
+
     func testBehaviorTheAllowPageSaysWhatSettingsWould() {
         XCTAssertEqual(PhoneWelcome.state(.granted), .allowed)
         XCTAssertEqual(PhoneWelcome.state(.undetermined), .askable)

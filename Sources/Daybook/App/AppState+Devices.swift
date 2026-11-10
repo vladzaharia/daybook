@@ -176,7 +176,7 @@ extension AppState {
             pendingRecorderLead = session.id
             Task {
                 if let start = phoneCapture.start {
-                    _ = await start(newMeeting(title: "Conversation at \(Date().formatted(date: .omitted, time: .shortened))", selecting: false))
+                    _ = await start(newMeeting(title: "Conversation at \(Date().formatted(date: .omitted, time: .shortened))", selecting: false), nil)
                 } else {
                     await startRecording(from: .elsewhere)
                 }

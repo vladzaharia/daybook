@@ -50,6 +50,38 @@ final class WelcomeWordsTests: XCTestCase {
         XCTAssertEqual(WelcomeWords.page(2, of: 4), "Page 2 of 4")
     }
 
+    /// Welcome promises a summary only where one will be made (P3, uxf-09): with neither a summary model this iPhone
+    /// can run nor a Mac known to the library, the reading line is for transcripts and search, and nothing else changes.
+    func testBehaviorTheIntroPromisesASummaryOnlyWhereOneWillBeMade() {
+        let promised = WelcomeWords.points(.iPhone), bare = WelcomeWords.points(.iPhone, summaries: false)
+        XCTAssertEqual(promised[1].text, "Read a short summary. Search every word.")
+        XCTAssertEqual(bare[1].text, "Read the transcript. Search every word.")
+        XCTAssertEqual(bare.map(\.symbol), promised.map(\.symbol))
+        XCTAssertEqual(bare.enumerated().filter { $0.offset != 1 }.map(\.element), promised.enumerated().filter { $0.offset != 1 }.map(\.element))
+        XCTAssertEqual(WelcomeWords.points(.mac), WelcomeWords.points(.mac, summaries: true), "a Mac summarizes")
+    }
+
+    /// Where this iPhone won't summarize, the Ready line says what will: a Mac known to the library, or nothing.
+    func testBehaviorTheReadyLineSaysWhatSummarizesWhenThisIPhoneWont() {
+        XCTAssertEqual(WelcomeWords.readyMessage(downloading: true, canTranscribe: false, summarizesElsewhere: true),
+                       "Start a conversation now. It’s transcribed once the models download. Your Mac summarizes it.")
+        XCTAssertEqual(WelcomeWords.readyMessage(downloading: true, canTranscribe: false, waitsForWiFi: true, summarizesElsewhere: true),
+                       "Start a conversation now. It’s transcribed once the models download on Wi‑Fi. Your Mac summarizes it.")
+        XCTAssertEqual(WelcomeWords.readyMessage(downloading: false, canTranscribe: true, summarizesElsewhere: true),
+                       "Start a conversation now. Your Mac summarizes it.")
+        XCTAssertEqual(WelcomeWords.readyMessage(downloading: false, canTranscribe: false, transcribesElsewhere: true, summarizesElsewhere: true),
+                       "Start a conversation now. Your Mac transcribes and summarizes it.")
+        XCTAssertEqual(WelcomeWords.readyMessage(downloading: false, canTranscribe: true), "Start a conversation now.",
+                       "no Mac, and this iPhone won't: nothing about a summary")
+    }
+
+    func testBehaviorTheIPhonesModelsPageNamesEachRowAndTheTotal() {
+        XCTAssertEqual(WelcomeWords.phoneModelsRow, "Transcription and speakers")
+        XCTAssertEqual(WelcomeWords.phoneSummariesRow, "Summaries")
+        XCTAssertEqual(WelcomeWords.downloadAndContinue("4.4 GB"), "Download 4.4 GB and Continue")
+        XCTAssertEqual(WelcomeWords.downloadAndContinue, "Download and Continue", "one row: its size is on the row")
+    }
+
     /// The iPhone's pages say what its own models and pairing do. A Mac transcribes this iPhone's recordings through
     /// the library they sync, paired or not, so neither page promises it.
     func testBehaviorTheIPhonesModelsAndPairPagesSayOnlyWhatTheyDo() {

@@ -76,13 +76,15 @@ extension LibrarySyncEngine {
         defer { try? fm.removeItem(at: temporary) }
         var digest: String?
         // A courier delivery of the object, while the sync folder's copy isn't downloaded, saves waiting for iCloud.
-        if let delivered = courierObject(track.sha256) {
+        let delivered = courierObject(track.sha256)
+        if let delivered {
             try LocalFiles.directory(destination.deletingLastPathComponent())
             let total = ((try? fm.attributesOfItem(atPath: delivered.delivery.path))?[.size] as? NSNumber)?.int64Value
             let copied = try await copyVerifying(delivered.delivery, of: delivered.object, below: inboxBase, to: temporary, expected: track.sha256,
                                                  totalBytes: total, progress: progress)
             if copied == track.sha256 { digest = copied } else { try? fm.removeItem(at: temporary); discardDelivery(delivered.delivery) }
         }
+        let fromDelivery = digest != nil
         if digest == nil {
             try await waitUntilLocal(remote, options: options, progress: progress)
             try LocalFiles.directory(destination.deletingLastPathComponent())
@@ -100,6 +102,7 @@ extension LibrarySyncEngine {
         }
         let stamp = try assetStamp(destination, digest: track.sha256)
         verifiedAssets[destination.path] = stamp
+        if fromDelivery, let delivered { installedFromDelivery(delivered.delivery, object: delivered.object, holding: track.sha256) }
         if audioPolicy == .onDemand {
             let key = AudioCacheEntry.key(meetingID, track.relativePath)
             updateAudioIndex { index in

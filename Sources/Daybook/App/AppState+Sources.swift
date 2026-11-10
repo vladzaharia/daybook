@@ -115,19 +115,34 @@ extension AppState {
         case match(SourceAlignment)
     }
 
-    /// Compares a recording's sound with a conversation's best placed recording.
-    func compareSound(of url: URL, duration: TimeInterval?, in meetingID: UUID, clockOffset: TimeInterval?,
+    /// Compares a recording's sound with a conversation's best placed recording: around the clocks' estimate when
+    /// there is one, and, when that finds nothing sure, over the whole overlap, keeping what that finds only when it's
+    /// as sure as a match that joins a conversation (`attachConfidence`). A clock that was minutes off is still found.
+    /// The result is composed onto the reference's own clock (`Meeting.clock(of:)`), drift and all.
+    func compareSound(of url: URL, digest: String? = nil, duration: TimeInterval?, in meetingID: UUID, clockOffset: TimeInterval?,
                       reliableClock: Bool, excluding: Set<UUID> = []) async -> SoundComparison {
         guard let meeting = meetings.first(where: { $0.id == meetingID }),
               let reference = meeting.alignmentReference(excluding: excluding),
-              let placement = meeting.timelinePlacement(of: reference.id),
+              let clock = meeting.clock(of: reference.id),
               let referenceURL = await availableAudioURL(for: reference, in: meetingID) else { return .unavailable }
+        let placement = (offset: clock.offset, rate: clock.rate)
         let expected = SourcePlacement.expectedOffset(clockOffset: clockOffset, reference: placement)
         let radius = reliableClock && expected != nil ? sources.policy.clockSearchRadius
             : max(sources.policy.fileSearchRadius, duration ?? 0, reference.duration ?? 0)
-        let align = sources.alignAudio
+        let align = sources.alignAudio, policy = sources.policy
+        let other = AlignmentRecording(url: url, digest: digest), base = AlignmentRecording(url: referenceURL, digest: reference.sha256)
         let result: AudioAlignment?
-        do { result = try await detachedWork(priority: .userInitiated) { try align(url, referenceURL, expected, radius) } }
+        do {
+            result = try await detachedWork(priority: .userInitiated) {
+                let near = try align(other, base, expected, radius)
+                guard expected != nil, (near?.confidence ?? 0) < policy.placeConfidence else { return near }
+                try Task.checkCancellation()
+                let wide: AudioAlignment?
+                do { wide = try align(other, base, nil, 0) } catch is CancellationError { throw CancellationError() } catch { wide = nil }
+                if let wide, wide.confidence.isFinite, wide.confidence >= policy.attachConfidence { return wide }
+                return near
+            }
+        }
         catch { return .failed(error.localizedDescription) }
         guard let sound = result, sound.offset.isFinite, sound.rate.isFinite, sound.rate > 0, sound.confidence.isFinite else { return .noMatch }
         let composed = SourcePlacement.compose(sound, onto: placement)
@@ -264,8 +279,9 @@ extension AppState {
 
     /// A recorder's clock against this Mac's, for placing its recording: the one its multipoint link
     /// keeps, or the one Daybook on iPhone measured while recording and stored on its track
-    /// (`capture.peerClocks`), whichever was measured later. The track's entry for this Mac comes
-    /// first; another Mac's is only near this one's.
+    /// (`capture.peerClocks`), whichever is tighter where the recording starts: its uncertainty, plus what the
+    /// clocks may have drifted between when it was measured and the recording's start (50 ppm: tens in practice).
+    /// Even, the later. The track's entry for this Mac comes first; another Mac's is only near this one's.
     func recorderClock(for track: RecordingTrack, link: CompanionRecording?) -> CompanionClock? {
         let peers = track.capture?.peerClocks ?? []
         let entry = peers.first { $0.deviceID == phoneLink.identity.deviceID.uuidString }
@@ -275,6 +291,10 @@ extension AppState {
                                                   measuredAt: $0.measuredAt.addingTimeInterval($0.offset)) }
         guard let linked = link?.clock else { return measured }
         guard let measured else { return linked }
+        let start = track.startedAt ?? track.createdAt, drift = 50e-6
+        func bound(_ clock: CompanionClock) -> TimeInterval { clock.uncertainty + drift * abs(clock.measuredAt.timeIntervalSince(start)) }
+        let (a, b) = (bound(measured), bound(linked))
+        if a != b { return a < b ? measured : linked }
         return measured.measuredAt > linked.measuredAt ? measured : linked
     }
 
@@ -343,8 +363,21 @@ extension AppState {
     /// other direction), the new ones join its existing timeline rather than replacing it: they wait
     /// to be lined up (sound, transcript, then clock), bookmarks made meanwhile follow the microphone
     /// recording, and notes made meanwhile move onto the timeline once it's placed.
+    ///
+    /// Every track this recording made says which capture and which Mac made it (`TrackCaptureDetails.captureID`,
+    /// `deviceID`), so a conversation two Macs recorded keeps one origin after sync (`Meeting.separatingCaptureGroups`).
     func sourcesAfterCapture(_ id: UUID, startedAt: Date, captureID: UUID) {
         guard let context = sources.captures.removeValue(forKey: id) else { return }
+        let device = phoneLink.identity.deviceID.uuidString
+        update(id) { meeting in
+            for index in meeting.tracks.indices where !context.preexistingTrackIDs.contains(meeting.tracks[index].id)
+                && meeting.tracks[index].deviceKind == nil && meeting.tracks[index].capture != nil
+                && meeting.tracks[index].capture?.captureID == nil
+                && (meeting.tracks[index].source == .microphone || meeting.tracks[index].source == .systemAudio) {
+                meeting.tracks[index].capture?.captureID = captureID
+                meeting.tracks[index].capture?.deviceID = device
+            }
+        }
         if context.keepsDate, context.preexistingTrackIDs.isEmpty { update(id) { $0.date = context.date } }
         guard !context.preexistingTrackIDs.isEmpty, let meeting = meetings.first(where: { $0.id == id }) else { return }
         var existing = meeting
@@ -381,16 +414,21 @@ extension AppState {
 
     // MARK: Processing
 
-    /// The first step of processing: recordings waiting to be placed, or placed only by the clocks,
-    /// are lined up from their sound against the conversation's best placed recording, once there is
-    /// one to compare with. What the sound doesn't settle waits for the transcript, then the clocks
-    /// (`SourceFusion`). Cancellable with the rest of the request between recordings; one comparison
-    /// in progress finishes first.
+    /// The first step of processing: recordings waiting to be placed, or placed only by the clocks or by
+    /// shared phrases, are lined up from their sound against the conversation's best surely placed
+    /// recording, once there is one to compare with. What the sound doesn't settle waits for the
+    /// transcript, then the clocks (`SourceFusion`). A conversation two Macs both filed as the origin
+    /// keeps the first one's (`Meeting.separatingCaptureGroups`); the other's wait here. Cancellable with
+    /// the rest of the request between recordings; one comparison in progress finishes first.
     func placePendingSources(_ id: UUID) async throws {
+        if let meeting = meetings.first(where: { $0.id == id }) {
+            let separated = meeting.separatingCaptureGroups()
+            if !separated.isEmpty { update(id) { $0.applyPlacements(separated) } }
+        }
         guard let initial = meetings.first(where: { $0.id == id }) else { return }
         func soundMayHelp(_ alignment: SourceAlignment?) -> Bool {
             guard let alignment, alignment.audioChecked != true else { return false }
-            return alignment.isPending || alignment.method == .clock
+            return alignment.isPending || alignment.method == .clock || alignment.method == .transcript
         }
         let waiting = initial.tracks.filter { soundMayHelp($0.alignment) }
         guard !waiting.isEmpty else { return }
@@ -401,7 +439,7 @@ extension AppState {
                   soundMayHelp(pending) else { continue }
             var placed: SourceAlignment?, compared = false
             if let url = await availableAudioURL(for: track, in: id) {
-                switch await compareSound(of: url, duration: track.duration, in: id, clockOffset: pending.clockOffset,
+                switch await compareSound(of: url, digest: track.sha256, duration: track.duration, in: id, clockOffset: pending.clockOffset,
                                           reliableClock: pending.clockOffset != nil, excluding: unplaced.union([track.id])) {
                 case .unavailable, .failed: break
                 case .noMatch: compared = true

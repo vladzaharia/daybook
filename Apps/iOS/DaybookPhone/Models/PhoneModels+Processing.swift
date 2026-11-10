@@ -111,4 +111,84 @@ extension PhoneModels {
     func releaseProcessingModels() async {
         try? await runtime.unload()
     }
+
+    // MARK: Summaries here, and the set's downloads
+
+    /// The summary model this iPhone could run once it's here: the chosen one, where one fits in the memory iOS gives
+    /// Daybook and language models run here. Nil where summaries are a Mac's, never a model the iPhone can't run.
+    var summaryModel: CatalogModel? {
+        guard let model = choice(for: .summarization), status(of: model).isAvailable else { return nil }
+        return model
+    }
+
+    /// What downloading `summaryModel` takes, while it isn't here and no one has asked for it (or it stopped, and
+    /// asking again downloads it); 0 otherwise.
+    var summaryModelBytes: Int64 {
+        guard let model = summaryModel, status(of: model).canDownload else { return 0 }
+        return downloadBytes(model)
+    }
+
+    /// `summaryModel` is asked for: arriving, waiting its turn or for Wi‑Fi, or stopped.
+    var summaryModelAsked: Bool {
+        guard let model = summaryModel else { return false }
+        let status = status(of: model)
+        return status.isTransferring || status.isFailed
+    }
+
+    /// The chosen processing models that can run here, each once: what transcribing needs, then the summary model.
+    private var processingModels: [CatalogModel] {
+        var seen = Set<String>()
+        return processingRoles.compactMap(choice(for:)).filter { status(of: $0).isAvailable && seen.insert($0.key).inserted }
+    }
+
+    /// This iPhone's processing downloads as one fact, in the words every surface says them with (DaybookKit's
+    /// `ModelDownloadState`, as a Mac's queue gives it): the whole set asked for arriving, with a model that finished
+    /// counted whole ("Downloading models · 40%", "1.8 of 4.4 GB"), waiting for Wi‑Fi, or a download that stopped. Nil
+    /// when none is on its way or stopped.
+    var processingDownloadState: ModelDownloadState? {
+        let models = processingModels
+        let coming = models.filter { status(of: $0).isTransferring }
+        if !coming.isEmpty {
+            let arriving = coming.contains { if case .downloading = status(of: $0) { return true } else { return false } }
+            if !arriving, coming.contains(where: { status(of: $0) == .waitingForWiFi }) {
+                return .waitingForWiFi(bytes: coming.reduce(0) { $0 + downloadBytes($1) })
+            }
+            let set = models.filter { processingBatch.contains($0.key) || status(of: $0).isTransferring }
+            let done = set.reduce(Int64(0)) { sum, model in
+                switch status(of: model) {
+                case .downloading(let fraction):
+                    return sum + Int64(Double(model.approximateBytes) * (fraction.isFinite ? min(max(fraction, 0), 1) : 0))
+                case let status where status.isReady: return sum + model.approximateBytes
+                default: return sum
+                }
+            }
+            return .downloading(done: done, total: set.reduce(0) { $0 + $1.approximateBytes })
+        }
+        let stopped = models.filter { status(of: $0).isFailed }
+        guard let failed = stopped.first else { return nil }
+        // Trying again downloads everything the set still misses.
+        let missing = models.filter { status(of: $0).canDownload && (processingBatch.contains($0.key) || Self.transcribingRoles.contains(where: $0.serves)) }
+        return .failed(model: failed.name, bytes: missing.reduce(0) { $0 + downloadBytes($1) })
+    }
+
+    /// A model transcribing here needs, on its way (downloading, or waiting its turn or for Wi‑Fi), with the whole set's
+    /// figure: what a recording of this iPhone's own waits for.
+    var transcribingDownload: ConversationStatusPresentation.LocalCapabilities.Download? {
+        guard let model = Self.transcribingRoles.compactMap(choice(for:)).first(where: { status(of: $0).isTransferring }) else { return nil }
+        return .init(name: model.name, fraction: processingDownloadState?.fraction ?? 0)
+    }
+
+    /// Downloads what the set still misses: what transcribing here needs and, once it's been asked for, the summary
+    /// model ("Try Again" on the page).
+    func downloadProcessingSet() {
+        for model in processingMissing { download(model) }
+        if let summary = summaryModel, summaryModelAsked, status(of: summary).canDownload { download(summary) }
+    }
+
+    /// Cancels every processing download, the summary model's included: the one set's Cancel.
+    func cancelProcessingDownloads() {
+        // What waits its turn goes first, so cancelling what's ahead of it doesn't start it.
+        if let summary = summaryModel, status(of: summary).isTransferring { cancel(summary) }
+        cancelDownloads(in: processingRoles)
+    }
 }

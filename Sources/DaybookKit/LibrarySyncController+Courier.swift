@@ -20,6 +20,7 @@ final class SyncCourierBridge {
     @ObservationIgnored private var started: Task<Void, Never>?
     @ObservationIgnored private var sends: Task<Void, Never>?
     @ObservationIgnored private var expiryCheck: Date?
+    @ObservationIgnored private var redeliveryCheck: Date?
     /// Numbers the running courier's statuses (`apply`).
     @ObservationIgnored private var numbering = StatusNumbering()
     /// The libraries whose plaintext courier files were dropped once they were found encrypted.
@@ -54,13 +55,19 @@ final class SyncCourierBridge {
     }
 
     /// Hands the files a pass wrote to the courier and asks it to send them now. Each file is sent once, however often a
-    /// pass reports it. Expired courier files are cleared at most hourly, after a pass.
+    /// pass reports it. Expired courier files are cleared at most hourly, after a pass. A receiver is offered again, at
+    /// most every `redeliveryInterval`, what it fetched and couldn't settle (a pass may have read the library's manifest
+    /// since).
     func hand(_ files: [SyncJournalFile], engine: LibrarySyncEngine, deviceID: String) {
         guard let courier, let start = started else { return }
         let now = Date()
         if expiryCheck.map({ now.timeIntervalSince($0) >= 3_600 }) ?? true {
             expiryCheck = now
             Task { await start.value; await courier.removeExpired() }
+        }
+        if role.contains(.receive), redeliveryCheck.map({ now.timeIntervalSince($0) >= Self.redeliveryInterval }) ?? true {
+            redeliveryCheck = now
+            Task { await start.value; await courier.redeliverUnsettled() }
         }
         guard role.contains(.send), !files.isEmpty else { return }
         let previous = sends
@@ -94,6 +101,15 @@ final class SyncCourierBridge {
         guard let courier, let start = started else { return }
         Task { await start.value; await courier.fetch() }
     }
+
+    /// Asks the courier to send what waits now (the network came back).
+    func flush() {
+        guard let courier, let start = started, role.contains(.send) else { return }
+        Task { await start.value; await courier.flush() }
+    }
+
+    /// How often, at most, a pass offers a receiver again what it couldn't settle.
+    static let redeliveryInterval: TimeInterval = 60
 
     /// `libraryID` turned out encrypted: the plaintext files the courier still holds are dropped, once (and those it sent,
     /// deleted).
@@ -158,8 +174,11 @@ extension LibrarySyncController {
     /// iPhone woken in the background soon after it started) tries again now.
     public func resumeCourier() { courierBridge.resume() }
 
-    /// Asks the courier for what other devices sent (a push arrived).
+    /// Asks the courier for what other devices sent (a push arrived, a nudge, a recording awaited).
     public func fetchCourier() { courierBridge.fetch() }
+
+    /// Asks the courier to send what waits now, rather than when the system schedules it (the network came back).
+    public func flushCourier() { courierBridge.flush() }
 
     /// Files a courier brought. Each is verified and kept in the engine's inbox, never written into the sync folder;
     /// a pass then applies them. Returns those the courier may delete: stored, already here, or rejected.

@@ -77,6 +77,8 @@ extension FloatingStatusInputs {
     private static func phone(_ session: DeviceSession, state: AppState, along: CompanionRecording.State?) -> RecordingStatusInputs.Peer {
         var phone = RecordingStatusInputs.Peer(id: session.id, name: session.device.name, kind: .iPhone, isConnected: session.isLinked,
                                                along: along, lastConnected: session.direct?.lastConnectedAt)
+        // The phone this Mac records for, out of reach: its chip says so while this Mac keeps recording.
+        if let lead = state.phones.leadOutOfReach, lead.sessionID == session.id, lead.meetingID == state.recordingID { phone.outOfReach = true }
         if let id = UUID(uuidString: session.id), let recording = state.phoneLink.recordingStates[id], phone.isConnected {
             switch recording.phase {
             case .recording, .starting: phone.activity = .recording
@@ -117,6 +119,7 @@ extension FloatingStatusInputs {
             guard state.summaryWaitsForModel(meeting), let models = state.modelDownloadState else { return .ready(summary: false) }
             return .transcriptReady(waiting: ProcessingWords.summaryWaitsLine(models))
         case .awaitingRecordings(let recordings): return .awaiting(ProcessingStatus.awaitingLine(recordings))
+        case .missingRecordings: return meeting.summary != nil ? .ready(summary: true) : nil
         case .done:
             if meeting.summary != nil { return .ready(summary: true) }
             return meeting.unifiedTranscript.isEmpty ? nil : .ready(summary: false)

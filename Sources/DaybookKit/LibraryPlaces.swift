@@ -50,9 +50,11 @@ public enum LibraryPlace: Hashable, Sendable {
     public var isTrash: Bool { self == .trash }
 
     /// The conversations this place lists, newest first. A device's page lists its recordings instead, and the
-    /// Trash what's in its folder, which the library's conversations don't include.
-    public func meetings(in meetings: [Meeting]) -> [Meeting] {
+    /// Trash what's in its folder, which the library's conversations don't include. While a Focus leaves Personal out
+    /// (`showingPersonal` false, `PersonalLock.focus`), no place lists a Personal conversation, Personal itself included.
+    public func meetings(in meetings: [Meeting], showingPersonal: Bool = true) -> [Meeting] {
         meetings.filter { meeting in
+            if !showingPersonal, meeting.effectivePlacement == .personal { return false }
             switch self {
             case .section(let section): return section.contains(meeting)
             case .folder(let id): return meeting.folderID == id

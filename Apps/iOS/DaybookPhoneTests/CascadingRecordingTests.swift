@@ -121,6 +121,32 @@ final class CascadingRecordingTests: XCTestCase {
         try await eventually("the Mac stops too") { await macRecorder.recording == nil }
     }
 
+    /// The Macs this iPhone started stop as its capture ends, not once the recording is filed, which can wait on the
+    /// library (or a sync pass, for a Mac's conversation) while the Mac goes on recording.
+    func testBehaviorTheMacsItStartedStopAsItsCaptureEndsBeforeItsFiled() async throws {
+        let mac = try await makeMac()
+        let macRecorder = LinkServicesTests.RecordingMac()
+        await mac.service.setRecordControlHandler { _, request in await macRecorder.handle(request) }
+        let link = makeLink()
+        let rig = RecorderRig()
+        let model = try makeModel(link: link, rig: rig)
+        try await pair(link, with: mac)
+        try await model.startRecording()
+        rig.pump(1)
+        try await waitUntil("the Mac records too") { model.multipoint?.recordingMacs.map(\.id) == [mac.id] }
+        rig.pump(1)
+
+        // Filing waits for the library.
+        await model.library.controller.acquireLock()
+        let stop = Task { try await model.stopRecording() }
+        try await eventually("the Mac stops as the capture ends") { await macRecorder.recording == nil }
+        XCTAssertTrue(model.isFiling, "while this iPhone still files its recording")
+        model.library.controller.releaseLock()
+        try await stop.value
+        XCTAssertEqual(model.library.conversations.count, 1)
+        XCTAssertTrue(model.pendingStops.isEmpty)
+    }
+
     /// A Mac's Can start recording for this iPhone off is the person's choice there: a start this iPhone asks on its own
     /// that the Mac declines is taken quietly, a Mac that said so isn't asked at all, and only a start the person chose
     /// for that Mac (Record on Studio Mac too) says why, with the fix.

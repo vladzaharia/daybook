@@ -264,6 +264,12 @@ final class PhoneSync {
         }
     }
 
+    /// The network came back or changed: what the courier holds goes now (docs/icloud-sync.md, "Courier (CloudKit)").
+    func networkChanged() {
+        guard isConnected else { return }
+        controller?.flushCourier()
+    }
+
     /// Lists the library's devices (presence) for "Waiting for your Mac · last seen 2 h ago".
     func refreshDevices() async {
         guard isConnected, let controller else { return }

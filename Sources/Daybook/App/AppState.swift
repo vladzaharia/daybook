@@ -28,7 +28,31 @@ final class AppState {
     let library: LibraryController
     /// The library's conversations. Every change goes through `library` (`update`, `add`, …), which saves it.
     var meetings: [Meeting] { library.meetings }
-    var selectedID: UUID?
+    /// The conversation the list selects, which the page, the inspector, Version History, Share, the menus, and
+    /// Floating Notes act on. A Personal one behind the lock (`personalLock`) is selected only once the person unlocks
+    /// it: setting it asks, and the selection stays where it was meanwhile, so nothing shows it locked.
+    var selectedID: UUID? {
+        get { selection }
+        set {
+            guard let id = newValue, personalLock.hides(id) else {
+                unlockingSelection = nil
+                selection = newValue
+                return
+            }
+            unlockingSelection = id
+            Task {
+                guard await personalLock.unlock(), unlockingSelection == id else { return }
+                unlockingSelection = nil
+                selection = id
+            }
+        }
+    }
+    private var selection: UUID?
+    /// The Personal conversation waiting for the person to unlock it: selected once they do, unless they chose another.
+    @ObservationIgnored private var unlockingSelection: UUID?
+    /// The lock for Personal conversations, and what a Focus asks (Settings › Library; docs/architecture.md, "The
+    /// Personal lock").
+    let personalLock: PersonalLock
     var search = ""
     var searchTokens: [SearchToken] = []
     var searchScope: SearchScope = .all
@@ -441,7 +465,7 @@ final class AppState {
     var libraryRevision: Int { library.revision }
     /// Bumped when a search that ran off the main actor has its results, so the views showing them read them again.
     private var searchResultsArrived = 0
-    @ObservationIgnored private var visibleMemo: (place: LibraryPlace, revision: Int, meetings: [Meeting])?
+    @ObservationIgnored private var visibleMemo: (place: LibraryPlace, revision: Int, showsPersonal: Bool, meetings: [Meeting])?
     let searchMemo = LibrarySearchMemo()
 
     /// `capture` is this Mac's microphone and call audio; tests pass fakes.
@@ -497,6 +521,7 @@ final class AppState {
         devices = DeviceHub(environment: environment)
         recorderHandoff = RecorderHandoff(library: library, devices: devices, deviceClass: .mac, defaults: defaults)
         sources = MultiSourceCoordinator(defaults: defaults)
+        personalLock = PersonalLock(defaults: defaults, platform: .mac, authenticator: SystemPersonalLockAuthenticator())
         callPolicy = CallPolicy.stored(in: defaults)
         callAppChoices = CallPolicy.storedChoices(in: defaults)
         usesCalendar = defaults.bool(forKey: Preference.usesCalendar)
@@ -517,7 +542,8 @@ final class AppState {
         monitor.onMeetingStarted = { [weak self] candidate in
             guard let self else { return .notRecorded }
             let decision = CallPolicy.decision(for: candidate.bundleID, policy: self.callPolicy, choices: self.callAppChoices,
-                                               busy: self.recordingID != nil || self.isStartingRecording)
+                                               busy: self.recordingID != nil || self.isStartingRecording,
+                                               asks: self.personalLock.focus.asksToRecord)
             // The calendar's meeting, when there is one, names the recording, and isn't asked about again as it starts:
             // its call was, or its app's answer stands.
             let meeting = self.meeting(for: candidate)
@@ -562,8 +588,22 @@ final class AppState {
         wirePhones()
         wireCaptions()
         wireSummaryPlacements()
+        wirePersonalLock()
         libraryMoveOffer = launch.offer
         launchNotice = launch.notice
+    }
+
+    /// The lock finds conversations in the library, and the page follows it. The app's own also locks with the screen,
+    /// sleep, and idleness, and starts from the Focus that's on (never under XCTest, whose tests drive it themselves).
+    private func wirePersonalLock() {
+        personalLock.lookup = { [weak self] id in self?.meetings.first { $0.id == id } }
+        personalLock.observe { [weak self] event in self?.personalLockChanged(event) }
+        #if DEBUG
+        if let demo = PersonalLockDemo.state() { PersonalLockDemo.apply(demo, to: personalLock, platform: .mac); return }
+        #endif
+        guard !MacCaptioners.isRunningTests else { return }
+        personalLock.watchSystem()
+        Task { [personalLock] in await DaybookFocusFilter.catchUp(personalLock) }
     }
 
     /// The preferences this Mac's state keeps, by name, in the app's preferences or a `--library` run's own suite.
@@ -759,25 +799,57 @@ final class AppState {
         if let data = try? JSONEncoder().encode(migrated) { defaults.set(data, forKey: Preference.modelSelections) }
         return migrated
     }
-    /// Conversations in the selected place, newest first. Kept until the place or the library changes.
+    /// Conversations in the selected place, newest first, less Personal ones while a Focus leaves them out. Kept until
+    /// the place, the library, or the Focus changes.
     var visibleMeetings: [Meeting] {
-        if let memo = visibleMemo, memo.place == place, memo.revision == libraryRevision { return memo.meetings }
-        let visible = meetings.filter { meeting in
-            switch place {
-            case .section(let section): return section.contains(meeting)
-            case .folder(let id): return meeting.folderID == id
-            case .device, .trash: return false
-            }
-        }.sorted { $0.date > $1.date }
-        visibleMemo = (place, libraryRevision, visible)
+        let showsPersonal = personalLock.focus.showsPersonal
+        if let memo = visibleMemo, memo.place == place, memo.revision == libraryRevision, memo.showsPersonal == showsPersonal {
+            return memo.meetings
+        }
+        let visible = place.meetings(in: meetings, showingPersonal: showsPersonal)
+        visibleMemo = (place, libraryRevision, showsPersonal, visible)
         return visible
+    }
+
+    /// Selects `id` if its page can open without asking, else the first of the place's that can: what the app selects
+    /// by itself (at launch, after a sync, beside what went to the Trash) never asks for Touch ID.
+    func selectQuietly(_ id: UUID?) {
+        if let id, personalLock.hides(id) {
+            selectedID = personalLock.firstShown(in: visibleMeetings)?.id
+        } else {
+            selectedID = id
+        }
+    }
+
+    /// Unlocks Personal (Touch ID, or the password), and opens the place's newest when nothing is selected: choosing the
+    /// Personal place, or Unlock on its page.
+    func unlockPersonal() async {
+        guard await personalLock.unlock(), selectedID == nil, !place.isDevice, !place.isTrash else { return }
+        selectedID = visibleMeetings.first?.id
+    }
+
+    /// The lock locked again: a Personal conversation on the page gives way to the place's first that isn't hidden, and
+    /// a selection of several lets hidden ones go. A Focus that leaves Personal out leaves its place too.
+    private func personalLockChanged(_ event: PersonalLock.Event) {
+        switch event {
+        case .locked:
+            unlockingSelection = nil
+            if let id = selection, personalLock.hides(id) { selection = personalLock.firstShown(in: visibleMeetings)?.id }
+            if multiSelection.contains(where: personalLock.hides) { multiSelection = [] }
+        case .focusChanged:
+            if !personalLock.focus.showsPersonal, place == .section(.personal) { place = .section(.all) }
+        }
     }
 
     /// The library search's results for the current query, kept until it or the library changes;
     /// a large library is searched off the main actor (`LibrarySearchMemo`).
     var searchHits: [SearchHit] {
         _ = searchResultsArrived
-        return searchMemo.hits(for: .init(text: search, tokens: searchTokens, scope: searchScope, revision: libraryRevision), in: meetings)
+        let hits = searchMemo.hits(for: .init(text: search, tokens: searchTokens, scope: searchScope, revision: libraryRevision), in: meetings)
+        // A Focus that leaves Personal out leaves it out of search too.
+        guard !personalLock.focus.showsPersonal else { return hits }
+        let left = Set(meetings.filter { !personalLock.lists($0) }.map(\.id))
+        return hits.filter { !left.contains($0.meetingID) }
     }
     var isSearching: Bool { !search.trimmingCharacters(in: .whitespaces).isEmpty || !searchTokens.isEmpty }
 
@@ -804,7 +876,7 @@ final class AppState {
             modelCatalog = await runtime.catalog
             await refreshInstalledModels()
             replaceRetiredChoices()
-            selectedID = meetings.first?.id
+            selectQuietly(meetings.first?.id)
             isReady = true
             speakerProfileCoordinator.start()
             await recoverRecordings()
@@ -1021,17 +1093,37 @@ final class AppState {
             if await phoneRecordingsArrived(id, job: request) { return }
             try await placePendingSources(id)
         }
-        // An original with a derived track (the microphone before echo removal) is transcribed through it.
-        for track in initial.transcribableTracks where request.mode != .summaryOnly {
-            try Task.checkCancellation()
-            let previous = meetings.first(where: { $0.id == id })?.transcripts.filter { $0.trackID == track.id }.max { $0.createdAt < $1.createdAt }
-            if request.mode == .newAudio && previous != nil { continue }
-            let url = try await library.audioURL(for: track, in: id)
-            let output = try await engine.transcribe(TrackProcessingInput(meetingID: id, track: track, audioURL: url, mode: request.mode,
-                                                                          previousTranscript: previous, vocabulary: terms), progress: progress)
-            post(output.notices)
-            update(id) { $0.apply(output, matching: matching, allowSameSource: previous != nil) }
+        // An original with a derived track (the microphone before echo removal) is transcribed through it. A recording this
+        // conversation waits for that syncs in meanwhile (passes run while this Mac works) joins this job before fusion,
+        // placed as it would have been, so there's one fused transcript and one summary; after that point, one gets a job
+        // of its own.
+        if request.mode != .summaryOnly { phones.foldsArrivalsInto = id }
+        defer { if phones.foldsArrivalsInto == id { phones.foldsArrivalsInto = nil } }
+        var tracks = request.mode == .summaryOnly ? [] : initial.transcribableTracks
+        var taken = Set(tracks.map(\.id))
+        while !tracks.isEmpty {
+            for track in tracks {
+                try Task.checkCancellation()
+                let previous = meetings.first(where: { $0.id == id })?.transcripts.filter { $0.trackID == track.id }.max { $0.createdAt < $1.createdAt }
+                if request.mode == .newAudio && previous != nil { continue }
+                let url = try await library.audioURL(for: track, in: id)
+                let output = try await engine.transcribe(TrackProcessingInput(meetingID: id, track: track, audioURL: url, mode: request.mode,
+                                                                              previousTranscript: previous, vocabulary: terms), progress: progress)
+                post(output.notices)
+                update(id) { $0.apply(output, matching: matching, allowSameSource: previous != nil) }
+            }
+            tracks = []
+            guard request.mode != .summaryOnly, let current = meetings.first(where: { $0.id == id }),
+                  current.transcribableTracks.contains(where: { track in !taken.contains(track.id) && !current.transcripts.contains { $0.trackID == track.id } })
+            else { break }
+            // The job as it runs now: it may have taken on the request the recording came with (`pickUpRequests`).
+            if await phoneRecordingsArrived(id, job: runningJob.flatMap { $0.meetingID == id ? $0 : nil } ?? request) { return }
+            try await placePendingSources(id)
+            guard let placed = meetings.first(where: { $0.id == id }) else { return }
+            tracks = placed.transcribableTracks.filter { !taken.contains($0.id) }
+            taken.formUnion(tracks.map(\.id))
         }
+        phones.foldsArrivalsInto = nil
         try Task.checkCancellation()
         await realign(id)
         if await sourcesAfterTranscription(id) { return }
@@ -1081,11 +1173,12 @@ final class AppState {
         if inputsChanged { enqueue(id) }
     }
 
-    /// Applies the sync folder's changes once nothing local is running, then queues new audio
-    /// that arrived when the person processes synced audio on this Mac, and picks up requests.
-    /// While this Mac carries out another device's request, passes still run: they publish the
-    /// claim's heartbeat and progress, and show whether another device took the request over. The
-    /// conversation being processed is protected from remote deletion and status, as a recording is.
+    /// Applies the sync folder's changes, then queues new audio that arrived when the person processes synced audio on
+    /// this Mac, and picks up requests. Passes run while this Mac processes, whatever the job (docs/iphone.md, "On the
+    /// Mac"): they publish a request's claim heartbeat and progress, show whether another device took the request over,
+    /// and bring an iPhone's recording, notes, and requests in without waiting for this Mac's transcription and summary.
+    /// The conversation being processed is protected from remote deletion and status, as a recording is; a recording it
+    /// waited for that arrives before fusion joins the running job (`process`).
     func synchronizeLibrary() async {
         guard isReady, sync.folder != nil, !library.isApplyingSync else { return }
         // While recording, only library settings apply (recorder ownership, handoffs), so another device's handoff
@@ -1094,11 +1187,10 @@ final class AppState {
             _ = await library.synchronize(protecting: recordingID, scope: .metadataOnly)
             return
         }
-        let carryingRequest = processingID != nil && runningJob?.requestID != nil
-        guard processingID == nil || carryingRequest, recordingID == nil, !isStartingRecording, !isStoppingRecording else { sync.deferUntilIdle(); return }
+        guard recordingID == nil, !isStartingRecording, !isStoppingRecording else { sync.deferUntilIdle(); return }
         defer { runQueue() }
         guard let applied = await library.synchronize(protecting: processingID ?? recordingID) else { return }
-        if selectedID == nil || !meetings.contains(where: { $0.id == selectedID }) { selectedID = meetings.sorted { $0.date > $1.date }.first?.id }
+        if selectedID == nil || !meetings.contains(where: { $0.id == selectedID }) { selectQuietly(meetings.sorted { $0.date > $1.date }.first?.id) }
         reconcileClaims()
         await syncedLibraryIdentity()
         await refreshSyncDevices()
@@ -1111,6 +1203,8 @@ final class AppState {
             // it completes a recording made with this Mac (docs/multipoint.md, "Mac first").
             for id in applied.newAudio(in: meetings) where !isHeldElsewhere(id) && !movedPhoneRecordings.contains(id) {
                 guard processSyncedAudio || meetings.first(where: { $0.id == id })?.hasAwaitedRecordingToAdd() == true else { continue }
+                // The job running for it takes it before fusion: one fused transcript, one summary.
+                if id == processingID, phones.foldsArrivalsInto == id { continue }
                 enqueue(id)
             }
             // A recording an iPhone transcribed itself may belong to a conversation of this Mac's: checked once.
@@ -1391,7 +1485,7 @@ final class AppState {
                 for id in ids {
                     guard library.isLoaded, try await library.moveToTrash(id, allowed: { !self.isBusy(id) }) else { continue }
                     trashed.append(id)
-                    if selectedID == id { selectedID = neighbour }
+                    if selectedID == id { selectQuietly(neighbour) }
                 }
             } catch { report("Couldn’t Move to Trash", "Try again.", error) }
             guard !trashed.isEmpty else { return }
@@ -1527,7 +1621,9 @@ extension AppState {
     /// Records into `existing` when given (a notes-only conversation), otherwise into a new conversation. From the
     /// library window (`origin`), a new conversation goes into the place it shows and is selected; from anywhere else it
     /// lands in All Conversations and the window stays as it was (`RecordingOrigin`).
-    func startRecording(title: String? = nil, automatic: Bool = false, into existing: UUID? = nil,
+    /// `making`: a conversation that isn't here yet (an iPhone's, as it will file it), made only once the recording has
+    /// started, so a start that fails leaves nothing behind.
+    func startRecording(title: String? = nil, automatic: Bool = false, into existing: UUID? = nil, making: Meeting? = nil,
                         from origin: RecordingOrigin = .window) async {
         guard isReady, recordingID == nil, !isStartingRecording, !isStoppingRecording else { return }
         guard !automatic || callPolicy != .off else { return }
@@ -1535,8 +1631,9 @@ extension AppState {
         defer { isStartingRecording = false }
         let previousSelection = selectedID
         let into = existing.flatMap { id in canRecordInto(id) ? id : nil }
+        let making = into == nil ? making.flatMap { new in meetings.contains { $0.id == new.id } ? nil : new } : nil
         let fromWindow = origin == .window
-        let id = into ?? newMeeting(title: Self.recordingTitle(title, at: Date()), selecting: fromWindow)
+        let id = into ?? making?.id ?? newMeeting(title: Self.recordingTitle(title, at: Date()), selecting: fromWindow)
         if fromWindow { selectedID = id }
         prepareSourceCapture(id)
         let directory = storageURL.appendingPathComponent("Staging").appendingPathComponent(id.uuidString)
@@ -1548,6 +1645,10 @@ extension AppState {
             let callApp = includeComputerAudio
                 ? monitor.activeCandidate.map(CallAppTarget.init) ?? CallAppResolver.activeCallApp(rules: monitor.rules) : nil
             try await recorder.start(in: directory, includeSystemAudio: includeComputerAudio, callApp: callApp)
+            if let making {
+                library.add(making)
+                prepareSourceCapture(id)
+            }
             startCaptions()
             recordingID = id
             // A conversation recorded into again, however it was started, is no longer one that stopped short; and
@@ -1562,6 +1663,7 @@ extension AppState {
         } catch {
             finishCaptions()
             if let partial = recorder.lastResult, !partial.tracks.isEmpty {
+                if let making, !meetings.contains(where: { $0.id == making.id }) { library.add(making) }
                 recordingID = id
                 await finishCapture(partial)
             } else {
@@ -1583,7 +1685,7 @@ extension AppState {
     private func discardUnrecorded(_ id: UUID, selecting previous: UUID?) async {
         guard let meeting = meetings.first(where: { $0.id == id }), meeting.tracks.isEmpty, meeting.highlights.isEmpty,
               meeting.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, meeting.visiblePhotos.isEmpty else { return }
-        if selectedID == id { selectedID = previous.flatMap { previous in meetings.contains { $0.id == previous } ? previous : nil } }
+        if selectedID == id { selectQuietly(previous.flatMap { previous in meetings.contains { $0.id == previous } ? previous : nil }) }
         do { _ = try await library.moveToTrash(id) }
         catch { Self.log.notice("An empty conversation couldn't be removed (\(error.logCode, privacy: .public)): \(error.localizedDescription, privacy: .private)") }
     }

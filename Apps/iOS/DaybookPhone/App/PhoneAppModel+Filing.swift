@@ -51,6 +51,15 @@ extension PhoneAppModel {
     /// Its notes couldn't be added yet; they stay for the next launch.
     static let notesNotFiled = "No audio was recorded. Couldn’t add your notes to your library. They’re kept and will be added next time Daybook opens."
 
+    /// What the notice says of a recording an earlier run left, as it's filed: one Daybook was making when it quit, or one
+    /// Stop had ended that Daybook was interrupted while saving (whole, so nothing's said to be missing).
+    static func recovered(_ recovery: PhoneRecording.Recovery) -> String {
+        switch recovery {
+        case .quitWhileRecording: return "Recovered a recording Daybook was making when it quit."
+        case .interruptedWhileSaving: return "Saved a recording Daybook was interrupted while saving."
+        }
+    }
+
     /// Runs the filing of conversation `id`'s recording, registered while it runs so a photo taken as the
     /// recording ended waits for it rather than polling.
     func whileFiling(_ id: UUID?, _ filing: Task<StopOutcome, Never>) async -> StopOutcome {
@@ -66,6 +75,8 @@ extension PhoneAppModel {
     @discardableResult
     func file(_ recording: PhoneRecording, session: MultipointSession? = nil) async -> Filing {
         let join = multipoints.join(for: recording, session: session)
+        // A Mac waits for it: the Macs hear where it stands until it's on its way.
+        if join != nil { multipoints.outgoingFiling(recording.id, recordingID: recording.recordingID.uuidString) }
         let filing: Filing
         // A Mac's conversation that hasn't synced here yet: one pass first, so this files into its copy.
         if join != nil, library.controller.meeting(recording.id) == nil, sync.isConnected { await sync.synchronize(.filed) }
@@ -73,13 +84,14 @@ extension PhoneAppModel {
             let filed = try await library.fileRecording(recording, join: join, requestTranscription: settings.requestsTranscription)
             noteFiled(filed.meeting.id)
             filing = .saved(filed.meeting.id, Date())
+            if join != nil { multipoints.outgoingFiled(recording.id, into: filed.meeting.id) }
             let identity = PhoneDevice.identity(recordingID: recording.recordingID, installation: library.installationID)
             if let track = filed.meeting.tracks.first(where: { $0.device == identity }) {
                 await captions.attach(trackID: track.id, meetingID: filed.meeting.id)
                 // Speakers the live model missed, from the recording, while the app is in front.
                 labelCaptionSpeakers()
             }
-            if recording.recovered { say("Recovered a recording Daybook was making when it quit.") }
+            if let recovery = recording.recovery { say(Self.recovered(recovery)) }
             if let request = filed.request { link.nudge(request) }
             if !options.isRunningTests { sync.synchronizeFinishing(.filed) }
             // Transcribed here when this iPhone has the models (it claimed the request as it filed it).
@@ -87,6 +99,7 @@ extension PhoneAppModel {
         } catch {
             say(Self.notFiled, details: error.localizedDescription)
             filing = .failed(Self.notFiled)
+            if join != nil { multipoints.outgoingFiled(recording.id, into: nil) }
         }
         publish()
         return filing

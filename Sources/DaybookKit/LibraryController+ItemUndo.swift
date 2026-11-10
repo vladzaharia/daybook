@@ -40,12 +40,30 @@ extension LibraryController {
              change: { $0.update(id, change) }, undo: mark(!done))
     }
 
-    /// Don't Wait: stops waiting for the recordings it waits for now (`Meeting.stopWaitingForRecordings`). Undo waits
-    /// for those again, by their links, and leaves what the links say otherwise as it is now.
+    /// Don't Wait: stops waiting for the recordings it waits for now, and lets go of those that never came
+    /// (`Meeting.stopWaitingForRecordings`). Undo waits for those again, by their links, and leaves what the links say
+    /// otherwise as it is now.
     public func stopWaitingForRecordings(in id: UUID, undoManager: UndoManager?, at now: Date = Date()) {
-        guard let links = meeting(id)?.awaitedLinks(now: now), !links.isEmpty else { return }
+        guard let meeting = meeting(id) else { return }
+        let links = meeting.awaitedLinks(now: now).union(meeting.missingLinks(now: now))
+        guard !links.isEmpty else { return }
         edit(id, actionName: "Don’t Wait", undoManager: undoManager,
              change: { $0.update(id) { $0.stopWaitingForRecordings(at: now, links: links) } }) { $0.waitAgain(for: links) }
+    }
+
+    /// Wait Again: a recording made alongside that didn't arrive in time is waited for once more
+    /// (`Meeting.waitAgainForMissingRecordings`). Undo puts back when each was waited for from.
+    public func waitAgainForMissingRecordings(in id: UUID, undoManager: UndoManager?, at now: Date = Date()) {
+        guard let meeting = meeting(id) else { return }
+        let links = meeting.missingLinks(now: now)
+        guard !links.isEmpty else { return }
+        let before = Dictionary(uniqueKeysWithValues: (meeting.companions ?? []).filter { links.contains($0.id) }.map { ($0.id, $0.waitedAgainAt) })
+        edit(id, actionName: "Wait Again", undoManager: undoManager,
+             change: { $0.update(id) { $0.waitAgainForMissingRecordings(at: now, links: links) } }) { meeting in
+            guard var companions = meeting.companions else { return }
+            for index in companions.indices { if let earlier = before[companions[index].id] { companions[index].waitedAgainAt = earlier } }
+            meeting.companions = companions
+        }
     }
 
     /// Makes `change` to conversation `id`, and lets `undoManager` take it back under `actionName` with `undo`, which

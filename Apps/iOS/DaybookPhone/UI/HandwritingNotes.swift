@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookDesign
 import DaybookKit
 import DaybookUI
 import SwiftUI
@@ -30,26 +31,37 @@ extension NotesInkModel {
             update: { block in model.updateInk(block) },
             remove: { blockID, keepingWords in model.removeInk(blockID, keepingWords: keepingWords) })
     }
+
+    /// The recording's notes as they were at Stop, while it's being saved: drawn, never written to.
+    @MainActor
+    static func stopped(_ model: PhoneAppModel, session: InkSession) -> NotesInkModel {
+        let recorder = model.recorder
+        return NotesInkModel(
+            session: session,
+            placements: NoteTimeline.inkPlacements(recorder.ink, anchors: recorder.timedNotes, text: recorder.notes),
+            add: { _, _ in }, update: { _ in }, remove: { _, _ in nil })
+    }
 }
 
-/// The notes with the writing tools at their foot: Write by Hand, then the pen, highlighter, eraser, and lasso while
-/// writing. Apple Pencil writes on the page without any of this; the tools come up once it has.
+/// The notes, and the writing tools docked at their foot while a finger or Apple Pencil writes: the pen, highlighter,
+/// eraser, lasso, undo, redo, and Keyboard, in a row of their own under the words, never over them. Nothing at rest:
+/// Write by Hand is in the keyboard's bar beside Done, in the page's More menu, and between Bookmark and Stop while
+/// recording, and Apple Pencil writes on the page with nothing to switch on.
 struct WritableNotes<Editor: View>: View {
     let session: InkSession
-    /// Inside a page, where the tools would otherwise sit on the last line.
-    var keepsRoomForTools = false
     @ViewBuilder var editor: Editor
-
-    /// What the tools take at the foot of the notes, for a scrolling editor's `bottomInset`.
-    static var toolsHeight: CGFloat { 44 + PhoneStyle.Space.s2 * 2 }
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        editor
-            .padding(.bottom, keepsRoomForTools ? Self.toolsHeight : 0)
-            .overlay(alignment: .bottomTrailing) {
+        VStack(spacing: 0) {
+            editor
+            if session.showsTools {
                 InkTools(session: session)
-                    .padding(.trailing, PhoneStyle.Space.s2)
-                    .padding(.bottom, PhoneStyle.Space.s2)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, DaybookSpacing.s2)
+                    .transition(.opacity)
             }
+        }
+        .animation(DaybookMotion.resolved(DaybookMotion.state, reduceMotion: reduceMotion), value: session.showsTools)
     }
 }

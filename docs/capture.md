@@ -500,14 +500,16 @@ transcription on any macOS, speakers, and names for voices that match the librar
 Mac, aren't synced, fused, summarized, or used as evidence, and the transcript replaces them.
 
 Code: `Sources/Daybook/Captions/` (the Mac's controller, echo rule, and settings), DaybookCaptions'
-`LiveCaptionSession` and `LiveCaptionStore` (what a recording's captions do on both apps), DaybookUI's
-`Captions/` (the strip's lines, saved captions, Settings' section), and `Capture/CaptureCaptionTap.swift`.
+`LiveCaptionSession`, `LiveCaptionMixer`, `LiveCaptionStore`, and `LiveCaptionCoverage` (what a recording's
+captions do on both apps), DaybookUI's `Captions/` (the strip's lines, saved captions, what goes over the
+link, Settings' section), and `Capture/CaptureCaptionTap.swift`.
 
 ```
  microphone ──► microphone writer ──► microphone.caf
             └─► tap ──► You captioner ──┐
- call app ────► call writer ──► systemAudio.caf      ├─► echo rule ─► Floating Notes, the conversation page,
-            └─► tap ──► Call captioner ─┘                           <library>/LiveCaptions/<meeting id>.json
+ call app ────► call writer ──► systemAudio.caf      ├─► mixer ─► Floating Notes, the conversation page,
+            └─► tap ──► Call captioner ─┤     (off the main actor)  <library>/LiveCaptions/<meeting id>.<recording id>.json
+ recorders, iPhones ─► their lines ─────┘
 ```
 
 - **Two captioners.** `LiveCaptionsController.prepare(meetingID:includesCall:)` makes one captioner
@@ -525,13 +527,14 @@ Code: `Sources/Daybook/Captions/` (the Mac's controller, echo rule, and settings
   running and finish after Stop on their own task; nothing in starting, stopping, or importing waits
   for them.
 - **Echo.** Through the speakers the microphone hears the call too, and echo removal runs only
-  after Stop, so the You captioner also captions the other side a moment after Call does.
-  `CaptionEcho` leaves out a You line when at least 60% of its words appear, in order, in the Call
-  lines within 2 seconds of it (words folded for case, accents, and apostrophes). It applies wherever
-  the output route at that moment isn't `headphones` (`AudioRouteMonitor`; Bluetooth of unknown form
-  factor counts as speakers, which costs nothing when there's no echo). With headphones both
-  sources show in full, so a line you repeat is kept. Route changes mid-recording apply from their
-  time on. Verdicts are recomputed while lines are fresh and kept once they're 30 seconds old.
+  after Stop, so the You captioner also captions the other side a moment after Call does. A You line
+  and a Call line within 2 seconds of each other that share, in order, at least 60% of the shorter
+  one's words (folded for case, accents, and apostrophes) are one utterance, which reads from Call, the
+  remote speaker's; the You line shows only words the call didn't have (the mixer below). That holds
+  wherever the output route at that moment isn't `headphones` (`CaptionEcho`, `AudioRouteMonitor`;
+  Bluetooth of unknown form factor counts as speakers, which costs nothing when there's no echo). With
+  headphones both sources show in full, so a line you repeat is kept. Route changes mid-recording
+  apply from their time on.
 - **Every source.** Live captions cover every source a recording has, not only this Mac's:
   - **You and Call** with the live models, each its own captioner over models loaded once
     (`LiveModelHost`): checked with the real models on this Mac, both captioning at once
@@ -541,34 +544,57 @@ Code: `Sources/Daybook/Captions/` (the Mac's controller, echo rule, and settings
     audio is captioned as Listen Live is, and `LiveCaptureCaptions` hands each recorder's lines to the
     recording's captions with when its recording began (its live audio starts there), so they move onto
     this Mac's timeline (lines from before this Mac started are left out).
-  - **A paired iPhone recording the same conversation**: the phone sends the captions it makes (its
-    microphone's, and its recorder's) over the local link, a second at a time, only the lines that
-    changed (`LinkCaptions`, to a Mac listing `liveCaptions`; docs/link.md). Its recording's start,
-    mapped through the link's clock estimate, places them. The Mac never receives the phone's audio
-    while it records, so it can't caption it itself.
+  - **A paired iPhone recording the same conversation**: the phone sends every line it and its
+    recorder heard over the local link, a second at a time, only the lines that changed and the IDs of
+    those its recognizer took back (`LinkCaptions.removed`, to a Mac listing `liveCaptions`;
+    docs/link.md), and the Mac drops those. Its recording's start, mapped through the link's clock
+    estimate, places them. The Mac never receives the phone's audio while it records, so it can't
+    caption it itself. The other way, the Mac sends its Call lines to an iPhone recording the
+    conversation that lists `liveCaptions`, so a phone in the room has the remote side when this Mac
+    plays the call into headphones.
 
-  Other devices' lines join by time (`LiveCaptionMix`), each tagged with its source
-  (`LiveCaptionSource.device`). Several devices in one room hear the same speech: a line another
-  device captioned that repeats, in order, at least 60% of the words of one already shown within 4
-  seconds is left out, so the room reads once; this Mac's own lines come first. Labels: You and Call
-  keep the time lane in Floating Notes; another device's line names the person live speakers
-  recognized before its words, else the device ("Soundcore", "iPhone"); the conversation page reads
-  them as turns labelled the same way. The devices' names are saved with the captions
-  (`LiveCaptions.sourceNames`).
-- **Storage.** `LiveCaptionStore` (DaybookCaptions, the iPhone's too) keeps
-  `<library>/LiveCaptions/<meeting id>.json` (directory 0700, file 0600, protected until first
-  unlock): one `LiveCaptions` with You and Call as segments tagged `source` (`.microphone`, `.call`),
-  saved every 10 seconds while listening and at Stop (what stood then is kept as heard), on the
+  All of it is put together off the main actor, as it arrives (`LiveCaptionMixer`). Several sources in
+  one room hear the same speech: lines from different sources that overlap in time (within 4 seconds
+  across devices, 2 between You and Call) and share, in order, at least 60% of the shorter line's
+  words, or where one's ending is the other's beginning (three words or more), are one utterance, and
+  it reads once, from the source that heard it best: the call for remote speakers; else the source
+  with the highest level while it was said (this Mac's microphone and call meters, each recorder's live
+  level, each iPhone's meter over the link), so a worn recorder reads its wearer and the nearest
+  microphone the room; else this Mac's own. Another source's line that runs on past those words shows
+  only its new words, under its own label; one with nothing new isn't shown; a line no other source
+  heard shows as it is, labelled with its device. Verdicts are sticky, so lines don't flicker: until an
+  utterance's lines are all final, or 4 seconds have passed, it keeps the source it first read from,
+  and a line still being revised never takes the place of a final one; settled, it chooses again once
+  (a level must beat the current one by 0.1 to win). Only lines near a change are judged again, each
+  line's words are folded once, and lines that ended 30 seconds before the newest keep their verdicts;
+  the main actor gets the newest eight lines and a version, and the whole list is built only to be saved.
+  Four hours of this Mac's microphone and three other devices, live at ten updates a second, cost under
+  2 ms an update (`LiveCaptionMixTests`). Labels: You and Call keep the time lane in Floating Notes;
+  another device's line names the person live speakers recognized before its words, else the device
+  ("Soundcore", "iPhone"); the conversation page reads them as turns labelled the same way. The
+  devices' names are saved with the captions (`LiveCaptions.sourceNames`), and each line with the
+  other sources that heard it (`alsoHeard`).
+- **Storage.** `LiveCaptionStore` (DaybookCaptions, the iPhone's too) keeps one file per recording,
+  `<library>/LiveCaptions/<meeting id>.<recording id>.json` (directory 0700, file 0600, protected until
+  first unlock; `<meeting id>.json` is one saved before recordings were kept apart), so a second
+  recording into a conversation never overwrites the first's: one `LiveCaptions` with You and Call as
+  segments tagged `source` (`.microphone`, `.call`), when the recording began, and each other device's
+  recording (`tracks`: an iPhone's by the recording ID its companion link gave, a recorder's by its
+  own), saved every 10 seconds while listening and at Stop (what stood then is kept as heard), on the
   store's own queue, never the main thread, with a save still on its way never putting back what a
-  later one replaced. It's outside `Meetings/`, so sync never reads it. One rule on both apps:
-  captions are replaced by any transcript made after they began (`LiveCaptionStore.isReplaced`), and
-  then deleted, as are captions of conversations moved to the Trash (`prune`, off the main thread, a
-  second after a transcript or the set of conversations changes; typing notes never prunes). A Mac
-  conversation exists from the moment it's recorded, so captions of one the library doesn't have are
-  gone; an iPhone recording joins the library only once it's filed, so the iPhone passes its Trash
-  (`trashed`) and keeps captions of a recording stopped a moment ago or left by a crash for recovery.
+  later one replaced. It's outside `Meetings/`, so sync never reads it. One rule on both apps, line by
+  line (`LiveCaptionCoverage`): a line is replaced once a recording that heard it is transcribed (its
+  own source's, or one that heard it too), or, for this device's own lines and lines whose recording
+  isn't known, once any recording transcribed after the captions began ran while it was said. Another
+  device's line whose recording is known waits for that recording, which may have heard what nothing
+  else did. Captions are deleted only once every line is replaced, as are captions of conversations
+  moved to the Trash (`prune`, off the main thread, a second after a transcript or the set of
+  conversations changes; typing notes never prunes). A Mac conversation exists from the moment it's
+  recorded, so captions of one the library doesn't have are gone; an iPhone recording joins the library
+  only once it's filed, so the iPhone passes its Trash (`trashed`) and keeps captions of a recording
+  stopped a moment ago or left by a crash for recovery.
 - **Where they show.** Every live caption on both apps is one renderer, `LiveCaptionStrip`
-  (DaybookDesign), in a style per surface: "LIVE CAPTIONS · TENTATIVE" on top, the newest line in
+  (DaybookDesign), in a style per surface: "Live captions · tentative" on top, the newest line in
   Body ink, earlier ones in Secondary, still-revised words in Meta, and "Listening…" before anything
   is heard. Floating Notes, while recording: a fixed-height strip above Bookmark and Stop (`.panel`)
   with the newest two lines, the newest larger and keeping its latest words; the source (You or
@@ -578,17 +604,17 @@ Code: `Sources/Daybook/Captions/` (the Mac's controller, echo rule, and settings
   six lines in the page's body type (`.feed`). Each surface observes the captions directly, so a
   revised word redraws only it.
 - **Saved captions.** Once the recording stops, both apps show saved captions by one rule
-  (`SavedCaptions.shown`, DaybookUI): a conversation's own, with words to read, until a transcript
-  made after they began replaces them. They read on the transcript's page: in the transcript's place
-  while there's none, with the Transcript switch (⌘2) on, else after the transcript (one from an
-  earlier recording of the conversation, which doesn't cover them; `SavedCaptions.standsIn`). Both
-  draw them with DaybookUI's `SavedCaptionsView`: each caption with its time, which plays the
-  recording it was heard from and marks the caption under the playhead, the person or device before
-  its words, in lighter ink than a transcript, with no editing. Search finds them in conversations
-  nothing else matched, labelled "Live captions · tentative" with the caption's time, and opens the
-  transcript's page at the caption. The Mac reads them off the main actor once they're saved and
-  after pruning (`LiveCaptionsController.readSaved`), and not while it records the conversation,
-  when the conversation page shows them live.
+  (`SavedCaptions.shown`, DaybookUI): a conversation's own, each recording's read together (the oldest
+  first), the lines with words to read that no transcript replaces yet. They read on the transcript's
+  page: in the transcript's place while there's none, with the Transcript switch (⌘2) on, else after
+  the transcript (one that doesn't cover them; `SavedCaptions.standsIn`). Both draw them with
+  DaybookUI's `SavedCaptionsView`: each caption with its time, which plays the recording it was heard
+  from and marks the caption under the playhead, the person or device before its words, in lighter
+  ink than a transcript, with no editing. Search finds them in conversations nothing else matched,
+  labelled "Live captions · tentative" with the caption's time, and opens the transcript's page at the
+  caption. The Mac reads them off the main actor: the conversation saved, each time captions are saved,
+  and every conversation's at launch and after pruning (`LiveCaptionsController.readSaved`); not while
+  it records the conversation, when the conversation page shows them live.
 - **Settings › Recording › Live Captions.** DaybookUI's `LiveCaptionSettingsSection`, the iPhone's
   too: "Show while recording" (on by default, as on the iPhone) and the language ("Same as This Mac",
   any `SpeechTranscriber` locale, and those only the downloaded live recognizers cover,

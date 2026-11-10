@@ -291,11 +291,13 @@ public struct ModelListRow<Actions: View>: View {
     }
 }
 
-/// Downloads what a section's choices still need: "Not downloaded yet · 852 MB" with Download, then the bar with what's
-/// arrived and Cancel, or, while none of it is arriving, what it waits for and Cancel, with no bar. Where there isn't
-/// room, it says how much is needed and Download waits.
+/// Downloads what a section's choices still need, titled with what that is ("Transcription and speakers"): under it
+/// "Not downloaded yet · 852 MB" with Download, then the bar with what's arrived and Cancel, or, while none of it is
+/// arriving, what it waits for and Cancel, with no bar. Where there isn't room, it says how much is needed and Download
+/// waits.
 public struct ModelDownloadRow: View {
     private let summary: ModelDownloadSummary
+    private let name: String
     private let space: ModelSpace
     private let download: () -> Void
     private let cancel: () -> Void
@@ -303,18 +305,28 @@ public struct ModelDownloadRow: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     private var stack: AnyLayout { ModelRowStack.layout(typeSize) }
 
-    public init(_ summary: ModelDownloadSummary, space: ModelSpace = .unknown, download: @escaping () -> Void, cancel: @escaping () -> Void) {
+    /// - Parameter name: What it downloads, in sentence case ("Live captions"); the iPhone title-cases it.
+    public init(_ summary: ModelDownloadSummary, name: String, space: ModelSpace = .unknown, download: @escaping () -> Void,
+                cancel: @escaping () -> Void) {
         self.summary = summary
+        self.name = name
         self.space = space
         self.download = download
         self.cancel = cancel
     }
 
-    public var body: some View {
+    /// The line under the row's name: where its download stands and its size ("Not downloaded yet · 853 MB",
+    /// "Waiting for Wi‑Fi · 853 MB", "Downloading · 0.4 of 1.6 GB"), or, where there isn't room, only how much it needs.
+    public static func status(_ summary: ModelDownloadSummary, space: ModelSpace = .unknown) -> ModelLine {
         let line = summary.line(space: space)
+        return line.needsAttention ? line : ModelLine(summary.title + " · " + line.text)
+    }
+
+    public var body: some View {
+        let line = Self.status(summary, space: space)
         stack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(summary.title)
+                Text(ModelSettingsText.label(name, density))
                     .foregroundStyle(summary.needsAttention ? DaybookPalette.Ink.warning : Color.primary)
                 Text(line.text)
                     .font(density == .touch ? .footnote : .subheadline)

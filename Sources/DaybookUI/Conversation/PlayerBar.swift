@@ -37,8 +37,9 @@ public protocol PlaybackControlling: AnyObject {
 ///
 /// It lays itself out in the room it has: everything on one row; on the Mac, then without the skip buttons and then
 /// without the speed; then, as on every iPhone, the buttons on one row and the scrubber under them with the times at
-/// its ends. The Mac's slider is the system's; under touch it's `Scrubber`, with a finger's hit area. While the audio
-/// downloads it says how far it has got; when it can't play, it says why.
+/// its ends. The Mac's slider is the system's; under touch it's `Scrubber`, with a finger's hit area and an amber tick
+/// for each bookmark in the recording (`ScrubberBookmarks`). While the audio downloads it says how far it has got; when
+/// it can't play, it says why.
 public struct PlayerBar<Player: PlaybackControlling>: View {
     private let player: Player
     private let meeting: Meeting
@@ -230,7 +231,10 @@ public struct PlayerBar<Player: PlaybackControlling>: View {
             .accessibilityValue(
                 "\(SpokenTime.format(player.position)) of \(SpokenTime.format(player.duration))")
         #else
-            Scrubber(position: player.position, duration: player.duration) { player.seek(to: $0) }
+            Scrubber(
+                position: player.position, duration: player.duration,
+                bookmarks: ScrubberBookmarks.fractions(in: meeting, trackID: player.trackID, duration: player.duration)
+            ) { player.seek(to: $0) }
         #endif
     }
 
@@ -414,21 +418,36 @@ private struct SkipButton: View {
 }
 
 /// The playhead under touch: a thin mint line that fills as the recording plays, with a knob that grows while it's
-/// dragged, and a finger's height to grab it by. VoiceOver adjusts it in 15-second steps.
+/// dragged, and a finger's height to grab it by. The recording's bookmarks stand on the line as amber ticks under the
+/// knob, so the line that measures time is the one that shows where they are. VoiceOver adjusts it in 15-second steps.
 public struct Scrubber: View {
     private let position: TimeInterval
     private let duration: TimeInterval
+    private let bookmarks: [Double]
     private let seek: (TimeInterval) -> Void
     @State private var dragging: Double?
     @State private var width: CGFloat = 1
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// - Parameter bookmarks: Where the recording's bookmarks fall along it, 0 to 1 (`ScrubberBookmarks`).
     public init(
-        position: TimeInterval, duration: TimeInterval, seek: @escaping (TimeInterval) -> Void
+        position: TimeInterval, duration: TimeInterval, bookmarks: [Double] = [],
+        seek: @escaping (TimeInterval) -> Void
     ) {
         self.position = position
         self.duration = duration
+        self.bookmarks = bookmarks
         self.seek = seek
+    }
+
+    /// A bookmark's tick: 2 pt wide and as tall as the knob at rest, so it stands out of the 4 pt line and hides under
+    /// the knob as it passes.
+    public static let tick = CGSize(width: 2, height: 10)
+
+    /// Where a tick's leading edge sits on a line `width` wide: centred on its fraction, and kept on the line.
+    public static func tickOffset(_ fraction: Double, width: CGFloat) -> CGFloat {
+        let clamped = fraction.isFinite ? min(1, max(0, fraction)) : 0
+        return min(max(0, width - tick.width), max(0, width * clamped - tick.width / 2))
     }
 
     /// Where along the line a time falls, 0 to 1.
@@ -444,6 +463,11 @@ public struct Scrubber: View {
                 width: max(4, width * fraction), height: 4
             )
             .daybookGlow(DaybookPalette.neonMint, radius: 3)
+            ForEach(Array(bookmarks.enumerated()), id: \.offset) { _, mark in
+                Capsule().fill(DaybookPalette.bookmark)
+                    .frame(width: Self.tick.width, height: Self.tick.height)
+                    .offset(x: Self.tickOffset(mark, width: width))
+            }
             Circle().fill(DaybookPalette.neonMint)
                 .frame(width: dragging == nil ? 12 : 20, height: dragging == nil ? 12 : 20)
                 .shadow(color: .black.opacity(0.18), radius: 2, y: 1)

@@ -146,6 +146,38 @@ final class RecorderSurfaceTests: XCTestCase {
         XCTAssertEqual(RecorderAfterStopState(title: "Design review", recordMore: .keepRecording).recordMore.title, "Keep Recording")
     }
 
+    /// Open after Stop goes to the conversation in Daybook, so it carries the forward chevron of navigation within the
+    /// app, never the arrow out to another app or the web.
+    func testBehaviorOpenAfterStopPointsWithinTheApp() {
+        XCTAssertEqual(OpenControlLabel.symbol, "chevron.forward")
+    }
+
+    /// Bookmark and Stop share their row equally when both keep their words that way; beside Write by Hand, where they
+    /// don't, each gets its words and they share the rest, so Bookmark keeps its word beside a shorter Stop; with no
+    /// room for both, equally again (and the words give way to glyphs).
+    func testBehaviorTheControlRowKeepsBookmarksWordBesideWriteByHand() {
+        let fills = [true, false, true]
+        XCTAssertEqual(RecorderControlTiles.widths(available: 400, ideals: [150, 44, 100], fills: fills, spacing: 12), [166, 44, 166],
+                       "room for both: equal")
+        XCTAssertEqual(RecorderControlTiles.widths(available: 334, ideals: [150, 44, 100], fills: fills, spacing: 12), [158, 44, 108],
+                       "Bookmark's words first, the rest shared")
+        XCTAssertEqual(RecorderControlTiles.widths(available: 250, ideals: [150, 44, 100], fills: fills, spacing: 12), [91, 44, 91],
+                       "no room for both: equal, glyphs")
+        XCTAssertEqual(RecorderControlTiles.widths(available: 300, ideals: [120, 90], fills: [true, true], spacing: 10), [145, 145],
+                       "the Mac's two tiles, as before")
+    }
+
+    /// While recording the open Duo's right page has the whole recorder at rest, one row only over the keyboard, and
+    /// the hand rests collapsed with the title over the notes.
+    func testBehaviorTheOpenDuoRestsAtTheWholeRecorder() {
+        XCTAssertEqual(RecorderSheetSize.resting(in: .spread(crease: 475.5), isWide: false), .expanded)
+        XCTAssertEqual(RecorderSheetSize.expanded.rendered(keyboardUp: true, hasNotice: false), .mini)
+        XCTAssertEqual(RecorderSheetSize.resting(in: .column, isWide: false), .collapsed)
+        XCTAssertFalse(RecorderSheetLook.page.inHand, "the title on the left page, the chips in the sheet")
+        XCTAssertTrue(RecorderSheetLook.page.timelineWhole, "the live timeline in the resting recorder")
+        XCTAssertTrue(RecorderSheetLook.hand.inHand, "title and chips over the notes")
+    }
+
     /// After Stop the iPhone says what becomes of the recording, as the Mac's panel does: its processing in a chip, in
     /// the words its library row says, filling as it goes; nothing when the row has nothing to say.
     func testBehaviorAfterStopTheProcessingChipSaysWhatTheRowSays() throws {

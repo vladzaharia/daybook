@@ -223,6 +223,46 @@ final class LibrarySyncInboxTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: audio), bytes)
     }
 
+    /// Audio a courier brought is kept once on the Mac: when the library holds its verified bytes and iCloud lists the
+    /// recorder's upload, the delivery goes without the sync folder's copy being downloaded to compare, and a copy iCloud
+    /// brings down later is let go as any uploaded copy is.
+    func testBehaviorDeliveredAudioIsDroppedOnceInstalledAndListedInICloud() async throws {
+        let phone = try phone(), mac = try mac()
+        try await pass(phone, "Phone"); try await pass(mac, "Mac")
+        let known = await phone.libraryID
+        let libraryID = try XCTUnwrap(known)
+        let bytes = audioBytes(8_000, seed: 15)
+        let filed = try await pass(phone, "Phone", [try await record(bytes, on: "Phone", into: Meeting(title: "Hallway"))])
+        let track = try XCTUnwrap(filed.meetings.first?.tracks.first)
+        let object = remote.appendingPathComponent("Blobs/\(track.sha256)")
+        let staged = try stage(filed.writtenFiles, from: phone)
+        for file in filed.writtenFiles { try cloud.withhold(remote.appendingPathComponent(file.path)) }
+        for (file, contents) in staged {
+            let delivery = try await mac.receiveCourierFile(file, libraryID: libraryID, contents: contents)
+            XCTAssertEqual(delivery, .stored)
+        }
+        let received = try await pass(mac, "Mac")
+        let onMac = try XCTUnwrap(received.meetings.first { $0.title == "Hallway" })
+        XCTAssertEqual(try Data(contentsOf: local("Mac").appendingPathComponent("Meetings/\(onMac.id.uuidString)/\(track.relativePath)")), bytes)
+        // iCloud has nothing yet: the delivery stays (it may be the only other copy, to promote).
+        var waiting = await mac.courierInboxCount()
+        XCTAssertEqual(waiting, 2)
+
+        // The phone's upload reaches iCloud, which lists it here without downloading it.
+        for file in filed.writtenFiles where !file.path.hasPrefix("Blobs/") { try cloud.deliver(remote.appendingPathComponent(file.path)) }
+        try Data().write(to: SimulatedICloud.placeholder(object))
+        try await pass(mac, "Mac")
+        waiting = await mac.courierInboxCount()
+        XCTAssertEqual(waiting, 0, "The library holds it and iCloud lists it: kept once")
+        XCTAssertFalse(cloud.downloadRequests.contains(object.path), "Not downloaded only to compare")
+
+        // iCloud brings it down anyway (a Mac that keeps everything local): that copy is let go too.
+        try cloud.deliver(object)
+        try await pass(mac, "Mac")
+        XCTAssertTrue(cloud.droppedLocalCopies.contains(object.path))
+        XCTAssertEqual(try Data(contentsOf: local("Mac").appendingPathComponent("Meetings/\(onMac.id.uuidString)/\(track.relativePath)")), bytes)
+    }
+
     func testOnDemandFetchInstallsAudioFromTheInboxWithoutWaitingForICloud() async throws {
         let mac = try mac(), phone = try phone()
         let bytes = audioBytes(9_000, seed: 11)
@@ -254,7 +294,7 @@ final class LibrarySyncInboxTests: XCTestCase {
         XCTAssertFalse(phases.values.contains(.downloading)); XCTAssertFalse(phases.values.contains(.waitingForUpload))
         XCTAssertEqual(phases.values.last, .installed)
         XCTAssertEqual(phone.audioAvailability(for: meeting), [track.id: .local])
-        XCTAssertTrue(cloud.downloadRequests.allSatisfy { $0.hasSuffix(blob.sha256) }, "Only a request for iCloud's own copy, for pruning")
+        XCTAssertFalse(cloud.downloadRequests.contains { $0.hasSuffix(blob.sha256) }, "iCloud's own copy isn't asked for: the library holds it now")
         let cached = await phone.cachedAudio()
         XCTAssertEqual(cached.map(\.origin), [.fetched])
     }

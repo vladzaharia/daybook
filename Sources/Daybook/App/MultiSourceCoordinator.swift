@@ -6,9 +6,16 @@ import DaybookLink
 import Foundation
 import Observation
 
-/// Lines up one recording against another from their sound: `AudioAligner.align` in the app,
+/// One recording to line up: its file, and its SHA-256 when the library knows it, which keys its features in the cache
+/// (`MultiSourceCoordinator.features`) so it's decoded once, not again after every launch.
+struct AlignmentRecording: Sendable {
+    var url: URL
+    var digest: String?
+}
+
+/// Lines up one recording against another from their sound: `AudioAligner` in the app,
 /// a stub in tests. Runs off the main actor.
-typealias AudioAlignmentFunction = @Sendable (_ other: URL, _ reference: URL, _ expectedOffset: TimeInterval?,
+typealias AudioAlignmentFunction = @Sendable (_ other: AlignmentRecording, _ reference: AlignmentRecording, _ expectedOffset: TimeInterval?,
                                               _ searchRadius: TimeInterval) throws -> AudioAlignment?
 
 /// The state behind multipoint recording and post-hoc sources: the recorders that record alongside
@@ -45,8 +52,14 @@ final class MultiSourceCoordinator {
     let recorders: CompanionRecorders
     var policy = SourceMatcher.Policy()
     @ObservationIgnored var alignAudio: AudioAlignmentFunction = { other, reference, expected, radius in
-        try AudioAligner.align(other: other, reference: reference, expectedOffset: expected, searchRadius: radius)
+        try AudioAligner.analyze(other: other.url, otherDigest: other.digest, reference: reference.url, referenceDigest: reference.digest,
+                                 expectedOffset: expected, searchRadius: radius, cache: MultiSourceCoordinator.features).alignment
     }
+    /// Alignment features (about 800 bytes a second of audio, which can't reproduce speech), kept in this Mac's Caches
+    /// folder by recording digest: derived, never synced, and rebuilt if the system clears it.
+    nonisolated static let features = AudioFeatureCache(directory: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+        .appendingPathComponent(Bundle.main.bundleIdentifier ?? "Daybook", isDirectory: true)
+        .appendingPathComponent("Alignment", isDirectory: true))
     /// Replaces the local runtime for processing (tests).
     @ObservationIgnored var inference: (any MeetingInference)?
     /// Files imported by hand join a conversation they overlap, like recorder recordings do.

@@ -13,6 +13,7 @@ public struct ModelProcessingSection<Presets: View>: View {
     private let isOn: Binding<Bool>
     private let presets: Presets
     private let download: ModelDownloadSummary?
+    private let downloadName: String
     private let space: ModelSpace
     private let downloadAction: () -> Void
     private let cancelAction: () -> Void
@@ -21,12 +22,15 @@ public struct ModelProcessingSection<Presets: View>: View {
     /// - Parameters:
     ///   - toggleTitle: What turning it on does here, in sentence case; the iPhone title-cases it.
     ///   - download: What the choices still need, or nil when it's all here.
-    public init(toggleTitle: String, isOn: Binding<Bool>, download: ModelDownloadSummary?, space: ModelSpace = .unknown,
-                downloadAction: @escaping () -> Void, cancelAction: @escaping () -> Void, @ViewBuilder presets: () -> Presets) {
+    ///   - downloadName: What that download is, in sentence case ("Transcription and speakers").
+    public init(toggleTitle: String, isOn: Binding<Bool>, download: ModelDownloadSummary?, downloadName: String,
+                space: ModelSpace = .unknown, downloadAction: @escaping () -> Void, cancelAction: @escaping () -> Void,
+                @ViewBuilder presets: () -> Presets) {
         self.toggleTitle = toggleTitle
         self.isOn = isOn
         self.presets = presets()
         self.download = download
+        self.downloadName = downloadName
         self.space = space
         self.downloadAction = downloadAction
         self.cancelAction = cancelAction
@@ -39,7 +43,7 @@ public struct ModelProcessingSection<Presets: View>: View {
                 .controlSize(.regular)
             presets
             if let download {
-                ModelDownloadRow(download, space: space, download: downloadAction, cancel: cancelAction)
+                ModelDownloadRow(download, name: downloadName, space: space, download: downloadAction, cancel: cancelAction)
             }
         } header: {
             Text("Processing")
@@ -49,10 +53,10 @@ public struct ModelProcessingSection<Presets: View>: View {
 
 extension ModelProcessingSection where Presets == EmptyView {
     /// Without presets: the iPhone's.
-    public init(toggleTitle: String, isOn: Binding<Bool>, download: ModelDownloadSummary?, space: ModelSpace = .unknown,
-                downloadAction: @escaping () -> Void, cancelAction: @escaping () -> Void) {
-        self.init(toggleTitle: toggleTitle, isOn: isOn, download: download, space: space, downloadAction: downloadAction,
-                  cancelAction: cancelAction) { EmptyView() }
+    public init(toggleTitle: String, isOn: Binding<Bool>, download: ModelDownloadSummary?, downloadName: String,
+                space: ModelSpace = .unknown, downloadAction: @escaping () -> Void, cancelAction: @escaping () -> Void) {
+        self.init(toggleTitle: toggleTitle, isOn: isOn, download: download, downloadName: downloadName, space: space,
+                  downloadAction: downloadAction, cancelAction: cancelAction) { EmptyView() }
     }
 }
 

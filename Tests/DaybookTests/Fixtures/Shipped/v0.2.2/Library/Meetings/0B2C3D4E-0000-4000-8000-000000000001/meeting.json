@@ -270,7 +270,7 @@
   "tracks" : [
     {
       "capture" : {
-        "clockRate" : 48000.5,
+        "clockRate" : 1.0000152587890625,
         "method" : "microphone",
         "notes" : [
           "Switched to MacBook Pro Microphone at 12.5 s."
@@ -304,7 +304,7 @@
         "capturedApps" : [
           "us.zoom.xos"
         ],
-        "clockRate" : 48000,
+        "clockRate" : 0.9999847412109375,
         "method" : "process-tap"
       },
       "createdAt" : 814292800,

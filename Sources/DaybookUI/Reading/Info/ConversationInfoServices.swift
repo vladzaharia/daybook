@@ -87,6 +87,8 @@ public struct InfoNow: Equatable, Sendable {
             if planner.started != nil { actions.append(.stopSummary) }
         } else if case .awaitingRecordings = status {
             actions = [.dontWait]
+        } else if case .missingRecordings = status {
+            actions = [.dontWait, .waitAgain]
         }
         return InfoNow(text: text, countdownUntil: row.countdownUntil, actions: actions)
     }

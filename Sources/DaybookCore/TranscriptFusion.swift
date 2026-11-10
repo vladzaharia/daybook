@@ -50,9 +50,9 @@ public struct FusionResult: Sendable {
 /// Otherwise the recording stays out of the unified transcript (`unaligned`).
 ///
 /// Wording: words from all placed recordings are aligned in time and text (a word transition
-/// network, as in ROVER) and voted on, weighted by each source's role for that speech, its
-/// signal-to-noise ratio, and recognition confidence. Speech heard by several recordings appears
-/// once; provenance lists every recording and which words each supported. See `docs/alignment.md`.
+/// network, as in ROVER) and voted on, weighted by each source's role for that speech, how it was
+/// placed, and recognition confidence. Speech heard by several recordings appears once; provenance
+/// lists every recording and which words each supported. See `docs/alignment.md`.
 public enum TranscriptFusion {
     public static func fuse(_ transcripts: [TrackTranscript], tracks: [RecordingTrack] = []) -> FusionResult {
         fuse(transcripts, tracks: tracks, inputs: FusionInputs())
@@ -89,8 +89,13 @@ public enum TranscriptFusion {
     }
     /// Text-anchor timing of `source` against `reference` segments whose times are already on the
     /// meeting timeline less `referenceOffset`.
+    ///
+    /// From fusion version 2 a fit's rate stays within `ClockRate.maximumDriftPPM`, and it's measured at all only when
+    /// the phrases span at least `rateSpan(overlap:)`; otherwise the fit is an offset at rate 1. A few phrases a few
+    /// seconds apart can't tell a clock's drift from the phrases' own timing noise, and a rate stored from them would
+    /// misplace the end of a long recording by minutes. Its confidence grows with the span, full from two minutes.
     static func estimate(_ source: [TranscriptSegment], reference: [TranscriptSegment], trackID: UUID,
-                         referenceOffset: Double) -> TrackAlignment {
+                         referenceOffset: Double, version: Int = FusionSummary.currentVersion) -> TrackAlignment {
         let failure = TrackAlignment(trackID: trackID, method: .unaligned,
                                      explanation: "Insufficient consistent shared phrases. Original transcript retained separately; set a verified time offset to combine it.")
         let candidates = reference.map(AnchorText.init).filter(\.qualifies)
@@ -113,13 +118,14 @@ public enum TranscriptFusion {
             anchors = (0..<120).map { anchors[$0 * (anchors.count - 1) / 119] }
         }
         // RANSAC-style pair hypotheses tolerate unrelated or mistranscribed matching phrases.
+        let drift = version >= 2 ? ClockRate.maximumDriftPPM / 1_000_000 : 0.03
         var hypotheses: [(Double, Double)] = anchors.map { (1, $0.reference - $0.source) }
         for i in anchors.indices {
             for j in anchors.indices where j > i {
                 let span = anchors[j].source - anchors[i].source
                 guard abs(span) >= 10 else { continue }
                 let rate = (anchors[j].reference - anchors[i].reference) / span
-                guard (0.97...1.03).contains(rate) else { continue }
+                guard abs(rate - 1) <= drift else { continue }
                 hypotheses.append((rate, anchors[i].reference - rate * anchors[i].source))
             }
         }
@@ -134,18 +140,45 @@ public enum TranscriptFusion {
         }
         guard let fit = best, fit.inliers.count >= max(3, Int(ceil(Double(anchors.count) * 0.6))),
               let first = fit.inliers.map(\.source).min(), let last = fit.inliers.map(\.source).max(), last - first >= 10 else { return failure }
-        // Refine over the consensus, limiting drift to the same conservative interval.
+        // Refine over the consensus, limiting drift to the same interval.
         let meanX = fit.inliers.reduce(0) { $0 + $1.source } / Double(fit.inliers.count)
         let meanY = fit.inliers.reduce(0) { $0 + $1.reference } / Double(fit.inliers.count)
         let denominator = fit.inliers.reduce(0) { $0 + pow($1.source - meanX, 2) }
-        let rate = denominator > 0 ? fit.inliers.reduce(0) { $0 + ($1.source - meanX) * ($1.reference - meanY) } / denominator : 1
-        guard (0.97...1.03).contains(rate) else { return failure }
+        let fitted = denominator > 0 ? fit.inliers.reduce(0) { $0 + ($1.source - meanX) * ($1.reference - meanY) } / denominator : 1
+        let span = last - first
+        let rate: Double
+        if version >= 2 {
+            // The stretch of the source the reference also covers, at the offset alone.
+            let shift = meanY - meanX
+            let valid = Self.valid(source), others = Self.valid(reference)
+            let sourceStart = valid.map(\.start).min() ?? 0, sourceEnd = valid.map(\.end).max() ?? 0
+            let referenceStart = (others.map(\.start).min() ?? 0) + referenceOffset - shift
+            let referenceEnd = (others.map(\.end).max() ?? 0) + referenceOffset - shift
+            let covered = min(sourceEnd, referenceEnd) - max(sourceStart, referenceStart)
+            rate = span >= rateSpan(overlap: max(0, covered)) && abs(fitted - 1) <= drift ? fitted : 1
+        } else {
+            guard (0.97...1.03).contains(fitted) else { return failure }
+            rate = fitted
+        }
         let offset = meanY - rate * meanX
         let residual = fit.inliers.reduce(0) { $0 + abs($1.reference - ($1.source * rate + offset)) } / Double(fit.inliers.count)
+        var confidence: Double?
+        if version >= 2 {
+            let count = min(1, Double(fit.inliers.count) / 12), closeness = max(0, 1 - residual / 1.5)
+            confidence = ((0.45 + 0.4 * count + 0.15 * closeness) * (0.7 + 0.3 * min(1, span / 120)) * 100).rounded() / 100
+        }
+        let measured = version < 2 || rate != 1
         return TrackAlignment(trackID: trackID, method: .anchors, offset: offset, rate: rate,
                               matchedAnchors: fit.inliers.count, residual: residual,
-                              explanation: "Aligned using \(fit.inliers.count) distinct shared phrases; clock drift estimated from their timestamps. Short replies and differing wording remain separate.")
+                              explanation: measured
+                                ? "Aligned using \(fit.inliers.count) distinct shared phrases; clock drift estimated from their timestamps. Short replies and differing wording remain separate."
+                                : "Aligned using \(fit.inliers.count) distinct shared phrases. Short replies and differing wording remain separate.",
+                              confidence: confidence)
     }
+
+    /// How far apart, in the source's seconds, phrase anchors must be before their fit measures a clock rate: ten
+    /// minutes, or 30% of the stretch both recordings cover when that's longer.
+    static func rateSpan(overlap: TimeInterval) -> TimeInterval { max(600, 0.3 * overlap) }
 
     static func tokens(_ text: String) -> [String] {
         text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))

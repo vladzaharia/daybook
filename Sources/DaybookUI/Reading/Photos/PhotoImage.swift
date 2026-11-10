@@ -37,7 +37,8 @@ public final class PhotoImageCache: @unchecked Sendable {
 }
 
 /// One photo, filled or fitted into the frame its caller gives it. A quiet fill stands in while it loads; when the
-/// original can't be had (offline, missing), Try Again.
+/// original can't be had (offline, missing), Try Again: its words where they fit with room either side, and in a small
+/// tile (under about 120 pt) its glyph alone, which VoiceOver still reads as Try Again.
 public struct PhotoImage: View {
     private let photo: MeetingPhoto
     private let meetingID: UUID
@@ -68,10 +69,21 @@ public struct PhotoImage: View {
                     Rectangle().fill(DaybookPalette.quietFill)
                         .overlay {
                             if let failure {
-                                Button { attempt += 1 } label: { Label("Try Again", systemImage: "arrow.clockwise") }
-                                    .buttonStyle(.daybookLink)
-                                    .font(DaybookFont.status.font(.platformDefault))
-                                    .accessibilityHint(failure)
+                                Button { attempt += 1 } label: {
+                                    // Never "Try / Again" wrapped in a transcript's small tile.
+                                    ViewThatFits(in: .horizontal) {
+                                        Label("Try Again", systemImage: "arrow.clockwise")
+                                            .fixedSize()
+                                            .padding(.horizontal, DaybookSpacing.s4)
+                                        Label("Try Again", systemImage: "arrow.clockwise")
+                                            .labelStyle(.iconOnly)
+                                            .daybookHitTarget()
+                                    }
+                                }
+                                .buttonStyle(.daybookLink)
+                                .font(DaybookFont.status.font(.platformDefault))
+                                .accessibilityLabel("Try Again")
+                                .accessibilityHint(failure)
                             } else {
                                 Image(systemName: "photo").foregroundStyle(DaybookPalette.Ink.faint).accessibilityHidden(true)
                             }

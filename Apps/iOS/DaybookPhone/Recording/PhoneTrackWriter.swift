@@ -76,7 +76,7 @@ final class PhoneTrackWriter: @unchecked Sendable {
     /// Called on the input's thread.
     func append(_ buffer: AVAudioPCMBuffer, hostTime: TimeInterval) {
         guard lock.withLock({ accepting }) else { return }
-        meter.record(buffer)
+        meter.record(buffer, hostTime: hostTime)
         let accepted = lock.withLock { () -> Bool in
             guard accepting else { return false }
             if sessionAnchor == nil {

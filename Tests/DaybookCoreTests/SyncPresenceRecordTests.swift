@@ -19,4 +19,29 @@ final class SyncPresenceRecordTests: XCTestCase {
         XCTAssertEqual(record.audioPolicy, "eager")
         XCTAssertEqual(record.lastSeen, lastSeen)
     }
+
+    /// What a device has left to upload and what stands in its way travel in its record; a problem a newer Daybook names
+    /// is kept, and a field this build can't read leaves the record readable.
+    func testBehaviorPendingUploadsAndProblemReadBackLeniently() throws {
+        var record = SyncDeviceRecord(deviceID: "phone", deviceClass: .phone, displayName: "Alex's iPhone", canProcess: false,
+                                      audioPolicy: "onDemand", lastSeen: Date(timeIntervalSince1970: 1_800_000_000))
+        record.pendingUploads = 3
+        record.problem = .storageFull
+        let decoded = try XCTUnwrap(SyncPresenceFiles.decode(SyncPresenceFiles.encode(record)))
+        XCTAssertEqual(decoded.pendingUploads, 3)
+        XCTAssertEqual(decoded.problem, .storageFull)
+        XCTAssertEqual(decoded, record)
+
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: SyncPresenceFiles.encode(record)) as? [String: Any])
+        object["problem"] = "accountLocked"
+        object["pendingUploads"] = "many"
+        let newer = try XCTUnwrap(SyncPresenceFiles.decode(JSONSerialization.data(withJSONObject: object)))
+        XCTAssertEqual(newer.problem, SyncPresenceProblem(rawValue: "accountLocked"))
+        XCTAssertNil(newer.pendingUploads)
+        object["problem"] = 7
+        object.removeValue(forKey: "pendingUploads")
+        let odd = try XCTUnwrap(SyncPresenceFiles.decode(JSONSerialization.data(withJSONObject: object)))
+        XCTAssertNil(odd.problem)
+        XCTAssertEqual(odd.displayName, "Alex's iPhone")
+    }
 }

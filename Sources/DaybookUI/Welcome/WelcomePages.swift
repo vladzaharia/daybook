@@ -8,10 +8,13 @@ import SwiftUI
 /// Welcome's first page: the mark, the name, what Daybook is, and Continue.
 public struct WelcomeIntroPage: View {
     private let device: WelcomeWords.Device
+    private let summaries: Bool
     private let next: () -> Void
 
-    public init(device: WelcomeWords.Device, next: @escaping () -> Void) {
+    /// - Parameter summaries: Something here or within reach makes summaries (`WelcomeWords.points`).
+    public init(device: WelcomeWords.Device, summaries: Bool = true, next: @escaping () -> Void) {
         self.device = device
+        self.summaries = summaries
         self.next = next
     }
 
@@ -29,7 +32,7 @@ public struct WelcomeIntroPage: View {
                     .multilineTextAlignment(.center)
                     .padding(.top, DaybookSpacing.s1)
                 VStack(alignment: .leading, spacing: DaybookSpacing.s3) {
-                    ForEach(WelcomeWords.points(device), id: \.self) { point in
+                    ForEach(WelcomeWords.points(device, summaries: summaries), id: \.self) { point in
                         HStack(alignment: .firstTextBaseline, spacing: DaybookSpacing.s2) {
                             Image(systemName: point.symbol)
                                 .font(WelcomeMetrics.pointSymbolFont)

@@ -140,6 +140,7 @@ public struct BookmarkControlLabel: View {
     ///   - size: A fixed size (Mac); nil follows Dynamic Type (`.headline`, iPhone).
     ///   - landed: Counts the person's own taps: the symbol bounces for those alone, never for a bookmark
     ///     another device added or one taken away. Nil bounces for every one added.
+    ///   - title: The word; empty draws the glyph and the count alone, for a tile too narrow for it.
     public init(count: Int, title: String = "Bookmark", size: CGFloat? = nil, landed: Int? = nil) {
         self.count = count
         self.title = title
@@ -155,7 +156,7 @@ public struct BookmarkControlLabel: View {
             Image(systemName: "bookmark.fill")
                 .daybookBounce(value: landed ?? added)
                 .daybookGlow(count > 0 ? DaybookPalette.bookmark : .clear, radius: 3)
-            if !Self.isGlyphOnly(size: size, typeSize: typeSize) {
+            if !Self.isGlyphOnly(size: size, typeSize: typeSize), !title.isEmpty {
                 Text(title).lineLimit(1)
             }
             if count > 0 {
