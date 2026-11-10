@@ -33,6 +33,7 @@ public enum RevisionRestore {
             let previous = meeting.timedNotes ?? NoteTimeline.reconcile(previous: [], text: meeting.notes, captureTime: nil)
             meeting.timedNotes = NoteTimeline.reconcile(previous: previous, text: revision.oldValue, captureTime: nil)
             meeting.setNotes(revision.oldValue)
+            meeting.reanchorInk()
         case .segment(let id): meeting.correctSegment(id: id, text: revision.oldValue)
         case .speaker(let id): meeting.renameSpeaker(id: id, name: revision.oldValue)
         case .summary:

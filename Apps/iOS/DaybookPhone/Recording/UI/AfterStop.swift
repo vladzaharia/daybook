@@ -78,7 +78,7 @@ struct PhoneAfterStop: View {
  @Environment(PhoneAppModel.self) private var model
  @Environment(ReadingSession.self) private var reading
  @State private var writing = false
- @State private var handwriting = false
+ @State private var inkSession = InkSession()
  @State private var linger = AfterStopLinger()
 
  private var outcome: AfterStop.Outcome {
@@ -110,13 +110,13 @@ struct PhoneAfterStop: View {
    case .none: done()
    case .saving: break
    }
-   linger.update(stay: AfterStop.stay(for: new), writing: writing || handwriting, done: done)
+   linger.update(stay: AfterStop.stay(for: new), writing: writing || inkSession.showsTools, done: done)
   }
   .onChange(of: writing) { _, isWriting in
    // Writing holds the moment; done writing, it gives the library back after a pause.
-   linger.update(stay: AfterStop.stay(for: outcome), writing: isWriting || handwriting, done: done)
+   linger.update(stay: AfterStop.stay(for: outcome), writing: isWriting || inkSession.showsTools, done: done)
   }
-  .onChange(of: handwriting) { _, isHandwriting in
+  .onChange(of: inkSession.showsTools) { _, isHandwriting in
    linger.update(stay: AfterStop.stay(for: outcome), writing: writing || isHandwriting, done: done)
   }
  }
@@ -185,7 +185,7 @@ struct PhoneAfterStop: View {
    let notes = Binding(
     get: { library.meeting(meeting.id)?.notes ?? meeting.notes },
     set: { library.editNotes(meeting.id, text: $0) })
-   HStack(alignment: .top, spacing: 0) {
+   WritableNotes(session: inkSession) {
     MarginNotesEditor(
      text: notes,
      times: meeting.paragraphTimes(),
@@ -193,11 +193,9 @@ struct PhoneAfterStop: View {
       NoteMark(id: $0.id.uuidString, kind: .bookmark, time: meeting.alignedTime(for: $0) ?? $0.time)
      },
      scrolls: true,
-     bottomInset: DaybookSpacing.s3,
-     onFocusChange: { writing = $0 })
-    HandwritingButton(
-     text: notes, canInsert: { library.meeting(meeting.id) != nil },
-     onPresentationChange: { handwriting = $0 })
+     bottomInset: WritableNotes<EmptyView>.toolsHeight,
+     onFocusChange: { writing = $0 },
+     ink: .conversation(meeting.id, library: library, session: inkSession))
    }
    // Inset as the recording's notes are in the column, so they stay put as Stop lands.
    .padding(.horizontal, style == .notebook ? 0 : DaybookSpacing.s4)

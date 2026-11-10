@@ -145,6 +145,8 @@ struct PhoneCaptureJournal: Codable, Equatable, Sendable {
     var warnings: [String] = []
     var notes = ""
     var timedNotes: [TimedNote] = []
+    /// Handwriting in the notes. Optional, so journals written before handwriting still load.
+    var ink: [NoteInk]?
     var highlights: [Highlight] = []
     /// Optional, so journals written before photos still load.
     var photos: [CapturePhoto]?
@@ -223,6 +225,8 @@ struct PhoneRecording: Sendable, Equatable {
     var recovered: Bool
     /// Photos taken while recording; their files are in `stagingDirectory`.
     var photos: [CapturePhoto] = []
+    /// Handwriting in the notes.
+    var ink: [NoteInk] = []
     /// The Macs it was recorded with, as the journal kept them (for a recovered recording).
     var multipoint: CaptureMultipoint?
     /// What a Mac recording along wrote over the link, as that Mac files it (`PhoneCaptureJournal.sharedNotes`).

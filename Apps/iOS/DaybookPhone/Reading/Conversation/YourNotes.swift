@@ -11,6 +11,7 @@ struct PhoneNotes: View {
     let play: (PlaybackTarget) -> Void
     let passages: PassageLinks
     @Environment(ReadingSession.self) private var session
+    @State private var inkSession = InkSession()
 
     var body: some View {
         let times = meeting.paragraphTimes()
@@ -19,7 +20,7 @@ struct PhoneNotes: View {
                             set: { library.editNotes(meeting.id, text: $0) })
         YourNotes(meeting: meeting, library: library, canPlay: !meeting.presentTracks.isEmpty, play: play, passages: passages,
                   bookmarksID: SummaryBlockID.bookmarks) {
-            HStack(alignment: .top, spacing: 0) {
+            WritableNotes(session: inkSession, keepsRoomForTools: true) {
                 MarginNotesEditor(
                     text: notes,
                     times: times,
@@ -29,8 +30,8 @@ struct PhoneNotes: View {
                     lane: timed ? PhoneStyle.Page.lane : 0,
                     focusOnAppear: session.focusNotesFor == meeting.id,
                     playTime: meeting.tracks.isEmpty ? nil : { play(.timeline($0)) },
-                    onFocusChange: { focused in if focused, session.focusNotesFor == meeting.id { session.focusNotesFor = nil } })
-                HandwritingButton(text: notes, canInsert: { library.meeting(meeting.id) != nil })
+                    onFocusChange: { focused in if focused, session.focusNotesFor == meeting.id { session.focusNotesFor = nil } },
+                    ink: .conversation(meeting.id, library: library, session: inkSession))
             }
             .padding(.top, PhoneStyle.Space.s2)
         }

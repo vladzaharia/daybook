@@ -128,6 +128,11 @@ public enum MeetingMerge {
                 conflicted.insert("a photo")
             }
         }
+        // Handwriting is an original too: every copy's blocks survive, the newer strokes of a block both changed.
+        if local.ink != nil || remote.ink != nil {
+            result.ink = NoteInk.mergedList(base: base?.ink ?? [], local: local.ink ?? [], remote: remote.ink ?? [])
+            result.keepInkParagraphs(local: local, remote: remote)
+        }
         result.speakerMatches = items("speaker-match", local.speakerMatches ?? [], remote.speakerMatches ?? [], base?.speakerMatches ?? [])
         if result.speakerMatches?.isEmpty == true { result.speakerMatches = nil }
         // Who each speaker is: a speaker's identity merges like the speaker, and one removed on one side stays removed.

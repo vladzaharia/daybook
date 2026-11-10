@@ -593,6 +593,8 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
     /// Photos taken or added for the conversation (`Photos.swift`), deleted ones included. Nil until
     /// the first photo.
     public var photos: [MeetingPhoto]?
+    /// Handwriting in the notes (`NoteInk.swift`), one block per ink paragraph. Nil until the first stroke.
+    public var ink: [NoteInk]?
     /// Passages left out of `unifiedTranscript` as background audio (a TV, radio, or music;
     /// `BackgroundAudio`), on the timeline as fusion placed them. Derived with the unified transcript;
     /// nil when there are none. The transcript runs still hold every word.
@@ -722,7 +724,7 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         case schemaVersion, id, title, date, updatedAt, kind, notes, timedNotes, folderID, tags, templateID,
             placement, tracks, transcripts, unifiedTranscript, alignmentReports, summary, revisions, highlights,
             speakers, status, errorMessage, correctionTransferIssues, speakerMatches, companions, sourceSuggestions,
-            audioAlignments, fusionSummary, processingRequests, photos, backgroundPassages, includesBackgroundAudio,
+            audioAlignments, fusionSummary, processingRequests, photos, ink, backgroundPassages, includesBackgroundAudio,
             speakerIdentities, upgradeDismissals
     }
     private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
@@ -759,6 +761,7 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         fusionSummary = try values.decodeIfPresent(FusionSummary.self, forKey: .fusionSummary)
         processingRequests = try values.decodeIfPresent([ProcessingRequest].self, forKey: .processingRequests)
         photos = try values.decodeIfPresent([MeetingPhoto].self, forKey: .photos)
+        ink = try values.decodeIfPresent([NoteInk].self, forKey: .ink)
         backgroundPassages = try values.decodeIfPresent([TranscriptSegment].self, forKey: .backgroundPassages)
         includesBackgroundAudio = try values.decodeIfPresent(Bool.self, forKey: .includesBackgroundAudio)
         speakerIdentities = try values.decodeIfPresent([SpeakerIdentity].self, forKey: .speakerIdentities)
@@ -799,6 +802,7 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         try values.encodeIfPresent(fusionSummary, forKey: .fusionSummary)
         try values.encodeIfPresent(processingRequests, forKey: .processingRequests)
         try values.encodeIfPresent(photos, forKey: .photos)
+        try values.encodeIfPresent(ink, forKey: .ink)
         try values.encodeIfPresent(backgroundPassages, forKey: .backgroundPassages)
         try values.encodeIfPresent(includesBackgroundAudio, forKey: .includesBackgroundAudio)
         try values.encodeIfPresent(speakerIdentities, forKey: .speakerIdentities)

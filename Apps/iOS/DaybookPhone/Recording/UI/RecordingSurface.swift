@@ -9,8 +9,8 @@ import UIKit
 /// after Stop. It's the recorder Floating Notes shows on the Mac (DaybookUI's `RecorderSurface`), filled from the
 /// app model, with what only the iPhone has around it: the camera, the live timeline, and table mode's dimming.
 ///
-/// - **Pocket** (closed, and every other iPhone held upright): one column, one hand. The phase, what records along,
-///   the clock with the camera beside it, the level, the notes, and a large Bookmark and Stop at the thumb.
+/// - **Pocket** (closed, and every other iPhone held upright): your notes on top, and under them the recorder in one
+///   sheet of four sizes (mini, collapsed, expanded, full), with Bookmark and Stop at the thumb at every size.
 /// - **Notebook** (open): notes on the left page; the recorder on the right. Split at the crease, never across it.
 /// - **Table** (partly open, standing): glanceable from across a table, and dimmed between touches.
 ///
@@ -26,6 +26,9 @@ struct RecorderScreen: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var levels = RecorderLevels()
     @AccessibilityFocusState private var clockFocused: Bool
+    /// How far the person has expanded the recorder's sheet; nil rests it at the posture's size. Lives here, so
+    /// it survives folding and turning (`style` changes), and a new recording starts at rest.
+    @State private var sheetExpansion: RecorderSheetSize?
 
     var body: some View {
         Group {
@@ -37,6 +40,7 @@ struct RecorderScreen: View {
         }
         .background(PhoneStyle.paper.ignoresSafeArea())
         .onAppear {
+            if let launch = model.options.recorderSheet { sheetExpansion = launch }
             levels.adopt(model.levels, for: .microphone)
             runLevels()
             // VoiceOver: the screen changed under the person's finger; it starts on the clock.
@@ -91,14 +95,15 @@ struct RecorderScreen: View {
             canBookmark: recorder.isCapturing && recorder.state != .starting,
             isSaving: recorder.state == .stopping || model.isFiling,
             pause: PhoneRecorderStatus.pause(recorder.state, message: recorder.pauseMessage, canResume: recorder.canResume),
-            asleep: asleep)
+            asleep: asleep,
+            hasNotice: RecordingNotice.isShowing(model))
         let model = self.model
         let actions = RecorderSurfaceActions(
             bookmark: { Task { try? await model.addBookmark() } },
             stop: { Task { try? await model.stopRecording() } },
             resume: { Task { try? await model.resumeRecording() } })
         return RecorderSurface(state: state, levels: levels, actions: actions, slots: slots(writing: writing), writing: writing,
-                               clockFocus: $clockFocused)
+                               clockFocus: $clockFocused, sheetExpansion: $sheetExpansion)
     }
 
     private func slots(writing: Binding<Bool>) -> RecorderSlots {
@@ -110,7 +115,8 @@ struct RecorderScreen: View {
                                  captions: AnyView(PhoneCaptions(style: typeSize.isAccessibilitySize ? .stripNewest : .strip)
                                     .padding(.horizontal, DaybookSpacing.s2)
                                     .dynamicTypeSize(...DynamicTypeSize.xxxLarge)),
-                                 accessory: AnyView(CameraControl()), notice: AnyView(RecordingNotice()),
+                                 accessory: AnyView(CameraControl()), details: AnyView(LiveTimelineBar()), notice: AnyView(RecordingNotice()),
+                                 log: AnyView(ScrollView { BookmarkLog() }.scrollBounceBehavior(.basedOnSize)),
                                  menu: { AnyView(PhoneChipMenu(chip: $0)) })
         case .notebook:
             // Captions take the space when they're on: they're the live sign that the audio is being heard, while

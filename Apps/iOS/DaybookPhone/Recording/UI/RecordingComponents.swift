@@ -297,6 +297,11 @@ struct RecordingNotice: View {
     @Environment(PhoneAppModel.self) private var model
     @State private var details: NoticeDetails?
 
+    /// Whether it has anything to say now, for the recorder to make room for.
+    static func isShowing(_ model: PhoneAppModel) -> Bool {
+        model.notice != nil || (model.recorder.isCapturing && PhoneAppModel.recorderWarning(model.recorder.lastError) != nil)
+    }
+
     var body: some View {
         let warning = model.recorder.isCapturing ? PhoneAppModel.recorderWarning(model.recorder.lastError) : nil
         Group {
@@ -372,24 +377,27 @@ private struct NoticeRow: View {
 }
 
 /// The notes while recording: the editor the conversation's page uses, with each paragraph's time in the lane and
-/// this recording's bookmarks and photos as ticks beside the paragraphs written after them.
+/// this recording's bookmarks and photos as ticks beside the paragraphs written after them. Typing and handwriting
+/// go in the same notes.
 struct RecordingNotes: View {
     @Environment(PhoneAppModel.self) private var model
     var focusOnAppear = false
+    @State private var inkSession = InkSession()
 
     var body: some View {
         let recorder = model.recorder
         let notes = Binding(get: { recorder.notes }, set: { model.editNotes($0) })
-        HStack(alignment: .top, spacing: 0) {
+        WritableNotes(session: inkSession) {
             MarginNotesEditor(
                 text: notes,
                 times: NoteTimeline.paragraphTimes(anchors: recorder.timedNotes, text: recorder.notes),
                 marks: NotesTimeline.marks(bookmarks: recorder.highlights, photos: recorder.photos),
                 scrolls: true,
                 focusOnAppear: focusOnAppear,
-                bottomInset: DaybookSpacing.s3)
+                bottomInset: WritableNotes<EmptyView>.toolsHeight,
+                ink: .recording(model, session: inkSession))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            HandwritingButton(text: notes, canInsert: { recorder.isCapturing })
         }
+        .onAppear { if model.options.demoInkWriting { inkSession.isWriting = true } }
     }
 }

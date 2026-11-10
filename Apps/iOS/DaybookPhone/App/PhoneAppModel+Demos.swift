@@ -1,5 +1,6 @@
 #if DEBUG
 import DaybookCaptions
+import DaybookCore
 import DaybookDevices
 import DaybookKit
 import DaybookLink
@@ -9,6 +10,15 @@ import Foundation
 // added and importing, its handoff states, and a Mac's presence in a sync folder, for screenshots. Nothing
 // here reaches the network or a real device, and none of it is in a release build.
 extension PhoneAppModel {
+    /// `--demo-ink`: typed paragraphs and handwriting in one note, one block already read and one left for the recognizer.
+    func runInkDemo() async {
+        try? await Task.sleep(for: .seconds(1))
+        editNotes("Agenda: what the phone app records")
+        addInk(NoteInk(drawing: SyntheticInk.drawing("hello world").dataRepresentation(), width: 440, height: 96, recognized: "hello world"), after: nil)
+        editNotes(recorder.notes + "\nTyped again, right after the handwriting")
+        addInk(NoteInk(drawing: SyntheticInk.drawing("world hello").dataRepresentation(), width: 440, height: 96), after: nil)
+    }
+
     /// What the launch arguments ask for, once the library, sync, and the link are up.
     func runLaunchDemos() {
         if options.deviceAutopilot { runDeviceAutopilot() }
@@ -19,6 +29,7 @@ extension PhoneAppModel {
             if options.startRecording, !recorder.isActive {
                 try? await startRecording()
                 runDemoScript()
+                if options.demoInk { await runInkDemo() }
             }
             if let name = options.demoRecorderOnly, !recorder.isActive {
                 // After the scene has come forward, which would otherwise record along at once.
