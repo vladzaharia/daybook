@@ -11,7 +11,7 @@ import SwiftUI
 @Observable
 final class FloatingNotesModel {
     let state: AppState
-    let input = InputDeviceName()
+    let input = MicrophoneInputs()
     let levels = RecorderLevels()
     /// The conversation shown when nothing is recording; nil is the home.
     private(set) var focusID: UUID?
@@ -94,7 +94,7 @@ struct FloatingNotesView: View {
     let model: FloatingNotesModel
     let state: AppState
     let chrome: PanelChrome
-    let input: InputDeviceName
+    let input: MicrophoneInputs
     /// Live captions are running for the recording. Kept here, rather than reading the captions,
     /// so a revised word redraws only the caption strip.
     @State private var captionsShowing: UUID?
@@ -151,7 +151,7 @@ struct FloatingNotesView: View {
                 // Full, the band holds the phase and the chips get a row of their own under it;
                 // compact, the band holds both.
                 StatusBand(chrome: chrome, phase: FloatingStatus.phase(inputs), chips: compact ? chips : [],
-                           context: context(compact: compact, chips: chips), compact: compact)
+                           context: context(compact: compact, chips: chips), compact: compact, input: input)
             }
             .daybookMotion(DaybookMotion.state, value: surface)
             .daybookMotion(DaybookMotion.state, value: compact)
@@ -272,6 +272,7 @@ private struct StatusBand: View {
     let chips: [RecorderChip]
     let context: PanelContext
     let compact: Bool
+    let input: MicrophoneInputs
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -304,10 +305,16 @@ private struct StatusBand: View {
         }
     }
 
+    @ViewBuilder
     private func phaseLabel(_ phase: RecorderPhase, yields: Bool) -> some View {
-        RecordingPhaseLabel(phase.phase, title: phase.title, detail: phase.detail, detailIsWarning: phase.detailIsWarning,
-                            detailYields: yields, metrics: .panel)
-            .help(phase.detailIsWarning ? RecordingStatusWords.microphoneSilentHelp : phase.detail ?? "")
+        let label = RecordingPhaseLabel(phase.phase, title: phase.title, detail: phase.detail, detailIsWarning: phase.detailIsWarning,
+                                        detailYields: yields, metrics: .panel)
+        // Recording, the phase is the input menu: Automatic and each input.
+        if phase.choosesInput {
+            MicrophoneMenu(inputs: input, phase: phase) { label }
+        } else {
+            label.help(phase.detailIsWarning ? RecordingStatusWords.microphoneSilentHelp : phase.detail ?? "")
+        }
     }
 
     /// Compact snaps the panel short (the status bar, one caption line, the controls); Expand returns.

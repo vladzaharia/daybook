@@ -1,20 +1,21 @@
-import AudioToolbox
 import AVFoundation
 import CoreAudio
 import CoreMedia
+import DaybookKit
 import Foundation
 
 /// The part of `AVAudioEngine` the microphone uses, so its restart rules are tested without a device.
 protocol MicrophoneEngine: AnyObject {
     /// Called on the main queue when the input device or its format changes (the engine has stopped).
     var onConfigurationChange: (() -> Void)? { get set }
-    /// Starts delivering the input (the system's default, or the Mac's built-in microphone) and returns its
-    /// format. Throws when it can't start: no device, or one that reports 0 Hz for a moment after a switch.
-    func start(builtIn: Bool, deliver: @escaping CaptureBufferHandler, report: @escaping CaptureEventHandler) throws -> AVAudioFormat
+    /// Sets `device` (a Core Audio UID; nil leaves the system's default input) on the input before anything starts,
+    /// starts delivering it, and returns its format. Throws when it can't start: no device, one that's gone, or one
+    /// that reports 0 Hz for a moment after a switch.
+    func start(device: String?, deliver: @escaping CaptureBufferHandler, report: @escaping CaptureEventHandler) throws -> AVAudioFormat
     func stop()
 }
 
-/// The default input device through AVAudioEngine, without Apple voice processing.
+/// The chosen input through AVAudioEngine, without Apple voice processing.
 ///
 /// Voice processing (`setVoiceProcessingEnabled`) is deliberately off: it ducks other audio
 /// (including the call the person is listening to), applies gain control and noise suppression
@@ -22,16 +23,22 @@ protocol MicrophoneEngine: AnyObject {
 /// call track Daybook records. Daybook keeps the raw microphone as the original and removes the
 /// call's echo offline from the recorded call track instead.
 ///
-/// When the input device or its format changes (AirPods connecting, or switching to the hands-free
-/// profile when an app opens their microphone), the engine stops. This source starts again on the
-/// new input and continues; the writer converts the new format to the file's. Restarts are limited
-/// by rate, not count (more than `restartLimit` in `restartWindow` is a failure), so AirPods coming
-/// and going all day never end a recording. A start that fails (a new device reporting 0 Hz for a
-/// moment) is tried again after 0.25, 0.5, 1, and 2 s, then on the built-in microphone, before the
-/// microphone counts as failed.
+/// The input is `MicrophoneChoice`'s: the person's choice, or Automatic, which records the default input unless that's
+/// a Bluetooth headset no other app is recording from (then the built-in microphone, so headphones never switch to
+/// call mode for Daybook). It's set on the engine's input unit before the engine starts.
+///
+/// When the input or its format changes (AirPods connecting, or switching to the hands-free profile when an app opens
+/// their microphone), when an input comes or goes or the default input changes so the choice resolves elsewhere, when
+/// the input in use stops being alive, or when the person chooses another, this source starts again on the input the
+/// choice resolves to now and continues; the writer converts the new format to the file's. Restarts are limited by
+/// rate, not count (more than `restartLimit` in `restartWindow` is a failure), so AirPods coming and going all day
+/// never end a recording. A start that fails (a new device reporting 0 Hz for a moment) is tried again after 0.25, 0.5,
+/// 1, and 2 s, then on the built-in microphone, before the microphone counts as failed.
 final class MicrophoneSource: CaptureAudioSource, @unchecked Sendable {
     let method = "microphone"
     private let engine: MicrophoneEngine
+    private let devices: MicrophoneDevices
+    private let reportInput: @Sendable (MicrophoneChoice.Device?) -> Void
     private let now: () -> TimeInterval
     private let pause: (TimeInterval) async -> Void
     private var onBuffer: CaptureBufferHandler?
@@ -41,19 +48,29 @@ final class MicrophoneSource: CaptureAudioSource, @unchecked Sendable {
     private var restarting = false
     private var restartPending: Cause?
     private var restartTimes: [TimeInterval] = []
+    /// The input recording now; nil when the system's default is used without a list to choose from.
+    private var current: MicrophoneChoice.Device?
 
     static let restartLimit = 10
     static let restartWindow: TimeInterval = 60
     /// Waits before each further try of a start that failed.
     static let retryDelays: [TimeInterval] = [0.25, 0.5, 1, 2]
 
+    /// - Parameter reportInput: Told the input in use as it changes, and nil once stopped (Floating Notes names it).
     init(engine: MicrophoneEngine = AVMicrophoneEngine(),
+         devices: MicrophoneDevices = CoreAudioMicrophoneDevices(),
+         reportInput: @escaping @Sendable (MicrophoneChoice.Device?) -> Void = { MicrophoneInUse.report($0) },
          now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
          pause: @escaping (TimeInterval) async -> Void = { try? await Task.sleep(for: .seconds($0)) }) {
         self.engine = engine
+        self.devices = devices
+        self.reportInput = reportInput
         self.now = now
         self.pause = pause
     }
+
+    /// The input being recorded.
+    var currentInput: MicrophoneChoice.Device? { current }
 
     func start(onBuffer: @escaping CaptureBufferHandler, onEvent: @escaping CaptureEventHandler) async throws {
         self.onBuffer = onBuffer
@@ -61,51 +78,88 @@ final class MicrophoneSource: CaptureAudioSource, @unchecked Sendable {
         engine.onConfigurationChange = { [weak self] in
             Task { @MainActor in await self?.follow(.deviceChanged) }
         }
-        _ = try engine.start(builtIn: false, deliver: onBuffer, report: onEvent)
+        let snapshot = devices.snapshot()
+        let chosen = snapshot.resolved
+        do {
+            _ = try engine.start(device: chosen?.id, deliver: onBuffer, report: onEvent)
+            current = chosen
+        } catch {
+            // A chosen input that won't start: the Mac's own microphone, rather than no recording.
+            engine.stop()
+            guard let builtIn = snapshot.builtIn, builtIn.id != chosen?.id,
+                  (try? engine.start(device: builtIn.id, deliver: onBuffer, report: onEvent)) != nil else { throw error }
+            current = builtIn
+        }
         running = true
+        devices.onChange = { [weak self] in
+            Task { @MainActor in await self?.follow(.inputsChanged) }
+        }
+        devices.follow(current?.id)
+        reportInput(current)
     }
 
     func stop() async {
         running = false
         engine.onConfigurationChange = nil
+        devices.onChange = nil
+        devices.follow(nil)
         engine.stop()
         onBuffer = nil
+        current = nil
+        reportInput(nil)
     }
 
     @MainActor func restart(_ reason: CaptureRestartReason) async {
         await follow(reason == .stalled ? Cause.stalled : Cause.audioSystemRestarted)
     }
 
-    private enum Cause: Equatable { case deviceChanged, stalled, audioSystemRestarted }
+    private enum Cause: Equatable {
+        /// The engine's input or format changed.
+        case deviceChanged
+        /// An input came or went, the default changed, the input in use died, or the person chose another.
+        case inputsChanged
+        case stalled, audioSystemRestarted
 
-    /// Follows the new input (or starts the engine again) instead of ending the recording. One restart at a time;
-    /// a change that arrives during one is followed once it's done.
+        var isRestart: Bool { self == .stalled || self == .audioSystemRestarted }
+    }
+
+    /// Follows the input the choice resolves to (or starts the engine again) instead of ending the recording. One
+    /// restart at a time; a change that arrives during one is followed once it's done. A change that leaves the choice
+    /// where it was (another app's device coming or going) restarts nothing.
     @MainActor private func follow(_ cause: Cause) async {
         guard running, let deliver = onBuffer, let report = onEvent else { return }
         guard !restarting else {
             restartPending = restartPending ?? cause
             return
         }
+        if cause == .inputsChanged, devices.snapshot().resolved?.id == current?.id { return }
         let time = now()
         restartTimes = restartTimes.filter { time - $0 < Self.restartWindow } + [time]
         guard restartTimes.count <= Self.restartLimit else {
             running = false
             engine.stop()
-            report(.failed(RecordingError.interrupted(cause == .deviceChanged
-                ? "The microphone kept changing, so recording stopped. Everything up to then is saved."
-                : "The microphone stopped delivering audio, so recording stopped. Everything up to then is saved.")))
+            report(.failed(RecordingError.interrupted(cause.isRestart
+                ? "The microphone stopped delivering audio, so recording stopped. Everything up to then is saved."
+                : "The microphone kept changing, so recording stopped. Everything up to then is saved.")))
             return
         }
         restarting = true
         defer { restarting = false }
         engine.stop()
         var lastError: Error = RecordingError.noMicrophone
+        var snapshot = devices.snapshot()
         for delay in [0] + Self.retryDelays {
-            if delay > 0 { await pause(delay) }
+            if delay > 0 {
+                await pause(delay)
+                // An input that died meanwhile has left the list, so the next try resolves past it.
+                snapshot = devices.snapshot()
+            }
             guard running else { return }
+            let target = snapshot.resolved
             do {
-                let format = try engine.start(builtIn: false, deliver: deliver, report: report)
-                report(cause == .deviceChanged ? .deviceChanged(note(cause, format: format)) : .restarted(note(cause, format: format)))
+                let format = try engine.start(device: target?.id, deliver: deliver, report: report)
+                moved(to: target)
+                report(cause.isRestart ? .restarted(note(cause, format: format)) : .deviceChanged(note(cause, format: format)))
                 await followPending()
                 return
             } catch {
@@ -115,7 +169,8 @@ final class MicrophoneSource: CaptureAudioSource, @unchecked Sendable {
         }
         // The input that's there won't start: the Mac's own microphone, before giving up.
         guard running else { return }
-        if let format = try? engine.start(builtIn: true, deliver: deliver, report: report) {
+        if let builtIn = snapshot.builtIn, let format = try? engine.start(device: builtIn.id, deliver: deliver, report: report) {
+            moved(to: builtIn)
             report(.deviceChanged("The microphone couldn’t start, so recording moved to the Mac’s built-in microphone (\(Int(format.sampleRate)) Hz, \(format.channelCount) ch)."))
             await followPending()
             return
@@ -123,6 +178,12 @@ final class MicrophoneSource: CaptureAudioSource, @unchecked Sendable {
         engine.stop()
         running = false
         report(.failed(lastError))
+    }
+
+    @MainActor private func moved(to device: MicrophoneChoice.Device?) {
+        current = device
+        devices.follow(device?.id)
+        reportInput(device)
     }
 
     @MainActor private func followPending() async {
@@ -135,7 +196,9 @@ final class MicrophoneSource: CaptureAudioSource, @unchecked Sendable {
     private func note(_ cause: Cause, format: AVAudioFormat) -> String {
         let now = "now \(Int(format.sampleRate)) Hz, \(format.channelCount) ch"
         switch cause {
-        case .deviceChanged: return "The microphone changed (\(now)); recording continued."
+        case .deviceChanged, .inputsChanged:
+            guard let name = current?.name else { return "The microphone changed (\(now)); recording continued." }
+            return "The microphone changed to \(name) (\(now)); recording continued."
         case .stalled: return CaptureRestartReason.stalled.note("microphone") + " (\(now))"
         case .audioSystemRestarted: return CaptureRestartReason.audioSystemRestarted.note("microphone") + " (\(now))"
         }
@@ -149,16 +212,14 @@ final class AVMicrophoneEngine: MicrophoneEngine, @unchecked Sendable {
     private var engine: AVAudioEngine?
     private var observer: NSObjectProtocol?
 
-    func start(builtIn: Bool, deliver: @escaping CaptureBufferHandler, report: @escaping CaptureEventHandler) throws -> AVAudioFormat {
+    func start(device: String?, deliver: @escaping CaptureBufferHandler, report: @escaping CaptureEventHandler) throws -> AVAudioFormat {
         stop()
         let engine = AVAudioEngine()
         let input = engine.inputNode
-        if builtIn {
-            guard let device = Self.builtInInput(), let unit = input.audioUnit else { throw RecordingError.noMicrophone }
-            var id = device
-            let status = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
-                                              &id, UInt32(MemoryLayout<AudioDeviceID>.size))
-            guard status == noErr else { throw RecordingError.noMicrophone }
+        if let device {
+            // On the input unit before it starts, so the system's default input (idle AirPods, say) is never opened.
+            guard let object = CoreAudioInputs.object(for: device) else { throw RecordingError.noMicrophone }
+            try input.auAudioUnit.setDeviceID(object)
         }
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0 && format.channelCount > 0 else { throw RecordingError.noMicrophone }
@@ -191,18 +252,5 @@ final class AVMicrophoneEngine: MicrophoneEngine, @unchecked Sendable {
         engine.stop()
         engine.inputNode.removeTap(onBus: 0)
         self.engine = nil
-    }
-
-    /// The Mac's own microphone: the built-in device with input streams.
-    static func builtInInput() -> AudioDeviceID? {
-        let devices: [AudioObjectID] = (try? CoreAudioProperty.readArray(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDevices)) ?? []
-        return devices.first { device in
-            let transport: UInt32? = CoreAudioProperty.scalar(device, kAudioDevicePropertyTransportType)
-            guard transport == kAudioDeviceTransportTypeBuiltIn else { return false }
-            var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreams, mScope: kAudioDevicePropertyScopeInput,
-                                                     mElement: kAudioObjectPropertyElementMain)
-            var size: UInt32 = 0
-            return AudioObjectGetPropertyDataSize(device, &address, 0, nil, &size) == noErr && size > 0
-        }
     }
 }

@@ -180,19 +180,51 @@ places a track's first sample relative to the session anchor.
   Fusion applies it: a track this Mac recorded, and not otherwise placed, goes to `TranscriptFusion`
   as a placement with its measured rate (`SourceFusion`).
 
+## Choosing the microphone
+
+The microphone records the input `MicrophoneChoice` (DaybookKit) resolves to, the rule the iPhone
+follows too (docs/iphone.md, "Scope"):
+
+- **Automatic** (the default) records the system's default input, except a Bluetooth headset no
+  other app is recording from. Opening a headset's microphone switches it to its hands-free
+  profile, narrowband both ways, for the whole recording, so the built-in microphone records
+  instead. When a call app already records from the headset, it's in that profile anyway and it's
+  what hears the person, so it's recorded. "Records from" means the device is running
+  (`kAudioDevicePropertyDeviceIsRunningSomewhere`) and another process has input running on it
+  (`kAudioProcessPropertyDevices`, input scope), since a device runs for playback too; when the
+  processes can't be read, running counts.
+- **A chosen input** (Settings › Recording › Microphone, or Floating Notes' input menu) is used
+  whenever it's there. While it's away, another of its kind stands in (another headset for chosen
+  AirPods, another wired microphone for a USB one), else Automatic decides. The choice is kept in
+  the app's preferences (`microphoneChoice`).
+- `MicrophoneSource` sets the device on the engine's input unit (`auAudioUnit.setDeviceID`) before
+  the engine starts, so an idle default input is never opened. While it records it follows the
+  inputs (`CoreAudioMicrophoneDevices`): an input coming or going, the default input changing, the
+  input in use no longer alive (`kAudioDevicePropertyDeviceIsAlive`), or a new choice resolves the
+  choice again, and a different answer restarts the engine on it through the restart rules below
+  ("The microphone changed to MacBook Pro Microphone (now 48000 Hz, 1 ch); recording continued.").
+  A change that leaves the answer where it was restarts nothing. A chosen input that won't start
+  records the built-in microphone. Floating Notes names the input in use (`MicrophoneInUse`).
+- **The call tap.** The tap's aggregate takes its clock from the output device, listed as its
+  sub-device, so with AirPods as the output their microphone's streams are part of it. Whether that
+  alone switches them to hands-free needs hardware to tell; for that check,
+  `defaults write local.daybook DaybookTapOnlyAggregate -bool YES` builds the aggregate from the tap
+  alone (`ProcessTapSource.tapOnlyAggregate`).
+
 ## Device and route changes
 
-- **Microphone.** `MicrophoneSource` restarts its AVAudioEngine tap on the new input when
-  `AVAudioEngineConfigurationChange` fires. That happens when AirPods connect, or when they switch
-  to the hands-free profile because an app opened their microphone. `PCMTrackWriter` converts the
+- **Microphone.** `MicrophoneSource` restarts its AVAudioEngine tap on the input the choice
+  resolves to (above) when `AVAudioEngineConfigurationChange` fires. That happens when AirPods
+  connect, or when they switch to the hands-free profile because an app opened their microphone.
+  `PCMTrackWriter` converts the
   new format to the file's original format with `AVAudioConverter`. It drains the converter's
   look-ahead at every switch and at the end, so no frames are lost. It also pads the switch gap
   and starts a new clock segment. Restarts are limited by rate, not count: more than 10 in a minute
   is a microphone that won't settle, and ends the recording, so AirPods coming and going all day
   never do. A start that fails (a new device reporting 0 Hz for a moment) is tried again after 0.25,
-  0.5, 1, and 2 s, then on the Mac's built-in microphone (`AVMicrophoneEngine.builtInInput`), before
+  0.5, 1, and 2 s, reading the inputs again each time, then on the Mac's built-in microphone, before
   the microphone counts as failed. Each start is a fresh `AVAudioEngine` (behind `MicrophoneEngine`,
-  which tests replace).
+  which tests replace, as they replace the inputs behind `MicrophoneDevices`).
 - **Output route.** `AudioRouteMonitor` records the default output device: once at start, then at
   every device or data-source change. Data-source changes cover a headphone jack being plugged
   in. The events go in `capture-result.json` as `outputRoutes`.

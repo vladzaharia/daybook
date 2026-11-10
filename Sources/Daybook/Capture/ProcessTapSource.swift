@@ -169,19 +169,33 @@ final class ProcessTapSource: CaptureAudioSource, ProcessTapReporting, @unchecke
         tapID = AudioObjectID(kAudioObjectUnknown)
     }
 
-    private func createAggregateAndStart() throws {
-        guard let output = AudioRouteMonitor.defaultOutputDevice(),
-              let outputUID = CoreAudioProperty.string(output, kAudioDevicePropertyDeviceUID) else { throw ProcessTapError.noOutputDevice }
-        let description: [String: Any] = [
+    /// The hardware check for AH-08 (docs/validation.md, "Microphone choice"): with
+    /// `defaults write local.daybook DaybookTapOnlyAggregate -bool YES` the aggregate holds the tap alone, without the
+    /// output device as a sub-device, so an output that has a microphone (AirPods) brings no input streams into it.
+    static var tapOnlyAggregate: Bool { UserDefaults.standard.bool(forKey: "DaybookTapOnlyAggregate") }
+
+    /// The private aggregate the tap is read through: clocked by the output device, which is its sub-device, or, tap
+    /// only, by the tap.
+    static func aggregateDescription(outputUID: String, tapUUID: UUID, tapOnly: Bool) -> [String: Any] {
+        var description: [String: Any] = [
             kAudioAggregateDeviceNameKey: "Daybook call capture",
             kAudioAggregateDeviceUIDKey: "app.daybook.call-capture.\(UUID().uuidString)",
-            kAudioAggregateDeviceMainSubDeviceKey: outputUID,
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceIsStackedKey: false,
             kAudioAggregateDeviceTapAutoStartKey: true,
-            kAudioAggregateDeviceSubDeviceListKey: [[kAudioSubDeviceUIDKey: outputUID]],
             kAudioAggregateDeviceTapListKey: [[kAudioSubTapDriftCompensationKey: true, kAudioSubTapUIDKey: tapUUID.uuidString]]
         ]
+        if !tapOnly {
+            description[kAudioAggregateDeviceMainSubDeviceKey] = outputUID
+            description[kAudioAggregateDeviceSubDeviceListKey] = [[kAudioSubDeviceUIDKey: outputUID]]
+        }
+        return description
+    }
+
+    private func createAggregateAndStart() throws {
+        guard let output = AudioRouteMonitor.defaultOutputDevice(),
+              let outputUID = CoreAudioProperty.string(output, kAudioDevicePropertyDeviceUID) else { throw ProcessTapError.noOutputDevice }
+        let description = Self.aggregateDescription(outputUID: outputUID, tapUUID: tapUUID, tapOnly: Self.tapOnlyAggregate)
         var aggregate = AudioObjectID(kAudioObjectUnknown)
         try check(AudioHardwareCreateAggregateDevice(description as CFDictionary, &aggregate), "create the capture device")
         aggregateID = aggregate

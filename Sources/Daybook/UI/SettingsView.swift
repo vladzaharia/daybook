@@ -201,6 +201,7 @@ private struct RecordingSettings: View {
     var body: some View {
         Form {
             Section {
+                MicrophoneSettingsRow()
                 Toggle(isOn: computerAudio) {
                     Text("Include computer audio")
                     Text("Records the other people on a call.")

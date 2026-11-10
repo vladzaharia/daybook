@@ -46,6 +46,25 @@ final class FloatingNotesStatusTests: XCTestCase {
         XCTAssertEqual(silent?.detailIsWarning, true)
     }
 
+    /// Recording, the band's phase is the input menu: the input reads "MacBook Pro Microphone ▾", and a silent
+    /// microphone keeps the menu, since choosing another input is the fix (its words stay the warning's own).
+    func testBehaviorTheRecordingPhaseIsTheInputMenu() {
+        let menu = FloatingStatus.phase(recording { $0.recording.choosesInput = true })
+        XCTAssertEqual(menu, RecorderPhase(phase: .recording, title: "Recording", detail: "MacBook Pro Microphone ▾", choosesInput: true,
+                                           input: "MacBook Pro Microphone"))
+        let silent = FloatingStatus.phase(recording { $0.recording.choosesInput = true; $0.recording.microphoneSilent = true })
+        XCTAssertEqual(silent?.detail, "Microphone silent")
+        XCTAssertEqual(silent?.detailIsWarning, true)
+        XCTAssertEqual(silent?.choosesInput, true)
+        XCTAssertEqual(silent?.input, "MacBook Pro Microphone")
+        var saved = FloatingStatusInputs()
+        saved.phase = .saved
+        saved.recording.choosesInput = true
+        saved.recording.duration = 60
+        XCTAssertEqual(FloatingStatus.phase(saved)?.choosesInput, false, "only while recording")
+        XCTAssertEqual(RecordingStatusWords.inputChoice("iPhone Microphone"), "iPhone Microphone ▾")
+    }
+
     func testPhaseAfterStopAndWhenIdle() {
         var inputs = FloatingStatusInputs()
         XCTAssertNil(FloatingStatus.phase(inputs), "Nothing recording: the band stays quiet")
