@@ -366,7 +366,7 @@ extension AppState {
                                            recordsItself: request.cascade?.requesterRecords ?? true)
             let started: Bool
             if let start = phoneCapture.start { started = await start(id) }
-            else { await startRecording(into: id); started = recordingID == id }
+            else { await startRecording(into: id, from: .elsewhere); started = recordingID == id }
             guard started else {
                 phoneLeads[id] = nil
                 return .refused(LinkRecordRefusal(reason: .microphoneUnavailable, message: errorMessage ?? "This Mac couldn’t start recording."))

@@ -337,7 +337,7 @@ final class DaybookDelegate: NSObject, NSApplicationDelegate {
         guard let state else { return nil }
         let menu = NSMenu()
         menu.addItem(DockMenuItem(state.isRecording ? "Stop Recording" : "Start Recording") {
-            Task { if state.isRecording { await state.stopRecording() } else { await state.startRecording() } }
+            Task { if state.isRecording { await state.stopRecording() } else { await state.startRecording(from: .elsewhere) } }
         })
         if let id = state.recordingID {
             menu.addItem(DockMenuItem("Add Bookmark") { state.addHighlight(id) })

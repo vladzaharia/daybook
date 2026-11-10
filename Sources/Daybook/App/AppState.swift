@@ -105,6 +105,8 @@ final class AppState {
 
     /// The reason is said; the person has seen it.
     func dismissUnexpectedStop(_ id: UUID) { unexpectedStops[id] = nil }
+    /// After a Stop, the conversation Keep Recording records into for a while (AppState+RecordMore.swift).
+    let afterStop = AfterStopMoment()
     var readingPhotoID: UUID?
     var pendingPhotoReadings = Set<UUID>()
     /// Photos that couldn't be read wait before they're tried again (AppState+Photos.swift).
@@ -494,9 +496,12 @@ final class AppState {
             // its call was, or its app's answer stands.
             let meeting = self.meeting(for: candidate)
             if let meeting { self.askedMeetings.insert(meeting.id) }
+            // The next meeting: a Stop before it is final, so Keep Recording never joins the two (`RecordMore`).
+            self.afterStop.end()
             switch decision {
             case .record:
-                Task { await self.startRecording(title: meeting?.title ?? candidate.windowTitle, automatic: true) }
+                // Started by the call: in All Conversations, leaving the window as it was.
+                Task { await self.startRecording(title: meeting?.title ?? candidate.windowTitle, automatic: true, from: .elsewhere) }
                 return .recording
             case .ask:
                 self.askToRecord(candidate, in: meeting)
@@ -509,6 +514,8 @@ final class AppState {
         monitor.onMeetingEnded = { [weak self] call in
             guard let self else { return false }
             CallPromptWindow.shared.callEnded()
+            // The call's meeting is over: a Stop during it is final (`RecordMore`).
+            self.afterStop.end()
             if self.recordingWasAutomatic {
                 Task { await self.stopRecording(manual: false) }
                 return true
@@ -793,7 +800,8 @@ final class AppState {
                                              machine: ReplicaIdentity.currentMachine ?? "", savedAt: Date()), in: storageURL)
     }
 
-    /// A background import from a recorder (`selecting: false`) takes neither the place being viewed nor the selection.
+    /// One made from anywhere but the library window (`selecting: false`: a recorder's import, a recording started
+    /// elsewhere) takes neither the place being viewed nor the selection.
     @discardableResult func newMeeting(title: String = "Untitled Conversation", date: Date = Date(), selecting: Bool = true) -> UUID {
         var folder: UUID?, placement: LibraryPlacement?
         switch place {
@@ -1408,16 +1416,20 @@ extension AppState {
         "\(name.flatMap { $0.isEmpty ? nil : $0 } ?? "Conversation") at \(date.formatted(date: .omitted, time: .shortened))"
     }
 
-    /// Records into `existing` when given (a notes-only conversation), otherwise into a new conversation.
-    func startRecording(title: String? = nil, automatic: Bool = false, into existing: UUID? = nil) async {
+    /// Records into `existing` when given (a notes-only conversation), otherwise into a new conversation. From the
+    /// library window (`origin`), a new conversation goes into the place it shows and is selected; from anywhere else it
+    /// lands in All Conversations and the window stays as it was (`RecordingOrigin`).
+    func startRecording(title: String? = nil, automatic: Bool = false, into existing: UUID? = nil,
+                        from origin: RecordingOrigin = .window) async {
         guard isReady, recordingID == nil, !isStartingRecording, !isStoppingRecording else { return }
         guard !automatic || callPolicy != .off else { return }
         isStartingRecording = true
         defer { isStartingRecording = false }
         let previousSelection = selectedID
         let into = existing.flatMap { id in canRecordInto(id) ? id : nil }
-        let id = into ?? newMeeting(title: Self.recordingTitle(title, at: Date()))
-        selectedID = id
+        let fromWindow = origin == .window
+        let id = into ?? newMeeting(title: Self.recordingTitle(title, at: Date()), selecting: fromWindow)
+        if fromWindow { selectedID = id }
         prepareSourceCapture(id)
         let directory = storageURL.appendingPathComponent("Staging").appendingPathComponent(id.uuidString)
         captureDirectory = directory
@@ -1430,8 +1442,10 @@ extension AppState {
             try await recorder.start(in: directory, includeSystemAudio: includeComputerAudio, callApp: callApp)
             startCaptions()
             recordingID = id
-            // A conversation recorded into again, however it was started, is no longer one that stopped short.
+            // A conversation recorded into again, however it was started, is no longer one that stopped short; and
+            // another recording ends the moment after the last Stop.
             unexpectedStops[id] = nil
+            afterStop.end()
             recordingStartedAt = recorder.startedAt ?? Date()
             update(id) { $0.status = .recording; $0.date = recordingStartedAt ?? Date() }
             recordingDidStart(id)
@@ -1466,18 +1480,24 @@ extension AppState {
         catch { Self.log.notice("An empty conversation couldn't be removed: \(error.localizedDescription, privacy: .public)") }
     }
 
-    func stopRecording(manual: Bool = true) async {
+    /// `meetingOver`: the person said Stop when asked as the call or the calendar's meeting ended.
+    func stopRecording(manual: Bool = true, meetingOver: Bool = false) async {
         guard !isStoppingRecording else { return }
         if manual { monitor.suppressCurrentMeeting() }
         isStoppingRecording = true
-        if let result = await recorder.stop() { await finishCapture(result) }
+        // A Stop of the person's own (here or on a device recording with it) can be taken back for a while with Keep
+        // Recording; one the meeting's end made (the call ending, or the question it asked), or turning calls off,
+        // can't.
+        if let result = await recorder.stop() { await finishCapture(result, keepsRecording: manual && !meetingOver) }
         isStoppingRecording = false
     }
 
-    private func finishCapture(_ result: CaptureResult) async {
+    /// `keepsRecording`: Keep Recording records into the conversation for a while after this stop (`RecordMore`).
+    private func finishCapture(_ result: CaptureResult, keepsRecording: Bool = true) async {
         guard let id = recordingID ?? UUID(uuidString: result.directory.lastPathComponent) else { return }
         finishCaptions()
         recordingWillFinish(id, at: result.endedAt)
+        if keepsRecording { afterStop.began(id, at: result.endedAt) } else { afterStop.end() }
         recordingID = nil; recordingStartedAt = nil; recordingWasAutomatic = false
         calendarMeeting = nil
         CallPromptWindow.shared.recordingEnded()

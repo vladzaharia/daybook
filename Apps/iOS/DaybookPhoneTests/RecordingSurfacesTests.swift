@@ -481,6 +481,31 @@ final class RecorderScreenTests: XCTestCase {
    AfterStop.stay(for: .none), "nothing to show: the library at once, not after a pause")
  }
 
+ /// After Stop the iPhone follows the Mac's rule (`RecordMore`): Keep Recording into the same conversation for two
+ /// minutes, said while it's still being added too; then Record. A recording that stopped on its own says Record
+ /// Again; one that couldn't be added records anew.
+ func testBehaviorAfterStopKeepRecordingFollowsTheRuleBothAppsShare() {
+  let stop = Date(timeIntervalSinceReferenceDate: 800_000_000)
+  let saved = AfterStop.Outcome.saved(UUID())
+  XCTAssertEqual(
+   AfterStop.recordMore(saved, stoppedShort: false, stoppedAt: stop, now: stop.addingTimeInterval(9)),
+   .keepRecording)
+  XCTAssertEqual(
+   AfterStop.recordMore(.saving, stoppedShort: false, stoppedAt: stop, now: stop), .keepRecording,
+   "the words don't change as it lands")
+  XCTAssertEqual(
+   AfterStop.recordMore(saved, stoppedShort: false, stoppedAt: stop, now: stop.addingTimeInterval(121)),
+   .record, "writing held the moment past two minutes")
+  XCTAssertEqual(
+   AfterStop.recordMore(saved, stoppedShort: true, stoppedAt: stop, now: stop), .recordAgain)
+  XCTAssertEqual(
+   AfterStop.recordMore(
+    .failed(PhoneAppModel.notFiled), stoppedShort: false, stoppedAt: stop, now: stop), .record)
+  XCTAssertEqual(
+   AfterStop.recordMore(saved, stoppedShort: false, stoppedAt: stop, now: stop).title,
+   "Keep Recording")
+ }
+
  func testBehaviorBookmarksAndPhotosAreMarksInTheNotesLane() {
   let mark = Highlight(time: 4, text: "")
   let photo = CapturePhoto(fileName: "photo-a.heic", capturedAt: Date(), time: 6)

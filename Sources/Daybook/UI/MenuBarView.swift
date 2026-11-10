@@ -20,7 +20,7 @@ struct MenuBarView: View {
             Button("Add Bookmark") { if let id = state.recordingID { state.addHighlight(id) } }
                 .keyboardShortcut("d")
         } else {
-            Button("Start Recording") { Task { await state.startRecording() } }
+            Button("Start Recording") { Task { await state.startRecording(from: .elsewhere) } }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(!state.isReady || state.isStartingRecording)
         }

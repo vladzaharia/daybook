@@ -30,9 +30,18 @@ extension AppState {
         return calendarMeeting.event
     }
 
-    /// One look at the calendar: a meeting starting asks to be recorded, one recorded from its start that's over asks
-    /// whether to stop.
+    /// A meeting with other people that has started (or is about to) since the last Stop: the next meeting, so that Stop
+    /// is final and Keep Recording gives way to Record (`RecordMore`).
+    func nextMeetingStarted(at now: Date = Date()) -> Bool {
+        guard usesCalendar, meetingCalendar.access == .allowed, let stopped = afterStop.stoppedAt else { return false }
+        return CalendarMeetings.startingNow(meetingCalendar.events(from: now.addingTimeInterval(-3600), to: now.addingTimeInterval(3600)),
+                                            at: now, asked: []).contains { $0.start > stopped }
+    }
+
+    /// One look at the calendar: the next meeting ends the moment after a Stop; a meeting starting asks to be recorded,
+    /// one recorded from its start that's over asks whether to stop.
     func checkCalendar(at now: Date = Date()) {
+        if nextMeetingStarted(at: now) { afterStop.end() }
         if let meeting = meetingToAsk(at: now) {
             askToRecord(meeting)
         } else if let meeting = meetingToStop(at: now) {

@@ -79,7 +79,7 @@ enum IntentActions {
     /// Starts recording a new conversation; already recording, nothing changes.
     static func startRecording(_ state: AppState) async throws {
         guard state.recordingID == nil, !state.isStartingRecording else { return }
-        await state.startRecording()
+        await state.startRecording(from: .elsewhere)
         // A start that failed says why in the window's alert; Shortcuts says it too.
         guard state.recordingID != nil else {
             throw DaybookIntentError.failed(state.problem?.message ?? "Recording couldn’t start.")
