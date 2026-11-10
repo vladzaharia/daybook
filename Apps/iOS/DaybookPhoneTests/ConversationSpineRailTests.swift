@@ -5,6 +5,9 @@ import XCTest
 
 @MainActor
 final class ConversationSpineRailTests: XCTestCase {
+ /// A clock running as fast as a clock may (`ClockRate.maximumDriftPPM`): placements keep their rate.
+ private let rate = 1.001
+
  private func track(
   _ name: String, duration: TimeInterval? = nil, offset: TimeInterval? = nil,
   alignment: SourceAlignment? = nil
@@ -21,16 +24,17 @@ final class ConversationSpineRailTests: XCTestCase {
  func testExtentAndNormalizedBookmarksUseTheMeetingTimeline() throws {
   let recording = track("placed", duration: 120)
   var meeting = Meeting(
-   tracks: [recording], unifiedTranscript: [segment(200)],
-   alignmentReports: [.init(trackID: recording.id, method: .anchors, offset: 20, rate: 2)],
+   tracks: [recording], unifiedTranscript: [segment(100)],
+   alignmentReports: [.init(trackID: recording.id, method: .anchors, offset: 20, rate: rate)],
    highlights: [
     .init(time: 0), .init(time: 65), .init(trackID: recording.id, time: 15),
     .init(time: 1_000),
    ])
+  let end = 20 + 120 * rate
   let rail = try XCTUnwrap(ConversationSpineRailData(meeting: meeting))
-  XCTAssertEqual(rail.duration, 260, "a placed recording's offset and rate extend the timeline")
+  XCTAssertEqual(rail.duration, end, "a placed recording's offset and rate extend the timeline")
   XCTAssertEqual(
-   rail.bookmarks, [0, 0.25, 50.0 / 260.0, 1], "source-local bookmarks are aligned; outliers clamp")
+   rail.bookmarks, [0, 65 / end, (20 + 15 * rate) / end, 1], "source-local bookmarks are aligned; outliers clamp")
   XCTAssertNil(rail.playhead(at: 10), "no loaded player")
   let player = ConversationSpineRailData.Player(
    meetingID: meeting.id, trackID: recording.id, duration: 120)
@@ -48,7 +52,7 @@ final class ConversationSpineRailTests: XCTestCase {
 
  func testStoredPlacementWithoutReportPlacesBookmarkAtPlayhead() throws {
   let recording = track(
-   "manual", duration: 100, alignment: .init(method: .manual, offset: 20, rate: 2))
+   "manual", duration: 100, alignment: .init(method: .manual, offset: 20, rate: rate))
   let meeting = Meeting(
    tracks: [recording], highlights: [.init(trackID: recording.id, time: 15)])
   let player = ConversationSpineRailData.Player(
@@ -56,13 +60,13 @@ final class ConversationSpineRailTests: XCTestCase {
   let rail = try XCTUnwrap(ConversationSpineRailData(meeting: meeting, player: player))
   XCTAssertEqual(rail.bookmarks.count, 1)
   let bookmark = try XCTUnwrap(rail.bookmarks.first)
-  XCTAssertEqual(bookmark, 50.0 / 220.0, accuracy: 0.000_001)
+  XCTAssertEqual(bookmark, (20 + 15 * rate) / (20 + 100 * rate), accuracy: 0.000_001)
   XCTAssertEqual(try XCTUnwrap(rail.playhead(at: 15)), bookmark, accuracy: 0.000_001)
  }
 
  func testStoredPlacementTakesPrecedenceOverStaleReportForBookmark() throws {
   let recording = track(
-   "manual", duration: 100, alignment: .init(method: .manual, offset: 20, rate: 2))
+   "manual", duration: 100, alignment: .init(method: .manual, offset: 20, rate: rate))
   let meeting = Meeting(
    tracks: [recording],
    alignmentReports: [.init(trackID: recording.id, method: .anchors, offset: 5, rate: 1)],
@@ -72,7 +76,7 @@ final class ConversationSpineRailTests: XCTestCase {
   let rail = try XCTUnwrap(ConversationSpineRailData(meeting: meeting, player: player))
   XCTAssertEqual(rail.bookmarks.count, 1)
   let bookmark = try XCTUnwrap(rail.bookmarks.first)
-  XCTAssertEqual(bookmark, 50.0 / 220.0, accuracy: 0.000_001)
+  XCTAssertEqual(bookmark, (20 + 15 * rate) / (20 + 100 * rate), accuracy: 0.000_001)
   XCTAssertEqual(try XCTUnwrap(rail.playhead(at: 15)), bookmark, accuracy: 0.000_001)
  }
 
@@ -135,7 +139,7 @@ final class ConversationSpineRailTests: XCTestCase {
   let overflowing = track("overflow", duration: .greatestFiniteMagnitude)
   let meeting = Meeting(
    tracks: [overflowing], unifiedTranscript: [segment(10), segment(.infinity)],
-   alignmentReports: [.init(trackID: overflowing.id, method: .anchors, rate: 2)],
+   alignmentReports: [.init(trackID: overflowing.id, method: .anchors, rate: rate)],
    highlights: [
     .init(time: .nan), .init(time: .infinity), .init(time: -1),
     .init(trackID: overflowing.id, time: .greatestFiniteMagnitude),
@@ -147,15 +151,16 @@ final class ConversationSpineRailTests: XCTestCase {
  }
 
  func testPlayerUsesItsPlacedTrackAndLoadedDuration() throws {
-  let recording = track("placed", alignment: .init(method: .manual, offset: 20, rate: 2))
+  let recording = track("placed", alignment: .init(method: .manual, offset: 20, rate: rate))
   let meeting = Meeting(
    tracks: [recording], unifiedTranscript: [segment(50)], highlights: [.init(time: 55)])
   let player = ConversationSpineRailData.Player(
    meetingID: meeting.id, trackID: recording.id, duration: 100)
+  let end = 20 + 100 * rate
   let rail = try XCTUnwrap(ConversationSpineRailData(meeting: meeting, player: player))
-  XCTAssertEqual(rail.duration, 220, "loaded audio supplies the missing recording length")
-  XCTAssertEqual(rail.bookmarks, [0.25])
-  XCTAssertEqual(try XCTUnwrap(rail.playhead(at: 40)), 100.0 / 220.0, accuracy: 0.000_001)
+  XCTAssertEqual(rail.duration, end, "loaded audio supplies the missing recording length")
+  XCTAssertEqual(rail.bookmarks, [55 / end])
+  XCTAssertEqual(try XCTUnwrap(rail.playhead(at: 40)), (20 + 40 * rate) / end, accuracy: 0.000_001)
   XCTAssertEqual(rail.playhead(at: 1_000), 1, "a position past the extent clamps")
   XCTAssertNil(rail.playhead(at: -1))
   XCTAssertNil(rail.playhead(at: .nan))
@@ -185,7 +190,7 @@ final class ConversationSpineRailTests: XCTestCase {
    ConversationSpineRailData(meeting: meeting, player: unknownLength))
   XCTAssertEqual(
    unknownLengthRail.duration, 50, "a nonfinite player duration cannot enlarge the extent")
-  XCTAssertEqual(try XCTUnwrap(unknownLengthRail.playhead(at: 10)), 0.8, accuracy: 0.000_001)
+  XCTAssertEqual(try XCTUnwrap(unknownLengthRail.playhead(at: 10)), (20 + 10 * rate) / 50, accuracy: 0.000_001)
   XCTAssertNil(
    earlyRail.playhead(at: 10), "a valid local position before timeline zero is excluded")
   XCTAssertEqual(earlyRail.playhead(at: 20), 0)

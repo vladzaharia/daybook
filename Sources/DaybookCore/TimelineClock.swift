@@ -163,10 +163,13 @@ extension Meeting {
         return tracks.first?.id == track.id ? TimelineClock(offset: 0, method: .origin) : nil
     }
 
+    /// A report without a usable rate (zero, not a number) places nothing.
     private func reportedClock(_ trackID: UUID) -> TimelineClock? {
         guard let report = alignmentReports.first(where: { $0.trackID == trackID }), report.method != .unaligned,
-              report.offset.isFinite else { return nil }
-        return TimelineClock(offset: report.offset, rate: ClockRate.bounded(report.rate) ?? 1, method: .init(report.method),
+              report.offset.isFinite, report.rate.isFinite, report.rate > 0 else { return nil }
+        let duration = tracks.first { $0.id == trackID }?.duration
+        let physical = TimelineClock.physical(offset: report.offset, rate: report.rate, duration: duration)
+        return TimelineClock(offset: physical.offset, rate: physical.rate, method: .init(report.method),
                              confidence: report.confidence, dependsOn: report.referenceTrackID)
     }
 }
