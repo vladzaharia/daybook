@@ -243,7 +243,7 @@ final class PhoneLink {
             pairingsRetries = 0
             pairingsRetry?.cancel(); pairingsRetry = nil
         } catch {
-            Self.log.error("Couldn’t read the iPhone pairings: \(String(describing: error), privacy: .public)")
+            Self.log.error("Couldn’t read the iPhone pairings (\(error.logCode, privacy: .public)): \(String(describing: error), privacy: .private)")
             pairingsReadFailed = true
             scheduleReloadPairings()
         }

@@ -38,6 +38,8 @@ final class PhoneTrackWriter: @unchecked Sendable {
     private var writer: AACSegmentWriter?
     private let converter = PCMFormatConverter()
     private var lastAnchor: ClockAnchor?
+    /// Which anchors the journal keeps; `lastAnchor`, for judging gaps, is always the latest.
+    private var anchorSchedule = ClockAnchorSchedule()
     private var pendingResync = false
     private var pendingNotes: [String] = []
     private var failed = false
@@ -157,7 +159,7 @@ final class PhoneTrackWriter: @unchecked Sendable {
             if lastAnchor == nil || pendingResync || hostTime - (lastAnchor?.hostTime ?? 0) >= Self.anchorInterval {
                 let anchor = ClockAnchor(frame: frames, hostTime: hostTime, resync: pendingResync && lastAnchor != nil ? true : nil)
                 lastAnchor = anchor
-                newAnchor = anchor
+                if anchorSchedule.keeps(anchor) { newAnchor = anchor }
                 pendingResync = false
             }
             try writer.append(buffer)
@@ -183,6 +185,7 @@ final class PhoneTrackWriter: @unchecked Sendable {
         let fileName = CaptureSegment.fileName(index: index)
         writer = try AACSegmentWriter(url: directory.appendingPathComponent(fileName), format: format, realTime: realTime)
         lastAnchor = nil
+        anchorSchedule = ClockAnchorSchedule()
         let start = lock.withLock { sessionAnchor.map { clock.continuousTime(forHostTime: host) - $0.continuousTime } } ?? 0
         let segment = CaptureSegment(index: index, fileName: fileName, startOffset: max(0, start), frameCount: 0, closed: false,
                                      firstSampleHostTime: host, clockAnchors: [], notes: nil)

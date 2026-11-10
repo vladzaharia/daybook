@@ -464,7 +464,7 @@ public final class SoundcoreConnection: DiscoveringConnection, RecordingStateCon
     private func listingFailed(_ error: Error) {
         guard case .connected = phase, (error as? SoundcoreError) != .disconnected, !(error is CancellationError) else { return }
         lastListing = ListingOutcome(at: Date(), result: .failed(error.localizedDescription))
-        Self.log.notice("Recording list failed: \(error.localizedDescription, privacy: .public)")
+        Self.log.notice("Recording list failed (\(error.logCode, privacy: .public)): \(error.localizedDescription, privacy: .private)")
         if problem == nil { problem = SoundcoreIssue.listFailed.problem }
         scheduleRelist()
         publish()
@@ -1570,7 +1570,7 @@ extension SoundcoreConnection: SoundcoreFastTransferHost {
 
     func fastTransferFailed(_ error: Error) {
         lastTechnicalProblem = "Fast Transfer: \(error.localizedDescription)"
-        Self.log.notice("Fast Transfer fell back to Bluetooth: \(error.localizedDescription, privacy: .public)")
+        Self.log.notice("Fast Transfer fell back to Bluetooth (\(error.logCode, privacy: .public)): \(error.localizedDescription, privacy: .private)")
         switch error {
         case SoundcoreHotspotError.unavailable:
             storage.set(wifiHooks.build, "fastTransferUnavailableIn")

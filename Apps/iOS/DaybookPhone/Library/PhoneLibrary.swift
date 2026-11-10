@@ -349,7 +349,7 @@ final class PhoneLibrary {
                 if changes == broughtInChanges { broughtInUnsaved = false }
             } catch {
                 broughtInUnsaved = true
-                Self.log.error("Couldn’t save the recordings brought in on this iPhone: \(error.localizedDescription, privacy: .public)")
+                Self.log.error("Couldn’t save the recordings brought in on this iPhone (\(error.logCode, privacy: .public)): \(error.localizedDescription, privacy: .private)")
             }
         }
         broughtInWrite = write
@@ -364,7 +364,7 @@ final class PhoneLibrary {
             let ids = try JSONDecoder().decode([String].self, from: Data(contentsOf: url))
             return Set(ids.compactMap(UUID.init(uuidString:)))
         } catch {
-            log.error("Couldn’t read the recordings brought in on this iPhone: \(String(describing: error), privacy: .public)")
+            log.error("Couldn’t read the recordings brought in on this iPhone (\(error.logCode, privacy: .public)): \(String(describing: error), privacy: .private)")
             return []
         }
     }

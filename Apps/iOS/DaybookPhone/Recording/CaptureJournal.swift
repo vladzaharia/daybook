@@ -15,7 +15,8 @@ struct CaptureSegment: Codable, Equatable, Sendable {
     var closed: Bool
     /// Host time (seconds) of the first sample.
     var firstSampleHostTime: TimeInterval
-    /// Frame/host-time pairs about once a second, for measuring the microphone clock's drift.
+    /// Frame/host-time pairs for measuring the microphone clock's drift: about once a second for a run's first minute,
+    /// then about every ten seconds (`ClockAnchorSchedule`).
     var clockAnchors: [ClockAnchor]
     /// Format conversions and device switches inside this segment.
     var notes: [String]?
@@ -187,9 +188,10 @@ struct PhoneCaptureJournal: Codable, Equatable, Sendable {
 }
 
 enum JournalCoding {
+    /// Compact: the journal is rewritten every few seconds while recording. Earlier, pretty-printed journals read the same.
     static func encoder() -> JSONEncoder {
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.outputFormatting = [.sortedKeys]
         encoder.dateEncodingStrategy = .millisecondsSince1970
         return encoder
     }
