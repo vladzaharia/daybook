@@ -343,7 +343,7 @@ final class RecordingSurfacesTests: XCTestCase {
   try await model.startRecording()
   rig.pump(1)
   rig.recorder.updateLevels()
-  XCTAssertEqual(RecordingStatusWords.phase(PhoneRecorderStatus.inputs(model))?.detail, "Synthetic Microphone")
+  XCTAssertEqual(RecordingStatusWords.phase(PhoneRecorderStatus.inputs(model))?.detail, RecordingStatusWords.inputChoice("Synthetic Microphone"))
   XCTAssertEqual(model.activityState().level, 1)
   XCTAssertEqual(model.activityState().title(isStale: false), "Recording")
 
@@ -359,7 +359,7 @@ final class RecordingSurfacesTests: XCTestCase {
   rig.inputs.current.signal = .tone(frequency: 440, amplitude: 0.3)
   rig.pump(0.2)
   rig.recorder.updateLevels()
-  XCTAssertEqual(RecordingStatusWords.phase(PhoneRecorderStatus.inputs(model))?.detail, "Synthetic Microphone")
+  XCTAssertEqual(RecordingStatusWords.phase(PhoneRecorderStatus.inputs(model))?.detail, RecordingStatusWords.inputChoice("Synthetic Microphone"))
   XCTAssertEqual(model.activityState().title(isStale: false), "Recording")
   try await model.stopRecording()
  }
