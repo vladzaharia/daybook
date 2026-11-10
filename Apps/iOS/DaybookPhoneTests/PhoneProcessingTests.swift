@@ -509,6 +509,34 @@ final class PhoneProcessingTests: XCTestCase {
         XCTAssertFalse(rig.processor.isStartedByPerson(mac, work: .transcribe([])))
     }
 
+    /// Regression (iOS 27's `submitTaskRequest`): `begin` said yes before the system had answered. Its result is now the
+    /// system's answer, and a refusal forgets the request, so asking again for the same job asks the system again.
+    func testBehaviorBeginReportsTheSystemsAnswer() async throws {
+        let scheduler = ScriptedScheduler()
+        scheduler.refuses = true
+        let continued = ContinuedProcessing(scheduler: scheduler)
+        let job = UUID()
+        let refused = await continued.begin(job: job, title: "Transcribing", subtitle: "1 conversation").value
+        XCTAssertFalse(refused)
+        XCTAssertFalse(continued.isRunning)
+
+        scheduler.refuses = false
+        let accepted = await continued.begin(job: job, title: "Transcribing", subtitle: "1 conversation").value
+        XCTAssertTrue(accepted, "a refused job asks again")
+        XCTAssertEqual(scheduler.submitted.count, 1)
+        try await waitUntil("the system to start the task") { continued.isRunning }
+        let again = await continued.begin(job: job, title: "Transcribing", subtitle: "1 conversation").value
+        XCTAssertTrue(again)
+        XCTAssertEqual(scheduler.submitted.count, 1, "an accepted job isn't asked for twice")
+        continued.end(success: true)
+        XCTAssertEqual(scheduler.tasks.first?.completed, true)
+        let next = await continued.begin(job: UUID(), title: "Transcribing", subtitle: "1 conversation").value
+        XCTAssertTrue(next)
+        XCTAssertEqual(scheduler.submitted.count, 2, "a new job asks anew")
+        let unscheduled = await ContinuedProcessing(scheduler: nil).begin(job: job, title: "", subtitle: "").value
+        XCTAssertFalse(unscheduled, "no scheduler, no task")
+    }
+
     func testBehaviorWithoutAContinuedTaskLeavingTheScreenPausesTheWork() async throws {
         let rig = try await rig()
         rig.scheduler.refuses = true
