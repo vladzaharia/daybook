@@ -531,7 +531,11 @@ preferences (the policy, the countdown's length, the effort) are read from each 
 
 **When it counts down.** Only when there's something to choose. Without a cloud model on offer (no key, or
 Never) a summary starts at once where it can, as before there was a cloud. **Always** sends it to the cloud
-with no countdown. A summary someone asked for starts at once wherever it can: Summarize Again, a template,
+with no countdown, except a **Personal** conversation (filed there, or its template or summary says so:
+`Meeting.effectivePlacement`), which is never sent on its own: it counts down as Offer First does, or waits for a
+Mac, and the cloud is only ever the person's choice for it (Use the Cloud). The planner reads it as `isPersonal`,
+which each app's `SummaryPlacements.isPersonal` answers from its library as the planner begins. A summary someone
+asked for starts at once wherever it can: Summarize Again, a template,
 Identify Speakers Again, Transcribe Everything Again, here or as another device's request. Only the summary
 that new audio makes due counts down.
 
@@ -539,8 +543,8 @@ that new audio makes due counts down.
 countdown keeps its deadline when where it ends up changes (the Mac it counted down to went away and another
 is reachable; this device became able to summarize, or stopped); one with nowhere left to go waits for a Mac;
 one whose cloud went away (the key removed, Never chosen) starts its default now, since the countdown was
-there to offer the cloud; Always chosen sends it to the cloud. Waiting turns into a fresh countdown when
-somewhere to run it appears.
+there to offer the cloud; Always chosen sends it to the cloud, except a Personal one, which keeps counting down.
+Waiting turns into a fresh countdown when somewhere to run it appears.
 
 **On the Mac.** The summary step of every job goes through the planner (`placedSummary`): when the
 transcript is ready and the summary is due, the job reads Settings › Cloud again (`AppState.cloud.reload`),
@@ -660,7 +664,8 @@ option, and goes everywhere once the work is done or the offer dismissed.
 - **Within reach:** this device's own models (`ProcessingCapabilities.models`; a Mac's whether or not it takes other
   devices' work; the iPhone redoes only a conversation whose every recording is its own, as it transcribes only those),
   the Macs reachable now that name their models (the placement's reachability; an earlier Daybook names none, so offers
-  nothing), and for the summary the cloud model Settings › Cloud resolves to, with a key and unless Never. The best rank
+  nothing), and for the summary the cloud model Settings › Cloud resolves to, with a key and unless Never, and never for
+  a Personal conversation. The best rank
   wins; on a tie this device, then the Macs in order, then the cloud, so the work stays nearest. A transcription model
   must cover each recording's language as it was transcribed.
 - **Clearly better:** the best must rank at least the step's margin above what's there now. Without one, every Gemma 4

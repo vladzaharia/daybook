@@ -9,8 +9,9 @@ import Foundation
 ///   reachable. Use the Cloud, Start Now, and, on a device that isn't a Mac, Wait for a Mac.
 /// - With nowhere to run it but the cloud, it waits for a Mac, with Use the Cloud, and counts down once a
 ///   Mac is reachable.
-/// - Always skips the countdown for the cloud. Without a cloud model on offer there's nothing to choose,
-///   so it starts at once where it can, or waits as before.
+/// - Always skips the countdown for the cloud, except for a Personal conversation (`isPersonal`), which counts down
+///   as Offer First does: the cloud is only ever a choice the person makes for it. Without a cloud model on offer
+///   there's nothing to choose, so it starts at once where it can, or waits as before.
 /// - Asked for by the person or another device, it starts at once (`immediately`).
 ///
 /// Pure: every change takes the time, so tests drive it with a clock of their own.
@@ -49,13 +50,17 @@ public struct SummaryPlacementPlanner: Equatable, Sendable {
     public let waitsForMacs: Bool
     /// The person chose Wait for a Mac: this device's own summarizer is passed over from then on.
     public private(set) var prefersMac = false
+    /// The conversation is Personal (placed there, or its template or kind says so: `Meeting.effectivePlacement`). It's
+    /// never sent to the cloud on its own: under Always it counts down as Offer First does, with Use the Cloud.
+    public let isPersonal: Bool
 
     public init(options: SummaryOptions, preferences: CloudSummaryPreferences, at now: Date,
-                immediately: Bool = false, waitsForMacs: Bool = false) {
+                immediately: Bool = false, waitsForMacs: Bool = false, personal: Bool = false) {
         self.options = options
         self.preferences = preferences
         self.immediately = immediately
         self.waitsForMacs = waitsForMacs
+        isPersonal = personal
         phase = .waiting
         phase = plan(at: now)
     }
@@ -64,6 +69,9 @@ public struct SummaryPlacementPlanner: Equatable, Sendable {
 
     /// The cloud model on offer: one the preferences resolve to, unless the policy is Never.
     public var cloud: CloudModel? { preferences.policy == .never ? nil : options.cloud }
+
+    /// The cloud model Always sends it to with no countdown: none for a Personal conversation.
+    private var alwaysCloud: CloudModel? { preferences.policy == .always && !isPersonal ? cloud : nil }
 
     /// How long a countdown lasts: the setting (15 or 30 s), never less than a second.
     public var countdown: TimeInterval { TimeInterval(max(1, preferences.countdownSeconds)) }
@@ -138,7 +146,7 @@ public struct SummaryPlacementPlanner: Equatable, Sendable {
         case .started:
             return
         case .countingDown(let place, let until):
-            if self.preferences.policy == .always, let cloud {
+            if let cloud = alwaysCloud {
                 phase = .started(.cloud(cloud))
                 return
             }
@@ -167,7 +175,7 @@ public struct SummaryPlacementPlanner: Equatable, Sendable {
     }
 
     private func plan(at now: Date) -> Phase {
-        if preferences.policy == .always, let cloud { return .started(.cloud(cloud)) }
+        if let cloud = alwaysCloud { return .started(.cloud(cloud)) }
         guard let target = defaultPlace else { return cloud == nil ? .waiting : .waitingForMac }
         // Asked for, or nothing to offer instead: it starts where it can, now.
         if immediately || cloud == nil { return .started(target) }

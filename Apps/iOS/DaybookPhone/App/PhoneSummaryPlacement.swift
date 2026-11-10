@@ -44,6 +44,8 @@ extension LibraryController {
 ///   iPhone stops its own countdown for that conversation.
 /// - **In the background**, where a countdown can't run, each countdown's default happens at once, and a
 ///   summary waiting for a Mac is left to one through the library.
+/// - **Personal** (placed there, or its template or kind says so) is never sent to the cloud on its own: under Always
+///   it counts down as Offer First does, or waits for a Mac, with Use the Cloud.
 @MainActor
 @Observable
 final class PhoneSummaryPlacement {
@@ -100,6 +102,7 @@ final class PhoneSummaryPlacement {
         self.runsTimer = runsTimer
         placements = SummaryPlacements(waitsForMacs: true, clock: clock, runsTimer: runsTimer)
         placements.onSettled = { [weak self] id, phase in self?.settled(id, phase) }
+        placements.isPersonal = { [weak library] id in library?.meeting(id)?.effectivePlacement == .personal }
         // A Mac's countdown or work on a conversation ends this iPhone's own countdown for it.
         link.onLiveProgress = { [weak self] _ in self?.refresh() }
     }

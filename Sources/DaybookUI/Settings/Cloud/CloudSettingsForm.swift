@@ -36,7 +36,7 @@ public struct CloudSettingsForm: View {
     }
 
     /// The pane's one footer line.
-    public static let footer = "Sends the transcript and notes, never audio."
+    public static let footer = "Sends the transcript, notes, and vocabulary, never audio."
 
     /// Removing a key: what it means for the other devices.
     public static let removalMessage = "It’s removed from your other devices too."

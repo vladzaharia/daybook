@@ -185,8 +185,8 @@ public enum Upgrades {
     }
 
     /// The best model within reach for `role`, by rank: this device's, then each reachable Mac's in order, then (for
-    /// summaries) the cloud's; on a tie the earlier one, so work stays nearest. A transcription model is a candidate only
-    /// when it covers every recording's language as transcribed.
+    /// summaries) the cloud's, never for a Personal conversation; on a tie the earlier one, so work stays nearest. A
+    /// transcription model is a candidate only when it covers every recording's language as transcribed.
     static func best(_ role: UpgradeRole, for meeting: Meeting, candidates: UpgradeCandidates,
                      ranks: UpgradeRanks) -> (place: UpgradeOffer.Place, model: String, quality: Int)? {
         var options: [(place: UpgradeOffer.Place, model: String)] = []
@@ -196,7 +196,10 @@ public enum Upgrades {
         for mac in candidates.macs {
             if let model = runs(role, mac.capabilities) { options.append((.mac(ProcessingRequest.Device(id: mac.id, name: mac.name)), model)) }
         }
-        if role == .summarization, let cloud = candidates.cloud { options.append((.cloud(cloud), "\(cloud.provider.rawValue)/\(cloud.id)")) }
+        // A Personal conversation is never nudged toward the cloud: it goes there only when the person chooses it.
+        if role == .summarization, meeting.effectivePlacement != .personal, let cloud = candidates.cloud {
+            options.append((.cloud(cloud), "\(cloud.provider.rawValue)/\(cloud.id)"))
+        }
         var best: (place: UpgradeOffer.Place, model: String, quality: Int)?
         for option in options {
             guard let quality = ranks.quality(of: option.model, for: role), quality > (best?.quality ?? -1) else { continue }

@@ -290,6 +290,30 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         XCTAssertTrue(rig.inference.summarized.isEmpty)
     }
 
+    /// A Personal conversation is never sent to the cloud on its own: under Always it counts down as Offer First does,
+    /// and Use the Cloud is the person's choice for that one conversation.
+    func testBehaviorAlwaysCountsDownForAPersonalConversation() async throws {
+        let cloud = FakeCloud()
+        let rig = try await rig(cloud: cloud, policy: .always, seconds: 30)
+        let filed = try await conversation(rig, "Filed in Personal", frequency: 345)
+        rig.state.library.update(filed) { $0.placement = .personal }
+        rig.state.enqueue(filed)
+        try await countingDown(rig, filed)
+        XCTAssertEqual(rig.state.placements[filed]?.actions, [.useCloud, .startNow])
+        rig.state.chooseSummaryPlacement(.startNow, for: filed)
+        try await rig.processed(filed)
+        XCTAssertTrue(cloud.summarized.isEmpty, "Never sent on its own")
+        XCTAssertEqual(rig.inference.summarized.count, 1, "Summarized here")
+
+        let therapy = try await conversation(rig, "Therapy template", frequency: 355)
+        rig.state.library.update(therapy) { $0.kind = .therapy }
+        rig.state.enqueue(therapy)
+        try await countingDown(rig, therapy)
+        rig.state.chooseSummaryPlacement(.useCloud, for: therapy)
+        try await rig.processed(therapy)
+        XCTAssertEqual(cloud.summarized, [therapy], "Use the Cloud still sends it")
+    }
+
     /// A speaker named while the summary is being written: the name follows into it, as into a summary already there,
     /// and nothing is summarized twice. Notes written meanwhile still summarize it again.
     func testBehaviorANameGivenWhileSummarizingFollowsIntoTheSummaryWithoutAnother() async throws {

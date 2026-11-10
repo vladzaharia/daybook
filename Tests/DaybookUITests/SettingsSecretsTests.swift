@@ -91,7 +91,7 @@ final class SettingsSecretsTests: XCTestCase {
             XCTAssertNotNil(CloudModelPicker.chosenCost(cloud), "a chosen model's cost is under Model")
             XCTAssertEqual(CloudModelPicker.currentTitle(cloud), other.model.name)
         }
-        XCTAssertEqual(CloudSettingsForm.footer, "Sends the transcript and notes, never audio.")
+        XCTAssertEqual(CloudSettingsForm.footer, "Sends the transcript, notes, and vocabulary, never audio.")
         XCTAssertEqual(CloudSettingsForm.removalTitle(.anthropic), "Remove the Anthropic key?")
         XCTAssertEqual(CloudSettingsForm.removalMessage, "It’s removed from your other devices too.")
     }

@@ -14,6 +14,12 @@ audio, no photos or their captions, no voiceprints, no speaker profiles. Photo c
 summary places photos by time only (`PhotoPlacement.arrange`). OpenAI's request sets `store: false`, so the response
 isn't kept on OpenAI's side.
 
+**Personal.** A conversation that's Personal (filed there, given the Therapy or Personal template, or found Personal by
+its summary: `Meeting.effectivePlacement`) is never sent on its own. Under Always it counts down as Offer First does, or
+waits for a Mac, with Use the Cloud, and the cloud's Upgrade is never offered for it (docs/multipoint.md). Use the Cloud
+is the person's choice for that one conversation. A conversation whose kind isn't known yet follows Always until a
+summary finds it Personal.
+
 OpenRouter's model list (for prices) is fetched without a key and carries nothing about the person: no key, no cookies,
 and a bare `User-Agent: Daybook`. It's fetched only once a key has been added.
 
@@ -243,7 +249,7 @@ Settings › Cloud (a pane of its own on the Mac, between Models and Devices; a 
   it offers first.
 - **Quality** (unless Never): Best, Balanced, and Economy, each with its recommended model and what an hour costs; Model,
   Recommended or a model of the tier (with its cost when one is chosen); Effort, the efforts the model takes.
-- One footer line: "Sends the transcript and notes, never audio."
+- One footer line: "Sends the transcript, notes, and vocabulary, never audio."
 
 Preferences (`CloudSummaryPreferences`) are each device's own, in its UserDefaults (`cloudSummaryPreferences`), read and
 written only through `CloudSetup.preferences`; the Mac's `--library` runs keep their own suite. The countdown's length

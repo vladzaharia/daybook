@@ -162,6 +162,31 @@ final class UpgradeTests: XCTestCase {
         XCTAssertEqual(offer(meeting, macs: [laptop, mac()])?.place, .mac(studio))
     }
 
+    func testBehaviorAPersonalConversationIsNeverOfferedTheCloud() throws {
+        // Placed in Personal, given the Therapy or Personal template, or found Personal by its first summary.
+        var placed = conversation(transcription: ["parakeet/ultra"], speakers: "nemotron-3-diarization/offline", summary: "gemma-4/e4b-4bit")
+        placed.placement = .personal
+        var therapy = placed
+        therapy.placement = nil
+        therapy.kind = .therapy
+        var found = placed
+        found.placement = nil
+        found.summary?.kind = .personal
+        for meeting in [placed, therapy, found] {
+            XCTAssertEqual(meeting.effectivePlacement, .personal)
+            XCTAssertNil(offer(meeting, cloud: sonnet), "No nudge toward the cloud")
+            XCTAssertNil(Upgrades.offer(.summarization, for: meeting, candidates: UpgradeCandidates(thisDevice: .none, cloud: sonnet)))
+            // A better model on a Mac is still offered: it stays on the person's devices.
+            let local = try XCTUnwrap(offer(meeting, macs: [mac()], cloud: sonnet))
+            XCTAssertEqual(local.place, .mac(studio))
+            XCTAssertEqual(local.line, "Upgrade summary on Studio Mac")
+        }
+        // The same conversation filed in Work is offered the cloud's better summary.
+        var work = placed
+        work.placement = .work
+        XCTAssertEqual(offer(work, macs: [mac()], cloud: sonnet)?.place, .cloud(sonnet))
+    }
+
     func testBehaviorTheWeakestRecordingsModelCounts() throws {
         // The Mac's microphone with Ultra and the iPhone's recording with Redux: the transcript is as good as Redux's.
         let mixed = conversation(transcription: ["parakeet/ultra", "parakeet/redux"])

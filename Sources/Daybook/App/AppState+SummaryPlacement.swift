@@ -13,12 +13,18 @@ import Foundation
 /// One summary per conversation: a summary another device is working on (it holds a claim on one of the
 /// conversation's requests: an iPhone summarizing it in the cloud, say) isn't written here too, and one
 /// that arrives while this Mac summarizes is kept rather than replaced.
+///
+/// A Personal conversation (placed there, or its template or kind says so) is never sent to the cloud on its own:
+/// under Always it counts down as Offer First does, and the cloud is the person's choice for it (Use the Cloud).
 extension AppState {
     /// "this Mac" in the countdown's words.
     nonisolated static let thisDeviceWords = "this Mac"
 
     func wireSummaryPlacements() {
         placements.onChange = { [weak self] id in self?.reportSummaryPlacement(id) }
+        placements.isPersonal = { [weak self] id in
+            self?.meetings.first(where: { $0.id == id })?.effectivePlacement == .personal
+        }
     }
 
     // MARK: What this Mac offers
