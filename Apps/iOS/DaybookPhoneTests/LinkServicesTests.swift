@@ -39,6 +39,9 @@ final class LinkServicesTests: XCTestCase {
         var permissions: [LinkRecordPermission] {
             all.compactMap { if case .received(.recordPermission(let permission), _) = $0 { return permission } else { return nil } }
         }
+        var arrivals: [LinkRecordingArrival] {
+            all.compactMap { if case .received(.recordingArrival(let arrival), _) = $0 { return arrival } else { return nil } }
+        }
     }
 
     final class RequestLog: @unchecked Sendable {
@@ -90,10 +93,11 @@ final class LinkServicesTests: XCTestCase {
         return recorder
     }
 
-    func makeMac(name: String = "Studio Mac") async throws -> Mac {
+    func makeMac(name: String = "Studio Mac", features: [String] = []) async throws -> Mac {
         let id = UUID()
         let store = MemoryLinkKeyStore()
-        let service = LinkService(identity: LinkIdentity(deviceID: id, name: name, deviceClass: .mac, appVersion: "1.0", canProcess: true),
+        let service = LinkService(identity: LinkIdentity(deviceID: id, name: name, deviceClass: .mac, appVersion: "1.0", canProcess: true,
+                                                         features: features),
                                   keyStore: store, configuration: .loopback())
         try await service.start()
         addTeardownBlock { await service.stop() }
@@ -633,6 +637,30 @@ final class LinkServicesTests: XCTestCase {
         model.checkLead(now: quiet.addingTimeInterval(46 * 60))
         try await waitUntil("stopped as the Mac did") { !model.recorder.isActive && !model.isFiling }
         XCTAssertEqual(model.notice, "Studio Mac stopped recording, so this iPhone stopped too.")
+    }
+
+    /// A recording a Mac waits for says where it stands to that Mac (`recording.arrival`): being saved, then on its way,
+    /// and the conversation's page here says the matching line.
+    func testARecordingAMacWaitsForSaysWhereItIs() async throws {
+        let mac = try await makeMac(features: [LinkCapabilities.recordingArrivalFeature])
+        let inbox = MacInbox(mac.service.events())
+        let link = makeLink()
+        let rig = RecorderRig()
+        let model = try makeModel(link: link, rig: rig)
+        try await pair(link, with: mac, allowingRecordingOn: model)
+        let phoneID = link.deviceID
+        let conversation = UUID()
+        let reply = try await mac.service.request(LinkRecordRequest(action: .start, conversationID: conversation,
+                                                                    timing: LinkTiming(startedAt: Date(), elapsed: 0)), from: phoneID)
+        guard case .accepted = reply.outcome else { return XCTFail("\(reply.outcome)") }
+        rig.pump(1)
+        let stop = try await mac.service.request(LinkRecordRequest(action: .stop, conversationID: conversation), from: phoneID)
+        guard case .accepted = stop.outcome else { return XCTFail("\(stop.outcome)") }
+        try await waitUntil("filed") { !model.recorder.isActive && !model.isFiling }
+        try await waitUntil("the Mac hears it's on its way") { inbox.arrivals.contains { $0.phase == .sending } }
+        XCTAssertEqual(inbox.arrivals.first?.phase, .filing, "saving first")
+        XCTAssertEqual(inbox.arrivals.last?.conversationID, conversation)
+        XCTAssertEqual(model.multipoints.unsent(conversation), .sending(nil), "the page here says it's on its way")
     }
 
     // MARK: Recovery

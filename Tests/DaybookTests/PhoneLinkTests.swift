@@ -1267,6 +1267,38 @@ final class PhoneLinkTests: XCTestCase {
         await rig.state.sources.recorders.settle()
     }
 
+    /// The phone says where a recording this Mac waits for stands (`recording.arrival`), and the page's wait says it;
+    /// once its word is old, its presence does ("Last online").
+    func testAnAwaitedPhoneRecordingSaysWhereItIs() async throws {
+        let rig = try await rig()
+        let phone = try await PhoneLinkRig.connect(rig.state)
+        defer { Task { await phone.tearDown(rig.state) } }
+        let id = macStartsRecording(rig)
+        await rig.state.sources.recorders.settle()
+        macStopsRecording(rig, id)
+        await rig.state.sources.recorders.settle()
+        let meeting = try XCTUnwrap(rig.meeting(id))
+        let awaited = meeting.awaitedRecordings()
+        XCTAssertEqual(awaited.map(\.deviceName), [PhoneLinkRig.phoneName])
+        XCTAssertTrue(rig.state.arrivals(for: meeting).isEmpty, "nothing known yet: nothing added")
+
+        try await phone.client.send(.recordingArrival(LinkRecordingArrival(conversationID: id, phase: .sending, fraction: 0.4)))
+        try await waitUntil("the Mac hears it") { rig.state.phoneLink.arrivals[id] != nil }
+        XCTAssertEqual(ProcessingStatus.awaitingDetail(awaited, arrivals: rig.state.arrivals(for: meeting)),
+                       "Waiting for audio from \(PhoneLinkRig.phoneName) · Sending 40%")
+        XCTAssertTrue(rig.state.phoneLink.identity.features.contains(LinkCapabilities.recordingArrivalFeature))
+
+        // Gone, its word older than ten minutes: its presence says when it was last online.
+        let seen = Date().addingTimeInterval(-3 * 3600)
+        rig.state.phones.knownDevices = {
+            [KnownSyncDevice(id: PhoneLinkRig.syncID(phone.phoneID), deviceClass: .phone, displayName: PhoneLinkRig.phoneName, lastSeen: seen)]
+        }
+        await rig.state.checkAwaitedRecordings()
+        await phone.client.disconnect(from: phone.macID)
+        try await waitUntil("the phone is gone") { rig.state.phoneLink.peers[phone.phoneID] == nil }
+        XCTAssertEqual(rig.state.arrivals(for: meeting, now: Date().addingTimeInterval(11 * 60)).values.first, .lastOnline(seen))
+    }
+
     func testARecoveredRecordingClosesItsLinksAndStopsThePhoneItStarted() async throws {
         let rig = try await rig()
         let phone = try await PhoneLinkRig.connect(rig.state)

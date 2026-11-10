@@ -31,6 +31,10 @@ final class PhoneCoordinator {
     @ObservationIgnored var leadPresenceRead: Task<Void, Never>?
     /// The library's devices' presence, listed while a conversation waits for an iPhone's recording (`AppState.arrivals`).
     var presence: [KnownSyncDevice] = []
+    #if DEBUG
+    /// The library demo's word on where an awaited recording is (`--library-demo`), by conversation.
+    @ObservationIgnored var demoArrivals: [UUID: [String: ArrivalStatus]] = [:]
+    #endif
     /// Fetches from the courier and lists presence while a recording is awaited (`AppState.watchAwaitedRecordings`).
     @ObservationIgnored var awaitedCheck: Task<Void, Never>?
     /// Lists the library's devices' presence. Nil reads sync's; tests supply their own.
@@ -38,6 +42,9 @@ final class PhoneCoordinator {
     /// When this Mac's microphone last heard something as loud as speech. Nil reads the recorder's meter; tests supply
     /// their own.
     @ObservationIgnored var lastHeardSpeech: (@MainActor () -> Date?)?
+    /// The conversation whose running job takes a recording it waited for that syncs in before fusion (`AppState.process`),
+    /// so a pass doesn't queue a second job, and a second summary, for it.
+    @ObservationIgnored var foldsArrivalsInto: UUID?
     /// Conversations an iPhone recording moved out of, on their way to the Trash: not processed.
     var movedRecordings: Set<UUID> = []
     /// Conversations of an iPhone's own queued only to check where its recording belongs (`phoneTranscriptArrived`):

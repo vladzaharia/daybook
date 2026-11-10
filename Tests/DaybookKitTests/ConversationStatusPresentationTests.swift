@@ -292,6 +292,32 @@ final class ConversationStatusPresentationTests: XCTestCase {
                            Presentation(kind: .line, symbol: "clock", title: "Waiting for audio from Alex’s iPhone", actions: [.dontWait]))
             XCTAssertEqual(row(.awaitingRecordings(awaited), nil, inputs), ConversationRowStatus(kind: .waiting, text: "Waiting for iPhone audio"))
         }
+        // Where it is, when this device knows: one clause after the wait.
+        var known = mac
+        known.arrivals = [awaited[0].arrivalKey: .sending(0.4)]
+        XCTAssertEqual(page(.awaitingRecordings(awaited), nil, known)?.title, "Waiting for audio from Alex’s iPhone · Sending 40%")
+    }
+
+    /// Past its wait, a recording that never came is a problem box with both ways on, and the row says so.
+    func testBehaviorAudioThatDidntArriveOffersDontWaitAndWaitAgain() {
+        let missing = [AwaitedRecording(deviceName: "Alex’s iPhone", deviceKind: DaybookPhoneIntegration.id, since: now)]
+        for inputs in [mac, phone] {
+            XCTAssertEqual(page(.missingRecordings(missing), nil, inputs),
+                           Presentation(kind: .box(.problem), symbol: "exclamationmark.triangle.fill", title: "Alex’s iPhone audio didn’t arrive",
+                                        actions: [.dontWait, .waitAgain]))
+            XCTAssertEqual(row(.missingRecordings(missing), nil, inputs), ConversationRowStatus(kind: .failed, text: "iPhone audio didn’t arrive"))
+        }
+        XCTAssertEqual(Presentation.Action.waitAgain.title, "Wait Again")
+    }
+
+    /// The iPhone's own recording a Mac waits for, not on its way yet: the line the Mac's page matches.
+    func testBehaviorTheIPhonesUnsentRecordingIsSaid() {
+        var inputs = phone
+        inputs.unsent = .storageFull
+        XCTAssertEqual(page(.done, nil, inputs),
+                       Presentation(kind: .line, symbol: "exclamationmark.icloud", title: "This iPhone’s audio can’t be sent · iCloud storage is full"))
+        inputs.unsent = .sending(nil)
+        XCTAssertEqual(page(.recorded, recorded(), inputs)?.title, "Sending this iPhone’s audio to your Mac")
     }
 
     func testBehaviorDoneSaysNothingButAnUpgradeOrANote() {

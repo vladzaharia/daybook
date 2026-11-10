@@ -240,7 +240,8 @@ DNS-SD's `PolicyDenied` (−65570); the client reads that as `localNetworkDenied
 | `captions` | `LinkCaptions` | iPhone → Mac | the live captions an iPhone makes of a shared recording, the lines that changed since it last sent (each with its ID, times in its recording, text, tentative, the voice and person live speakers heard, and the recorder that heard it, if not the phone), and when its recording began on its clock; only to a Mac recording the same conversation that lists `liveCaptions` |
 | `levels` | `LinkLevels` | iPhone → Mac | an iPhone's input level during a shared recording, for the Mac's meters: its meter's readings since it last sent (0…1, oldest first, `interval` apart, at most 30), about five times a second; only to a Mac recording the same conversation that lists `liveLevels`, and never queued behind other messages (one still on its way drops the next) |
 | `processing.progress` | `LinkProcessingProgress` | Mac → phone | meeting, phase, fraction, Mac name, detail; while a summary counts down, phase `summaryCountdown` with `countdown` (seconds left as sent, whether Use the Cloud is on offer); in the cloud, `cloudModel` (both optional) |
-| `processing.nudge` | `LinkProcessingNudge` | phone → Mac | "I just wrote request X": the request itself travels through sync |
+| `processing.nudge` | `LinkProcessingNudge` | phone → Mac | "I just wrote request X": the request itself travels through sync; the Mac syncs and asks the courier at once |
+| `recording.arrival` | `LinkRecordingArrival` | iPhone → Mac | where a recording of the iPhone's that the Mac waits for stands: `filing`, `sending` (with a fraction when known), `sent`, `storageFull`, `waitingForKey`; the conversation and the recording's ID; sent as it changes and as a Mac connects, only to a Mac listing `recordingArrival` (docs/multipoint.md, "Mac first") |
 | `record.permission` | `LinkRecordPermission` | both | the sender's Can start recording for the receiver (`allowed`), as a session begins and when it changes; from a Mac, once, `asksReceiverOff` (an off from an earlier build, below), which the iPhone answers with `turnedOff`; only to a peer listing `recordPermission` |
 | `processing.choice` | `LinkSummaryChoice` | phone → Mac | the person's choice for a summary the Mac counts down to: `useCloud` or `startNow`, the meeting, sent-at; only to a Mac listing `summaryPlacement` (docs/multipoint.md, "Where summaries run") |
 | `recorder.handoff.request` | `LinkRecorderHandoffRequest` | both | take (or give) a recorder, by kind and serial, addressed by the owner's sync ID |
@@ -357,6 +358,8 @@ start reads as a start the person chose, and `sharedConversationID` isn't read.
   `captions` of a shared recording beside its own; an older Mac is never sent them. `liveLevels` (the
   Mac lists it): it draws another device's input level (`levels`) beside its own meters; an older Mac
   is never sent them, and a Mac shows an older iPhone, which sends none, with a flat meter.
+  `recordingArrival` (the Mac lists it): it says where a recording of the iPhone's it waits for stands
+  (`recording.arrival`); an older Mac is never sent it, and says the wait without the clause.
 - **Cascading start.** `LinkRecordRequest.cascade` says what started the requester's recording
   (`person`, `recorder`, `automatic`, or another `device`; an open value), whether the requester records
   the conversation itself (`requesterRecords`; false for an iPhone whose recorder records while it
@@ -395,7 +398,10 @@ clock, keeps a phase for 45 s (it's repeated while recording), and a recorder's 
 minutes past its as-of time. A recorder entry it can't read is dropped, never the whole state.
 
 A device recording because the other asked follows it: when the one that asked says it isn't
-recording that conversation any more, or has been unreachable for 30 minutes, it stops too.
+recording that conversation any more, it stops too. One it can't reach is followed on evidence, not
+silence: after two minutes it says so and keeps recording, the leader's sync presence decides when it
+says something, and after 30 minutes with no word it stops only in a quiet room (docs/multipoint.md,
+"Who stops whom").
 
 ## Clock samples
 

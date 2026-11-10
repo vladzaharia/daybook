@@ -35,6 +35,7 @@ extension MultipointCoordinator {
         entry.filedAt = Date()
         entry.phase = .sending
         outgoing[conversationID] = entry
+        report(conversationID)
         refreshOutgoing()
     }
 

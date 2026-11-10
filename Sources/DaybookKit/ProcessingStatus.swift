@@ -232,11 +232,11 @@ public enum ArrivalStatus: Equatable, Sendable {
 
     /// The device's word over the link counts for this long after it's heard (always, while it's connected).
     public static let reportLifetime: TimeInterval = 10 * 60
-    /// A device whose presence is older than this is said to be offline ("Last online 10:02").
-    public static let offlineAfter: TimeInterval = 15 * 60
 
     /// From what this device knows: the other device's word over the link (`LinkRecordingArrival`, received at
-    /// `reportedAt`), while it's connected or recent, else its presence.
+    /// `reportedAt`), while it's connected or recent, else its presence: iCloud storage full, the library's key not there
+    /// yet, not heard from for a while (`KnownSyncDevice.isPresent`, "Last online" at its own last write), or files still
+    /// to upload.
     public static func resolve(report: LinkRecordingArrival?, reportedAt: Date?, connected: Bool, presence: KnownSyncDevice?,
                                now: Date = Date()) -> ArrivalStatus? {
         if let report, connected || reportedAt.map({ now.timeIntervalSince($0) < reportLifetime }) == true {
@@ -249,8 +249,10 @@ public enum ArrivalStatus: Equatable, Sendable {
             }
         }
         guard let presence, let lastSeen = presence.lastSeen else { return nil }
+        if presence.problem == .storageFull { return .storageFull }
         if presence.keyState?.state == .waiting { return .waitingForKey }
-        if now.timeIntervalSince(lastSeen) > offlineAfter { return .lastOnline(lastSeen) }
+        if !presence.isPresent(at: now) { return .lastOnline(lastSeen) }
+        if (presence.pendingUploads ?? 0) > 0 { return .sending(nil) }
         return nil
     }
 

@@ -984,17 +984,37 @@ final class AppState {
             if await phoneRecordingsArrived(id, job: request) { return }
             try await placePendingSources(id)
         }
-        // An original with a derived track (the microphone before echo removal) is transcribed through it.
-        for track in initial.transcribableTracks where request.mode != .summaryOnly {
-            try Task.checkCancellation()
-            let previous = meetings.first(where: { $0.id == id })?.transcripts.filter { $0.trackID == track.id }.max { $0.createdAt < $1.createdAt }
-            if request.mode == .newAudio && previous != nil { continue }
-            let url = try await library.audioURL(for: track, in: id)
-            let output = try await engine.transcribe(TrackProcessingInput(meetingID: id, track: track, audioURL: url, mode: request.mode,
-                                                                          previousTranscript: previous, vocabulary: terms), progress: progress)
-            post(output.notices)
-            update(id) { $0.apply(output, matching: matching, allowSameSource: previous != nil) }
+        // An original with a derived track (the microphone before echo removal) is transcribed through it. A recording this
+        // conversation waits for that syncs in meanwhile (passes run while this Mac works) joins this job before fusion,
+        // placed as it would have been, so there's one fused transcript and one summary; after that point, one gets a job
+        // of its own.
+        if request.mode != .summaryOnly { phones.foldsArrivalsInto = id }
+        defer { if phones.foldsArrivalsInto == id { phones.foldsArrivalsInto = nil } }
+        var tracks = request.mode == .summaryOnly ? [] : initial.transcribableTracks
+        var taken = Set(tracks.map(\.id))
+        while !tracks.isEmpty {
+            for track in tracks {
+                try Task.checkCancellation()
+                let previous = meetings.first(where: { $0.id == id })?.transcripts.filter { $0.trackID == track.id }.max { $0.createdAt < $1.createdAt }
+                if request.mode == .newAudio && previous != nil { continue }
+                let url = try await library.audioURL(for: track, in: id)
+                let output = try await engine.transcribe(TrackProcessingInput(meetingID: id, track: track, audioURL: url, mode: request.mode,
+                                                                              previousTranscript: previous, vocabulary: terms), progress: progress)
+                post(output.notices)
+                update(id) { $0.apply(output, matching: matching, allowSameSource: previous != nil) }
+            }
+            tracks = []
+            guard request.mode != .summaryOnly, let current = meetings.first(where: { $0.id == id }),
+                  current.transcribableTracks.contains(where: { track in !taken.contains(track.id) && !current.transcripts.contains { $0.trackID == track.id } })
+            else { break }
+            // The job as it runs now: it may have taken on the request the recording came with (`pickUpRequests`).
+            if await phoneRecordingsArrived(id, job: runningJob.flatMap { $0.meetingID == id ? $0 : nil } ?? request) { return }
+            try await placePendingSources(id)
+            guard let placed = meetings.first(where: { $0.id == id }) else { return }
+            tracks = placed.transcribableTracks.filter { !taken.contains($0.id) }
+            taken.formUnion(tracks.map(\.id))
         }
+        phones.foldsArrivalsInto = nil
         try Task.checkCancellation()
         await realign(id)
         if await sourcesAfterTranscription(id) { return }
@@ -1035,11 +1055,12 @@ final class AppState {
         if inputsChanged { enqueue(id) }
     }
 
-    /// Applies the sync folder's changes once nothing local is running, then queues new audio
-    /// that arrived when the person processes synced audio on this Mac, and picks up requests.
-    /// While this Mac carries out another device's request, passes still run: they publish the
-    /// claim's heartbeat and progress, and show whether another device took the request over. The
-    /// conversation being processed is protected from remote deletion and status, as a recording is.
+    /// Applies the sync folder's changes, then queues new audio that arrived when the person processes synced audio on
+    /// this Mac, and picks up requests. Passes run while this Mac processes, whatever the job (docs/iphone.md, "On the
+    /// Mac"): they publish a request's claim heartbeat and progress, show whether another device took the request over,
+    /// and bring an iPhone's recording, notes, and requests in without waiting for this Mac's transcription and summary.
+    /// The conversation being processed is protected from remote deletion and status, as a recording is; a recording it
+    /// waited for that arrives before fusion joins the running job (`process`).
     func synchronizeLibrary() async {
         guard isReady, sync.folder != nil, !library.isApplyingSync else { return }
         // While recording, only library settings apply (recorder ownership, handoffs), so another device's handoff
@@ -1048,8 +1069,7 @@ final class AppState {
             _ = await library.synchronize(protecting: recordingID, scope: .metadataOnly)
             return
         }
-        let carryingRequest = processingID != nil && runningJob?.requestID != nil
-        guard processingID == nil || carryingRequest, recordingID == nil, !isStartingRecording, !isStoppingRecording else { sync.deferUntilIdle(); return }
+        guard recordingID == nil, !isStartingRecording, !isStoppingRecording else { sync.deferUntilIdle(); return }
         defer { runQueue() }
         guard let applied = await library.synchronize(protecting: processingID ?? recordingID) else { return }
         if selectedID == nil || !meetings.contains(where: { $0.id == selectedID }) { selectedID = meetings.sorted { $0.date > $1.date }.first?.id }
@@ -1065,6 +1085,8 @@ final class AppState {
             // it completes a recording made with this Mac (docs/multipoint.md, "Mac first").
             for id in applied.newAudio(in: meetings) where !isHeldElsewhere(id) && !movedPhoneRecordings.contains(id) {
                 guard processSyncedAudio || meetings.first(where: { $0.id == id })?.hasAwaitedRecordingToAdd() == true else { continue }
+                // The job running for it takes it before fusion: one fused transcript, one summary.
+                if id == processingID, phones.foldsArrivalsInto == id { continue }
                 enqueue(id)
             }
             // A recording an iPhone transcribed itself may belong to a conversation of this Mac's: checked once.

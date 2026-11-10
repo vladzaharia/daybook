@@ -17,8 +17,8 @@ public enum LeaderWatch {
     public static let silenceLimit: TimeInterval = 30 * 60
     /// The follower's own input below speech for this long is a quiet room.
     public static let quietRoom: TimeInterval = 10 * 60
-    /// Presence must have been written this long after the link went quiet to say the leader stopped since, so two
-    /// clocks a little apart never read an old record as new.
+    /// Presence must have been heard this long after the link went quiet to say the leader stopped since, so a record
+    /// written just before (or two clocks a little apart) never reads as new.
     static let presenceMargin: TimeInterval = 60
 
     /// What the leader's presence says about the recording it leads.
@@ -53,7 +53,9 @@ public enum LeaderWatch {
         // A record that keeps its activity to itself (its device waits for an encrypted library's key, or this one can't
         // open it) says nothing about the recording: its name goes with it.
         guard leader.displayName != nil else { return .unknown }
-        return lastSeen > silentSince.addingTimeInterval(presenceMargin) ? .stopped : .unknown
+        // When this device heard the record change (its own clock), else when its writer says it wrote it.
+        let heard = leader.lastHeard ?? lastSeen
+        return heard > silentSince.addingTimeInterval(presenceMargin) ? .stopped : .unknown
     }
 
     /// The verdict, from when the link went quiet (nil: connected), the presence evidence, and when the follower's own

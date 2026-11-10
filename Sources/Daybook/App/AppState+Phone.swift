@@ -450,6 +450,9 @@ extension AppState {
     /// the link while it's connected or recent, else its sync presence (`phones.presence`, listed while recordings are
     /// awaited). By `AwaitedRecording.arrivalKey`.
     func arrivals(for meeting: Meeting, now: Date = Date()) -> [String: ArrivalStatus] {
+        #if DEBUG
+        if let demo = phones.demoArrivals[meeting.id] { return demo }
+        #endif
         var arrivals: [String: ArrivalStatus] = [:]
         let waited = meeting.awaitedLinks(now: now)
         for link in meeting.companions ?? [] where waited.contains(link.id) && link.deviceKind == DaybookPhoneIntegration.id {
