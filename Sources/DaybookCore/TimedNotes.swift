@@ -70,6 +70,24 @@ public enum NoteTimeline {
         return Array(previous.prefix(prefix)) + middle + Array(previous.suffix(suffix))
     }
 
+    /// Whether the notes being handed on now are Writing Tools' rewrite of them rather than typing: the notes editor
+    /// says so around the change (`rewriting(_:)`). A rewrite during a recording (Key Points, a list) is the person's
+    /// notes reworded, not notes taken at that moment, so its new paragraphs get no time (`captureTime(recording:)`).
+    @MainActor public private(set) static var isRewriting = false
+
+    /// Runs `change` (the editor handing on Writing Tools' rewrite) with `isRewriting` set.
+    @MainActor public static func rewriting<Result>(_ change: () throws -> Result) rethrows -> Result {
+        let outer = isRewriting
+        isRewriting = true
+        defer { isRewriting = outer }
+        return try change()
+    }
+
+    /// The time a new paragraph gets: the recording's, except in a Writing Tools rewrite.
+    @MainActor public static func captureTime(recording time: TimeInterval?) -> TimeInterval? {
+        isRewriting ? nil : time
+    }
+
     /// The recording time of each nonempty paragraph of `text`, in order, for display.
     /// Saved anchors are matched to paragraphs by their text, the same way `reconcile` pairs them,
     /// so a paragraph the anchors don't know about (or an anchor whose paragraph is gone) costs only

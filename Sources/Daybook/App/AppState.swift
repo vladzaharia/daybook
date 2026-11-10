@@ -819,14 +819,14 @@ final class AppState {
     }
     func setTags(_ id: UUID, text: String) { library.setTags(id, text: text) }
 
-    /// While this Mac records the conversation, new paragraphs get the recording's time.
+    /// While this Mac records the conversation, new paragraphs get the recording's time; Writing Tools' rewrite doesn't.
     func editNotes(_ id: UUID, text: String) {
         // A paragraph a phone wrote a moment ago that the editor hadn't shown yet isn't deleted by it.
         var text = text
         if sharedNotes.conversationID == id, let meeting = meetings.first(where: { $0.id == id }) {
             text = sharedNotes.keepingArrivals(text, anchors: NoteTimeline.anchors(meeting.timedNotes, text: meeting.notes))
         }
-        library.editNotes(id, text: text, captureTime: recordingID == id ? recorder.elapsedTime : nil)
+        library.editNotes(id, text: text, captureTime: NoteTimeline.captureTime(recording: recordingID == id ? recorder.elapsedTime : nil))
     }
 
     func flush() async { await library.flush() }

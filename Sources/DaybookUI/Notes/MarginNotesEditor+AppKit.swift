@@ -134,10 +134,26 @@ extension MarginNotesEditor: NSViewRepresentable {
             guard let textView else { return }
             isEditing = true
             lastWritten = textView.string
-            parent.text = textView.string
+            hand(textView.string, rewriting: textView.isWritingToolsActive)
             textView.invalidateIntrinsicContentSize()
             textView.needsDisplay = true
             DispatchQueue.main.async { [weak self] in self?.isEditing = textView.window?.firstResponder === textView }
+        }
+
+        /// Hands the text on. Writing Tools' rewrite goes as one (`NoteTimeline.rewriting`), so a recording doesn't
+        /// stamp the paragraphs it wrote with the moment of the rewrite.
+        func hand(_ text: String, rewriting: Bool) {
+            if rewriting {
+                NoteTimeline.rewriting { parent.text = text }
+            } else {
+                parent.text = text
+            }
+        }
+
+        /// What Writing Tools leaves alone: attachments, of which the Mac's plain text has none.
+        public func textView(_ textView: NSTextView, writingToolsIgnoredRangesInEnclosingRange enclosingRange: NSRange) -> [NSValue] {
+            guard let storage = textView.textStorage else { return [] }
+            return NoteParagraphs.attachments(in: storage, within: enclosingRange).map { NSValue(range: $0) }
         }
     }
 }

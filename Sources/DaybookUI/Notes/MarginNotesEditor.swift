@@ -74,6 +74,18 @@ public enum NoteParagraphs {
         return nil
     }
 
+    /// The attachment characters inside `range`, which Writing Tools leaves alone: on the iPhone each block of
+    /// handwriting is one (`NotesInk`), and a rewrite over it would drop the block. The Mac's plain text has none.
+    public static func attachments(in text: NSAttributedString, within range: NSRange) -> [NSRange] {
+        let range = NSIntersectionRange(range, NSRange(location: 0, length: text.length))
+        guard range.length > 0 else { return [] }
+        var found: [NSRange] = []
+        text.enumerateAttribute(.attachment, in: range, options: []) { value, run, _ in
+            if value != nil { found.append(run) }
+        }
+        return found
+    }
+
     /// Every match of the library search in the notes, marked as the page marks the rest (`FindHighlight`).
     public static func matches(of query: String, in text: NSString) -> [NSRange] {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
