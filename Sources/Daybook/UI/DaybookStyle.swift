@@ -107,6 +107,19 @@ extension View {
     func quietBox(cornerRadius: CGFloat = 8) -> some View {
         background(DaybookStyle.quietFill, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }
+
+    /// Liquid Glass on macOS 26 and later; a material surface with a hairline and shadow on macOS 15. The call
+    /// prompt's card sits on it.
+    @ViewBuilder
+    func glassSurface(in shape: some Shape, tint: Color? = nil, interactive: Bool = false) -> some View {
+        if #available(macOS 26, *) {
+            glassEffect(.regular.tint(tint).interactive(interactive), in: shape)
+        } else {
+            background(.regularMaterial, in: shape)
+                .overlay(shape.stroke(Color(nsColor: .separatorColor), lineWidth: 0.5))
+                .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+        }
+    }
 }
 
 // MARK: - Glow and motion
