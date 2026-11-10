@@ -163,13 +163,21 @@ struct FloatingAfterStop: View {
 
 /// Nothing recording: the iPhone's status sheet, floating. Status lines (recorders, iPhones, this
 /// Mac's queue), then recent conversations, or the focused conversation's notes; Record and Import
-/// at the foot. Compact: the status bar and Record and Import.
+/// at the foot. Compact: the status bar and Record and Import. A Personal conversation the lock hides isn't opened
+/// here: Recent takes its place.
 struct HomeSurface: View {
     let context: PanelContext
-    let focused: Meeting?
+    private let shown: Meeting?
     let inputs: FloatingStatusInputs
 
+    init(context: PanelContext, focused: Meeting?, inputs: FloatingStatusInputs) {
+        self.context = context
+        shown = focused
+        self.inputs = inputs
+    }
+
     private var state: AppState { context.state }
+    private var focused: Meeting? { shown.flatMap { state.personalLock.hides($0) ? nil : $0 } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -277,7 +285,8 @@ private struct StatusLineButton: View {
 }
 
 /// The newest conversations, in the iPhone's row style: the title, then the time and what's
-/// happening (or the gist), a glyph only when it isn't ready. A row opens in Daybook.
+/// happening (or the gist), a glyph only when it isn't ready. A row opens in Daybook. A Personal one reads as the
+/// library's row does while the lock hides it, and goes while a Focus leaves Personal out.
 private struct RecentConversations: View {
     let context: PanelContext
     var limit = 5
@@ -285,7 +294,7 @@ private struct RecentConversations: View {
 
     var body: some View {
         let state = context.state
-        let recent = state.meetings.filter { $0.id != state.recordingID }.sorted { $0.date > $1.date }.prefix(limit)
+        let recent = state.meetings.filter { $0.id != state.recordingID && state.personalLock.lists($0) }.sorted { $0.date > $1.date }.prefix(limit)
         VStack(alignment: .leading, spacing: 4) {
             if showsHeading {
                 Text("Recent")
@@ -316,6 +325,7 @@ private struct RecentConversations: View {
             .scrollBounceBehavior(.basedOnSize)
         }
         .frame(maxHeight: showsHeading ? .infinity : nil, alignment: .top)
+        .environment(state.personalLock)
     }
 }
 

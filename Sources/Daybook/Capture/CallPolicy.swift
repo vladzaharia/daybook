@@ -47,15 +47,20 @@ enum CallPolicy {
     static let legacyKey = "automaticRecording"
 
     /// The app's own choice, else the policy's. Nothing while a recording is being made or started, and nothing when
-    /// the policy is Off, whatever an app's choice.
-    static func decision(for bundleID: String, policy: CallRecordingPolicy, choices: [String: CallAppChoice], busy: Bool) -> CallDecision {
+    /// the policy is Off, whatever an app's choice. In a Focus whose Daybook filter turns Ask to Record Meetings off
+    /// (`asks` false, `PersonalFocus.asksToRecord`), a call that would be asked about is left alone; one recorded
+    /// automatically still is.
+    static func decision(for bundleID: String, policy: CallRecordingPolicy, choices: [String: CallAppChoice], busy: Bool,
+                         asks: Bool = true) -> CallDecision {
         guard !busy, policy != .off else { return .ignore }
+        let decision: CallDecision
         switch choices[bundleID] {
-        case .always?: return .record
-        case .never?: return .ignore
-        case .ask?: return .ask
-        case nil: return policy == .record ? .record : .ask
+        case .always?: decision = .record
+        case .never?: decision = .ignore
+        case .ask?: decision = .ask
+        case nil: decision = policy == .record ? .record : .ask
         }
+        return decision == .ask && !asks ? .ignore : decision
     }
 
     /// The saved policy. Before there was one, "Record calls automatically" on records, and off asks, as a new

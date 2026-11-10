@@ -111,6 +111,8 @@ struct DaybookApp: App {
         Window("Daybook", id: WindowID.library) {
             LibraryView(state: state)
                 .defaultAppStorage(LaunchOptions.defaults)
+                // The rows, results, and the Trash's page ask it what the Personal lock hides.
+                .environment(state.personalLock)
                 .frame(minWidth: 720, minHeight: 480)
                 .task {
                     delegate.state = state

@@ -6,7 +6,8 @@ import UniformTypeIdentifiers
 
 /// Places, the person's folders, the Trash once something is in it, and the recorder once it's set up. Nothing else.
 /// Conversations dropped on a place are filed there, a dragged row's whole selection with it (and on the Trash,
-/// asked about first); Edit › Undo takes a filing back.
+/// asked about first); Edit › Undo takes a filing back. Personal shows the lock while it's locked, and choosing it
+/// asks to unlock; a Focus that leaves Personal out leaves it out here too (`PersonalLock`).
 struct SidebarView: View {
     let state: AppState
     @State private var folderToDelete: LibraryFolder?
@@ -16,8 +17,9 @@ struct SidebarView: View {
 
     var body: some View {
         List(selection: Binding(get: { state.place }, set: { if let place = $0 { select(place) } })) {
-            ForEach(LibrarySection.allCases) { section in
-                Label(section.rawValue, systemImage: section.systemImage)
+            ForEach(state.personalLock.sections) { section in
+                Label(section.rawValue, systemImage: state.personalLock.symbol(section))
+                    .accessibilityValue(state.personalLock.symbol(section) == section.systemImage ? "" : PersonalLockWords.locked)
                     .tag(LibraryPlace.section(section))
                     .dropDestination(for: ConversationTransfer.self) { items, _ in drop(items, on: .section(section)) }
             }
@@ -97,8 +99,10 @@ struct SidebarView: View {
         state.multiSelection = []
         // The Trash selects what it lists itself, once it has read them.
         if !place.isDevice, !place.isTrash, let selected = state.selectedID, !state.visibleMeetings.contains(where: { $0.id == selected }) {
-            state.selectedID = state.visibleMeetings.first?.id
+            state.selectQuietly(state.visibleMeetings.first?.id)
         }
+        // Personal, locked: choosing it asks to unlock, and then its newest opens.
+        if place == .section(.personal), state.personalLock.isLocked { Task { await state.unlockPersonal() } }
     }
 
     private func createFolder(moving ids: [UUID]) {
