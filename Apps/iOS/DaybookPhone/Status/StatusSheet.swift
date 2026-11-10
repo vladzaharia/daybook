@@ -5,560 +5,305 @@ import DaybookLink
 import DaybookUI
 import SwiftUI
 
-// The status surface (docs/iphone.md, "Status sheet"): the recorder, your Mac, this iPhone's own work,
-// and sync at a glance, expanding to manage them, like Maps or Find My. It shares the overview both
-// apps draw (DaybookUI's `StatusOverview`), at a depth per detent.
+// The status (docs/iphone.md, "Status sheet"): the recorders, the Macs, this iPhone's own work, and iCloud. At rest
+// it speaks only when there's something to say: one line, the status strip, above the library's toolbar
+// (`StatusStrip`). Tapping it, or Devices in the library's More menu, shows the sheet: the overview both apps draw
+// (DaybookUI's `StatusOverview`), a group and a card for each kind of device.
 //
-// - Pocket (closed, or an iPhone 18 Pro upright): a persistent system sheet on the library screens,
-//   with a compact detent that hosts Record, Import, and Search at the thumb (`StatusSheetHost`).
-// - Notebook (open, partly open in the library, or any iPhone on its side): a combined glass tray at
-//   the foot of the library page, clear of the crease and separate from the reading preview (`StatusPanel`,
-//   hosted by `LibraryPage`).
-// - Recording: hidden. `RecordingSurface` replaces the library and shows the recorder's essentials.
+// - Pocket (closed, or an iPhone 18 Pro upright): an ordinary sheet over the library, at medium, then large.
+// - Notebook (open, partly open in the library, or any iPhone on its side): a card on the right page, clear of the
+//   crease, leaving the left page in reach, as every reading sheet on two pages is (`PageCard`).
+// - Recording: no strip. `RecordingSurface` replaces the library and shows the recorder's essentials.
+
+/// A request to show the status sheet: at a size, at a screen inside it (a recorder's page, Settings › iCloud), or
+/// scrolled to the group that says how to fix a line.
+struct StatusRequest: Identifiable, Equatable {
+  var id = UUID()
+  var detent: StatusDetent = .medium
+  var route: SettingsRoute?
+  var fix: StatusSection?
+
+  init(detent: StatusDetent = .medium, route: SettingsRoute? = nil, fix: StatusSection? = nil) {
+    self.detent = route == nil ? detent : .large
+    self.route = route
+    self.fix = fix
+  }
+
+  /// What tapping a line asks for: the screen that fixes it, the group that says how, or the sheet.
+  init(_ route: StatusLineRoute) {
+    switch route {
+    case .showMore: self.init()
+    case .showFix(let section): self.init(fix: section)
+    case .open(let screen): self.init(route: screen)
+    }
+  }
+}
+
+/// Shows the status sheet: the library's strip and its More menu's Devices ask for it (`\.showStatus`).
+struct ShowStatusAction {
+  let show: @MainActor (StatusRequest) -> Void
+
+  @MainActor func callAsFunction(_ request: StatusRequest) { show(request) }
+}
 
 extension EnvironmentValues {
-  /// Set while the folded status sheet hosts Record at the foot of the library, for room to leave
-  /// above it; the list then shows only the mini player just above the sheet.
-  @Entry var statusSheetInset: CGFloat? = nil
+  @Entry var showStatus = ShowStatusAction { _ in }
 }
 
-extension PresentationDetent {
-  /// The compact detent: the Record row and the lines (three, or four while this iPhone has work of its
-  /// own), with room for a notice or an import's progress over Record when there's one.
-  static func statusCompact(notice: Bool, workLine: Bool) -> PresentationDetent {
-    switch (notice, workLine) {
-    case (false, false): return .custom(StatusCompactDetent.self)
-    case (true, false): return .custom(StatusCompactShaped<WithNotice>.self)
-    case (false, true): return .custom(StatusCompactShaped<WithWorkLine>.self)
-    case (true, true): return .custom(StatusCompactShaped<WithNoticeAndWorkLine>.self)
-    }
+// MARK: Presenting it
+
+extension View {
+  /// The status sheet over the library, when asked for (`\.showStatus`), a recorder's notification, or a debug launch:
+  /// in the hand an ordinary sheet, at medium then large; open, a card on the right page (`PageCard`), the left page
+  /// in reach. A fold shows it again the other way.
+  func statusSheet(onPage: Bool) -> some View {
+    modifier(StatusSheetPresenter(onPage: onPage))
   }
 }
 
-/// Tall enough for the Record row and the lines at the person's text size, measured from the fonts they
-/// use, so nothing is cut off. At the accessibility sizes compact holds the Record row and one line, its
-/// title and its words sharing four rows (`StatusSheetModel.compactLines`), so the list above stays
-/// usable; the rest are a tap away. At most 55% of the screen; past that, the line scrolls.
-struct StatusCompactDetent: CustomPresentationDetent {
-  /// Room above Record, so the sheet's grabber sits clearly above it.
-  static let recordTop: CGFloat = 26
-  /// Room between Record and the lines.
-  static let recordGap: CGFloat = PhoneStyle.Space.s4
-  /// The largest text size the Record row takes: beyond it, Record's label would break mid-word
-  /// beside the round buttons. The row is a control bar, with the large content viewer past it.
-  static let recordLargestSize = DynamicTypeSize.accessibility1
-  /// Lines when nothing on this iPhone is working: the recorder, your Mac, and iCloud.
-  static let lineCount = 3
-
-  static func height(in context: Context) -> CGFloat? {
-    height(for: context.dynamicTypeSize, maximum: context.maxDetentValue)
-  }
-
-  static func lineHeight(_ style: UIFont.TextStyle, at size: DynamicTypeSize) -> CGFloat {
-    let traits = UITraitCollection(preferredContentSizeCategory: UIContentSizeCategory(size))
-    return ceil(UIFont.preferredFont(forTextStyle: style, compatibleWith: traits).lineHeight)
-  }
-
-  /// The lines' height at a text size: one row each, or at the accessibility sizes one line with its title
-  /// and its words sharing four rows (`StatusLineView`, stacked); the room between them, and a progress
-  /// line's under the last.
-  static func linesHeight(for size: DynamicTypeSize, lines: Int = lineCount) -> CGFloat {
-    let line = lineHeight(.subheadline, at: size)
-    if size.isAccessibilitySize {
-      return CGFloat(StatusMetrics.stackedRows) * line + 2 + 6
-    }
-    return CGFloat(lines) * line + CGFloat(max(0, lines - 1)) * PhoneStyle.Space.s2 + 6
-  }
-
-  static func height(
-    for size: DynamicTypeSize, maximum: CGFloat, notice: Bool = false, lines: Int = lineCount
-  ) -> CGFloat {
-    // Record is at least 60 pt, taller when its label grows; the glass button adds 4 pt each side.
-    let record = max(60, lineHeight(.title3, at: min(size, recordLargestSize)) + 8) + 8
-    // A notice over Record (`RecordingNotice`, or "Importing 2 recordings…"): two lines and the gap under them.
-    let notice =
-      notice ? 2 * lineHeight(.footnote, at: min(size, recordLargestSize)) + PhoneStyle.Space.s2 : 0
-    let content =
-      recordTop + notice + record + recordGap + linesHeight(for: size, lines: lines)
-      + PhoneStyle.Space.s4
-    return min(maximum * 0.55, content)
-  }
-}
-
-/// What a compact detent makes room for besides the Record row and three lines.
-protocol StatusCompactShape {
-  static var notice: Bool { get }
-  static var workLine: Bool { get }
-}
-enum WithNotice: StatusCompactShape { static let notice = true, workLine = false }
-enum WithWorkLine: StatusCompactShape { static let notice = false, workLine = true }
-enum WithNoticeAndWorkLine: StatusCompactShape { static let notice = true, workLine = true }
-
-/// `StatusCompactDetent` with room for a notice over Record, or this iPhone's line, or both.
-struct StatusCompactShaped<Shape: StatusCompactShape>: CustomPresentationDetent {
-  static func height(in context: Context) -> CGFloat? {
-    StatusCompactDetent.height(
-      for: context.dynamicTypeSize, maximum: context.maxDetentValue, notice: Shape.notice,
-      lines: StatusCompactDetent.lineCount + (Shape.workLine ? 1 : 0))
-  }
-}
-
-// MARK: Pocket: the sheet
-
-/// Presents the status sheet over the pocket library while it's the thing on screen: not over a
-/// conversation, search, selection, or the Trash, and never in a compact height (an iPhone on its
-/// side), where iOS would show it over the whole window; the library lays out as two pages there
-/// (`DevicePosture.layout`). Other sheets and alerts (Settings, Move, Tags) open above it, as they do
-/// over Maps' sheet.
-struct StatusSheetHost: ViewModifier {
-  let enabled: Bool
+private struct StatusSheetPresenter: ViewModifier {
+  let onPage: Bool
   @Environment(PhoneAppModel.self) private var model
   @Environment(ReadingSession.self) private var session
-  @Environment(\.dynamicTypeSize) private var typeSize
-  @Environment(\.verticalSizeClass) private var heightClass
-  @State private var detent: PresentationDetent = .statusCompact(notice: false, workLine: false)
-  @State private var appliedLaunchDetent = false
-
-  /// Something shows over Record (`RecordStartButton`), so the compact detent makes room for it.
-  private var hasNotice: Bool {
-    model.notice != nil || model.importing > 0
-      || (model.recorderOnly != nil && !model.recorder.isActive)
-      || (model.recorder.isCapturing
-        && PhoneAppModel.recorderWarning(model.recorder.lastError) != nil)
-  }
-
-  /// What the compact detent makes room for: a notice over Record, and this iPhone's line while it has work.
-  private var shape: CompactShape {
-    CompactShape(
-      notice: hasNotice,
-      workLine: !StatusSheetInputs.phoneWork(model, library: model.library.controller).line.isEmpty)
-  }
-
-  struct CompactShape: Equatable {
-    var notice: Bool
-    var workLine: Bool
-  }
-
-  static func shows(
-    enabled: Bool, reading: Bool, searching: Bool, selecting: Bool, inTrash: Bool,
-    heightClass: UserInterfaceSizeClass?
-  ) -> Bool {
-    enabled && !reading && !searching && !selecting && !inTrash && heightClass != .compact
-  }
+  @State private var request: StatusRequest?
+  @State private var shownOnPage: Bool?
+  @State private var detent: PresentationDetent = .medium
+  @State private var appliedLaunch = false
 
   func body(content: Content) -> some View {
-    let shows = Self.shows(
-      enabled: enabled, reading: session.reading, searching: session.isSearchPresented,
-      selecting: session.isSelecting,
-      inTrash: session.place == .trash, heightClass: heightClass)
-    let shape = shape
+    let onPage = shownOnPage ?? self.onPage
     content
-      .environment(
-        \.statusSheetInset,
-        shows
-          ? StatusCompactDetent.height(
-            for: typeSize, maximum: 900, notice: shape.notice,
-            lines: StatusCompactDetent.lineCount + (shape.workLine ? 1 : 0)) - 34
-          : nil
-      )
-      .sheet(isPresented: Binding(get: { shows }, set: { _ in })) {
+      .environment(\.showStatus, ShowStatusAction { show($0) })
+      .sheet(item: Binding(get: { onPage ? nil : request }, set: { request = $0 })) { request in
         StatusSheetView(
-          detent: Binding(
-            get: { Self.status(detent) }, set: { detent = Self.presentation($0, shape: shape) }),
-          hostsRecordButton: true
+          request: request,
+          detent: Binding(get: { detent == .large ? .large : .medium }, set: { detent = $0 == .large ? .large : .medium })
         )
         .environment(model)
         .environment(session)
-        .presentationDetents(
-          [Self.presentation(.compact, shape: shape), .medium, .large], selection: $detent
-        )
-        .presentationBackgroundInteraction(.enabled(upThrough: .medium))
-        .presentationContentInteraction(.resizes)
+        .presentationDetents([.medium, .large], selection: $detent)
         .presentationDragIndicator(.visible)
-        .interactiveDismissDisabled()
         .tint(PhoneStyle.accent)
       }
-      .onChange(of: shows) { _, shows in
-        // Back from a conversation or search: compact again, not wherever it was left.
-        if !shows, detent == .large { detent = Self.presentation(.compact, shape: self.shape) }
+      .overlay {
+        if onPage, let shown = request {
+          // A page is tall enough for the cards with what can be done.
+          CreaseSplit {
+            Color.clear.allowsHitTesting(false).accessibilityHidden(true)
+          } trailing: {
+            PageCard(close: { request = nil }) {
+              StatusSheetView(request: shown, detent: .constant(.large))
+                .environment(\.closePageSheet) { request = nil }
+            }
+            .id(shown.id)
+          }
+          .daybookTransition(.move(edge: .bottom).combined(with: .opacity))
+        }
       }
-      .onChange(of: shape) { _, shape in
-        if Self.status(detent) == .compact { detent = Self.presentation(.compact, shape: shape) }
+      .daybookMotion(PhoneStyle.Motion.state, value: onPage ? request?.id : nil)
+      .onChange(of: request?.id) { _, id in shownOnPage = id == nil ? nil : self.onPage }
+      // Folded or opened while it shows: the same request, shown the other way.
+      .onChange(of: self.onPage) { _, now in if request != nil { shownOnPage = now } }
+      // A recorder's notification (imported, almost full) opens its page here, where recorders' pages are.
+      .onChange(of: model.destination, initial: true) { _, destination in
+        guard let destination, case .device(let id) = destination.destination,
+          model.devices.sessions.contains(where: { $0.id == id })
+        else { return }
+        show(StatusRequest(route: .device(id)))
+        model.reached(destination)
       }
-      .task {
-        guard !appliedLaunchDetent, let launch = model.options.statusDetent else { return }
-        appliedLaunchDetent = true
-        try? await Task.sleep(for: .milliseconds(700))
-        detent = Self.presentation(launch, shape: self.shape)
-      }
+      .task { await showRequestedAtLaunch() }
   }
 
-  static func status(_ detent: PresentationDetent) -> StatusDetent {
-    detent == .large ? .large : detent == .medium ? .medium : .compact
+  private func show(_ next: StatusRequest) {
+    detent = next.detent == .large ? .large : .medium
+    request = next
   }
 
-  static func presentation(_ detent: StatusDetent, shape: CompactShape) -> PresentationDetent {
-    switch detent {
-    case .compact: return .statusCompact(notice: shape.notice, workLine: shape.workLine)
-    case .medium: return .medium
-    case .large: return .large
+  /// `--status-detent`, `--status-open`, and `--status-choose` (debug): the sheet at a size, at a screen, or as a
+  /// line's tap would show it, for screenshots.
+  private func showRequestedAtLaunch() async {
+    guard !appliedLaunch else { return }
+    appliedLaunch = true
+    let options = model.options
+    if let screen = options.statusPage {
+      // A recorder the device autopilot is still adding: wait for it to connect and import.
+      for _ in 0..<150 where screen == .device && model.devices.sessions.first?.links.recent.isEmpty != false {
+        try? await Task.sleep(for: .milliseconds(100))
+      }
+      try? await Task.sleep(for: .milliseconds(800))
+      switch screen {
+      case .device: if let session = model.devices.sessions.first { show(StatusRequest(route: .device(session.id))) }
+      case .mac: if let mac = model.link.macs.first { show(StatusRequest(route: .mac(mac.id))) }
+      case .storage: show(StatusRequest(route: .storage))
+      case .icloud: show(StatusRequest(route: .icloud))
+      case .addRecorder: show(StatusRequest(route: .addRecorder))
+      }
+    } else if let detent = options.statusDetent {
+      try? await Task.sleep(for: .milliseconds(700))
+      show(StatusRequest(detent: detent))
+    } else if let id = options.statusChoose {
+      try? await Task.sleep(for: .milliseconds(1_500))
+      let inputs = StatusSheetInputs.make(model, library: model.library.controller)
+      guard let line = StatusSheetModel.lines(inputs).first(where: { $0.id == id || $0.id.hasPrefix(id + "-") }) else { return }
+      show(StatusRequest(StatusSheetModel.route(for: line, inputs)))
     }
   }
 }
 
-// MARK: Notebook: combined library tray
+// MARK: The strip
 
-/// The status and quick actions form one tray on the notebook's library page. It stays clear of the
-/// crease and expands in place; the reading preview on the opposite page remains unobstructed.
-struct StatusPanel: View {
-  @Binding var detent: StatusDetent
-  let availableHeight: CGFloat
-  let hostsQuickActions: Bool
-  @Environment(PhoneAppModel.self) private var model
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+/// The library's status strip, above its toolbar: the one line with something to say (`StatusSheetModel.strip`), in
+/// its own words, ink, and progress line; `LibraryPage` shows it only while there is one (`shown`). Tapping it leads
+/// where the line's fix is, else to the sheet.
+struct StatusStrip: View {
+  let line: StatusLineItem
+  let route: StatusLineRoute
+  @Environment(\.showStatus) private var showStatus
   @Environment(\.dynamicTypeSize) private var typeSize
-  @GestureState private var drag: CGFloat = 0
-  @State private var appliedLaunchDetent = false
+
+  /// The line the strip says now, and where it leads; nil when there's nothing to say.
+  static func shown(_ model: PhoneAppModel, now: Date = Date()) -> StatusStrip? {
+    let inputs = StatusSheetInputs.make(model, library: model.library.controller)
+    guard let line = StatusSheetModel.strip(StatusSheetModel.lines(inputs, now: now)) else { return nil }
+    return StatusStrip(line: line, route: StatusSheetModel.route(for: line, inputs))
+  }
 
   var body: some View {
-    let layout = StatusPanelLayout(
-      lines: StatusCompactDetent.lineCount
-        + (StatusSheetInputs.phoneWork(model, library: model.library.controller).line.isEmpty
-          ? 0 : 1),
-      typeSize: typeSize,
-      notice: model.notice != nil || model.importing > 0
-        || (model.recorderOnly != nil && !model.recorder.isActive)
-        || (model.recorder.isCapturing
-          && PhoneAppModel.recorderWarning(model.recorder.lastError) != nil),
-      hostsQuickActions: hostsQuickActions
-    )
-    let compactScrolls = Self.scrollsCompact(in: availableHeight, layout: layout)
-    let trayHeight = Self.footprint(detent, in: availableHeight, layout: layout)
-    GeometryReader { _ in
-      VStack(spacing: 0) {
-        Spacer(minLength: 0)
-        if hostsQuickActions {
-          StatusQuickActions()
-            .padding(.horizontal, PhoneStyle.Space.s4)
-            .padding(.top, StatusCompactDetent.recordTop)
-            .padding(.bottom, StatusCompactDetent.recordGap)
-        }
-        handle
-        StatusSheetView(detent: $detent, hostsRecordButton: false, scrollsCompact: compactScrolls)
-          .frame(height: Self.contentHeight(detent, in: availableHeight, layout: layout))
-      }
-      .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-      .padding(.bottom, PhoneStyle.Space.s2)
-      .offset(y: max(-40, min(40, drag)))
-    }
-    .frame(height: trayHeight)
-    .animation(reduceMotion ? nil : PhoneStyle.Motion.state, value: detent)
-    .accessibilityElement(children: .contain)
-    .accessibilityLabel("Status")
-    .accessibilityActions {
-      if detent != .large { Button("Expand") { step(up: true) } }
-      if detent != .compact { Button("Collapse") { step(up: false) } }
-    }
-    .accessibilityAction(.escape) { if detent == .large { detent = .compact } }
-    .task {
-      guard !appliedLaunchDetent, let launch = model.options.statusDetent else { return }
-      detent = launch
-    }
-  }
-
-  static func footprint(_ detent: StatusDetent, in height: CGFloat, layout: StatusPanelLayout)
-    -> CGFloat
-  {
-    min(
-      height,
-      contentHeight(detent, in: height, layout: layout) + actionHeight(layout) + chromeHeight)
-  }
-
-  private static let handleHeight: CGFloat = 28
-  private static let chromeHeight = handleHeight + PhoneStyle.Space.s2
-
-  private static func actionHeight(_ layout: StatusPanelLayout) -> CGFloat {
-    guard layout.hostsQuickActions else { return 0 }
-    let size = min(layout.typeSize, StatusCompactDetent.recordLargestSize)
-    let record = max(60, StatusCompactDetent.lineHeight(.title3, at: size) + 8) + 8
-    let notice =
-      layout.notice
-      ? 2 * StatusCompactDetent.lineHeight(.footnote, at: size) + PhoneStyle.Space.s2
-      : 0
-    return StatusCompactDetent.recordTop + notice + record + StatusCompactDetent.recordGap
-  }
-
-  /// Compact keeps the combined tray within 55% of the page; medium takes half and large replaces
-  /// the library page. The quick actions and handle are included in those bounds.
-  static func contentHeight(_ detent: StatusDetent, in height: CGFloat, layout: StatusPanelLayout)
-    -> CGFloat
-  {
-    let lines =
-      StatusCompactDetent.linesHeight(for: layout.typeSize, lines: layout.lines)
-      + PhoneStyle.Space.s1 + PhoneStyle.Space.s4
-    let actionsAndHandle = actionHeight(layout) + chromeHeight
-    let compact = max(0, min(lines, height * 0.55 - actionsAndHandle))
-    let medium = max(
-      compact,
-      min(max(220, height * 0.5 - actionsAndHandle), max(compact, height - actionsAndHandle - 44)))
-    switch detent {
-    case .compact: return compact
-    case .medium: return medium
-    case .large:
-      return max(
-        medium,
-        min(
-          max(medium, height - 44 - PhoneStyle.Space.s2 - PhoneStyle.Space.s3 - actionsAndHandle),
-          max(compact, height - actionsAndHandle)))
-    }
-  }
-  static func scrollsCompact(in height: CGFloat, layout: StatusPanelLayout) -> Bool {
-    let lines =
-      StatusCompactDetent.linesHeight(for: layout.typeSize, lines: layout.lines)
-      + PhoneStyle.Space.s1 + PhoneStyle.Space.s4
-    return contentHeight(.compact, in: height, layout: layout) < lines
-  }
-
-  private var handle: some View {
     Button {
-      step(up: detent != .large)
+      showStatus(StatusRequest(route))
     } label: {
-      Capsule().fill(.secondary.opacity(0.5)).frame(width: 36, height: 5)
-        .frame(maxWidth: .infinity, minHeight: Self.handleHeight)
-        .contentShape(Rectangle())
+      HStack(spacing: PhoneStyle.Space.s2) {
+        StatusLineView(line)
+        // At the accessibility sizes the words take the chevron's room: the strip is a button either way.
+        if !typeSize.isAccessibilitySize { StatusChevron() }
+      }
+      .padding(.horizontal, typeSize.isAccessibilitySize ? PhoneStyle.Space.s3 : PhoneStyle.Space.s4)
+      .padding(.vertical, PhoneStyle.Space.s3)
+      .contentShape(DaybookRadius.shape(DaybookRadius.panel))
     }
     .buttonStyle(.plain)
-    .accessibilityLabel("Status")
-    .accessibilityValue(detent == .compact ? "Compact" : detent == .medium ? "Half" : "Full")
-    .accessibilityHint(detent == .large ? "Collapses the status" : "Shows more")
-    .gesture(
-      DragGesture(minimumDistance: 8)
-        .updating($drag) { value, state, _ in state = value.translation.height }
-        .onEnded { value in
-          if value.translation.height < -30 {
-            step(up: true)
-          } else if value.translation.height > 30 {
-            step(up: false)
-          }
-        })
-  }
-
-  private func step(up: Bool) {
-    let all = StatusDetent.allCases
-    guard let index = all.firstIndex(of: detent) else { return }
-    detent = all[up ? min(all.count - 1, index + 1) : max(0, index - 1)]
+    .glassEffect(.regular.interactive(), in: DaybookRadius.shape(DaybookRadius.panel))
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(line.accessibilityLabel)
+    .accessibilityHint(StatusSheetModel.hint(for: route))
+    .accessibilityAddTraits(.isButton)
   }
 }
 
-/// The notebook tray's compact sizing inputs: status lines, actions, any notice, and type size.
-struct StatusPanelLayout: Equatable {
-  var lines: Int
-  var typeSize: DynamicTypeSize
-  var notice = false
-  var hostsQuickActions = true
-}
+// MARK: The sheet
 
-// MARK: The content
-
-/// The sheet's content for a detent, shared by the pocket sheet and the notebook panel. Its links
-/// open the full screens inside it (a device's page, a Mac's, Settings › iCloud, Storage), never
-/// copies of them.
+/// The status sheet: the groups for its size in a navigation stack of the sheet's own, so its links open the full
+/// screens inside it (a device's page, a Mac's, Settings › iCloud, Storage), never copies of them.
 struct StatusSheetView: View {
+  let request: StatusRequest
   @Binding var detent: StatusDetent
-  let hostsRecordButton: Bool
-  var scrollsCompact = false
   @Environment(PhoneAppModel.self) private var model
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @State private var path: [SettingsRoute] = []
+  @State private var path: [SettingsRoute]
   @State private var showingPairing = false
-  @State private var showingAddDevice = false
+  private let dismiss = SheetDismiss()
+
+  init(request: StatusRequest, detent: Binding<StatusDetent>) {
+    self.request = request
+    _detent = detent
+    _path = State(initialValue: request.route.map { [$0] } ?? [])
+  }
 
   var body: some View {
     NavigationStack(path: $path) {
       StatusSections(
-        library: model.library.controller, detent: $detent, hostsRecordButton: hostsRecordButton,
-        scrollsCompact: scrollsCompact, open: open,
-        showingPairing: $showingPairing, showingAddDevice: $showingAddDevice
+        library: model.library.controller, detent: detent, fix: request.fix, open: open,
+        close: { dismiss() }, pair: { showingPairing = true }
       )
-      .toolbar(.hidden, for: .navigationBar)
-      // The sheet's (or panel's) Liquid Glass shows through; content is never glass itself.
-      .containerBackground(.clear, for: .navigation)
+      .navigationTitle(StatusSheetModel.title)
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .topBarTrailing) { Button(role: .close) { dismiss() }.tint(PhoneStyle.Ink.title) }
+      }
       .navigationDestination(for: SettingsRoute.self) { route in SettingsDestination(route: route) }
     }
     .pairingSheet(isPresented: $showingPairing)
-    .addRecorderSheet(isPresented: $showingAddDevice) { id in
-      if let id { open(.device(id)) }
-    }
-    .onChange(of: detent) { _, detent in
-      // Collapsing goes back to the overview.
-      if detent != .large, !path.isEmpty { path = [] }
-    }
-    .task { await openRequestedScreen() }
-    // A recorder's notification (imported, almost full) opens its page here, where recorders' pages are.
-    .onChange(of: model.destination, initial: true) { _, request in
-      guard let request, case .device(let id) = request.destination,
-        model.devices.sessions.contains(where: { $0.id == id })
-      else { return }
-      open(.device(id))
-      model.reached(request)
-    }
-  }
-
-  /// `--status-open device|mac|storage|icloud|add-recorder` (debug): that screen inside the sheet (or
-  /// Add Recorder over it), for screenshots.
-  private func openRequestedScreen() async {
-    guard let screen = model.options.statusOpen else { return }
-    // A recorder the device autopilot is still adding: wait for it to connect and import.
-    for _ in 0..<150
-    where screen == "device" && model.devices.sessions.first?.links.recent.isEmpty != false {
-      try? await Task.sleep(for: .milliseconds(100))
-    }
-    try? await Task.sleep(for: .milliseconds(800))
-    switch screen {
-    case "device": if let session = model.devices.sessions.first { open(.device(session.id)) }
-    case "mac": if let mac = model.link.macs.first { open(.mac(mac.id)) }
-    case "storage": open(.storage)
-    case "icloud": open(.icloud)
-    case "add-recorder": showingAddDevice = true
-    default: break
-    }
   }
 
   /// A full screen opens with the sheet at full height.
   private func open(_ route: SettingsRoute) {
     detent = .large
-    path = [route]
+    path.append(route)
   }
 }
 
-/// The sections for the detent: Record pinned at the top, clear of the grabber and never scrolled
-/// under it, then the overview both apps share (`StatusOverview`): the lines, and past compact the
-/// groups, in a scroll view.
+/// The groups, in a scroll view: iCloud's line while it's a problem, then a group per kind of device, each a heading
+/// and one card (`StatusSheetModel.sections`). It doesn't repeat the lines the cards say.
 private struct StatusSections: View {
   let library: LibraryController
-  @Binding var detent: StatusDetent
-  let hostsRecordButton: Bool
-  let scrollsCompact: Bool
+  let detent: StatusDetent
+  let fix: StatusSection?
   let open: (SettingsRoute) -> Void
-  @Binding var showingPairing: Bool
-  @Binding var showingAddDevice: Bool
+  let close: () -> Void
+  let pair: () -> Void
   @Environment(PhoneAppModel.self) private var model
   @Environment(ReadingSession.self) private var session
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @Environment(\.dynamicTypeSize) private var typeSize
-  /// The group a tapped line's fix is in, until the sheet has scrolled to it.
-  @State private var fix: StatusSection?
 
   var body: some View {
-    let inputs = StatusSheetInputs.make(
-      model, library: library, hostsRecordButton: hostsRecordButton)
-    let sections = StatusSheetModel.sections(for: detent, inputs)
-    VStack(spacing: 0) {
-      if sections.contains(.quickActions) {
-        StatusQuickActions()
-          .padding(.horizontal, PhoneStyle.Space.s4)
-          .padding(.top, StatusCompactDetent.recordTop)
-          .padding(.bottom, StatusCompactDetent.recordGap)
-      }
-      ScrollViewReader { proxy in
-        ScrollView {
-          TimelineView(.periodic(from: .now, by: 30)) { context in
-            let lines = StatusSheetModel.lines(inputs, now: context.date)
-            StatusOverview(
-              lines: detent == .compact
-                ? StatusSheetModel.compactLines(
-                  lines, accessibilitySize: typeSize.isAccessibilitySize)
-                : lines,
-              density: detent.density,
-              hint: { StatusSheetModel.hint(for: StatusSheetModel.route(for: $0, inputs)) },
-              choose: { choose($0, inputs: inputs) }
-            ) {
-              ForEach(sections.filter { $0 != .quickActions && $0 != .lines }, id: \.self) {
-                section in
-                view(for: section, inputs: inputs, now: context.date)
-                  .id(section)
-                  .transition(.opacity)
-              }
+    let inputs = StatusSheetInputs.make(model, library: library)
+    ScrollViewReader { proxy in
+      ScrollView {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+          let sections = StatusSheetModel.sections(inputs, now: context.date)
+          StatusOverview(lines: [], density: detent.density) {
+            ForEach(sections, id: \.self) { section in
+              view(for: section, inputs: inputs, now: context.date)
+                .id(section)
+                .transition(.opacity)
             }
-            .padding(.horizontal, PhoneStyle.Space.s4)
-            .padding(.top, hostsRecordButton ? 0 : PhoneStyle.Space.s1)
-            .padding(.bottom, PhoneStyle.Space.s4)
           }
-        }
-        // Compact holds its lines whole; at the accessibility sizes, where the 55% cap can leave a long
-        // line less room than it takes, the line scrolls rather than running under the home indicator.
-        .scrollDisabled(detent == .compact && !typeSize.isAccessibilitySize && !scrollsCompact)
-        .scrollBounceBehavior(.basedOnSize)
-        // `--status-scroll-end`: the foot of the content, for screenshots.
-        .defaultScrollAnchor(model.options.statusScrollEnd ? .bottom : nil)
-        .onChange(of: fix.map(sections.contains) ?? false) { _, shown in
-          if shown { reveal(in: proxy) }
+          .padding(.horizontal, PhoneStyle.Space.s4)
+          .padding(.top, PhoneStyle.Space.s2)
+          .padding(.bottom, PhoneStyle.Space.s4)
+          .animation(reduceMotion ? nil : PhoneStyle.Motion.state, value: sections)
         }
       }
+      .scrollBounceBehavior(.basedOnSize)
+      // `--status-scroll-end`: the foot of the content, for screenshots.
+      .defaultScrollAnchor(model.options.statusScrollEnd ? .bottom : nil)
+      .task { await reveal(in: proxy) }
     }
-    .animation(reduceMotion ? nil : PhoneStyle.Motion.state, value: sections)
     .animation(reduceMotion ? nil : PhoneStyle.Motion.state, value: detent)
-    .task { await chooseRequestedLine() }
   }
 
-  /// `--status-choose mac|sync|recorder` (debug): that compact line, tapped, for screenshots of where it leads.
-  private func chooseRequestedLine() async {
-    guard let id = model.options.statusChoose, detent == .compact else { return }
-    try? await Task.sleep(for: .milliseconds(1_500))
-    let inputs = StatusSheetInputs.make(
-      model, library: library, hostsRecordButton: hostsRecordButton)
-    guard
-      let line = StatusSheetModel.lines(inputs).first(where: {
-        $0.id == id || $0.id.hasPrefix(id + "-")
-      })
-    else { return }
-    choose(line, inputs: inputs)
-  }
-
-  /// A line leads to its fix when it needs the person, else to more of the sheet.
-  private func choose(_ line: StatusLineItem, inputs: StatusInputs) {
-    switch StatusSheetModel.route(for: line, inputs) {
-    case .showMore: if detent == .compact { detent = .medium }
-    case .showFix(let section):
-      if detent == .compact { detent = .medium }
-      fix = section
-    case .open(let route): open(route)
-    }
-  }
-
-  /// Scrolls the group with the fix to the top, once the sheet has stepped up and the group has laid out.
-  private func reveal(in proxy: ScrollViewProxy) {
-    guard let section = fix else { return }
-    Task { @MainActor in
-      try? await Task.sleep(for: .milliseconds(350))
-      withAnimation(reduceMotion ? nil : PhoneStyle.Motion.state) {
-        proxy.scrollTo(section, anchor: .top)
-      }
-      fix = nil
-    }
+  /// The group with a line's fix, scrolled to the top once the sheet has laid out.
+  private func reveal(in proxy: ScrollViewProxy) async {
+    guard let fix else { return }
+    try? await Task.sleep(for: .milliseconds(350))
+    withAnimation(reduceMotion ? nil : PhoneStyle.Motion.state) { proxy.scrollTo(fix, anchor: .top) }
   }
 
   @ViewBuilder
   private func view(for section: StatusSection, inputs: StatusInputs, now: Date) -> some View {
     switch section {
-    case .quickActions, .lines: EmptyView()
+    case .lines:
+      if let line = StatusSheetModel.syncLine(inputs) {
+        StatusLines(
+          [line], hint: { StatusSheetModel.hint(for: StatusSheetModel.route(for: $0, inputs)) },
+          choose: { _ in open(.icloud) })
+      }
     case .captions: StatusCaptions()
-    case .recorders:
-      StatusRecorders(detent: detent, open: open, addRecorder: { showingAddDevice = true })
+    case .recorders: StatusRecorders(detent: detent, open: open)
     case .macs:
       StatusMacs(
-        inputs: inputs, now: now, open: open, pair: { showingPairing = true },
-        openConversation: openConversation, perform: perform)
+        inputs: inputs, now: now, open: open, pair: pair, openConversation: openConversation,
+        perform: perform)
     case .iphone:
       StatusThisIPhone(
-        entries: inputs.phoneQueue, showsStorage: detent == .large, now: now, open: open,
-        openConversation: openConversation, perform: perform)
+        entries: inputs.phoneQueue, now: now, open: open, openConversation: openConversation,
+        perform: perform)
     }
   }
 
-  /// A queued conversation opens on its page, and the sheet steps back to compact behind it.
+  /// A queued conversation opens on its page, and the sheet goes.
   private func openConversation(_ id: UUID) {
-    detent = .compact
+    close()
     session.open(id)
   }
 
@@ -575,9 +320,7 @@ private struct StatusSections: View {
 /// Gathers the sheet's facts from the app model.
 @MainActor
 enum StatusSheetInputs {
-  static func make(_ model: PhoneAppModel, library: LibraryController, hostsRecordButton: Bool)
-    -> StatusInputs
-  {
+  static func make(_ model: PhoneAppModel, library: LibraryController) -> StatusInputs {
     let devices = model.devices
     var inputs = StatusInputs()
     inputs.recorders = devices.sessions.map { lineRecorder($0, model: model) }
@@ -592,12 +335,12 @@ enum StatusSheetInputs {
     inputs.phone = work.line
     inputs.phoneQueue = work.entries
     sync(model.sync, into: &inputs)
-    inputs.hostsRecordButton = hostsRecordButton
     inputs.hasLiveCaptions = devices.sessions.contains { $0.isListeningLive }
     inputs.pairedMacs = model.link.macs.map { mac in
       StatusInputs.Mac(
         id: mac.id, name: mac.name, line: macLine(mac, model: model), isConnected: mac.isConnected,
-        notProcessing: mac.isConnected && !mac.canProcess)
+        notProcessing: mac.isConnected && !mac.canProcess,
+        isRecording: mac.isRecording || model.isRecordingBySync(mac), problem: mac.problem != nil)
     }
     return inputs
   }
@@ -731,44 +474,6 @@ enum StatusSheetInputs {
   }
 }
 
-// MARK: Compact
-
-enum StatusQuickActionLayout {
-  /// One gap for Record–Import and Import–Search in the folded row and the Duo tray.
-  static let spacing = PhoneStyle.Space.s2
-}
-
-/// Record, Import, and Search, at the thumb (they move here from the library's foot while the
-/// sheet is up, so there's one bottom surface rather than two stacked). Their glass is one layer
-/// (`GlassEffectContainer`), so the three read and blend as one bar. Past `recordLargestSize` the
-/// row stops growing and each control shows the large content viewer.
-private struct StatusQuickActions: View {
-  @Environment(ReadingSession.self) private var session
-
-  var body: some View {
-    GlassEffectContainer(spacing: PhoneStyle.Space.s3) {
-      HStack(alignment: .bottom, spacing: StatusQuickActionLayout.spacing) {
-        RecordStartButton()
-        Button {
-          session.isSearchPresented = true
-        } label: {
-          Image(systemName: "magnifyingglass")
-            .font(.title3.weight(.medium))
-            .frame(width: 60, height: 60)
-            .contentShape(Circle())
-        }
-        .buttonStyle(.glass)
-        .buttonBorderShape(.circle)
-        .foregroundStyle(PhoneStyle.Ink.title)
-        .accessibilityLabel("Search")
-        .accessibilityHint("Searches titles, notes, transcripts, and summaries")
-        .accessibilityShowsLargeContentViewer()
-      }
-    }
-    .dynamicTypeSize(...StatusCompactDetent.recordLargestSize)
-  }
-}
-
 // MARK: Cards
 
 /// The glyph column of a card's rows at the person's text size: a card tile's side (DaybookDesign's
@@ -828,28 +533,14 @@ struct StatusRowButtonStyle: ButtonStyle {
 
 // MARK: Recorders
 
-/// A card per recorder; Add Recorder… when there's none.
+/// A card per recorder added (the group shows only while there's one; Add Recorder… is in Settings).
 private struct StatusRecorders: View {
   let detent: StatusDetent
   let open: (SettingsRoute) -> Void
-  let addRecorder: () -> Void
   @Environment(PhoneAppModel.self) private var model
 
   var body: some View {
     StatusGroup(title: "Recorders") {
-      if model.devices.sessions.isEmpty {
-        StatusCard {
-          Button(action: addRecorder) {
-            StatusRow {
-              StatusLinkGlyph(systemImage: "plus")
-            } content: {
-              Text("Add Recorder…").font(.subheadline.weight(.medium)).foregroundStyle(
-                PhoneStyle.Ink.link)
-            }
-          }
-          .buttonStyle(StatusRowButtonStyle())
-        }
-      }
       VStack(spacing: PhoneStyle.Space.s3) {
         ForEach(model.devices.sessions) { session in
           StatusRecorderCard(session: session, detent: detent, open: open)
@@ -1129,8 +820,9 @@ private struct StatusCaptions: View {
 
 // MARK: Macs
 
-/// Every paired Mac (and one the library syncs with that isn't paired here), the queue under the
-/// Mac doing it, and Pair with Your Mac…. Work no Mac here is doing yet starts at the card's edge.
+/// Every paired Mac (and one the library synced with lately that isn't paired here), the queue under the
+/// Mac doing it, and Pair with Your Mac… while none is paired. Work no Mac here is doing yet starts at the
+/// card's edge.
 private struct StatusMacs: View {
   let inputs: StatusInputs
   let now: Date
@@ -1153,15 +845,17 @@ private struct StatusMacs: View {
             ForEach(inputs.queue) { entry in queueRow(entry, under: row.name) }
           }
         }
-        Button(action: pair) {
-          StatusRow {
-            StatusLinkGlyph(systemImage: "plus")
-          } content: {
-            Text("Pair with Your Mac…").font(.subheadline.weight(.medium)).foregroundStyle(
-              PhoneStyle.Ink.link)
+        if inputs.pairedMacs.isEmpty {
+          Button(action: pair) {
+            StatusRow {
+              StatusLinkGlyph(systemImage: "plus")
+            } content: {
+              Text("Pair with Your Mac…").font(.subheadline.weight(.medium)).foregroundStyle(
+                PhoneStyle.Ink.link)
+            }
           }
+          .buttonStyle(StatusRowButtonStyle())
         }
-        .buttonStyle(StatusRowButtonStyle())
       }
     }
   }
@@ -1210,12 +904,11 @@ private struct StatusMacs: View {
 
 // MARK: This iPhone
 
-/// This iPhone's own work while it has some (docs/iphone.md, "Processing on this iPhone"): what runs
+/// This iPhone: its own work while it has some (docs/iphone.md, "Processing on this iPhone"), what runs
 /// here, a summary counting down to it, what waits and what's paused, in the rows the Macs card uses;
-/// and at full height the audio kept on it, opening Storage.
+/// and the audio kept on it, opening Storage.
 private struct StatusThisIPhone: View {
   let entries: [StatusQueueEntry]
-  let showsStorage: Bool
   let now: Date
   let open: (SettingsRoute) -> Void
   let openConversation: (UUID) -> Void
@@ -1232,26 +925,24 @@ private struct StatusThisIPhone: View {
           )
           .statusRowAtCardEdge()
         }
-        if showsStorage {
-          Button {
-            open(.storage)
-          } label: {
-            StatusRow {
-              DaybookTile(symbol: "iphone", size: .card)
-            } content: {
-              HStack(spacing: PhoneStyle.Space.s2) {
-                Text(StatusSheetModel.audioOnThisIPhone(bytes: model.audio.usage.bytes))
-                  .font(.subheadline)
-                  .foregroundStyle(PhoneStyle.Ink.title)
-                  .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
-                StatusChevron()
-              }
+        Button {
+          open(.storage)
+        } label: {
+          StatusRow {
+            DaybookTile(symbol: "iphone", size: .card)
+          } content: {
+            HStack(spacing: PhoneStyle.Space.s2) {
+              Text(StatusSheetModel.audioOnThisIPhone(bytes: model.audio.usage.bytes))
+                .font(.subheadline)
+                .foregroundStyle(PhoneStyle.Ink.title)
+                .fixedSize(horizontal: false, vertical: true)
+              Spacer(minLength: 0)
+              StatusChevron()
             }
           }
-          .buttonStyle(StatusRowButtonStyle())
-          .accessibilityHint("Shows storage")
         }
+        .buttonStyle(StatusRowButtonStyle())
+        .accessibilityHint("Shows storage")
       }
     }
   }

@@ -4,8 +4,8 @@ import DaybookUI
 import SwiftUI
 
 /// The library and reading while nothing is being recorded, in one column (pocket) or two pages
-/// (notebook). Owned by the library and reading work (docs/iphone.md, phase 2). It places
-/// `RecordStartButton` and presents `SettingsScreen`, and hosts the status tray on the library/left page.
+/// (notebook). Owned by the library and reading work (docs/iphone.md, phase 2). Its library page places
+/// `RecordStartButton` and the status strip and presents `SettingsScreen`; it presents the status sheet.
 ///
 /// - Pocket (closed, or a regular iPhone): the list, and a conversation pushed over it with a
 ///   Summary | Transcript switch.
@@ -47,7 +47,6 @@ private struct ReadingLayout: View {
   let library: LibraryController
   let rootURL: URL
   let openLatest: Bool
-  @State private var panelDetent: StatusDetent = .compact
   @Environment(ReadingSession.self) private var session
   @Environment(\.audioProvider) private var provider
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -62,14 +61,16 @@ private struct ReadingLayout: View {
     .environment(\.liveCaptionStore, LiveCaptionStore(libraryRoot: rootURL))
     // The photo views' originals, viewer, and actions on every page (DaybookUI's photos).
     .modifier(PhonePhotoServices(library: library))
-    // One column presents a sheet; two pages show it on the right page instead (`PageSheet`),
-    // so nothing sits across the crease. The share sheet is always the system's.
+    // One column presents a sheet; two pages show it as a card on the right page instead (`PageCard`), so nothing
+    // sits across the crease and the left page stays in reach. The share sheet is always the system's.
     .sheet(item: Binding(get: { sheetOnPage ? nil : session.sheet }, set: { session.sheet = $0 })) {
       sheet in
       ReadingSheetContent(sheet: sheet, library: library)
         .environment(session)
         .tint(PhoneStyle.accent)
     }
+    // Today's status, in the hand a sheet, open on the right page; the library's strip and More ask for it.
+    .statusSheet(onPage: style != .pocket)
     .fullScreenCover(
       isPresented: Binding(
         get: { session.cameraFor != nil }, set: { if !$0 { session.cameraFor = nil } })
@@ -174,7 +175,6 @@ private struct ReadingLayout: View {
 
   private var pocket: some View {
     PocketStack(library: library, rootURL: rootURL)
-      .modifier(StatusSheetHost(enabled: true))
   }
 
   // MARK: Two pages
@@ -189,7 +189,7 @@ private struct ReadingLayout: View {
         .confirmationBeat(Bindable(session).confirmation)
         .overlay {
           if sheetOnPage, let sheet = session.sheet {
-            PageSheet(close: { session.sheet = nil }) {
+            PageCard(close: { session.sheet = nil }) {
               ReadingSheetContent(sheet: sheet, library: library)
                 .environment(\.closePageSheet) { session.sheet = nil }
             }
@@ -250,7 +250,7 @@ private struct ReadingLayout: View {
       .transition(pageTurn(from: .trailing))
     } else {
       NavigationStack {
-        LibraryPage(library: library, rootURL: rootURL, twoPage: true, panelDetent: $panelDetent)
+        LibraryPage(library: library, rootURL: rootURL, twoPage: true)
       }
       .transition(pageTurn(from: .leading))
     }
@@ -289,12 +289,17 @@ private struct ReadingLayout: View {
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-              // Words, not a glyph the toolbar would show alone: it's the way across both pages
-              // (a second tap on the row is the other).
-              ToolbarItem(placement: .topBarLeading) {
-                Button("Open") { session.open(id) }
-                  .buttonStyle(.glassProminent)
-                  .tint(PhoneStyle.prominentFill)
+              // The way across both pages (a second tap on the row is the other), in the trailing group with Info and
+              // More, no louder than they are: its word beside the open book where the bar has room; on the Duo, whose
+              // bar items stand in the status bar's column, the glyph, with "Open" for VoiceOver.
+              ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                  session.open(id)
+                } label: {
+                  Label("Open", systemImage: "book.pages").labelStyle(.titleAndIcon)
+                }
+                .tint(PhoneStyle.Ink.title)
+                .accessibilityHint("Opens it across both pages")
               }
               ConversationToolbar(library: library, meeting: meeting)
             }
@@ -332,84 +337,6 @@ private struct ReadingLayout: View {
     } else {
       session.showNewest(of: library.meetings)
     }
-  }
-}
-
-/// A reading sheet on the notebook's right page: a card on that page, clear of the crease, where one
-/// column would present a sheet. Its Done or Cancel closes it (`SheetDismiss`), and so do what closes
-/// a sheet: a swipe down from its grabber, and VoiceOver's escape (two fingers scrubbing). It isn't
-/// modal: the left page stays as it was, and stays in reach.
-private struct PageSheet<Content: View>: View {
-  let close: () -> Void
-  @ViewBuilder var content: Content
-  @State private var drag: CGFloat = 0
-  @Environment(\.creaseEdge) private var creaseEdge
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-  var body: some View {
-    content
-      .background(Color(uiColor: .systemBackground))
-      .overlay(alignment: .top) { grabber }
-      .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
-      .shadow(color: .black.opacity(0.12), radius: 18, y: 4)
-      .offset(y: drag)
-      .accessibilityAction(.escape) { close() }
-      .padding(
-        .leading, creaseEdge == .leading ? PhoneStyle.Page.creaseClearance : PhoneStyle.Space.s3
-      )
-      .padding(.trailing, PhoneStyle.Space.s3)
-      .padding(.vertical, PhoneStyle.Space.s2)
-      // The page under it steps back, as under a sheet; the other page doesn't.
-      .background {
-        Rectangle().fill(.ultraThinMaterial)
-          .overlay(Color.black.opacity(0.12))
-          .opacity(PageSheetDrag.dimming(drag))
-          .ignoresSafeArea(edges: [.top, .bottom, .trailing])
-          .accessibilityHidden(true)
-      }
-  }
-
-  /// A sheet's grabber, over the middle of the card's top edge, clear of its Done and Cancel: the card follows a
-  /// finger down and closes past a point, or springs back.
-  private var grabber: some View {
-    Capsule()
-      .fill(Color(uiColor: .tertiaryLabel))
-      .frame(width: 36, height: 5)
-      .padding(.top, 5)
-      .frame(width: 120, height: 24, alignment: .top)
-      .contentShape(Rectangle())
-      .gesture(
-        DragGesture(minimumDistance: 4, coordinateSpace: .global)
-          .onChanged { value in drag = max(0, value.translation.height) }
-          .onEnded { value in
-            if PageSheetDrag.closes(
-              translation: value.translation.height, predicted: value.predictedEndTranslation.height
-            ) {
-              close()
-            } else {
-              withAnimation(DaybookMotion.resolved(DaybookMotion.land, reduceMotion: reduceMotion))
-              {
-                drag = 0
-              }
-            }
-          }
-      )
-      .accessibilityHidden(true)
-  }
-}
-
-/// When a swipe down on a page sheet's grabber closes it, and how much the page behind stays dimmed meanwhile.
-enum PageSheetDrag {
-  /// Past this far down, or flicked to land past twice it, the sheet closes.
-  static let closingDistance: CGFloat = 120
-
-  static func closes(translation: CGFloat, predicted: CGFloat) -> Bool {
-    translation >= closingDistance || predicted >= closingDistance * 2
-  }
-
-  /// The dimming fades as the card is pulled down, gone by twice the closing distance.
-  static func dimming(_ drag: CGFloat) -> Double {
-    max(0, 1 - Double(drag) / Double(closingDistance * 2))
   }
 }
 

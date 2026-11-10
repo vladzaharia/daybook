@@ -3,11 +3,14 @@ import DaybookUI
 import SwiftUI
 import UIKit
 
-// On the open iPhone Duo a sheet is a card centred across the crease (docs/iphone.md, "Status
-// sheet"). Settings and Add Recorder present themselves over the whole display there instead, as two
-// pages (`pagesPresentation`). A sheet shown in the hand and then opened still meets the crease, so it
-// lays itself out as two pages split where the crease falls inside it (`SheetCreaseSplit`); partly
-// open, the system keeps a sheet to one side of the hinge, and it stays one column.
+// On the open iPhone Duo a sheet is a card centred across the crease unless it's placed on a page (docs/iphone.md,
+// "iPhone Duo"). Settings and Add Recorder present themselves over the whole display there instead, as two pages
+// (`pagesPresentation`); every other sheet goes on the right page as a card (`PageCard`). iOS 27's
+// `presentationPlacement(.trailing)` was tried for a system sheet there: on the Duo it aligns a form sheet about
+// 650 pt wide to the display's trailing edge, across the crease, and dims both pages, so the card stays. A sheet shown
+// in the hand and then opened still meets the crease, so it lays itself out as two pages split where the crease falls
+// inside it (`SheetCreaseSplit`); partly open, the system keeps a sheet to one side of the hinge, and it stays one
+// column.
 
 extension View {
     /// A sheet in the hand; open, the whole display, which the content lays out as two pages. The
@@ -39,9 +42,9 @@ private struct PagesPresentation<Sheet: View>: ViewModifier {
 
 extension View {
     /// A sheet a Settings screen shows (Add Term, a new template, a recovery key, Details): a sheet in
-    /// the hand; open, where a sheet would be a card across the crease, a card on the right page,
-    /// clear of the fold, with the display stepping back behind it (`PageCard`). How it was shown is
-    /// kept until it's dismissed, as `pagesPresentation` does.
+    /// the hand; open, where a sheet would be a card across the crease, a card on the right page, clear
+    /// of the fold, with that page stepping back behind it (`PageCard`). How it was shown is kept until
+    /// it's dismissed, as `pagesPresentation` does.
     func pageSheet<Item: Identifiable, Sheet: View>(item: Binding<Item?>, @ViewBuilder content: @escaping (Item) -> Sheet) -> some View {
         modifier(PageSheetPresentation(item: item, sheet: content))
     }
@@ -67,82 +70,113 @@ private struct PageSheetPresentation<Item: Identifiable, Sheet: View>: ViewModif
         content
             .sheet(item: Binding(get: { onPage ? nil : item }, set: { item = $0 })) { sheet($0) }
             .fullScreenCover(item: Binding(get: { onPage ? item : nil }, set: { item = $0 })) { value in
-                PageCard { sheet(value) }
+                PageCardCover { sheet(value) }
                     .presentationBackground(.clear)
             }
             .onChange(of: item?.id) { _, id in shownOnPage = id == nil ? nil : onPage }
     }
 }
 
-/// A sheet's content as a card on the open display's right page, as the reading sheets are
-/// (`LibraryBrowser`'s `PageSheet`). Folded shut while shown, it takes the cover display whole. Like a
-/// sheet it closes with a drag down (on its handle) and with VoiceOver's escape, unless what's in it
-/// has changes to lose (`guardingDismissal`), when its own Cancel asks first.
-private struct PageCard<Content: View>: View {
+/// A `PageCard` over the whole open display, for a sheet presented as a cover: the left page clear, the card on the
+/// right. Folded shut while shown, it takes the cover display whole.
+private struct PageCardCover<Content: View>: View {
     @ViewBuilder var content: Content
     @Environment(\.surfaceStyle) private var surface
     @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        if surface == .pocket {
+            content.background(Color(uiColor: .secondarySystemBackground).ignoresSafeArea())
+        } else {
+            CreaseSplit {
+                Color.clear.accessibilityHidden(true)
+            } trailing: {
+                PageCard(close: { dismiss() }, isModal: true) { content }
+            }
+        }
+    }
+}
+
+/// A sheet as a card on the open display's right page, clear of the crease: the one card the reading sheets, the
+/// status sheet, and Settings' sheets use on two pages, where the system would centre a sheet across the crease. It has
+/// the panel's
+/// radius and the grouped ground's paper (`secondarySystemBackground`), and its page steps back under a dim while the
+/// other page doesn't, so the left page stays as it was. Like a sheet it closes with its Done, Cancel, or close
+/// button (`SheetDismiss`), a drag down on its grabber, and VoiceOver's escape, unless what's in it has changes to lose
+/// (`guardingDismissal`), when its own Cancel asks first.
+struct PageCard<Content: View>: View {
+    let close: () -> Void
+    /// VoiceOver stays in it (a cover's card); a reading sheet's leaves the left page in reach.
+    var isModal = false
+    @ViewBuilder var content: Content
+    @Environment(\.creaseEdge) private var creaseEdge
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// What's in it would lose changes if it closed.
     @State private var guarded = false
     @State private var drag: CGFloat = 0
 
-    /// How far the handle is dragged before letting go closes the card.
-    private static var closesAfter: CGFloat { 96 }
+    /// How dark its page steps back.
+    static var dim: Double { 0.2 }
 
     var body: some View {
-        Group {
-            if surface == .pocket {
-                content.background(Color(uiColor: .systemBackground).ignoresSafeArea())
-            } else {
-                CreaseSplit {
-                    Color.clear.accessibilityHidden(true)
-                } trailing: {
-                    card
-                }
-                // The display under it steps back, as under a sheet.
-                .background(Color.black.opacity(0.2).ignoresSafeArea().accessibilityHidden(true))
-            }
-        }
-        .onPreferenceChange(DismissalGuardKey.self) { value in MainActor.assumeIsolated { guarded = value } }
-        .accessibilityAction(.escape) { if !guarded { dismiss() } }
-    }
-
-    private var card: some View {
         content
-            .background(Color(uiColor: .systemBackground))
+            .background(Color(uiColor: .secondarySystemBackground))
             // Over the bar's top margin, where a sheet's grabber is, clear of its buttons.
-            .overlay(alignment: .top) { handle }
-        .clipShape(RoundedRectangle(cornerRadius: DaybookRadius.panel, style: .continuous))
-        .shadow(color: .black.opacity(0.12), radius: 18, y: 4)
-        .offset(y: drag)
-        .accessibilityAddTraits(.isModal)
-        .padding(.leading, PhoneStyle.Page.creaseClearance)
-        .padding(.trailing, PhoneStyle.Space.s3)
-        .padding(.vertical, PhoneStyle.Space.s2)
+            .overlay(alignment: .top) { grabber }
+            .clipShape(DaybookRadius.shape(DaybookRadius.panel))
+            .shadow(color: .black.opacity(0.12), radius: 18, y: 4)
+            .offset(y: drag)
+            .accessibilityAddTraits(isModal ? .isModal : [])
+            .padding(.leading, creaseEdge == .leading ? PhoneStyle.Page.creaseClearance : PhoneStyle.Space.s3)
+            .padding(.trailing, PhoneStyle.Space.s3)
+            .padding(.vertical, PhoneStyle.Space.s2)
+            // Its page steps back, as under a sheet; the other page doesn't.
+            .background {
+                Color.black.opacity(Self.dim * PageSheetDrag.dimming(drag))
+                    .ignoresSafeArea(edges: [.top, .bottom, .trailing])
+                    .accessibilityHidden(true)
+            }
+            .onPreferenceChange(DismissalGuardKey.self) { value in MainActor.assumeIsolated { guarded = value } }
+            .accessibilityAction(.escape) { if !guarded { close() } }
     }
 
-    /// A sheet's grabber: dragged down past `closesAfter`, the card goes; short of it, or with changes to
-    /// lose, it settles back.
-    private var handle: some View {
+    /// A sheet's grabber, over the middle of the card's top edge: the card follows a finger down and closes past a
+    /// point (`PageSheetDrag`), or springs back; with changes to lose it barely moves.
+    private var grabber: some View {
         Capsule()
             .fill(Color(uiColor: .tertiaryLabel))
             .frame(width: 36, height: 5)
             .padding(.top, 5)
-            .frame(width: 120, height: 16, alignment: .top)
+            .frame(width: 120, height: 24, alignment: .top)
             .contentShape(Rectangle())
             .gesture(
-                DragGesture(minimumDistance: 4)
+                DragGesture(minimumDistance: 4, coordinateSpace: .global)
                     .onChanged { value in drag = max(0, value.translation.height) * (guarded ? 0.15 : 1) }
                     .onEnded { value in
-                        if !guarded, value.translation.height > Self.closesAfter || value.predictedEndTranslation.height > Self.closesAfter * 2 {
-                            dismiss()
+                        if !guarded, PageSheetDrag.closes(translation: value.translation.height,
+                                                          predicted: value.predictedEndTranslation.height) {
+                            close()
                         } else {
-                            withAnimation(DaybookMotion.resolved(DaybookMotion.state, reduceMotion: reduceMotion)) { drag = 0 }
+                            withAnimation(DaybookMotion.resolved(DaybookMotion.land, reduceMotion: reduceMotion)) { drag = 0 }
                         }
                     }
             )
             .accessibilityHidden(true)
+    }
+}
+
+/// When a swipe down on a page card's grabber closes it, and how much its page stays dimmed meanwhile.
+enum PageSheetDrag {
+    /// Past this far down, or flicked to land past twice it, the card closes.
+    static let closingDistance: CGFloat = 120
+
+    static func closes(translation: CGFloat, predicted: CGFloat) -> Bool {
+        translation >= closingDistance || predicted >= closingDistance * 2
+    }
+
+    /// The dimming fades as the card is pulled down, gone by twice the closing distance.
+    static func dimming(_ drag: CGFloat) -> Double {
+        max(0, 1 - Double(drag) / Double(closingDistance * 2))
     }
 }
 
