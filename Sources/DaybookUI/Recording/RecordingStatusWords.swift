@@ -64,10 +64,8 @@ public struct RecorderChip: Identifiable, Equatable, Sendable {
     /// The chip at a moment: a countdown's seconds move with it ("Summarizing in 11 s", "11 s").
     public func at(_ now: Date) -> RecorderChip {
         guard let until = countdownUntil else { return self }
-        let seconds = max(1, Int(until.timeIntervalSince(now).rounded(.up)))
-        func moved(_ text: String) -> String {
-            text.replacingOccurrences(of: #"\b\d+ s\b"#, with: "\(seconds) s", options: .regularExpression)
-        }
+        let seconds = SummaryPlacementWords.secondsLeft(until: until, at: now)
+        func moved(_ text: String) -> String { SummaryPlacementWords.ticking(text, to: seconds) }
         var chip = self
         chip.label = moved(label)
         chip.shortLabel = shortLabel.map(moved)
@@ -280,8 +278,8 @@ public enum RecordingStatusWords {
 
     /// After Stop, what's becoming of the conversation, as a chip in the words its library row says
     /// (`ConversationStatusPresentation.row`): "Transcribing · 40%" filling as it goes, "Waiting for your Mac", "Waiting
-    /// for models", a summary's countdown. Nil when the row has nothing to say.
-    public static func processingChip(_ row: ConversationRowStatus?) -> RecorderChip? {
+    /// for models", a summary's countdown, as it stands at `now`. Nil when the row has nothing to say.
+    public static func processingChip(_ row: ConversationRowStatus?, now: Date = Date()) -> RecorderChip? {
         guard let row, let text = row.text else { return nil }
         func chip(_ symbol: String, _ tone: StatusTone, short: String?, progress: Double? = nil) -> RecorderChip {
             RecorderChip(target: .processing, symbol: symbol, label: text, shortLabel: short, tone: tone, progress: progress, detail: text,
@@ -293,7 +291,7 @@ public enum RecordingStatusWords {
                         progress: row.fraction)
         case .waiting:
             // A countdown's short words are its seconds ("12 s"), which move with it.
-            let seconds = row.countdownUntil == nil ? nil : text.range(of: #"\d+ s$"#, options: .regularExpression).map { String(text[$0]) }
+            let seconds = row.countdownUntil.map { SummaryPlacementWords.seconds(SummaryPlacementWords.secondsLeft(until: $0, at: now)) }
             return chip("clock", .calm, short: seconds ?? "Waiting")
         case .waitingForModels: return chip("arrow.down.circle", .attention, short: "Models")
         case .paused: return chip("pause.circle", .calm, short: "Paused")

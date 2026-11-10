@@ -340,7 +340,7 @@ struct TemplateMenuItems: View {
     @Environment(\.openWindow) private var openWindow
     var body: some View {
         Picker("Template", selection: state.templateSelection(for: meetingID)) {
-            Text(automaticTitle).tag("auto")
+            Text(TemplateWords.automatic(for: state.meetings.first { $0.id == meetingID })).tag("auto")
             Divider()
             ForEach(state.templates.filter(\.isBuiltIn)) { template in Text(template.name).tag(template.id) }
             let custom = state.templates.filter { !$0.isBuiltIn }
@@ -352,10 +352,6 @@ struct TemplateMenuItems: View {
         .pickerStyle(.inline)
         Divider()
         Button("Edit Templates…") { openWindow(id: WindowID.templates) }
-    }
-    private var automaticTitle: String {
-        guard let kind = state.meetings.first(where: { $0.id == meetingID })?.summary?.kind, kind != .auto else { return "Automatic" }
-        return "Automatic (\(kind.title))"
     }
 }
 

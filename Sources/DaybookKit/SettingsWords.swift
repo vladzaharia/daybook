@@ -154,6 +154,14 @@ public enum SettingsWords {
         justNow || (isOn && access == .denied)
     }
 
+    // MARK: Protection while locked
+
+    /// The iPhone's Settings › Storage switch: the library's files can't be read while the iPhone is locked
+    /// (docs/iphone.md, "File protection").
+    public static let protectWhileLocked = "Protect while iPhone is locked"
+    /// Its one footer line: what it costs, and nothing of how.
+    public static let protectWhileLockedFooter = "Syncs and transcribes while unlocked."
+
     // MARK: Casing
 
     /// A sentence-case label as a title-case one, as the iPhone's Settings shows labels ("Use the cloud" → "Use the
@@ -205,6 +213,21 @@ public enum TemplateWords {
     public static func deleteTitle(_ template: SummaryTemplate) -> String { "Delete “\(template.displayName)”?" }
     public static let deleteConsequence = "Conversations that used it switch to Automatic."
     public static let delete = "Delete"
+
+    /// A conversation's template menu's first item, which carries the guess (the Mac's colophon, inspector, and
+    /// Conversation menu; the iPhone's colophon and Info): "Automatic (Meeting)" once a summary guessed what kind of
+    /// conversation it was, else "Automatic".
+    public static func automatic(for meeting: Meeting?) -> String {
+        guard let kind = meeting?.summary?.kind, kind != .auto else { return "Automatic" }
+        return "Automatic (\(kind.title))"
+    }
+
+    /// The template a conversation is summarized with, as its colophon names it on both apps: the template's own name,
+    /// else the menu's automatic item. `resolved` is the library's choice for it (`LibraryController.resolvedTemplate(for:)`,
+    /// nil for Automatic).
+    public static func title(for meeting: Meeting, resolved: SummaryTemplate?) -> String {
+        resolved?.name ?? automatic(for: meeting)
+    }
 }
 
 /// Vocabulary's words on both apps.

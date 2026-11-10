@@ -131,7 +131,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         rig.state.enqueue(id)
         try await countingDown(rig, id)
         let planner = try XCTUnwrap(rig.state.placements[id])
-        XCTAssertEqual(planner.line(at: Date(), thisDevice: AppState.thisDeviceWords), "Summarizing on this Mac in 1 s")
+        XCTAssertEqual(planner.line(at: Date(), thisDevice: AppState.thisDeviceWords), SummaryPlacementWords.countdown(on: AppState.thisDeviceWords, seconds: 1))
         XCTAssertEqual(planner.actions, [.useCloud, .startNow])
         XCTAssertTrue(rig.inference.summarized.isEmpty, "Nothing runs while it counts down")
         try await rig.processed(id)
@@ -150,7 +150,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         let row = try XCTUnwrap(MacRowStatus.make(rig.state, meeting))
         XCTAssertEqual(row.kind, .waiting)
         XCTAssertNotNil(row.countdownUntil, "The row counts down")
-        XCTAssertEqual(row.text?.hasPrefix("Summarizing in "), true)
+        XCTAssertEqual(row.text?.hasPrefix(SummaryPlacementWords.phrase), true)
         // VM-16: the list's subtitle counts down to the same moment, on the same ticks, so the two say the same number.
         let until = try XCTUnwrap(row.countdownUntil)
         XCTAssertEqual(MacListSubtitle.countdown(rig.state), until, "the subtitle ticks on the row's deadline")
@@ -187,7 +187,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         try await countingDown(rig, id)
         rig.state.chooseSummaryPlacement(.useCloud, for: id)
         try await waitUntil("the cloud to be asked") { cloud.isWaiting }
-        XCTAssertEqual(rig.state.placements[id]?.line(at: Date(), thisDevice: AppState.thisDeviceWords), "Summarizing with Claude Sonnet 5.5")
+        XCTAssertEqual(rig.state.placements[id]?.line(at: Date(), thisDevice: AppState.thisDeviceWords), SummaryPlacementWords.inCloud("Claude Sonnet 5.5"))
         cloud.release()
         try await rig.processed(id)
         XCTAssertEqual(cloud.summarized, [id])

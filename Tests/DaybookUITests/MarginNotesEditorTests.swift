@@ -29,6 +29,21 @@ final class MarginNotesEditorTests: XCTestCase {
         XCTAssertEqual(NoteMark(id: "b", kind: .bookmark, time: 250).spoken, "Bookmark at \(SpokenTime.format(250))")
     }
 
+    /// A bookmark after the last paragraph has nothing written beside it, so it says "Bookmark" there, as its row in
+    /// the summary does; one beside a paragraph has that paragraph's words, and a photo shows itself.
+    func testBehaviorOnlyABookmarkAfterTheLastParagraphIsWordless() {
+        let times: [TimeInterval?] = [2, nil, 10]
+        let marks = [NoteMark(id: "late", kind: .bookmark, time: 12), NoteMark(id: "early", kind: .bookmark, time: 4),
+                     NoteMark(id: "photo", kind: .photo, time: 14)]
+        let wordless = NoteParagraphs.placement(of: marks, times: times)
+            .filter { NoteParagraphs.isWordless($0.mark, before: $0.before, paragraphs: times.count) }
+        XCTAssertEqual(wordless.map(\.mark.id), ["late"])
+        XCTAssertFalse(NoteParagraphs.isWordless(marks[0], before: 3, paragraphs: 4), "a paragraph written after it, untimed, is its words")
+        XCTAssertEqual(BookmarkLabel.untitled, "Bookmark")
+        XCTAssertEqual(BookmarkLabel.placeholder(for: Highlight(time: 4, text: ""), in: Meeting(title: "Call")), BookmarkLabel.untitled,
+                       "the summary's row says the same word")
+    }
+
     func testBehaviorPlayFromHerePlaysTheParagraphAtTheCaretOrTheOneBeforeIt() {
         let text = "Intro\nUntimed\nLater" as NSString
         let ranges = NoteParagraphs.ranges(in: text)
@@ -115,6 +130,19 @@ final class MarginNotesEditorTests: XCTestCase {
         view.applyTypingStyle()
         view.updateGutter()
         return view
+    }
+
+    /// A bookmark alone on the line after the last paragraph says "Bookmark" beside its mark, where the notes' words
+    /// start; one beside a paragraph, or in an empty note, says nothing (the placeholder keeps that line).
+    func testBehaviorTheMacEditorSaysBookmarkBesideAWordlessBookmark() {
+        let late = editor("First\n\nSecond", times: [2, 10], marks: [NoteMark(id: "late", kind: .bookmark, time: 12)])
+        let origin = late.markWordsOriginForTesting
+        XCTAssertNotNil(origin, "a bookmark after the last paragraph has no words of its own")
+        XCTAssertEqual(origin?.x, 52, "where the notes' words start, beside the mark in the lane")
+        let early = editor("First\n\nSecond", times: [2, 10], marks: [NoteMark(id: "early", kind: .bookmark, time: 4)])
+        XCTAssertNil(early.markWordsOriginForTesting, "the paragraph written after it is its words")
+        let empty = editor("", times: [], marks: [NoteMark(id: "alone", kind: .bookmark, time: 4)])
+        XCTAssertNil(empty.markWordsOriginForTesting, "the placeholder holds the first line")
     }
 
     /// What VoiceOver finds beside the notes: the container's children after the notes themselves.

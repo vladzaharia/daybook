@@ -1,5 +1,55 @@
 # Validation record
 
+## Design pass follow-ups (2026-11-10)
+
+The items the design pass deferred (docs/audits/2026-11-10/README.md, "Still to do"), each on its own worktree from
+`design-pass-2026-11-followups` (stacked on PR #62), merged here with the touched suites rerun after every merge.
+
+- **F1, the countdown words once, and the wordless bookmark (CQ-19).** The summary countdown's words ("Summarizing in
+  12 s" and its siblings, the one rounding rule, the tick, a summary under way here, on a Mac, or in the cloud,
+  "Waiting for a Mac to summarize", and the choices) are written once in DaybookKit's `SummaryPlacementWords`; every
+  surface on both apps says them from there (the planner, the page, rows, a Mac's countdown over the link, the queue
+  words, the status block, the recorder chip, Floating Notes, the menu bar, the iPhone's `MacPresence` and status
+  sheet; the Live Activity and widgets say none). `DaybookDesign.StatusLineItem` keeps its own tick because
+  DaybookDesign can't import DaybookKit, and StatusLineTests proves it ticks the same. SummaryPlacementWordsTests
+  (every variant, 1 s against many, rounding, ticking, Personal under Always per ux-mac-10), and the 17 other suites
+  that asserted the literals now assert the shared words (237 tests). After Stop on the iPhone, a bookmark with
+  nothing written after it says "Bookmark" beside its mark in placeholder ink (`BookmarkLabel.untitled`,
+  `NoteParagraphs.isWordless`; the summary's placeholder and the Mac transcript's tooltip use the same word), in every
+  posture since the editor is shared; RecorderScreenTests at default and accessibility sizes, MarginNotesEditorTests,
+  and 18 Pro (pocket) and open Duo (notebook) captures. iPhone suites 122 + 24. The Mac's AppKit editor (Floating
+  Notes and the page's notes) draws the same word beside a trailing wordless bookmark, from the same rule
+  (MarginNotesEditorTests' Mac case: after the last paragraph, not beside one, not under the placeholder); no Mac
+  demo state has such a bookmark, so that one is checked by the test alone.
+- **F4, Protect while iPhone is locked (security F-08, P4 step 2).** Settings › Storage › Protect While iPhone Is
+  Locked (off by default; its footer, "Syncs and transcribes while unlocked.", from `SettingsWords`). On, the library's
+  text is class A and its audio and photos class B, and Spotlight moves to a class A index of Daybook's own; off puts
+  back the earlier classes. Recordings in progress and the few files read while locked (sealing, owed stops,
+  brought-in recordings, the courier's ledgers) are never touched (`LibraryProtection`). Switching re-protects the
+  library in the background a conversation at a time, recorded in preferences so a killed run resumes, and a sweep
+  gives later saves their class (`LibraryProtector`). While locked, loading the library, sync (sealing, the courier),
+  processing (`Pause.locked`), recovery, Spotlight, the widgets' snapshots (a locked snapshot shows the heading alone),
+  and the backup rules wait for the unlock through `PhoneAppEnvironment.protectedData`; a recording still starts and
+  stops without the library. Saved captions are filed class A (`LiveCaptionStore.filedProtection`). The whole
+  DaybookPhoneTests bundle on a private simulator (507, 0 failures), with the new LibraryProtectionTests (classes
+  given and read through `F_SETPROTECTIONCLASS`/`F_GETPROTECTIONCLASS`, a pretend lock, a killed run resumed, backup
+  exclusion kept), two PhoneProcessingTests cases, LiveCaptionStoreTests on macOS, and iPhone 18 Pro captures of
+  Settings › Storage off and on, light and dark. Still needs a passcode-locked device: the classes of a switched library
+  and of later saves, sync and processing waiting and resuming across a real lock, a pass running when the phone locks,
+  Spotlight from the named index, the widgets across a lock, a cold Lock Screen recording, and an encrypted library's
+  backups with the mode on.
+- **F2, the page's status out of the views (code-quality P7).** The page's status is gathered in one function per
+  app (`ConversationStatusPresentation.mac` with `Inputs.mac`, `.phone` with `Inputs.phone`), and what it offers is
+  carried out by DaybookKit's `ConversationStatusActionHandler`, which `MacStatusActions` and `PhoneStatusActions`
+  implement through `MacActions.process` and `PhoneActions.process`, from the page and Info's Now row alike. A
+  conversation's template is named once, in `TemplateWords.title(for:resolved:)` and `automatic(for:)`, replacing five
+  copies. PageStatusTests and PhonePageStatusTests check the page over the demo library (a download running,
+  processing off, Personal under Always per ux-mac-10, waiting for another device's audio, failures); TemplateWordsTests
+  and ConversationStatusActionHandlerTests. `swift test` whole package (2,556, only the two load-sensitive
+  SpeakerProfileProcessingTests timing out at a load average of 150–800); the three touched iPhone suites (51). Mac
+  and iPhone page captures before and after are unchanged. Row and Info inputs (`MeetingInspector.inputs`,
+  `MacRowStatus.make`, the iPhone's `ConversationRow`) stay in place; P7 covers the page.
+
 ## Design pass (2026-11-10)
 
 A whole-app design pass with the owner's authority to redesign (docs/audits/2026-11-10/README.md): eight reviews, 219

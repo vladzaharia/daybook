@@ -209,9 +209,10 @@ final class RecorderStatusWordsTests: XCTestCase {
     }
 
     func testBehaviorACountdownLineMovesWithTheClock() {
-        let line = StatusLineWords(id: "queue", symbol: "desktopcomputer", title: "This Mac", text: "Summarizing in 12 s · 1 waiting",
-                                   tone: .calm, countdownUntil: now.addingTimeInterval(12))
-        XCTAssertEqual(line.text(at: now.addingTimeInterval(4)), "Summarizing in 8 s · 1 waiting")
-        XCTAssertEqual(line.accessibilityLabel, "This Mac, Summarizing in 12 s · 1 waiting")
+        let line = StatusLineWords(id: "queue", symbol: "desktopcomputer", title: "This Mac",
+                                   text: SummaryPlacementWords.countdown(seconds: 12) + " · 1 waiting", tone: .calm,
+                                   countdownUntil: now.addingTimeInterval(12))
+        XCTAssertEqual(line.text(at: now.addingTimeInterval(4)), SummaryPlacementWords.countdown(seconds: 8) + " · 1 waiting")
+        XCTAssertEqual(line.accessibilityLabel, "This Mac, " + SummaryPlacementWords.countdown(seconds: 12) + " · 1 waiting")
     }
 }

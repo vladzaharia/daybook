@@ -282,7 +282,7 @@ public enum StatusBlockLayout {
         }
     }
 
-    static func secondsLeft(_ until: Date, at now: Date) -> Int { max(1, Int(until.timeIntervalSince(now).rounded(.up))) }
+    static func secondsLeft(_ until: Date, at now: Date) -> Int { SummaryPlacementWords.secondsLeft(until: until, at: now) }
 
     /// What the page animates on: the kind, the words without their figure, and the actions. A new percent or a
     /// countdown's tick changes none of it, so progress never starts an animation.

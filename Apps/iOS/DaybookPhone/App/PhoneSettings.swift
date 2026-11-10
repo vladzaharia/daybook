@@ -40,12 +40,19 @@ final class PhoneSettings {
     var includesEncryptedLibraryInBackups: Bool {
         didSet { defaults.set(includesEncryptedLibraryInBackups, forKey: Keys.includesEncryptedLibraryInBackups) }
     }
+    /// Protect While iPhone Is Locked (Settings › Storage): the library's files can't be read while this iPhone is
+    /// locked, and sync, processing, and Spotlight wait for it to be unlocked (`LibraryProtection`; docs/iphone.md, "File
+    /// protection"). Off by default.
+    var protectsWhileLocked: Bool { didSet { defaults.set(protectsWhileLocked, forKey: Keys.protectsWhileLocked) } }
     /// Encrypting the library's history here may download recordings over cellular too (Settings › iCloud, while this
     /// iPhone encrypts it). Off: it waits for Wi‑Fi, as model downloads do unless allowed.
     var encryptsOverCellular: Bool { didSet { defaults.set(encryptsOverCellular, forKey: Keys.encryptsOverCellular) } }
 
     /// `encryptsOverCellular` as stored, for sync's sealing, which asks from its own queue.
     nonisolated var encryptsOverCellularNow: Bool { defaults.bool(forKey: Keys.encryptsOverCellular) }
+
+    /// `protectsWhileLocked` as stored in `defaults`, for what writes the widgets' snapshots.
+    nonisolated static func protectsWhileLocked(in defaults: UserDefaults) -> Bool { defaults.bool(forKey: Keys.protectsWhileLocked) }
 
     var captionLocale: Locale { captionLocaleIdentifier.map(Locale.init(identifier:)) ?? .current }
 
@@ -115,6 +122,7 @@ final class PhoneSettings {
         includesLibraryInBackups = defaults.object(forKey: Keys.includesLibraryInBackups) as? Bool ?? true
         includesEncryptedLibraryInBackups = defaults.object(forKey: Keys.includesEncryptedLibraryInBackups) as? Bool ?? false
         encryptsOverCellular = defaults.bool(forKey: Keys.encryptsOverCellular)
+        protectsWhileLocked = defaults.bool(forKey: Keys.protectsWhileLocked)
         macRecordDecisions = defaults.data(forKey: Keys.macRecordDecisions)
             .flatMap { try? JSONDecoder().decode([String: MacRecordDecision].self, from: $0) } ?? [:]
         takenMacOffs = defaults.data(forKey: Keys.takenMacOffs).flatMap { try? JSONDecoder().decode([String: Date].self, from: $0) } ?? [:]
@@ -139,6 +147,7 @@ final class PhoneSettings {
         static let includesLibraryInBackups = "phone.includesLibraryInBackups"
         static let includesEncryptedLibraryInBackups = "phone.includesEncryptedLibraryInBackups"
         static let encryptsOverCellular = "phone.encryptsOverCellular"
+        static let protectsWhileLocked = "phone.protectsWhileLocked"
         static let macRecordDecisions = "phone.macRecordDecisions"
         static let takenMacOffs = "phone.takenMacOffs"
     }

@@ -108,8 +108,8 @@ enum FloatingStatus {
         switch row.kind {
         case .processing:
             guard case .processing(let progress) = conversation.status else {
-                // Where its summary runs: in the cloud, with its model named.
-                return chip(text.hasPrefix("Summarizing with ") ? "cloud" : "text.alignleft", text, short: "Summary…", .working)
+                // Not this Mac's queue at work: where its summary runs said so, in the cloud with its model named.
+                return chip("cloud", text, short: "Summary…", .working)
             }
             let elsewhere = progress.device.map { $0.id != words.thisDeviceID } ?? false
             let symbol: String
@@ -124,8 +124,9 @@ enum FloatingStatus {
         case .waiting:
             // Where its summary runs (docs/multipoint.md, "Where summaries run"): Use the Cloud and Start Now are in its menu.
             if let until = row.countdownUntil {
-                let seconds = max(1, Int(until.timeIntervalSince(now).rounded(.up)))
-                return chip("clock", text, short: "\(seconds) s", .calm, detail: "Summarizing on \(words.here) in \(seconds) s", countdown: until)
+                let seconds = SummaryPlacementWords.secondsLeft(until: until, at: now)
+                return chip("clock", text, short: SummaryPlacementWords.seconds(seconds), .calm,
+                            detail: SummaryPlacementWords.countdown(on: words.here, seconds: seconds), countdown: until)
             }
             return chip("clock", text, short: "Waiting", .calm)
         case .waitingForModels:

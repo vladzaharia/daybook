@@ -487,6 +487,11 @@ enum MacActions {
                                            status: state.processingStatus(for: meeting))
     }
 
+    /// How the Mac processes a conversation in a mode, from its menus and its status alike: its queue.
+    static func process(_ id: UUID, _ mode: ProcessingRequest.Mode, state: AppState) {
+        state.enqueue(id, mode: mode)
+    }
+
     /// Carries out `id` on the conversations `ids`. `window` answers what needs the window: Tags… (the chooser over the
     /// list, or from More the inspector) and Share ▸ (the sharing picker under More).
     static func perform(_ id: ConversationAction.ID, on ids: [UUID], state: AppState, undoManager: UndoManager?,
@@ -495,7 +500,7 @@ enum MacActions {
             library: state.library,
             // A menu in the toolbar acts on the key window, the library's.
             undoManager: undoManager ?? NSApp.keyWindow?.undoManager,
-            process: { state.enqueue($0, mode: $1) },
+            process: { process($0, $1, state: state) },
             show: { request in
                 switch request {
                 case .tags(let ids): window(.tags, ids)
@@ -554,6 +559,46 @@ enum MacActions {
             .help({ if case .unavailable(let why) = action.availability { return why } else { return "" } }()))
         default:
             return nil
+        }
+    }
+}
+
+/// What the Mac does for what a conversation's status offers, from the page and the inspector's Now row alike: the
+/// library's half through DaybookKit's `ConversationStatusActionHandler`, as the iPhone does it, with its work through
+/// the queue its menus use (`MacActions.process`), and the Mac's own here: its queue's Pause, Resume, and Cancel, its
+/// downloads, Settings, where the summary runs, and upgrades. Details is the status's own popover.
+@MainActor
+struct MacStatusActions: ConversationStatusActionHandler {
+    let state: AppState
+    let undoManager: UndoManager?
+    /// Opens Settings on a pane (Models, Cloud).
+    let openSettings: @MainActor (SettingsPane) -> Void
+
+    var library: LibraryController { state.library }
+
+    func process(_ id: UUID, _ mode: ProcessingRequest.Mode) { MacActions.process(id, mode, state: state) }
+
+    func performHere(_ action: ConversationStatusPresentation.Action, on id: UUID) {
+        switch action {
+        case .details: break // The status's popover.
+        case .useYourMac: process(id, .summaryOnly)
+        case .pause, .stopSummary: state.pauseProcessing(id)
+        case .resume:
+            guard let meeting = library.meeting(id) else { return }
+            process(id, state.defaultProcessingMode(for: meeting))
+        case .cancel: state.cancelQueued(id)
+        case .cancelDownload: state.cancelDownload()
+        case .downloadModels, .downloadSummaryModel:
+            state.enqueue(id)
+            state.downloadModels(state.missingSelectedModels)
+        case .chooseModels: openSettings(.models)
+        case .cloudSettings: openSettings(.cloud)
+        case .summarizeHere: state.summarizeHere(id)
+        case .placement(let choice): state.chooseSummaryPlacement(choice, for: id)
+        case .upgrade(let offer): state.acceptUpgrade(offer, for: id)
+        case .dismissUpgrade(let offer): state.dismissUpgrade(offer, for: id)
+        case .transcribe, .summarize, .tryAgain, .cancelRequest, .dontWait, .waitAgain, .dismiss:
+            break // The library's (`ConversationStatusActionHandler.perform`).
         }
     }
 }

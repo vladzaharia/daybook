@@ -193,6 +193,9 @@ public final class MarginTextView: UITextView {
 
     let gutter = MarginGutterView()
     private let placeholderLabel = UILabel()
+    /// "Bookmark", in placeholder ink, beside a bookmark on the line after the last paragraph, which nothing written
+    /// says what it is (`NoteParagraphs.isWordless`).
+    private let markWordsLabel = UILabel()
 
     /// Handwriting: nil leaves it out.
     public var ink: NotesInkModel? { didSet { inkModelChanged() } }
@@ -236,6 +239,12 @@ public final class MarginTextView: UITextView {
         placeholderLabel.textColor = DaybookPalette.Shade.faint.uiColor
         placeholderLabel.isAccessibilityElement = false
         addSubview(placeholderLabel)
+        // VoiceOver hears the mark itself ("Bookmark at 4 minutes 10 seconds"), so its words aren't said twice.
+        markWordsLabel.text = BookmarkLabel.untitled
+        markWordsLabel.textColor = DaybookPalette.Shade.faint.uiColor
+        markWordsLabel.isAccessibilityElement = false
+        markWordsLabel.isHidden = true
+        addSubview(markWordsLabel)
         applyStyle()
         registerForTraitChanges([UITraitPreferredContentSizeCategory.self, UITraitUserInterfaceStyle.self,
                                  UITraitAccessibilityContrast.self]) { (view: MarginTextView, _: UITraitCollection) in
@@ -295,6 +304,7 @@ public final class MarginTextView: UITextView {
         }
         applied = nil
         placeholderLabel.font = bodyFont
+        markWordsLabel.font = bodyFont
         tintColor = DaybookPalette.Shade.accent.uiColor
         restyleParagraphs()
         invalidateIntrinsicContentSize()
@@ -383,13 +393,15 @@ public final class MarginTextView: UITextView {
     }
 
     /// Places each timed paragraph's time on its first line's baseline, right-aligned in the lane (or on its own
-    /// line above the paragraph), and each mark before the paragraph written after it.
+    /// line above the paragraph), and each mark before the paragraph written after it; a bookmark after the last
+    /// says "Bookmark" beside it.
     private func layoutGutter() {
         let height = max(contentSize.height, bounds.height)
         let above = timesAbove
         gutter.frame = CGRect(x: 0, y: 0, width: above ? bounds.width : lane, height: height)
         guard baseLane > 0, times.contains(where: { $0 != nil }) || !marks.isEmpty else {
             gutter.update(labels: [], ticks: [], above: above)
+            layoutMarkWords(at: nil)
             return
         }
         layoutManager.ensureLayout(for: textContainer)
@@ -415,6 +427,7 @@ public final class MarginTextView: UITextView {
         let lineHeight = bodyFont.lineHeight
         let next = nextLineRect
         var ticks: [MarginGutterView.Tick] = []
+        var wordless: CGPoint?
         for (mark, before) in NoteParagraphs.placement(of: marks, times: Array(times.prefix(ranges.count))) {
             let place = before < tops.count ? tops[before] : nil
             if above {
@@ -424,8 +437,34 @@ public final class MarginTextView: UITextView {
                 let line = place?.line ?? next
                 ticks.append(.init(mark: mark, rect: CGRect(x: lane - 7.5, y: line.minY + 2, width: 5, height: min(line.height, lineHeight * 1.1) - 4)))
             }
+            // Where the words start on that line: past the tick when it sits at the edge, at the accessibility sizes.
+            if NoteParagraphs.isWordless(mark, before: before, paragraphs: ranges.count) {
+                wordless = CGPoint(x: above ? 12 : lane, y: next.minY)
+            }
         }
         gutter.update(labels: labels, ticks: ticks, above: above)
+        layoutMarkWords(at: wordless)
+    }
+
+    /// "Bookmark" on the line after the last paragraph, beside the bookmark alone there; nothing while the placeholder
+    /// holds the first line.
+    private func layoutMarkWords(at origin: CGPoint?) {
+        guard let origin, !text.isEmpty else {
+            markWordsLabel.isHidden = true
+            return
+        }
+        let width = max(40, bounds.width - origin.x)
+        let size = markWordsLabel.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
+        markWordsLabel.frame = CGRect(x: origin.x, y: origin.y, width: min(size.width, width), height: size.height)
+        markWordsLabel.isHidden = false
+    }
+
+    /// The words beside a bookmark alone on the line after the last paragraph, where they sit, and their ink; nil
+    /// when there's none (for tests and diagnostics).
+    public var markWords: (text: String, frame: CGRect, color: UIColor)? {
+        layoutIfNeeded()
+        guard !markWordsLabel.isHidden else { return nil }
+        return (markWordsLabel.text ?? "", markWordsLabel.frame, markWordsLabel.textColor)
     }
 
     /// Where the next paragraph would start, in this view's coordinates.

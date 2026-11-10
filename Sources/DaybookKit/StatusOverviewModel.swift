@@ -35,20 +35,20 @@ public struct StatusQueueEntry: Equatable, Identifiable, Sendable {
     public var brief: String?
     /// What the person can choose for its summary here (docs/multipoint.md, "Where summaries run").
     public var actions: [SummaryPlacementPlanner.Action]
-    /// Its summary's countdown runs out then, where `countdownPlace` says ("on Studio Mac", "on this iPhone").
+    /// Its summary's countdown runs out then, on the device `countdownDevice` names ("Studio Mac", "this iPhone").
     public var countdownUntil: Date?
-    public var countdownPlace: String?
+    public var countdownDevice: String?
     /// A failure Try Again asks again for, as the page's box does.
     public var retry: ProcessingRequest.Mode?
 
     public init(id: UUID, title: String, line: String, requestedHere: Bool, progress: Double?, isRunning: Bool, failed: Bool = false,
                 awaitsRecording: Bool = false, detail: String? = nil, details: String? = nil, mac: String? = nil, brief: String? = nil,
-                actions: [SummaryPlacementPlanner.Action] = [], countdownUntil: Date? = nil, countdownPlace: String? = nil,
+                actions: [SummaryPlacementPlanner.Action] = [], countdownUntil: Date? = nil, countdownDevice: String? = nil,
                 retry: ProcessingRequest.Mode? = nil) {
         self.id = id; self.title = title; self.line = line; self.requestedHere = requestedHere; self.progress = progress
         self.isRunning = isRunning; self.failed = failed; self.awaitsRecording = awaitsRecording; self.detail = detail
         self.details = details; self.mac = mac; self.brief = brief; self.actions = actions; self.countdownUntil = countdownUntil
-        self.countdownPlace = countdownPlace; self.retry = retry
+        self.countdownDevice = countdownDevice; self.retry = retry
     }
 
     /// The line under a Mac's row in the Macs card: that Mac isn't named again.
@@ -57,12 +57,11 @@ public struct StatusQueueEntry: Equatable, Identifiable, Sendable {
     /// The same at a moment: a countdown's seconds move with it.
     public func line(under macName: String?, at now: Date) -> String {
         if let until = countdownUntil {
-            let seconds = max(1, Int(until.timeIntervalSince(now).rounded(.up)))
-            // A countdown in its own card (this iPhone's) names no place: its line ticks as it is.
-            guard let place = countdownPlace else {
-                return line.replacingOccurrences(of: #"in \d+ s"#, with: "in \(seconds) s", options: .regularExpression)
-            }
-            return mac != nil && mac == macName ? "Summarizing in \(seconds) s" : "Summarizing \(place) in \(seconds) s"
+            let seconds = SummaryPlacementWords.secondsLeft(until: until, at: now)
+            // A countdown in its own card (this iPhone's) names no device: its line ticks as it is.
+            guard let device = countdownDevice else { return SummaryPlacementWords.ticking(line, to: seconds) }
+            return mac != nil && mac == macName ? SummaryPlacementWords.countdown(seconds: seconds)
+                : SummaryPlacementWords.countdown(on: device, seconds: seconds)
         }
         guard let mac, mac == macName, let brief else { return line }
         return brief
@@ -359,7 +358,7 @@ public enum StatusOverviewModel {
         if let running = inputs.queue.first(where: { $0.isRunning && ($0.countdownUntil == nil || $0.mac != nil) }) {
             if let until = running.countdownUntil, let mac = running.mac {
                 // Counting down to sending it to that Mac.
-                return line(mac, "Summarizing in \(max(1, Int(until.timeIntervalSince(now).rounded(.up)))) s", .calm, countdown: until)
+                return line(mac, SummaryPlacementWords.countdown(until: until, at: now), .calm, countdown: until)
             }
             // Coarse progress from the claim that synced.
             let verb = running.line.components(separatedBy: " on ").first ?? "Transcribing"
@@ -447,9 +446,10 @@ public enum StatusOverviewModel {
                 }
                 var entry = StatusQueueEntry(id: meeting.id, title: meeting.title, line: line, requestedHere: false, progress: nil,
                                              isRunning: false, actions: planner.actions, countdownUntil: planner.deadline)
-                if case .countingDown(let place, _) = planner.phase {
-                    entry.countdownPlace = SummaryPlacementPlanner.where(place, thisDevice: words.here)
-                    if case .mac(_, let name) = place { entry.mac = name }
+                // A countdown to this device is its own card's (above), so one here counts down to a Mac.
+                if case .countingDown(.mac(_, let name), _) = planner.phase {
+                    entry.countdownDevice = name
+                    entry.mac = name
                 }
                 running.append(entry)
                 continue
@@ -458,7 +458,7 @@ public enum StatusOverviewModel {
                 running.append(StatusQueueEntry(id: meeting.id, title: meeting.title, line: live.line(at: now), requestedHere: requestedHere,
                                                 progress: live.isCountingDown ? nil : live.fraction, isRunning: true, mac: live.macName,
                                                 brief: live.brief(at: now), actions: live.placementActions, countdownUntil: live.countdownUntil,
-                                                countdownPlace: live.isCountingDown ? "on \(live.macName)" : nil))
+                                                countdownDevice: live.isCountingDown ? live.macName : nil))
                 continue
             }
             switch ProcessingStatus(meeting, now: now) {
@@ -476,7 +476,7 @@ public enum StatusOverviewModel {
                 // A summary waiting for a Mac can go to the cloud instead.
                 let cloud = cloudOffered && request.mode == .summaryOnly
                 waiting.append((request.createdAt, StatusQueueEntry(id: meeting.id, title: meeting.title,
-                                                                    line: cloud ? "Waiting for a Mac to summarize" : "Waiting",
+                                                                    line: cloud ? SummaryPlacementWords.waitingForMac : "Waiting",
                                                                     requestedHere: request.requestedBy.id == thisDevice,
                                                                     progress: nil, isRunning: false, actions: cloud ? [.useCloud] : [])))
             case .awaitingRecordings(let recordings):
@@ -544,10 +544,10 @@ public enum StatusOverviewModel {
                 break
             }
             if case .cloud(let model)? = runs[meeting.id] {
-                running.append(entry("Summarizing with \(model.name)", running: true))
+                running.append(entry(SummaryPlacementWords.inCloud(model.name), running: true))
                 if work.line.cloudModel == nil { work.line.cloudModel = model.name }
             } else if let planner = planners[meeting.id], case .countingDown(.thisDevice, let until) = planner.phase {
-                var countdown = entry("Summarizing in \(planner.secondsLeft(at: now) ?? 1) s")
+                var countdown = entry(SummaryPlacementWords.countdown(until: until, at: now))
                 countdown.actions = planner.actions
                 // Under the This iPhone heading, it doesn't say "on this iPhone" again.
                 countdown.countdownUntil = until
@@ -555,7 +555,7 @@ public enum StatusOverviewModel {
                 counting.append(countdown)
                 if work.line.countdown == nil { work.line.countdown = until }
             } else if let planner = planners[meeting.id], case .started(.cloud(let model)) = planner.phase {
-                running.append(entry("Summarizing with \(model.name)", running: true))
+                running.append(entry(SummaryPlacementWords.inCloud(model.name), running: true))
                 if work.line.cloudModel == nil { work.line.cloudModel = model.name }
             }
         }

@@ -203,12 +203,12 @@ enum MenuBarStatus {
         let name = work.title.map { "“\($0)”" } ?? "a personal conversation"
         let waiting = work.waiting > 0 ? " · \(work.waiting) waiting" : ""
         if let until = work.countdown {
-            let seconds = max(1, Int(until.timeIntervalSince(now).rounded(.up)))
-            return Line(id: "work", title: "Summarizing \(name) in \(seconds) s", opens: .conversation(work.id),
+            let seconds = SummaryPlacementWords.secondsLeft(until: until, at: now)
+            return Line(id: "work", title: SummaryPlacementWords.countdown(of: name, seconds: seconds), opens: .conversation(work.id),
                         choices: work.choices.map { Choice(title: $0.title, action: .placement($0, work.id)) })
         }
         if let model = work.cloudModel {
-            return Line(id: "work", title: "Summarizing \(name) with \(model)\(waiting)", opens: .conversation(work.id))
+            return Line(id: "work", title: SummaryPlacementWords.inCloud(model, of: name) + waiting, opens: .conversation(work.id))
         }
         let verb = ProcessingWords.verb(work.stage)
         let figure = work.stage == .summarizing ? "…" : work.fraction.map { " · \(ProcessingWords.percentText($0))" } ?? "…"

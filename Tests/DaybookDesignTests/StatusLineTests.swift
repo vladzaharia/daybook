@@ -1,3 +1,4 @@
+import DaybookKit
 import SwiftUI
 import XCTest
 @testable import DaybookDesign
@@ -7,13 +8,22 @@ final class StatusLineTests: XCTestCase {
     private let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
 
     func testBehaviorACountdownLineTicksItsWordsAndShortWords() {
-        let line = StatusLineItem(id: "queue", symbol: "desktopcomputer", title: "This Mac", text: "Summarizing in 12 s · 1 waiting", tone: .calm,
-                                  shortText: "Summarizing in 12 s", countdownUntil: now.addingTimeInterval(12))
-        XCTAssertEqual(line.text(at: now.addingTimeInterval(3)), "Summarizing in 9 s · 1 waiting")
-        XCTAssertEqual(line.shortText(at: now.addingTimeInterval(3)), "Summarizing in 9 s")
+        typealias Words = SummaryPlacementWords
+        let until = now.addingTimeInterval(12)
+        let text = Words.countdown(seconds: 12) + " · 1 waiting"
+        let line = StatusLineItem(id: "queue", symbol: "desktopcomputer", title: "This Mac", text: text, tone: .calm,
+                                  shortText: Words.countdown(seconds: 12), countdownUntil: until)
+        XCTAssertEqual(line.text(at: now.addingTimeInterval(3)), Words.countdown(seconds: 9) + " · 1 waiting")
+        XCTAssertEqual(line.shortText(at: now.addingTimeInterval(3)), Words.countdown(seconds: 9))
         XCTAssertEqual(line.secondsLeft(at: now.addingTimeInterval(2.2)), 10, "rounded up")
-        XCTAssertEqual(line.text(at: now.addingTimeInterval(30)), "Summarizing in 1 s · 1 waiting", "never under a second")
-        XCTAssertEqual(line.accessibilityLabel, "This Mac, Summarizing in 12 s · 1 waiting")
+        XCTAssertEqual(line.text(at: now.addingTimeInterval(30)), Words.countdown(seconds: 1) + " · 1 waiting", "never under a second")
+        XCTAssertEqual(line.accessibilityLabel, "This Mac, " + text)
+        // The line ticks as the shared words do, on the same second.
+        for offset in [0, 2.2, 3, 11.9, 30] as [TimeInterval] {
+            let at = now.addingTimeInterval(offset)
+            XCTAssertEqual(line.text(at: at), Words.ticking(text, until: until, at: at))
+            XCTAssertEqual(line.secondsLeft(at: at), Words.secondsLeft(until: until, at: at))
+        }
     }
 
     func testBehaviorALineWithoutACountdownKeepsItsWords() {

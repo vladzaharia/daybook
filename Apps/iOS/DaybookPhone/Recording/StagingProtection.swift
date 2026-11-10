@@ -14,14 +14,7 @@ enum StagingProtection {
 
     /// The file is there but can't be opened now: the iPhone is locked (`EPERM`), or the file isn't readable
     /// (`EACCES`). Never the same as a file with no audio in it.
-    static func cannotOpen(_ url: URL) -> Bool {
-        let descriptor = open(url.path, O_RDONLY)
-        if descriptor >= 0 {
-            close(descriptor)
-            return false
-        }
-        return errno == EPERM || errno == EACCES
-    }
+    static func cannotOpen(_ url: URL) -> Bool { ProtectionClass.cannotOpen(url) }
 
     /// Every file in `folder` could be opened now, so what it holds is known: only then may a folder found to hold
     /// nothing go. False when the folder can't be listed.

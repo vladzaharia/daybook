@@ -970,6 +970,53 @@ final class RecorderScreenTests: XCTestCase {
    above[0].baseline, view.textContainerInset.top, "the first time sits above its paragraph")
  }
 
+ /// Regression: after Stop, a bookmark with nothing written after it stood alone on an empty line, a bare amber mark.
+ /// It says "Bookmark" there in placeholder ink, as its row in the summary does, at every text size; one beside a
+ /// note has that note's words, a photo shows itself, and an empty note's placeholder keeps its line.
+ func testBehaviorABookmarkWithoutWordsSaysBookmarkInPlaceholderInk() throws {
+  let view = DaybookUI.MarginTextView()
+  view.frame = CGRect(x: 0, y: 0, width: 360, height: 600)
+  view.traitOverrides.preferredContentSizeCategory = .large
+  view.updateTraitsIfNeeded()
+  view.times = [2, 75]
+  view.setText("First thought\nA second paragraph")
+  view.marks = [NoteMark(id: "beside", kind: .bookmark, time: 30)]
+  view.layoutIfNeeded()
+  XCTAssertNil(view.markWords, "beside a note, the note says what it's about")
+
+  view.marks = [
+   NoteMark(id: "beside", kind: .bookmark, time: 30), NoteMark(id: "last", kind: .bookmark, time: 90),
+  ]
+  view.layoutIfNeeded()
+  let words = try XCTUnwrap(view.markWords)
+  XCTAssertEqual(words.text, BookmarkLabel.untitled)
+  XCTAssertEqual(words.text, "Bookmark")
+  XCTAssertEqual(
+   words.color.resolvedColor(with: view.traitCollection),
+   DaybookPalette.Shade.faint.uiColor.resolvedColor(with: view.traitCollection), "placeholder ink")
+  XCTAssertEqual(words.frame.minX, view.lane, accuracy: 0.5, "where the notes' words start, beside its mark")
+  let last = try XCTUnwrap(view.laneTimes.last)
+  XCTAssertGreaterThan(words.frame.minY, last.baseline, "on the line after the last note")
+
+  view.marks = [NoteMark(id: "photo", kind: .photo, time: 90)]
+  view.layoutIfNeeded()
+  XCTAssertNil(view.markWords, "a photo shows itself")
+
+  view.marks = [NoteMark(id: "last", kind: .bookmark, time: 90)]
+  view.setText("")
+  view.layoutIfNeeded()
+  XCTAssertNil(view.markWords, "the placeholder keeps the first line")
+
+  view.setText("First thought\nA second paragraph")
+  view.traitOverrides.preferredContentSizeCategory = .accessibilityExtraExtraExtraLarge
+  view.updateTraitsIfNeeded()
+  view.applyStyle()
+  view.layoutIfNeeded()
+  let large = try XCTUnwrap(view.markWords, "at the accessibility sizes too")
+  XCTAssertEqual(large.text, BookmarkLabel.untitled)
+  XCTAssertGreaterThan(large.frame.minX, 0, "past its mark, which sits at the edge there")
+ }
+
  /// The times are buttons VoiceOver hears ("Play from 1 minute 15 seconds") where they play, and the marks say
  /// themselves; both are reachable beside the text, which VoiceOver reads as one field.
  func testBehaviorVoiceOverReachesTheTimesAndMarksBesideTheNotes() throws {

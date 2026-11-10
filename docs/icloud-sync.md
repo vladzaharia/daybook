@@ -514,6 +514,12 @@ func pass(trigger: Trigger) async throws {
   - Run a pass on launch and on foreground, and two seconds after a local edit.
   - While visible, check `hasRemoteChanges()` every one to two minutes.
   - In the background, run `BGAppRefreshTask` passes with `.background` limits.
+  - With Protect While iPhone Is Locked on (docs/iphone.md, "File protection"), the library's files can't be read while
+    the iPhone is locked, so no pass runs then: one asked for waits and runs once it's unlocked, one under way as it locks
+    is cancelled as at the end of background time (what it pulled and didn't acknowledge is offered again), and the
+    courier's sends wait with them (`PhoneSync.libraryReadable`). iCloud and the Mac get what this iPhone recorded after
+    the unlock. What sync sealed (`Sync/sealing.json`) stays readable while locked, so an encrypted library is never
+    taken for a plaintext one.
   - Macs keep their 30-second fallback with `.unlimited`. The controller skips the fallback's pass while it would change
     nothing (`LibrarySyncController.poll`): the last pass finished up to date, nothing here asked for one since, iCloud's
     listing hasn't changed (`hasRemoteChanges`), and it's been less than ten minutes (`idlePassInterval`), after which a

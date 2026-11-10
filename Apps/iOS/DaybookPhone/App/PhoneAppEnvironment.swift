@@ -51,6 +51,12 @@ struct PhoneAppEnvironment {
     /// Whether a recording's files, kept until unlock, can be read now (Stop on a locked iPhone waits to join and file
     /// it); always by default.
     var protectedData = ProtectedData.always
+    /// Where Spotlight lists the library while "Protect while iPhone is locked" is on: an index kept as the library is
+    /// (class A). Nil: the same as `spotlight`.
+    var spotlightWhileLocked: ConversationIndex.Indexer? = nil
+    /// The widgets' snapshots' folder (`SharedWidgetCache`), which "Protect while iPhone is locked" protects too; nil:
+    /// none (tests).
+    var widgetCache: URL? = nil
 
     /// The app's: the keychain, `UserDefaults.standard`, Application Support's models with background
     /// downloads, the shared Wi‑Fi monitor, Bluetooth (or the simulated recorder), notifications, and Spotlight.
@@ -74,15 +80,19 @@ struct PhoneAppEnvironment {
             startsLink: true,
             spotlight: .system,
             publishRecentConversations: { snapshot in
-                guard snapshot != SharedRecentConversations.load(), snapshot.save() else { return }
+                let protects = PhoneSettings.protectsWhileLocked(in: .standard)
+                guard snapshot != SharedRecentConversations.load(), snapshot.save(protects: protects) else { return }
                 WidgetCenter.shared.reloadTimelines(ofKind: SharedRecentConversations.widgetKind)
             },
             publishNextSteps: { snapshot in
-                guard snapshot != SharedNextSteps.load(), snapshot.save() else { return }
+                let protects = PhoneSettings.protectsWhileLocked(in: .standard)
+                guard snapshot != SharedNextSteps.load(), snapshot.save(protects: protects) else { return }
                 WidgetCenter.shared.reloadTimelines(ofKind: SharedNextSteps.widgetKind)
             },
             backgroundTime: SystemBackgroundTime(),
-            protectedData: .system)
+            protectedData: .system,
+            spotlightWhileLocked: .system(protected: true),
+            widgetCache: SharedWidgetCache.groupContainer.map(SharedRecentConversations.cache.cacheDirectory(in:)))
     }
 
     /// Nothing real: memory key stores, a scratch suite and models folder for this process, no downloads, no
@@ -122,14 +132,20 @@ struct ProtectedData {
     var isAvailable: () -> Bool
     /// Calls `handler` each time they become readable, from now on.
     var whenAvailable: (@escaping @MainActor () -> Void) -> Void
+    /// Calls `handler` each time the iPhone locks, from now on: they stop being readable shortly after
+    /// ("Protect while iPhone is locked" puts what was running aside then).
+    var whenUnavailable: (@escaping @MainActor () -> Void) -> Void = { _ in }
 
     /// Always readable, and never changing: tests and the test host.
     static var always: ProtectedData { ProtectedData(isAvailable: { true }, whenAvailable: { _ in }) }
 
-    /// `UIApplication.isProtectedDataAvailable`, and its notification.
+    /// `UIApplication.isProtectedDataAvailable`, and its notifications.
     static var system: ProtectedData {
         ProtectedData(isAvailable: { UIApplication.shared.isProtectedDataAvailable }, whenAvailable: { handler in
             _ = NotificationCenter.default.addObserver(forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil,
+                                                       queue: .main) { _ in MainActor.assumeIsolated { handler() } }
+        }, whenUnavailable: { handler in
+            _ = NotificationCenter.default.addObserver(forName: UIApplication.protectedDataWillBecomeUnavailableNotification, object: nil,
                                                        queue: .main) { _ in MainActor.assumeIsolated { handler() } }
         })
     }

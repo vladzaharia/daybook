@@ -171,7 +171,7 @@ public struct LiveProgress: Equatable, Sendable {
 
     /// Seconds left in the Mac's countdown, rounded up.
     public func secondsLeft(at now: Date) -> Int? {
-        countdownUntil.map { max(1, Int($0.timeIntervalSince(now).rounded(.up))) }
+        countdownUntil.map { SummaryPlacementWords.secondsLeft(until: $0, at: now) }
     }
 
     /// The verb for the phase: "Transcribing", "Summarizing".
@@ -196,8 +196,8 @@ public struct LiveProgress: Equatable, Sendable {
 
     /// The line at a moment: a countdown's seconds change with it ("Summarizing on Studio Mac in 12 s").
     public func line(at now: Date) -> String {
-        if let seconds = secondsLeft(at: now), isCountingDown { return "Summarizing on \(macName) in \(seconds) s" }
-        if phase == .summarizing, let cloudModel { return "Summarizing with \(cloudModel)" }
+        if let seconds = secondsLeft(at: now), isCountingDown { return SummaryPlacementWords.countdown(on: macName, seconds: seconds) }
+        if phase == .summarizing, let cloudModel { return SummaryPlacementWords.inCloud(cloudModel) }
         switch phase {
         case .queued: return detail.map { "In line on \(macName) · \($0)" } ?? "In line on \(macName)"
         case .waitingForModels: return "Waiting for models on \(macName)"
@@ -215,8 +215,8 @@ public struct LiveProgress: Equatable, Sendable {
     public var brief: String { brief(at: Date()) }
 
     public func brief(at now: Date) -> String {
-        if let seconds = secondsLeft(at: now), isCountingDown { return "Summarizing in \(seconds) s" }
-        if phase == .summarizing, let cloudModel { return "Summarizing with \(cloudModel)" }
+        if let seconds = secondsLeft(at: now), isCountingDown { return SummaryPlacementWords.countdown(seconds: seconds) }
+        if phase == .summarizing, let cloudModel { return SummaryPlacementWords.inCloud(cloudModel) }
         switch phase {
         case .queued: return detail.map { "In line · \($0)" } ?? "In line"
         case .failed, .waitingForModels, .paused, .finished: return activity

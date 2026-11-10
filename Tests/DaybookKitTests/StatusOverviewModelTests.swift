@@ -365,29 +365,33 @@ final class StatusOverviewModelTests: XCTestCase {
         ]
         let mac = try XCTUnwrap(StatusOverviewModel.macLine(inputs, now: now))
         XCTAssertEqual(mac.title, "Studio Mac")
-        XCTAssertEqual(mac.text, "Summarizing in 12 s")
+        XCTAssertEqual(mac.text, SummaryPlacementWords.countdown(seconds: 12))
         XCTAssertEqual(mac.countdownUntil, now.addingTimeInterval(12))
-        XCTAssertEqual(mac.text(at: now.addingTimeInterval(3)), "Summarizing in 9 s", "it ticks")
+        XCTAssertEqual(mac.text(at: now.addingTimeInterval(3)), SummaryPlacementWords.countdown(seconds: 9), "it ticks")
         XCTAssertEqual(mac.tone, .calm, "waiting isn't progress: calm, as the Mac's own countdown is")
 
         // This iPhone counting down to sending one to Studio Mac.
         inputs.liveProgress = []
         var entry = StatusQueueEntry(
-            id: id, title: "A", line: "Summarizing on Studio Mac in 15 s", requestedHere: false,
+            id: id, title: "A", line: SummaryPlacementWords.countdown(on: "Studio Mac", seconds: 15), requestedHere: false,
             progress: nil,
             isRunning: false, countdownUntil: now.addingTimeInterval(15))
         entry.isRunning = true
         entry.mac = "Studio Mac"
-        entry.countdownPlace = "on Studio Mac"
+        entry.countdownDevice = "Studio Mac"
         inputs.queue = [entry]
-        XCTAssertEqual(StatusOverviewModel.macLine(inputs, now: now)?.text, "Summarizing in 15 s")
+        XCTAssertEqual(StatusOverviewModel.macLine(inputs, now: now)?.text, SummaryPlacementWords.countdown(seconds: 15))
         XCTAssertEqual(
             StatusOverviewModel.macLine(inputs, now: now)?.text(at: now.addingTimeInterval(5)),
-            "Summarizing in 10 s")
+            SummaryPlacementWords.countdown(seconds: 10))
         XCTAssertEqual(StatusOverviewModel.macLine(inputs, now: now)?.tone, .calm)
+        // Under another Mac's row (or none), it names the Mac it counts down to; under that Mac, it doesn't.
+        XCTAssertEqual(
+            entry.line(under: nil, at: now.addingTimeInterval(5)), SummaryPlacementWords.countdown(on: "Studio Mac", seconds: 10))
+        XCTAssertEqual(entry.line(under: "Studio Mac", at: now.addingTimeInterval(5)), SummaryPlacementWords.countdown(seconds: 10))
         // Counting down to summarizing on this iPhone: nothing for the Mac's line.
         entry.mac = nil
-        entry.countdownPlace = "on this iPhone"
+        entry.countdownDevice = "this iPhone"
         inputs.queue = [entry]
         XCTAssertEqual(StatusOverviewModel.macLine(inputs, now: now)?.text, "Connected")
     }
@@ -870,7 +874,7 @@ final class StatusOverviewModelTests: XCTestCase {
         let row = try XCTUnwrap(work.entries.first)
         XCTAssertEqual(
             row.line(under: nil, at: now.addingTimeInterval(2)),
-            "Summarizing in \(here.secondsLeft(at: now.addingTimeInterval(2)) ?? 0) s",
+            SummaryPlacementWords.countdown(seconds: here.secondsLeft(at: now.addingTimeInterval(2)) ?? 0),
             "under the This iPhone heading it doesn't name the place, and it ticks")
         XCTAssertEqual(row.actions.map(\.title), here.actions.map(\.title))
         XCTAssertNotNil(work.line.countdown)

@@ -107,7 +107,8 @@ struct LibraryDevicesScreen: View {
 
 /// Settings › Storage: DaybookUI's `LibraryStorageSection` (the figures the Mac's Storage shows: this iPhone's audio,
 /// its conversations, and downloaded models), then this iPhone's own: how much downloaded audio it keeps while it
-/// syncs, Clear Downloaded Audio (only while there's some), and backups.
+/// syncs, Clear Downloaded Audio (only while there's some), backups, and Protect While iPhone Is Locked (with a bar only
+/// while the library's files are being switched over, `LibraryProtector`).
 struct StorageScreen: View {
     @Environment(PhoneAppModel.self) private var model
     @State private var clearing = false
@@ -151,6 +152,16 @@ struct StorageScreen: View {
                 Toggle("Include in iPhone Backups", isOn: model.libraryIsEncrypted
                        ? $settings.includesEncryptedLibraryInBackups : $settings.includesLibraryInBackups)
             }
+            Section {
+                Toggle(SettingsWords.titleCased(SettingsWords.protectWhileLocked), isOn: $settings.protectsWhileLocked)
+                // Only while the library's files are being switched over, in the background.
+                if let progress = model.protector.progress {
+                    ProgressView(value: progress)
+                        .accessibilityLabel(SettingsWords.titleCased(SettingsWords.protectWhileLocked))
+                }
+            } footer: {
+                SettingsFooter(SettingsWords.protectWhileLockedFooter)
+            }
             SettingsScrollEndMarker()
         }
         .settingsScrollEnd()
@@ -160,6 +171,7 @@ struct StorageScreen: View {
         .onChange(of: settings.audioCacheBudget) { _, budget in Task { await model.audio.setBudget(budget) } }
         .onChange(of: settings.includesLibraryInBackups) { model.applyBackupExclusion() }
         .onChange(of: settings.includesEncryptedLibraryInBackups) { model.applyBackupExclusion() }
+        .onChange(of: settings.protectsWhileLocked) { model.protectionChanged() }
     }
 
     /// A size, as Settings says it everywhere ("632 MB").
