@@ -427,12 +427,6 @@ public final class MarginTextView: UITextView {
         return gutter.labels.map { ($0.text, $0.baseline) }
     }
 
-    /// The marks drawn in the lane, top to bottom (for tests and diagnostics).
-    public var laneMarks: [(mark: NoteMark, frame: CGRect)] {
-        layoutIfNeeded()
-        return gutter.ticks.map { ($0.mark, $0.rect) }
-    }
-
     /// Keeps the caret above the keyboard when the page, not this view, scrolls.
     public func keepCaretVisible() {
         guard !isScrollEnabled, isFirstResponder, let range = selectedTextRange else { return }

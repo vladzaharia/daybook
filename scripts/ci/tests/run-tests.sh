@@ -23,6 +23,7 @@
 #   github-release.sh     draft, re-run, publish, and refusal to touch a published release (fake gh)
 #   prune-caches.sh       which caches go and which stay, against a fake gh
 #   xcresult-retries.sh   passes on retry and flaky iterations, from xcresulttool fixtures
+#   own-warnings.sh       a warning in Sources/ or Apps/iOS/ fails, coloured or not; a dependency's or a test's doesn't
 #   check-ios-archive.sh  synthetic archives: export compliance, icon, versions (macOS: needs plutil)
 #   setup-github.sh       the dry run prints the plan and never calls gh
 #   approve-release.sh    approves every waiting channel at once, rejects skipped ones, and checks first
@@ -457,6 +458,28 @@ expect_eq "mixed iterations are flaky" "::warning title=Flaky test::PhoneRecorde
 jq 'walk(if type == "object" and .nodeType == "Repetition" then .result = "Passed" else . end)' "$fixtures/xcresult-retried.json" > "$work/all-passed.json"
 expect_eq "all passing: no warnings" "" "$("$ci/xcresult-retries.sh" --json "$work/all-passed.json" | grep '^::' || true)"
 expect_ok "no bundle (the run stopped early) is fine" "$ci/xcresult-retries.sh" "$work/none.xcresult"
+
+# --- own-warnings.sh on build logs ------------------------------------------------------------------------
+echo "own-warnings.sh"
+esc=$'\x1b'
+{
+    echo "[12/40] Compiling Daybook CallPrompt.swift"
+    echo "/w/repo/Sources/Daybook/UI/CallPrompt.swift:60:26: ${esc}[1;33mwarning: ${esc}[1;39mimmutable value 'call' was never used${esc}[0;0m"
+    echo "  |  \`- warning: immutable value 'call' was never used"
+    echo "/w/repo/Sources/Daybook/UI/CallPrompt.swift:60:26: ${esc}[1;33mwarning: ${esc}[1;39mimmutable value 'call' was never used${esc}[0;0m"
+    echo "/w/repo/.build/checkouts/mlx-swift/Source/Cmlx/mlx/mlx/array.h:12:3: warning: unused variable 'x' [-Wunused-variable]"
+    echo "/w/repo/Tests/DaybookCoreTests/SpeakerProfileTests.swift:125:13: warning: variable 'foreign' was never mutated"
+    echo "/w/DerivedData/SourcePackages/checkouts/swift-transformers/Sources/Hub/Hub.swift:3:1: warning: deprecated"
+} > "$work/warnings.log"
+own="$("$ci/own-warnings.sh" "$work/warnings.log" || true)"
+expect_fail "a warning in Sources/ fails" "$ci/own-warnings.sh" "$work/warnings.log"
+expect_eq "named once, without colour codes" "/w/repo/Sources/Daybook/UI/CallPrompt.swift:60:26: warning: immutable value 'call' was never used" \
+    "$(printf '%s\n' "$own" | grep -v '^::' || true)"
+grep -v 'CallPrompt' "$work/warnings.log" > "$work/dependencies.log"
+expect_ok "a dependency's or a test's doesn't" "$ci/own-warnings.sh" "$work/dependencies.log"
+echo "Apps/iOS/DaybookPhone/App/PhoneAppModel.swift:9:5: warning: unused" >> "$work/dependencies.log"
+expect_fail "the iPhone app's fails too, with a relative path" "$ci/own-warnings.sh" "$work/dependencies.log"
+expect_fail "a missing log is an error" "$ci/own-warnings.sh" "$work/none.log"
 
 # --- check-ios-archive.sh -------------------------------------------------------------------------------
 echo "check-ios-archive.sh"

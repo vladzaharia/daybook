@@ -132,19 +132,3 @@ struct VersionHistorySheet: View {
         }
     }
 }
-
-/// Marks what changed between two versions word by word (`WordChanges`): removed words struck through in magenta,
-/// inserted words washed in mint, over the text's own styling (`RevisionMarks`, which Version History draws with).
-enum WordDiff {
-    static func tokens(_ text: String) -> [Substring] { WordChanges.tokens(text) }
-    static func changes(old: [Substring], new: [Substring]) -> (removed: IndexSet, inserted: IndexSet) { WordChanges.changes(old: old, new: new) }
-
-    static func marked(old: String, new: String, dark: Bool = false) -> (old: AttributedString, new: AttributedString) {
-        marked(old: AttributedString(old), new: AttributedString(new), dark: dark)
-    }
-
-    /// In dark mode the washes are stronger and an inserted word is itself neon mint (over 10:1 on its wash).
-    static func marked(old: AttributedString, new: AttributedString, dark: Bool = false) -> (old: AttributedString, new: AttributedString) {
-        WordChanges.marked(old: old, new: new, removed: RevisionMarks.removed(dark: dark), inserted: RevisionMarks.inserted(dark: dark))
-    }
-}

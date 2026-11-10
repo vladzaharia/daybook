@@ -16,7 +16,6 @@ final class AudioPlaybackController: PlaybackControlling {
     var isPlaying: Bool { engine.isPlaying }
     var position: TimeInterval { engine.position }
     var duration: TimeInterval { engine.duration }
-    var currentURL: URL? { engine.url }
     var backSkips: Int { engine.backSkips }
     var forwardSkips: Int { engine.forwardSkips }
     /// What went wrong, in a sentence, while the recording stays open or when it couldn't be.

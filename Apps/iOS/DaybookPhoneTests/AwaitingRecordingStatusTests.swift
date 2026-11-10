@@ -22,10 +22,12 @@ final class AwaitingRecordingStatusTests: XCTestCase {
         return meeting
     }
 
+    private let inputs = ConversationStatusPresentation.Inputs(words: .iPhone(id: "phone"), local: .iPhone())
+
     func testTheRowAndThePageSayWhatTheyreWaitingFor() {
         let status = ProcessingStatus(meeting(), now: now)
-        XCTAssertEqual(StatusPresentation.row(status), RowStatus(kind: .waiting, text: "Waiting for Soundcore Work audio"))
-        let inputs = ConversationStatusPresentation.Inputs(words: .iPhone(id: "phone"), local: .iPhone())
+        XCTAssertEqual(ConversationStatusPresentation.row(status, meeting: meeting(), inputs: inputs, now: now),
+                       ConversationRowStatus(kind: .waiting, text: "Waiting for Soundcore Work audio"))
         let page = ConversationStatusPresentation.page(status, meeting: meeting(), inputs: inputs, now: now)
         XCTAssertEqual(page?.kind, .line)
         XCTAssertEqual(page?.title, "Waiting for audio from Soundcore Work")
@@ -37,6 +39,7 @@ final class AwaitingRecordingStatusTests: XCTestCase {
         var waited = meeting()
         XCTAssertTrue(waited.stopWaitingForRecordings(at: now))
         XCTAssertEqual(ProcessingStatus(waited, now: now), .done)
-        XCTAssertNil(StatusPresentation.row(ProcessingStatus(waited, now: now)), "the row shows its preview again")
+        XCTAssertNil(ConversationStatusPresentation.row(ProcessingStatus(waited, now: now), meeting: waited, inputs: inputs, now: now),
+                     "the row shows its preview again")
     }
 }

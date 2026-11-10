@@ -42,41 +42,6 @@ extension View {
     }
 }
 
-/// A time that plays from there: meta ink, monospaced digits.
-struct TimeButton: View {
-    let time: TimeInterval
-    var ink: Color = PhoneStyle.Ink.meta
-    let play: () -> Void
-
-    var body: some View {
-        Button(action: play) {
-            Text(TimeLabel.short(time))
-                .font(PhoneStyle.Typeface.time)
-                .foregroundStyle(ink)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-                .padding(.vertical, 4)
-                .contentShape(Rectangle())
-                // A 44 pt target without making its row taller.
-                .daybookHitTarget()
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Play from \(SpokenTime.format(time))")
-    }
-}
-
-/// A heading on the page: Body ink at semibold. Weight, not grey, makes a heading.
-struct PageHeading: View {
-    let text: String
-    var body: some View {
-        Text(text)
-            .font(PhoneStyle.Typeface.heading)
-            .foregroundStyle(PhoneStyle.Ink.body)
-            .accessibilityAddTraits(.isHeader)
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
 /// A tag, as a teal chip.
 struct TagChip: View {
     let tag: String

@@ -210,14 +210,6 @@ extension AppState {
         recorderHandoff.useHere(session)
     }
 
-    /// Take Over Anyway, after the person confirmed the risk.
-    func takeOverRecorder(_ session: DeviceSession) { recorderHandoff.takeOverAnyway(session) }
-
-    /// Stops waiting for the other device, or clears its answer.
-    func cancelRecorderHandoff(_ session: DeviceSession) {
-        if recorderHandoff.state(of: session).isPending { recorderHandoff.cancel(session) } else { recorderHandoff.dismiss(session) }
-    }
-
     /// "Use on Alex’s iPhone": offers the recorder to a connected phone.
     func giveRecorder(_ session: DeviceSession, to peer: RecorderHandoff.Peer) { recorderHandoff.give(session, to: peer) }
 

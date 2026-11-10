@@ -138,10 +138,8 @@ public struct FusionInputs: Sendable {
     /// reference, and a derived recording without its own follows its original's. Pass the rate
     /// here rather than scaling segment times.
     public var placements: [UUID: TrackPlacement] = [:]
-    /// Measured by `MeetingAudioAlignment` / `AudioAligner` (normally `Meeting.audioAlignments`).
+    /// Pairwise measurements Daybook 0.2.2 stored (`Meeting.audioAlignments`), read but no longer written.
     public var audioAlignments: [TrackAudioAlignment]
-    /// Per-recording signal-to-noise profiles from `AudioAligner.signalQuality(of:)`.
-    public var signalQuality: [UUID: SignalQualityProfile]
     /// Wall-clock recording starts, used only when sound and text can't place a recording.
     public var recordingStartDates: [UUID: Date]
     /// The meeting's speakers, so existing identities are reused.
@@ -153,20 +151,19 @@ public struct FusionInputs: Sendable {
     /// passage all of whose sources are here is left out of the transcript, into `FusionResult.backgroundSegments`.
     public var background: [UUID: BackgroundAudio.Kind]
     public init(placements: [UUID: TrackPlacement] = [:], audioAlignments: [TrackAudioAlignment] = [],
-                signalQuality: [UUID: SignalQualityProfile] = [:], recordingStartDates: [UUID: Date] = [:],
-                speakers: [Speaker] = [], namedSpeakerIDs: Set<String> = [], options: FusionOptions = .init(),
-                background: [UUID: BackgroundAudio.Kind] = [:]) {
-        self.placements = placements; self.audioAlignments = audioAlignments; self.signalQuality = signalQuality
+                recordingStartDates: [UUID: Date] = [:], speakers: [Speaker] = [], namedSpeakerIDs: Set<String> = [],
+                options: FusionOptions = .init(), background: [UUID: BackgroundAudio.Kind] = [:]) {
+        self.placements = placements; self.audioAlignments = audioAlignments
         self.recordingStartDates = recordingStartDates; self.speakers = speakers; self.namedSpeakerIDs = namedSpeakerIDs
         self.options = options; self.background = background
     }
 
     /// Everything a meeting already stores: audio alignments, speakers, renamed speakers, and the
     /// passages that are background audio (unless the person included it).
-    public init(meeting: Meeting, placements: [UUID: TrackPlacement] = [:], signalQuality: [UUID: SignalQualityProfile] = [:],
-                recordingStartDates: [UUID: Date] = [:], options: FusionOptions = .init()) {
-        self.init(placements: placements, audioAlignments: meeting.audioAlignments ?? [], signalQuality: signalQuality,
-                  recordingStartDates: recordingStartDates, speakers: meeting.speakers, namedSpeakerIDs: meeting.renamedSpeakerIDs, options: options,
+    public init(meeting: Meeting, placements: [UUID: TrackPlacement] = [:], recordingStartDates: [UUID: Date] = [:],
+                options: FusionOptions = .init()) {
+        self.init(placements: placements, audioAlignments: meeting.audioAlignments ?? [], recordingStartDates: recordingStartDates,
+                  speakers: meeting.speakers, namedSpeakerIDs: meeting.renamedSpeakerIDs, options: options,
                   background: meeting.backgroundSegmentKinds())
     }
 }

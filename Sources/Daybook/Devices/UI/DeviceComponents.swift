@@ -94,18 +94,6 @@ struct DeviceStatusDot: View {
     }
 }
 
-/// One quiet-filled box on the column, its outer edge on the text's edge as a conversation's
-/// status boxes are, with their padding and corners.
-struct DeviceBox<Content: View>: View {
-    @ViewBuilder var content: Content
-    var body: some View {
-        content
-            .padding(Space.s3)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(DaybookStyle.quietFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-    }
-}
-
 /// A state that needs the person, as a conversation's status box (`StatusBox`): a problem (warning),
 /// or something to know (quiet), spanning the column, its actions under the message when it's narrow.
 struct DeviceAttentionBox<Actions: View>: View {
@@ -130,13 +118,6 @@ struct DeviceBoxPrimaryButton: View {
         Button(title, action: action)
             .buttonStyle(.borderedProminent)
             .tint(DaybookStyle.prominentFill)
-    }
-}
-
-/// The M4 transition: a status line or notice slides in from the top; it only fades under Reduce Motion.
-extension AnyTransition {
-    static func deviceNotice(reduceMotion: Bool) -> AnyTransition {
-        reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top))
     }
 }
 

@@ -51,14 +51,14 @@ enum CaptureFiles {
     /// recorder's real-time encoder, read from disk once `fragments` movie fragments after the first
     /// are complete there. Its end is whatever the encoder was writing at that moment.
     static func inProgressSegment(seconds: Double, frequency: Float, fragments: Int = 2,
-                                  in scratch: URL, test: XCTestCase) async throws -> Data {
+                                  in scratch: URL) async throws -> Data {
         let url = scratch.appendingPathComponent("writing-\(UUID().uuidString).m4a")
         let writer = try AACSegmentWriter(url: url, format: format, realTime: true)
         defer { writer.cancel() }
         try append(tone: frequency, seconds: seconds, to: writer)
         var seen: [Box] = []
-        return try await test.waitFor("\(fragments) movie fragments on disk", timeout: 30, poll: .milliseconds(20),
-                                      state: { seen.map { "\($0.type)@\($0.offset)+\($0.size)" }.joined(separator: " ") }) { () -> Data? in
+        return try await waitFor("\(fragments) movie fragments on disk", timeout: 30, poll: .milliseconds(20),
+                                 state: { seen.map { "\($0.type)@\($0.offset)+\($0.size)" }.joined(separator: " ") }) { () -> Data? in
             guard let bytes = try? Data(contentsOf: url) else { return nil }
             seen = boxes(bytes)
             return seen.filter { $0.type == "moof" && $0.end <= bytes.count }.count >= fragments ? bytes : nil

@@ -243,6 +243,8 @@ final class DesignTokenTests: XCTestCase {
         XCTAssertEqual(DaybookMotion.tick, .snappy(duration: 0.3))
         XCTAssertEqual(DaybookMotion.scroll, .easeInOut(duration: 0.3))
         XCTAssertEqual(DaybookMotion.page, .easeInOut(duration: 0.35))
+        XCTAssertEqual(DaybookMotion.pageTurn, .easeOut(duration: 0.15), "Summary and Transcript crossfade, on both apps")
+        XCTAssertEqual(DaybookMotion.progress, .linear(duration: 0.2))
         XCTAssertEqual(DaybookMotion.dim, .easeInOut(duration: 0.6))
         XCTAssertEqual(DaybookMotion.reduced, .easeOut(duration: 0.15))
         XCTAssertEqual(DaybookMotion.hold, .seconds(1.5))

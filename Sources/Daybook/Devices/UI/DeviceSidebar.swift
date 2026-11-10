@@ -1,4 +1,5 @@
 import AppKit
+import DaybookDesign
 import DaybookKit
 import DaybookUI
 import SwiftUI
@@ -72,8 +73,8 @@ private struct DeviceSidebarRow: View {
             }
         }
         .badge(newCount)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: progress == nil)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: session.isLinked)
+        .animation(reduceMotion ? nil : DaybookMotion.fade, value: progress == nil)
+        .animation(reduceMotion ? nil : DaybookMotion.fade, value: session.isLinked)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityLabel(newCount: newCount))
     }
@@ -180,6 +181,6 @@ private struct ImportRing: View {
         }
         .frame(width: 12, height: 12)
         .padding(1)
-        .animation(reduceMotion ? nil : .linear(duration: 0.2), value: progress)
+        .animation(reduceMotion ? nil : DaybookMotion.progress, value: progress)
     }
 }

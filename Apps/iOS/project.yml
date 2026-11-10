@@ -240,6 +240,9 @@ targets:
       - path: DaybookPhoneTests
         excludes:
           - "Fixtures/**"
+      # What the package's tests share (waits, defaults and folders removed when a test ends, the doubles for iCloud
+      # and iCloud Keychain), compiled into this bundle: the package's DaybookTestSupport target isn't a product.
+      - path: ../../Tests/DaybookTestSupport
       # Files shipped versions wrote, copied into the bundle as they are (DaybookPhoneTests/Fixtures).
       - path: DaybookPhoneTests/Fixtures
         type: folder

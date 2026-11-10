@@ -586,8 +586,8 @@ final class MultiSourceFusion {
 
     /// How much a source's word counts. Remote speech: the call audio is the original signal;
     /// local speech: the microphone (echo-cancelled when available) is closest to the owner.
-    /// Scaled by signal-to-noise ratio when measured, and by how the source was placed.
-    private func weight(_ s: Int, callSpeech: Bool, localTime: Double) -> Double {
+    /// Scaled by how the source was placed.
+    private func weight(_ s: Int, callSpeech: Bool) -> Double {
         var value: Double
         switch sources[s].role {
         case .call: value = callSpeech ? 1 : 0.6
@@ -595,20 +595,12 @@ final class MultiSourceFusion {
         case .room: value = callSpeech ? 0.5 : 0.8
         case .unknown: value = 1
         }
-        if let profile = inputs.signalQuality[sources[s].trackID], let snr = profile.snr(at: localTime) {
-            value *= min(1, max(0.3, 0.3 + 0.7 * Double(snr - 5) / 25))
-        }
         switch sources[s].alignment.method {
         case .anchors: value *= 0.9
         case .timestamps: value *= 0.6
         default: break
         }
         return value
-    }
-
-    private func localTime(_ s: Int, meeting time: Double) -> Double {
-        let alignment = sources[s].alignment
-        return alignment.rate > 0 ? (time - alignment.offset) / alignment.rate : time
     }
 
     /// ROVER-style vote per column. Each source scores weight × (0.5 + 0.5 × confidence); sources
@@ -641,7 +633,7 @@ final class MultiSourceFusion {
             var tallies: [String: (score: Double, supporters: [Entry], best: Entry, bestScore: Double, scores: [Int: Double])] = [:]
             for entry in column.entries {
                 let word = sources[entry.source].words[entry.word]
-                let score = weight(entry.source, callSpeech: callSpeech, localTime: (word.localStart + word.localEnd) / 2)
+                let score = weight(entry.source, callSpeech: callSpeech)
                     * (0.5 + 0.5 * (word.confidence ?? 0.7))
                 if var tally = tallies[word.key] {
                     tally.score += score; tally.supporters.append(entry); tally.scores[entry.source, default: 0] += score
@@ -652,7 +644,7 @@ final class MultiSourceFusion {
                 }
             }
             let silent = sources.indices.filter { column.participants & (UInt64(1) << UInt64($0)) != 0 && present & (UInt64(1) << UInt64($0)) == 0 }
-            let silentScore = silent.reduce(0.0) { $0 + weight($1, callSpeech: callSpeech, localTime: localTime($1, meeting: column.time)) * 0.75 }
+            let silentScore = silent.reduce(0.0) { $0 + weight($1, callSpeech: callSpeech) * 0.75 }
             if tallies.count > 1 || (!silent.isEmpty && !tallies.isEmpty) { disputed += 1 }
             let ranked = order.sorted { a, b in
                 let x = tallies[a]!, y = tallies[b]!

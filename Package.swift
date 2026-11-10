@@ -57,10 +57,10 @@ let package = Package(
         // warning, not silence.
         .target(name: "DaybookCore", swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]),
         .target(name: "DaybookLink"),
-        // Foundation, AVFoundation, and Speech only, so the device framework can use it too.
-        .target(name: "DaybookCaptions"),
-        // SwiftUI only, no models: either app's views can use it without the other's code.
-        .target(name: "DaybookDesign"),
+        // Foundation, AVFoundation, and Speech only, so the device framework can use it too. Complete checking, as Core's.
+        .target(name: "DaybookCaptions", swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]),
+        // SwiftUI only, no models: either app's views can use it without the other's code. Complete checking, as Core's.
+        .target(name: "DaybookDesign", swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]),
         .target(name: "DaybookDevices", dependencies: ["DaybookCore", "DaybookCaptions"]),
         // Shared screens over the library's models; not the model store or the engines, so it stays light
         // for the iPhone. macOS 26 API behind availability checks: the Mac deploys to macOS 15.
@@ -118,9 +118,10 @@ let package = Package(
             "DaybookDesign",
             "DaybookUI"
         ]),
-        // What every test bundle shares (Tests/DaybookTestSupport): waiting for something to happen, UserDefaults
-        // suites and folders that are removed when a test ends, and one seeded random generator.
-        .target(name: "DaybookTestSupport", path: "Tests/DaybookTestSupport"),
+        // What every test bundle shares (Tests/DaybookTestSupport), the iPhone's too: waiting for something to happen,
+        // UserDefaults suites and folders that are removed when a test ends, one seeded random generator, and the
+        // doubles that stand in for iCloud (`InMemoryCourier`), iCloud Keychain (`MemoryLibraryKeyStore`), and audio files.
+        .target(name: "DaybookTestSupport", dependencies: ["DaybookCore", "DaybookKit"], path: "Tests/DaybookTestSupport"),
         .testTarget(name: "DaybookCoreTests", dependencies: ["DaybookCore", "DaybookTestSupport"]),
         // Device tests decode transferred audio with DaybookIntelligence's reader (macOS).
         .testTarget(name: "DaybookDevicesTests", dependencies: ["DaybookDevices", "DaybookCore", "DaybookIntelligence", "DaybookCaptions",

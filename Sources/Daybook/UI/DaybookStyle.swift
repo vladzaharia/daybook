@@ -34,9 +34,6 @@ enum DaybookStyle {
     /// A glyph for audio that's live (playing, listening): neon mint in Dark Mode, link ink in Light
     /// (`DaybookPalette.liveGlyph`, which follows the appearance itself).
     static func liveGlyph(_ scheme: ColorScheme) -> Color { DaybookPalette.liveGlyph }
-    /// Daybook's signature, corner to corner: the Privacy lock and Welcome's bullets. Progress draws it
-    /// left to right (`WorkProgress`).
-    static let brandGradient = DaybookPalette.brandGradient(.mark)
 
     /// Text on paper. Chrome keeps the system label colours.
     typealias Ink = DaybookPalette.Ink
@@ -51,17 +48,6 @@ enum DaybookStyle {
     static let measure = ReadingGeometry.measure
     /// Times hang in this margin to the left of the measure.
     static let margin = ReadingGeometry.margin
-    /// Below this detail width, times fold inline and the measure fills the column.
-    static let narrowWidth = ReadingGeometry.narrowBelow
-}
-
-extension DaybookPalette.Ink {
-    /// The Ink scale for the notes `NSTextView`, the same values as the colours above.
-    static let titleNS = DaybookPalette.Shade.title.nsColor
-    static let bodyNS = DaybookPalette.Shade.body.nsColor
-    static let secondaryNS = DaybookPalette.Shade.secondary.nsColor
-    static let metaNS = DaybookPalette.Shade.meta.nsColor
-    static let faintNS = DaybookPalette.Shade.faint.nsColor
 }
 
 /// Text on paper reads `Ink.body`, `Ink.meta`, and so on.
@@ -104,41 +90,9 @@ enum TypeStyle {
     static func bodyLineSpacing(_ scale: CGFloat = 1) -> CGFloat { DaybookFont.bodyLineSpacing(.window, scale: scale) }
 }
 
-// MARK: - Liquid Glass, only on the floating layer
+// MARK: - Bars and boxes
 
 extension View {
-    /// Liquid Glass on macOS 26 and later; a material capsule with a hairline and shadow on macOS 15.
-    @ViewBuilder
-    func glassSurface(in shape: some Shape, tint: Color? = nil, interactive: Bool = false) -> some View {
-        if #available(macOS 26, *) {
-            glassEffect(.regular.tint(tint).interactive(interactive), in: shape)
-        } else {
-            background(.regularMaterial, in: shape)
-                .overlay(shape.stroke(Color(nsColor: .separatorColor), lineWidth: 0.5))
-                .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
-        }
-    }
-
-    /// Glass buttons belong only inside floating strips (the player and the floating notes controls).
-    @ViewBuilder
-    func glassButtonStyle(prominent: Bool = false) -> some View {
-        if #available(macOS 26, *) {
-            if prominent { buttonStyle(.glassProminent) } else { buttonStyle(.glass) }
-        } else {
-            if prominent { buttonStyle(.borderedProminent) } else { buttonStyle(.bordered) }
-        }
-    }
-
-    /// Pins a bar to the top edge. On macOS 26 it joins the toolbar's scroll edge effect.
-    @ViewBuilder
-    func topBar(@ViewBuilder _ content: () -> some View) -> some View {
-        if #available(macOS 26, *) {
-            safeAreaBar(edge: .top, spacing: 0, content: content)
-        } else {
-            safeAreaInset(edge: .top, spacing: 0, content: content)
-        }
-    }
-
     /// Pins a bar to the bottom edge, letting content scroll beneath it on macOS 26.
     @ViewBuilder
     func bottomBar(@ViewBuilder _ content: () -> some View) -> some View {
@@ -192,13 +146,4 @@ struct SidebarLabelStyle: LabelStyle {
 
 extension LabelStyle where Self == SidebarLabelStyle {
     static var sidebar: SidebarLabelStyle { SidebarLabelStyle() }
-}
-
-/// Lets neighbouring glass shapes blend on macOS 26.
-struct GlassGroup<Content: View>: View {
-    var spacing: CGFloat?
-    @ViewBuilder var content: Content
-    var body: some View {
-        if #available(macOS 26, *) { GlassEffectContainer(spacing: spacing) { content } } else { content }
-    }
 }

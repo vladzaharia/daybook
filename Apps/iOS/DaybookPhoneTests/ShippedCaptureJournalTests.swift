@@ -93,7 +93,7 @@ final class ShippedCaptureJournalTests: XCTestCase {
         let folder = try v022Folder()
         let scratch = try temporaryDirectory()
         XCTAssertEqual(try CaptureFiles.writeClosedSegment(to: folder.appendingPathComponent("segment-000.m4a"), seconds: 3, frequency: 440), 144_000)
-        let second = try await CaptureFiles.inProgressSegment(seconds: 4, frequency: 660, in: scratch, test: self)
+        let second = try await CaptureFiles.inProgressSegment(seconds: 4, frequency: 660, in: scratch)
         try second.write(to: folder.appendingPathComponent("segment-001.m4a"))
         let secondFrames = try CaptureFiles.readableFrames(second, scratch: scratch)
         XCTAssertGreaterThanOrEqual(secondFrames, 48_000)

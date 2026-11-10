@@ -159,8 +159,9 @@ final class AudioAlignerTests: XCTestCase {
 
     // MARK: Pipeline
 
-    /// Plan, measure, store, and fuse: the recorder's transcript lands on the call's timeline from
-    /// the sound alone (its words are too different to align by text).
+    /// A measurement stored as Daybook 0.2.2 stored them (`Meeting.audioAlignments`) still places a recording: the
+    /// recorder's transcript lands on the call's timeline from the sound alone (its words are too different to align
+    /// by text).
     func testMeasuredAlignmentPlacesRecorderTranscriptInFusion() throws {
         let event = SyntheticEvent.conversation(seed: 808, duration: 220)
         let callURL = try callCapture(event, start: 10, duration: 200)
@@ -178,15 +179,13 @@ final class AudioAlignerTests: XCTestCase {
         let recorderTranscript = TrackTranscript(trackID: recorder.id, segments: [segment(recorder.id, local, "Let us review the budget for the spring off site"),
                                                                                   segment(recorder.id, 120, "Someone in the room speaking quietly")])
         var meeting = Meeting(tracks: [call, recorder], transcripts: [callTranscript, recorderTranscript])
-        let requests = MeetingAudioAlignment.requests(for: meeting)
-        XCTAssertEqual(requests.map(\.referenceTrackID), [call.id])
-        let measured = MeetingAudioAlignment.measure(requests, in: meeting, urls: [call.id: callURL, recorder.id: recorderURL],
-                                                     cache: AudioFeatureCache())
-        let alignment = try XCTUnwrap(measured.first?.alignment, measured.first?.explanation ?? "")
+        let measured = try AudioAligner.analyze(other: recorderURL, otherDigest: recorder.sha256, reference: callURL,
+                                                referenceDigest: call.sha256, expectedOffset: nil, searchRadius: 0, cache: AudioFeatureCache())
+        let alignment = try XCTUnwrap(measured.alignment, measured.explanation)
         XCTAssertEqual(alignment.offset, 30, accuracy: 0.02)
         XCTAssertEqual(alignment.driftPPM, 80, accuracy: 20)
-        meeting.recordAudioAlignments(measured)
-        XCTAssertTrue(MeetingAudioAlignment.requests(for: meeting).isEmpty)
+        meeting.audioAlignments = [TrackAudioAlignment(trackID: recorder.id, referenceTrackID: call.id, alignment: alignment,
+                                                       trackDigest: recorder.sha256, referenceDigest: call.sha256)]
         meeting.applyFusion(TranscriptFusion.fuse(meeting: meeting))
         let report = try XCTUnwrap(meeting.alignmentReports.first { $0.trackID == recorder.id })
         XCTAssertEqual(report.method, .audio)

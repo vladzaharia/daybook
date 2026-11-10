@@ -385,10 +385,6 @@ extension AppState {
         meeting.hasUntranscribedTranscribableAudio ? .newAudio : .summaryOnly
     }
 
-    /// This Mac's queue, as `ProcessingStatus` reads it: the running job's step is the one the engine reports
-    /// (`ProcessingProgress.stage`), or summarizing from when the conversation is marked so.
-    var processingQueueState: ProcessingStatus.LocalQueue { queueState(readingProgress: true) }
-
     /// The one status the list, the conversation page, and device pages show (shared with the iPhone). Only the
     /// conversation being processed reads the job's progress, so a progress report redraws its row and page, not every row.
     func processingStatus(for meeting: Meeting) -> ProcessingStatus {

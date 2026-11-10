@@ -10,19 +10,20 @@ Everything runs locally. Audio alignment uses Accelerate (vDSP) and AVFoundation
 ## Pipeline contract
 
 ```swift
-// 1. Decide what to measure (recordings without capture or manual timing, against those with it).
-let requests = MeetingAudioAlignment.requests(for: meeting, recordingStartDates: dates)   // dates optional
-// 2. Measure off the main actor (decodes audio; features are cached).
-let measured = MeetingAudioAlignment.measure(requests, in: meeting, urls: urlsByTrackID)
-// 3. Store the measurements, including failed ones, so they're not repeated.
-meeting.recordAudioAlignments(measured)                                                  // Meeting.audioAlignments
-// 4. Fuse and apply. This stores unifiedTranscript, alignmentReports, fusionSummary, and the owner speaker.
-meeting.applyFusion(TranscriptFusion.fuse(meeting: meeting, signalQuality: profiles))   // profiles optional
+// 1. Line a recording up against another, off the main actor (decodes audio; features are cached).
+let sound = try AudioAligner.align(other: recordingURL, reference: referenceURL, expectedOffset: prior, searchRadius: radius)
+// 2. Store it as the recording's placement (`RecordingTrack.alignment`, a `SourceAlignment` composed onto the
+//    reference's own placement: `SourcePlacement.compose`).
+// 3. Fuse with every stored placement (`FusionInputs(placements:)`), then store what fusion settled. This stores
+//    unifiedTranscript, alignmentReports, fusionSummary, and the owner speaker.
+let result = SourceFusion.fuse(meeting)
+meeting.applyFusion(result.fusion)
+meeting.applyPlacements(result.settled)
 ```
 
-`AudioAligner.align(other:reference:expectedOffset:searchRadius:)` is the single-pair primitive behind step 2. It returns `AudioAlignment { offset, rate, confidence }` with `referenceTime = offset + rate × otherTime`, or nil when the recordings don't share enough sound. If `expectedOffset` is nil, or the radius isn't a positive finite number, it searches every placement where the two recordings overlap. Otherwise it searches only ±`searchRadius` seconds around the prior. `MeetingAudioAlignment.measure` retries a failed prior search with a full search, because recorder clocks can be wrong by more than the radius. `AudioAligner.analyze(...)` returns the full `AudioAlignmentReport`: windows compared and matched, median peak, residual, ambiguity, overlap span, and an explanation.
+On the Mac, `MultiSourceCoordinator` lines up a recording that arrives (a recorder's, an imported file) with `AudioAligner.align(other:reference:expectedOffset:searchRadius:)`. It returns `AudioAlignment { offset, rate, confidence }` with `referenceTime = offset + rate × otherTime`, or nil when the recordings don't share enough sound. If `expectedOffset` is nil, or the radius isn't a positive finite number, it searches every placement where the two recordings overlap. Otherwise it searches only ±`searchRadius` seconds around the prior. `AudioAligner.analyze(...)` returns the full `AudioAlignmentReport`: windows compared and matched, median peak, residual, ambiguity, overlap span, and an explanation.
 
-`AudioAligner.signalQuality(of:)` returns a per-second signal-to-noise profile from the same cached features. Pass the profiles to fusion to prefer the clearer recording.
+Daybook 0.2.2 also stored pairwise measurements on the conversation (`Meeting.audioAlignments`, `TrackAudioAlignment`). Nothing writes them any more, but they're still read: fusion places a source by a stored measurement taken on the same bytes (`FusionInputs(meeting:)`), and sync merges them (see Sync).
 
 `TranscriptFusion.fuse(_:tracks:)` keeps its old signature and behaviour for callers without audio evidence. It goes through the same engine.
 
@@ -40,7 +41,7 @@ Each recording is read in 32k-frame chunks with `AVAudioFile`, averaged to mono,
   - Log bands make it independent of gain and automatic gain control.
   - The gate keeps background noise from creating onsets.
   - Rises survive reverb tails and codecs.
-- **Level.** The frame level in dB, used for activity detection and signal-to-noise estimates.
+- **Level.** The frame level in dB, used for activity detection.
 
 The window length matters for reverberant rooms. A 32 ms window biased a reverberant recorder 13 ms late against clean call audio. A 20 ms window cut that bias to about 8 ms. This bias is physical: early reflections arrive after the direct sound.
 
@@ -124,7 +125,7 @@ The weight depends on the speech's role:
 | Microphone | 0.5 | 1.0 |
 | Room recorder or imported file | 0.5 | 0.8 |
 
-Two more factors adjust the weight. With a signal-quality profile, the weight is scaled by SNR, from 0.3 at 5 dB or less to 1.0 at 30 dB. Sources placed by anchors are scaled by 0.9, and by timestamps by 0.6.
+One more factor adjusts the weight: sources placed by anchors are scaled by 0.9, and by timestamps by 0.6. Signal-to-noise ratio isn't a factor; the iPhone fuses without the audio to measure it, and both devices word a transcript alike.
 
 So the call's wording wins remote speech over one confident far-field mishearing. Two far-field recordings that agree outvote a low-confidence call word.
 

@@ -98,14 +98,6 @@ public protocol PCMSampleSink: AnyObject {
     func write(_ samples: UnsafePointer<Float>, count: Int) throws
 }
 
-public final class ArraySampleSink: PCMSampleSink {
-    public private(set) var samples: [Float] = []
-    public init() {}
-    public func write(_ samples: UnsafePointer<Float>, count: Int) throws {
-        self.samples.append(contentsOf: UnsafeBufferPointer(start: samples, count: count))
-    }
-}
-
 /// Writes mono Float32 PCM to a CAF file.
 public final class AudioFileSampleSink: PCMSampleSink {
     private let file: AVAudioFile

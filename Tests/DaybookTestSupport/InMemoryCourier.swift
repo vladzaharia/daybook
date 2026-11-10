@@ -1,9 +1,10 @@
 import DaybookCore
+import DaybookKit
 import Foundation
 import Synchronization
 
-/// A courier's server held in memory: what the private CloudKit database is to `CloudKitCourier`. Tests and
-/// previews use it with `InMemoryCourier`; nothing leaves the process.
+/// A courier's server held in memory: what the private CloudKit database is to `CloudKitCourier`. Tests use it with
+/// `InMemoryCourier`; nothing leaves the process.
 public final class InMemoryCourierService: Sendable {
     public enum Failure: Sendable, Equatable {
         /// Saves fail as a network failure would: files keep waiting and go on the next flush.

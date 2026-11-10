@@ -153,8 +153,9 @@ extension SyncCourier {
 /// What a courier on this device has taken: files waiting to send (with staged copies of their bytes), files sent,
 /// files left to iCloud Drive, and files known to be on the server, for expiry. Shared by every courier, so sending
 /// once, retries, and expiry behave the same over CloudKit and in tests. Kept in `<directory>/outbox.json`, with the
-/// staged copies in `<directory>/Outbox/`. Not thread-safe: its courier (an actor) owns it.
-final class CourierOutbox {
+/// staged copies in `<directory>/Outbox/`. Not thread-safe: its courier (an actor) owns it. Public for the tests'
+/// in-memory courier (Tests/DaybookTestSupport).
+public final class CourierOutbox {
     struct Waiting: Codable, Equatable {
         var file: CourierFile
         var queuedAt: Date
@@ -180,7 +181,7 @@ final class CourierOutbox {
     private(set) var ledger: Ledger
     private let fm = FileManager.default
 
-    init(directory: URL, policy: CourierPolicy) {
+    public init(directory: URL, policy: CourierPolicy) {
         self.directory = directory; self.policy = policy
         let url = directory.appendingPathComponent("outbox.json")
         if let data = try? Data(contentsOf: url), let decoded = try? JSONDecoder.courier.decode(Ledger.self, from: data),
@@ -192,11 +193,11 @@ final class CourierOutbox {
     }
 
     var stagingDirectory: URL { directory.appendingPathComponent("Outbox", isDirectory: true) }
-    func stagedURL(_ id: String) -> URL { stagingDirectory.appendingPathComponent(id) }
+    public func stagedURL(_ id: String) -> URL { stagingDirectory.appendingPathComponent(id) }
 
     /// Takes the files it hasn't seen, staging a copy of each; returns those it took.
     @discardableResult
-    func accept(_ files: [CourierOutgoingFile], now: Date) -> [CourierFile] {
+    public func accept(_ files: [CourierOutgoingFile], now: Date) -> [CourierFile] {
         var taken: [CourierFile] = []
         for outgoing in files {
             let id = outgoing.id
@@ -227,7 +228,7 @@ final class CourierOutbox {
     }
 
     /// Files ready to send now, oldest first.
-    func due(now: Date) -> [CourierFile] {
+    public func due(now: Date) -> [CourierFile] {
         ledger.waiting.values.filter { $0.retryAfter.map { $0 <= now } ?? true }
             .sorted { ($0.queuedAt, $0.file.id) < ($1.queuedAt, $1.file.id) }.map(\.file)
     }
@@ -235,7 +236,7 @@ final class CourierOutbox {
     /// When the next file waiting out a refusal may go again.
     var nextRetry: Date? { ledger.waiting.values.compactMap(\.retryAfter).min() }
 
-    func markSent(_ id: String, now: Date) {
+    public func markSent(_ id: String, now: Date) {
         guard ledger.waiting.removeValue(forKey: id) != nil else { return }
         try? fm.removeItem(at: stagedURL(id))
         ledger.sent[id] = now
@@ -243,7 +244,7 @@ final class CourierOutbox {
     }
 
     /// The server refused the file for now (storage full): wait, doubling each time, then try again.
-    func markRetry(_ id: String, error: String, storageFull: Bool, now: Date) {
+    public func markRetry(_ id: String, error: String, storageFull: Bool, now: Date) {
         guard var entry = ledger.waiting[id] else { return }
         entry.attempts += 1
         let delay = min(policy.firstRetry * pow(2, Double(entry.attempts - 1)), policy.maxRetry)
@@ -255,7 +256,7 @@ final class CourierOutbox {
     }
 
     /// A failure the transport retries itself (network, rate limit): the file keeps waiting.
-    func noteTransient(_ id: String, error: String) {
+    public func noteTransient(_ id: String, error: String) {
         ledger.waiting[id]?.lastError = error
         ledger.lastError = error
     }
@@ -263,7 +264,7 @@ final class CourierOutbox {
     func noteError(_ error: String) { ledger.lastError = error }
 
     /// Gives up on a file for good; iCloud Drive carries it.
-    func drop(_ id: String, now: Date, error: String? = nil) {
+    public func drop(_ id: String, now: Date, error: String? = nil) {
         guard ledger.waiting.removeValue(forKey: id) != nil else { return }
         try? fm.removeItem(at: stagedURL(id))
         ledger.skipped[id] = now
@@ -271,18 +272,18 @@ final class CourierOutbox {
     }
 
     /// Gives up on everything waiting (the courier went off, or the account's data was reset).
-    func dropAllWaiting(now: Date) {
+    public func dropAllWaiting(now: Date) {
         for id in ledger.waiting.keys { drop(id, now: now) }
         ledger.storageFull = false
     }
 
-    func noteKnown(_ id: String, createdAt: Date) { ledger.known[id] = createdAt }
+    public func noteKnown(_ id: String, createdAt: Date) { ledger.known[id] = createdAt }
 
     /// The file is gone from the server.
-    func forget(_ id: String) { ledger.known.removeValue(forKey: id) }
+    public func forget(_ id: String) { ledger.known.removeValue(forKey: id) }
 
     /// Known files old enough to delete. Any still waiting are given up.
-    func expired(now: Date) -> [String] {
+    public func expired(now: Date) -> [String] {
         let ids = ledger.known.filter { now.timeIntervalSince($0.value) >= policy.expiry }.map(\.key).sorted()
         for id in ids where ledger.waiting[id] != nil { drop(id, now: now) }
         return ids
@@ -290,7 +291,7 @@ final class CourierOutbox {
 
     /// Drops plaintext files waiting to send (an encrypted library's are `Sealed/…`), and returns those known to be on
     /// the server, which are then forgotten: the courier deletes them.
-    func dropPlaintext(now: Date) -> [String] {
+    public func dropPlaintext(now: Date) -> [String] {
         func plaintext(_ id: String) -> Bool { id.split(separator: ".").dropFirst().first != "Sealed" }
         for id in ledger.waiting.keys where plaintext(id) { drop(id, now: now) }
         let known = ledger.known.keys.filter(plaintext).sorted()
@@ -304,13 +305,13 @@ final class CourierOutbox {
         try? fm.removeItem(at: stagingDirectory)
     }
 
-    func status(availability: CourierAvailability) -> CourierStatus {
+    public func status(availability: CourierAvailability) -> CourierStatus {
         CourierStatus(availability: availability, waitingToSend: ledger.waiting.count,
                       oldestWaiting: ledger.waiting.values.map(\.queuedAt).min(), lastError: ledger.lastError,
                       storageFull: ledger.storageFull)
     }
 
-    func save(now: Date = Date()) {
+    public func save(now: Date = Date()) {
         ledger.sent = ledger.sent.filter { now.timeIntervalSince($0.value) < policy.sentMemory }
         ledger.skipped = ledger.skipped.filter { now.timeIntervalSince($0.value) < policy.sentMemory }
         do {

@@ -1,4 +1,5 @@
 import DaybookCaptions
+import DaybookCore
 import Foundation
 
 /// The captions of recorders recording along with a shared recording, from the live audio each saves

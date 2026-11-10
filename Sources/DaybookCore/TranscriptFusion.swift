@@ -58,17 +58,16 @@ public enum TranscriptFusion {
         fuse(transcripts, tracks: tracks, inputs: FusionInputs())
     }
 
-    /// Fusion with audio alignments, signal quality, start dates, and speakers.
+    /// Fusion with placements, stored audio alignments, start dates, and speakers.
     public static func fuse(_ transcripts: [TrackTranscript], tracks: [RecordingTrack], inputs: FusionInputs) -> FusionResult {
         MultiSourceFusion(transcripts: transcripts, tracks: tracks, inputs: inputs).run()
     }
 
     /// Fuses everything a meeting stores: transcripts, tracks, measured audio alignments, speakers,
     /// and renamed speakers. Apply the result with `Meeting.applyFusion`.
-    public static func fuse(meeting: Meeting, signalQuality: [UUID: SignalQualityProfile] = [:],
-                            recordingStartDates: [UUID: Date] = [:], options: FusionOptions = .init()) -> FusionResult {
+    public static func fuse(meeting: Meeting, recordingStartDates: [UUID: Date] = [:], options: FusionOptions = .init()) -> FusionResult {
         fuse(meeting.transcripts, tracks: meeting.tracks,
-             inputs: FusionInputs(meeting: meeting, signalQuality: signalQuality, recordingStartDates: recordingStartDates, options: options))
+             inputs: FusionInputs(meeting: meeting, recordingStartDates: recordingStartDates, options: options))
     }
 
     static func valid(_ segments: [TranscriptSegment]) -> [TranscriptSegment] {

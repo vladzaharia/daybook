@@ -1,4 +1,5 @@
 import AppKit
+import DaybookDesign
 import DaybookKit
 import SwiftUI
 
@@ -66,7 +67,7 @@ struct DeviceDetailsView: View {
 
             VStack(alignment: .leading, spacing: Space.s3) {
                 Button {
-                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) { browser.showsTechnicalDetails.toggle() }
+                    withAnimation(reduceMotion ? nil : DaybookMotion.fade) { browser.showsTechnicalDetails.toggle() }
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "chevron.right")
