@@ -38,6 +38,10 @@ struct SyncDeviceRecord: Codable, Equatable {
     /// What it does with its own models for other devices (`SyncDeviceCapabilities`). Additive: earlier versions
     /// write none, and are read as unknown.
     var capabilities: SyncDeviceCapabilities?
+    /// Files its last pass left to upload. Additive, and never sealed: a count says nothing about the library.
+    var pendingUploads: Int?
+    /// What stands in the way of its sync (`SyncPresenceProblem`, an open value). Additive, never sealed.
+    var problem: SyncPresenceProblem?
     /// A random ID for the app that wrote it, on this device. Two apps sharing the device's identity through the keychain
     /// (the iPhone app kept beside the one that replaced it) write the same `installation` and differ here. Additive.
     var appInstallation: String?
@@ -50,7 +54,7 @@ struct SyncDeviceRecord: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case format, schemaVersion, deviceID, deviceClass, displayName, canProcess, audioPolicy, lastSeen, installation, activity
-        case features, key, sealed, compaction, firstSeen, capabilities, appInstallation
+        case features, key, sealed, compaction, firstSeen, capabilities, appInstallation, pendingUploads, problem
     }
 
     init(from decoder: Decoder) throws {
@@ -73,6 +77,8 @@ struct SyncDeviceRecord: Codable, Equatable {
         firstSeen = (try? values.decodeIfPresent(Date.self, forKey: .firstSeen)) ?? nil
         capabilities = (try? values.decodeIfPresent(SyncDeviceCapabilities.self, forKey: .capabilities)) ?? nil
         appInstallation = (try? values.decodeIfPresent(String.self, forKey: .appInstallation)) ?? nil
+        pendingUploads = (try? values.decodeIfPresent(Int.self, forKey: .pendingUploads)).flatMap { $0.map { max(0, $0) } }
+        problem = (try? values.decodeIfPresent(SyncPresenceProblem.self, forKey: .problem)) ?? nil
     }
 
     /// The same device, saying the same thing: everything but when it was written.
@@ -135,6 +141,15 @@ extension LibrarySyncEngine {
         try writePresence(now: Date(), force: true)
     }
 
+    /// What stands in the way of this device's sync, as the app knows it (the courier refused for lack of iCloud
+    /// storage): written into its presence record at once when it changes, so other devices can say why its work
+    /// hasn't arrived. A pass that finds iCloud refusing uploads for storage says so itself.
+    public func setPresenceProblem(_ problem: SyncPresenceProblem?) throws {
+        guard problem != presenceProblem else { return }
+        presenceProblem = problem
+        try writePresence(now: Date(), force: false)
+    }
+
     func writePresence(now: Date, force: Bool) throws {
         guard let device else { return }
         var stamped = activity
@@ -146,6 +161,8 @@ extension LibrarySyncEngine {
         record.compaction = state.compactionAck
         record.capabilities = device.capabilities
         record.appInstallation = appInstallation
+        record.pendingUploads = presenceUploads
+        record.problem = presenceProblem ?? (presenceStorageFull ? .storageFull : nil)
         // Whether the library is encrypted isn't known yet (the manifest isn't downloaded): say nothing private.
         let known = checkManifestForPresence()
         if let sealing { record.key = SyncDeviceKeyState(state: .ready, id: sealing.current.idHex) }
@@ -223,6 +240,9 @@ extension LibrarySyncEngine {
             known.keyState = record.key
             known.firstSeen = record.firstSeen.map { min($0, now) }
             known.capabilities = record.capabilities
+            known.pendingUploads = record.pendingUploads
+            known.problem = record.problem
+            if record.deviceID != deviceID { known.heardAt = heard(record, now: now) }
             return known
         }
         if records[deviceID] == nil, let device {
@@ -234,6 +254,8 @@ extension LibrarySyncEngine {
             known.keyState = sealing.map { SyncDeviceKeyState(state: .ready, id: $0.current.idHex) }
                 ?? waitingForKey.map { SyncDeviceKeyState(state: .waiting, id: $0) }
             known.firstSeen = presenceFirstSeen.map { min($0, now) }
+            known.pendingUploads = presenceUploads
+            known.problem = presenceProblem ?? (presenceStorageFull ? .storageFull : nil)
             devices.append(known)
         }
         for id in journalDeviceIDs.subtracting(records.keys).subtracting([deviceID]).sorted() {
@@ -248,6 +270,17 @@ extension LibrarySyncEngine {
 }
 
 extension LibrarySyncEngine {
+    /// When this device saw another's presence change to what `record` says, by this device's clock: nil the first time
+    /// it reads it (it can't tell when that write arrived), and kept while the record stays the same. A record that goes
+    /// back (restored from somewhere) isn't a change.
+    func heard(_ record: SyncDeviceRecord, now: Date) -> Date? {
+        let known = presenceHeard[record.deviceID]
+        if let known, known.lastSeen == record.lastSeen { return known.heard }
+        let heard = known.map { record.lastSeen > $0.lastSeen ? now : $0.heard } ?? nil
+        presenceHeard[record.deviceID] = (record.lastSeen, heard)
+        return heard
+    }
+
     /// The sealed part of a presence record, opened with a key held here. Nil without one, or if it doesn't open.
     func unsealedPresence(_ record: SyncDeviceRecord) -> SealedPresence? {
         guard let sealed = record.sealed, let bytes = Data(base64Encoded: sealed), let sealing,

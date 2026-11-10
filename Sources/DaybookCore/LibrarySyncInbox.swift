@@ -182,26 +182,41 @@ extension LibrarySyncEngine {
     public static let courierPromotionDelay: TimeInterval = 24 * 60 * 60
 
     /// Deletes deliveries whose sync-folder copy is now downloaded and identical, and anything an interrupted delivery
-    /// left behind. A delivery is never deleted before that: a pass may have applied it, and losing it would roll the
-    /// conversation back. One that has waited `courierPromotionDelay` with no copy in the sync folder at all is written
-    /// there. Returns how many deliveries are still waiting for iCloud Drive.
+    /// left behind. A journal entry is never deleted before that: a pass may have applied it, and losing it would roll the
+    /// conversation back. An audio object the library holds verified bytes of is deleted as soon as iCloud lists the
+    /// sync folder's copy, downloaded or not, so the recording isn't kept twice; one the library doesn't hold yet asks
+    /// iCloud for that copy, to compare. One that has waited `courierPromotionDelay` with no copy in the sync folder at
+    /// all is written there. Returns how many deliveries are still waiting for iCloud Drive.
     @discardableResult
     public func pruneCourierInbox(now: Date = Date()) -> Int {
         guard let root = inboxRoot() else { return 0 }
         var waiting = 0
+        var held: Set<String>?
         for directory in SyncJournalFile.directories {
             let folder = root.appendingPathComponent(directory, isDirectory: true)
             guard let names = try? fm.contentsOfDirectory(atPath: folder.path) else { continue }
+            let isAudio = directory == "Blobs" || directory == "Sealed/Blobs"
             for name in names {
                 let url = folder.appendingPathComponent(name)
                 guard (try? SyncFiles.noSymlinks(url, below: inboxBase)) != nil else { continue }
                 if name.hasPrefix(".") { try? fm.removeItem(at: url); continue }
                 let remote = remoteRoot.appendingPathComponent(directory, isDirectory: true).appendingPathComponent(name)
-                // A plaintext file's name is its content; a sealed one's copies are compared byte for byte.
-                guard let expected = SyncJournalFile.address(of: name, in: directory)
-                        ?? (try? SyncFiles.coordinateRead(url, below: inboxBase) { try SyncDigest.sha256(fileURL: $0) }) else { continue }
                 let state = SyncFiles.itemState(remote)
-                if state == .local,
+                if isAudio, state != .absent {
+                    if held == nil { held = heldBlobNames() }
+                    if held?.contains("\(directory)/\(name)") == true { try? fm.removeItem(at: url); continue }
+                }
+                // A plaintext file's name is its content; a sealed one's copies are compared byte for byte (hashed only
+                // when there's a copy to compare with, or one to write).
+                var digest: String??
+                func expected() -> String? {
+                    if let digest { return digest }
+                    let computed = SyncJournalFile.address(of: name, in: directory)
+                        ?? (try? SyncFiles.coordinateRead(url, below: inboxBase) { try SyncDigest.sha256(fileURL: $0) })
+                    digest = .some(computed)
+                    return computed
+                }
+                if state == .local, let expected = expected(),
                    (try? SyncFiles.coordinateRead(remote, below: remoteRoot) { try SyncDigest.sha256(fileURL: $0) }) == expected {
                     try? fm.removeItem(at: url)
                 } else if !directory.hasPrefix("Sealed/"), sealing != nil, sealedCounterpartExists(name, in: directory) {
@@ -214,8 +229,10 @@ extension LibrarySyncEngine {
                     // author's copy, if it has one.
                     try? fm.removeItem(at: url)
                 } else {
+                    if isAudio, state == .inCloud { try? cloud.requestDownload(remote) }
                     if state == .absent, let arrived = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate,
-                       now.timeIntervalSince(arrived) >= Self.courierPromotionDelay, mayPromote(url, directory: directory, name: name) {
+                       now.timeIntervalSince(arrived) >= Self.courierPromotionDelay, mayPromote(url, directory: directory, name: name),
+                       let expected = expected() {
                         promoteDelivery(url, to: remote, expected: expected)
                     }
                     waiting += 1
@@ -223,6 +240,19 @@ extension LibrarySyncEngine {
             }
         }
         return waiting
+    }
+
+    /// The inbox paths (`Blobs/<SHA-256>`, `Sealed/Blobs/<name>` under each key held here) of the audio objects the
+    /// library holds verified bytes of.
+    func heldBlobNames() -> Set<String> {
+        let digests = heldDigests()
+        var names = Set(digests.map { "Blobs/\($0)" })
+        for key in sealing?.readingOrder ?? [] {
+            for digest in digests {
+                if let name = key.objectName(.blob, plaintextSHA256: digest) { names.insert("Sealed/Blobs/\(name)") }
+            }
+        }
+        return names
     }
 
     /// Whether a plaintext delivery's entry or object (named by its SHA-256) is in the sync folder sealed under the

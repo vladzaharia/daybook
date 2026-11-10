@@ -237,6 +237,30 @@ final class LibrarySyncReplicaTests: XCTestCase {
         XCTAssertEqual(cleared.pendingUploads, 0)
     }
 
+    /// A Mac missing several recordings of a conversation asks iCloud for every one in the same pass, not only the first,
+    /// so they download together.
+    func testBehaviorAnEagerPassAsksForEveryMissingRecordingAtOnce() async throws {
+        let mac = try mac(), other = try self.mac("Other")
+        var meeting = try await record(audioBytes(5000, seed: 21), on: "Other", into: Meeting(title: "Two microphones"))
+        meeting = try await record(audioBytes(6000, seed: 22), on: "Other", into: meeting, source: .systemAudio)
+        meeting = try await record(audioBytes(7000, seed: 23), on: "Other", into: meeting)
+        XCTAssertEqual(meeting.tracks.count, 3)
+        try await pass(other, "Other", [meeting])
+        // iCloud holds every recording in the cloud only, and doesn't bring any down yet.
+        for track in meeting.tracks { try cloud.evict(blob(track)) }
+        cloud.holdDownloads(true)
+        let waiting = try await mac.synchronize(meetings: [])
+        XCTAssertFalse(waiting.meetings.contains { $0.id == meeting.id }, "Applies once its audio is here")
+        XCTAssertGreaterThan(waiting.pendingDownloads, 0)
+        let objects = Set(meeting.tracks.map { blob($0).path })
+        XCTAssertEqual(Set(cloud.downloadRequests).intersection(objects), objects)
+        try await mac.acknowledge(waiting.checkpointID)
+        cloud.holdDownloads(false)
+        for track in meeting.tracks { try cloud.deliver(blob(track)) }
+        let arrived = try await pass(mac, "Mac")
+        XCTAssertEqual(arrived.meetings.first { $0.id == meeting.id }?.tracks, meeting.tracks)
+    }
+
     func testBehaviorAMacTrustsWhatICloudHoldsAndLetsGoOfItsSecondCopy() async throws {
         let mac = try mac()
         let recorded = try await pass(mac, "Mac", [try await record(audioBytes(6000, seed: 4), on: "Mac", into: Meeting(title: "Retro"))]).meetings[0]
@@ -553,6 +577,78 @@ final class LibrarySyncReplicaTests: XCTestCase {
         let watch = try XCTUnwrap(devices.first { $0.id == "Watch" })
         XCTAssertEqual(watch.deviceClass, .other); XCTAssertLessThanOrEqual(watch.lastSeen!, Date(), "Clock skew is clamped to now")
         XCTAssertEqual(devices.first { $0.id == "Mac" }?.canProcess, false)
+    }
+
+    /// A device's presence says how many files it still has to upload and whether iCloud's storage is what holds them
+    /// back, from its last pass and from what the app tells it (the courier's storage), rewritten as soon as either
+    /// changes; another device reads both.
+    func testBehaviorPresenceSaysWhatWaitsToUploadAndWhetherStorageIsFull() async throws {
+        let phone = try phone(), mac = try mac()
+        try await pass(mac, "Mac")
+        let recorded = try await record(audioBytes(4000, seed: 41), on: "Phone", into: Meeting(title: "Walk and talk"))
+        cloud.refuseUploadsForQuota(under: remote.appendingPathComponent("Blobs"))
+        let refused = try await pass(phone, "Phone", [recorded])
+        XCTAssertTrue(refused.storageFull)
+        var seen = try await mac.knownDevices()
+        var onMac = try XCTUnwrap(seen.first { $0.id == "Phone" })
+        XCTAssertEqual(onMac.pendingUploads, refused.pendingUploads)
+        XCTAssertGreaterThan(onMac.pendingUploads ?? 0, 0)
+        XCTAssertEqual(onMac.problem, .storageFull)
+
+        cloud.refuseUploadsForQuota(under: nil)
+        let cleared = try await pass(phone, "Phone", refused.meetings)
+        XCTAssertEqual(cleared.pendingUploads, 0)
+        seen = try await mac.knownDevices()
+        onMac = try XCTUnwrap(seen.first { $0.id == "Phone" })
+        XCTAssertEqual(onMac.pendingUploads, 0)
+        XCTAssertNil(onMac.problem)
+
+        // The app says the courier is refused for storage: the record says so at once, without a pass.
+        try await phone.setPresenceProblem(.storageFull)
+        seen = try await mac.knownDevices()
+        XCTAssertEqual(seen.first { $0.id == "Phone" }?.problem, .storageFull)
+        try await phone.setPresenceProblem(nil)
+        seen = try await mac.knownDevices()
+        XCTAssertNil(seen.first { $0.id == "Phone" }?.problem)
+    }
+
+    /// Whether another device is around is judged from when this device saw its presence change, on this device's
+    /// clock, over two and a half refresh intervals: a Mac whose clock runs 20 minutes behind and rewrites its record
+    /// every 10 minutes never drops out, and one that stops rewriting does after 25 minutes.
+    func testBehaviorPresenceIsJudgedFromWhenThisDeviceSawItChange() async throws {
+        let phone = try phone()
+        try await pass(phone, "Phone")
+        let start = Date()
+        func macWrites(at seconds: TimeInterval) throws {
+            // Its clock runs 20 minutes behind this one.
+            try SyncPresenceRecord.write(deviceID: "Mac", displayName: "Studio Mac", deviceClass: .mac, canProcess: true, audioPolicy: .eager,
+                                         lastSeen: start.addingTimeInterval(seconds - 1200), intoSyncFolder: remote)
+        }
+        func mac(at seconds: TimeInterval) async throws -> KnownSyncDevice {
+            let devices = try await phone.knownDevices(now: start.addingTimeInterval(seconds))
+            return try XCTUnwrap(devices.first { $0.id == "Mac" })
+        }
+        try macWrites(at: 0)
+        var read = try await mac(at: 1)
+        XCTAssertNil(read.heardAt, "The first read can't tell when that write arrived")
+        XCTAssertEqual(read.lastHeard, read.lastSeen)
+        for write in stride(from: 600.0, through: 3_600, by: 600) {
+            try macWrites(at: write)
+            // iCloud takes a few minutes to bring each rewrite.
+            read = try await mac(at: write + 240)
+            XCTAssertEqual(try XCTUnwrap(read.heardAt).timeIntervalSince(start), write + 240, accuracy: 0.001)
+            for check in [write + 240, write + 600, write + 839] {
+                let moment = start.addingTimeInterval(check)
+                XCTAssertTrue(read.isPresent(at: moment), "present at \(check) s")
+                // The writer's own time alone would have had it gone 15 minutes after it says it wrote.
+                XCTAssertGreaterThan(moment.timeIntervalSince(try XCTUnwrap(read.lastSeen)), 15 * 60)
+            }
+        }
+        // It stops rewriting: gone once two and a half intervals pass, as this device's clock tells it.
+        let last = try XCTUnwrap(read.heardAt)
+        XCTAssertTrue(read.isPresent(at: last.addingTimeInterval(KnownSyncDevice.presenceWindow - 1)))
+        XCTAssertFalse(read.isPresent(at: last.addingTimeInterval(KnownSyncDevice.presenceWindow + 1)))
+        XCTAssertEqual(KnownSyncDevice.presenceWindow, 1_500)
     }
 
     /// A Mac's presence says what it does for other devices, role by role, with its models; an earlier Daybook's

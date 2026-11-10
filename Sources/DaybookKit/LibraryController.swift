@@ -76,6 +76,8 @@ public final class LibraryController {
     private var settingsEditedDuringSync = false
     /// The saves being made are the pass's own.
     private var savingSyncResult = false
+    /// The library settings as a pass last encoded them, so a pass with unchanged settings doesn't encode them again.
+    @ObservationIgnored private var encodedSettings: (metadata: LibraryMetadata, data: Data)?
 
     public init(rootURL: URL, sync: LibrarySyncController?) {
         self.rootURL = rootURL
@@ -871,29 +873,47 @@ public final class LibraryController {
             try Task.checkCancellation()
             let snapshot = meetings
             let deleted = Set(trashedMeetingIDs())
-            let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-            guard let result = try await sync.synchronize(meetings: snapshot, deletedMeetingIDs: deleted, metadata: encoder.encode(metadata),
+            guard let result = try await sync.synchronize(meetings: snapshot, deletedMeetingIDs: deleted, metadata: try encodedMetadata(),
                                                           limits: limits, protecting: active.map { [$0] } ?? [], scope: scope) else { return nil }
             // Save edits made while iCloud hydrated files before applying the pass.
             await flush()
             try Task.checkCancellation()
             guard sync.canApply(result) else { return nil }
             var mergeWarnings = result.warnings
+            // Each conversation that arrived merges with this device's copy off the main actor (a long one's merge takes
+            // a while), against what this device had when the pass began.
+            let base = Dictionary(snapshot.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let remotes = result.meetings.filter { !result.deletedMeetingIDs.contains($0.id) }
+            var indexByID = Dictionary(meetings.indices.map { (meetings[$0].id, $0) }, uniquingKeysWith: { first, _ in first })
+            let locals = remotes.map { remote in indexByID[remote.id].map { meetings[$0] } }
+            let revisionBefore = revision
+            let merges = await Self.merge(remotes, locals: locals, base: base)
+            try Task.checkCancellation()
+            guard sync.canApply(result) else { return nil }
+            // What the person changed meanwhile is merged again here, with what's there now.
+            let changedMeanwhile = revision != revisionBefore
+            if changedMeanwhile { indexByID = Dictionary(meetings.indices.map { (meetings[$0].id, $0) }, uniquingKeysWith: { first, _ in first }) }
             savingSyncResult = true
             defer { savingSyncResult = false }
-            for remote in result.meetings where !result.deletedMeetingIDs.contains(remote.id) {
+            for (offset, remote) in remotes.enumerated() {
                 try Task.checkCancellation()
+                let local = indexByID[remote.id].map { meetings[$0] }
+                // Removed here while it merged (the Trash): the next pass carries that.
+                if local == nil, locals[offset] != nil { continue }
                 var merged = remote
-                let local = meetings.first(where: { $0.id == remote.id })
                 if let local {
-                    let rebased = MeetingMerge.merge(base: snapshot.first { $0.id == remote.id }, local: local, remote: remote)
-                    merged = rebased.meeting; mergeWarnings += rebased.warnings
+                    let rebased = !changedMeanwhile || local == locals[offset] ? merges[offset]
+                        : MeetingMerge.merge(base: base[remote.id], local: local, remote: remote)
+                    if let rebased { merged = rebased.meeting; mergeWarnings += rebased.warnings }
                 }
                 // A status such as transcribing describes the device doing the work. It's kept as synced: rewriting it
                 // here would publish it back and conflict with that device's next status. Views read processing
                 // from `ProcessingStatus`, which never shows another device's work as running here.
                 if merged != local {
-                    if let index = meetings.firstIndex(where: { $0.id == merged.id }) { meetings[index] = merged } else { meetings.append(merged) }
+                    if let index = indexByID[merged.id] { meetings[index] = merged } else {
+                        indexByID[merged.id] = meetings.count
+                        meetings.append(merged)
+                    }
                     persist(merged)
                 } else if persistenceErrors[.meeting(merged.id)] != nil {
                     // Retry a prior failed save even when the in-memory snapshot is unchanged.
@@ -954,6 +974,26 @@ public final class LibraryController {
             sync.passCancelled()
         } catch { sync.reportFailure(error.localizedDescription) }
         return applied
+    }
+
+    /// The library settings for a pass, encoded once for as long as they don't change.
+    private func encodedMetadata() throws -> Data {
+        if let encodedSettings, encodedSettings.metadata == metadata { return encodedSettings.data }
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(metadata)
+        encodedSettings = (metadata, data)
+        return data
+    }
+
+    /// Merges each conversation that arrived with this device's copy (`locals`, nil where it has none), off the main
+    /// actor. Nil where there's nothing to merge.
+    nonisolated private static func merge(_ remotes: [Meeting], locals: [Meeting?], base: [UUID: Meeting]) async -> [MeetingMergeResult?] {
+        guard locals.contains(where: { $0 != nil }) else { return locals.map { _ in nil } }
+        return await Task.detached(priority: .userInitiated) {
+            zip(remotes, locals).map { remote, local in
+                local.map { MeetingMerge.merge(base: base[remote.id], local: $0, remote: remote) }
+            }
+        }.value
     }
 }
 

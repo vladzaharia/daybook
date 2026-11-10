@@ -130,8 +130,12 @@ public protocol SyncCourier: AnyObject, Sendable {
     func send(_ files: [CourierOutgoingFile]) async
     /// Sends what's waiting now rather than when the system schedules it (the iPhone, under a background task).
     func flush() async
-    /// Fetches what other devices sent now (a push arrived, or the app came to the front).
+    /// Fetches what other devices sent now (a push arrived, or the app came to the front), and offers again any file it
+    /// fetched before that the receiver couldn't settle then.
     func fetch() async
+    /// Offers the receiver again the files it fetched and couldn't settle (an error, or a library whose manifest it hadn't
+    /// read), without asking the server what's new. Nothing when there are none.
+    func redeliverUnsettled() async
     /// Deletes files older than `CourierPolicy.expiry` that this device knows about.
     func removeExpired() async
     func status() async -> CourierStatus
@@ -146,6 +150,12 @@ public protocol SyncCourier: AnyObject, Sendable {
 extension SyncCourier {
     /// Couriers that never go off for a passing reason have nothing to try again.
     public func reconnect() async {}
+}
+
+extension CourierPolicy {
+    /// How long a file this device fetched and couldn't settle is kept on the server for it, from when it was sent:
+    /// past `expiry`, since it may be the only copy (docs/icloud-sync.md, "Expiry").
+    public var unsettledMemory: TimeInterval { max(expiry, sentMemory) }
 }
 
 // MARK: - The outbox
@@ -174,6 +184,9 @@ public final class CourierOutbox {
         var known: [String: Date] = [:]
         var storageFull = false
         var lastError: String?
+        /// Files a receiver fetched and couldn't settle, by when they were created: offered again at the next fetch, and
+        /// not expired until `CourierPolicy.unsettledMemory`. Absent from earlier ledgers.
+        var unsettled: [String: Date]?
     }
 
     let directory: URL
@@ -280,11 +293,36 @@ public final class CourierOutbox {
     public func noteKnown(_ id: String, createdAt: Date) { ledger.known[id] = createdAt }
 
     /// The file is gone from the server.
-    public func forget(_ id: String) { ledger.known.removeValue(forKey: id) }
+    public func forget(_ id: String) {
+        ledger.known.removeValue(forKey: id)
+        ledger.unsettled?.removeValue(forKey: id)
+    }
 
-    /// Known files old enough to delete. Any still waiting are given up.
+    /// The receiver couldn't settle a file it was handed: it's offered again later rather than lost.
+    public func noteUnsettled(_ id: String, createdAt: Date) {
+        ledger.known[id] = createdAt
+        ledger.unsettled = (ledger.unsettled ?? [:]).merging([id: createdAt]) { _, new in new }
+    }
+
+    /// The receiver settled it (stored, already held, or rejected): the courier deletes it.
+    public func noteSettled(_ id: String) { ledger.unsettled?.removeValue(forKey: id) }
+
+    /// Files fetched and not settled yet, oldest first.
+    public var unsettledIDs: [String] {
+        (ledger.unsettled ?? [:]).sorted { ($0.value, $0.key) < ($1.value, $1.key) }.map(\.key)
+    }
+
+    /// Whether a file this device fetched may still be needed: not settled, and within `CourierPolicy.unsettledMemory`.
+    public func isUnsettled(_ id: String, now: Date) -> Bool {
+        guard let created = ledger.unsettled?[id] else { return false }
+        return now.timeIntervalSince(created) < policy.unsettledMemory
+    }
+
+    /// Known files old enough to delete. Any still waiting are given up. A file fetched here and not settled yet isn't
+    /// one until `CourierPolicy.unsettledMemory`: it's delivered first.
     public func expired(now: Date) -> [String] {
-        let ids = ledger.known.filter { now.timeIntervalSince($0.value) >= policy.expiry }.map(\.key).sorted()
+        let ids = ledger.known.filter { now.timeIntervalSince($0.value) >= policy.expiry && !isUnsettled($0.key, now: now) }
+            .map(\.key).sorted()
         for id in ids where ledger.waiting[id] != nil { drop(id, now: now) }
         return ids
     }
