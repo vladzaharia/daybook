@@ -37,6 +37,24 @@ The items the design pass deferred (docs/audits/2026-11-10/README.md, "Still to 
   across the Kit and the selected Mac suites, 91 across six iPhone suites. Mac snapshots before and after of the home,
   recording with four sources, and a countdown after Stop at 360×560, 340×228, and 280×196, light and dark, the same
   layout; the 18 Pro's status sheet unchanged at medium and large.
+- **F5, a level per source on the iPhone's recorder.** `levels` now goes both ways: a Mac recording with an iPhone
+  sends the louder of its microphone and computer audio each meter tick (`RecordingController.onLevelsRead`,
+  `AppState.shareLevel`), a few readings at a time, only to an iPhone recording the same conversation that lists
+  `liveLevels` (the iPhone now lists it); a new `sharesLevels` feature says a device sends its own, so the iPhone gives
+  a Mac a row only when it lists it (an older Mac, which draws an iPhone's level but sends none, gets no row).
+  `LevelShare` and `LevelPlayback` (a reading a tick, fading between messages, none after 1.5 s) moved to DaybookLink
+  for both apps. On touch the recorder's lone microphone meter is unlabelled; with a recorder or a Mac along each row
+  has its glyph (mic, the recorder's symbol, `desktopcomputer`), the glyphs growing with Dynamic Type up to the first
+  accessibility size (`MeterStack.scaled`), in every posture and on the Duo's resting recorder; Floating Notes is
+  unchanged. `--demo-levels` with `--demo-multipoint` gives a stand-in Mac's levels. LinkLevelsTests (the features, an
+  older iPhone and an older Mac, the round trip over a loopback session, batching, playback and the drop),
+  FloatingNotesMetersTests (the Mac sends only to an iPhone along that lists the feature), RecorderSurfaceTests (the
+  labelling rule and the scaled stack), CascadingRecordingTests (a loopback Mac's row with its glyph, playback, resting
+  after 1.5 s, none for an older Mac), RecorderScreenTests (three rows fit the Duo cover and the open page at
+  accessibility5), RecordingSurfacesTests, LinkServicesTests; captures of a Mac recording along on the 18 Pro
+  (collapsed and expanded, light and dark) and the Duo cover. Still needs hardware: a Mac's level reaching an iPhone
+  over real Wi‑Fi during a call (latency, dropped sends), a real Soundcore's row on the iPhone, VoiceOver reading the
+  rows, and the cost of receiving levels while the iPhone records in the background.
 - **F4, Protect while iPhone is locked (security F-08, P4 step 2).** Settings › Storage › Protect While iPhone Is
   Locked (off by default; its footer, "Syncs and transcribes while unlocked.", from `SettingsWords`). On, the library's
   text is class A and its audio and photos class B, and Spotlight moves to a class A index of Daybook's own; off puts
