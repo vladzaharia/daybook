@@ -240,6 +240,100 @@ final class PhoneRecorderTests: XCTestCase {
         XCTAssertTrue(notes.contains { $0.contains("became AirPods Pro (new-device)") })
     }
 
+    // MARK: The input
+
+    private static let builtIn = AudioInputPort(id: "Built-In Microphone", name: "iPhone Microphone", portType: AVAudioSession.Port.builtInMic.rawValue)
+    private static let airPods = AudioInputPort(id: "AC:90:85:AA:BB:CC-tsco", name: "AirPods Pro", portType: AVAudioSession.Port.bluetoothHFP.rawValue,
+                                                supportsFarField: true)
+    private static let olderAirPods = AudioInputPort(id: "F4:2B:11:AA:BB:CC-tsco", name: "AirPods", portType: AVAudioSession.Port.bluetoothHFP.rawValue)
+    private static let usb = AudioInputPort(id: "AppleUSBAudioEngine:Shure:MV7", name: "Shure MV7", portType: AVAudioSession.Port.usbAudio.rawValue)
+
+    /// A table recording with AirPods in someone's ears: iOS would record them, so the built-in microphone is preferred
+    /// before the session starts, without far-field. The recording says it used the iPhone's microphone.
+    func testBehaviorAutomaticRecordsTheIPhoneMicrophoneWithAirPodsIn() async throws {
+        let rig = RecorderRig()
+        rig.session.availableInputs = [Self.builtIn, Self.airPods]
+        rig.session.currentInput = AudioInputRoute(name: "AirPods Pro", portType: AVAudioSession.Port.bluetoothHFP.rawValue)
+        try await rig.recorder.start(in: try temporaryDirectory().appendingPathComponent("capture"), title: "Table")
+        XCTAssertEqual(rig.session.plans, [AudioInputPlan(preferredInput: Self.builtIn.id, farField: false)])
+        if #available(iOS 26.2, *) { XCTAssertFalse(rig.session.categoryOptions.contains(.farFieldInput)) }
+        XCTAssertTrue(rig.session.categoryOptions.isSuperset(of: [.allowBluetoothHFP, .bluetoothHighQualityRecording, .defaultToSpeaker]))
+        XCTAssertEqual(rig.recorder.inputRoute?.name, "iPhone Microphone")
+        rig.pump(1)
+        let recording = try await rig.stop()
+        XCTAssertTrue(recording.capture.notes?.contains("Recorded with iPhone Microphone.") == true, "\(recording.capture.notes ?? [])")
+    }
+
+    /// AirPods connecting mid-recording don't take over: the session is asked again, and records the iPhone's microphone.
+    func testBehaviorAirPodsConnectingMidRecordingDontTakeOver() async throws {
+        let rig = RecorderRig()
+        rig.session.availableInputs = [Self.builtIn]
+        rig.session.currentInput = AudioInputRoute(name: "iPhone Microphone", portType: AVAudioSession.Port.builtInMic.rawValue)
+        try await rig.recorder.start(in: try temporaryDirectory().appendingPathComponent("capture"), title: "Table")
+        rig.pump(1)
+        rig.session.availableInputs = [Self.builtIn, Self.airPods]
+        rig.session.send(.routeChanged(reason: "new-device", input: AudioInputRoute(name: "AirPods Pro", portType: AVAudioSession.Port.bluetoothHFP.rawValue)))
+        XCTAssertEqual(rig.session.plans.last, AudioInputPlan(preferredInput: Self.builtIn.id, farField: false))
+        XCTAssertEqual(rig.recorder.inputRoute?.name, "iPhone Microphone")
+        rig.pump(1)
+        _ = try await rig.stop()
+    }
+
+    /// The person picks AirPods that can hear the room: they're recorded with far-field capture (iOS 26.2), and the
+    /// choice is remembered, so the next recording uses them from its start. Without far-field on this iOS, or on older
+    /// AirPods, they're recorded as they are.
+    func testBehaviorPickingAirPodsRecordsTheRoomAndIsRemembered() async throws {
+        let rig = RecorderRig()
+        rig.session.availableInputs = [Self.builtIn, Self.airPods]
+        try await rig.recorder.start(in: try temporaryDirectory().appendingPathComponent("capture"), title: "Table")
+        rig.pump(1)
+        rig.session.pick(Self.airPods)
+        rig.recorder.inputChosen()
+        XCTAssertEqual(rig.session.preference, .device(Self.airPods.device))
+        XCTAssertEqual(rig.session.plans.last, AudioInputPlan(preferredInput: Self.airPods.id, farField: true))
+        if #available(iOS 26.2, *) { XCTAssertTrue(rig.session.categoryOptions.contains(.farFieldInput)) }
+        XCTAssertEqual(rig.recorder.inputRoute?.name, "AirPods Pro")
+        rig.pump(1)
+        let recording = try await rig.stop()
+        XCTAssertTrue(recording.capture.notes?.contains { $0.contains("became AirPods Pro") } == true)
+
+        // The next recording starts on them.
+        rig.session.currentInput = AudioInputRoute(name: "iPhone Microphone", portType: AVAudioSession.Port.builtInMic.rawValue)
+        try await rig.recorder.start(in: try temporaryDirectory().appendingPathComponent("capture-2"), title: "Next")
+        XCTAssertEqual(rig.recorder.inputRoute?.name, "AirPods Pro")
+        rig.pump(1)
+        _ = try await rig.stop()
+
+        XCTAssertEqual(AudioInputPlan.make(inputs: [Self.builtIn, Self.airPods], currentInput: nil, preference: .device(Self.airPods.device),
+                                           farFieldAvailable: false),
+                       AudioInputPlan(preferredInput: Self.airPods.id, farField: false), "iOS 26.0 and 26.1")
+        XCTAssertEqual(AudioInputPlan.make(inputs: [Self.builtIn, Self.olderAirPods], currentInput: nil, preference: .device(Self.airPods.device),
+                                           farFieldAvailable: true),
+                       AudioInputPlan(preferredInput: Self.olderAirPods.id, farField: false), "another headset stands in, as it can")
+    }
+
+    /// Opening the picker and leaving the input as it was chooses nothing: Automatic stays Automatic.
+    func testBehaviorLeavingThePickerAsItWasChoosesNothing() async throws {
+        let rig = RecorderRig()
+        rig.session.availableInputs = [Self.builtIn, Self.airPods]
+        try await rig.recorder.start(in: try temporaryDirectory().appendingPathComponent("capture"), title: "Table")
+        rig.recorder.inputChosen()
+        XCTAssertEqual(rig.session.preference, .automatic)
+        rig.pump(1)
+        _ = try await rig.stop()
+    }
+
+    /// A USB microphone is what iOS records by default, and Automatic keeps it.
+    func testBehaviorAutomaticKeepsAWiredMicrophone() {
+        XCTAssertEqual(AudioInputPlan.make(inputs: [Self.builtIn, Self.usb], currentInput: nil, preference: .automatic, farFieldAvailable: true),
+                       AudioInputPlan(preferredInput: Self.usb.id, farField: false))
+        XCTAssertEqual(AudioInputPlan.make(inputs: [Self.builtIn, Self.usb, Self.airPods], currentInput: Self.airPods.id, preference: .automatic,
+                                           farFieldAvailable: true),
+                       AudioInputPlan(preferredInput: Self.builtIn.id, farField: false))
+        XCTAssertEqual(AudioInputPort.kind(AVAudioSession.Port.headsetMic.rawValue), .wired)
+        XCTAssertEqual(AudioInputPort.kind(AVAudioSession.Port.carAudio.rawValue), .other)
+    }
+
     /// What a killed app leaves on disk depends on AVAssetWriter writing a movie fragment each time the
     /// audio passes a fragment boundary. In the recorder's real-time mode it does, promptly, whether
     /// the audio is loud or silent (VBR silence is tiny); in non-real-time mode it held back the first

@@ -38,6 +38,7 @@ struct RecorderScreen: View {
                 recorder
             }
         }
+        .environment(\.recorderInputControl, PhoneInputButton.control)
         .background(PhoneStyle.paper.ignoresSafeArea())
         .onAppear {
             if let launch = model.options.recorderSheet { sheetExpansion = launch }
