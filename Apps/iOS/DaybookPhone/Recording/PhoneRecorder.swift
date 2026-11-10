@@ -76,11 +76,9 @@ final class PhoneRecorder {
     /// The microphone isn't hearing anything now (`HearingCheck`): muted, unplugged, blocked, or covered. Rolling: it
     /// clears as soon as it hears again.
     private(set) var isMicrophoneSilent = false
-    /// When the microphone last heard something as loud as speech (`speechLevel`): following a Mac it can't reach, this
-    /// iPhone stops only in a quiet room (`LeaderWatch`). Changes with every word, so unobserved.
+    /// When the microphone last heard something as loud as speech (`AudioLevelMeter.audibleThreshold`): following a Mac
+    /// it can't reach, this iPhone stops only in a quiet room (`LeaderWatch`). Changes with every word, so unobserved.
     @ObservationIgnored private(set) var lastHeardSpeechAt: Date?
-    /// At or above this level, dBFS, the microphone hears something as loud as speech (the Mac's `audibleThreshold`).
-    static let speechLevel: Float = -50
     /// The conversation being recorded.
     private(set) var captureID: UUID?
     /// This recording's own ID (one conversation can hold several of this iPhone's recordings).
@@ -860,9 +858,9 @@ final class PhoneRecorder {
         }
         guard state == .recording else { return }
         let reading = writer.meter.read()
-        if abs(reading.rms - level.rms) >= 0.5 || abs(reading.peak - level.peak) >= 0.5 { level = reading }
-        if reading.rms >= Self.speechLevel { lastHeardSpeechAt = Date() }
-        let silent = HearingCheck.isNotHearing(writer.meter.heard, listeningSince: listeningSince, now: environment.clock.hostTime())
+        if abs(reading.rms - level.rms) >= 0.5 || abs(reading.peak - level.peak) >= 0.5 { level = reading.level }
+        if reading.rms >= AudioLevelMeter.audibleThreshold { lastHeardSpeechAt = Date() }
+        let silent = HearingCheck.isNotHearing(reading, listeningSince: listeningSince, now: environment.clock.hostTime())
         if silent != isMicrophoneSilent { isMicrophoneSilent = silent }
         onLevel?(level)
     }

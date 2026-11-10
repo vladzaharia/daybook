@@ -237,10 +237,10 @@ extension RecorderLevels.Readers {
     static func live(_ state: AppState) -> Self {
         let monitor = state.recorder.levels
         return Self(
-            microphone: { [weak monitor] in monitor.map { Double($0.microphone.meterValue) } },
+            microphone: { [weak monitor] in monitor.map { $0.microphone.meterValue } },
             call: { [weak monitor] in
                 guard let monitor, monitor.isCapturingCall else { return nil }
-                return Double(monitor.call.meterValue)
+                return monitor.call.meterValue
             },
             recorder: { [weak state] id in
                 guard let state, let conversation = state.recordingID else { return nil }

@@ -3,65 +3,6 @@ import DaybookCore
 import DaybookKit
 import Foundation
 
-/// Thread-safe level meter fed by capture callbacks and read by the UI timer.
-///
-/// Every source moves alike, whatever its buffer size (a tap's 10 ms, the microphone's 85 ms): the level is
-/// RMS smoothed with a 300 ms time constant, and the peak holds for a second. It also keeps when it last heard
-/// anything, for the rolling hearing check (`CaptureLevelMonitor.isNotHearing`).
-final class AudioLevelMeter: @unchecked Sendable {
-    struct Reading: Equatable {
-        /// Root-mean-square level, smoothed over about 300 ms, in dBFS.
-        var rms: Float
-        /// The highest sample magnitude in the last second, in dBFS.
-        var peak: Float
-        /// Host time of the most recent buffer whose level exceeded `audibleThreshold`.
-        var lastAudibleHostTime: TimeInterval?
-        /// Host time of the most recent buffer with any non-zero sample; all-zero input usually means a muted,
-        /// unplugged, or denied device (or a MacBook's microphone with its lid closed).
-        var lastSignalHostTime: TimeInterval?
-        /// Host time of the most recent buffer above `hearingFloor`.
-        var lastHeardHostTime: TimeInterval?
-        static let silent = Reading(rms: -160, peak: -160)
-    }
-
-    static let audibleThreshold: Float = -50
-    /// Below this a microphone hears nothing a person could have said (a real room is 30 dB louder).
-    static let hearingFloor: Float = -90
-    static let timeConstant: TimeInterval = 0.3
-    static let peakHold: TimeInterval = 1
-    private let lock = NSLock()
-    private var reading = Reading.silent
-    private var meanSquare: Float = 0
-    private var peakHeldUntil: TimeInterval = -.infinity
-
-    func record(_ buffer: AVAudioPCMBuffer, hostTime: TimeInterval) {
-        guard let level = AudioBufferLevel.measure(buffer), buffer.format.sampleRate > 0 else { return }
-        let duration = Double(buffer.frameLength) / buffer.format.sampleRate
-        let weight = Float(1 - exp(-duration / Self.timeConstant))
-        let power = level.rms <= -160 ? 0 : pow(10, level.rms / 10)
-        lock.lock()
-        meanSquare += weight * (power - meanSquare)
-        reading.rms = max(-160, 10 * log10(max(meanSquare, 1e-16)))
-        if level.peak >= reading.peak || hostTime >= peakHeldUntil {
-            reading.peak = level.peak
-            peakHeldUntil = hostTime + Self.peakHold
-        }
-        if level.hasSignal { reading.lastSignalHostTime = hostTime }
-        if level.rms >= Self.hearingFloor { reading.lastHeardHostTime = hostTime }
-        if level.rms >= Self.audibleThreshold { reading.lastAudibleHostTime = hostTime }
-        lock.unlock()
-    }
-
-    func read() -> Reading {
-        lock.lock(); defer { lock.unlock() }
-        return reading
-    }
-
-    func reset() {
-        lock.lock(); reading = .silent; meanSquare = 0; peakHeldUntil = -.infinity; lock.unlock()
-    }
-}
-
 /// All file mutation happens on a serial queue, never the real-time input thread.
 ///
 /// Timing: every buffer's host time is compared with the time predicted from the most recent

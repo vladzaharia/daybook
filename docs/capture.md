@@ -267,7 +267,7 @@ trouble that loses sound is said where the person is looking. The controller's 1
   "The microphone stopped for a moment and was restarted, leaving a short gap." rather than that the
   microphone changed.
 - **Hearing.** The microphone isn't hearing when no non-zero sample arrived in the last 5 s, or
-  nothing above −90 dBFS for 20 s (`CaptureLevelMonitor.isNotHearing`). It's rolling, so a
+  nothing above −90 dBFS for 20 s (DaybookCore's `HearingCheck`, the iPhone's rule too). It's rolling, so a
   microphone that goes to digital zeros partway (a MacBook lid closed in clamshell mode, a mute
   switch, a dead interface) is said too, and it clears as soon as it hears again. Floating Notes says
   "Microphone silent" (the iPhone's words), and a notification goes out while Daybook isn't in front.
@@ -470,7 +470,7 @@ the same fakes (`capture:`).
 
 | API | Type | Meaning |
 |---|---|---|
-| `recorder.levels.microphone` | `CaptureLevelMonitor.Level` | "You": `rms` (smoothed over 300 ms) and `peak` (held for a second) in dBFS, so a tap's 10 ms buffers and the microphone's 85 ms ones move alike. `meterValue` maps −60…0 dBFS to 0…1. |
+| `recorder.levels.microphone` | `AudioLevel` | "You": `rms` (smoothed over 300 ms) and `peak` (held for a second) in dBFS, so a tap's 10 ms buffers and the microphone's 85 ms ones move alike. `meterValue` maps −60…0 dBFS to 0…1. Each writer measures with DaybookCore's `AudioLevelMeter`, the iPhone's meter too. |
 | `recorder.levels.call` | same | "Call", with the same fields. |
 | `recorder.levels.isCallAudioDetected` | `Bool` | The call track was above −50 dBFS within the last 4 s. |
 | `recorder.isCallAudioDetected` | `Bool` | The same signal on the controller. It changes rarely, so any view may read it. |

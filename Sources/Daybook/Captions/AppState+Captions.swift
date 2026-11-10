@@ -138,8 +138,8 @@ extension AppState {
     /// live audio, and each iPhone's meter.
     func captionLevels() -> [LiveCaptionSource: Double] {
         guard let id = recordingID else { return [:] }
-        var levels: [LiveCaptionSource: Double] = [.microphone: Double(recorder.levels.microphone.meterValue)]
-        if recorder.levels.isCapturingCall { levels[.call] = Double(recorder.levels.call.meterValue) }
+        var levels: [LiveCaptionSource: Double] = [.microphone: recorder.levels.microphone.meterValue]
+        if recorder.levels.isCapturingCall { levels[.call] = recorder.levels.call.meterValue }
         for session in devices.sessions {
             if let level = session.liveLevel(into: id) { levels[.device(session.id)] = level }
         }

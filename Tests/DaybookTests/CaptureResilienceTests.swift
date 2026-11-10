@@ -258,38 +258,6 @@ final class CaptureResilienceTests: XCTestCase {
         _ = await recorder.stop()
     }
 
-    func testTheHearingRuleOnItsOwn() {
-        typealias Reading = AudioLevelMeter.Reading
-        func notHearing(_ signal: TimeInterval?, _ heard: TimeInterval?, now: TimeInterval = 100, elapsed: TimeInterval = 60) -> Bool {
-            CaptureLevelMonitor.isNotHearing(Reading(rms: -40, peak: -30, lastSignalHostTime: signal, lastHeardHostTime: heard),
-                                             now: now, elapsed: elapsed)
-        }
-        XCTAssertFalse(notHearing(nil, nil, elapsed: 4), "nothing yet, but too soon to say")
-        XCTAssertTrue(notHearing(nil, nil, elapsed: 6), "nothing in the first 5 s")
-        XCTAssertFalse(notHearing(99, 99))
-        XCTAssertTrue(notHearing(94.9, 94.9), "no non-zero sample for over 5 s")
-        XCTAssertFalse(notHearing(99.9, 81), "quiet but not under −90 dBFS for 20 s")
-        XCTAssertTrue(notHearing(99.9, 79.9), "under −90 dBFS for over 20 s")
-    }
-
-    /// RMS over 300 ms and a peak held for a second: a tap's 10 ms buffers and the microphone's 85 ms ones read alike.
-    func testMetersMoveAlikeWhateverTheBufferSize() {
-        let small = AudioLevelMeter(), large = AudioLevelMeter()
-        for index in 0..<100 { small.record(CallSignals.tone(level: 0.2, frames: 480), hostTime: 100 + Double(index) * 0.01) }
-        for index in 0..<12 { large.record(CallSignals.tone(level: 0.2, frames: 4_096), hostTime: 100 + Double(index) * 4_096 / 48_000) }
-        XCTAssertEqual(small.read().rms, large.read().rms, accuracy: 0.5)
-        XCTAssertEqual(small.read().rms, -17, accuracy: 0.5, "a 0.2 sine is −17 dBFS once settled")
-
-        // Silence: the level falls over a few hundred milliseconds, the peak holds for a second.
-        for index in 0..<30 { small.record(CallSignals.tone(level: 0, frames: 480), hostTime: 101 + Double(index) * 0.01) }
-        let falling = small.read()
-        XCTAssertLessThan(falling.rms, -18)
-        XCTAssertGreaterThan(falling.rms, -40, "not dropped at once")
-        XCTAssertEqual(falling.peak, 20 * log10(0.2), accuracy: 0.2, "the peak holds")
-        for index in 0..<100 { small.record(CallSignals.tone(level: 0, frames: 480), hostTime: 101.3 + Double(index) * 0.01) }
-        XCTAssertEqual(small.read().peak, -160, accuracy: 1, "and lets go after a second")
-    }
-
     // MARK: Space
 
     /// Every 30 s the free space is divided by the byte rate: under 30 minutes it warns; under 3, call audio stops so
