@@ -67,7 +67,10 @@ enum ProcessTapError: LocalizedError {
 /// if that needs no new prompt, and otherwise keeps the tap and warns.
 ///
 /// While running, the source follows the app's helper processes (a browser can start a new audio
-/// process mid-call) and rebuilds the aggregate when the default output device changes.
+/// process mid-call) and rebuilds the aggregate when the default output device changes. On macOS 26
+/// the tap also names the processes' bundle IDs with process restore, so Core Audio itself adds a
+/// process of one of them that starts or restarts; the source rewrites the tap only for a helper
+/// with a bundle ID it doesn't name yet. On macOS 15 it rewrites the tap for any change.
 final class ProcessTapSource: CaptureAudioSource, ProcessTapReporting, @unchecked Sendable {
     let method = "process-tap"
     let target: CallAppTarget
@@ -127,14 +130,38 @@ final class ProcessTapSource: CaptureAudioSource, ProcessTapReporting, @unchecke
     // MARK: Core Audio objects (control queue)
 
     private func createTap() throws {
+        var tap = AudioObjectID(kAudioObjectUnknown)
+        try check(AudioHardwareCreateProcessTap(tapDescription(), &tap), "create the process tap")
+        tapID = tap
+    }
+
+    /// The call app's processes now and, on macOS 26, their bundle IDs with process restore: Core Audio then adds a
+    /// process of one of them that starts, or starts again, during the call.
+    private func tapDescription() -> CATapDescription {
         let description = CATapDescription(stereoMixdownOfProcesses: processObjects)
         description.uuid = tapUUID
         description.name = "Daybook call capture"
         description.isPrivate = true
         description.muteBehavior = .unmuted
-        var tap = AudioObjectID(kAudioObjectUnknown)
-        try check(AudioHardwareCreateProcessTap(description, &tap), "create the process tap")
-        tapID = tap
+        if #available(macOS 26.0, *) {
+            description.bundleIDs = capturedBundleIDs
+            description.isProcessRestoreEnabled = true
+        }
+        return description
+    }
+
+    /// Whether Core Audio follows the tap's bundle IDs itself (macOS 26).
+    static var followsBundleIDs: Bool {
+        if #available(macOS 26.0, *) { return true } else { return false }
+    }
+
+    /// Whether the tap needs rewriting for the call app's processes now. Where Core Audio follows the tap's bundle IDs,
+    /// only a process with a bundle ID the tap doesn't name yet does; elsewhere any change to the processes does.
+    static func needsRetap(_ processes: [AudioProcessInfo], tapped: [AudioObjectID], bundleIDs: [String],
+                           followsBundleIDs: Bool) -> Bool {
+        guard !processes.isEmpty else { return false }
+        if followsBundleIDs { return !Set(processes.map(\.bundleID)).isSubset(of: Set(bundleIDs)) }
+        return Set(processes.map(\.objectID)) != Set(tapped)
     }
 
     private func destroyTap() {
@@ -142,19 +169,33 @@ final class ProcessTapSource: CaptureAudioSource, ProcessTapReporting, @unchecke
         tapID = AudioObjectID(kAudioObjectUnknown)
     }
 
-    private func createAggregateAndStart() throws {
-        guard let output = AudioRouteMonitor.defaultOutputDevice(),
-              let outputUID = CoreAudioProperty.string(output, kAudioDevicePropertyDeviceUID) else { throw ProcessTapError.noOutputDevice }
-        let description: [String: Any] = [
+    /// The hardware check for AH-08 (docs/validation.md, "Microphone choice"): with
+    /// `defaults write local.daybook DaybookTapOnlyAggregate -bool YES` the aggregate holds the tap alone, without the
+    /// output device as a sub-device, so an output that has a microphone (AirPods) brings no input streams into it.
+    static var tapOnlyAggregate: Bool { UserDefaults.standard.bool(forKey: "DaybookTapOnlyAggregate") }
+
+    /// The private aggregate the tap is read through: clocked by the output device, which is its sub-device, or, tap
+    /// only, by the tap.
+    static func aggregateDescription(outputUID: String, tapUUID: UUID, tapOnly: Bool) -> [String: Any] {
+        var description: [String: Any] = [
             kAudioAggregateDeviceNameKey: "Daybook call capture",
             kAudioAggregateDeviceUIDKey: "app.daybook.call-capture.\(UUID().uuidString)",
-            kAudioAggregateDeviceMainSubDeviceKey: outputUID,
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceIsStackedKey: false,
             kAudioAggregateDeviceTapAutoStartKey: true,
-            kAudioAggregateDeviceSubDeviceListKey: [[kAudioSubDeviceUIDKey: outputUID]],
             kAudioAggregateDeviceTapListKey: [[kAudioSubTapDriftCompensationKey: true, kAudioSubTapUIDKey: tapUUID.uuidString]]
         ]
+        if !tapOnly {
+            description[kAudioAggregateDeviceMainSubDeviceKey] = outputUID
+            description[kAudioAggregateDeviceSubDeviceListKey] = [[kAudioSubDeviceUIDKey: outputUID]]
+        }
+        return description
+    }
+
+    private func createAggregateAndStart() throws {
+        guard let output = AudioRouteMonitor.defaultOutputDevice(),
+              let outputUID = CoreAudioProperty.string(output, kAudioDevicePropertyDeviceUID) else { throw ProcessTapError.noOutputDevice }
+        let description = Self.aggregateDescription(outputUID: outputUID, tapUUID: tapUUID, tapOnly: Self.tapOnlyAggregate)
         var aggregate = AudioObjectID(kAudioObjectUnknown)
         try check(AudioHardwareCreateAggregateDevice(description as CFDictionary, &aggregate), "create the capture device")
         aggregateID = aggregate
@@ -252,11 +293,14 @@ final class ProcessTapSource: CaptureAudioSource, ProcessTapReporting, @unchecke
                 report(.failed(ProcessTapError.silent(target.displayName)))
             }
         }
-        // Follow helper processes that start mid-call.
+        // Follow helper processes that start mid-call (on macOS 26, only one with a new bundle ID: Core Audio follows
+        // the rest).
         if ticks % 3 == 0 {
-            let objects = processes.map(\.objectID)
-            if !objects.isEmpty && Set(objects) != Set(processObjects) {
-                processObjects = objects
+            let retap = Self.needsRetap(processes, tapped: processObjects, bundleIDs: capturedBundleIDs,
+                                        followsBundleIDs: Self.followsBundleIDs)
+            // What a rebuild for a new output device taps.
+            if !processes.isEmpty { processObjects = processes.map(\.objectID) }
+            if retap {
                 capturedBundleIDs = Array(Set(capturedBundleIDs + processes.map(\.bundleID))).sorted()
                 updateTapProcesses()
             }
@@ -264,13 +308,8 @@ final class ProcessTapSource: CaptureAudioSource, ProcessTapReporting, @unchecke
     }
 
     private func updateTapProcesses() {
-        let description = CATapDescription(stereoMixdownOfProcesses: processObjects)
-        description.uuid = tapUUID
-        description.name = "Daybook call capture"
-        description.isPrivate = true
-        description.muteBehavior = .unmuted
         var address = CoreAudioProperty.address(kAudioTapPropertyDescription)
-        var reference = description
+        var reference = tapDescription()
         let status = withUnsafeMutablePointer(to: &reference) {
             AudioObjectSetPropertyData(tapID, &address, 0, nil, UInt32(MemoryLayout<CATapDescription>.size), $0)
         }
@@ -294,6 +333,16 @@ final class ProcessTapSource: CaptureAudioSource, ProcessTapReporting, @unchecke
             report(.deviceChanged(reason))
         } catch {
             report(.failed(error))
+        }
+    }
+
+    /// The tap stopped delivering (or the audio system restarted under it): it's built again on the current output.
+    @MainActor func restart(_ reason: CaptureRestartReason) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            control.async { [self] in
+                if !finished { rebuild(reason: reason.note("call capture")) }
+                continuation.resume()
+            }
         }
     }
 

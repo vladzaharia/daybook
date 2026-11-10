@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Synchronization
 
 public enum LibraryError: LocalizedError {
     case unsafePath(String), corruptMeeting(UUID), unsupportedSchema(Int), invalidAudio(String), invalidHighlight, invalidTranscript, trashedMeeting(UUID), missingMeeting(UUID), unsupportedHighlightSchema(Int), invalidHighlightSidecar
@@ -42,6 +43,8 @@ public actor MeetingStore {
     private var unsynchronized = Set<URL>()
     /// `library.json`: whether it may be written, and whether it holds settings that were read.
     var libraryFile = LibraryFileState.unknown
+    /// Whether the library's settings files (`library.json` and its recovery and damaged copies) stay out of backups.
+    let settingsBackupExclusion = Mutex(false)
     /// How many `meeting.json` files were read and decoded, and written (tests check the cache).
     private(set) var metadataReads = 0
     private(set) var metadataWrites = 0
@@ -479,9 +482,28 @@ enum LocalFiles {
         try requireContained(url, in: directory)
         return url
     }
-    static func atomicWrite(_ data: Data, to url: URL) throws {
-        // Foundation's atomic option writes a sibling temporary file then atomically renames it.
-        try data.write(to: url, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    /// `backupExcluded`: the file stays out of backups (iCloud, a computer's, Time Machine). The exclusion is the file's own
+    /// attribute and a save replaces the file, so the new file is marked before the rename puts it in place: there's never
+    /// a moment the saved file is in backups.
+    static func atomicWrite(_ data: Data, to url: URL, backupExcluded: Bool = false) throws {
+        guard backupExcluded else {
+            // Foundation's atomic option writes a sibling temporary file then atomically renames it.
+            try data.write(to: url, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            return
+        }
+        let temporary = url.deletingLastPathComponent().appendingPathComponent(".\(url.lastPathComponent)-\(UUID().uuidString).tmp")
+        try data.write(to: temporary, options: .withoutOverwriting)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
+        try excludeFromBackup(temporary)
+        guard rename(temporary.path, url.path) == 0 else { throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path]) }
+    }
+    /// Marks a file to stay out of backups. The mark moves with the file when it's renamed into place.
+    static func excludeFromBackup(_ url: URL) throws {
+        var url = url
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try url.setResourceValues(values)
     }
 }

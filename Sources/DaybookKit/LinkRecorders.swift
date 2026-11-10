@@ -144,8 +144,8 @@ public enum RecorderRemoteControl {
                 return .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: control.status?.recordingStartedAt,
                                                recordingID: inProgress(), wasAlreadyRecording: true))
             }
-            control.startRecording()
-            guard await wait(timing.confirm, timing.poll, until: { control.status?.isRecording == true && !control.recordCommandPending }) else {
+            // Now or not at all: ahead of any import, and a Start that confirms after this gives up is paused again.
+            guard await session.recordCommand(.start, deadline: timing.confirm) == .confirmed else {
                 return .refused(LinkRecordRefusal(reason: .recorderUnavailable, message: "\(name) didn’t start recording."))
             }
             return .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: control.status?.recordingStartedAt ?? Date(),
@@ -159,8 +159,7 @@ public enum RecorderRemoteControl {
             guard control.status?.isRecording == true, target.recordingID == nil || inProgress() == target.recordingID else {
                 return .refused(LinkRecordRefusal(reason: .notRecording))
             }
-            control.pauseRecording()
-            guard await wait(timing.confirm, timing.poll, until: { control.status?.isRecording == false && !control.recordCommandPending }) else {
+            guard await session.recordCommand(.pause, deadline: timing.confirm) == .confirmed else {
                 return .refused(LinkRecordRefusal(reason: .recorderUnavailable, message: "\(name) didn’t confirm it stopped."))
             }
             cascade?.remoteStopped(session, recordingID: target.recordingID ?? inProgress())

@@ -3,7 +3,7 @@ import DaybookKit
 import Foundation
 
 // What a recorder says about the recording and everything recording along with it, the same on both apps
-// (docs/interface.md, "Floating Notes"): the phase ("● RECORDING · MacBook Pro Microphone", "✓ SAVED · 18 min"),
+// (docs/interface.md, "Floating Notes"): the phase ("● Recording · MacBook Pro Microphone", "✓ Saved · 18 min"),
 // a chip for each recorder and each other Daybook ("Soundcore · 80%" with the red dot, "Not recording" in
 // warning ink), and a meter for each source. Plain values from plain inputs, so tests read exactly what each
 // state says and the views only draw it. Floating Notes builds the inputs from AppState, the iPhone's recorder
@@ -45,11 +45,14 @@ public struct RecordingStatusInputs: Equatable {
         public var lastConnected: Date?
         /// Its levels reach this device (an iPhone's, over the link to a Mac), so it gets a meter.
         public var hasMeter: Bool
+        /// It leads this recording and hasn't been heard from for a while; this device keeps recording (`LeaderWatch`).
+        public var outOfReach: Bool
 
         public init(id: String, name: String, kind: Kind, isConnected: Bool = false, activity: Activity = .idle,
-                    along: CompanionRecording.State? = nil, lastConnected: Date? = nil, hasMeter: Bool? = nil) {
+                    along: CompanionRecording.State? = nil, lastConnected: Date? = nil, hasMeter: Bool? = nil, outOfReach: Bool = false) {
             self.id = id; self.name = name; self.kind = kind; self.isConnected = isConnected; self.activity = activity
             self.along = along; self.lastConnected = lastConnected; self.hasMeter = hasMeter ?? (kind == .iPhone)
+            self.outOfReach = outOfReach
         }
 
         var symbol: String { kind == .iPhone ? "iphone" : "desktopcomputer" }
@@ -59,12 +62,21 @@ public struct RecordingStatusInputs: Equatable {
     public var phase: Phase = .idle
     /// The conversation's length, once saved.
     public var duration: TimeInterval?
+    /// Saving, a recording stopped while the iPhone was locked waits for it to be unlocked to be finished: it's saved.
+    public var waitsForUnlock = false
     /// What it records from: "MacBook Pro Microphone".
     public var inputDevice: String?
+    /// The input can be changed where the phase is drawn (Floating Notes' input menu, the iPhone's input picker), so
+    /// the phase says so: "MacBook Pro Microphone ▾".
+    public var choosesInput = false
     public var microphoneSilent = false
     /// Computer audio is part of this recording (Settings › General), so it has a Call meter.
     public var includesCall = false
     public var call: CallAudio = .off
+    /// Seconds of recording the disk still has room for, once that's under half an hour (the Mac); nil above.
+    public var spaceLeft: TimeInterval?
+    /// Call audio stopped to leave the disk's last minutes to the microphone (the Mac).
+    public var callStoppedForSpace = false
     public var recorders: [RecorderFacts] = []
     public var peers: [Peer] = []
     /// How this device calls itself in a sentence: "this Mac", "this iPhone".
@@ -79,17 +91,24 @@ public struct RecorderPhase: Equatable, Sendable {
     public var title: String
     public var detail: String?
     public var detailIsWarning: Bool
+    /// The phase is where the input is chosen: the host draws it as the input menu or picker, which `input` names.
+    public var choosesInput: Bool
+    /// The input it records from, for the control that chooses it ("MacBook Pro Microphone").
+    public var input: String?
 
-    public init(phase: RecordingPhaseLabel.Phase, title: String, detail: String? = nil, detailIsWarning: Bool = false) {
+    public init(phase: RecordingPhaseLabel.Phase, title: String, detail: String? = nil, detailIsWarning: Bool = false,
+                choosesInput: Bool = false, input: String? = nil) {
         self.phase = phase; self.title = title; self.detail = detail; self.detailIsWarning = detailIsWarning
+        self.choosesInput = choosesInput; self.input = input
     }
 }
 
 /// One item in a status bar: a glyph and a short label that open a menu with the whole sentence.
 public struct RecorderChip: Identifiable, Equatable, Sendable {
     public enum Target: Equatable, Hashable, Sendable {
-        /// `processing` is the shown conversation's work; `queue` is this device's, whichever conversation it's on.
-        case call, recorder(String), peer(String), processing, queue, sync
+        /// `processing` is the shown conversation's work; `queue` is this device's, whichever conversation it's on;
+        /// `storage` is the disk running out of room while recording.
+        case call, recorder(String), peer(String), processing, queue, sync, storage
     }
 
     public var target: Target
@@ -147,6 +166,7 @@ public struct RecorderChip: Identifiable, Equatable, Sendable {
         case .processing: return "processing"
         case .queue: return "queue"
         case .sync: return "sync"
+        case .storage: return "storage"
         }
     }
 }
@@ -187,6 +207,11 @@ public struct RecorderMeter: Identifiable, Equatable, Sendable {
 public enum RecordingStatusWords {
     public static let microphoneSilentHelp = "Check that your microphone isn’t muted or unplugged."
     public static let callMissingHelp = "Call audio isn’t being recorded. Allow Daybook in Privacy & Security › Screen & System Audio Recording."
+    /// The input control's name, for VoiceOver and its tooltip.
+    public static let inputControlName = "Microphone"
+
+    /// An input that can be changed where it's named: "MacBook Pro Microphone ▾", "iPhone Microphone ▾".
+    public static func inputChoice(_ name: String) -> String { "\(name) ▾" }
 
     // MARK: Phase
 
@@ -195,9 +220,17 @@ public enum RecordingStatusWords {
         case .idle: return nil
         case .starting: return RecorderPhase(phase: .starting, title: "Starting")
         case .recording:
-            if inputs.microphoneSilent { return RecorderPhase(phase: .recording, title: "Recording", detail: "Microphone silent", detailIsWarning: true) }
-            return RecorderPhase(phase: .recording, title: "Recording", detail: inputs.inputDevice)
+            // Where the input can be changed, the phase is its control; silent, it still is, since another input is the fix.
+            let chooses = inputs.choosesInput
+            let input = chooses ? inputs.inputDevice : nil
+            if inputs.microphoneSilent {
+                return RecorderPhase(phase: .recording, title: "Recording", detail: "Microphone silent", detailIsWarning: true,
+                                     choosesInput: chooses, input: input)
+            }
+            return RecorderPhase(phase: .recording, title: "Recording", detail: input.map(inputChoice) ?? inputs.inputDevice,
+                                 choosesInput: chooses, input: input)
         case .paused: return RecorderPhase(phase: .paused, title: "Paused")
+        case .saving where inputs.waitsForUnlock: return RecorderPhase(phase: .saved, title: "Saved", detail: RecordingWords.finishesWhenUnlocked)
         case .saving: return RecorderPhase(phase: .saving, title: "Saving…")
         // How long it is, as the page and the list say it ("18 min"), never a time that reads like a clock.
         case .saved: return RecorderPhase(phase: .saved, title: "Saved", detail: inputs.duration.map(DurationLabel.format))
@@ -212,6 +245,9 @@ public enum RecordingStatusWords {
         let recording = inputs.phase == .recording || inputs.phase == .paused
         var chips: [RecorderChip] = []
         if inputs.phase == .recording, includesCall, let call = callChip(inputs.call) { chips.append(call) }
+        if inputs.phase == .recording, let storage = storageChip(spaceLeft: inputs.spaceLeft, callStopped: inputs.callStoppedForSpace) {
+            chips.append(storage)
+        }
         chips += inputs.recorders.compactMap { recorderChip($0, recording: recording, here: inputs.here, now: now) }
         chips += inputs.peers.compactMap { peerChip($0, recording: recording, here: inputs.here) }
         return chips
@@ -231,6 +267,34 @@ public enum RecordingStatusWords {
         }
     }
 
+    /// The disk running out of room while recording: "Low on space", and how long it lasts at this rate. Nothing until
+    /// there's under half an hour.
+    public static func storageChip(spaceLeft: TimeInterval?, callStopped: Bool) -> RecorderChip? {
+        guard spaceLeft != nil || callStopped else { return nil }
+        return RecorderChip(target: .storage, symbol: "externaldrive.badge.exclamationmark", label: "Low on space", shortLabel: "Space",
+                            tone: .attention, detail: storageDetail(spaceLeft: spaceLeft, callStopped: callStopped))
+    }
+
+    /// The whole sentence: "Room for about 25 more minutes. Free up space to keep recording." Once call audio has
+    /// stopped for it, that comes first.
+    public static func storageDetail(spaceLeft: TimeInterval?, callStopped: Bool) -> String {
+        var parts: [String] = []
+        if callStopped { parts.append("The disk is almost full, so call audio stopped.") }
+        if let spaceLeft {
+            let minutes = Int(spaceLeft / 60)
+            parts.append(minutes < 1 ? "Room for less than a minute more." : minutes == 1 ? "Room for about 1 more minute."
+                                                                            : "Room for about \(minutes) more minutes.")
+        }
+        parts.append("Free up space to keep recording.")
+        return parts.joined(separator: " ")
+    }
+
+    /// The devices that kept recording when this Mac went to sleep: "Soundcore Work and Alex’s iPhone kept recording."
+    public static func keptRecording(_ names: [String]) -> String? {
+        guard !names.isEmpty else { return nil }
+        return "\(names.formatted(.list(type: .and))) kept recording."
+    }
+
     /// A recorder's chip, in the words its status line uses everywhere (`RecorderStatusWords`).
     public static func recorderChip(_ facts: RecorderFacts, recording: Bool, here: String, now: Date = Date()) -> RecorderChip? {
         guard let words = RecorderStatusWords.chip(facts, recording: recording, here: here, now: now) else { return nil }
@@ -247,6 +311,10 @@ public enum RecordingStatusWords {
                          detail: detail, shortensFirst: shortensFirst)
         }
         let name = peer.name
+        // The device this recording follows can't be reached: this one keeps recording, and says so.
+        if recording, peer.outOfReach {
+            return chip(LeaderWatch.outOfReachLabel, short: nil, .attention, detail: LeaderWatch.outOfReach(name, here: here))
+        }
         if recording, let along = peer.along {
             switch along {
             case .recording, .alreadyRecording, .stopping:
@@ -281,6 +349,33 @@ public enum RecordingStatusWords {
         case .linked: return .linked
         case .recording: return .recording
         case .attention: return .attention
+        }
+    }
+
+    // MARK: Processing
+
+    /// After Stop, what's becoming of the conversation, as a chip in the words its library row says
+    /// (`ConversationStatusPresentation.row`): "Transcribing · 40%" filling as it goes, "Waiting for your Mac", "Waiting
+    /// for models", a summary's countdown. Nil when the row has nothing to say.
+    public static func processingChip(_ row: ConversationRowStatus?) -> RecorderChip? {
+        guard let row, let text = row.text else { return nil }
+        func chip(_ symbol: String, _ tone: StatusTone, short: String?, progress: Double? = nil) -> RecorderChip {
+            RecorderChip(target: .processing, symbol: symbol, label: text, shortLabel: short, tone: tone, progress: progress, detail: text,
+                         countdownUntil: row.countdownUntil)
+        }
+        switch row.kind {
+        case .processing:
+            return chip("quote.bubble", .working, short: row.fraction.flatMap { $0 > 0 ? ProcessingWords.percentText($0) : nil },
+                        progress: row.fraction)
+        case .waiting:
+            // A countdown's short words are its seconds ("12 s"), which move with it.
+            let seconds = row.countdownUntil == nil ? nil : text.range(of: #"\d+ s$"#, options: .regularExpression).map { String(text[$0]) }
+            return chip("clock", .calm, short: seconds ?? "Waiting")
+        case .waitingForModels: return chip("arrow.down.circle", .attention, short: "Models")
+        case .paused: return chip("pause.circle", .calm, short: "Paused")
+        case .failed: return chip("exclamationmark.triangle.fill", .attention, short: nil)
+        case .notTranscribed: return chip("quote.bubble", .calm, short: nil)
+        case .recording, .playing, .justFinished: return nil
         }
     }
 

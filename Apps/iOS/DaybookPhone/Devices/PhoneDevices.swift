@@ -93,6 +93,8 @@ final class PhoneDevices {
             // background task while it runs.
             environment.soundcoreWiFi.hotspot = SystemSoundcoreHotspot()
             environment.soundcoreWiFi.holdInBackground = Self.holdInBackground
+            // An import holds background time from when its audio arrives until it's in the library.
+            DeviceBackgroundTime.hold = Self.backgroundTime
         case .inert:
             environment.soundcoreTransport = { InertSoundcoreTransport() }
         case .simulator:
@@ -161,14 +163,42 @@ final class PhoneDevices {
     func start() {
         guard !started else { return }
         started = true
+        // Who manages each recorder, as this iPhone last knew it, before anything connects: iOS can relaunch Daybook in
+        // the background for a recorder before the library loads, and a recorder a Mac manages is never reached for.
+        hub.applyLastKnownOwnership()
         let controller = library.controller
         hub.observeLibrary { [weak controller] in (controller?.meetings ?? [], controller?.isLoaded == true) }
-        watches.append(ObservationWatch({ [weak controller] in _ = controller?.metadata }) { [weak self] in self?.applyOwnership() })
+        watches.append(ObservationWatch({ [weak controller] in
+            _ = controller?.metadata
+            _ = controller?.isLoaded
+        }) { [weak self] in self?.applyOwnership() })
         hub.start()
         holdRecorders()
         applyOwnership()
         recorderActivity?.follow()
         observeBackground()
+        // A background relaunch skips the scene's launch, which loads the library: a recorder connecting loads it here.
+        watches.append(ObservationWatch({ [weak self] in
+            guard let self else { return }
+            _ = self.hub.sessions.map(\.isLinked)
+            _ = self.library.controller.isLoaded
+        }) { [weak self] in self?.loadLibraryForRecorder() })
+    }
+
+    @ObservationIgnored private var loadingLibrary = false
+
+    /// A recorder connected while the library hasn't loaded (iOS relaunched Daybook in the background for it): the
+    /// library loads now, under background time, so what the recorder brings in can be imported and its ownership
+    /// read.
+    private func loadLibraryForRecorder() {
+        guard !library.controller.isLoaded, !loadingLibrary, hub.sessions.contains(where: \.isLinked) else { return }
+        loadingLibrary = true
+        let release = DeviceBackgroundTime.hold("Opening the library for a recorder")
+        Task { [weak self] in
+            try? await self?.library.reload()
+            self?.loadingLibrary = false
+            release()
+        }
     }
 
     func shutDown() { hub.shutDown() }
@@ -207,6 +237,22 @@ final class PhoneDevices {
         return end
     }
 
+    /// Background time for work the person no longer sees (`DeviceBackgroundTime`): an import from the moment its audio
+    /// is here until it's in the library, or opening the library for a recorder. iOS ending it early ends nothing but
+    /// the task.
+    private static func backgroundTime(_ name: String) -> @MainActor () -> Void {
+        var task = UIBackgroundTaskIdentifier.invalid
+        let end = {
+            guard task != .invalid else { return }
+            UIApplication.shared.endBackgroundTask(task)
+            task = .invalid
+        }
+        task = UIApplication.shared.beginBackgroundTask(withName: name) {
+            MainActor.assumeIsolated { end() }
+        }
+        return end
+    }
+
     /// Background app refresh: a recorder whose wait before the next automatic import ran out while
     /// the app was suspended reaches for the recorder now (`AutomaticImportScheduling.automaticDueAt`).
     func backgroundRefresh() {
@@ -218,9 +264,12 @@ final class PhoneDevices {
 
     // MARK: Ownership
 
-    /// The library's ownership records changed, or a recorder's serial became known.
+    /// The library's ownership records changed, or a recorder's serial became known. Until the library has loaded its
+    /// records aren't known, and what this iPhone last knew stands (`DeviceHub.applyLastKnownOwnership`).
     func applyOwnership() {
-        hub.recorderOwnersChanged(library.controller.recorderOwners, thisDevice: library.controller.thisDevice.id)
+        if library.controller.isLoaded {
+            hub.recorderOwnersChanged(library.controller.recorderOwners, thisDevice: library.controller.thisDevice.id)
+        }
         holdRecorders()
     }
 
@@ -259,10 +308,6 @@ final class PhoneDevices {
     func handoffState(_ session: DeviceSession) -> RecorderHandoff.State { handoff.state(of: session) }
     /// Macs on Wi‑Fi this iPhone could hand the recorder to.
     func handoffTargets(_ session: DeviceSession) -> [RecorderHandoff.Peer] { handoff.peersToGive(session) }
-    /// Stops waiting, or clears an answer that was shown.
-    func endHandoff(_ session: DeviceSession) {
-        if handoff.state(of: session).isPending { handoff.cancel(session) } else { handoff.dismiss(session) }
-    }
 
     /// Removing a recorder here lets another device manage it again.
     func remove(_ session: DeviceSession) {

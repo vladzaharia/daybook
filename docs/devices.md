@@ -92,9 +92,17 @@ DeviceHub (@MainActor @Observable)       │  configured devices, persisted as [
   disconnect puts the interrupted recording back at the front and suspends the queue; it
   resumes when that method reconnects. A stall or integrity failure gets one quiet retry
   (`DeviceRetryPolicy`), then a failure with Try Again. It holds an idle-sleep assertion while
-  transferring, posts one notification per batch and one a day for low storage (bundled app
+  transferring, and from the moment a transfer's audio is here until it's in the library, background
+  time (`DeviceBackgroundTime`: on iPhone a `UIApplication` background task, since `ProcessInfo`
+  activities don't keep an iOS app running, and a suspension there would cost the whole transfer). It
+  posts one notification per batch and one a day for low storage (bundled app
   only, and only while Daybook is in the background), and imports automatically where the
-  method and preference allow. Each notification carries where opening it goes
+  method and preference allow. What waits to import from the recorder is stored with the device
+  (`DeviceStorage`, `device.<id>.session.pending`): the imports a handoff brought, a shared recording's
+  file (`importWhenFinished`), the queue's recordings from the recorder, the person's included, and
+  what's arriving through sync. After a relaunch they're all adopted imports: each imports once the
+  recorder lists it, and one it no longer lists after a fresh listing is dropped. Quitting leaves them
+  as they were; removing the device clears them. Each notification carries where opening it goes
   (`DeviceNotificationDestination` in its `userInfo`): a batch whose recordings all went into one
   conversation opens it, anything else the recorder's page.
 - **Hub** (`DeviceHub`): owns the sessions, persists configured devices, runs setup (a device
@@ -143,18 +151,25 @@ that recording joins the same conversation.
 
 ## Automatic import (the default, and why)
 
-- **Files**: everything that appears in the watched folder and is unchanged across two scans
-  imports on its own, once. A file whose conversation is later deleted is offered again but
-  not re-imported automatically. Each scan lists the folder, reads its files' details, asks iCloud for
+- **Files**: everything that appears in the watched folder and is finished imports on its own,
+  once. Finished (`ImportFolderWatcher.Stability`) is unchanged across two scans, last written at
+  least 30 seconds ago (a slow writer pausing between scans isn't done), and readable as audio (an
+  M4A or MP4 still being written has no index yet); a file that still can't be read once it has been
+  unchanged for five minutes is listed anyway, so its import says why. A file whose conversation is
+  later deleted is offered again but not re-imported automatically. Each scan lists the folder, reads its files' details, asks iCloud for
   what isn't downloaded, and hashes new files off the main actor (`ImportFolderWatcher.survey`), so a
   large folder or a slow file provider never holds up the window.
 - **Direct (Soundcore)**: "Import new recordings automatically" (on the iPhone's recorder page,
   "Import Automatically") is **on by default**, because
   recordings that arrive without effort is what people want most from a wearable. It imports
-  only recordings that **started after the recorder was added to Daybook**
-  (`automaticImportsSince`), so adding a recorder that already holds months of audio, or
-  recordings already brought in through the Soundcore app, doesn't start a long transfer the
-  person didn't ask for. Older recordings are listed under New on Soundcore for one click.
+  only recordings that **weren't on the recorder when it was added to Daybook**: its first listing
+  after setup is kept with the remembered recorder (`SoundcoreSnapshot.setupListing`, by recording ID),
+  so adding a recorder that already holds months of audio, or recordings already brought in through
+  the Soundcore app, doesn't start a long transfer the person didn't ask for, and a recorder whose clock
+  is behind (its recording IDs are its own start times) doesn't have its first recordings after setup
+  skipped for looking older. A recorder remembered by an earlier build is listed against its start
+  dates once (`automaticImportsSince`), then by ID. Older recordings are listed under New on Soundcore
+  for one click.
 - Nothing imports automatically until the library has loaded, because without it every
   recording would look new.
 - Nothing imports from a remembered list either: only once the recorder has been listed on this
@@ -184,8 +199,24 @@ connected it's live. After the link goes (the idle release lets go even of a rec
 started), it's the last confirmed state for 20 minutes (`SoundcoreTiming.lastKnownRecording`): the
 device's status says recording, pages read "Recording · as of 10:07 AM", the recording stays
 Recording now, and then it's unknown again, because nobody can see it stop. The snapshot keeps
-`activeRecordingID`, `info.isRecording`, and `statusUpdatedAt` (the as-of), so a relaunch knows too.
-On iPhone, a recording it started and Listen Live get a Live Activity (docs/iphone.md).
+`activeRecordingID`, `info.isRecording`, `statusUpdatedAt` (the as-of), and `startedHereID` (the recording
+this device started), so a relaunch knows too. On iPhone, a recording it started and Listen Live get a Live
+Activity (docs/iphone.md), which therefore survives a relaunch while the recorder keeps recording.
+
+**Record commands come first.** A Start or Pause acts now or not at all (`DeviceSession.recordCommand(_:deadline:)`,
+`RecordControlConnection.recordCommand`, used by the shared recording's cascade on both apps, the Mac's
+`CompanionRecorders`, and a linked device's request, `RecorderRemoteControl`). On Soundcore
+(`SoundcoreSession.record`) it goes ahead of everything waiting for the link: a transfer under way (not live audio) is
+stopped (`1A 11`), the command is sent, the recorder's status is read until it confirms, and the transfer starts again
+from its beginning right after, still first in the queue and not counted as an attempt. A transfer within ten seconds
+of its end (`SoundcoreTiming.preemptExemption`, at the pace it has come) is left to finish and the command waits for
+it. It still waits for another app's transfer, which nothing cuts off. The caller's deadline (15 s for a cascade) is
+the answer's limit: a command still waiting to be sent then is dropped and never reaches the recorder; one already
+sent that the recorder confirms later (its own confirmation window is 10 s) is undone if it's a Start (Pause follows,
+so "didn't start" stays true); a late Pause stands, as the recorder is stopped either way. The clock offset is measured
+from when the command's write went out. The person's Record and Pause on a recorder's page are the same command with
+no deadline. During Fast Transfer the Bluetooth link is let go, so a Start can't be sent; the cascade says it didn't
+start.
 
 **Its button.** A recording state the recorder reports unasked (`18 82`) that changes what this device
 knew, while no Start or Pause of Daybook's is waiting for an answer, is its button:
@@ -194,7 +225,9 @@ apps start or stop a shared recording from it (docs/multipoint.md, "Starting any
 commands, and a state it already knew, never count. A held link (below) that comes back to find a
 recording started in the last minute that it didn't know of counts it as a press
 (`SoundcoreTiming.buttonCatchUp`): iOS relaunching Daybook for the recorder can deliver the push before
-the link is ready. One that started earlier was the person's some time ago, and isn't.
+the link is ready. One that started earlier was the person's some time ago, and isn't; nor is one this
+device already expects (`RecordingStateConnection.expectsRecording`: a recording a handoff brought, or a
+shared recording's file, among the session's adopted imports), which another device started.
 
 ## Holding the recorder's link (iPhone)
 
@@ -222,9 +255,13 @@ set by `PhoneDevices.holdRecorders`):
   system ended it: the central manager is made in `App.init` with a restore identifier,
   `willRestoreState` hands back the recorder (its delegate set again at once), and the connection's own
   state machine adopts a link that's still up (`connect` on a peripheral iOS kept connected carries on
-  from service discovery rather than connecting again). A background relaunch skips the scene's
-  `launch`: the library loads when something is imported, and the link starts when a shared recording
-  needs it.
+  from service discovery rather than connecting again). Before the hub starts, `PhoneDevices.start` applies
+  the ownership this iPhone last knew (`DeviceHub.applyLastKnownOwnership`, kept with its devices under
+  `devices.ownership` whenever the library's records are applied), so a relaunch before the library loads
+  never reaches for a recorder a Mac manages; the library's own records replace it once it has loaded. A
+  background relaunch skips the scene's `launch`: once a recorder connects, `PhoneDevices` loads the
+  library under background time, so what it brings in can be imported, and the link starts when a shared
+  recording needs it.
 - **Battery.** An idle Bluetooth LE link costs the iPhone little; what it costs the recorder's battery,
   and whether the recorder keeps advertising or holds the link through its own sleep, needs the real
   recorder (docs/validation.md).
@@ -241,12 +278,35 @@ listed (`importWhenFinished`, the same waiting list as a handoff's imports). A l
 whose recording ID ends with `~live`; the full recording replaces it (docs/multipoint.md, "A recorder's
 audio while it records"). The device page shows it as Listen Live (Stop Listening keeps what arrived).
 
+- **A gap costs nothing that arrived.** Live audio keeps going past a lost packet: the gap becomes
+  silence sized by the sequence numbers (20 ms a packet), an old repeat is dropped, and a packet that
+  can't be read becomes 20 ms of silence, so what follows keeps its time (docs/direct-soundcore.md). The
+  saved portion carries how much was filled (`LiveCapture.Saved.filledSeconds`), and Device Details says
+  it ("Live audio lost").
+- **The link coming back.** The link going away mid-capture saves what arrived; once the recorder is back
+  and listed, the session captures again into the same conversation (`DeviceSession.captureLive` keeps
+  its target until `endLiveCapture`), captions and all, as long as the recorder is still making the same
+  recording. Each capture is its own `~live` portion; the recorder's file replaces them all. A capture
+  that ended with the link still up (stopped, gone quiet, or its recording ended) isn't started again.
+- **Catching up.** A recorder streams what it recorded before listening began first, as fast as the link
+  goes. While the stream arrives faster than real time (`LiveCapture.isCatchingUp`: over 1.25 seconds of
+  audio a second, over the last three seconds) the meter shows no level, so earlier audio never reads as
+  live, and the recorder's status line, chip, and Listen Live's row say "Catching up…".
+- **Where its captions go.** A recorder's captions count from the start of its live stream, and are placed
+  on the shared recording from where that stream starts on this device's clock
+  (`DeviceSession.liveStreamStartedAt`, `LiveCaptureCaptions.Update.startedAt`): when its audio arrived,
+  less its place in the stream, the earliest so far. A stream that starts now counts from its first
+  buffer, not from a recording begun minutes before; one that starts with what was recorded before
+  settles on the recording's start once it has caught up. Which one the real recorder sends is a hardware
+  check (docs/validation.md).
+
 ## One owner per recorder
 
 A recorder talks to one device at a time, so the iPhone and a Mac never both reach for it. Ownership is a `RecorderOwnership` (kind, serial number, owner's sync device ID, name, and class) in `LibraryMetadata.recorders`, keyed by kind and serial; the serial is the only identity every device sees the same way. It lives in the library's settings because they already sync with per-item last-writer-wins times and deletion markers (like folders and templates): the later claim wins, a release is a deletion marker that an older claim can't undo, and the field is optional, so earlier library files and journal versions decode and older Daybook versions ignore it.
 
 - **Claiming.** `LibraryController.claimRecorder` when the person sets a recorder up on a device, or when a handoff (below) moves it there; `releaseRecorder(onlyIfOwnedBy:)` when it's removed there. No record means nobody claimed it, and every device behaves as before.
-- **Honouring.** `DeviceHub.recorderOwnersChanged` (or `observeOwnership`) hands the records to each session, which applies them once its recorder's serial is known. While `managedElsewhere` is set, `SoundcoreConnection` never connects on its own (automatic import, reconnecting, multipoint) and `connect()` does nothing; a link already up is let go once idle, never mid-transfer, and the session starts no further transfer for it (what was waiting moves to the new owner). The page reads "Managed by Alex’s iPhone · Its recordings arrive through sync", and multipoint says "Soundcore Work is managed by Alex’s iPhone. Recording on this Mac only."
+- **Honouring.** `DeviceHub.recorderOwnersChanged` (or `observeOwnership`) hands the records to each session, which applies them once its recorder's serial is known. The hub keeps the last records it applied with its devices (`devices.ownership`), and `applyLastKnownOwnership` applies them before `start()` where the library loads after the devices (the iPhone). While `managedElsewhere` is set, `SoundcoreConnection` never connects on its own (automatic import, reconnecting, multipoint) and `connect()` does nothing; a link already up is let go once idle, never mid-transfer, and the session starts no further transfer for it (what was waiting moves to the new owner). The page reads "Managed by Alex’s iPhone · Its recordings arrive through sync", and multipoint says "Soundcore Work is managed by Alex’s iPhone. Recording on this Mac only."
+- **A claim gone quiet.** A device that is wiped or gone would otherwise leave "Managed by …", calm, for good, while the recorder overwrites its oldest recordings when full. When the managing device hasn't been heard from in 14 days (`RecorderStatusWords.managerQuietLimit`: the latest of its claim, its latest import of this recorder's to reach this library, and its last word over the link), the recorder's status line, byline, and chip ask for attention: "Managed by Alex’s iPhone · Not heard from since 20 Oct", with Use on This Mac beside it as always.
 
 ## Handing a recorder over
 
@@ -282,6 +342,14 @@ owner answers in the record at its next pass (`releasing`, `released` with the w
 `refused` with words), then the requester takes over as above. **Stop Waiting** cancels it: in the record through sync, and over the link a
 `recorder.handoff.request` with the same ID and intent `cancel` (docs/link.md), so an owner still finishing an import
 keeps the recorder and carries on. Once the owner has let go it's too late: its release still moves the recorder.
+**An owner that goes quiet.** An owner finishing over the link updates every five seconds; one that says
+nothing for two minutes (`ownerQuiet`: it quit, crashed, or the link went) is taken to be gone, and through
+sync for 30 minutes (`releasePatience`; an hour-long recording takes 12 to 24 minutes over Bluetooth). The
+request then waits through sync (a record with its ID, for a request that went over the link), overdue at
+once, so the page offers Take Over Anyway with when the owner was last heard from. An owner back after a
+relaunch takes the request up from the record, and one whose record already says `releasing` but holds
+nothing of it in memory carries the release on: it finishes, lets go, and hands over what was waiting.
+
 **Take Over Anyway** claims the recorder at once after a confirmation that says the risk: if the
 other device is still connected, the recorder may not answer here until it hears and lets go
 (finishing any import first); nothing on the recorder is lost. The new owner keeps trying with no
@@ -346,7 +414,8 @@ pushes, Settings).
   1. Its name in New York and a byline (`RecorderStatusWords.byline`: "Connected", "Not connected · Last seen
      today, 3:25 AM"), with Cancel while it connects. Where the column has a margin (600 pt and wider: the Mac's
      detail, a single page on the open Duo) the kind's glyph hangs in it; narrower, it sits on a tile beside the name.
-     Teal while the recorder is linked.
+     Teal while the recorder is linked. The tile is DaybookUI's `DeviceGlyph`, the one the iPhone's status sheet and
+     the Mac's Device Details draw too.
   2. The problem, in a problem box (`AttentionBox`) with at most two actions, the first leading, in this device's
      words (`RecorderStatusWords.problem`: the iPhone's Bluetooth is in Settings, with Open Settings). None while
      another device manages it.
@@ -429,9 +498,10 @@ a second local runtime), which are gone, with their plumbing (`LiveTranscriber`,
   `DeviceEnvironment.liveCaptions` (`LiveCaptionHooks`, shared by reference so the app can point it
   at its settings) and hands it every decoded packet as it arrives: 16 kHz mono, at the recorder's
   own rate and in its own bursts (what it recorded before listening began, then as it records). Each
-  packet is stamped with its sample position in the live audio, and the captioner counts from zero
-  (`timelineOrigin: 0`), so the engine's time map keeps every caption at its place even when it
-  drops audio. Its backlog is raised to about a minute of 20 ms packets (`LiveCaptionHooks.backlog`);
+  packet is stamped with its sample position in the live audio (a gap's silence included), and the
+  captioner counts from zero (`timelineOrigin: 0`), so the engine's time map keeps every caption at its
+  place even when it drops audio. Decrypting, decoding, and writing run off the main actor
+  (`SoundcoreAudioWriter`), and each decoded packet comes back to it in order. Its backlog is raised to about a minute of 20 ms packets (`LiveCaptionHooks.backlog`);
   past that the oldest wait is dropped, never the audio being saved.
 - **Defaults.** The hooks' default makes the Speech framework's captioner where it exists (macOS 26,
   iOS 26) in the device's language, never downloading one. The Mac points them at Settings › Recording
@@ -458,6 +528,10 @@ a second local runtime), which are gone, with their plumbing (`LiveTranscriber`,
   packets and a quiet spell from the simulator (`Fault.pause`) arrive back to back on the live
   audio's timeline at 16 kHz, captions reach `DeviceSession.liveCaptions` and go when listening
   stops, the inert link never makes a captioner, and the session mirrors any `LiveCapture`.
+  `SoundcoreSharedRecordingTests` cover a lost packet kept as silence and a capture the link took away
+  starting again with its captions; `SoundcoreRecordCommandTests` where a stream starts and when it's
+  catching up, Start and Pause ahead of an import (within the deadline, dropped, or undone), and what a
+  relaunch keeps; `CascadeDuringImportTests` (DaybookKit) a cascade started mid-import.
 
 ## Daybook on iPhone
 

@@ -41,8 +41,8 @@ enum CaptureFiles {
 
     /// A tone, encoded and finished as a part an interruption closed. Returns its frames.
     @discardableResult
-    static func writeClosedSegment(to url: URL, seconds: Double, frequency: Float) throws -> Int64 {
-        let writer = try AACSegmentWriter(url: url, format: format, realTime: false)
+    static func writeClosedSegment(to url: URL, seconds: Double, frequency: Float, format: RecordingFormat? = nil) throws -> Int64 {
+        let writer = try AACSegmentWriter(url: url, format: format ?? Self.format, realTime: false)
         try append(tone: frequency, seconds: seconds, to: writer)
         return try writer.finish()
     }
@@ -51,14 +51,14 @@ enum CaptureFiles {
     /// recorder's real-time encoder, read from disk once `fragments` movie fragments after the first
     /// are complete there. Its end is whatever the encoder was writing at that moment.
     static func inProgressSegment(seconds: Double, frequency: Float, fragments: Int = 2,
-                                  in scratch: URL, test: XCTestCase) async throws -> Data {
+                                  in scratch: URL) async throws -> Data {
         let url = scratch.appendingPathComponent("writing-\(UUID().uuidString).m4a")
         let writer = try AACSegmentWriter(url: url, format: format, realTime: true)
         defer { writer.cancel() }
         try append(tone: frequency, seconds: seconds, to: writer)
         var seen: [Box] = []
-        return try await test.waitFor("\(fragments) movie fragments on disk", timeout: 30, poll: .milliseconds(20),
-                                      state: { seen.map { "\($0.type)@\($0.offset)+\($0.size)" }.joined(separator: " ") }) { () -> Data? in
+        return try await waitFor("\(fragments) movie fragments on disk", timeout: 30, poll: .milliseconds(20),
+                                 state: { seen.map { "\($0.type)@\($0.offset)+\($0.size)" }.joined(separator: " ") }) { () -> Data? in
             guard let bytes = try? Data(contentsOf: url) else { return nil }
             seen = boxes(bytes)
             return seen.filter { $0.type == "moof" && $0.end <= bytes.count }.count >= fragments ? bytes : nil
@@ -74,6 +74,7 @@ enum CaptureFiles {
     }
 
     private static func append(tone frequency: Float, seconds: Double, to writer: AACSegmentWriter) throws {
+        let format = writer.format
         let chunk: AVAudioFrameCount = 4_800
         let total = Int((seconds * format.sampleRate).rounded())
         var written = 0

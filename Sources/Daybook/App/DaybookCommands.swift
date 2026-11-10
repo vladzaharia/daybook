@@ -24,6 +24,9 @@ struct DaybookCommands: Commands {
         // Continuity Camera: Take Photo, Scan Documents, and Add Sketch from an iPhone or iPad
         // (the page receives them through `importsItemProviders`).
         ImportFromDevicesCommands()
+        // Edit › Find in Conversation… (⌘F), Find Next, Find Previous. Edit › Find ▸ Find… comes first in the menu, so
+        // ⌘F still finds in the notes while they have the focus; Search Conversations is ⌥⌘F.
+        ConversationFindCommands(state: state)
         EditCommands(state: state)
         ViewCommands(state: state)
         WindowCommands(state: state)
@@ -153,12 +156,14 @@ private struct ViewCommands: Commands {
             .disabled(toolbarShown == nil)
         }
         CommandGroup(before: .sidebar) {
-            Button("Summary") { state.pageMode = .summary }
-                .keyboardShortcut("1")
-                .disabled(meeting == nil)
-            Button("Transcript") { state.pageMode = .transcript }
-                .keyboardShortcut("2")
-                .disabled(meeting.map { state.hasTranscriptPage($0) } != true)
+            // The toolbar's Summary | Transcript, ticked as it's lit: where the window has room for two pages, both
+            // while both show, and choosing one keeps it alone or puts the other back beside it (`PageSides`).
+            ForEach(PageMode.allCases) { side in
+                Toggle(side.title, isOn: Binding(get: { meeting.map { state.pageSides($0).shows(side) } ?? false },
+                                                 set: { _ in if let meeting { state.choosePage(side, for: meeting) } }))
+                    .keyboardShortcut(side == .summary ? "1" : "2")
+                    .disabled(side == .summary ? meeting == nil : meeting.map { state.hasTranscriptPage($0) } != true)
+            }
             Divider()
             // The reading surface scales in every window that shows it, Floating Notes too.
             Button("Make Text Bigger") { state.readingScale = ReadingScale.bigger(state.readingScale) }
@@ -248,7 +253,7 @@ private struct PlacementMenuItem: View {
     var body: some View {
         let personal = meeting?.effectivePlacement == .personal
         Button(personal ? "Move to Work" : "Move to Personal") {
-            if let meeting { state.setPlacement([meeting.id], personal ? .work : .personal, undoManager: undoManager ?? NSApp.keyWindow?.undoManager) }
+            if let meeting { state.library.setPlacement([meeting.id], personal ? .work : .personal, undoManager: undoManager ?? NSApp.keyWindow?.undoManager) }
         }
         .disabled(meeting == nil)
     }
@@ -360,10 +365,10 @@ struct FolderMenuItems: View {
     let meetingIDs: [UUID]
     @Environment(\.undoManager) private var undoManager
     var body: some View {
-        Button("None") { state.moveToFolder(meetingIDs, nil, undoManager: undo) }
+        Button("None") { state.library.moveToFolder(meetingIDs, nil, undoManager: undo) }
         if !state.folders.isEmpty { Divider() }
         ForEach(state.folders) { folder in
-            Button(folder.name) { state.moveToFolder(meetingIDs, folder.id, undoManager: undo) }
+            Button(folder.name) { state.library.moveToFolder(meetingIDs, folder.id, undoManager: undo) }
         }
         Divider()
         Button("New Folder") { state.requestNewFolder(moving: meetingIDs) }

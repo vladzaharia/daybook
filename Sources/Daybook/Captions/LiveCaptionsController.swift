@@ -2,6 +2,7 @@ import AVFoundation
 import DaybookCaptions
 import DaybookCore
 import DaybookDevices
+import DaybookLink
 import DaybookUI
 import Foundation
 import Observation
@@ -17,14 +18,15 @@ typealias LiveCaptionStore = DaybookCaptions.LiveCaptionStore
 /// transcript exists. They're never the transcript: saved on this Mac only (`LiveCaptionStore`),
 /// never synced, fused, summarized, or used as evidence, and gone once the transcript lands.
 ///
-/// What the iPhone does too (the captioners, saving, other devices' lines, finishing) is the shared
-/// `LiveCaptionSession`; this adds the Mac's own: You and Call put together without the speakers' echo
-/// of the call (`CaptionEcho`), and when the recording surfaces show captions.
+/// What the iPhone does too (the captioners, saving, other devices' lines put together, finishing) is the
+/// shared `LiveCaptionSession`; this adds the Mac's own: when the microphone can hear the call through the
+/// speakers (`CaptionEcho`), when the recording surfaces show captions, and the call's lines for an iPhone
+/// recording the conversation too (`shareCall`).
 ///
 /// Other devices recording the same conversation add their captions (`received`): a recorder
 /// recording along (its live audio, captioned on this Mac) and a paired iPhone (its captions, over
-/// the local link). Their lines join by time, labelled with the device, without lines that repeat
-/// this Mac's (`LiveCaptionMix`).
+/// the local link). An utterance several sources heard reads once, from the source that heard it best,
+/// labelled with it (`LiveCaptionMixer`).
 @MainActor
 @Observable
 final class LiveCaptionsController {
@@ -39,30 +41,28 @@ final class LiveCaptionsController {
     /// The captions of recorders recording along, as they're made (`AppState.wireCaptions`).
     let recorders = LiveCaptureCaptions()
 
-    @ObservationIgnored private var routes: [(time: TimeInterval, echoes: Bool)] = []
+    @ObservationIgnored private var canEcho: Bool?
     @ObservationIgnored private var routeWatch: ObservationWatch?
-    /// You lines already judged, so an hour of captions isn't compared again on every word.
-    @ObservationIgnored private var verdicts: [UUID: (text: String, isEcho: Bool)] = [:]
+    /// The call's lines going to each iPhone recording this conversation that shows other devices' captions.
+    @ObservationIgnored private var callShares: [UUID: CaptionShare] = [:]
+    @ObservationIgnored private var callSharing: Task<Void, Never>?
 
-    /// You lines older than this (behind the newest caption) keep the echo verdict they were given.
-    static let settledAfter: TimeInterval = 30
-
-    /// Saved captions by conversation, as `readSaved` last read them off the main actor: what the
-    /// transcript's page, the view switch, and search show (`AppState.savedCaptions(for:)`).
-    private(set) var saved: [UUID: LiveCaptions] = [:]
-    /// Reads started, so one that finishes after a later one leaves what that read.
+    /// Saved captions by conversation, each recording's, as `readSaved` last read them off the main actor:
+    /// what the transcript's page, the view switch, and search show (`AppState.savedCaptions(for:)`).
+    private(set) var saved: [UUID: [LiveCaptions]] = [:]
+    /// Reads of every conversation's started, and of each one's, so one that finishes after a later one leaves
+    /// what that read.
     @ObservationIgnored private var savedReads = 0
+    @ObservationIgnored private var conversationReads: [UUID: Int] = [:]
 
     init(store: LiveCaptionStore, makeCaptioner: @escaping (LiveCaptionSource) -> (any LiveCaptioning)?) {
         session = LiveCaptionSession(store: store)
         self.makeCaptioner = makeCaptioner
-        session.merge = { [weak self] heard in self?.merged(heard) ?? [] }
         session.statesChanged = { [weak self] in self?.updateShowing() }
     }
 
-    /// What's on screen: You and Call interleaved by time and tagged with their source, without
-    /// microphone lines that only echo the call through the speakers (`CaptionEcho`), and other
-    /// devices' lines that add something.
+    /// What's on screen: the newest of You and Call, tagged with their source, and other devices' lines,
+    /// each utterance once (`LiveCaptionMixer`).
     var segments: [LiveCaptionSegment] { session.segments }
     /// Other devices' names by source (raw value), for their lines' labels.
     var sourceNames: [String: String] { session.sourceNames }
@@ -109,31 +109,73 @@ final class LiveCaptionsController {
     /// What a line from `source` is labelled with: "You", "Call", or the device that heard it.
     func label(for source: LiveCaptionSource?) -> String { LiveCaptionLabels.label(for: source, names: sourceNames) }
 
-    /// Reads every conversation's saved captions again (`saved`), off the main actor: after captions
-    /// are saved, and after pruning.
+    /// Reads every conversation's saved captions again (`saved`), off the main actor: at launch and after
+    /// pruning.
     func readSaved() async {
         savedReads += 1
         let read = savedReads, store = self.store
-        let found = await Task.detached(priority: .userInitiated) { store.allCaptions() }.value
+        let found = await Task.detached(priority: .userInitiated) { store.allCaptures() }.value
         guard read == savedReads, found != saved else { return }
         saved = found
+    }
+
+    /// Reads one conversation's saved captions again, off the main actor: after they're saved.
+    func readSaved(_ meetingID: UUID) async {
+        let all = savedReads, read = (conversationReads[meetingID] ?? 0) + 1
+        conversationReads[meetingID] = read
+        let store = self.store
+        let found = await Task.detached(priority: .userInitiated) { store.captures(of: meetingID) }.value
+        guard all == savedReads, conversationReads[meetingID] == read else { return }
+        let value = found.isEmpty ? nil : found
+        if saved[meetingID] != value { saved[meetingID] = value }
     }
 
     // MARK: Other devices
 
     /// Another device's captions of this recording (`LiveCaptionSession.received`).
-    func received(_ segments: [LiveCaptionSegment], from source: LiveCaptionSource, name: String, offset: TimeInterval,
-                  changesOnly: Bool = false) {
-        session.received(segments, from: source, name: name, offset: offset, changesOnly: changesOnly)
+    func received(_ segments: [LiveCaptionSegment], removed: [UUID] = [], from source: LiveCaptionSource, name: String,
+                  offset: TimeInterval, changesOnly: Bool = false, forwards: Bool = true, track: LiveCaptionTrack? = nil) {
+        session.received(segments, removed: removed, from: source, name: name, offset: offset, changesOnly: changesOnly,
+                         forwards: forwards, track: track)
     }
+
+    /// While this Mac records, its call's lines go to the iPhones recording the conversation too that show
+    /// other devices' captions (`recipients`), a second at a time and only what changed, with those taken
+    /// back: with headphones on here, a phone in the room can't hear the call.
+    func shareCall(conversation: UUID, startedAt: Date, recipients: @escaping @MainActor () -> [UUID],
+                   send: @escaping @MainActor (LinkCaptions, UUID) async -> Void) {
+        callShares = [:]
+        callSharing?.cancel()
+        callSharing = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.callShareInterval)
+                guard !Task.isCancelled, let self, self.session.meetingID == conversation else { return }
+                let phones = recipients()
+                guard !phones.isEmpty else { continue }
+                let lines = await self.session.forwardable().filter { $0.source == .call }
+                for phone in phones {
+                    var share = self.callShares[phone] ?? CaptionShare()
+                    let changes = share.changes(lines, names: [:])
+                    self.callShares[phone] = share
+                    guard !changes.lines.isEmpty || !changes.removed.isEmpty else { continue }
+                    await send(LinkCaptions(conversationID: conversation, startedAt: startedAt, lines: changes.lines,
+                                            removed: changes.removed.isEmpty ? nil : changes.removed), phone)
+                }
+            }
+        }
+    }
+
+    /// The call's lines go to an iPhone this often.
+    static let callShareInterval: Duration = .seconds(1)
 
     // MARK: A recording
 
     /// Before the recorder starts: a captioner for each source (none when captions are off or the
     /// system can't make them) and the tap that hands them the recorder's audio. Nil means no captions.
     func prepare(meetingID: UUID, includesCall: Bool) -> CaptureCaptionTap? {
-        routes = []
-        verdicts = [:]
+        canEcho = nil
+        callSharing?.cancel()
+        callSharing = nil
         var tap = CaptureCaptionTap()
         var captioners: [(source: LiveCaptionSource, captioner: any LiveCaptioning)] = []
         for source in includesCall ? [LiveCaptionSource.microphone, .call] : [.microphone] {
@@ -150,14 +192,15 @@ final class LiveCaptionsController {
         return session.begin(meetingID: meetingID, captioners: captioners) ? tap : nil
     }
 
-    /// The recorder is running: listen in `locale`. The microphone's captioner starts first, so a
-    /// language that needs a download is fetched once. Returns once both run or have said why not.
-    func start(locale: Locale) async {
-        await session.start(locale: locale)
+    /// The recorder is running (since `startedAt`, by this Mac's clock): listen in `locale`. The microphone's
+    /// captioner starts first, so a language that needs a download is fetched once. Returns once both run or
+    /// have said why not.
+    func start(locale: Locale, startedAt: Date = Date()) async {
+        await session.start(locale: locale, startedAt: startedAt)
     }
 
-    /// Follows the recorder's output route: on speakers (or anything that might be), microphone lines
-    /// that only echo the call are left out; with headphones both sources show in full.
+    /// Follows the recorder's output route: on speakers (or anything that might be), a microphone line
+    /// that only echoes the call reads as the call's; with headphones both sources show in full.
     func follow(_ recorder: RecordingController) {
         routeWatch = ObservationWatch.values(of: { [weak recorder] in recorder?.outputRoute }) { [weak self, weak recorder] route in
             guard let self, let route, self.isActive else { return }
@@ -165,40 +208,20 @@ final class LiveCaptionsController {
         }
     }
 
-    /// The output route at `time` seconds into the recording.
+    /// The output route at `time` seconds into the recording: it applies from then on.
     func routeChanged(_ kind: AudioOutputRoute.Kind, at time: TimeInterval) {
-        let canEcho = kind != .headphones
-        guard routes.last?.echoes != canEcho else { return }
-        routes.append((time, canEcho))
-        verdicts = [:]
-        session.rebuild()
+        let echoes = CaptionEcho.canEcho(kind)
+        guard canEcho != echoes else { return }
+        canEcho = echoes
+        session.echoes(echoes, from: time)
     }
 
     /// The recording stopped (or never started): finish both captioners, keep what stands as heard,
     /// and save. Nothing about the recording waits for this.
     func finish() async {
+        callSharing?.cancel()
+        callSharing = nil
         await session.finish()
-    }
-
-    // MARK: You and Call
-
-    /// You and Call as one list, without You lines that only echo the call.
-    private func merged(_ heard: [LiveCaptionSource: [LiveCaptionSegment]]) -> [LiveCaptionSegment] {
-        let you = heard[.microphone] ?? [], call = heard[.call] ?? []
-        let newest = max(you.last?.end ?? 0, call.last?.end ?? 0)
-        return CaptionEcho.merge(you: you, call: call, echoes: canEcho(at:)) { line in
-            if let known = verdicts[line.id], known.text == line.text, !line.isTentative, line.end < newest - Self.settledAfter {
-                return known.isEcho
-            }
-            let verdict = CaptionEcho.isEcho(line, of: call)
-            verdicts[line.id] = (line.text, verdict)
-            return verdict
-        }
-    }
-
-    /// Whether the output could echo into the microphone at `time`. Until a route is known, assume it can.
-    private func canEcho(at time: TimeInterval) -> Bool {
-        (routes.last { $0.time <= time } ?? routes.first)?.echoes ?? true
     }
 }
 

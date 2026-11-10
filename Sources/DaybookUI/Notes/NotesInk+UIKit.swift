@@ -8,9 +8,17 @@ import UIKit
 import Vision
 
 // Handwriting in the iPhone's notes editor (docs/iphone.md, "Handwriting"). Ink sits in the column between typed
-// paragraphs, as one attachment each, so it moves with the text and stays whole when the Duo folds. The strokes are
-// live PencilKit canvases laid over the attachments' rects; below the last paragraph, a canvas with nothing in it
-// waits for the next stroke, so Apple Pencil can start writing anywhere past the words with no mode to enter.
+// paragraphs, as one attachment each, so it moves with the text and stays whole when the Duo folds. Each block is a
+// PencilKit canvas laid over its attachment's rect, drawn at rest as a picture of its strokes; below the last
+// paragraph, a canvas with nothing in it waits for the next stroke, so Apple Pencil can start writing anywhere past
+// the words with no mode to enter. The tools are the control layer's: Write by Hand in the keyboard's bar, and the
+// tools docked under the notes while writing (the app places them).
+
+/// What the handwriting controls say, wherever they are.
+public enum InkWords {
+    public static let writeByHand = "Write by Hand"
+    public static let writeByHandSymbol = "pencil.tip.crop.circle"
+}
 
 /// What the editor needs from whoever keeps the notes.
 public struct NotesInkModel {
@@ -215,7 +223,11 @@ final class InkAttachment: NSTextAttachment {
     override func image(forBounds imageBounds: CGRect, textContainer: NSTextContainer?, characterIndex charIndex: Int) -> UIImage? { nil }
 }
 
-/// A canvas over one attachment, or waiting past the last paragraph.
+/// A canvas over one attachment, or waiting past the last paragraph. At rest the strokes show as a picture of
+/// themselves (`PKDrawing.image`), which always draws: a canvas handed its drawing before it had a size, or scaled
+/// when the Duo folds, could draw nothing until something else made it draw again (docs/iphone.md, "Handwriting").
+/// The canvas stays under the picture and still takes Apple Pencil; it shows its own strokes while they're being
+/// written, and while the tools are up (a lasso's selection is the canvas's).
 final class InkBlockView: UIView, PKCanvasViewDelegate {
     let id: UUID
     let canvas = PKCanvasView()
@@ -233,6 +245,28 @@ final class InkBlockView: UIView, PKCanvasViewDelegate {
     var began: ((InkBlockView) -> Void)?
     var changed: ((InkBlockView) -> Void)?
 
+    /// The strokes as a picture, over the canvas while nothing is written here.
+    private let picture = CALayer()
+    /// Masks the canvas's own drawing while the picture shows (a hidden or transparent view would stop taking touches).
+    private let canvasMask = UIView()
+    /// The canvas draws its own strokes: the tools are up, or a pen is on it.
+    private(set) var isLive = false
+    private var toolsUp = false
+    private var usingTool = false
+    /// Bumped with each change to the strokes, so the picture is drawn again only when something changed.
+    private var drawingVersion = 0
+    private var pictureKey: PictureKey?
+    private var pictureImage: CGImage?
+    /// The scale the canvas last laid out at; nil until it has a size.
+    private var laidOutScale: CGFloat?
+
+    private struct PictureKey: Equatable {
+        var version: Int
+        var size: CGSize
+        var scale: CGFloat
+        var style: UIUserInterfaceStyle
+    }
+
     init(id: UUID = UUID(), authoredWidth: CGFloat) {
         self.id = id
         self.authoredWidth = authoredWidth
@@ -242,9 +276,18 @@ final class InkBlockView: UIView, PKCanvasViewDelegate {
         canvas.isScrollEnabled = false
         canvas.drawingPolicy = .pencilOnly
         canvas.delegate = self
+        canvas.mask = canvasMask
         addSubview(canvas)
+        picture.contentsGravity = .resize
+        // Placed and swapped at once, never animated.
+        picture.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull(), "hidden": NSNull()]
+        layer.addSublayer(picture)
         isAccessibilityElement = true
         accessibilityTraits = .staticText
+        // The picture is drawn for the appearance (PencilKit draws black ink light in Dark Mode) and the screen.
+        registerForTraitChanges([UITraitUserInterfaceStyle.self, UITraitDisplayScale.self]) { (view: InkBlockView, _: UITraitCollection) in
+            view.drawPicture()
+        }
     }
 
     @available(*, unavailable)
@@ -263,9 +306,7 @@ final class InkBlockView: UIView, PKCanvasViewDelegate {
         accessibilityLabel = block.paragraphText == NoteInk.placeholder ? "Handwriting" : "Handwriting: \(block.paragraphText)"
         guard block.drawing != savedDrawing else { return }
         savedDrawing = block.drawing
-        isLoading = true
-        canvas.drawing = (try? PKDrawing(data: block.drawing)) ?? PKDrawing()
-        isLoading = false
+        setDrawing((try? PKDrawing(data: block.drawing)) ?? PKDrawing())
     }
 
     func markSaved(_ data: Data) { savedDrawing = data }
@@ -273,16 +314,26 @@ final class InkBlockView: UIView, PKCanvasViewDelegate {
     /// Moves the strokes within the canvas, without it counting as writing.
     func shiftInk(byY delta: CGFloat) {
         guard abs(delta) > 0.25 else { return }
-        isLoading = true
-        canvas.drawing = canvas.drawing.transformed(using: CGAffineTransform(translationX: 0, y: delta))
-        isLoading = false
+        setDrawing(canvas.drawing.transformed(using: CGAffineTransform(translationX: 0, y: delta)))
     }
 
-    func apply(tool: PKTool, fingerDraws: Bool, interactive: Bool) {
+    /// Strokes that aren't being written: the canvas and the picture both take them.
+    private func setDrawing(_ drawing: PKDrawing) {
+        isLoading = true
+        canvas.drawing = drawing
+        isLoading = false
+        drawingVersion += 1
+        drawPicture()
+    }
+
+    /// - Parameter live: The tools are up, so the canvas draws its own strokes (and a lasso's selection).
+    func apply(tool: PKTool, fingerDraws: Bool, interactive: Bool, live: Bool = false) {
         canvas.tool = tool
         self.fingerDraws = fingerDraws
         canvas.drawingPolicy = fingerDraws ? .anyInput : .pencilOnly
         canvas.isUserInteractionEnabled = interactive
+        toolsUp = live && interactive
+        updateLive()
     }
 
     override func layoutSubviews() {
@@ -297,7 +348,59 @@ final class InkBlockView: UIView, PKCanvasViewDelegate {
         if canvas.transform != transform { canvas.transform = transform }
         if canvas.bounds.size != size { canvas.bounds = CGRect(origin: .zero, size: size) }
         if canvas.center != center { canvas.center = center }
+        if picture.frame != bounds { picture.frame = bounds }
+        // The canvas's first size, and each new scale, draw its strokes again: it can otherwise keep what it drew
+        // before, which for a canvas handed its strokes before it had a size is nothing.
+        if !bounds.isEmpty, laidOutScale != scale {
+            laidOutScale = scale
+            redrawCanvas()
+        }
+        drawPicture()
     }
+
+    /// Hands the canvas its own strokes again, so it draws them. Never under a pen, which would end its stroke.
+    private func redrawCanvas() {
+        guard !usingTool, hasInk else { return }
+        let drawing = canvas.drawing
+        isLoading = true
+        canvas.drawing = PKDrawing()
+        canvas.drawing = drawing
+        isLoading = false
+        canvas.setNeedsDisplay()
+    }
+
+    /// The canvas shows its strokes while the tools are up or a pen is on it; otherwise the picture does.
+    private func updateLive() {
+        let live = toolsUp || usingTool
+        guard live != isLive else { return }
+        isLive = live
+        if live { redrawCanvas() }
+        canvas.mask = live ? nil : canvasMask
+        drawPicture()
+    }
+
+    /// The picture of the strokes at the size and scale they're drawn at, in this appearance: drawn again only when
+    /// one of those changed, and hidden while the canvas draws.
+    private func drawPicture() {
+        let shows = !isLive && hasInk && !bounds.isEmpty
+        if picture.isHidden == shows { picture.isHidden = !shows }
+        guard shows else { return }
+        let screen = traitCollection.displayScale > 0 ? traitCollection.displayScale : 2
+        let key = PictureKey(version: drawingVersion, size: canvas.bounds.size, scale: screen * fitScale,
+                             style: traitCollection.userInterfaceStyle)
+        guard key != pictureKey else { return }
+        pictureKey = key
+        let drawing = canvas.drawing
+        var image: UIImage?
+        traitCollection.performAsCurrent {
+            image = drawing.image(from: CGRect(origin: .zero, size: key.size), scale: key.scale)
+        }
+        pictureImage = image?.cgImage
+        picture.contents = pictureImage
+    }
+
+    /// The picture drawn at rest, for tests.
+    var drawnPicture: CGImage? { picture.isHidden ? nil : pictureImage }
 
     /// Asked before the touch is delivered: a touch known not to be Apple Pencil goes through the empty page.
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
@@ -306,15 +409,71 @@ final class InkBlockView: UIView, PKCanvasViewDelegate {
         return touches.contains { $0.type == .pencil }
     }
 
-    func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) { began?(self) }
+    func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
+        usingTool = true
+        updateLive()
+        began?(self)
+    }
+
+    func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
+        usingTool = false
+        updateLive()
+    }
 
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
         guard !isLoading else { return }
+        drawingVersion += 1
+        drawPicture()
         changed?(self)
     }
 }
 
-/// Writing tools over the notes: Pen, or the tools themselves once writing.
+extension MarginTextView {
+    /// Each block's picture as drawn at rest, top to bottom: nil for a block drawing live or not drawn at all.
+    public var inkPictures: [CGImage?] {
+        layoutIfNeeded()
+        inkViews.values.forEach { $0.layoutIfNeeded() }
+        return inkAttachments.compactMap { attachment, _ in inkViews[attachment.inkID].map { $0.drawnPicture } }
+    }
+
+    /// Write by Hand and Done over the keyboard while the notes can be written in; nothing over a page that can't.
+    func updateInkKeyboardBar() {
+        guard let session = ink?.session, isEditable else {
+            if inputAccessoryView is InkKeyboardBar { inputAccessoryView = nil }
+            return
+        }
+        if (inputAccessoryView as? InkKeyboardBar)?.session !== session {
+            inputAccessoryView = InkKeyboardBar(session: session, textView: self)
+            if isFirstResponder { reloadInputViews() }
+        }
+    }
+}
+
+/// The keyboard's bar over the notes: Write by Hand, which puts the keyboard away for a finger to write, and Done,
+/// which puts it away.
+final class InkKeyboardBar: UIToolbar {
+    private(set) weak var session: InkSession?
+
+    init(session: InkSession, textView: UITextView) {
+        self.session = session
+        super.init(frame: CGRect(x: 0, y: 0, width: 320, height: 44))
+        var write = UIButton.Configuration.plain()
+        write.title = InkWords.writeByHand
+        write.image = UIImage(systemName: InkWords.writeByHandSymbol)
+        write.imagePadding = DaybookSpacing.s2
+        write.baseForegroundColor = .label
+        let writeButton = UIButton(configuration: write, primaryAction: UIAction { [weak session] _ in session?.isWriting = true })
+        let done = UIBarButtonItem(systemItem: .done, primaryAction: UIAction { [weak textView] _ in textView?.resignFirstResponder() })
+        items = [UIBarButtonItem(customView: writeButton), .flexibleSpace(), done]
+        sizeToFit()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+}
+
+/// The writing tools while writing, in one capsule: the pen, highlighter, eraser, and lasso, Undo and Redo, and
+/// Keyboard. The app docks it under the notes (never over them) while `InkSession.showsTools`.
 public struct InkTools: View {
     @Bindable private var session: InkSession
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -325,23 +484,18 @@ public struct InkTools: View {
 
     public var body: some View {
         HStack(spacing: 0) {
-            if session.showsTools {
-                ForEach(InkSession.Tool.allCases) { tool in
-                    button(tool.title, symbol: tool.symbol, selected: session.tool == tool) { session.tool = tool }
-                }
-                divider
-                button("Undo", symbol: "arrow.uturn.backward", enabled: session.canUndo) { session.undo() }
-                button("Redo", symbol: "arrow.uturn.forward", enabled: session.canRedo) { session.redo() }
-                divider
-                button("Keyboard", symbol: "keyboard") { session.returnToKeyboard() }
-            } else {
-                button("Write by Hand", symbol: "pencil.tip") { session.isWriting = true }
+            ForEach(InkSession.Tool.allCases) { tool in
+                button(tool.title, symbol: tool.symbol, selected: session.tool == tool) { session.tool = tool }
             }
+            divider
+            button("Undo", symbol: "arrow.uturn.backward", enabled: session.canUndo) { session.undo() }
+            button("Redo", symbol: "arrow.uturn.forward", enabled: session.canRedo) { session.redo() }
+            divider
+            button("Keyboard", symbol: "keyboard") { session.returnToKeyboard() }
         }
-        .padding(.horizontal, session.showsTools ? DaybookSpacing.s1 : 0)
+        .padding(.horizontal, DaybookSpacing.s1)
         .glassEffect(.regular, in: Capsule())
         .fixedSize()
-        .animation(DaybookMotion.resolved(DaybookMotion.state, reduceMotion: reduceMotion), value: session.showsTools)
     }
 
     private var divider: some View {

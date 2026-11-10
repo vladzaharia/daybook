@@ -191,12 +191,6 @@ public enum DaybookPalette {
         guard let index else { return Ink.secondary }
         return speakerInks[abs(index) % speakerInks.count]
     }
-    /// The text of a speaker's owner chip, on `speakerInk(index)` at 14% (`Shade.ownerText`).
-    public static func ownerInk(_ index: Int?) -> Color {
-        guard let index else { return Ink.secondary }
-        return ownerInks[abs(index) % ownerInks.count]
-    }
-    private static let ownerInks: [Color] = Shade.ownerText.map(\.color)
 
     /// Mint into cyan into violet: Daybook itself, or work in progress. Never text or small glyphs.
     public static let brandColors = [neonMint, neonCyan, neonViolet]

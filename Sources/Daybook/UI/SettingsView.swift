@@ -51,16 +51,21 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         }
     }
 
-    /// What else finds the page in the sidebar's search: what's on it, in the words people look for.
+    /// What else finds the page in the sidebar's search: what's on it, and what its rows open, in the words people look
+    /// for.
     var keywords: [String] {
         switch self {
-        case .general: ["Login", "Startup", "Menu Bar"]
-        case .recording: ["Microphone", "Computer Audio", "Calls", "Automatic", "Calendar", "Live Captions", "Floating Notes", "Permissions", "Screen"]
-        case .devices: ["iPhone", "Recorder", "Soundcore", "Pair", "Bluetooth", "Wi-Fi"]
-        case .library: ["Folder", "Storage", "iCloud", "Sync", "Import", "Privacy", "Encryption"]
-        case .models: ["Transcription", "Speakers", "Summaries", "Language", "Download", "Quality", "Voice", "Vocabulary", "Templates",
-                       "Parakeet", "Whisper", "Gemma", "Nemotron", "Community-1"]
-        case .cloud: ["Anthropic", "OpenAI", "Claude", "GPT", "Key"]
+        case .general: ["Login", "Login Items", "Startup", "Menu Bar"]
+        case .recording: ["Microphone", "Computer Audio", "System Audio", "Calls", "Automatic", "Ask", "Zoom", "Teams", "Meet", "Slack",
+                          "Apps", "Calendar", "Live Captions", "Language", "Floating Notes", "Permissions", "Screen", "Notifications"]
+        case .devices: ["iPhone", "Recorder", "Soundcore", "Add Device", "Pair", "Unpair", "Bluetooth", "Wi-Fi", "Wi‑Fi"]
+        case .library: ["Folder", "Location", "Storage", "iCloud", "Sync", "Import", "Privacy", "Encryption", "Recovery Key",
+                        "Summary Templates", "Vocabulary", "Glossary", "Speaker Profiles", "Voiceprint", "Version", "Personal", "Lock",
+                        "Touch ID", "Password"]
+        case .models: ["Transcription", "Speakers", "Summaries", "Language", "Download", "Quality", "Voice", "Voiceprint", "Vocabulary",
+                       "Glossary", "Summary Templates", "Speaker Profiles", "Accuracy", "Synced Recordings", "Live Transcription",
+                       "Model Library", "Updates", "Parakeet", "Whisper", "Gemma", "Nemotron", "Community-1"]
+        case .cloud: ["Anthropic", "OpenAI", "Claude", "GPT", "Key", "API Key", "Always", "Offer First", "Countdown", "Effort", "Cost"]
         }
     }
 
@@ -124,8 +129,18 @@ struct SettingsView: View {
                     }
                 }
                 .navigationTitle(pane.title)
+                .defaultScrollAnchor(Self.snapshotAnchor)
             }
         }
+    }
+
+    /// `--scroll-end` (debug builds, with `--open-settings`, as on the iPhone): the page opens at its foot, for snapshots.
+    private static var snapshotAnchor: UnitPoint? {
+        #if DEBUG
+        CommandLine.arguments.contains("--scroll-end") ? .bottom : nil
+        #else
+        nil
+        #endif
     }
 }
 
@@ -195,12 +210,11 @@ private struct RecordingSettings: View {
     @State private var microphone = AVCaptureDevice.authorizationStatus(for: .audio)
     @State private var screenCapture = CGPreflightScreenCaptureAccess()
     @State private var showingSupportedApps = false
-    /// Use Calendar was turned on and the system said no.
-    @State private var calendarRefused = false
 
     var body: some View {
         Form {
             Section {
+                MicrophoneSettingsRow()
                 Toggle(isOn: computerAudio) {
                     Text("Include computer audio")
                     Text("Records the other people on a call.")
@@ -226,20 +240,12 @@ private struct RecordingSettings: View {
                     Text("When a call starts")
                     if state.callPolicy != .off { DetectionStatusLine(state: state) }
                 }
-                Toggle("Use Calendar", isOn: Binding(get: { state.usesCalendar }, set: { on in
-                    Task {
-                        await state.setUsesCalendar(on)
-                        calendarRefused = on && !state.usesCalendar
-                    }
-                }))
+                CalendarSettingsRow(isOn: state.usesCalendar, access: state.meetingCalendar.access, set: { on in
+                    await state.setUsesCalendar(on)
+                    return state.usesCalendar
+                }, openSettings: { PrivacySettings.open(.calendars) })
                 .controlSize(.regular)
                 .disabled(state.callPolicy == .off)
-                // Refused just now, or taken away in System Settings since.
-                if calendarRefused || (state.usesCalendar && state.meetingCalendar.access == .denied) {
-                    ProblemLine(text: "Daybook can’t read your calendars.", details: nil) {
-                        Button("Open System Settings…") { PrivacySettings.open(.calendars) }
-                    }
-                }
                 Toggle("Show floating notes while recording", isOn: $showsFloatingNotes)
                     .controlSize(.regular)
             }
@@ -260,8 +266,10 @@ private struct RecordingSettings: View {
             LiveCaptionSettingsSection(settings: state.captionSettings)
 
             Section {
-                LabeledContent("Microphone") { microphoneStatus }
-                LabeledContent("Screen & System Audio Recording") { screenCaptureStatus }
+                LabeledContent(WelcomeWords.microphone) { microphoneStatus }
+                // Named as Welcome names it; the system's own name is in its help, as System Settings lists it.
+                LabeledContent(WelcomeWords.computerAudio) { screenCaptureStatus }
+                    .help(Self.computerAudioHelp)
             } header: {
                 Text("Permissions")
             } footer: {
@@ -273,6 +281,9 @@ private struct RecordingSettings: View {
         .formStyle(.grouped)
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in refreshPermissions() }
     }
+
+    /// Where System Settings lists the computer-audio permission, by its own name.
+    static let computerAudioHelp = "Screen & System Audio Recording, in System Settings › Privacy & Security"
 
     private var computerAudio: Binding<Bool> {
         Binding(get: { state.includeComputerAudio }, set: { enabled in
@@ -539,12 +550,22 @@ private struct LibrarySettings: View {
                 StorageSettingsRow(state: state)
             }
 
+            // The library's own things, as the iPhone's Settings lists them under Library; Models keeps Edit… beside
+            // the model each one serves.
+            Section {
+                TemplatesSettingsRow(state: state)
+                VocabularySettingsRow(state: state)
+                SpeakerProfilesSettingsRow(state: state)
+            }
+
             SyncSettingsView(state: state)
 
             Section("Imports") {
                 Toggle("Add imported files to conversations they overlap", isOn: $sources.matchesImportedFiles)
                     .controlSize(.regular)
             }
+
+            PersonalLockSection(lock: state.personalLock)
 
             Section {
                 PrivacyStatement()
@@ -566,6 +587,53 @@ private struct LibrarySettings: View {
         #if DEBUG
         .task { LibraryMoveDemo.apply(to: state) }
         #endif
+    }
+}
+
+/// "Require Touch ID for Personal" (or the password, on a Mac without Touch ID) and its one line. Off by default;
+/// turning it off asks first, as unlocking does (`PersonalLock.setRequired`).
+private struct PersonalLockSection: View {
+    let lock: PersonalLock
+
+    var body: some View {
+        Section {
+            Toggle(PersonalLockWords.requirement(lock.method), isOn: Binding(get: { lock.isRequired }, set: { on in
+                Task { await lock.setRequired(on) }
+            }))
+            .controlSize(.regular)
+        } footer: {
+            SettingsFooter(PersonalLockWords.footer)
+        }
+    }
+}
+
+/// Summary templates, with how many there are, and Edit… opening their window: on Library, and under the summary model.
+struct TemplatesSettingsRow: View {
+    let state: AppState
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        LabeledContent {
+            Button("Edit…") { openWindow(id: WindowID.templates) }
+        } label: {
+            Text("Summary templates")
+            Text(SettingsWords.templates(state.templates))
+        }
+    }
+}
+
+/// The vocabulary, with how many terms, and Edit… opening its window: on Library, and under the transcription model.
+struct VocabularySettingsRow: View {
+    let state: AppState
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        LabeledContent {
+            Button("Edit…") { openWindow(id: WindowID.vocabulary) }
+        } label: {
+            Text("Vocabulary")
+            Text(SettingsWords.vocabulary(state.glossary))
+        }
     }
 }
 

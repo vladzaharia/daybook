@@ -7,11 +7,12 @@ import WidgetKit
 /// The recording on the Lock Screen and in the Dynamic Island: the clock, and Bookmark and Stop (Resume
 /// and Stop once a pause can end, Stop alone during a call; none from Stop while it saves). The compact and minimal presentations are
 /// Daybook's waveform, so they never pass for the system's microphone dot. Red means recording; amber
-/// means bookmarks; the warning ink, a recording that stopped by itself.
+/// means bookmarks; the warning ink, a recording that stopped by itself. The small family (the Watch's
+/// Smart Stack, CarPlay) is the clock and the buttons alone.
 struct RecordingLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: RecordingActivityAttributes.self) { context in
-            LockScreenRecording(context: context)
+            RecordingActivityContent(context: context)
                 .activityBackgroundTint(nil)
                 .activitySystemActionForegroundColor(PhoneStyle.Ink.record)
         } dynamicIsland: { context in
@@ -49,7 +50,7 @@ struct RecordingLiveActivity: Widget {
             } compactLeading: {
                 RecordingGlyph(context: context)
             } compactTrailing: {
-                ActivityClock(state: context.state, isStale: context.isStale)
+                CompactClock(state: context.state, isStale: context.isStale)
                     .font(.caption.weight(.semibold).monospacedDigit())
                     .foregroundStyle(isLive(context) ? PhoneStyle.Ink.record : .white)
                     .frame(maxWidth: 52)
@@ -58,6 +59,73 @@ struct RecordingLiveActivity: Widget {
             }
             .keylineTint(glyphInk(context))
         }
+        .supplementalActivityFamilies([.small])
+    }
+}
+
+/// The Lock Screen's presentation, or the small family's where the system asks for it.
+private struct RecordingActivityContent: View {
+    let context: ActivityViewContext<RecordingActivityAttributes>
+    @Environment(\.activityFamily) private var family
+
+    var body: some View {
+        if family == .small {
+            SmallRecording(context: context)
+        } else {
+            LockScreenRecording(context: context)
+        }
+    }
+}
+
+/// The Watch's Smart Stack and CarPlay: what it's doing, the clock, and the buttons as glyphs. No conversation
+/// title: a wrist or a car's screen isn't where Daybook names one.
+private struct SmallRecording: View {
+    let context: ActivityViewContext<RecordingActivityAttributes>
+
+    var body: some View {
+        let state = context.state
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 4) {
+                HearingDot(state: state, isStale: context.isStale, size: 8)
+                Text(state.title(isStale: context.isStale)).font(.caption.weight(.semibold))
+                    .foregroundStyle(titleInk(context))
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                ActivityClock(state: state, isStale: context.isStale)
+                    .font(.headline.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(isLive(context) ? PhoneStyle.Ink.record : .primary)
+            }
+            if let line = state.endLine {
+                Text(line).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+            } else if !state.hasEnded {
+                ActivityButtons(state: state, isStale: context.isStale, iconsOnly: true)
+            }
+        }
+    }
+}
+
+/// The compact clock: whole minutes ("12m") where iOS 27 says the island has less width than usual, else the clock.
+private struct CompactClock: View {
+    let state: RecordingActivityAttributes.ContentState
+    var isStale = false
+
+    var body: some View {
+        if #available(iOS 27.0, *) {
+            NarrowableClock(state: state, isStale: isStale)
+        } else {
+            ActivityClock(state: state, isStale: isStale)
+        }
+    }
+}
+
+@available(iOS 27.0, *)
+private struct NarrowableClock: View {
+    let state: RecordingActivityAttributes.ContentState
+    var isStale = false
+    @Environment(\.isDynamicIslandLimitedInWidth) private var isLimited
+
+    var body: some View {
+        ActivityClock(state: state, isStale: isStale, minutesOnly: isLimited)
     }
 }
 
@@ -89,17 +157,27 @@ private struct RecordingGlyph: View {
 }
 
 /// Counts itself while recording; frozen when paused, saving, saved, or stopped; a dash once it's stale,
-/// because the app hasn't confirmed the recording is still going.
+/// because the app hasn't confirmed the recording is still going. `minutesOnly` says whole minutes ("12m").
 struct ActivityClock: View {
     let state: RecordingActivityAttributes.ContentState
     var isStale = false
+    var minutesOnly = false
+
+    /// Whole minutes, as narrow as they go: "12m".
+    static let minutes = Duration.UnitsFormatStyle(allowedUnits: [.minutes], width: .narrow, fractionalPart: .hide(rounded: .down))
 
     var body: some View {
         if isStale, !state.hasEnded {
             Text("–")
         } else if state.phase == .recording {
-            Text(timerInterval: state.timerStart...Date.distantFuture, countsDown: false, showsHours: true)
-                .multilineTextAlignment(.trailing)
+            if minutesOnly {
+                Text(.durationOffset(to: state.timerStart), format: Self.minutes)
+            } else {
+                Text(timerInterval: state.timerStart...Date.distantFuture, countsDown: false, showsHours: true)
+                    .multilineTextAlignment(.trailing)
+            }
+        } else if minutesOnly {
+            Text(Duration.seconds(state.frozenElapsed ?? 0).formatted(Self.minutes))
         } else {
             Text(DaybookTime.short(state.frozenElapsed ?? 0))
         }
@@ -125,13 +203,23 @@ struct HearingDot: View {
 
 /// Bookmark and Stop while recording; Resume and Stop once a pause can end; Stop alone during the call
 /// and when it's stale. Each label has its own ink on its fill (4.5:1 in both appearances); a filled
-/// button's default white label vanished on Resume's white and Bookmark's amber.
+/// button's default white label vanished on Resume's white and Bookmark's amber. `iconsOnly` shows the
+/// glyphs alone (the small family), each still named for VoiceOver.
 struct ActivityButtons: View {
     let state: RecordingActivityAttributes.ContentState
     var isStale = false
+    var iconsOnly = false
 
     var body: some View {
-        HStack(spacing: 10) {
+        if iconsOnly {
+            buttons.labelStyle(.iconOnly)
+        } else {
+            buttons
+        }
+    }
+
+    private var buttons: some View {
+        HStack(spacing: iconsOnly ? 6 : 10) {
             if state.phase == .recording, !isStale {
                 Button(intent: AddBookmarkIntent()) {
                     Label(state.bookmarkCount > 0 ? "Bookmark · \(state.bookmarkCount)" : "Bookmark", systemImage: "bookmark.fill")
@@ -207,8 +295,10 @@ struct LockScreenRecording: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(state.title(isStale: context.isStale)).font(.subheadline.weight(.semibold))
                         .foregroundStyle(titleInk(context))
-                    // A conversation's title is private: hidden while the iPhone is locked.
-                    Text(context.attributes.title).font(.caption).foregroundStyle(.secondary).lineLimit(1).privacySensitive()
+                    // A conversation's title is private: hidden while the iPhone is locked. A Personal one has none.
+                    if context.attributes.namesConversation {
+                        Text(context.attributes.title).font(.caption).foregroundStyle(.secondary).lineLimit(1).privacySensitive()
+                    }
                     if let multipoint = state.multipoint, !state.hasEnded, !context.isStale, !captioned {
                         Label(multipoint, systemImage: "macbook.and.iphone")
                             .font(.caption2.weight(.medium))

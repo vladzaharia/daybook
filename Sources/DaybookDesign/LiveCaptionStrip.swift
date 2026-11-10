@@ -187,7 +187,7 @@ public struct LiveCaptionStrip: View {
         .accessibilityValue(lines.last.map { [$0.speaker ?? $0.source, $0.text].compactMap { $0 }.joined(separator: ": ") } ?? status ?? "")
     }
 
-    /// "LIVE CAPTIONS · TENTATIVE" on top: their glyph, then the words, in Meta.
+    /// "Live captions · tentative" on top, in sentence case: their glyph, then the words, semibold in Meta.
     @ViewBuilder
     private var labelView: some View {
         let font = style.labelStyle.map { Font.system($0).weight(.semibold) } ?? .system(size: style.labelSize, weight: .semibold)
@@ -202,8 +202,6 @@ public struct LiveCaptionStrip: View {
             }
         }
         .font(font)
-        .textCase(.uppercase)
-        .tracking(0.5)
         .foregroundStyle(DaybookPalette.Ink.meta)
         .lineLimit(1)
     }

@@ -4,9 +4,10 @@ import Foundation
 
 // The Mac's App Intents: Start Recording, Stop Recording, Add Bookmark, New Note, Show Floating Notes, and Open
 // Conversation (ConversationEntity.swift), for Shortcuts, Spotlight, and Siri. The iPhone has the same recording
-// intents with the same titles and phrases (Apps/iOS/Shared/RecordingIntents.swift); there they're
-// AudioRecordingIntent and LiveActivityIntent, which the Mac doesn't have, so these are the Mac's own. Each runs in
-// the app, on its state (`IntentState`), launching Daybook when it isn't running.
+// intents with the same titles and phrases (Apps/iOS/Shared/RecordingIntents.swift). Start and Stop are
+// AudioRecordingIntents on both, so the system knows they start and stop a recording; the iPhone's Bookmark is a
+// LiveActivityIntent, which the Mac doesn't have, and the Mac has no Resume (a Mac recording doesn't pause). Each runs
+// in the app, on its state (`IntentState`), launching Daybook when it isn't running.
 
 /// The app's state, for intents and Spotlight: the app hands it over once its library window is up
 /// (`SystemEntryPoints`). An intent that runs before then (Shortcuts launching Daybook) waits for it a little.
@@ -79,7 +80,7 @@ enum IntentActions {
     /// Starts recording a new conversation; already recording, nothing changes.
     static func startRecording(_ state: AppState) async throws {
         guard state.recordingID == nil, !state.isStartingRecording else { return }
-        await state.startRecording()
+        await state.startRecording(from: .elsewhere)
         // A start that failed says why in the window's alert; Shortcuts says it too.
         guard state.recordingID != nil else {
             throw DaybookIntentError.failed(state.problem?.message ?? "Recording couldn’t start.")
@@ -116,7 +117,7 @@ enum IntentActions {
     }
 }
 
-struct StartRecordingIntent: AppIntent {
+struct StartRecordingIntent: AudioRecordingIntent {
     static let title: LocalizedStringResource = "Start Recording"
     static let description = IntentDescription("Records a conversation, with a call’s audio when there is one.")
 
@@ -127,7 +128,7 @@ struct StartRecordingIntent: AppIntent {
     }
 }
 
-struct StopRecordingIntent: AppIntent {
+struct StopRecordingIntent: AudioRecordingIntent {
     static let title: LocalizedStringResource = "Stop Recording"
     static let description = IntentDescription("Stops the recording and saves it to your library.")
 
@@ -172,7 +173,8 @@ struct ShowFloatingNotesIntent: AppIntent {
     }
 }
 
-/// Siri phrases and Spotlight's actions. The recording phrases are the iPhone's (DaybookShortcuts there).
+/// Siri phrases and Spotlight's actions. An action the iPhone has too is said as it is there (DaybookShortcuts there;
+/// `ShortcutPhrasesTests` holds them together).
 struct DaybookShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(intent: StartRecordingIntent(),
@@ -191,7 +193,7 @@ struct DaybookShortcuts: AppShortcutsProvider {
                     shortTitle: "Add Bookmark", systemImageName: "bookmark")
         AppShortcut(intent: NewNoteIntent(),
                     phrases: ["New note in \(.applicationName)",
-                              "Start a \(.applicationName) note"],
+                              "Start a note in \(.applicationName)"],
                     shortTitle: "New Note", systemImageName: "square.and.pencil")
         AppShortcut(intent: ShowFloatingNotesIntent(),
                     phrases: ["Show floating notes in \(.applicationName)",

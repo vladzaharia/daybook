@@ -2,9 +2,8 @@ import Accelerate
 import AVFoundation
 import Foundation
 
-// The capture code both apps share: how loud a buffer is, for the level meters, and converting
-// buffers a device delivers in another format to the recording's. Each app keeps its own meter state
-// (the Mac also tracks when it last heard something) and its own writer.
+// The capture code both apps share: how loud a buffer is, for the level meter (`AudioLevelMeter`), and converting
+// buffers a device delivers in another format to the recording's. Each app keeps its own writer.
 
 /// How loud a buffer of float PCM is.
 public enum AudioBufferLevel {

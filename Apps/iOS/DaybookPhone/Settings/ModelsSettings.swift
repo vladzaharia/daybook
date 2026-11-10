@@ -6,7 +6,8 @@ import SwiftUI
 /// Settings › Models: the models this iPhone runs, drawn with the Mac's own rows (DaybookUI's model rows and sections)
 /// but only what a phone needs. Processing (docs/iphone.md, "Processing on this iPhone"): whether this iPhone
 /// transcribes its own recordings and one Download for what that needs; then per role (transcription, speakers,
-/// voice profiles, summaries) the model, which is its own menu, with its state and Download or Cancel. Live
+/// voice profiles, summaries) the model, which is its own menu, with its state and Download or Cancel, and under
+/// Transcription the library's language, the Mac's row too (DaybookUI's `TranscriptionLanguageSettings`). Live
 /// (docs/iphone.md, "Live transcription"): the same for live captions' models. Model Library: what the models take
 /// here, each with Remove. And whether downloads may use cellular data.
 struct ModelsSettingsScreen: View {
@@ -19,7 +20,8 @@ struct ModelsSettingsScreen: View {
         @Bindable var settings = model.settings
         Form {
             ModelProcessingSection(toggleTitle: "Transcribe on this iPhone", isOn: $settings.processesOnThisIPhone,
-                                   download: models.processingDownload, space: models.space,
+                                   download: models.processingDownload, downloadName: "Transcription and speakers",
+                                   space: models.space,
                                    downloadAction: { models.downloadMissing(in: PhoneModels.transcribingRoles) },
                                    cancelAction: { models.cancelDownloads(in: PhoneModels.transcribingRoles) })
             // The voice-profile model comes with the speaker model: it isn't a choice of its own.
@@ -28,7 +30,8 @@ struct ModelsSettingsScreen: View {
             }
             if let live = models.liveDownload {
                 Section {
-                    ModelDownloadRow(live, space: models.space, download: { models.downloadMissing(in: models.roles) },
+                    ModelDownloadRow(live, name: "Live captions", space: models.space,
+                                     download: { models.downloadMissing(in: models.roles) },
                                      cancel: { models.cancelDownloads(in: models.roles) })
                 } header: {
                     Text("Live")
@@ -76,6 +79,9 @@ struct ModelsSettingsScreen: View {
                     select: { models.select($0, for: role) },
                     download: { key in if let model = models.catalog.model(key) { models.downloadIfItFits(model) } },
                     cancel: { key in if let model = models.catalog.model(key) { models.cancel(model) } }))
+                if role == .transcription {
+                    TranscriptionLanguageSettings(language: language, catalog: models.catalog)
+                }
             } header: {
                 Text(Self.title(role))
             }
@@ -87,6 +93,12 @@ struct ModelsSettingsScreen: View {
                 Text(Self.title(role))
             }
         }
+    }
+
+    /// The library's transcription language: a synced setting, so a change here changes what every device transcribes with.
+    private var language: Binding<String?> {
+        let library = model.library.controller
+        return Binding(get: { library.transcriptionLanguage }, set: { library.setTranscriptionLanguage($0) })
     }
 
     /// A role as the iPhone's Settings heads it: the shared word, title-cased ("Voice Profiles").

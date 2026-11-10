@@ -37,7 +37,11 @@ Code: `Sources/Daybook/Capture/` (capture, devices, finalizing) and `Sources/Day
      `org.mozilla.plugincontainer`, so those are included too. A browser tap records the whole
      browser, not just one tab.
    - During the call, the tap does three things:
-     - It re-reads the process list every three seconds and adds any new audio helper.
+     - It re-reads the process list every three seconds and adds any new audio helper. On macOS 26
+       the tap also names the processes' bundle IDs with process restore (`CATapDescription.bundleIDs`,
+       `isProcessRestoreEnabled`), so Core Audio itself adds a helper that starts or restarts under one
+       of them, and the tap is rewritten only for a helper with a bundle ID it doesn't name yet. On
+       macOS 15 any change rewrites it.
      - It rebuilds its aggregate device when the default output device changes.
      - It runs a silence watchdog (see Permissions).
 2. **ScreenCaptureKit (fallback).** This records everything the Mac plays except Daybook. The
@@ -59,11 +63,13 @@ Code: `Sources/Daybook/Capture/` (capture, devices, finalizing) and `Sources/Day
 
 If the tap fails *during* a call, `RecordingController` switches the same `systemAudio.caf` to
 ScreenCaptureKit and records `switchedAt`. The failure might be a rebuild that didn't work, the
-device disappearing, or the watchdog (only when that switch needs no new prompt; see
-Permissions). If ScreenCaptureKit also fails, or fails later, only the
-call track stops; the microphone keeps recording and a warning is kept. Only a microphone failure,
-a disk that can't keep up, or sleep ends a recording. In every case the audio captured so far is
-preserved.
+device disappearing, a tap that stays silent through three restarts (When the world misbehaves,
+below), or the watchdog (only when that switch needs no new prompt; see Permissions).
+ScreenCaptureKit records through the main display (`CGMainDisplayID`), the one that stays when an
+external display is unplugged, and a stream that stops on its own or stalls restarts once there. If
+it fails again, only the call track stops; the microphone keeps recording and a warning is kept. A
+recording ends only when someone stops it, the microphone fails for good, a writer stops moving for
+a minute, or the Mac is put to sleep. In every case the audio captured so far is preserved.
 
 The path used is saved in two places:
 
@@ -118,7 +124,7 @@ The caller supplies a fresh directory for each recording. Files are owner-only: 
 |---|---|
 | `capture-session.json` | Session ID, wall-clock and host-clock anchor, and the target call app. Saved before recording starts. |
 | `microphone.caf`, `systemAudio.caf` | The originals: independent native PCM tracks, never modified after capture. |
-| `microphone.json`, `systemAudio.json` | Track timing, format, frame count, capture method, notes, and **clock anchors**. Saved after the first buffer, every ten seconds, and at the end. |
+| `microphone.json`, `systemAudio.json` | Track timing, format, frame count, capture method, notes, and **clock anchors**, and `gaps` (where the timeline holds no captured audio, and why). Saved after the first buffer, every ten seconds, and at the end, as compact JSON on a queue of its own, so a slow disk never holds up the audio; the last save is the finished track's. Earlier, pretty-printed sidecars read the same. |
 | `capture-result.json` | Final result: warnings, call-capture path, output-route events, and later the echo-removal report and derived tracks. |
 | `microphone.echo-cancelled.caf` | The microphone with the call's echo removed: 16 kHz mono Float32, written after Stop. |
 
@@ -132,14 +138,25 @@ recording still gets drift correction and echo removal.
 Every buffer arrives with the host time of its first frame. `CapturedAudioTrack.offsetSeconds`
 places a track's first sample relative to the session anchor.
 
-- **Anchors.** About once a second, `PCMTrackWriter` records `(frame, hostTime)` as a
-  `ClockAnchor`.
+- **Anchors.** About once a second, `PCMTrackWriter` takes `(frame, hostTime)` as a
+  `ClockAnchor`. The sidecar keeps every one for the first minute of each clock run (the start,
+  and after each resync), then one every ten seconds (`ClockAnchorSchedule`): a 4-hour track keeps
+  about 1,500 rather than 14,400, and the fit below measures the same drift from them. The
+  iPhone's journal keeps its anchors the same way.
 - **Gaps.** Each buffer is compared with the time predicted from the latest anchor, which is at
-  most about a second old. Slow drift therefore never looks like a gap.
-  - A real gap of more than 80 ms and up to 5 s is padded with silence, and the next anchor is
-    marked `resync`.
-  - A jump of more than 5 s forward or more than 100 ms backward stops that track and preserves
-    it.
+  most about a second old. Slow drift therefore never looks like a gap. A track never stops for its
+  clock (the iPhone's rule, `PhoneTrackWriter`):
+  - A real gap of more than 80 ms and up to 5 minutes is padded with silence, and the next anchor is
+    marked `resync`. The silence ramps over 5 ms from the last sample written and into the next
+    buffer's first, so neither seam clicks; the captured samples themselves are untouched.
+  - A gap longer than 5 minutes isn't padded: the next anchor is marked `resync` at the buffer's
+    real host time, which starts a new clock segment.
+  - A jump of more than 100 ms backward drops the audio that overlaps what's already written (buffer
+    after buffer, until the stamps reach the timeline again) and resyncs where it continues.
+
+  Each is kept in the track's `gaps` (`CaptureGap`: `padded`, `lost`, `skipped`, or `overlap`, with
+  its frame and seconds), and the capture notes say the total ("3 gaps were filled with silence
+  (8.2 s in all).").
 
   The earlier code compared against the time predicted from the *first* buffer, which caused two
   problems:
@@ -160,16 +177,54 @@ places a track's first sample relative to the session anchor.
     session seconds per track second, with the same convention as `TrackAlignment.rate`:
     `meetingTime = offset + trackTime × clockRate`.
 
-  `TranscriptFusion` doesn't read `clockRate` yet. That's the alignment owner's call.
+  Fusion applies it: a track this Mac recorded, and not otherwise placed, goes to `TranscriptFusion`
+  as a placement with its measured rate (`SourceFusion`).
+
+## Choosing the microphone
+
+The microphone records the input `MicrophoneChoice` (DaybookKit) resolves to, the rule the iPhone
+follows too (docs/iphone.md, "Scope"):
+
+- **Automatic** (the default) records the system's default input, except a Bluetooth headset no
+  other app is recording from. Opening a headset's microphone switches it to its hands-free
+  profile, narrowband both ways, for the whole recording, so the built-in microphone records
+  instead. When a call app already records from the headset, it's in that profile anyway and it's
+  what hears the person, so it's recorded. "Records from" means the device is running
+  (`kAudioDevicePropertyDeviceIsRunningSomewhere`) and another process has input running on it
+  (`kAudioProcessPropertyDevices`, input scope), since a device runs for playback too; when the
+  processes can't be read, running counts.
+- **A chosen input** (Settings › Recording › Microphone, or Floating Notes' input menu) is used
+  whenever it's there. While it's away, another of its kind stands in (another headset for chosen
+  AirPods, another wired microphone for a USB one), else Automatic decides. The choice is kept in
+  the app's preferences (`microphoneChoice`).
+- `MicrophoneSource` sets the device on the engine's input unit (`auAudioUnit.setDeviceID`) before
+  the engine starts, so an idle default input is never opened. While it records it follows the
+  inputs (`CoreAudioMicrophoneDevices`): an input coming or going, the default input changing, the
+  input in use no longer alive (`kAudioDevicePropertyDeviceIsAlive`), or a new choice resolves the
+  choice again, and a different answer restarts the engine on it through the restart rules below
+  ("The microphone changed to MacBook Pro Microphone (now 48000 Hz, 1 ch); recording continued.").
+  A change that leaves the answer where it was restarts nothing. A chosen input that won't start
+  records the built-in microphone. Floating Notes names the input in use (`MicrophoneInUse`).
+- **The call tap.** The tap's aggregate takes its clock from the output device, listed as its
+  sub-device, so with AirPods as the output their microphone's streams are part of it. Whether that
+  alone switches them to hands-free needs hardware to tell; for that check,
+  `defaults write local.daybook DaybookTapOnlyAggregate -bool YES` builds the aggregate from the tap
+  alone (`ProcessTapSource.tapOnlyAggregate`).
 
 ## Device and route changes
 
-- **Microphone.** `MicrophoneSource` restarts its AVAudioEngine tap on the new input when
-  `AVAudioEngineConfigurationChange` fires. That happens when AirPods connect, or when they switch
-  to the hands-free profile because an app opened their microphone. `PCMTrackWriter` converts the
+- **Microphone.** `MicrophoneSource` restarts its AVAudioEngine tap on the input the choice
+  resolves to (above) when `AVAudioEngineConfigurationChange` fires. That happens when AirPods
+  connect, or when they switch to the hands-free profile because an app opened their microphone.
+  `PCMTrackWriter` converts the
   new format to the file's original format with `AVAudioConverter`. It drains the converter's
   look-ahead at every switch and at the end, so no frames are lost. It also pads the switch gap
-  and starts a new clock segment. Recording stops only after 20 restarts, or if a restart fails.
+  and starts a new clock segment. Restarts are limited by rate, not count: more than 10 in a minute
+  is a microphone that won't settle, and ends the recording, so AirPods coming and going all day
+  never do. A start that fails (a new device reporting 0 Hz for a moment) is tried again after 0.25,
+  0.5, 1, and 2 s, reading the inputs again each time, then on the Mac's built-in microphone, before
+  the microphone counts as failed. Each start is a fresh `AVAudioEngine` (behind `MicrophoneEngine`,
+  which tests replace, as they replace the inputs behind `MicrophoneDevices`).
 - **Output route.** `AudioRouteMonitor` records the default output device: once at start, then at
   every device or data-source change. Data-source changes cover a headphone jack being plugged
   in. The events go in `capture-result.json` as `outputRoutes`.
@@ -185,6 +240,48 @@ places a track's first sample relative to the session anchor.
   Daybook doesn't use Bluetooth APIs to identify the form factor.
 - **Call tap.** The tap rebuilds its aggregate device on the new output device. The writer pads
   the short gap and resyncs.
+
+## When the world misbehaves
+
+A recorder's first duty is to keep the audio, so recoverable trouble never ends a recording, and
+trouble that loses sound is said where the person is looking. The controller's 15 Hz meter timer
+(`updateLevels`) does the watching.
+
+- **A busy disk.** Each writer holds up to 30 s of audio (`PCMTrackWriter.defaultBacklog`, counted
+  in seconds, not buffers) while its queue waits on the disk. Past that a buffer is dropped and
+  counted, and the gap code pads the hole once writing catches up, as a `lost` gap; the track's
+  notes and the conversation say it: "2.4 s of call audio were lost while the disk was busy."
+  (`RecordingWords.lostAudio`). Only a writer with audio waiting that hasn't finished any for 60 s
+  (`CaptureWriting.stallLimit`) stops: the microphone's ends the recording ("The disk couldn't keep
+  up…"), the call's stops only the call. A write that fails is the same: a call-track problem never
+  stops the microphone.
+- **A source that stops delivering.** No buffer for 3 s while recording restarts that source
+  (`CaptureAudioSource.restart`): the microphone's engine, the tap rebuilt on the current output, or
+  ScreenCaptureKit once on the main display. Each restart gets its own 3 s. A call source still
+  silent after three restarts has failed: a tap falls back to ScreenCaptureKit (when that needs no new
+  prompt; otherwise only the call stops), and ScreenCaptureKit's call track ends. The microphone is
+  restarted for as long as it's silent, within its rate limit. Audio arriving starts the count over.
+- **The audio system restarting.** A `kAudioHardwarePropertyServiceRestarted` listener
+  (`AudioServiceRestartMonitor`) hears coreaudiod restart (a crash, `killall coreaudiod`); every
+  device, tap, and aggregate is new afterwards, so both sources start again. The conversation says
+  "The microphone stopped for a moment and was restarted, leaving a short gap." rather than that the
+  microphone changed.
+- **Hearing.** The microphone isn't hearing when no non-zero sample arrived in the last 5 s, or
+  nothing above −90 dBFS for 20 s (DaybookCore's `HearingCheck`, the iPhone's rule too). It's rolling, so a
+  microphone that goes to digital zeros partway (a MacBook lid closed in clamshell mode, a mute
+  switch, a dead interface) is said too, and it clears as soon as it hears again. Floating Notes says
+  "Microphone silent" (the iPhone's words), and a notification goes out while Daybook isn't in front.
+- **Space.** Every 30 s the free space (`volumeAvailableCapacityForImportantUsage`) is divided by the
+  recording's byte rate (2.3 GB an hour for a typical call). Under 30 minutes, Floating Notes shows
+  "Low on space" and a notification goes out while Daybook is behind; under 3 minutes, call audio
+  stops (two thirds of the bytes) so the microphone has what's left, and the room is measured again
+  at its rate.
+- **Sleep.** While recording, Daybook holds an idle-sleep assertion (`SleepAssertion`,
+  `.idleSystemSleepDisabled` with `.userInitiated`), so a long call on battery never idles the Mac to
+  sleep. A forced sleep (the lid, the Apple menu) still stops this Mac's tracks
+  (`RecordingController.stoppedForSleep`), but the recorders and iPhones recording along keep going
+  (docs/multipoint.md). After wake, Floating Notes says "Soundcore Work and Alex's iPhone kept
+  recording." with Stop.
 
 ## Echo removal
 
@@ -330,8 +427,8 @@ Observe these:
 Keep a visible recording indicator whenever the state is `.starting`, `.recording`, or
 `.stopping`.
 
-Set `onUnexpectedStop` to import partial audio after a microphone failure, a disk backlog, or
-sleep. A failed start can still leave a partial result in `lastResult`; don't delete that staging
+Set `onUnexpectedStop` to import partial audio after a microphone failure, a writer that stopped
+moving for a minute, or sleep. A failed start can still leave a partial result in `lastResult`; don't delete that staging
 folder. With nothing recorded, `AppState` takes back a conversation it made for the recording (to the
 Trash, the library's only way out) and leaves one it recorded into as it was; the alert says why, with
 Open System Settings when a permission is the reason. The hook gets the partial result and one sentence saying why it stopped (the recorder's
@@ -362,7 +459,9 @@ only then quits (`DaybookDelegate`, `QuitDecision`):
 - the microphone source;
 - the system-audio provider;
 - the current route and route observation;
-- the host clock.
+- the host clock;
+- free space, the idle-sleep assertion, and the audio system's restarts;
+- how writers buffer (`CaptureWriting`: the backlog, the stall limit, and a hook before each write).
 
 Tests drive the controller with fakes, so no device, tap, or stream is opened. `AppState` takes
 the same fakes (`capture:`).
@@ -371,12 +470,14 @@ the same fakes (`capture:`).
 
 | API | Type | Meaning |
 |---|---|---|
-| `recorder.levels.microphone` | `CaptureLevelMonitor.Level` | "You": `rms` and `peak` in dBFS. `meterValue` maps −60…0 dBFS to 0…1. |
+| `recorder.levels.microphone` | `AudioLevel` | "You": `rms` (smoothed over 300 ms) and `peak` (held for a second) in dBFS, so a tap's 10 ms buffers and the microphone's 85 ms ones move alike. `meterValue` maps −60…0 dBFS to 0…1. Each writer measures with DaybookCore's `AudioLevelMeter`, the iPhone's meter too. |
 | `recorder.levels.call` | same | "Call", with the same fields. |
 | `recorder.levels.isCallAudioDetected` | `Bool` | The call track was above −50 dBFS within the last 4 s. |
 | `recorder.isCallAudioDetected` | `Bool` | The same signal on the controller. It changes rarely, so any view may read it. |
-| `recorder.levels.isMicrophoneSilent` | `Bool` | After 3 s, not one non-zero microphone sample has arrived. The input is muted in hardware, unplugged, or denied. |
+| `recorder.levels.isMicrophoneSilent` | `Bool` | The microphone isn't hearing: no non-zero sample in the last 5 s, or nothing above −90 dBFS for 20 s. Rolling: it clears when it hears again. |
 | `recorder.levels.isCapturingCall` | `Bool` | Call audio is part of this recording. It's false after the call track stops. |
+| `recorder.spaceLeft` | `TimeInterval?` | Seconds of recording the disk has room for at the current rate, once that's under 30 minutes. |
+| `recorder.callStoppedForSpace` | `Bool` | Call audio stopped to leave the disk's last minutes to the microphone. |
 
 Floating Notes meters every source a recording has, not only these two (docs/interface.md, "Meters"): a
 recorder recording along from the live audio it saves into the recording (`LiveCapture.level(at:)`, the
@@ -399,14 +500,16 @@ transcription on any macOS, speakers, and names for voices that match the librar
 Mac, aren't synced, fused, summarized, or used as evidence, and the transcript replaces them.
 
 Code: `Sources/Daybook/Captions/` (the Mac's controller, echo rule, and settings), DaybookCaptions'
-`LiveCaptionSession` and `LiveCaptionStore` (what a recording's captions do on both apps), DaybookUI's
-`Captions/` (the strip's lines, saved captions, Settings' section), and `Capture/CaptureCaptionTap.swift`.
+`LiveCaptionSession`, `LiveCaptionMixer`, `LiveCaptionStore`, and `LiveCaptionCoverage` (what a recording's
+captions do on both apps), DaybookUI's `Captions/` (the strip's lines, saved captions, what goes over the
+link, Settings' section), and `Capture/CaptureCaptionTap.swift`.
 
 ```
  microphone ──► microphone writer ──► microphone.caf
             └─► tap ──► You captioner ──┐
- call app ────► call writer ──► systemAudio.caf      ├─► echo rule ─► Floating Notes, the conversation page,
-            └─► tap ──► Call captioner ─┘                           <library>/LiveCaptions/<meeting id>.json
+ call app ────► call writer ──► systemAudio.caf      ├─► mixer ─► Floating Notes, the conversation page,
+            └─► tap ──► Call captioner ─┤     (off the main actor)  <library>/LiveCaptions/<meeting id>.<recording id>.json
+ recorders, iPhones ─► their lines ─────┘
 ```
 
 - **Two captioners.** `LiveCaptionsController.prepare(meetingID:includesCall:)` makes one captioner
@@ -424,13 +527,14 @@ Code: `Sources/Daybook/Captions/` (the Mac's controller, echo rule, and settings
   running and finish after Stop on their own task; nothing in starting, stopping, or importing waits
   for them.
 - **Echo.** Through the speakers the microphone hears the call too, and echo removal runs only
-  after Stop, so the You captioner also captions the other side a moment after Call does.
-  `CaptionEcho` leaves out a You line when at least 60% of its words appear, in order, in the Call
-  lines within 2 seconds of it (words folded for case, accents, and apostrophes). It applies wherever
-  the output route at that moment isn't `headphones` (`AudioRouteMonitor`; Bluetooth of unknown form
-  factor counts as speakers, which costs nothing when there's no echo). With headphones both
-  sources show in full, so a line you repeat is kept. Route changes mid-recording apply from their
-  time on. Verdicts are recomputed while lines are fresh and kept once they're 30 seconds old.
+  after Stop, so the You captioner also captions the other side a moment after Call does. A You line
+  and a Call line within 2 seconds of each other that share, in order, at least 60% of the shorter
+  one's words (folded for case, accents, and apostrophes) are one utterance, which reads from Call, the
+  remote speaker's; the You line shows only words the call didn't have (the mixer below). That holds
+  wherever the output route at that moment isn't `headphones` (`CaptionEcho`, `AudioRouteMonitor`;
+  Bluetooth of unknown form factor counts as speakers, which costs nothing when there's no echo). With
+  headphones both sources show in full, so a line you repeat is kept. Route changes mid-recording
+  apply from their time on.
 - **Every source.** Live captions cover every source a recording has, not only this Mac's:
   - **You and Call** with the live models, each its own captioner over models loaded once
     (`LiveModelHost`): checked with the real models on this Mac, both captioning at once
@@ -440,34 +544,57 @@ Code: `Sources/Daybook/Captions/` (the Mac's controller, echo rule, and settings
     audio is captioned as Listen Live is, and `LiveCaptureCaptions` hands each recorder's lines to the
     recording's captions with when its recording began (its live audio starts there), so they move onto
     this Mac's timeline (lines from before this Mac started are left out).
-  - **A paired iPhone recording the same conversation**: the phone sends the captions it makes (its
-    microphone's, and its recorder's) over the local link, a second at a time, only the lines that
-    changed (`LinkCaptions`, to a Mac listing `liveCaptions`; docs/link.md). Its recording's start,
-    mapped through the link's clock estimate, places them. The Mac never receives the phone's audio
-    while it records, so it can't caption it itself.
+  - **A paired iPhone recording the same conversation**: the phone sends every line it and its
+    recorder heard over the local link, a second at a time, only the lines that changed and the IDs of
+    those its recognizer took back (`LinkCaptions.removed`, to a Mac listing `liveCaptions`;
+    docs/link.md), and the Mac drops those. Its recording's start, mapped through the link's clock
+    estimate, places them. The Mac never receives the phone's audio while it records, so it can't
+    caption it itself. The other way, the Mac sends its Call lines to an iPhone recording the
+    conversation that lists `liveCaptions`, so a phone in the room has the remote side when this Mac
+    plays the call into headphones.
 
-  Other devices' lines join by time (`LiveCaptionMix`), each tagged with its source
-  (`LiveCaptionSource.device`). Several devices in one room hear the same speech: a line another
-  device captioned that repeats, in order, at least 60% of the words of one already shown within 4
-  seconds is left out, so the room reads once; this Mac's own lines come first. Labels: You and Call
-  keep the time lane in Floating Notes; another device's line names the person live speakers
-  recognized before its words, else the device ("Soundcore", "iPhone"); the conversation page reads
-  them as turns labelled the same way. The devices' names are saved with the captions
-  (`LiveCaptions.sourceNames`).
-- **Storage.** `LiveCaptionStore` (DaybookCaptions, the iPhone's too) keeps
-  `<library>/LiveCaptions/<meeting id>.json` (directory 0700, file 0600, protected until first
-  unlock): one `LiveCaptions` with You and Call as segments tagged `source` (`.microphone`, `.call`),
-  saved every 10 seconds while listening and at Stop (what stood then is kept as heard), on the
+  All of it is put together off the main actor, as it arrives (`LiveCaptionMixer`). Several sources in
+  one room hear the same speech: lines from different sources that overlap in time (within 4 seconds
+  across devices, 2 between You and Call) and share, in order, at least 60% of the shorter line's
+  words, or where one's ending is the other's beginning (three words or more), are one utterance, and
+  it reads once, from the source that heard it best: the call for remote speakers; else the source
+  with the highest level while it was said (this Mac's microphone and call meters, each recorder's live
+  level, each iPhone's meter over the link), so a worn recorder reads its wearer and the nearest
+  microphone the room; else this Mac's own. Another source's line that runs on past those words shows
+  only its new words, under its own label; one with nothing new isn't shown; a line no other source
+  heard shows as it is, labelled with its device. Verdicts are sticky, so lines don't flicker: until an
+  utterance's lines are all final, or 4 seconds have passed, it keeps the source it first read from,
+  and a line still being revised never takes the place of a final one; settled, it chooses again once
+  (a level must beat the current one by 0.1 to win). Only lines near a change are judged again, each
+  line's words are folded once, and lines that ended 30 seconds before the newest keep their verdicts;
+  the main actor gets the newest eight lines and a version, and the whole list is built only to be saved.
+  Four hours of this Mac's microphone and three other devices, live at ten updates a second, cost under
+  2 ms an update (`LiveCaptionMixTests`). Labels: You and Call keep the time lane in Floating Notes;
+  another device's line names the person live speakers recognized before its words, else the device
+  ("Soundcore", "iPhone"); the conversation page reads them as turns labelled the same way. The
+  devices' names are saved with the captions (`LiveCaptions.sourceNames`), and each line with the
+  other sources that heard it (`alsoHeard`).
+- **Storage.** `LiveCaptionStore` (DaybookCaptions, the iPhone's too) keeps one file per recording,
+  `<library>/LiveCaptions/<meeting id>.<recording id>.json` (directory 0700, file 0600, protected until
+  first unlock; `<meeting id>.json` is one saved before recordings were kept apart), so a second
+  recording into a conversation never overwrites the first's: one `LiveCaptions` with You and Call as
+  segments tagged `source` (`.microphone`, `.call`), when the recording began, and each other device's
+  recording (`tracks`: an iPhone's by the recording ID its companion link gave, a recorder's by its
+  own), saved every 10 seconds while listening and at Stop (what stood then is kept as heard), on the
   store's own queue, never the main thread, with a save still on its way never putting back what a
-  later one replaced. It's outside `Meetings/`, so sync never reads it. One rule on both apps:
-  captions are replaced by any transcript made after they began (`LiveCaptionStore.isReplaced`), and
-  then deleted, as are captions of conversations moved to the Trash (`prune`, off the main thread, a
-  second after a transcript or the set of conversations changes; typing notes never prunes). A Mac
-  conversation exists from the moment it's recorded, so captions of one the library doesn't have are
-  gone; an iPhone recording joins the library only once it's filed, so the iPhone passes its Trash
-  (`trashed`) and keeps captions of a recording stopped a moment ago or left by a crash for recovery.
+  later one replaced. It's outside `Meetings/`, so sync never reads it. One rule on both apps, line by
+  line (`LiveCaptionCoverage`): a line is replaced once a recording that heard it is transcribed (its
+  own source's, or one that heard it too), or, for this device's own lines and lines whose recording
+  isn't known, once any recording transcribed after the captions began ran while it was said. Another
+  device's line whose recording is known waits for that recording, which may have heard what nothing
+  else did. Captions are deleted only once every line is replaced, as are captions of conversations
+  moved to the Trash (`prune`, off the main thread, a second after a transcript or the set of
+  conversations changes; typing notes never prunes). A Mac conversation exists from the moment it's
+  recorded, so captions of one the library doesn't have are gone; an iPhone recording joins the library
+  only once it's filed, so the iPhone passes its Trash (`trashed`) and keeps captions of a recording
+  stopped a moment ago or left by a crash for recovery.
 - **Where they show.** Every live caption on both apps is one renderer, `LiveCaptionStrip`
-  (DaybookDesign), in a style per surface: "LIVE CAPTIONS · TENTATIVE" on top, the newest line in
+  (DaybookDesign), in a style per surface: "Live captions · tentative" on top, the newest line in
   Body ink, earlier ones in Secondary, still-revised words in Meta, and "Listening…" before anything
   is heard. Floating Notes, while recording: a fixed-height strip above Bookmark and Stop (`.panel`)
   with the newest two lines, the newest larger and keeping its latest words; the source (You or
@@ -477,24 +604,26 @@ Code: `Sources/Daybook/Captions/` (the Mac's controller, echo rule, and settings
   six lines in the page's body type (`.feed`). Each surface observes the captions directly, so a
   revised word redraws only it.
 - **Saved captions.** Once the recording stops, both apps show saved captions by one rule
-  (`SavedCaptions.shown`, DaybookUI): a conversation's own, with words to read, until a transcript
-  made after they began replaces them. They read on the transcript's page: in the transcript's place
-  while there's none, with the Transcript switch (⌘2) on, else after the transcript (one from an
-  earlier recording of the conversation, which doesn't cover them; `SavedCaptions.standsIn`). Both
-  draw them with DaybookUI's `SavedCaptionsView`: each caption with its time, which plays the
-  recording it was heard from and marks the caption under the playhead, the person or device before
-  its words, in lighter ink than a transcript, with no editing. Search finds them in conversations
-  nothing else matched, labelled "Live captions · tentative" with the caption's time, and opens the
-  transcript's page at the caption. The Mac reads them off the main actor once they're saved and
-  after pruning (`LiveCaptionsController.readSaved`), and not while it records the conversation,
-  when the conversation page shows them live.
+  (`SavedCaptions.shown`, DaybookUI): a conversation's own, each recording's read together (the oldest
+  first), the lines with words to read that no transcript replaces yet. They read on the transcript's
+  page: in the transcript's place while there's none, with the Transcript switch (⌘2) on, else after
+  the transcript (one that doesn't cover them; `SavedCaptions.standsIn`). Both draw them with
+  DaybookUI's `SavedCaptionsView`: each caption with its time, which plays the recording it was heard
+  from and marks the caption under the playhead, the person or device before its words, in lighter
+  ink than a transcript, with no editing. Search finds them in conversations nothing else matched,
+  labelled "Live captions · tentative" with the caption's time, and opens the transcript's page at the
+  caption. The Mac reads them off the main actor: the conversation saved, each time captions are saved,
+  and every conversation's at launch and after pruning (`LiveCaptionsController.readSaved`); not while
+  it records the conversation, when the conversation page shows them live.
 - **Settings › Recording › Live Captions.** DaybookUI's `LiveCaptionSettingsSection`, the iPhone's
   too: "Show while recording" (on by default, as on the iPhone) and the language ("Same as This Mac",
   any `SpeechTranscriber` locale, and those only the downloaded live recognizers cover,
   `LiveModelSet.languages`: the Latin model's six, the multilingual model's 35; on macOS 15 only
-  those), with a footer, only while captions are on, that says whether the language downloads the
-  first time (never asking triggers a download), or, on macOS 15, that live transcription doesn't
-  cover the chosen language; none when a downloaded recognizer covers it. A language chosen before
+  those), with a footer, only while captions are on, that says why they can't run in the chosen
+  language (the system says it isn't offered, or, on macOS 15, live transcription doesn't cover it);
+  none when they can, including a language the system fetches the first time it's recorded with,
+  which is how it works rather than something to do (never asking triggers a download), and none
+  when a downloaded recognizer covers it. A language chosen before
   its model was removed stays chosen and listed, so the choice still reads, and captions return when
   a model covers it again (`LiveCaptionLanguages`, DaybookCaptions). It's in General, beside the other recording choices, rather than Models: captions use
   the system's speech assets, which Daybook doesn't download or manage, and they never feed the
@@ -548,8 +677,9 @@ tests drive it with scripted looks.
 
 **Use Calendar** (Settings › Recording, under When a call starts; off by default, and unavailable while
 When a call starts is Off) reads the calendars on this Mac through EventKit (`MeetingCalendar.swift`).
-Turning it on asks for full access to events; without it, the switch stays off and the page says so,
-with Open System Settings… (Privacy & Security › Calendars). Events are read on this Mac and never
+Turning it on asks for full access to events; without it, the switch stays off and the page says
+"Daybook can’t read your calendars." with Open System Settings… (Privacy & Security › Calendars), the
+row both apps draw (DaybookUI's `CalendarSettingsRow`). Events are read on this Mac and never
 leave it. Only a meeting's title is kept, as its conversation's title, as a typed one would be.
 
 - **A call takes its meeting's name.** When a call starts, `CalendarMeetings.current` picks the
@@ -646,16 +776,21 @@ candidate becomes the process-tap target.
 ## Notifications
 
 While Daybook isn't in front, `RecordingNotifications` (Sources/Daybook/App/MacNotifications.swift)
-says two things a person would otherwise miss, by the same background-only rule as a recorder's
+says what a person would otherwise miss, by the same background-only rule as a recorder's
 notifications (`DeviceNotifications`):
 
 - **Recording stopped**, when a recording ends without Stop (`AppState.unexpectedStops`: a
   microphone that went, sleep, a disk that couldn't keep up). It names the conversation, unless
   it's Personal, as the menu bar extra never does, says the recorder's one sentence for why, and
-  offers Record Again. A click opens the conversation. It goes once the stop has been seen in the
-  app (`dismissUnexpectedStop`) or the next recording starts.
+  offers Record Again, into that conversation, as Floating Notes' does. A click opens the
+  conversation. It goes once the stop has been seen in the app (`dismissUnexpectedStop`) or the
+  next recording starts.
 - **Recording**, when a call starts recording on its own while Floating Notes isn't showing,
   naming the call ("Zoom call"). A click shows Floating Notes. It goes when that recording ends.
+- **Microphone silent**, when the microphone stops hearing while recording, and **Low on space**,
+  once the disk has room for under half an hour (Floating Notes' chip's sentence, kept up to date in
+  steps of five minutes). Each names the conversation unless it's Personal, a click shows Floating
+  Notes, and each goes when it's over or the recording ends.
 
 Permission is asked the first time someone records or chooses Record Automatically, for
 alerts and sound, as a recorder's first import asks (`DeviceNotifications.authorizationOptions`):
@@ -682,7 +817,12 @@ logic with snapshots and a fake center. The app starts it with its other system 
 - **Output format.** The derived track is 16 kHz, which suits speech recognition and diarization.
   Listen to the original for full bandwidth.
 - **Clock correction.** Drift correction depends on host-time stamps. ScreenCaptureKit's
-  presentation stamps are assumed to be host time. Fusion doesn't apply `clockRate` yet.
+  presentation stamps are assumed to be host time. Fusion applies `clockRate` from the longest clock
+  piece only. A gap longer than 5 minutes isn't padded (its audio starts a new clock segment), and
+  neither the library's one offset and rate nor echo removal's resampler (`SessionTimelineReader`,
+  which reads on across a gap between clock pieces) honours it: audio after one reads early by the
+  gap. With the stall watch restarting a silent source after 3 s, such a gap needs a source dead for
+  five minutes that then comes back.
 - **Detection heuristics.** Automatic detection is defeated by:
   - localized or renamed meeting windows;
   - browser helper-process attribution and custom meeting titles;
@@ -726,13 +866,33 @@ decaying tail, with added noise. They cover:
 - PCM writing, offsets, and gap padding with resync;
 - format changes converted without frame loss;
 - 900 ppm drift in both directions over two minutes, with no stop and no inserted silence;
-- recovery and backward clock jumps.
+- recovery;
+- a +8 s jump padded with 5 ms ramps, a 400 s one skipped onto a new clock segment, and a −0.5 s
+  jump whose overlap is dropped, none stopping the track.
+
+**`Tests/DaybookTests/CaptureResilienceTests.swift`** covers, with fake sources, a fake disk, a fake
+clock, and a fake free-space reading:
+
+- a 5 s disk stall keeping both tracks, padding the hole, and saying what was lost;
+- a call writer stuck for a minute stopping only the call, and the microphone's ending the
+  recording;
+- sources that stop delivering restarted every 3 s, and a tap silent through three rebuilds falling
+  back to ScreenCaptureKit;
+- the audio system restarting both sources, and sleep held off only while recording;
+- a microphone that goes to zeros after speech (and one under −90 dBFS for 20 s) said, and heard
+  again;
+- meters that move alike for 10 ms and 85 ms buffers, with the peak held a second;
+- low space warning under 30 minutes and stopping the call under 3;
+- sleep stopping this Mac's tracks and saying it was for sleep;
+- `MicrophoneRestartTests`: 30 device changes in 10 minutes all followed, 11 in a minute failing, a
+  restart that fails twice then succeeds, and one that falls back to the built-in microphone.
 
 **`Tests/DaybookTests/CallCaptureTests.swift`** covers:
 
 - tap versus ScreenCaptureKit selection with fakes: known app, unknown app, creation or start
   failure, an old OS, and both paths failing;
-- helper and own-process filtering, and the manual call-app choice;
+- helper and own-process filtering, when the tap is rewritten (any change on macOS 15, a new bundle
+  ID on 26), and the manual call-app choice;
 - route classification;
 - the controller end to end with fake sources:
   - levels and the call-detected signal;
@@ -742,7 +902,8 @@ decaying tail, with added noise. They cover:
   - a call-track failure that keeps the microphone running;
   - computer audio that can't start without a call app, recording the microphone alone with its
     one warning, and a known call app whose audio can't be recorded failing the start;
-  - sleep stopping the recording, from a watch that ends with the controller;
+  - sleep stopping the recording, from a watch that ends with the controller (the devices recording
+    along keep going: `PhoneLinkTests`);
   - microphone denial before any call capture;
 - `CaptureFinalizer`:
   - originals byte-identical;
@@ -769,14 +930,16 @@ Spotlight index:
 
 - a recording that stops on its own said once while Daybook is behind, its conversation named
   unless Personal, nothing while it's in front, and taken back once seen;
+- a microphone that stops hearing and a disk running low said while Daybook is behind, kept up to
+  date, and taken back when over or when the recording ends;
 - an automatic start said only while Floating Notes is hidden, taken back when it ends, and an
   earlier stop taken back by the next recording; permission asked once, at the first recording or
   When a call starts (Record Automatically);
-- a click opening the conversation, and Record Again recording with a fake microphone;
+- a click opening the conversation, and Record Again recording into it with a fake microphone;
 - the intents waiting for the app and its library, and Start, Bookmark, Stop, New Note, and Open
   Conversation on the app's state;
 - Spotlight and Shortcuts' suggestions without Personal conversations, following renames, moves to
-  Personal, and the Trash.
+  Personal, and the Trash; Spotlight's items carry the title and dates, never the summary.
 
 **`Tests/DaybookTests/WelcomeTests.swift`** covers Welcome's Record waiting for the library (and
 stopping for a library move or a library that can't open), the free-space check, and the Allow

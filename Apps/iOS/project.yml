@@ -100,6 +100,9 @@ targets:
         # Joining a Soundcore Work's own network for Wi-Fi Fast Transfer (NEHotspotConfiguration;
         # docs/direct-soundcore.md, "Wi-Fi Fast Transfer"). Enabled on the App ID by the account owner.
         com.apple.developer.networking.HotspotConfiguration: true
+        # "Recording stopped" and "Recording paused" are time sensitive (PhoneNotices); the App ID carries the
+        # capability (docs/release.md, "Capabilities and entitlements").
+        com.apple.developer.usernotifications.time-sensitive: true
     info:
       path: DaybookPhone/Resources/Info.plist
       properties:
@@ -126,6 +129,8 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         NSMicrophoneUsageDescription: Daybook records your conversations with the microphone.
         NSCameraUsageDescription: Daybook takes photos of whiteboards, slides, and notes for your conversations.
+        # Asked the first time Personal is unlocked, with Settings' Require Face ID for Personal on (PersonalLock).
+        NSFaceIDUsageDescription: Daybook uses Face ID to show your Personal conversations.
         # Asked only if on-device live captions turn out to need it (see DaybookCaptions' LiveCaptionAuthorization).
         NSSpeechRecognitionUsageDescription: Daybook shows live captions while it records.
         NSCalendarsFullAccessUsageDescription: Daybook names recordings after their meeting and reminds you to record a meeting when it starts.
@@ -240,6 +245,9 @@ targets:
       - path: DaybookPhoneTests
         excludes:
           - "Fixtures/**"
+      # What the package's tests share (waits, defaults and folders removed when a test ends, the doubles for iCloud
+      # and iCloud Keychain), compiled into this bundle: the package's DaybookTestSupport target isn't a product.
+      - path: ../../Tests/DaybookTestSupport
       # Files shipped versions wrote, copied into the bundle as they are (DaybookPhoneTests/Fixtures).
       - path: DaybookPhoneTests/Fixtures
         type: folder

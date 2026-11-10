@@ -24,13 +24,20 @@ public struct TrackCaptureDetails: Codable, Equatable, Sendable {
     /// A recorder's recording (a Soundcore Work's): its clock as Daybook last measured it, and whether
     /// the recording's start was corrected by it. The only field set on an import from a recorder.
     public var recorderClock: CaptureRecorderClock?
+    /// One recording on this Mac: its microphone, computer audio, and echo-cancelled copy share it, made on one clock.
+    /// Two Macs that recorded one conversation are told apart by it (docs/alignment.md, "One origin").
+    public var captureID: UUID?
+    /// The local link's ID for the device that recorded it (`LinkIdentity.deviceID`), the one an iPhone's `peerClocks`
+    /// names, so its clock against another recorder's is known.
+    public var deviceID: String?
 
     public init(method: String? = nil, capturedApps: [String]? = nil, fallbackReason: String? = nil,
                 clockRate: Double? = nil, outputRoute: String? = nil, echoRemoval: EchoRemovalReport? = nil,
-                notes: [String]? = nil, peerClocks: [CapturePeerClock]? = nil, recorderClock: CaptureRecorderClock? = nil) {
+                notes: [String]? = nil, peerClocks: [CapturePeerClock]? = nil, recorderClock: CaptureRecorderClock? = nil,
+                captureID: UUID? = nil, deviceID: String? = nil) {
         self.method = method; self.capturedApps = capturedApps; self.fallbackReason = fallbackReason
         self.clockRate = clockRate; self.outputRoute = outputRoute; self.echoRemoval = echoRemoval; self.notes = notes
-        self.peerClocks = peerClocks; self.recorderClock = recorderClock
+        self.peerClocks = peerClocks; self.recorderClock = recorderClock; self.captureID = captureID; self.deviceID = deviceID
     }
 }
 

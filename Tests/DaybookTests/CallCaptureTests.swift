@@ -1,6 +1,7 @@
 import Accelerate
 import AppKit
 import AVFoundation
+import CoreAudio
 import DaybookCore
 import DaybookTestSupport
 import XCTest
@@ -29,6 +30,10 @@ final class FakeCaptureSource: CaptureAudioSource, ProcessTapReporting, @uncheck
     func stop() async { stopped = true; onBuffer = nil }
     func emit(_ buffer: AVAudioPCMBuffer, at host: TimeInterval) { onBuffer?(buffer, host) }
     func send(_ event: CaptureSourceEvent) { onEvent?(event) }
+
+    /// Why the controller asked it to start again, in order.
+    @MainActor private(set) var restarts: [CaptureRestartReason] = []
+    @MainActor func restart(_ reason: CaptureRestartReason) async { restarts.append(reason) }
 }
 
 final class FakeSystemAudio: SystemAudioProviding {
@@ -244,6 +249,27 @@ final class SystemAudioSelectionTests: XCTestCase {
         XCTAssertTrue(safari.owns(bundleID: "com.apple.WebKit.GPU"))
         let arc = CallAppTarget(bundleID: "company.thebrowser.Browser", displayName: "Arc", isBrowser: true)
         XCTAssertTrue(arc.owns(bundleID: "company.thebrowser.browser.helper"))
+    }
+
+    /// On macOS 15 the tap is rewritten whenever the call app's processes change. On macOS 26 it names their bundle IDs
+    /// and Core Audio adds a restarted or new process of one of them itself, so only a helper with a new bundle ID
+    /// rewrites it.
+    func testTheTapIsRewrittenOnlyForWhatCoreAudioDoesntFollow() {
+        let tapped: [AudioObjectID] = [1, 2]
+        let bundleIDs = ["com.google.Chrome", "com.google.Chrome.helper"]
+        let restarted = [AudioProcessInfo(objectID: 1, pid: 10, bundleID: "com.google.Chrome", isRunningOutput: false),
+                         AudioProcessInfo(objectID: 7, pid: 17, bundleID: "com.google.Chrome.helper", isRunningOutput: true)]
+        XCTAssertTrue(ProcessTapSource.needsRetap(restarted, tapped: tapped, bundleIDs: bundleIDs, followsBundleIDs: false))
+        XCTAssertFalse(ProcessTapSource.needsRetap(restarted, tapped: tapped, bundleIDs: bundleIDs, followsBundleIDs: true),
+                       "Core Audio restores a helper it knows by bundle ID")
+        let newKind = restarted + [AudioProcessInfo(objectID: 8, pid: 18, bundleID: "com.google.Chrome.helper.renderer", isRunningOutput: true)]
+        XCTAssertTrue(ProcessTapSource.needsRetap(newKind, tapped: tapped, bundleIDs: bundleIDs, followsBundleIDs: true))
+        XCTAssertFalse(ProcessTapSource.needsRetap([], tapped: tapped, bundleIDs: bundleIDs, followsBundleIDs: false),
+                       "an app with no processes left keeps the tap it has")
+        let unchanged = [AudioProcessInfo(objectID: 2, pid: 11, bundleID: "com.google.Chrome.helper", isRunningOutput: true),
+                         AudioProcessInfo(objectID: 1, pid: 10, bundleID: "com.google.Chrome", isRunningOutput: false)]
+        XCTAssertFalse(ProcessTapSource.needsRetap(unchanged, tapped: tapped, bundleIDs: bundleIDs, followsBundleIDs: false))
+        if #available(macOS 26.0, *) { XCTAssertTrue(ProcessTapSource.followsBundleIDs) } else { XCTAssertFalse(ProcessTapSource.followsBundleIDs) }
     }
 
     func testManualRecordingTargetsTheAppInACall() {

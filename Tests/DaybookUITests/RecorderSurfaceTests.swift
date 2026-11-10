@@ -63,6 +63,21 @@ final class RecorderSurfaceTests: XCTestCase {
         XCTAssertEqual(RecordingStatusWords.chips(inputs).first?.tone, .attention)
     }
 
+    /// Where the input can be changed (the iPhone's picker, Floating Notes' menu), the phase is its control and says so;
+    /// elsewhere it names the input as it is.
+    func testBehaviorTheInputReadsAsAControlWhereItCanBeChosen() {
+        var inputs = RecordingStatusInputs()
+        inputs.phase = .recording
+        inputs.inputDevice = "iPhone Microphone"
+        XCTAssertEqual(RecordingStatusWords.phase(inputs), RecorderPhase(phase: .recording, title: "Recording", detail: "iPhone Microphone"))
+        inputs.choosesInput = true
+        XCTAssertEqual(RecordingStatusWords.phase(inputs), RecorderPhase(phase: .recording, title: "Recording", detail: "iPhone Microphone ▾",
+                                                                         choosesInput: true, input: "iPhone Microphone"))
+        inputs.inputDevice = nil
+        XCTAssertNil(RecordingStatusWords.phase(inputs)?.detail, "no route yet: nothing to name")
+        XCTAssertEqual(RecordingStatusWords.inputControlName, "Microphone")
+    }
+
     func testBehaviorAPausedRecordingRestsItsMetersAndSaysSo() {
         var inputs = RecordingStatusInputs()
         inputs.phase = .paused
@@ -96,6 +111,105 @@ final class RecorderSurfaceTests: XCTestCase {
         XCTAssertFalse(still.expands)
         XCTAssertEqual(StatusChip.accessibilityValue(progress: working.progress), "40 percent")
         XCTAssertNil(StatusChip.accessibilityValue(progress: still.progress))
+    }
+
+    // MARK: After Stop
+
+    /// One rule on both apps for recording more once a recording ends: Keep Recording into the same conversation for two
+    /// minutes after a Stop, then Record for a new one; Record Again into the same one after a recording that stopped on
+    /// its own, however long ago.
+    func testBehaviorAfterStopKeepRecordingLastsTwoMinutesThenRecordStartsANewConversation() {
+        let stop = Date(timeIntervalSince1970: 1_000)
+        XCTAssertEqual(RecordMore.window, 120)
+        XCTAssertEqual(RecordMore.windowEnds(after: stop), stop.addingTimeInterval(120))
+
+        let justAfter = RecordMore(stoppedShort: false, stoppedAt: stop, now: stop.addingTimeInterval(5))
+        XCTAssertEqual(justAfter, .keepRecording)
+        XCTAssertEqual(justAfter.title, "Keep Recording")
+        XCTAssertTrue(justAfter.recordsIntoSameConversation)
+        XCTAssertEqual(RecordMore(stoppedShort: false, stoppedAt: stop, now: stop.addingTimeInterval(119)), .keepRecording)
+
+        let later = RecordMore(stoppedShort: false, stoppedAt: stop, now: stop.addingTimeInterval(120))
+        XCTAssertEqual(later, .record, "two minutes on, it's for the next call")
+        XCTAssertEqual(later.title, "Record")
+        XCTAssertFalse(later.recordsIntoSameConversation)
+        XCTAssertEqual(RecordMore(stoppedShort: false, stoppedAt: nil, now: stop), .record,
+                       "nothing to go on from: the moment ended early (another recording, the meeting over, the next one starting)")
+
+        let again = RecordMore(stoppedShort: true, stoppedAt: stop, now: stop.addingTimeInterval(3600))
+        XCTAssertEqual(again, .recordAgain, "a recording that stopped on its own is recorded into again, however long ago")
+        XCTAssertEqual(again.title, "Record Again")
+        XCTAssertTrue(again.recordsIntoSameConversation)
+        XCTAssertEqual(RecordMore(stoppedShort: true, stoppedAt: nil), .recordAgain)
+
+        XCTAssertEqual(RecorderAfterStopState(title: "Design review").recordMore, .record, "nothing said: a new conversation")
+        XCTAssertEqual(RecorderAfterStopState(title: "Design review", recordMore: .keepRecording).recordMore.title, "Keep Recording")
+    }
+
+    /// Open after Stop goes to the conversation in Daybook, so it carries the forward chevron of navigation within the
+    /// app, never the arrow out to another app or the web.
+    func testBehaviorOpenAfterStopPointsWithinTheApp() {
+        XCTAssertEqual(OpenControlLabel.symbol, "chevron.forward")
+    }
+
+    /// Bookmark and Stop share their row equally when both keep their words that way; beside Write by Hand, where they
+    /// don't, each gets its words and they share the rest, so Bookmark keeps its word beside a shorter Stop; with no
+    /// room for both, equally again (and the words give way to glyphs).
+    func testBehaviorTheControlRowKeepsBookmarksWordBesideWriteByHand() {
+        let fills = [true, false, true]
+        XCTAssertEqual(RecorderControlTiles.widths(available: 400, ideals: [150, 44, 100], fills: fills, spacing: 12), [166, 44, 166],
+                       "room for both: equal")
+        XCTAssertEqual(RecorderControlTiles.widths(available: 334, ideals: [150, 44, 100], fills: fills, spacing: 12), [158, 44, 108],
+                       "Bookmark's words first, the rest shared")
+        XCTAssertEqual(RecorderControlTiles.widths(available: 250, ideals: [150, 44, 100], fills: fills, spacing: 12), [91, 44, 91],
+                       "no room for both: equal, glyphs")
+        XCTAssertEqual(RecorderControlTiles.widths(available: 300, ideals: [120, 90], fills: [true, true], spacing: 10), [145, 145],
+                       "the Mac's two tiles, as before")
+    }
+
+    /// While recording the open Duo's right page has the whole recorder at rest, one row only over the keyboard, and
+    /// the hand rests collapsed with the title over the notes.
+    func testBehaviorTheOpenDuoRestsAtTheWholeRecorder() {
+        XCTAssertEqual(RecorderSheetSize.resting(in: .spread(crease: 475.5), isWide: false), .expanded)
+        XCTAssertEqual(RecorderSheetSize.expanded.rendered(keyboardUp: true, hasNotice: false), .mini)
+        XCTAssertEqual(RecorderSheetSize.resting(in: .column, isWide: false), .collapsed)
+        XCTAssertFalse(RecorderSheetLook.page.inHand, "the title on the left page, the chips in the sheet")
+        XCTAssertTrue(RecorderSheetLook.page.timelineWhole, "the live timeline in the resting recorder")
+        XCTAssertTrue(RecorderSheetLook.hand.inHand, "title and chips over the notes")
+    }
+
+    /// After Stop the iPhone says what becomes of the recording, as the Mac's panel does: its processing in a chip, in
+    /// the words its library row says, filling as it goes; nothing when the row has nothing to say.
+    func testBehaviorAfterStopTheProcessingChipSaysWhatTheRowSays() throws {
+        let working = try XCTUnwrap(RecordingStatusWords.processingChip(
+            ConversationRowStatus(kind: .processing, text: "Transcribing on this iPhone · 40%", fraction: 0.4)))
+        XCTAssertEqual(working.target, .processing)
+        XCTAssertEqual(working.label, "Transcribing on this iPhone · 40%")
+        XCTAssertEqual(working.shortLabel, "40%")
+        XCTAssertEqual(working.progress, 0.4)
+        XCTAssertEqual(working.tone, .working)
+        XCTAssertTrue(working.isProminent, "what's becoming of it keeps its words longest")
+        XCTAssertNil(RecordingStatusWords.processingChip(ConversationRowStatus(kind: .processing, text: "Transcribing", fraction: 0))?.shortLabel,
+                     "no figure yet: the glyph alone when narrow")
+
+        let mac = try XCTUnwrap(RecordingStatusWords.processingChip(ConversationRowStatus(kind: .waiting, text: "Waiting for your Mac")))
+        XCTAssertEqual(mac.label, "Waiting for your Mac")
+        XCTAssertEqual(mac.shortLabel, "Waiting")
+        XCTAssertEqual(mac.tone, .calm)
+        XCTAssertNil(mac.progress)
+
+        let until = Date(timeIntervalSince1970: 1_012)
+        let countdown = try XCTUnwrap(RecordingStatusWords.processingChip(
+            ConversationRowStatus(kind: .waiting, text: "Summarizing in 12 s", countdownUntil: until)))
+        XCTAssertEqual(countdown.shortLabel, "12 s")
+        XCTAssertEqual(countdown.at(Date(timeIntervalSince1970: 1_004)).label, "Summarizing in 8 s", "its seconds move with it")
+
+        XCTAssertEqual(RecordingStatusWords.processingChip(ConversationRowStatus(kind: .waitingForModels, text: "Waiting for models"))?.tone,
+                       .attention)
+        XCTAssertEqual(RecordingStatusWords.processingChip(ConversationRowStatus(kind: .paused, text: "Paused"))?.shortLabel, "Paused")
+        XCTAssertNil(RecordingStatusWords.processingChip(nil), "done: the row shows its preview, the chips say nothing")
+        XCTAssertNil(RecordingStatusWords.processingChip(ConversationRowStatus(kind: .justFinished, text: nil)))
+        XCTAssertNil(RecordingStatusWords.processingChip(ConversationRowStatus(kind: .recording, text: "Recording now")))
     }
 
     // MARK: Levels

@@ -82,13 +82,13 @@ final class LiveCaptionsTests: XCTestCase {
         XCTAssertEqual(saved.trackID, track.id, "filed with its recording by the time Stop returns")
         XCTAssertEqual(saved.segments.map(\.text), ["Budget agreed", "Next we"])
         XCTAssertEqual(saved.segments.map(\.isTentative), [false, false], "what stood at Stop is kept as heard")
-        let file = try FileManager.default.attributesOfItem(atPath: model.captions.store.url(for: id).path)
+        let file = try FileManager.default.attributesOfItem(atPath: model.captions.store.url(for: saved.key).path)
         XCTAssertEqual(file[.posixPermissions] as? Int, 0o600, "readable by this user only, as on the Mac")
         let filed = try XCTUnwrap(model.library.controller.meeting(id))
         XCTAssertEqual(SavedCaptions.shown(saved, for: filed), saved, "until a Mac's transcript arrives")
         XCTAssertTrue(SavedCaptions.standsIn(for: filed), "in the transcript's place")
         XCTAssertFalse(saved.segments.isEmpty)
-        XCTAssertFalse(model.captions.store.url(for: id).path.contains("/Meetings/"), "never inside what syncs")
+        XCTAssertFalse(model.captions.store.url(for: saved.key).path.contains("/Meetings/"), "never inside what syncs")
 
         // Moving the conversation to the Trash removes them.
         _ = try await model.library.controller.moveToTrash(id)
@@ -233,22 +233,40 @@ final class LiveCaptionsTests: XCTestCase {
         XCTAssertEqual(model.captions.segments.map { CaptionLine($0, names: model.captions.sourceNames).speaker }, [nil, "Soundcore"],
                        "as the strip draws it, on the Mac too")
 
-        // What goes to a Mac recording it too: each line once, then only what changes.
+        // What goes to a Mac recording it too: every line this iPhone and its recorder heard, each once, then only what
+        // changes and what's taken back. The Mac puts them together with its own.
         var share = CaptionShare()
-        let first = share.changes(model.captions.segments, names: model.captions.sourceNames)
-        XCTAssertEqual(first.map(\.text), ["Heard on the phone.", "Heard by the recorder."])
-        XCTAssertEqual(first.map(\.device), [nil, "Soundcore"])
-        XCTAssertTrue(share.changes(model.captions.segments, names: model.captions.sourceNames).isEmpty)
-        var revised = model.captions.segments
+        let heard = await model.captions.forwardable()
+        let first = share.changes(heard, names: model.captions.sourceNames)
+        XCTAssertEqual(first.lines.map(\.text), ["Heard on the phone.", "Heard by the recorder.", "heard on the phone"])
+        XCTAssertEqual(first.lines.map(\.device), [nil, "Soundcore", "Soundcore"])
+        XCTAssertTrue(share.changes(heard, names: model.captions.sourceNames).lines.isEmpty)
+        var revised = heard
         revised[0].text = "Heard on the phone, clearly."
-        XCTAssertEqual(share.changes(revised, names: model.captions.sourceNames).map(\.text), ["Heard on the phone, clearly."])
+        XCTAssertEqual(share.changes(revised, names: model.captions.sourceNames).lines.map(\.text), ["Heard on the phone, clearly."])
+        let taken = share.changes(Array(revised.dropLast()), names: model.captions.sourceNames)
+        XCTAssertEqual(taken.removed, [heard[2].id], "a line no longer there is taken back on the Mac too")
+        XCTAssertTrue(taken.lines.isEmpty)
         XCTAssertTrue(model.macsShowingCaptions(try XCTUnwrap(model.recorder.captureID)).isEmpty, "no Mac here to send them to")
+
+        // A Mac recording it too sends its call's lines: they join this iPhone's as Call, and never go back.
+        let mac = UUID()
+        model.macCaptioned(LinkCaptions(conversationID: try XCTUnwrap(model.recorder.captureID), startedAt: start.addingTimeInterval(1),
+                                        lines: [.init(id: UUID(), start: 7, end: 8, text: "Can everyone hear me?", isTentative: false)]),
+                           from: mac)
+        try await waitUntil("the Mac's call") { model.captions.segments.count == 3 }
+        XCTAssertEqual(model.captions.segments.last?.start ?? 0, 8, accuracy: 0.01)
+        XCTAssertEqual(model.captions.segments.last.flatMap { LiveCaptionLabels.speaker($0, names: model.captions.sourceNames) }, "Call")
+        let forwarded = await model.captions.forwardable()
+        XCTAssertFalse(forwarded.contains { $0.text == "Can everyone hear me?" })
 
         let id = try XCTUnwrap(model.recorder.captureID)
         try await model.stopRecording()
         let saved = try XCTUnwrap(model.captions.store.captions(for: id))
-        XCTAssertEqual(saved.segments.count, 2)
+        XCTAssertEqual(saved.segments.count, 3)
         XCTAssertEqual(saved.sourceNames?[LiveCaptionSource.device("sim").rawValue], "Soundcore")
+        let call = try XCTUnwrap(saved.segments.last?.source)
+        XCTAssertEqual(saved.tracks?[call.rawValue]?.capture, "systemAudio", "replaced by the Mac's call recording's transcript")
     }
 
     func testCaptionsOffMeansNoCaptioner() async throws {

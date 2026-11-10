@@ -55,6 +55,29 @@ final class ProcessingStatusTests: XCTestCase {
         XCTAssertEqual(ProcessingStatus(silent, now: now), .done)
     }
 
+    /// Transcript first (uxf-01): a Mac without its summary model (`canProcess` is about what transcribes) shows a
+    /// transcript it made as transcribed, not as waiting for models; and the phone whose Transcribe it carried out reads
+    /// the Summarize it left open as waiting for a Mac.
+    func testBehaviorATranscriptMadeWithoutTheSummaryModelReadsAsTranscribed() throws {
+        var meeting = recorded()
+        let track = meeting.tracks[0].id
+        let words = TranscriptSegment(trackID: track, start: 0, end: 2, text: "Agenda first.")
+        meeting.transcripts = [TrackTranscript(trackID: track, segments: [words], createdAt: now)]
+        meeting.unifiedTranscript = [words]
+        XCTAssertEqual(ProcessingStatus(meeting, queue: .init(canProcess: true), now: now), .transcribed)
+        XCTAssertEqual(ProcessingStatus(meeting, queue: .init(canProcess: false), now: now), .transcribed,
+                       "Nothing to transcribe: no models to wait for")
+        XCTAssertEqual(ProcessingStatus(recorded(), queue: .init(canProcess: false), now: now), .requested(.models))
+
+        var asked = meeting
+        let transcribe = ProcessingRequest(meetingID: meeting.id, mode: .newAudio, requestedBy: phone, createdAt: now)
+        asked.upsertProcessingRequest(try XCTUnwrap(transcribe.completed(by: mac, at: now)))
+        XCTAssertEqual(ProcessingStatus(asked, now: now), .transcribed, "Completed, with nothing left asked for")
+        let summarize = ProcessingRequest(meetingID: meeting.id, mode: .summaryOnly, requestedBy: mac, createdAt: now)
+        asked.upsertProcessingRequest(summarize)
+        XCTAssertEqual(ProcessingStatus(asked, now: now), .requested(.device(summarize)), "The phone waits for a Mac to summarize")
+    }
+
     func testAnOpenRequestWaitsForAMac() {
         var meeting = recorded()
         let request = ProcessingRequest(meetingID: meeting.id, mode: .newAudio, requestedBy: phone, createdAt: now)

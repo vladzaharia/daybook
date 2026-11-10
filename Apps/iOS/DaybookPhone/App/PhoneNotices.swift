@@ -15,6 +15,11 @@ import UserNotifications
 /// - A recording stopped by itself while Daybook wasn't in front (storage full or too slow, the
 ///   encoder failed): time-sensitive, so it reaches a pocket through Focus, and opening it goes to the
 ///   conversation it was saved in.
+/// - The Mac this iPhone records for can't be reached, while this iPhone keeps recording (`LeaderWatch`); taken
+///   back when it's heard from again or the recording ends.
+/// - A recording paused while Daybook wasn't in front that won't go on by itself (a call or Siri ended
+///   without iOS asking to continue, a resume that failed): "Recording paused", time-sensitive, opening
+///   the recorder, where Daybook resumes it. It goes once the recording goes on or stops.
 @MainActor
 struct PhoneNotices {
     /// One notification.
@@ -57,6 +62,19 @@ struct PhoneNotices {
     }
 
     func recorderStopped() { remove(Self.recorderRecordingID) }
+
+    // MARK: The Mac this recording follows, out of reach
+
+    static let leaderOutOfReachID = "multipoint.leader-out-of-reach"
+
+    /// The Mac this iPhone records for can't be reached and this iPhone keeps recording (`LeaderWatch`): "Out of reach",
+    /// with the sentence the recording screen says.
+    func leaderOutOfReach(_ words: String) {
+        post(Notice(id: Self.leaderOutOfReachID, title: LeaderWatch.outOfReachLabel, body: words, destination: .recording))
+    }
+
+    /// The Mac is back, or the recording ended.
+    func leaderBack() { remove(Self.leaderOutOfReachID) }
 
     // MARK: A recording that stopped by itself
 
@@ -110,6 +128,20 @@ struct PhoneNotices {
     func recordingStopped(_ text: (title: String, body: String), opening destination: AppDestination) {
         post(Notice(id: Self.recordingStoppedID, title: text.title, body: text.body, destination: destination, timeSensitive: true))
     }
+
+    // MARK: A recording that's paused
+
+    static let recordingPausedID = "recording.paused"
+    /// "Recording paused", and that opening Daybook resumes it.
+    static let recordingPausedText = (title: "Recording paused", body: "Open Daybook to resume recording.")
+
+    func recordingPaused() {
+        let text = Self.recordingPausedText
+        post(Notice(id: Self.recordingPausedID, title: text.title, body: text.body, destination: .recording, timeSensitive: true))
+    }
+
+    /// It went on, or stopped (or an earlier run left it): the notice is no longer true.
+    func recordingNoLongerPaused() { remove(Self.recordingPausedID) }
 
     // MARK: A meeting starting
 

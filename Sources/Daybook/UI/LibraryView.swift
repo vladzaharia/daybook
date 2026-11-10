@@ -39,10 +39,11 @@ struct LibraryView: View {
     /// The window's: Edit › Undo takes a Move to Trash back.
     @Environment(\.undoManager) private var undoManager
     // Where the person was, for the window to reopen there (`LibraryRestoration`): the place, the conversation, its
-    // page, and which columns they chose to show.
+    // page (and whether they collapsed the two pages to it), and which columns they chose to show.
     @SceneStorage("library.place") private var storedPlace = ""
     @SceneStorage("library.selection") private var storedSelection = ""
     @SceneStorage("library.page") private var storedPage = ""
+    @SceneStorage("library.spread") private var storedSpread = true
     @SceneStorage("library.columns") private var storedColumns = ColumnFit.all.rawValue
     @SceneStorage("library.toolbar") private var toolbarShown = true
     @State private var restored = false
@@ -70,7 +71,8 @@ struct LibraryView: View {
                 if state.place.isDevice && !state.isSearching { DeviceRecordingsList(state: state) }
                 else { ConversationList(state: state) }
             }
-            .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 380)
+            // A wide window gives the list room for two lines of gist (`ConversationRowView.twoLineGistWidth`).
+            .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 440)
         } detail: {
             // The inspector puts the page and itself in a split view of their own, and gives each a
             // new split item when its view's identity changes. Swapping the page's item takes the
@@ -133,6 +135,7 @@ struct LibraryView: View {
         .onChange(of: state.place) { _, place in if restored { storedPlace = LibraryRestoration.encode(place) } }
         .onChange(of: state.selectedID) { _, id in if restored { storedSelection = id?.uuidString ?? "" } }
         .onChange(of: state.pageMode) { _, mode in if restored { storedPage = mode.rawValue } }
+        .onChange(of: state.pageSpreadChosen) { _, chosen in if restored { storedSpread = chosen } }
         .sheet(item: $state.activeSheet) { sheet in ConversationSheet(state: state, sheet: sheet) }
         .sheet(item: $state.addDeviceRequest) { request in AddDeviceSheet(state: state, request: request) }
         .sheet(item: $state.libraryMoveOffer) { offer in LibraryMoveSheet(state: state, offer: offer) }
@@ -174,6 +177,9 @@ struct LibraryView: View {
                 .equatable()
                 .id(meeting.id)
                 .modifier(AddRecordingDrop(state: state, meeting: meeting))
+        } else if state.place == .section(.personal), state.personalLock.isLocked, !state.isSearching, !state.visibleMeetings.isEmpty {
+            // Personal, locked: its page waits for the person to unlock it.
+            LockedConversationPage { Task { await state.unlockPersonal() } }
         } else if state.isReady && state.meetings.isEmpty {
             EmptyLibraryView(state: state)
         } else if !state.isSearching && state.visibleMeetings.isEmpty {
@@ -210,7 +216,7 @@ struct LibraryView: View {
         let visible = state.visibleMeetings
         if let selected = state.selectedID, visible.contains(where: { $0.id == selected }) { return }
         state.multiSelection = []
-        state.selectedID = visible.first?.id
+        state.selectQuietly(visible.first?.id)
     }
 
     /// Typing "#tag " turns the tag into a token.
@@ -315,6 +321,7 @@ struct LibraryView: View {
             storedPlace = LibraryRestoration.encode(state.place)
             storedSelection = state.selectedID?.uuidString ?? ""
             storedPage = state.pageMode.rawValue
+            storedSpread = state.pageSpreadChosen
         }
         // The columns the person chose, as far as the window has room for them: one change, straight there.
         adaptColumns()
@@ -324,9 +331,10 @@ struct LibraryView: View {
         }
         if let id = LibraryRestoration.selection(storedSelection, in: state.place.isDevice ? [] : state.visibleMeetings) {
             state.multiSelection = []
-            state.selectedID = id
+            state.selectQuietly(id)
         }
         if let page = PageMode(rawValue: storedPage) { state.pageMode = page }
+        state.pageSpreadChosen = storedSpread
     }
 
     /// Share and Tags… from More: what needs the window.
@@ -572,27 +580,34 @@ private struct RecordingPill: View {
 private struct EmptyLibraryView: View {
     @Bindable var state: AppState
     @State private var isDropTargeted = false
+    /// Record's and Import's words.
+    private static let controlText: CGFloat = 13
     var body: some View {
         VStack(spacing: Space.s4) {
             DaybookMark(size: 64)
                 .padding(.bottom, Space.s2)
             Text("No Conversations Yet").font(TypeStyle.docTitleSmall).foregroundStyle(Ink.title)
             Text("Record a conversation, or drop audio files here.").foregroundStyle(Ink.secondary)
+            // One shape for both: capsules of one height, Import the quieter.
             HStack(spacing: Space.s3) {
                 // The red dot, as on the toolbar's Record and Floating Notes': the one red control.
                 Button { Task { await state.startRecording() } } label: {
-                    RecordControlLabel(size: 13).padding(.horizontal, 14).padding(.vertical, 6)
+                    RecordControlLabel(size: Self.controlText).padding(.horizontal, 14).padding(.vertical, 6)
                 }
                 .buttonStyle(DaybookControlStyle(role: .standard, shape: .capsule))
                 .disabled(!state.isReady || state.isStartingRecording)
-                Button("Import Audio…") { state.chooseImport() }
-                    .buttonStyle(.bordered)
+                Button { state.chooseImport() } label: {
+                    Text("Import Audio…")
+                        .font(.system(size: Self.controlText, weight: .medium))
+                        .foregroundStyle(DaybookPalette.Ink.body)
+                        .padding(.horizontal, 14).padding(.vertical, 6)
+                }
+                .buttonStyle(DaybookControlStyle(role: .standard, shape: .capsule))
             }
-            .controlSize(.large)
             .padding(.top, Space.s2)
-            if let id = state.downloadingID {
+            if let models = state.modelDownloadState {
                 ActivityReader {
-                    Text("Downloading \(state.modelCatalog.name(for: id)) · \(Int(state.downloadProgress.fraction * 100))%")
+                    Text(ProcessingWords.modelDownloadLine(models))
                         .font(TypeStyle.status)
                         .foregroundStyle(Ink.secondary)
                         .padding(.top, Space.s6)
@@ -617,9 +632,11 @@ private struct BatchSelectionView: View {
     var body: some View {
         VStack(spacing: Space.s3) {
             Text("\(meetings.count) Conversations").font(TypeStyle.docTitleSmall).foregroundStyle(Ink.title)
-            // Up to four names; "and 1 more" would take the place of the one name it hides.
-            Text(meetings.count > 4 ? meetings.prefix(3).map(\.title).joined(separator: ", ") + ", and \(meetings.count - 3) more"
-                 : meetings.map(\.title).formatted(.list(type: .and)))
+            // Up to four names; "and 1 more" would take the place of the one name it hides. One the Personal lock hides
+            // is "Personal conversation".
+            let titles = meetings.map { state.personalLock.hides($0) ? PersonalLockWords.hiddenTitle : $0.title }
+            Text(titles.count > 4 ? titles.prefix(3).joined(separator: ", ") + ", and \(titles.count - 3) more"
+                 : titles.formatted(.list(type: .and)))
                 .foregroundStyle(Ink.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 420)

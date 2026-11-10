@@ -162,10 +162,12 @@ public struct UpgradeOffer: Equatable, Sendable {
 public enum Upgrades {
     /// The one offer a conversation's page makes now, or nil: only for a conversation with nothing working or waiting
     /// (`status` is done), for the most upstream step a clearly better model could redo (it redoes the rest anyway), and
-    /// never for a step whose provenance is unknown, or an offer the person dismissed (nor any no better than it).
+    /// never for a step whose provenance is unknown, or an offer the person dismissed (nor any no better than it). A
+    /// transcript with no summary yet is never an upgrade: its summary is still to come (a Mac transcribes first and
+    /// summarizes once its summary model is here), and the first summary isn't a better one.
     public static func offer(for meeting: Meeting, status: ProcessingStatus, candidates: UpgradeCandidates,
                              ranks: UpgradeRanks = .builtIn) -> UpgradeOffer? {
-        guard status == .done else { return nil }
+        guard status == .done, meeting.summary != nil || meeting.unifiedTranscript.isEmpty else { return nil }
         for role in UpgradeRole.allCases {
             if let offer = offer(role, for: meeting, candidates: candidates, ranks: ranks) { return offer }
         }
@@ -185,8 +187,8 @@ public enum Upgrades {
     }
 
     /// The best model within reach for `role`, by rank: this device's, then each reachable Mac's in order, then (for
-    /// summaries) the cloud's; on a tie the earlier one, so work stays nearest. A transcription model is a candidate only
-    /// when it covers every recording's language as transcribed.
+    /// summaries) the cloud's, never for a Personal conversation; on a tie the earlier one, so work stays nearest. A
+    /// transcription model is a candidate only when it covers every recording's language as transcribed.
     static func best(_ role: UpgradeRole, for meeting: Meeting, candidates: UpgradeCandidates,
                      ranks: UpgradeRanks) -> (place: UpgradeOffer.Place, model: String, quality: Int)? {
         var options: [(place: UpgradeOffer.Place, model: String)] = []
@@ -196,7 +198,10 @@ public enum Upgrades {
         for mac in candidates.macs {
             if let model = runs(role, mac.capabilities) { options.append((.mac(ProcessingRequest.Device(id: mac.id, name: mac.name)), model)) }
         }
-        if role == .summarization, let cloud = candidates.cloud { options.append((.cloud(cloud), "\(cloud.provider.rawValue)/\(cloud.id)")) }
+        // A Personal conversation is never nudged toward the cloud: it goes there only when the person chooses it.
+        if role == .summarization, meeting.effectivePlacement != .personal, let cloud = candidates.cloud {
+            options.append((.cloud(cloud), "\(cloud.provider.rawValue)/\(cloud.id)"))
+        }
         var best: (place: UpgradeOffer.Place, model: String, quality: Int)?
         for option in options {
             guard let quality = ranks.quality(of: option.model, for: role), quality > (best?.quality ?? -1) else { continue }

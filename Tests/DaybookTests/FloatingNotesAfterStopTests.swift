@@ -1,5 +1,6 @@
 import AVFoundation
 import DaybookCore
+import DaybookKit
 import DaybookTestSupport
 import DaybookUI
 import Foundation
@@ -127,6 +128,130 @@ final class FloatingNotesAfterStopTests: XCTestCase {
         let inputs = FloatingStatusInputs.make(state, meeting: meeting, afterStop: true, inputDevice: nil)
         XCTAssertEqual(inputs.phase, .saved)
         XCTAssertEqual(FloatingStatus.phase(inputs)?.detail, "18 min")
+        await state.flush()
+    }
+
+    // MARK: Recording more (`RecordMore`)
+
+    /// One rule on both apps: after a Stop, Keep Recording records into the same conversation, after what was saved,
+    /// for two minutes; then Record starts a new one, for the next call.
+    func testBehaviorAfterAStopKeepRecordingRecordsIntoTheSameConversationThenRecordStartsANewOne() async throws {
+        let microphone = FakeCaptureSource(method: "microphone")
+        let state = await state(microphone)
+        await state.startRecording()
+        let id = try XCTUnwrap(state.recordingID)
+        speak(microphone)
+        await state.stopRecording()
+        try await waitUntil("the capture to finish") { state.recordingID == nil }
+
+        XCTAssertEqual(state.recordMore(after: id), .keepRecording)
+        XCTAssertEqual(state.recordMore(after: id, now: Date().addingTimeInterval(RecordMore.window + 1)), .record, "two minutes on")
+        XCTAssertEqual(state.recordMore(after: UUID()), .record, "only the conversation that was just stopped")
+
+        await state.record(.keepRecording, after: id)
+        XCTAssertEqual(state.recordingID, id, "Keep Recording records into the same conversation, its processing set aside")
+        XCTAssertEqual(state.meetings.count, 1, "no second conversation")
+        XCTAssertNil(state.afterStop.stoppedAt(id), "recording again ends the moment")
+        speak(microphone)
+        await state.stopRecording()
+        try await waitUntil("the second capture to finish") { state.recordingID == nil }
+        XCTAssertEqual(state.recordMore(after: id), .keepRecording, "every Stop has its own two minutes")
+
+        // Past the moment, Record makes a new conversation for the next call.
+        let selected = state.selectedID
+        await state.record(.record, after: id)
+        let next = try XCTUnwrap(state.recordingID)
+        XCTAssertNotEqual(next, id)
+        XCTAssertEqual(state.selectedID, selected, "started from the panel, the window is left as it was")
+        XCTAssertEqual(state.meetings.count, 2)
+        speak(microphone)
+        await state.stopRecording()
+        try await waitUntil("the third capture to finish") { state.recordingID == nil }
+        await state.flush()
+    }
+
+    /// Keep Recording ends early when the meeting it would join is over: the call's meeting ended, the next call or
+    /// calendar meeting started; and a stop the call's end made is final from the start.
+    func testBehaviorTheMeetingEndingOrTheNextStartingEndsKeepRecording() async throws {
+        let microphone = FakeCaptureSource(method: "microphone")
+        let state = await state(microphone)
+        let zoom = MeetingCandidate(bundleID: "us.zoom.xos", appName: "Zoom", windowTitle: "Zoom Meeting", hasInputActivity: true,
+                                    hasOutputActivity: true, hasMeetingWindow: true, isBrowser: false)
+        let id = state.newMeeting(title: "Design review")
+
+        state.afterStop.began(id)
+        XCTAssertEqual(state.recordMore(after: id), .keepRecording)
+        _ = state.monitor.onMeetingEnded?(zoom)
+        XCTAssertEqual(state.recordMore(after: id), .record, "the call's meeting ended")
+
+        state.afterStop.began(id)
+        state.callAppChoices = ["us.zoom.xos": .never]
+        _ = state.monitor.onMeetingStarted?(zoom)
+        XCTAssertEqual(state.recordMore(after: id), .record, "the next call started")
+
+        let stoppedAt = Date()
+        state.afterStop.began(id, at: stoppedAt)
+        let next = MeetingEvent(id: "Next", title: "Planning", start: stoppedAt.addingTimeInterval(60), end: stoppedAt.addingTimeInterval(1860),
+                                attendees: 3)
+        let earlier = MeetingEvent(id: "Earlier", title: "Design review", start: stoppedAt.addingTimeInterval(-60),
+                                   end: stoppedAt.addingTimeInterval(1740), attendees: 3)
+        state.meetingCalendar = FakeMeetingCalendar(meetings: [earlier, next])
+        state.usesCalendar = true
+        state.askedMeetings = ["Next", "Earlier"]
+        state.checkCalendar(at: stoppedAt.addingTimeInterval(10))
+        XCTAssertEqual(state.recordMore(after: id), .keepRecording, "the meeting it stopped in isn't the next one")
+        state.checkCalendar(at: stoppedAt.addingTimeInterval(45))
+        XCTAssertEqual(state.recordMore(after: id), .record, "the next meeting is starting")
+
+        // A recording the call's end stopped (or turning calls off) can't be gone on with, nor one the person stopped
+        // when the prompt asked as the call or the meeting ended.
+        await state.startRecording()
+        let automatic = try XCTUnwrap(state.recordingID)
+        speak(microphone)
+        await state.stopRecording(manual: false)
+        try await waitUntil("the capture to finish") { state.recordingID == nil }
+        XCTAssertEqual(state.recordMore(after: automatic), .record)
+        await state.startRecording()
+        let asked = try XCTUnwrap(state.recordingID)
+        speak(microphone)
+        await state.stopRecording(manual: true, meetingOver: true)
+        try await waitUntil("the second capture to finish") { state.recordingID == nil }
+        XCTAssertEqual(state.recordMore(after: asked), .record)
+        await state.flush()
+    }
+
+    /// A recording that starts anywhere but the library window's own Record (a call, the prompt, the menu bar, Floating
+    /// Notes, a notification, a recorder) lands in All Conversations, unfiled, and leaves the window on what it showed.
+    func testBehaviorARecordingStartedElsewhereLandsInAllAndLeavesTheWindowAlone() async throws {
+        let microphone = FakeCaptureSource(method: "microphone")
+        let state = await state(microphone)
+        state.place = .section(.personal)
+        let reading = state.newMeeting(title: "Prep notes")
+        XCTAssertEqual(state.selectedID, reading)
+
+        await state.startRecording(title: "Zoom Meeting", automatic: true, from: .elsewhere)
+        let call = try XCTUnwrap(state.recordingID)
+        let recorded = try XCTUnwrap(state.meetings.first { $0.id == call })
+        XCTAssertNil(recorded.placement, "not filed into Personal because the window happened to show it")
+        XCTAssertNil(recorded.folderID)
+        XCTAssertTrue(LibrarySection.all.contains(recorded))
+        XCTAssertEqual(state.selectedID, reading, "the page the person was reading stays")
+        XCTAssertEqual(state.place, .section(.personal))
+        speak(microphone)
+        await state.stopRecording()
+        try await waitUntil("the capture to finish") { state.recordingID == nil }
+
+        // The window's own Record files into the place it shows and opens the recording, as before.
+        state.createFolder(named: "Hiring", moving: [])
+        let folder = try XCTUnwrap(state.folders.first { $0.name == "Hiring" })
+        state.place = .folder(folder.id)
+        await state.startRecording()
+        let own = try XCTUnwrap(state.recordingID)
+        XCTAssertEqual(state.meetings.first { $0.id == own }?.folderID, folder.id)
+        XCTAssertEqual(state.selectedID, own)
+        speak(microphone)
+        await state.stopRecording()
+        try await waitUntil("the second capture to finish") { state.recordingID == nil }
         await state.flush()
     }
 }

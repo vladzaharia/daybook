@@ -356,11 +356,29 @@ final class PCMTrackWriterTests: XCTestCase {
             XCTAssertNil(outcome.error)
             XCTAssertEqual(track.frameCount, Int64(buffers * 800))
             let anchors = try XCTUnwrap(track.clockAnchors)
-            // About one anchor per second of host time.
-            XCTAssertTrue((115...132).contains(anchors.count), "\(anchors.count) anchors")
+            // About one anchor a second for the first minute, then one every ten seconds (`ClockAnchorSchedule`): with
+            // 0.1 s buffers a fast clock's anchors come every 11 buffers (1.1 s), a slow clock's every 10.
+            XCTAssertTrue((56...72).contains(anchors.count), "\(anchors.count) anchors")
             XCTAssertFalse(anchors.contains { $0.resync == true })
             XCTAssertEqual(track.clock.driftPPM, drift * 1e6, accuracy: 5)
         }
+    }
+
+    /// The sidecar is written off the audio queue every ten seconds, compact; the finished track's is written last.
+    func testTheSidecarIsCompactAndTheFinishedTracksIsTheLastWritten() async throws {
+        let directory = try temporaryDirectory()
+        let manifest = CaptureSessionManifest(id: UUID(), startedAt: Date(), hostTimeSeconds: 10, includeSystemAudio: false)
+        let writer = PCMTrackWriter(role: .microphone, directory: directory, manifest: manifest) { XCTFail($0.localizedDescription) }
+        for index in 0..<250 { writer.append(audio(frames: 800, rate: 8_000), hostTimeSeconds: 10 + Double(index) * 0.1) }
+        let outcome = await writer.finish()
+        let track = try XCTUnwrap(outcome.track)
+        XCTAssertNil(outcome.error)
+        let bytes = try Data(contentsOf: directory.appendingPathComponent("microphone.json"))
+        XCTAssertFalse(bytes.contains(UInt8(ascii: "\n")), "compact")
+        let saved = try CaptureJSON.decoder().decode(CapturedAudioTrack.self, from: bytes)
+        XCTAssertEqual(saved.frameCount, 200_000)
+        XCTAssertEqual(saved.clockAnchors, track.clockAnchors)
+        XCTAssertEqual(saved.clockAnchors?.count, 25)
     }
 
     func testAudioBufferCopyOwnsItsSamples() {
@@ -392,16 +410,56 @@ final class PCMTrackWriterTests: XCTestCase {
         XCTAssertFalse(recovered.warnings.isEmpty)
     }
 
-    func testBackwardClockJumpStopsWithoutCorruptingPartialAudio() async throws {
+    /// The iPhone's rule on the Mac: a clock that jumps back half a second drops what overlaps the written audio and
+    /// resyncs; the track never stops.
+    func testBackwardClockJumpDropsTheOverlapAndKeepsRecording() async throws {
         let directory = try temporaryDirectory()
         let manifest = CaptureSessionManifest(id: UUID(), startedAt: Date(), hostTimeSeconds: 50, includeSystemAudio: false)
-        let failure = expectation(description: "clock jump reported")
-        let writer = PCMTrackWriter(role: .microphone, directory: directory, manifest: manifest) { _ in failure.fulfill() }
-        writer.append(audio(), hostTimeSeconds: 50)
-        writer.append(audio(), hostTimeSeconds: 49)
+        let writer = PCMTrackWriter(role: .microphone, directory: directory, manifest: manifest) { XCTFail($0.localizedDescription) }
+        writer.append(audio(frames: 48_000), hostTimeSeconds: 50)
+        writer.append(audio(frames: 48_000), hostTimeSeconds: 50.5)
+        writer.append(audio(frames: 48_000), hostTimeSeconds: 51.5)
         let outcome = await writer.finish()
-        await fulfillment(of: [failure], timeout: TestTiming.scaled(2))
-        XCTAssertNotNil(outcome.error)
-        XCTAssertEqual(outcome.track?.frameCount, 4_800)
+        let track = try XCTUnwrap(outcome.track)
+        XCTAssertNil(outcome.error)
+        XCTAssertEqual(track.frameCount, 48_000 * 5 / 2, "the half second that overlapped is dropped")
+        XCTAssertEqual(track.gaps, [CaptureGap(kind: .overlap, frame: 48_000, seconds: 0.5)])
+        XCTAssertEqual(track.clockAnchors?.first { $0.resync == true }?.hostTime ?? 0, 51, accuracy: 1e-9,
+                       "the audio after the jump continues where the timeline is")
+        XCTAssertEqual(try AVAudioFile(forReading: track.url).length, track.frameCount)
+    }
+
+    /// A source that returns 8 s later is padded (so transcript times hold), with 5 ms ramps at the seams so the silence
+    /// doesn't click; one gone longer than five minutes isn't padded, and starts a new clock segment instead.
+    func testForwardJumpsArePaddedWithRampsUpToFiveMinutesAndSkippedBeyond() async throws {
+        let directory = try temporaryDirectory()
+        let manifest = CaptureSessionManifest(id: UUID(), startedAt: Date(), hostTimeSeconds: 50, includeSystemAudio: false)
+        let writer = PCMTrackWriter(role: .microphone, directory: directory, manifest: manifest) { XCTFail($0.localizedDescription) }
+        writer.append(audio(), hostTimeSeconds: 50)
+        writer.append(audio(), hostTimeSeconds: 58.1)
+        writer.append(audio(), hostTimeSeconds: 58.2 + 400)
+        let outcome = await writer.finish()
+        let track = try XCTUnwrap(outcome.track)
+        XCTAssertNil(outcome.error)
+        XCTAssertEqual(track.frameCount, 4_800 * 3 + 8 * 48_000, "8 s padded, the 400 s gap not")
+        XCTAssertEqual(track.gaps?.map(\.kind), [.padded, .skipped])
+        XCTAssertEqual(track.gaps?[0].seconds ?? 0, 8, accuracy: 1e-6)
+        XCTAssertEqual(track.gaps?[1].seconds ?? 0, 400, accuracy: 1e-6)
+        let resyncs = track.clockAnchors?.filter { $0.resync == true } ?? []
+        XCTAssertEqual(resyncs.last?.hostTime ?? 0, 458.2, accuracy: 1e-9, "the audio after the long gap is placed by its own anchor")
+        XCTAssertTrue(track.notes?.contains("1 gap was filled with silence (8 s). 1 gap longer than five minutes was left out (7 min).") == true,
+                      "\(track.notes ?? [])")
+
+        let file = try AVAudioFile(forReading: track.url)
+        let read = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length))!
+        try file.read(into: read)
+        let samples = read.floatChannelData![0]
+        let padStart = 4_800, padEnd = 4_800 + 8 * 48_000
+        XCTAssertEqual(samples[padStart - 1], 0.25, accuracy: 1e-6, "the captured audio is untouched")
+        XCTAssertEqual(samples[padStart], 0.25 * 240 / 241, accuracy: 1e-4, "the silence ramps down from the last sample")
+        XCTAssertEqual(samples[padStart + 240], 0, accuracy: 1e-6, "and is silent after 5 ms")
+        XCTAssertEqual(samples[padStart + 100_000], 0, accuracy: 1e-6)
+        XCTAssertEqual(samples[padEnd - 1], 0.25 * 240 / 241, accuracy: 1e-4, "it ramps up into the next buffer")
+        XCTAssertEqual(samples[padEnd], 0.25, accuracy: 1e-6)
     }
 }

@@ -60,18 +60,6 @@ enum PhoneStyle {
         static let all = [bookmark, resume, stop]
     }
 
-    /// The Ink scale for UIKit text views (the notes editor), so both draw the same ink.
-    enum UIInk {
-        static let title = DaybookPalette.Shade.title.uiColor
-        static let body = DaybookPalette.Shade.body.uiColor
-        static let secondary = DaybookPalette.Shade.secondary.uiColor
-        static let meta = DaybookPalette.Shade.meta.uiColor
-        static let faint = DaybookPalette.Shade.faint.uiColor
-        static let link = DaybookPalette.Shade.link.uiColor
-        static let bookmark = DaybookPalette.Shade.bookmark.uiColor
-        static let accent = DaybookPalette.Shade.accent.uiColor
-    }
-
     typealias Space = DaybookSpacing
 
     /// Type: New York for titles only, SF for everything else, monospaced digits for every time.

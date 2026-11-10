@@ -124,6 +124,23 @@ final class UpgradeTests: XCTestCase {
         XCTAssertEqual(offer.line, "Upgrade transcript on Studio Mac")
     }
 
+    func testBehaviorATranscriptTheSystemsSpeechModelMadeIsOfferedTheChosenModelOnceItsHere() throws {
+        XCTAssertEqual(UpgradeRanks.builtIn.quality(of: "apple-speech/system", for: .transcription), 50)
+        let interim = conversation(transcription: ["apple-speech/system"])
+        for chosen in ["parakeet/redux", "parakeet/ultra", "whisper/base"] {
+            let offer = try XCTUnwrap(offer(interim, here: capabilities(transcription: chosen)), chosen)
+            XCTAssertEqual(offer.place, .thisDevice)
+            XCTAssertEqual(offer.model, chosen)
+            XCTAssertEqual(offer.current, "apple-speech/system")
+        }
+        XCTAssertNil(Upgrades.offer(.transcription, for: conversation(transcription: ["parakeet/redux"]),
+                                    candidates: UpgradeCandidates(thisDevice: capabilities(transcription: "apple-speech/system"), macs: [])),
+                     "Never offered over a model a person chose")
+        XCTAssertNil(Upgrades.offer(.transcription, for: conversation(transcription: ["apple-speech/system"], languages: ["ja"]),
+                                    candidates: UpgradeCandidates(thisDevice: capabilities(transcription: "parakeet/ultra"), macs: [])),
+                     "Parakeet isn't offered for a language it doesn't transcribe")
+    }
+
     func testBehaviorEachStepsMarginDecidesWhatIsClearlyBetter() {
         // Transcripts: Redux (80) to Ultra (90) clears 10; Whisper Large v3 Turbo (85) to Ultra doesn't.
         XCTAssertEqual(Upgrades.offer(.transcription, for: conversation(transcription: ["parakeet/redux"]),
@@ -162,6 +179,31 @@ final class UpgradeTests: XCTestCase {
         XCTAssertEqual(offer(meeting, macs: [laptop, mac()])?.place, .mac(studio))
     }
 
+    func testBehaviorAPersonalConversationIsNeverOfferedTheCloud() throws {
+        // Placed in Personal, given the Therapy or Personal template, or found Personal by its first summary.
+        var placed = conversation(transcription: ["parakeet/ultra"], speakers: "nemotron-3-diarization/offline", summary: "gemma-4/e4b-4bit")
+        placed.placement = .personal
+        var therapy = placed
+        therapy.placement = nil
+        therapy.kind = .therapy
+        var found = placed
+        found.placement = nil
+        found.summary?.kind = .personal
+        for meeting in [placed, therapy, found] {
+            XCTAssertEqual(meeting.effectivePlacement, .personal)
+            XCTAssertNil(offer(meeting, cloud: sonnet), "No nudge toward the cloud")
+            XCTAssertNil(Upgrades.offer(.summarization, for: meeting, candidates: UpgradeCandidates(thisDevice: .none, cloud: sonnet)))
+            // A better model on a Mac is still offered: it stays on the person's devices.
+            let local = try XCTUnwrap(offer(meeting, macs: [mac()], cloud: sonnet))
+            XCTAssertEqual(local.place, .mac(studio))
+            XCTAssertEqual(local.line, "Upgrade summary on Studio Mac")
+        }
+        // The same conversation filed in Work is offered the cloud's better summary.
+        var work = placed
+        work.placement = .work
+        XCTAssertEqual(offer(work, macs: [mac()], cloud: sonnet)?.place, .cloud(sonnet))
+    }
+
     func testBehaviorTheWeakestRecordingsModelCounts() throws {
         // The Mac's microphone with Ultra and the iPhone's recording with Redux: the transcript is as good as Redux's.
         let mixed = conversation(transcription: ["parakeet/ultra", "parakeet/redux"])
@@ -198,6 +240,24 @@ final class UpgradeTests: XCTestCase {
                                          .awaitingRecordings([AwaitedRecording(deviceName: "iPhone", deviceKind: "daybook.iphone", since: Date())])] {
             XCTAssertNil(offer(meeting, status: status, macs: [mac()]), "\(status)")
         }
+    }
+
+    /// Transcript first (uxf-01): a transcript whose summary is still to come (a Mac waiting for its summary model) is
+    /// never an upgrade, however much better a model within reach is, whatever the status says: the first summary isn't
+    /// a better one. Once it has a summary, upgrades are offered as before.
+    func testBehaviorNoSummaryYetIsNeverAnUpgrade() {
+        let waiting = conversation(transcription: ["parakeet/redux"], summary: nil)
+        let transcriptOnly = mac(speakers: nil, summary: nil)
+        XCTAssertFalse(transcriptOnly.capabilities.summarizes)
+        for status: ProcessingStatus in [.transcribed, .done] {
+            XCTAssertNil(offer(waiting, status: status, here: capabilities(transcription: "parakeet/ultra", summary: "gemma-4/26b-a4b-qat-4bit"),
+                               macs: [mac()], cloud: sonnet), "\(status)")
+        }
+        XCTAssertNil(Upgrades.offer(.summarization, for: waiting, candidates: UpgradeCandidates(thisDevice: .none, cloud: sonnet)))
+        // Summarized now, with a weak model: the summary's upgrade is offered, never on the Mac that can't summarize.
+        let summarized = conversation(transcription: ["parakeet/ultra"], speakers: "nemotron-3-diarization/offline", summary: "gemma-4/e2b-4bit")
+        XCTAssertEqual(offer(summarized, macs: [transcriptOnly], cloud: sonnet)?.place, .cloud(sonnet))
+        XCTAssertNil(offer(summarized, macs: [transcriptOnly]), "A Mac without its summary model offers no summary")
     }
 
     func testBehaviorASummaryAnotherDeviceHoldsIsWorkUnderWay() throws {

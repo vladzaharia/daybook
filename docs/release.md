@@ -16,7 +16,7 @@ Both apps are one App Store Connect app with one bundle ID, `local.daybook`, so 
 |---|---|---|---|
 | CI | `lint` | `ubuntu-24.04` | actionlint (pinned, checksum-verified, with shellcheck on every `run:` block), shellcheck on every script under `scripts/` (all bash), and `scripts/ci/tests/run-tests.sh`, which also compiles the Python helpers with warnings as errors |
 | CI | `changes` | `ubuntu-24.04` | whether a pull request changes anything but documentation (`scripts/ci/changes.sh`: `docs/` and Markdown outside the apps' sources, the bundled `THIRD_PARTY_NOTICES.md` aside). One that doesn't skips `package`, `iphone`, `iphone-archive`, and `mac`; every push to `main` runs them, so a release always has a CI run to wait for |
-| CI | `package` | `xcode-27` | `swift build --build-tests --force-resolved-versions` once (then `git diff --exit-code -- Package.resolved`), then `swift test --skip-build` per test-target group, then the timing-budget test alone (see below) |
+| CI | `package` | `xcode-27` | `swift build --build-tests --force-resolved-versions` once (then `git diff --exit-code -- Package.resolved`, and `scripts/ci/own-warnings.sh`, which fails on a warning in `Sources/` or `Apps/iOS/` but not a dependency's or a test's), then `swift test --skip-build` per test-target group, then the timing-budget test alone (see below) |
 | CI | `iphone` | `xcode-27` | `scripts/build-ios.sh --build-for-testing` once, then the tests on that build (`--test --skip-build`) on a simulator (iPhone Duo if the image has one, otherwise iPhone 18 Pro), then the two encoder timing tests alone (see below) |
 | CI | `iphone-archive` | `xcode-27` | beside `iphone`: an unsigned Release device archive (`build-ios.sh --archive --no-sign`), checked the way a release would be. Its cache is the one the release's `iphone` job restores |
 | CI | `mac` | `xcode-27` | `scripts/ci/tests/run-tests.sh --require-all` (every group, including the macOS-only ones: CryptoKit's JWT check, the archive checks, the upload retry, the build scripts, and the keychain), then `scripts/build-app.sh --debug --ad-hoc` (Release with the `mac_configuration` input, which a manual run and `release.yml` set; a release's validation always builds Release), then the bundle is checked for its signature, icon, MLX `default.metallib`, and App Sandbox entitlements (`scripts/ci/check-mac-app.sh --kind adhoc`: sandboxed, `local.daybook.adhoc`, no migration manifest) |
@@ -68,7 +68,7 @@ Every push to `main` saves each job's cache, keyed by the Xcode build and the co
 
 After a push to `main`, the `caches` job (`scripts/ci/prune-caches.sh`) deletes the older caches of each family the run used: same key up to the commit, so `swiftpm-macOS-27A9275-…`, `ios-dd-macOS-27A9275-…`, `ios-release-dd-macOS-27A9275-…`, `mac-dd-macOS-27A9275-Debug-…`, and `mac-dd-macOS-27A9275-Release-…`. It deletes them only when the run's own cache for that family is saved, so a failed run never removes the last good one. It's the only job with `actions: write`, and it builds nothing: it runs that one script. (When `release.yml` calls CI, its `validate` job grants `actions: write` as a ceiling only, because GitHub checks a called workflow's permissions before the run starts; the `caches` job never runs there.) Caches of an older Xcode build age out after 7 days unused. Run CI manually with `clean` ticked to build without caches.
 
-**Test waits.** Every wait in the tests (`waitUntil`/`waitFor` in `Tests/DaybookTestSupport` and `DaybookPhoneTests/TestSupport.swift`, and the link tests' loopback timeouts) is multiplied by `DAYBOOK_TEST_TIMEOUT_SCALE`. CI's package and iPhone test steps set it to 2 (`TEST_RUNNER_DAYBOOK_TEST_TIMEOUT_SCALE` for `xcodebuild`, which hands it to the test runner without the prefix); CI under load sets 5. The isolated timing steps below keep their own budgets, unscaled.
+**Test waits.** Every wait in the tests (`waitUntil`/`waitFor` in `Tests/DaybookTestSupport`, which `DaybookPhoneTests` compiles too, and the link tests' loopback timeouts) is multiplied by `DAYBOOK_TEST_TIMEOUT_SCALE`. CI's package and iPhone test steps set it to 2 (`TEST_RUNNER_DAYBOOK_TEST_TIMEOUT_SCALE` for `xcodebuild`, which hands it to the test runner without the prefix); CI under load sets 5. The isolated timing steps below keep their own budgets, unscaled.
 
 **Timing-sensitive tests.** Three tests depend on timing that an overloaded machine can miss:
 
@@ -146,7 +146,7 @@ scripts/asc-certificates.sh --revoke             # revokes the ones older than 3
 
 | App ID | Capabilities on the account | Signed entitlements |
 |---|---|---|
-| `local.daybook` (iPhone) | App Groups (`group.local.daybook`); iCloud with iCloud Documents and CloudKit, container `iCloud.local.daybook`; Push Notifications; Hotspot; Increased Memory Limit and Background GPU Access, ready for when the app claims them (docs/iphone.md) | `Apps/iOS/project.yml`: the iCloud keys, `aps-environment`, the app group, `keychain-access-groups` = `<team>.local.daybook`, `<team>.local.daybook.phone`, `<team>.local.daybook.shared`, Hotspot. Info.plist's `UIBackgroundModes` adds `remote-notification` (not a capability) |
+| `local.daybook` (iPhone) | App Groups (`group.local.daybook`); iCloud with iCloud Documents and CloudKit, container `iCloud.local.daybook`; Push Notifications; Hotspot; Time Sensitive Notifications; Increased Memory Limit and Background GPU Access, ready for when the app claims them (docs/iphone.md) | `Apps/iOS/project.yml`: the iCloud keys, `aps-environment`, the app group, `keychain-access-groups` = `<team>.local.daybook`, `<team>.local.daybook.phone`, `<team>.local.daybook.shared`, Hotspot, `com.apple.developer.usernotifications.time-sensitive`. Info.plist's `UIBackgroundModes` adds `remote-notification` (not a capability) |
 | `local.daybook` (Mac: Developer ID, Apple Development, and the App Store) | the same App ID; the Mac's entitlements claim none of App Groups, Hotspot, or the memory and GPU capabilities | `Resources/Daybook.entitlements` (unsandboxed): audio input; `com.apple.developer.icloud-services` = `CloudDocuments`, `CloudKit`; the container in `com.apple.developer.icloud-container-identifiers` and `com.apple.developer.ubiquity-container-identifiers`; `com.apple.developer.aps-environment`; `keychain-access-groups` = `<team>.local.daybook`, `<team>.local.daybook.app`, `<team>.local.daybook.shared`. Sandboxed (`--app-store`, `--sandbox`), `Resources/Daybook-Sandbox.entitlements`: the same plus the App Sandbox ([docs/sandbox.md](sandbox.md)) |
 | `local.daybook.widgets` | App Groups | the app group only |
 | `local.daybook.app`, `local.daybook.phone`, `local.daybook.phone.widgets` | the IDs before the one bundle ID; they stay registered, and nothing new is signed with them | |
@@ -337,6 +337,17 @@ If Daybook ever adds non-exempt encryption (its own algorithms, or encryption be
 
 The Mac's Info.plist (`Resources/Info.plist`) carries the same key: App Store Connect asks the Mac App Store build too, and a Developer ID build ignores it.
 
+## Privacy manifests
+
+Each bundle carries a `PrivacyInfo.xcprivacy`: the Mac app (`Resources/PrivacyInfo.xcprivacy`, a resource in `Apps/macOS/project.yml`), the iPhone app (`Apps/iOS/DaybookPhone/Resources/`), and the widgets extension (`Apps/iOS/DaybookPhoneWidgets/`). None tracks or collects anything. They give the reason for each required-reason API that Daybook and its packages call:
+
+- Preferences: CA92.1, and 1C8F.1 for the app group the iPhone shares with its widgets.
+- File dates: C617.1 for the library, and 3B52.1 for files the person chose (imports, the Mac's library folder, a recorder's folder).
+- Free space: E174.1 before a model download, and 85F4.1 for Welcome's "12 GB free".
+- The host clock (iPhone only): 35F9.1, for the recorder's timing. The Mac's release build doesn't read it.
+
+A new call to one of these APIs, or to another category, adds its reason here before the next upload (ITMS-91053 otherwise).
+
 ## Cutting a release
 
 From an up-to-date `main` whose CI is green. The tag must point at a commit that's on `main`: `prepare` checks it with `git merge-base --is-ancestor` and refuses anything else, so a tag on an unmerged branch never releases. (That guards against mistakes; the tag ruleset and the approval guard against people, because a tag's run uses the workflow files at that tag.)
@@ -433,6 +444,12 @@ The channels are independent: the GitHub Release doesn't wait for TestFlight, an
 A release ships only a commit whose tests passed, but it doesn't test the commit again when `main` already has. A tag points at a commit on `main`, and the push that brought it there ran CI on it: `prepare` finds that run, and the signing jobs wait for it. Only when `main` has none (it was cancelled, say) does `validate` run CI's jobs in the release run itself.
 
 The signing jobs don't wait for the tests to start, so their channels ask for approval as soon as `prepare` is done, and the archives build meanwhile. Each job then waits at **Wait for the release commit's tests** (`scripts/ci/await-validation.sh`), before it exports or uploads anything, for that CI run to pass, or for this run's `validate` jobs. A test that fails fails the job there. If it was a flake, re-run the failed jobs of that CI run, then of the release.
+
+## Migrations
+
+Settings that moved, carried over once at launch by the version that moved them. A carry-over can be removed once every device that may still hold the old setting has launched a version with it.
+
+- **The transcription language** (2026-11-10, xdev-settings-08) moved from each Mac's preferences (`processingPreferences`' `transcriptionLanguage`) into the library, where both apps show it and every device routes by it ([sync](icloud-sync.md#the-librarys-choices)). At launch, once the library is open, a Mac with a stored language writes it into the library when the library has none (no device has chosen one, Automatic included), then clears it from its preferences, so it's carried once (`AppState.followLibraryLanguage`, `LibraryController.adoptTranscriptionLanguage`); from then on the Mac follows the library. Two Macs that each stored one end on the one carried last, as with any later change. The model for other languages and the speaker settings stay where they were. A Mac taken back to an earlier version transcribes Automatic until a language is chosen there again.
 
 ## One bundle ID
 

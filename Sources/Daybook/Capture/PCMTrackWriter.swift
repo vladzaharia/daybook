@@ -1,62 +1,43 @@
 import AVFoundation
 import DaybookCore
+import DaybookKit
 import Foundation
-
-/// Thread-safe level meter fed by capture callbacks and read by the UI timer.
-final class AudioLevelMeter: @unchecked Sendable {
-    struct Reading: Equatable {
-        /// Root-mean-square level of the latest buffers, in dBFS.
-        var rms: Float
-        /// Highest sample magnitude since the previous read, in dBFS.
-        var peak: Float
-        /// Host time of the most recent buffer whose level exceeded `audibleThreshold`.
-        var lastAudibleHostTime: TimeInterval?
-        /// True once any non-zero sample arrived; all-zero input usually means a muted or denied device.
-        var receivedSignal: Bool
-        static let silent = Reading(rms: -160, peak: -160, lastAudibleHostTime: nil, receivedSignal: false)
-    }
-
-    static let audibleThreshold: Float = -50
-    private let lock = NSLock()
-    private var reading = Reading.silent
-    private var peakSinceRead: Float = -160
-
-    func record(_ buffer: AVAudioPCMBuffer, hostTime: TimeInterval) {
-        guard let level = AudioBufferLevel.measure(buffer) else { return }
-        lock.lock()
-        reading.rms = level.rms
-        peakSinceRead = max(peakSinceRead, level.peak)
-        reading.peak = peakSinceRead
-        if level.hasSignal { reading.receivedSignal = true }
-        if level.rms >= Self.audibleThreshold { reading.lastAudibleHostTime = hostTime }
-        lock.unlock()
-    }
-
-    /// The current reading; resets the peak hold.
-    func read() -> Reading {
-        lock.lock(); defer { lock.unlock() }
-        let value = reading
-        peakSinceRead = reading.rms
-        return value
-    }
-
-    func reset() {
-        lock.lock(); reading = .silent; peakSinceRead = -160; lock.unlock()
-    }
-}
 
 /// All file mutation happens on a serial queue, never the real-time input thread.
 ///
 /// Timing: every buffer's host time is compared with the time predicted from the most recent
 /// clock anchor (at most about a second old), so slow device-clock drift is never mistaken for a
-/// gap. Real gaps over 80 ms are padded with silence; jumps over five seconds forward or 100 ms
-/// backward stop the track. Anchors are kept in the sidecar so drift can be measured and corrected
-/// after recording.
+/// gap. A track never stops for its clock (the iPhone's rule): a gap over 80 ms and up to five
+/// minutes is padded with silence (5 ms ramps at its seams, so it doesn't click); a longer one
+/// isn't padded and the next anchor starts a new clock segment; a jump back over 100 ms drops the
+/// audio that overlaps what's written and resyncs. Each is kept in the track's `gaps`. Anchors are
+/// kept in the sidecar so drift can be measured and corrected after recording.
+///
+/// Writing behind (a busy disk) holds up to `maximumBacklog` seconds of audio; past that a buffer
+/// is dropped and counted, and the gap code pads the hole once writing catches up, so the track
+/// says what was lost. `progress` lets the controller stop a writer that hasn't moved in a minute.
 ///
 /// A buffer in a different format (a device switch, AirPods changing profile) is converted to the
 /// file's format so the recording continues; the next anchor is marked as a resync.
 final class PCMTrackWriter: @unchecked Sendable {
     struct Outcome { var track: CapturedAudioTrack?; var error: String? }
+    /// Where writing stands, in the host times stamped on the buffers.
+    struct Progress: Equatable {
+        /// The latest buffer handed to the writer.
+        var delivered: TimeInterval?
+        /// `delivered` as the writer last finished a buffer (or at the first buffer): when it last moved.
+        var advanced: TimeInterval?
+        /// Audio waiting to be written, in seconds.
+        var backlog: TimeInterval = 0
+        /// Seconds of audio dropped because the backlog was full.
+        var dropped: TimeInterval = 0
+        /// Seconds the writer has had audio waiting without finishing any of it.
+        var stalledFor: TimeInterval {
+            guard backlog > 0, let delivered, let advanced else { return 0 }
+            return max(0, delivered - advanced)
+        }
+    }
+
     let role: CapturedTrackRole
     let meter = AudioLevelMeter()
     private let queue = DispatchQueue(label: "app.daybook.audio-writer", qos: .userInitiated)
@@ -71,38 +52,81 @@ final class PCMTrackWriter: @unchecked Sendable {
     private var isFinished = false
     private var lastMetadataWrite: TimeInterval = -.infinity
     private var lastAnchor: ClockAnchor?
+    /// Which anchors the sidecar keeps; `lastAnchor`, for judging gaps, is always the latest.
+    private var anchorSchedule = ClockAnchorSchedule()
+    /// The sidecar is written here, off the audio queue, in order; `finish` writes the last one after the rest.
+    private let sidecarQueue = DispatchQueue(label: "app.daybook.audio-writer.sidecar", qos: .utility)
     private var pendingResync = false
     private let converter = PCMFormatConverter()
     private var notes: [String] = []
-    private let pendingSlots = DispatchSemaphore(value: 256)
-    private let overflowLock = NSLock()
-    private var overflowReported = false
+    private var gaps: [CaptureGap] = []
+    /// The last frame written, per channel (float audio), so padding ramps from it.
+    private var lastSamples: [Float]?
+    private let maximumBacklog: TimeInterval
+    private let beforeWrite: (@Sendable () -> Void)?
+    // Shared with the input's thread under `progressLock`.
+    private let progressLock = NSLock()
+    private var shared = Progress()
+    /// Dropped since the last buffer accepted: the next one's gap is lost audio.
+    private var droppedSinceAccepted: TimeInterval = 0
+    /// Bytes a second of the file's format, once it's known.
+    private var fileBytesPerSecond: Double = 0
     static let anchorInterval: TimeInterval = 1
+    static let smallestGap: TimeInterval = 0.08
+    static let largestPaddedGap: TimeInterval = 300
+    static let backwardTolerance: TimeInterval = 0.1
+    /// Seconds of audio the writer holds while the disk is busy.
+    static let defaultBacklog: TimeInterval = 30
+    static let rampSeconds: TimeInterval = 0.005
 
+    /// `beforeWrite` runs on the writing queue before each buffer (tests stall the disk with it).
     init(role: CapturedTrackRole, directory: URL, manifest: CaptureSessionManifest, method: String? = nil,
+         maximumBacklog: TimeInterval = PCMTrackWriter.defaultBacklog, beforeWrite: (@Sendable () -> Void)? = nil,
          failure: @escaping (Error) -> Void) {
         self.role = role
         self.url = directory.appendingPathComponent(role.rawValue + ".caf")
         self.metadataURL = directory.appendingPathComponent(role.rawValue + ".json")
         self.manifest = manifest
         self.method = method
+        self.maximumBacklog = maximumBacklog
+        self.beforeWrite = beforeWrite
         self.failure = failure
     }
 
+    /// Where writing stands; any thread.
+    var progress: Progress { progressLock.withLock { shared } }
+
+    /// Bytes a second this track adds to the disk, once its first buffer is written; any thread.
+    var bytesPerSecond: Double { progressLock.withLock { fileBytesPerSecond } }
+
     func append(_ buffer: AVAudioPCMBuffer, hostTimeSeconds: TimeInterval) {
-        guard pendingSlots.wait(timeout: .now()) == .success else {
-            overflowLock.lock()
-            let shouldReport = !overflowReported
-            overflowReported = true
-            overflowLock.unlock()
-            if shouldReport { failure(PCMTrackWriterError.diskBacklog) }
-            return
+        let seconds = buffer.format.sampleRate > 0 ? Double(buffer.frameLength) / buffer.format.sampleRate : 0
+        // A full backlog drops the buffer, counted; the gap it leaves is padded once writing catches up.
+        let lostBefore = progressLock.withLock { () -> TimeInterval? in
+            shared.delivered = hostTimeSeconds
+            if shared.advanced == nil { shared.advanced = hostTimeSeconds }
+            guard shared.backlog + seconds <= maximumBacklog else {
+                shared.dropped += seconds
+                droppedSinceAccepted += seconds
+                return nil
+            }
+            shared.backlog += seconds
+            defer { droppedSinceAccepted = 0 }
+            return droppedSinceAccepted
         }
+        // The meter hears what the source delivers, written or not.
         meter.record(buffer, hostTime: hostTimeSeconds)
+        guard let lostBefore else { return }
         queue.async { [self] in
-            defer { pendingSlots.signal() }
+            defer {
+                progressLock.withLock {
+                    shared.backlog = max(0, shared.backlog - seconds)
+                    shared.advanced = shared.delivered
+                }
+            }
             guard !isFinished, errorMessage == nil, buffer.frameLength > 0 else { return }
-            do { try write(buffer, hostTimeSeconds: hostTimeSeconds) }
+            beforeWrite?()
+            do { try write(buffer, hostTimeSeconds: hostTimeSeconds, lost: lostBefore) }
             catch {
                 recordFailure(error)
                 failure(error)
@@ -127,11 +151,17 @@ final class PCMTrackWriter: @unchecked Sendable {
         }
     }
 
-    private func write(_ input: AVAudioPCMBuffer, hostTimeSeconds: TimeInterval) throws {
+    /// `lost` is how much audio was dropped just before this buffer, which its gap then stands for.
+    private func write(_ input: AVAudioPCMBuffer, hostTimeSeconds: TimeInterval, lost: TimeInterval = 0) throws {
+        // Moves on past audio a backward clock jump overlaps.
+        var hostTimeSeconds = hostTimeSeconds
         if file == nil {
             file = try AVAudioFile(forWriting: url, settings: input.format.settings,
                                    commonFormat: input.format.commonFormat, interleaved: input.format.isInterleaved)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            let rate = input.format.sampleRate * Double(input.format.streamDescription.pointee.mBytesPerFrame)
+                * (input.format.isInterleaved ? 1 : Double(input.format.channelCount))
+            progressLock.withLock { fileBytesPerSecond = rate }
             let offset = hostTimeSeconds - manifest.hostTimeSeconds
             track = CapturedAudioTrack(role: role, url: url,
                 startedAt: manifest.startedAt.addingTimeInterval(offset), firstSampleHostTimeSeconds: hostTimeSeconds,
@@ -152,29 +182,42 @@ final class PCMTrackWriter: @unchecked Sendable {
         }
         guard buffer.frameLength > 0 else { return }
 
-        // Compare with the time predicted from the latest anchor, so drift never reads as a gap.
-        if let anchor = lastAnchor, !pendingResync {
+        // Compare with the time predicted from the latest anchor, so drift never reads as a gap. The
+        // track never stops for its clock: gaps are padded, long ones skipped, and overlaps dropped.
+        if let anchor = lastAnchor {
             let expected = anchor.hostTime + Double(current.frameCount - anchor.frame) / current.sampleRate
             let gap = hostTimeSeconds - expected
             guard gap.isFinite else { throw RecordingError.invalidAudio }
-            if gap > 5 || gap < -0.1 {
-                throw RecordingError.interrupted("The \(role.rawValue) audio clock was interrupted. Everything up to then is saved.")
-            }
-            if gap > 0.08 {
-                try writeSilence(seconds: gap, format: buffer.format, to: file, track: &current)
+            if gap > Self.largestPaddedGap {
+                // Too long to fill: the audio resumes on a new clock segment, placed by its own anchor.
+                gaps.append(CaptureGap(kind: lost > 0 ? .lost : .skipped, frame: current.frameCount, seconds: gap))
                 pendingResync = true
-            }
-        } else if let anchor = lastAnchor, pendingResync {
-            // After a device change the new stream may start late; keep the timeline by padding.
-            let expected = anchor.hostTime + Double(current.frameCount - anchor.frame) / current.sampleRate
-            let gap = hostTimeSeconds - expected
-            if gap.isFinite && gap > 0.08 && gap <= 5 {
-                try writeSilence(seconds: gap, format: buffer.format, to: file, track: &current)
+            } else if gap > Self.smallestGap {
+                gaps.append(CaptureGap(kind: lost > 0 ? .lost : .padded, frame: current.frameCount, seconds: gap))
+                try writeSilence(seconds: gap, format: buffer.format, to: file, track: &current, before: buffer)
+                pendingResync = true
+            } else if gap < -Self.backwardTolerance && !pendingResync {
+                // The clock went back: what overlaps the written audio is dropped (buffer after buffer, until the
+                // stamps reach the timeline again), and the clock resyncs where the audio continues.
+                let overlap = Int64((-gap * current.sampleRate).rounded())
+                let dropped = Double(min(overlap, Int64(buffer.frameLength))) / current.sampleRate
+                if let last = gaps.last, last.kind == .overlap, last.frame == current.frameCount { gaps[gaps.count - 1].seconds += dropped }
+                else { gaps.append(CaptureGap(kind: .overlap, frame: current.frameCount, seconds: dropped)) }
+                current.gaps = gaps
+                guard overlap < Int64(buffer.frameLength), let rest = Self.tail(of: buffer, dropping: AVAudioFrameCount(overlap)) else { return }
+                buffer = rest
+                hostTimeSeconds += Double(overlap) / current.sampleRate
+                pendingResync = true
+            } else if lost > 0 {
+                // Dropped audio the timing hides (a sliver under the smallest gap): still said.
+                gaps.append(CaptureGap(kind: .lost, frame: current.frameCount, seconds: lost))
             }
         }
+        current.gaps = gaps.isEmpty ? nil : gaps
+        lastSamples = Self.lastFrame(of: buffer)
         if lastAnchor == nil || pendingResync || hostTimeSeconds - lastAnchor!.hostTime >= Self.anchorInterval {
             let anchor = ClockAnchor(frame: current.frameCount, hostTime: hostTimeSeconds, resync: pendingResync && lastAnchor != nil ? true : nil)
-            current.clockAnchors = (current.clockAnchors ?? []) + [anchor]
+            if anchorSchedule.keeps(anchor) { current.clockAnchors = (current.clockAnchors ?? []) + [anchor] }
             lastAnchor = anchor
             pendingResync = false
         }
@@ -182,20 +225,81 @@ final class PCMTrackWriter: @unchecked Sendable {
         current.frameCount += Int64(buffer.frameLength)
         current.notes = notes.isEmpty ? nil : notes
         if hostTimeSeconds - lastMetadataWrite >= 10 {
-            try persistTrack(current)
+            persistTrackSoon(current)
             lastMetadataWrite = hostTimeSeconds
         }
     }
 
-    private func writeSilence(seconds: TimeInterval, format: AVAudioFormat, to file: AVAudioFile, track: inout CapturedAudioTrack) throws {
+    /// Writes the sidecar off the audio queue, so a slow disk never holds up the audio. A write that fails stops the
+    /// track as it always has: the next buffers find `errorMessage` set.
+    private func persistTrackSoon(_ snapshot: CapturedAudioTrack) {
+        sidecarQueue.async { [self] in
+            do { try persistTrack(snapshot) }
+            catch {
+                queue.async { [self] in
+                    guard !isFinished, errorMessage == nil else { return }
+                    recordFailure(error)
+                    failure(error)
+                }
+            }
+        }
+    }
+
+    /// Silence for a gap, ramping over 5 ms from the last frame written and into `next`'s first, so neither seam
+    /// clicks; the captured samples themselves are never changed.
+    private func writeSilence(seconds: TimeInterval, format: AVAudioFormat, to file: AVAudioFile, track: inout CapturedAudioTrack,
+                              before next: AVAudioPCMBuffer? = nil) throws {
         let count = AVAudioFrameCount((seconds * track.sampleRate).rounded())
         guard count > 0, let silence = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: count) else { return }
         silence.frameLength = count
         for audio in UnsafeMutableAudioBufferListPointer(silence.mutableAudioBufferList) {
             if let data = audio.mData { memset(data, 0, Int(audio.mDataByteSize)) }
         }
+        let ramp = min(Int(count) / 2, Int((Self.rampSeconds * track.sampleRate).rounded()))
+        if ramp > 0, format.commonFormat == .pcmFormatFloat32 {
+            let channels = Int(format.channelCount)
+            func set(_ frame: Int, _ values: [Float], _ scale: Float) {
+                guard let data = silence.floatChannelData else { return }
+                for channel in 0..<min(channels, values.count) {
+                    if format.isInterleaved { data[0][frame * channels + channel] = values[channel] * scale }
+                    else { data[channel][frame] = values[channel] * scale }
+                }
+            }
+            if let last = lastSamples {
+                for index in 0..<ramp { set(index, last, 1 - Float(index + 1) / Float(ramp + 1)) }
+            }
+            if let first = next.flatMap(Self.firstFrame) {
+                for index in 0..<ramp { set(Int(count) - ramp + index, first, Float(index + 1) / Float(ramp + 1)) }
+            }
+        }
         try file.write(from: silence)
         track.frameCount += Int64(count)
+    }
+
+    /// One sample per channel at `frame` of float audio; nil for other formats.
+    private static func samples(of buffer: AVAudioPCMBuffer, at frame: Int) -> [Float]? {
+        guard let data = buffer.floatChannelData, frame >= 0, frame < Int(buffer.frameLength) else { return nil }
+        let channels = Int(buffer.format.channelCount)
+        return (0..<channels).map { buffer.format.isInterleaved ? data[0][frame * channels + $0] : data[$0][frame] }
+    }
+
+    static func firstFrame(of buffer: AVAudioPCMBuffer) -> [Float]? { samples(of: buffer, at: 0) }
+    static func lastFrame(of buffer: AVAudioPCMBuffer) -> [Float]? { samples(of: buffer, at: Int(buffer.frameLength) - 1) }
+
+    /// The buffer without its first `count` frames.
+    static func tail(of buffer: AVAudioPCMBuffer, dropping count: AVAudioFrameCount) -> AVAudioPCMBuffer? {
+        guard count < buffer.frameLength,
+              let rest = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength - count) else { return nil }
+        rest.frameLength = buffer.frameLength - count
+        let bytesPerFrame = Int(buffer.format.streamDescription.pointee.mBytesPerFrame)
+        let source = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
+        let destination = UnsafeMutableAudioBufferListPointer(rest.mutableAudioBufferList)
+        guard source.count == destination.count else { return nil }
+        for index in source.indices {
+            guard let input = source[index].mData, let output = destination[index].mData else { return nil }
+            memcpy(output, input + Int(count) * bytesPerFrame, Int(rest.frameLength) * bytesPerFrame)
+        }
+        return rest
     }
 
     /// Converts a buffer from a new device format to the file's format, keeping one converter per
@@ -246,14 +350,41 @@ final class PCMTrackWriter: @unchecked Sendable {
                 }
                 file = nil // Close the CAF before callers import/read it.
                 if var track {
+                    // Audio dropped after the last buffer written has no gap to pad; it's lost all the same.
+                    let lost = progressLock.withLock { () -> TimeInterval in
+                        defer { droppedSinceAccepted = 0 }
+                        return droppedSinceAccepted
+                    }
+                    if lost > 0 { gaps.append(CaptureGap(kind: .lost, frame: track.frameCount, seconds: lost)) }
+                    track.gaps = gaps.isEmpty ? nil : gaps
+                    if let summary = Self.gapSummary(gaps) { notes.append(summary) }
+                    if track.lostSeconds > 0 { notes.append(RecordingWords.lostAudio(track.lostSeconds, of: role.audioName)) }
                     track.notes = notes.isEmpty ? nil : notes
                     self.track = track
-                    do { try persistTrack(track) }
+                    // After every sidecar write already asked for, so an earlier one never lands last.
+                    do { try sidecarQueue.sync { try persistTrack(track) } }
                     catch { errorMessage = errorMessage ?? "The \(role.spokenName) recording is saved, but its details couldn’t be." }
                 }
                 continuation.resume(returning: Outcome(track: track, error: errorMessage))
             }
         }
+    }
+
+    /// The capture details' line for the silence put in: "3 gaps were filled with silence (8.2 s in all)."
+    static func gapSummary(_ gaps: [CaptureGap]) -> String? {
+        let filled = gaps.filter { $0.kind == .padded || $0.kind == .lost }
+        let skipped = gaps.filter { $0.kind == .skipped }
+        var parts: [String] = []
+        if !filled.isEmpty {
+            let total = RecordingWords.seconds(filled.map(\.seconds).reduce(0, +))
+            parts.append(filled.count == 1 ? "1 gap was filled with silence (\(total))." : "\(filled.count) gaps were filled with silence (\(total) in all).")
+        }
+        if !skipped.isEmpty {
+            let total = RecordingWords.seconds(skipped.map(\.seconds).reduce(0, +))
+            parts.append(skipped.count == 1 ? "1 gap longer than five minutes was left out (\(total))."
+                                            : "\(skipped.count) gaps longer than five minutes were left out (\(total) in all).")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
 
     private func persistTrack(_ track: CapturedAudioTrack) throws {

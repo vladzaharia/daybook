@@ -8,13 +8,19 @@ import Foundation
 
 /// Debug-only Floating Notes states for snapshots, without a microphone, a call, or an iPhone:
 ///
-///     --notes-demo multipoint|paused|processing|stopped|failed|home   [--notes-size 340x230] [--notes-contrast]
+///     --notes-demo multipoint|paused|trouble|processing|stopped|slept|failed|home   [--notes-size 340x230] [--notes-contrast]
 ///
 /// - `multipoint`: with `--simulate-recording`: the iPhone and Soundcore record along (links written
 ///   to the conversation as multipoint writes them), and call audio is detected.
 /// - `paused`: the same, with the iPhone paused (its link state is what the phone would send).
+/// - `trouble`: with `--simulate-recording`: the microphone isn't hearing and the disk has room for 25 minutes.
 /// - `processing`: after Stop, the conversation transcribing on this Mac at 40%.
+/// - `models`, `models-failed`, `models-wifi`: after Stop, the conversation waiting for this Mac's models while they
+///   download (a download that reports 42% and waits, never the network), after one stopped, or waiting for Wi‑Fi.
+/// - `summary-waits`: after Stop, the conversation transcribed, its summary waiting for this Mac's summary model while
+///   it downloads (transcript first; with `--cloud-demo anthropic`, Use the Cloud too).
 /// - `stopped`: after Stop, the recording itself failed. `failed`: transcription couldn't finish.
+/// - `slept`: this Mac went to sleep mid-recording and the Soundcore and the iPhone kept recording.
 /// - `home`: the panel opened from the menu bar, nothing recording, this Mac transcribing another.
 ///
 /// `--notes-open` closes the main window once the scenario shows, then opens the conversation from the panel as
@@ -26,7 +32,11 @@ import Foundation
 /// appearance. Nothing reaches the network beyond loopback, Bluetooth, or the microphone.
 @MainActor
 enum FloatingNotesDemo {
-    enum Scenario: String { case multipoint, paused, processing, stopped, failed, home }
+    enum Scenario: String {
+        case multipoint, paused, trouble, processing, stopped, slept, failed, home
+        case models, modelsFailed = "models-failed", modelsWiFi = "models-wifi"
+        case summaryWaits = "summary-waits"
+    }
 
     static let scenario = LaunchOptions.value(after: "--notes-demo").flatMap(Scenario.init(rawValue:))
     static let size: NSSize? = LaunchOptions.value(after: "--notes-size").flatMap { value in
@@ -52,6 +62,17 @@ enum FloatingNotesDemo {
         case .multipoint, .paused:
             // Give the device demos a moment to connect, then link them as multipoint would.
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { linkCompanions(state) }
+        case .trouble:
+            break
+        case .slept:
+            let id = conversation(state, title: "Design review", notes: notes)
+            let start = Date().addingTimeInterval(-900)
+            let links = [("demo-soundcore", SoundcoreWorkIntegration.id, "Soundcore Work"), ("demo-iphone", DaybookPhoneIntegration.id, "Alex’s iPhone")].map {
+                CompanionRecording(deviceID: $0.0, deviceKind: $0.1, deviceName: $0.2, macStartedAt: start, state: .recording, startedByDaybook: true)
+            }
+            state.update(id) { $0.status = .failed; $0.companions = links }
+            state.phones.sleptRecording = SleptRecording(meetingID: id, startedAt: start, endedAt: Date(), cause: nil)
+            show(state, id, afterStop: true)
         case .processing:
             let id = conversation(state, title: "Design review", notes: notes)
             state.update(id) { $0.status = .transcribing; $0.date = Date().addingTimeInterval(-900) }
@@ -59,6 +80,33 @@ enum FloatingNotesDemo {
             state.processingProgress = IntelligenceProgress(0.4, "Transcribing")
             // `--placement-demo countdown|cloud`: its summary's countdown, or the cloud at work.
             PlacementDemo.apply(to: state, processing: id)
+            show(state, id, afterStop: true)
+        case .models, .modelsFailed, .modelsWiFi:
+            let id = conversation(state, title: "Design review", notes: notes)
+            state.update(id) { $0.date = Date().addingTimeInterval(-900) }
+            state.queue.awaitModels(id)
+            let demo: AppState.DownloadDemo = scenario == .models ? .downloading : scenario == .modelsFailed ? .failed : .waitingForWiFi
+            state.demoDownloads(state.missingSelectedModels, demo)
+            show(state, id, afterStop: true)
+        case .summaryWaits:
+            let id = conversation(state, title: "Design review", notes: notes)
+            let lines = ["Ship the status bar first.", "Captions follow next week.", "Priya owns the handoff copy."]
+            let track = UUID()
+            state.update(id) { meeting in
+                meeting.date = Date().addingTimeInterval(-900)
+                meeting.unifiedTranscript = lines.enumerated().map { TranscriptSegment(trackID: track, start: Double($0) * 6, end: Double($0) * 6 + 5, text: $1) }
+                meeting.status = .imported
+            }
+            // The queue never runs, and the summary model isn't here, whatever the launch's own look at the models finds.
+            state.processingTask = Task { try? await Task.sleep(for: .seconds(86_400)) }
+            func waitForSummaryModel() {
+                state.installedModels.remove(state.summaryModel)
+                state.queue.removeJobs(for: id)
+                state.queue.awaitSummaryModel(id)
+            }
+            waitForSummaryModel()
+            for delay in [1.0, 2.5] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { waitForSummaryModel() } }
+            state.demoDownloads([state.summaryModel], .downloading)
             show(state, id, afterStop: true)
         case .stopped:
             let id = conversation(state, title: "Design review", notes: notes)
@@ -77,8 +125,12 @@ enum FloatingNotesDemo {
         }
     }
 
-    /// What the iPhone would report that the demo phone can't send: a pause.
+    /// What the iPhone would report that the demo phone can't send: a pause. And capture trouble no demo makes.
     static func adjust(_ inputs: inout FloatingStatusInputs, meeting: Meeting?) {
+        if scenario == .trouble, inputs.phase == .recording {
+            inputs.recording.microphoneSilent = true
+            inputs.recording.spaceLeft = 25 * 60 + 20
+        }
         guard scenario == .paused, inputs.phase == .recording else { return }
         for index in inputs.recording.peers.indices where inputs.recording.peers[index].along != nil {
             inputs.recording.peers[index].activity = .paused
@@ -116,8 +168,9 @@ enum FloatingNotesDemo {
         }
         state.update(id) { $0.companions = links }
         let now = state.recorder.levels
-        let heard = AudioLevelMeter.Reading(rms: -18, peak: -9, lastAudibleHostTime: ProcessInfo.processInfo.systemUptime, receivedSignal: true)
-        now.update(microphone: heard, call: heard, hostTime: ProcessInfo.processInfo.systemUptime, elapsed: 761)
+        let uptime = ProcessInfo.processInfo.systemUptime
+        let heard = AudioLevelMeter.Reading(rms: -18, peak: -9, lastAudibleHostTime: uptime, lastSignalHostTime: uptime, lastHeardHostTime: uptime)
+        now.update(microphone: heard, call: heard, hostTime: uptime, elapsed: 761)
     }
 }
 #endif

@@ -15,13 +15,15 @@ public enum WelcomeWords {
     public static let downloadAndContinue = "Download and Continue"
     public static let changeLater = "You can change this later in Settings."
 
-    /// What Daybook is, a line each.
-    public static func points(_ device: Device) -> [WelcomePoint] {
+    /// What Daybook is, a line each. `summaries`: something here or within reach makes them (a Mac, or this iPhone's own
+    /// model); without, the reading line promises transcripts and search alone.
+    public static func points(_ device: Device, summaries: Bool = true) -> [WelcomePoint] {
         [
             WelcomePoint(symbol: "mic.circle.fill", text: device == .mac
                          ? "Record calls, and conversations in the room."
                          : "Record conversations in the room, or with a recorder."),
-            WelcomePoint(symbol: "magnifyingglass.circle.fill", text: "Read a short summary. Search every word."),
+            WelcomePoint(symbol: "magnifyingglass.circle.fill",
+                         text: summaries ? "Read a short summary. Search every word." : "Read the transcript. Search every word."),
             WelcomePoint(symbol: "play.circle.fill", text: "Play back any moment."),
             WelcomePoint(symbol: "lock.circle.fill", text: "Transcribed and summarized on your devices, unless you choose a cloud model.")
         ]
@@ -37,6 +39,10 @@ public enum WelcomeWords {
     public static let phoneModelsMessage = "Download models so this iPhone transcribes what it records."
     /// What the download holds, beside its size.
     public static let phoneModelsRow = "Transcription and speakers"
+    /// The summary model's row, where this iPhone can run one.
+    public static let phoneSummariesRow = "Summaries"
+    /// The button with the total of the rows chosen: "Download 4.4 GB and Continue".
+    public static func downloadAndContinue(_ size: String) -> String { "Download \(size) and Continue" }
     /// A download the disk can't hold: "Needs 16.5 GB · 12 GB free".
     public static func needsSpace(_ needed: String, free: String) -> String { "Needs \(needed) · \(free) free" }
 
@@ -69,14 +75,31 @@ public enum WelcomeWords {
     public static let importAudio = "Import Audio…"
     public static let recorderQuestion = "Use a wearable or handheld recorder?"
     public static let addDevice = "Add Device…"
+    /// The Mac's Ready page: Daybook as a login item, so calls are noticed after a restart; the one row on it that says why.
+    public static let openAtLogin = "Open Daybook at login"
+    public static let openAtLoginReason = "So Daybook can notice calls."
 
-    /// The Ready page's line: what happens to a recording made now. `transcribesElsewhere`: a Mac known to transcribe
-    /// this library transcribes what this iPhone records.
-    public static func readyMessage(downloading: Bool, canTranscribe: Bool, transcribesElsewhere: Bool = false) -> String {
-        if downloading { return "Start a conversation now. It’s transcribed once the models download." }
-        if canTranscribe { return "Start a conversation now." }
-        if transcribesElsewhere { return "Start a conversation now. Your Mac transcribes it." }
-        return "Start a conversation now. Download models in Settings to transcribe it."
+    /// The Ready page's line: what happens to a recording made now. `canTranscribe`: it's transcribed now, by the models
+    /// here or, while they download, the system's speech model standing in, so nothing more needs saying of it.
+    /// `transcribesElsewhere`: a Mac known to transcribe this library transcribes what this iPhone records.
+    /// `waitsForWiFi`: the download is asked for and waits for Wi‑Fi, so the transcript waits for it too.
+    /// `transcriptFirst`: the models that transcribe arrive first and a transcript waits only for them, the summary
+    /// following the rest (the Mac). `summarizesElsewhere`: this iPhone won't summarize it and a Mac known to this
+    /// library will; with neither, the line says nothing of a summary.
+    public static func readyMessage(downloading: Bool, canTranscribe: Bool, transcribesElsewhere: Bool = false,
+                                    waitsForWiFi: Bool = false, transcriptFirst: Bool = false, summarizesElsewhere: Bool = false) -> String {
+        let summary = summarizesElsewhere ? " Your Mac summarizes it." : ""
+        if canTranscribe { return "Start a conversation now." + summary }
+        if downloading {
+            if transcriptFirst, !waitsForWiFi { return "Start a conversation now. It’s transcribed in minutes." + summary }
+            return (waitsForWiFi ? "Start a conversation now. It’s transcribed once the models download on Wi‑Fi."
+                : "Start a conversation now. It’s transcribed once the models download.") + summary
+        }
+        if transcribesElsewhere {
+            return summarizesElsewhere ? "Start a conversation now. Your Mac transcribes and summarizes it."
+                : "Start a conversation now. Your Mac transcribes it."
+        }
+        return "Start a conversation now. Download models in Settings to transcribe it." + summary
     }
 
     /// "Downloading Balanced models", or without a name, "Downloading models".

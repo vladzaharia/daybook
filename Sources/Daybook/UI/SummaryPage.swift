@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookDesign
 import DaybookKit
 import DaybookUI
 import SwiftUI
@@ -10,6 +11,9 @@ struct SummaryPage: View {
     let state: AppState
     let player: AudioPlaybackController
     let meeting: Meeting
+    /// The transcript is beside the page (a spread): a click on a step, a decision, or a bookmark shows its passage
+    /// there, as their times and menus do.
+    let besideTranscript: Bool
     let play: (PlaybackTarget) -> Void
     /// The summary present when the page opened. Any later one arrived while the page was on screen,
     /// so it's revealed block by block; opening a page never animates.
@@ -17,13 +21,14 @@ struct SummaryPage: View {
     @Environment(\.readingScale) private var scale
     @Environment(\.pageIsNarrow) private var narrow
 
-    init(state: AppState, player: AudioPlaybackController, meeting: Meeting, play: @escaping (PlaybackTarget) -> Void) {
-        self.state = state; self.player = player; self.meeting = meeting; self.play = play
+    init(state: AppState, player: AudioPlaybackController, meeting: Meeting, besideTranscript: Bool = false,
+         play: @escaping (PlaybackTarget) -> Void) {
+        self.state = state; self.player = player; self.meeting = meeting; self.besideTranscript = besideTranscript; self.play = play
         _arrival = State(initialValue: SummaryArrival(opening: meeting))
     }
 
     private var isRecording: Bool { state.recordingID == meeting.id }
-    private var passages: PassageLinks { PassageLinks { [state] in state.showPassage($0) } }
+    private var passages: PassageLinks { PassageLinks(onTap: besideTranscript) { [state] in state.showPassage($0) } }
 
     var body: some View {
         PageScroll(bottomInset: player.meetingID == meeting.id && player.duration > 0 ? 56 : 0) {
@@ -99,9 +104,10 @@ private struct NotesSection: View {
                 text: Binding(get: { meeting.notes }, set: { state.editNotes(meeting.id, text: $0) }),
                 times: times,
                 placeholder: "Add a note…",
-                fontSize: 14 * scale, lineSpacing: 5 * scale,
+                fontSize: DaybookFont.body.size(.window) * scale, lineSpacing: TypeStyle.bodyLineSpacing(scale),
                 // Narrow, the times keep a lane as the bookmarks and Floating Notes do, rather than disappearing.
                 margin: narrow ? (times.contains { $0 != nil } ? FloatingLayout.textLeading : 0) : DaybookStyle.margin,
+                timeFontSize: DaybookFont.marginTime.size(.window) * scale,
                 focusOnAppear: isRecording && meeting.notes.isEmpty,
                 playTime: state.isRecording ? nil : { play(.timeline($0)) })
         }

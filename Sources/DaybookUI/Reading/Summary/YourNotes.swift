@@ -279,7 +279,8 @@ struct BookmarkMargin: View {
     /// "00:00" in the margin's monospaced digits, growing with Dynamic Type under touch.
     @ScaledMetric(relativeTo: .caption2) private var touchSlot: CGFloat = 31
 
-    private var slot: CGFloat { density == .touch ? touchSlot : 31 * scale }
+    /// "00:00" at the window's 12 pt margin time.
+    private var slot: CGFloat { density == .touch ? touchSlot : 34 * scale }
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: density == .touch ? 3 : DaybookSpacing.s1) {

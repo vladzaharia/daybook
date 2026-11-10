@@ -87,4 +87,16 @@ final class SettingsWordsTests: XCTestCase {
         XCTAssertEqual(SettingsWords.titleCased("Also heard as"), "Also Heard As")
         XCTAssertEqual(SettingsWords.titleCased("Wi‑Fi only"), "Wi‑Fi Only", "a non-breaking hyphen's word keeps its capitals")
     }
+
+    /// Use Calendar's problem line (DaybookUI's `CalendarSettingsRow`), on both apps: refused just now, or on and
+    /// taken away since; never while it's off and was never refused, or while it's allowed.
+    func testBehaviorUseCalendarSaysWhenItCantReadTheCalendars() {
+        XCTAssertTrue(SettingsWords.calendarIsRefused(justNow: true, isOn: false, access: .denied), "turned on just now and refused")
+        XCTAssertTrue(SettingsWords.calendarIsRefused(justNow: false, isOn: true, access: .denied), "taken away in Settings since")
+        XCTAssertFalse(SettingsWords.calendarIsRefused(justNow: false, isOn: false, access: .denied), "off, and nobody asked")
+        XCTAssertFalse(SettingsWords.calendarIsRefused(justNow: false, isOn: true, access: .allowed))
+        XCTAssertFalse(SettingsWords.calendarIsRefused(justNow: false, isOn: false, access: .notAsked))
+        XCTAssertEqual(SettingsWords.titleCased(SettingsWords.useCalendar), SettingsWords.useCalendar, "the same label on both")
+        XCTAssertEqual(SettingsWords.calendarRefused, "Daybook can’t read your calendars.")
+    }
 }

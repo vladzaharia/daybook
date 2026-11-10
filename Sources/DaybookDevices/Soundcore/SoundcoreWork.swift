@@ -169,7 +169,7 @@ public enum SoundcoreIssue: String, CaseIterable {
             return transferring ? .integrity : .rejected
         case .rejected, .unsupported: return .rejected
         case .liveFileUnavailable: return .notRecording
-        case .timedOut, .stalled, .yielded: return transferring ? .stalled : .connectTimeout
+        case .timedOut, .stalled, .yielded, .yieldedTooOften, .preempted: return transferring ? .stalled : .connectTimeout
         }
     }
 }
@@ -179,7 +179,7 @@ extension DeviceTransferError {
     public init(soundcore error: Error) {
         switch error as? SoundcoreError {
         case .disconnected?: self = .disconnected
-        case .stalled?, .timedOut?: self = .stalled
+        case .stalled?, .timedOut?, .yieldedTooOften?: self = .stalled
         case .rejected?, .unsupported?, .liveFileUnavailable?: self = .rejected(error.localizedDescription)
         default: self = .integrity(error.localizedDescription)
         }
@@ -208,6 +208,16 @@ public struct SoundcoreSnapshot: Codable, Equatable {
     /// been closed since: the next confirmed Bluetooth link closes it. Optional, so earlier snapshots decode.
     public var accessPointSSID: String?
     public var accessPointSince: Date?
+    /// The recorder has reported a battery byte above 9, so it reports percentages throughout
+    /// (`SoundcoreDeviceInfo.reportsPercent`): settled per recorder. Optional, so earlier snapshots decode.
+    public var batteryInPercent: Bool?
+    /// The recording this device asked the recorder to start, kept so a relaunch still knows it (the iPhone's
+    /// Live Activity). Optional, so earlier snapshots decode.
+    public var startedHereID: UInt32?
+    /// The recordings the recorder held when it was set up here (its first listing): automatic import leaves
+    /// these alone and takes any other, whatever the recorder's clock says. Nil until it's been listed (an earlier
+    /// snapshot), when the recorder's own start dates decide instead.
+    public var setupListing: [UInt32]?
 
     /// The name shown in Settings: "soundcore Work ··7F3A".
     public var displayName: String { serial.isEmpty ? name : "\(name) \(maskedSerial(serial))" }
@@ -217,6 +227,8 @@ public struct SoundcoreSnapshot: Codable, Equatable {
         var merged = info ?? SoundcoreDeviceInfo()
         merged.microphoneBattery = update.microphoneBattery ?? merged.microphoneBattery
         merged.caseBattery = update.caseBattery ?? merged.caseBattery
+        merged.microphoneBatteryWire = update.microphoneBatteryWire ?? merged.microphoneBatteryWire
+        merged.caseBatteryWire = update.caseBatteryWire ?? merged.caseBatteryWire
         merged.microphoneCharging = update.microphoneCharging
         merged.caseCharging = update.caseCharging
         if update.totalBytes > 0 { merged.freeBytes = update.freeBytes; merged.totalBytes = update.totalBytes }

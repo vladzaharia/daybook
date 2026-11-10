@@ -96,4 +96,38 @@ final class LinkSharedRecordingTests: XCTestCase {
         XCTAssertEqual(back, .bookmarkChange(change))
         await pair.tearDown()
     }
+
+    /// A line the phone's recognizer took back reaches the Mac as taken back (`LinkCaptions.removed`), over a real
+    /// session; the Mac's call lines go the other way. Captions from an older build, without it, read the same.
+    func testCaptionsTakenBackTravelOverTheLink() async throws {
+        let conversation = UUID(), dropped = UUID(), kept = UUID()
+        let pair = try await LinkedPair.make(self)
+        try await pair.connect()
+        let first = LinkCaptions(conversationID: conversation, startedAt: t0, lines: [
+            .init(id: kept, start: 1, end: 2, text: "We still need legal.", isTentative: false),
+            .init(id: dropped, start: 2.5, end: 3, text: "and then", isTentative: true),
+        ], sentAt: t0)
+        try await pair.client.send(.captions(first))
+        let (received, _) = try await pair.macEvents.next("the lines") { $0.received }
+        XCTAssertEqual(received, .captions(first))
+        let retraction = LinkCaptions(conversationID: conversation, startedAt: t0, lines: [], removed: [dropped], sentAt: t0)
+        try await pair.client.send(.captions(retraction))
+        let (taken, _) = try await pair.macEvents.next("the line taken back") { $0.received }
+        guard case .captions(let captions) = taken else { return XCTFail("\(taken)") }
+        XCTAssertEqual(captions.removed, [dropped])
+        XCTAssertTrue(captions.lines.isEmpty)
+        // The Mac's call, to a phone that shows other devices' captions.
+        let call = LinkCaptions(conversationID: conversation, startedAt: t0, lines: [
+            .init(id: UUID(), start: 4, end: 5, text: "Can you hear me?", isTentative: false, speakerSlot: "S1")], sentAt: t0)
+        try await pair.service.send(.captions(call), to: pair.phone.deviceID)
+        let (back, _) = try await pair.phoneEvents.next("the call's lines") { $0.received }
+        XCTAssertEqual(back, .captions(call))
+        await pair.tearDown()
+
+        let older = #"{"v":1,"type":"captions","body":{"conversationID":"\#(conversation.uuidString)","startedAt":1800000000,"lines":[],"sentAt":1800000000}}"#
+        guard case .app(.captions(let decoded)) = try LinkWire.decode(Data(older.utf8)).message else { return XCTFail() }
+        XCTAssertNil(decoded.removed, "an older build never takes a line back")
+        XCTAssertTrue(LinkCapabilities(deviceClass: .iPhone, name: "P", appVersion: "1", features: [LinkCapabilities.liveCaptionsFeature]).showsCaptions,
+                      "an iPhone that lists it is sent a Mac's call")
+    }
 }

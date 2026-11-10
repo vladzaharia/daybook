@@ -213,4 +213,92 @@ final class ProcessingQueueTests: XCTestCase {
         held.downloadingID = "whisper/base"
         XCTAssertEqual(held.waiting(next, title: { _ in nil })?.behind, .download)
     }
+
+    // MARK: Transcript first (uxf-01)
+
+    /// With what transcribes here and no summary model, a recording is transcribed at once and ends at its transcript;
+    /// its summary is owed, across a relaunch too, and once the model arrives every conversation waiting for it is
+    /// summarized, the oldest first.
+    func testBehaviorWithoutTheSummaryModelAJobTranscribesThenIsSummarizedOnceTheModelArrives() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let summaryModel = state.summaryModel
+        state.installedModels.remove(summaryModel)
+        XCTAssertTrue(state.canProcess, "What transcribes is here")
+        XCTAssertFalse(state.summarizesLocally)
+        let older = try await rig.waitingConversation("Monday sync", audio: rig.audio("older.wav", frequency: 310), script: [(0, "Older agenda.")])
+        let newer = try await rig.waitingConversation("Tuesday sync", audio: rig.audio("newer.wav", frequency: 520), script: [(0, "Newer agenda.")])
+        state.update(older) { $0.date = Date().addingTimeInterval(-7200) }
+        state.enqueue(newer)
+        state.enqueue(older)
+        XCTAssertTrue(state.awaitingModels.isEmpty, "A transcript doesn't wait for the summary model")
+        try await rig.processed(newer, older)
+
+        XCTAssertEqual(state.queue.awaitingSummaryModel, [older, newer])
+        XCTAssertTrue(rig.inference.summarized.isEmpty, "Nothing summarized without the model")
+        for id in [older, newer] {
+            let meeting = try XCTUnwrap(rig.meeting(id))
+            XCTAssertFalse(meeting.unifiedTranscript.isEmpty, "The transcript reads")
+            XCTAssertNil(meeting.summary)
+            XCTAssertEqual(meeting.status, .imported)
+            XCTAssertEqual(state.processingStatus(for: meeting), .transcribed)
+            XCTAssertTrue(state.summaryWaitsForModel(meeting))
+            XCTAssertEqual(state.queue.owedWork(id)?.mode, .summaryOnly, "A Summarize is owed")
+        }
+        XCTAssertFalse(state.localCapabilities.summarizes)
+        XCTAssertEqual(state.missingSelectedModels, [summaryModel])
+        // While the summary model downloads, Floating Notes' chip says the transcript is ready, and what the summary waits for.
+        state.queue.downloadingID = summaryModel
+        guard case .transcriptReady(let waiting)? = FloatingStatusInputs.work(for: try XCTUnwrap(rig.meeting(newer)), state: state) else {
+            return XCTFail("Transcript ready, with the wait")
+        }
+        XCTAssertTrue(waiting.hasPrefix("Waiting to summarize after the download · "), waiting)
+        state.queue.downloadingID = nil
+
+        // Owed across a relaunch: the next launch waits for the model again.
+        await state.flush()
+        ProcessingQueue.drainWrites()
+        let saved = ProcessingQueue(owedURL: rig.root.appendingPathComponent("local-queue.json"))
+        saved.loadOwedWork()
+        XCTAssertEqual(saved.owedWork(older)?.mode, .summaryOnly)
+        // A Summarize asked for meanwhile waits for the model too, rather than running.
+        state.enqueue(newer, mode: .summaryOnly)
+        XCTAssertTrue(state.queuedIDs.isEmpty)
+        XCTAssertEqual(state.queue.awaitingSummaryModel, [older, newer])
+
+        // The model arrives: both are summarized, the oldest first, and nothing is owed.
+        state.installedModels.insert(summaryModel)
+        try await rig.processed(older, newer)
+        try await waitUntil("both summaries") { rig.inference.summarized.count == 2 }
+        try await rig.processed(older, newer)
+        XCTAssertTrue(rig.inference.summarized[0].contains("Older agenda"), "Date order")
+        XCTAssertTrue(rig.inference.summarized[1].contains("Newer agenda"))
+        XCTAssertTrue(state.queue.awaitingSummaryModel.isEmpty)
+        for id in [older, newer] {
+            let meeting = try XCTUnwrap(rig.meeting(id))
+            XCTAssertNotNil(meeting.summary)
+            XCTAssertEqual(state.processingStatus(for: meeting), .done)
+            XCTAssertFalse(state.queue.isOwed(id))
+        }
+    }
+
+    /// A model download doesn't hold the queue: what waited for the models that transcribe goes on as soon as they're
+    /// here, while the summary model still downloads, and its summary waits for that.
+    func testBehaviorWhatWaitedForModelsTranscribesWhileTheSummaryModelDownloads() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let installed = state.installedModels
+        let id = try await rig.waitingConversation("First call", audio: rig.audio("first.wav", frequency: 360), script: [(0, "Kickoff notes.")])
+        state.installedModels = []
+        state.enqueue(id)
+        XCTAssertEqual(state.awaitingModels, [id])
+        // The models that transcribe arrive; the summary model is still on its way.
+        state.installedModels = installed.subtracting([state.summaryModel])
+        state.queue.downloadingID = state.summaryModel
+        state.takeUpWorkWaitingForModels()
+        try await rig.processed(id)
+        XCTAssertFalse(try XCTUnwrap(rig.meeting(id)).unifiedTranscript.isEmpty, "Transcribed beside the download")
+        XCTAssertEqual(state.queue.awaitingSummaryModel, [id])
+        state.queue.downloadingID = nil
+    }
 }

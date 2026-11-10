@@ -3,8 +3,9 @@ import CoreSpotlight
 import DaybookKit
 import Foundation
 
-/// A conversation, for Siri, Shortcuts, and Spotlight: its title and date. Open Conversation opens it;
-/// Spotlight lists every conversation but Personal ones (`ConversationIndex`).
+/// A conversation, for Siri, Shortcuts, and Spotlight: its title and date, as on the Mac. Open Conversation
+/// opens it; Spotlight lists every conversation but Personal ones (`ConversationIndex`, by DaybookKit's
+/// `SpotlightPlan`), by title and dates only, never what was said.
 struct ConversationEntity: AppEntity, IndexedEntity {
     static let typeDisplayRepresentation: TypeDisplayRepresentation = "Conversation"
     static let defaultQuery = ConversationQuery()
@@ -19,12 +20,24 @@ struct ConversationEntity: AppEntity, IndexedEntity {
         self.date = date
     }
 
-    init(_ entry: ConversationIndex.Entry) {
+    init(_ entry: SpotlightPlan.Entry) {
         self.init(id: entry.id, title: entry.title, date: entry.date)
     }
 
+    /// "Nov 10, 2026 at 9:00 AM": the subtitle in Shortcuts, and the description in Spotlight.
+    var when: String { date.formatted(date: .abbreviated, time: .shortened) }
+
     var displayRepresentation: DisplayRepresentation {
-        DisplayRepresentation(title: "\(title)", subtitle: "\(date.formatted(date: .abbreviated, time: .shortened))")
+        DisplayRepresentation(title: "\(title)", subtitle: "\(when)")
+    }
+
+    var attributeSet: CSSearchableItemAttributeSet {
+        let attributes = defaultAttributeSet
+        attributes.title = title
+        attributes.contentDescription = when
+        attributes.contentCreationDate = date
+        attributes.metadataModificationDate = date
+        return attributes
     }
 }
 
@@ -34,7 +47,7 @@ struct ConversationQuery: EntityStringQuery {
     @MainActor
     func entities(for identifiers: [UUID]) async throws -> [ConversationEntity] {
         let meetings = try await Self.library()
-        return identifiers.compactMap { id in meetings.first { $0.id == id }.map { ConversationEntity(ConversationIndex.Entry($0)) } }
+        return identifiers.compactMap { id in meetings.first { $0.id == id }.map { ConversationEntity(SpotlightPlan.Entry($0)) } }
     }
 
     @MainActor
@@ -42,15 +55,15 @@ struct ConversationQuery: EntityStringQuery {
         let words = string.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !words.isEmpty else { return try await suggestedEntities() }
         return try await Self.library()
-            .filter { ConversationIndex.isShown($0) && $0.title.localizedStandardContains(words) }
+            .filter { SpotlightPlan.isShown($0) && $0.title.localizedStandardContains(words) }
             .sorted { $0.date > $1.date }
             .prefix(Self.limit)
-            .map { ConversationEntity(ConversationIndex.Entry($0)) }
+            .map { ConversationEntity(SpotlightPlan.Entry($0)) }
     }
 
     @MainActor
     func suggestedEntities() async throws -> [ConversationEntity] {
-        ConversationIndex.entries(try await Self.library()).prefix(Self.limit).map(ConversationEntity.init)
+        SpotlightPlan.entries(try await Self.library()).prefix(Self.limit).map(ConversationEntity.init)
     }
 
     static let limit = 20
@@ -99,31 +112,15 @@ struct NewNoteIntent: AppIntent {
     }
 }
 
-/// What Spotlight lists of the library: every conversation that isn't Personal (by the person's
-/// placement, or the kind it was found to be), by title and date, kept in step as the library changes.
-/// Personal ones, and those in the Trash, are never listed, and leave the list when they become so.
+/// Keeps Spotlight's list of the library in step with it, by the plan both apps share (DaybookKit's `SpotlightPlan`:
+/// every conversation that isn't Personal, by title and date; Personal ones, and those in the Trash, are never listed,
+/// and leave the list when they become so), and tells Siri which conversations it may name.
 @MainActor
 final class ConversationIndex {
-    struct Entry: Equatable, Sendable {
-        var id: UUID
-        var title: String
-        var date: Date
-
-        init(id: UUID, title: String, date: Date) {
-            self.id = id
-            self.title = title
-            self.date = date
-        }
-
-        init(_ meeting: Meeting) {
-            self.init(id: meeting.id, title: meeting.title, date: meeting.date)
-        }
-    }
-
     /// Where the list goes: Spotlight, or nowhere (tests).
     struct Indexer {
         var isActive: Bool
-        var index: @MainActor ([Entry]) async -> Void
+        var index: @MainActor ([SpotlightPlan.Entry]) async -> Void
         var remove: @MainActor ([UUID]) async -> Void
         /// Takes every conversation out, whatever an earlier run listed.
         var removeAll: @MainActor () async -> Void
@@ -145,12 +142,12 @@ final class ConversationIndex {
     }
 
     private let indexer: Indexer
-    /// What Spotlight has now, by conversation; nil until this run's first update.
-    private(set) var listed: [UUID: Entry]?
+    /// What Spotlight has now.
+    private var plan = SpotlightPlan()
     private var updating: Task<Void, Never>?
     /// The conversations Siri was last told it may name (`ConversationQuery.suggestedEntities`); nil until
     /// this run's first update, which tells it what changed while Daybook wasn't running.
-    private var named: [Entry]?
+    private var named: [SpotlightPlan.Entry]?
     private var naming: Task<Void, Never>?
     /// How long Siri's phrases wait for the list to settle, so a title being typed tells it once.
     private let namingDelay: Duration
@@ -160,20 +157,11 @@ final class ConversationIndex {
         self.namingDelay = namingDelay
     }
 
-    /// Whether Daybook may name the conversation outside the app (Spotlight, Siri's suggestions, Shortcuts'
-    /// search): anything not Personal, the Mac's rule (`ConversationEntity.isShown` there).
-    static func isShown(_ meeting: Meeting) -> Bool { meeting.effectivePlacement != .personal }
-
-    /// The conversations Spotlight lists, newest first: none that's Personal.
-    static func entries(_ meetings: [Meeting]) -> [Entry] {
-        meetings.filter(isShown).sorted { $0.date > $1.date }.map(Entry.init)
-    }
-
     /// Lists what's new or changed and removes what went (Trash, Personal), after any update before it.
     /// A run's first update starts Spotlight's list over: what changed while Daybook wasn't running (a
     /// conversation trashed or made Personal on another device) never stays listed. When the conversations
     /// Siri may name change, it's told once they've settled.
-    func update(_ entries: [Entry]) {
+    func update(_ entries: [SpotlightPlan.Entry]) {
         let suggested = Array(entries.prefix(ConversationQuery.limit))
         if suggested != named {
             named = suggested
@@ -185,19 +173,13 @@ final class ConversationIndex {
                 refresh()
             }
         }
-        let wanted = Dictionary(entries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let startsOver = listed == nil
-        let before = listed ?? [:]
-        let changed = entries.filter { before[$0.id] != $0 }
-        let gone = before.keys.filter { wanted[$0] == nil }
-        listed = wanted
-        guard startsOver || !changed.isEmpty || !gone.isEmpty else { return }
+        guard let pass = plan.pass(to: entries) else { return }
         let previous = updating, indexer = self.indexer
         updating = Task {
             await previous?.value
-            if startsOver { await indexer.removeAll() }
-            if !gone.isEmpty { await indexer.remove(Array(gone)) }
-            if !changed.isEmpty { await indexer.index(changed) }
+            if pass.startsOver { await indexer.removeAll() }
+            if !pass.removed.isEmpty { await indexer.remove(pass.removed) }
+            if !pass.listed.isEmpty { await indexer.index(pass.listed) }
         }
     }
 

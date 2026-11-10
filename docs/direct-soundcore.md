@@ -53,7 +53,12 @@ connected ──idle──▶ released (idle) ──cooldown──▶ waitingInR
 - **Bluetooth changes.** Bluetooth turning off, being denied, or being unsupported each have a
   problem with one action. If the recorder was connected, it reconnects when Bluetooth returns.
 - **Timeouts.** Commands 10 s, setup connect 20 s, remembered connect 10 s, scan 15 s, record
-  confirmation 10 s, stalled transfer 45 s. All live in `SoundcoreTiming`.
+  confirmation 10 s, stalled transfer 45 s, a transfer a Start or Pause lets finish 10 s from its end.
+  All live in `SoundcoreTiming`.
+- **Battery.** The protocol notes read battery bytes 0–9 as 10% buckets and larger ones as percentages,
+  which would show a recorder reporting 5% as 60% and never warn. The scale is settled per recorder: once
+  it reports a byte from 10 to 100 it reports percentages, and from then on (kept with the remembered
+  recorder, `batteryInPercent`) 0–9 are percentages too. Which scale real firmware uses is unverified.
 - **Holding the link** (iPhone, for its button; docs/devices.md, "Holding the recorder's link"):
   `staysConnected` never lets the recorder go when idle, reconnects with a pending connection at once
   after a drop, never scans (only the system's record of it, tried again after 30 s), and stands
@@ -100,7 +105,10 @@ connected ──idle──▶ released (idle) ──cooldown──▶ waitingInR
   transfer is done; that isn't a failure or a retry attempt. Daybook's own stragglers, within the
   settle time after it stopped a transfer, aren't taken for another app's. The recorder keeps one audio
   key, so another app's key exchange (an unrequested `2E 01` reply) makes Daybook exchange keys again
-  before its next transfer.
+  before its next transfer. A transfer gives way like that at most three times
+  (`SoundcoreTiming.otherAppYields`), then fails as a stall, with one quiet retry and then Try Again. On the
+  Mac nothing else shares the link (`otherAppYields` is 0): audio Daybook didn't ask for is only counted,
+  nothing waits for it, and nothing says "Waiting for the Soundcore app".
 - **Details.** Device Details' technical rows include the last list (how many, pages, when, or why
   it failed) and what the recorder names as in progress. On iPhone, the device page's Details lists
   every recording on the recorder with why it is or isn't new (`DeviceSession.standings`: New, In
@@ -111,6 +119,13 @@ connected ──idle──▶ released (idle) ──cooldown──▶ waitingInR
   recording ID; every slice arrives in sequence (an exact repeat of the last slice is ignored;
   a gap or conflict fails); the byte count matches the size the recorder reported; and the
   audio decodes to a non-empty, finite WAV. Anything else removes the partial file and throws.
+  Decrypting, decoding, and writing run in arrival order on a queue of their own, off the main actor
+  (`SoundcoreAudioWriter`; over Wi‑Fi hundreds of packets arrive at once), and the transfer is done once the
+  file is finished there.
+- **Decoded length.** Each packet is 20 ms: 320 samples at 16 kHz. What decoded is compared with the packets
+  (`Download.lengthDiffers`): more than 0.5% off (beyond the codec's own 40 ms) means time vanished or appeared
+  in decoding without an error. The import is kept, since the recorder has the original, and Device Details says
+  "Last transfer’s length: 9 min 0 sec decoded of 10 min 0 sec"; the log has it too.
   The staged WAV is deleted once the library has copied it, and what a killed run left staged is
   removed at the next launch.
 - **Disconnect mid-transfer:** nothing partial is saved; the recording goes back to the front of
@@ -119,8 +134,8 @@ connected ──idle──▶ released (idle) ──cooldown──▶ waitingInR
   recording couldn't be imported" with Try Again. A disconnect isn't counted as an attempt.
 - Stopping or failing asks the recorder to stop sending (`1A 11`), then waits a moment so stray
   packets can't reach the next transfer.
-- **Automatic import** is on by default and imports only recordings that started after the
-  recorder was added, then lets the recorder go. See [devices](devices.md#automatic-import-the-default-and-why).
+- **Automatic import** is on by default and imports only recordings that weren't on the recorder when it
+  was added (its first listing, kept by ID, whatever its clock says), then lets the recorder go. See [devices](devices.md#automatic-import-the-default-and-why).
 
 ### Limits of the integrity checks
 
@@ -153,8 +168,14 @@ recordings; neither simulator success nor successful decoding establishes audio 
   captions"). Stop Listening keeps what arrived as a conversation; a disconnect keeps it too.
   The portion is stored with the recording ID plus `~live`, and the full recording joins that
   conversation when it's imported later. It never stops the device's recording.
-- Start and Pause are sent only when the person chooses them. The state changes only when the
-  recorder reports it; after 10 seconds without confirmation the page says so.
+- Start and Pause are sent only when the person chooses them, or a shared recording asks. The state changes
+  only when the recorder reports it; after 10 seconds without confirmation the page says so. They come first
+  (docs/devices.md, "Record commands come first"): a transfer under way is stopped (`1A 11`) and starts again
+  from its beginning after the command, unless it's within ten seconds of its end; the session holds the link
+  from the command until the recorder's status confirms it, so no transfer slips in between. A command with a
+  deadline that's still waiting to be sent then is dropped; a Start sent and confirmed after its deadline is
+  paused again. Live audio isn't stopped for one: the command waits for it, and a device stopping the
+  recorder ends its live audio first.
 - The recorder's own button reports the new state unasked (`18 82`, per the protocol notes); either
   way, Daybook lists it again, so a new recording appears in progress and a finished one with its
   final size. A pushed state that changes what Daybook knew while no command of its own is waiting is
@@ -162,6 +183,11 @@ recordings; neither simulator success nor successful decoding establishes audio 
   end on its own (`SoundcoreTiming.liveTail`, 2 s).
 - Live audio that goes quiet for the stall timeout (45 s) keeps what arrived, as a disconnect does,
   rather than being discarded.
+- Live audio isn't held to a transfer's checks: a sequence gap becomes silence sized by the sequence numbers
+  (20 ms a packet), an older slice sent again is dropped, a packet that can't be parsed is skipped (its slices
+  become silence when the next one arrives), and one that doesn't decode becomes 20 ms of silence. What follows
+  keeps its time, and the saved portion says how much was filled. Only a jump of more than 30 minutes ends it,
+  keeping what arrived. Live audio may start at any sequence number.
 
 ### Live audio for a shared recording
 
@@ -238,7 +264,9 @@ Transfer, treat every byte below as a well-informed guess; any failure falls bac
    `User-Agent`), because the recorder's parser may match them exactly. It accepts the recorder's
    self-signed certificate for that connection only. A message is at most 16 MiB in all, the largest frame
    either side accepts (`WebSocketMessages`), so continuation frames can't grow one without end; past that
-   the WebSocket ends and the transfer falls back. A UDP keep-alive
+   the WebSocket ends and the transfer falls back. That's the only limit: a message is reassembled into frames
+   64 KB at a time (`SoundcorePacketBuffer.piece`), so a recorder that batches many frames into one message
+   isn't dropped back to Bluetooth. A UDP keep-alive
    (`soundcore-keep-alive-unicast`) goes to port 32003 every two seconds.
 5. Each recording is asked for as hex text, `08 EE 00 00 00 1A 07 12 00 | offset | id | 1B` (18 bytes,
    no checksum, the offset always 0), and arrives as the same encrypted `1A 07`/`1A 08`/`1A 0A` frames
@@ -271,8 +299,10 @@ doesn't count. On the recorder's network, a moment elsewhere doesn't cost the tr
 10 seconds (`fastTransferBackgroundGrace`, under the 15 iOS keeps the network), and ends, back to
 Bluetooth, only if Daybook hasn't come back by then or the system ends the background time first.
 
-**Recovery.** From `1A 05`'s answer until `1A 02` is sent, the remembered recorder carries
-`accessPointSSID` and `accessPointSince`. Whatever ends Fast Transfer (Disconnect, quitting, a crash,
+**Recovery.** From just before `1A 05` goes out (not once it's answered: Bluetooth dropping as the access point
+starts would leave it open with nothing to close it) until `1A 02` is sent, the remembered recorder carries
+`accessPointSSID` and `accessPointSince`; a refusal of `1A 05` clears them, and so does `1A 02` sent while Bluetooth
+is still up (Fast Transfer ending before it let Bluetooth go). Whatever ends Fast Transfer (Disconnect, quitting, a crash,
 Bluetooth not coming back), the next confirmed Bluetooth link sends `1A 02` before anything else and
 clears it. While it's set and the recorder isn't connected, the page says "Fast Transfer didn’t finish"
 ("The recording is still on your Soundcore. Connect to turn off its Wi‑Fi.") with Connect. Whether the
@@ -344,7 +374,8 @@ recorder’s Wi‑Fi." in Device Details) without iOS asking.
 ## The recorder's clock
 
 Recording IDs are Unix start times by the recorder's own clock, which nothing keeps right. When the
-recorder confirms a Start Daybook sent, the new recording's ID against the send time is its offset
+recorder confirms a Start Daybook sent, the new recording's ID against the moment the Start's write went out
+(not when it was asked for, which an import under way once delayed) is its offset
 (`SoundcoreClock`; a resume of a recording kept open isn't a measurement). It's kept with the
 remembered recorder, per serial, and in `SoundcoreClocks` for the importers. Offsets beyond the
 measurement's two-second resolution are taken off every start date: the list, Recording now, the
@@ -372,8 +403,21 @@ and the native Opus path.
 `SoundcoreSharedRecordingTests` cover the button heard and Daybook's own commands not, holding the
 link (no idle release, back without the cooldown, the person's Disconnect, never a scan, the system's
 record tried again), live audio saved into a shared recording and the recorder's file becoming the
-same track (identical bytes) or replacing it (different), live audio that goes quiet kept, and what
-live audio costs the link (above).
+same track (identical bytes) or replacing it (different), live audio that goes quiet kept, a lost packet
+kept as 20 ms of silence (`Fault.skipSlice`), a capture the link took away starting again with its captions
+once the recorder is back, a recording a handoff brought not taken for the button, and what live audio costs
+the link (above).
+
+`SoundcoreRecordCommandTests` cover, with a paced transfer: a Start ahead of an import under way (stopped with
+`1A 11`, Start confirmed within its deadline, the import again from its beginning and not an attempt, the clock
+measured from when the Start went out), a transfer about to finish let finish, a Start still queued behind another
+app's transfer dropped when its caller gives up and never sent, a Start confirmed late (`startsLate`) paused again,
+and on the Mac audio nobody asked for only counted. Also the battery's scale settled per recorder, automatic import
+by what the recorder held at setup whatever its clock, a recording started here still known after a relaunch, what
+waits to import stored and imported after a relaunch, background time from a transfer's audio to the library,
+ownership applied before the devices start, a stream's start and its catching up, the decoded length checked against
+the packets, and the writer decoding off the main actor (lenient for live audio). `CascadeDuringImportTests`
+(DaybookKit) start a shared recording mid-import: the recorder starts within the deadline, or never.
 
 `SoundcoreFastTransferTests` run Fast Transfer end to end on loopback, against the simulated recorder's
 access point: a TLS WebSocket server with a self-signed certificate made in memory (no keychain), whose
@@ -426,4 +470,8 @@ between its files, whether a request of Daybook's really cuts its transfer off, 
 keeps one audio key for both apps. Wi‑Fi Fast Transfer, all of it: `1A 05`'s payload and reply, the
 access point's start time, the WebSocket's TLS and handshake, the file request's last byte, whether
 the keep-alive matters, the recorder accepting Bluetooth while its access point is open, `1A 02`'s
-reply, whether `FINISH` closes the access point, and the throughput.
+reply, whether `FINISH` closes the access point, and the throughput. Start and Pause first: whether firmware
+accepts Start right after `1A 11`, how long that takes, and whether a transfer stopped partway leaves the recorder
+ready for the next request. Live audio: whether a real stream starts at the recording's first frame (catching up)
+or "now", what its sequence numbers start at, and how often packets go missing. The battery byte's scale (5% and
+below), and whether any real slot decodes to less than its 20 ms.

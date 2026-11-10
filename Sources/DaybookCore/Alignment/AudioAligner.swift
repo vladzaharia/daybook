@@ -26,7 +26,8 @@ public struct AudioAlignmentOptions: Equatable, Sendable {
     /// Window length and spacing for the drift measurements, seconds.
     public var fineWindow: TimeInterval
     public var fineHop: TimeInterval
-    /// Caps the wide-search work for long recordings; windows are spread over the whole file.
+    /// Caps the wide-search work for long recordings; windows are spread over the part of the file that can
+    /// overlap the reference under the search's bounds.
     public var maximumCoarseWindows: Int
     public init(maximumDriftPPM: Double = 1_000, minimumConfidence: Double = 0.15, coarseWindow: TimeInterval = 15,
                 fineWindow: TimeInterval = 10, fineHop: TimeInterval = 5, maximumCoarseWindows: Int = 48) {
@@ -129,8 +130,15 @@ public enum AudioAligner {
         // 1. Coarse observations.
         let coarseLength = min(no, nr, max(Int(3 * fps), min(Int(options.coarseWindow * fps), no / 2, nr / 2)))
         let coarseHop = max(1, coarseLength / 2)
+        // Only windows that can land inside the reference under the search's bounds are drawn: with a prior, a short
+        // overlap in a long recording would otherwise get few or none of the windows spread over the whole file.
+        func reach(_ start: Int) -> ClosedRange<Int>? {
+            let lo = max(0, start + Int((lagBounds.lowerBound * fps).rounded(.down)))
+            let hi = min(nr - coarseLength, start + Int((lagBounds.upperBound * fps).rounded(.up)))
+            return hi >= lo ? lo...hi : nil
+        }
         var starts = Array(stride(from: 0, through: no - coarseLength, by: coarseHop))
-            .filter { active(otherActivity, $0, coarseLength) >= 0.15 }
+            .filter { reach($0) != nil && active(otherActivity, $0, coarseLength) >= 0.15 }
         let limit = max(3, options.maximumCoarseWindows)
         if starts.count > limit {
             starts = (0..<limit).map { starts[$0 * (starts.count - 1) / (limit - 1)] }
@@ -138,10 +146,9 @@ public enum AudioAligner {
         var observations: [LagObservation] = []
         var primary: [Bool] = []
         for (group, start) in starts.enumerated() {
-            let lo = max(0, start + Int((lagBounds.lowerBound * fps).rounded(.down)))
-            let hi = min(nr - coarseLength, start + Int((lagBounds.upperBound * fps).rounded(.up)))
-            guard hi >= lo else { continue }
-            let curve = correlator.normalizedCorrelation(window: other.onset[start..<(start + coarseLength)], positions: lo...hi)
+            guard let positions = reach(start) else { continue }
+            let lo = positions.lowerBound
+            let curve = correlator.normalizedCorrelation(window: other.onset[start..<(start + coarseLength)], positions: positions)
             let time = (Double(start) + Double(coarseLength) / 2) / fps
             for (rank, peak) in PeakPicker.peaks(in: curve, count: 3, separation: Int(0.3 * fps)).enumerated() where peak.value > 0.05 {
                 let sharpness = curve.count >= 200 ? PeakPicker.peakToSidelobe(curve, peak: peak.index, exclusion: Int(0.5 * fps)) : 6

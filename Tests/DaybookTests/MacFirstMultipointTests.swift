@@ -110,6 +110,58 @@ final class MacFirstMultipointTests: XCTestCase {
         XCTAssertEqual(phone.library.processingStatus(for: id), .done)
     }
 
+    /// Passes run while this Mac's own job does (MP-05): the phone's recording, arriving before fusion, joins the running
+    /// job, so there's one fused transcript and one summary, not a second job and a summary written again.
+    func testAnAwaitedRecordingThatArrivesWhileThisMacWorksJoinsTheJob() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let cloud = try temporaryFolder("Cloud")
+        try rig.connectSync(cloud)
+        let link = try await PhoneLinkRig.connect(state)
+        addTeardownBlock { await link.tearDown(state) }
+        let phone = try await PhoneLibrarySide.make(in: self, root: try temporaryFolder("Phone"), cloud: cloud, phoneID: link.phoneID)
+        defer { phone.tearDown() }
+        let recordingID = UUID()
+        let phoneStart = Date()
+        link.recorder.answer = { request in
+            .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: phoneStart, recordingID: recordingID.uuidString))
+        }
+        let macAudio = try rig.audio("mac.wav", frequency: 310)
+        let phoneAudio = try rig.audio("iphone.wav", frequency: 470)
+        try rig.inference.script(macAudio, [(0, "Agenda first."), (5, "Then the budget.")])
+        try rig.inference.script(phoneAudio, [(0, "Agenda first."), (5, "Then the budget."), (10, "And someone near the phone agreed.")])
+
+        let id = try await rig.startRecording(title: "Design review")
+        let macStart = try XCTUnwrap(state.recordingStartedAt)
+        await state.sources.recorders.settle()
+        await rig.stopRecording()
+        await state.sources.recorders.settle()
+        try await rig.storeMacRecording(id, audio: macAudio, start: macStart)
+        await state.synchronizeLibrary()
+        await phone.synchronize()
+
+        // This Mac starts on its own audio; meanwhile the phone files its recording and a pass brings it here.
+        try rig.inference.block(macAudio)
+        state.enqueue(id)
+        try await waitUntil("this Mac's audio to be transcribing") { rig.inference.isWaiting(on: macAudio) }
+        try await phone.file(phoneAudio, recordingID: recordingID, into: id, start: phoneStart, duration: 0.5)
+        await phone.synchronize()
+        await state.synchronizeLibrary()
+        XCTAssertEqual(rig.meeting(id)?.tracks.count, 2, "the pass ran while this Mac worked")
+        XCTAssertEqual(state.processingID, id)
+        XCTAssertFalse(state.queuedIDs.contains(id), "no second job: the running one takes it before fusion")
+
+        try rig.inference.unblock(macAudio)
+        try await waitUntil("one job to add it and summarize", timeout: 20) {
+            rig.meeting(id)?.summary != nil && state.processingID == nil && state.queuedIDs.isEmpty
+        }
+        let meeting = try XCTUnwrap(rig.meeting(id))
+        XCTAssertEqual(meeting.summary?.overview, "Summary 1", "one summary, from both recordings")
+        XCTAssertTrue(meeting.unifiedTranscript.contains { $0.text == "And someone near the phone agreed." }, "fused with the phone's")
+        XCTAssertEqual(rig.inference.transcribed.count, 2, "each recording transcribed once")
+        XCTAssertEqual(state.processingStatus(for: meeting), .done)
+    }
+
     /// With "Transcribe synced recordings on this Mac" off, the wait reads the same, and the phone's
     /// recording is still added when it arrives: it completes this Mac's recording. Another phone
     /// recording that nothing waited for still waits for a Mac that transcribes synced recordings.

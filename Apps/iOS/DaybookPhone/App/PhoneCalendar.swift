@@ -24,7 +24,9 @@ extension PhoneAppModel {
     /// Schedules a notification for each of the next meetings with other people, in place of those scheduled before;
     /// without Use Calendar or access, takes them all away.
     func remindMeetings(at now: Date = Date()) {
-        guard settings.usesCalendar, environment.calendar.access == .allowed else { notices.remind([]); return }
+        // A Focus whose Daybook filter turns Ask to Record Meetings off takes them away until it ends.
+        guard settings.usesCalendar, environment.calendar.access == .allowed, PersonalFocus.load(from: environment.defaults).asksToRecord
+        else { notices.remind([]); return }
         let events = environment.calendar.events(from: now, to: now.addingTimeInterval(Self.reminderHorizon))
         notices.remind(CalendarMeetings.upcoming(events, after: now, limit: Self.reminderLimit).map(PhoneNotices.meetingStarts))
     }

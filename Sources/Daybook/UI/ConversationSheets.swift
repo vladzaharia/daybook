@@ -5,8 +5,8 @@ import DaybookUI
 import Foundation
 import SwiftUI
 
-/// Presents the main window's one sheet for the selected conversation. Review Earlier Corrections, Adjust Timing, and
-/// Original Transcript are DaybookUI's, the same sheets the iPhone shows.
+/// Presents the main window's one sheet for the selected conversation. Version History, Review Earlier Corrections,
+/// Adjust Timing, and Original Transcript are DaybookUI's, the same sheets the iPhone shows.
 struct ConversationSheet: View {
     let state: AppState
     let sheet: ActiveSheet
@@ -14,7 +14,10 @@ struct ConversationSheet: View {
         if let meeting = state.selectedMeeting {
             switch sheet {
             case .versionHistory:
-                VersionHistorySheet(state: state, meeting: meeting)
+                // A restore would be overwritten while the conversation records or is processed here.
+                VersionHistoryScreen(library: state.library, meetingID: meeting.id) {
+                    state.recordingID == $0.id || state.processingID == $0.id
+                }
             case .reviewCorrections:
                 ReviewCorrectionsSheet(library: state.library, meetingID: meeting.id)
             case .adjustTiming(let id):
@@ -28,123 +31,5 @@ struct ConversationSheet: View {
         } else {
             ContentUnavailableView("No Conversation Selected", systemImage: "text.bubble").frame(width: 360, height: 200)
         }
-    }
-}
-
-// MARK: - Version History
-
-struct VersionHistorySheet: View {
-    let state: AppState
-    let meeting: Meeting
-    @Environment(\.dismiss) private var dismiss
-    @State private var selection: UUID?
-    @State private var confirmingRestore = false
-
-    private var revisions: [MeetingRevision] { meeting.revisions.reversed() }
-    private var groups: [(day: String, revisions: [MeetingRevision])] {
-        var result: [(String, [MeetingRevision])] = []
-        for revision in revisions {
-            let day = DateGroup.title(for: revision.date, now: Date(), calendar: .current)
-            if result.last?.0 == day { result[result.count - 1].1.append(revision) } else { result.append((day, [revision])) }
-        }
-        return result
-    }
-    private var locked: Bool { state.recordingID == meeting.id || state.processingID == meeting.id }
-
-    var body: some View {
-        NavigationSplitView {
-            List(selection: $selection) {
-                // A sheet has no title bar: the sheet names itself at the top of its list.
-                Text("Version History")
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-                    .padding(.top, Space.s5 - Space.s2)
-                    .selectionDisabled()
-                    .accessibilityAddTraits(.isHeader)
-                ForEach(groups, id: \.day) { group in
-                    Section(group.day) {
-                        ForEach(group.revisions) { revision in
-                            HStack {
-                                Label(RevisionText.title(revision, in: meeting), systemImage: RevisionText.symbol(revision))
-                                Spacer()
-                                Text(revision.date.formatted(date: .omitted, time: .shortened)).foregroundStyle(.secondary).font(.caption)
-                                    .monospacedDigit()
-                            }
-                            .tag(revision.id)
-                        }
-                    }
-                }
-            }
-            .listStyle(.sidebar)
-            .labelStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 240, ideal: 270, max: 320)
-        } detail: {
-            if let revision = revisions.first(where: { $0.id == selection }) {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: Space.s5) {
-                        Text(RevisionText.subject(revision, in: meeting)).font(.headline).foregroundStyle(Ink.title)
-                        RevisionComparison(revision: revision)
-                    }
-                    // The headline lines up with the list's title.
-                    .padding(.horizontal, Space.s5)
-                    .padding(.top, Space.s5)
-                    .padding(.bottom, Space.s5)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .background(DaybookStyle.paper)
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    if RevisionRestore.canRestore(revision, in: meeting) {
-                        HStack {
-                            Spacer()
-                            Button("Restore Previous Version…") { confirmingRestore = true }
-                                .buttonStyle(.bordered)
-                                .disabled(locked)
-                                .help(locked ? "Wait until this conversation finishes recording or processing." : "Put back the text from before this change")
-                        }
-                        // Trailing edge lines up with the sheet's Done button.
-                        .padding(Space.s4).padding(.trailing, Space.s1)
-                    }
-                }
-                .alert("Restore the previous version?", isPresented: $confirmingRestore) {
-                    Button("Restore") { state.library.restore(revision, in: meeting.id) }
-                    Button("Cancel", role: .cancel) { }
-                } message: {
-                    Text("What’s there now stays in Version History.")
-                }
-            } else {
-                ContentUnavailableView("Choose a Change", systemImage: "clock.arrow.circlepath")
-            }
-        }
-        .toolbar {
-            ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
-        }
-        .dismissesOnEscape { dismiss() }
-        .frame(width: 760, height: 520)
-        .onAppear {
-            selection = revisions.first?.id
-            #if DEBUG
-            // `--history-change "Summary written"` opens the newest change with that title, for snapshots, as on the iPhone.
-            if let title = LaunchOptions.value(after: "--history-change"),
-               let change = revisions.first(where: { RevisionText.title($0, in: meeting) == title }) {
-                selection = change.id
-            }
-            #endif
-        }
-    }
-}
-
-/// Marks what changed between two versions word by word (`WordChanges`): removed words struck through in magenta,
-/// inserted words washed in mint, over the text's own styling (`RevisionMarks`, which Version History draws with).
-enum WordDiff {
-    static func tokens(_ text: String) -> [Substring] { WordChanges.tokens(text) }
-    static func changes(old: [Substring], new: [Substring]) -> (removed: IndexSet, inserted: IndexSet) { WordChanges.changes(old: old, new: new) }
-
-    static func marked(old: String, new: String, dark: Bool = false) -> (old: AttributedString, new: AttributedString) {
-        marked(old: AttributedString(old), new: AttributedString(new), dark: dark)
-    }
-
-    /// In dark mode the washes are stronger and an inserted word is itself neon mint (over 10:1 on its wash).
-    static func marked(old: AttributedString, new: AttributedString, dark: Bool = false) -> (old: AttributedString, new: AttributedString) {
-        WordChanges.marked(old: old, new: new, removed: RevisionMarks.removed(dark: dark), inserted: RevisionMarks.inserted(dark: dark))
     }
 }

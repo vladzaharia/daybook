@@ -119,7 +119,7 @@ final class PlaybackController: PlaybackControlling {
             } catch {
                 guard let self, !Task.isCancelled, self.meetingID == meetingID else { return }
                 // The provider's own reasons are plain ("It downloads when you’re online"); others get a sentence.
-                self.phase = .unavailable(PlainError.message(for: error, fallback: "The audio couldn’t be loaded. Try again.").message)
+                self.phase = .unavailable(ProblemWords(fallback: "The audio couldn’t be loaded. Try again.", error: error).message)
             }
         }
     }

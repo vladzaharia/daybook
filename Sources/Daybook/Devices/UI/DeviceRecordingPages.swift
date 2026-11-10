@@ -21,7 +21,7 @@ struct RecordingPage: View {
         DevicePageScroll {
             if recordings.count == 1, let recording = recordings.first { single(recording) } else { several }
         }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: session.queue.ids)
+        .animation(reduceMotion ? nil : DaybookMotion.fade, value: session.queue.ids)
     }
 
     private var connected: Bool { session.primary?.state.isConnected == true }

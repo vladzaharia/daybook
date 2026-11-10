@@ -176,9 +176,9 @@ extension AppState {
             pendingRecorderLead = session.id
             Task {
                 if let start = phoneCapture.start {
-                    _ = await start(newMeeting(title: "Conversation at \(Date().formatted(date: .omitted, time: .shortened))", selecting: false))
+                    _ = await start(newMeeting(title: "Conversation at \(Date().formatted(date: .omitted, time: .shortened))", selecting: false), nil)
                 } else {
-                    await startRecording()
+                    await startRecording(from: .elsewhere)
                 }
                 if recordingID == nil { pendingRecorderLead = nil }
             }
@@ -208,14 +208,6 @@ extension AppState {
     /// it to let go (over Wi‑Fi in seconds when it's connected, otherwise through iCloud), then connect.
     func useRecorderOnThisMac(_ session: DeviceSession) {
         recorderHandoff.useHere(session)
-    }
-
-    /// Take Over Anyway, after the person confirmed the risk.
-    func takeOverRecorder(_ session: DeviceSession) { recorderHandoff.takeOverAnyway(session) }
-
-    /// Stops waiting for the other device, or clears its answer.
-    func cancelRecorderHandoff(_ session: DeviceSession) {
-        if recorderHandoff.state(of: session).isPending { recorderHandoff.cancel(session) } else { recorderHandoff.dismiss(session) }
     }
 
     /// "Use on Alex’s iPhone": offers the recorder to a connected phone.

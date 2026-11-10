@@ -10,8 +10,9 @@ public enum FindHighlight {
         var text = text
         var cursor = text.startIndex
         while cursor < text.endIndex, let range = text[cursor...].range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) {
-            text[range].backgroundColor = DaybookPalette.findHighlight
-            text[range].foregroundColor = DaybookPalette.Ink.onFind
+            // By the attributes' types: a key path through the attribute scope isn't Sendable, which complete checking flags.
+            text[range][AttributeScopes.SwiftUIAttributes.BackgroundColorAttribute.self] = DaybookPalette.findHighlight
+            text[range][AttributeScopes.SwiftUIAttributes.ForegroundColorAttribute.self] = DaybookPalette.Ink.onFind
             cursor = range.upperBound
         }
         return text

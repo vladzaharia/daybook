@@ -136,8 +136,9 @@ extension MarginTextView: UIScribbleInteractionDelegate, UIPencilInteractionDele
         wasShowingInkTools = session.showsTools
         session.refreshUndo()
         for view in Array(inkViews.values) + [tailView].compactMap({ $0 }) {
-            view.apply(tool: session.tool.pencilTool, fingerDraws: session.isWriting, interactive: isEditable)
+            view.apply(tool: session.tool.pencilTool, fingerDraws: session.isWriting, interactive: isEditable, live: session.showsTools)
         }
+        updateInkKeyboardBar()
         setNeedsLayout()
     }
 
@@ -280,7 +281,9 @@ extension MarginTextView: UIScribbleInteractionDelegate, UIPencilInteractionDele
         view.changed = { [weak self] view in self?.blockChanged(view) }
         view.addInteraction(UIContextMenuInteraction(delegate: self))
         addSubview(view)
-        if let session = ink?.session { view.apply(tool: session.tool.pencilTool, fingerDraws: session.isWriting, interactive: isEditable) }
+        if let session = ink?.session {
+            view.apply(tool: session.tool.pencilTool, fingerDraws: session.isWriting, interactive: isEditable, live: session.showsTools)
+        }
         return view
     }
 
@@ -577,7 +580,8 @@ extension MarginTextView: UIScribbleInteractionDelegate, UIPencilInteractionDele
                     if let undo = ink.remove(id, true) { self?.registerUndo(undo) }
                 })
                 actions.append(UIAction(title: "Copy Text", image: UIImage(systemName: "doc.on.doc")) { _ in
-                    UIPasteboard.general.string = words
+                    // This iPhone only, as every copy of a conversation's words is (`LocalCopy`).
+                    LocalCopy.copy(words)
                 })
             }
             actions.append(UIAction(title: "Delete", image: UIImage(systemName: "trash"), attributes: .destructive) { _ in

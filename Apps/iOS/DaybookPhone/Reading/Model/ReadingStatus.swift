@@ -1,233 +1,18 @@
 import DaybookKit
 import Foundation
 
-/// What the page and the list say about a conversation's processing, from DaybookKit's
-/// `ProcessingStatus` (docs/iphone.md, "Processing on the Mac" and "Processing on this iPhone"). Work
-/// on a Mac names the Mac; work here says "on this iPhone"; nothing ever fakes progress.
-///
-/// | Status | Page | Row |
-/// |---|---|---|
-/// | Recorded | "Not transcribed yet" + Transcribe | "Not transcribed yet" + teal dot |
-/// | Transcribed | "Not summarized yet" + Summarize | the preview |
-/// | Requested | "Waiting for your Mac" (+ "Last seen 2 h ago") | "Waiting for your Mac" + clock |
-/// | Waiting here | "Waiting on this iPhone" | the same |
-/// | Paused here | "Paused" + why ("Continues when Daybook is open") | "Paused" |
-/// | Processing | "Transcribing on Studio · 40%" (or "on this iPhone") + gradient bar | same words + a 2 pt gradient line |
-/// | Couldn't finish | a box with the Mac's reason, Try Again, Details | "Couldn't finish" + warning |
-/// | Waiting for a recording | "Waiting for audio from Alex's iPhone" | "Waiting for iPhone audio" + clock |
-/// | Done | nothing | the preview |
-struct StatusPresentation: Equatable {
-    enum Kind: Equatable {
-        /// One quiet line: a working or waiting state.
-        case line
-        /// A state that needs the person: a quiet filled box with at most two actions.
-        case problem
-        /// Something worth knowing, dismissible.
-        case info
-    }
-
-    enum Action: Equatable {
-        /// Writes a new request for the Mac (Try Again).
-        case request(ProcessingRequest.Mode)
-        /// The Mac's own words.
-        case details(String)
-        /// Clears the conversation's message.
-        case dismiss
-        /// Where its summary runs: Use the Cloud, Start Now, Wait for a Mac (`PhoneSummaryPlacement.perform`).
-        case placement(SummaryPlacementPlanner.Action)
-        /// Stops a summary running here or in the cloud.
-        case stopSummary
-        /// Redoes a step with the better model (docs/multipoint.md, "Upgrade"), or puts the offer away.
-        case upgrade(UpgradeOffer)
-        case dismissUpgrade(UpgradeOffer)
-    }
-
-    var kind: Kind
-    var symbol: String?
-    var title: String
-    var detail: String?
-    /// 0...1 when the Mac reported a figure; nil shows no bar.
-    var progress: Double?
-    /// Shows a small spinner: something is running with no figure to show.
-    var isWorking = false
-    var actions: [Action] = []
-    /// A countdown runs out then: the title changes every second (`TimelineView`).
-    var countdownUntil: Date?
-
-    /// The page's status, or nil when there's nothing to say.
-    static func page(_ status: ProcessingStatus, meeting: Meeting, sighting: MacSighting?, pause: PhoneProcessor.Pause? = nil,
-                     now: Date = Date()) -> StatusPresentation? {
-        switch status {
-        case .requested(.queued):
-            return StatusPresentation(kind: .line, symbol: "clock", title: "Waiting on this iPhone")
-        case .requested(.paused):
-            return StatusPresentation(kind: .line, symbol: "pause.circle", title: "Paused", detail: pause.map(pausedLine))
-        case .recorded:
-            // The fix is one tap away: ask your Mac (the request waits for one if none is around).
-            return StatusPresentation(kind: .line, symbol: "waveform", title: "Not transcribed yet",
-                                      actions: meeting.tracks.isEmpty ? [] : [.request(.newAudio)])
-        case .transcribed:
-            // The transcript reads; Summarize asks your Mac for the rest.
-            return StatusPresentation(kind: .line, symbol: "text.alignleft", title: "Not summarized yet",
-                                      actions: [.request(.summaryOnly)])
-        case .requested(let waiting):
-            if case .device(let request) = waiting, let upgrade = request.upgrade {
-                // An upgrade waits for the device with the better model: "Waiting for Studio Mac to upgrade the transcript".
-                return StatusPresentation(kind: .line, symbol: "clock", title: upgrade.waitingLine)
-            }
-            let mode: ProcessingRequest.Mode
-            if case .device(let request) = waiting { mode = request.mode } else { mode = .newAudio }
-            return StatusPresentation(kind: .line, symbol: "clock", title: waitingTitle(mode, summarized: meeting.summary != nil),
-                                      detail: MacSighting.line(sighting, now: now))
-        case .processing(let progress):
-            return StatusPresentation(kind: .line, symbol: progress.device == nil ? "iphone" : "desktopcomputer", title: workingTitle(progress),
-                                      progress: progress.fraction, isWorking: progress.fraction == nil)
-        case .failed(let failure):
-            let silent = FriendlyError.isNoSpeech(failure.reason)
-            var actions: [Action] = []
-            if !silent && !meeting.tracks.isEmpty { actions.append(.request(failure.request?.mode ?? .newAudio)) }
-            if !failure.reason.isEmpty { actions.append(.details(failure.reason)) }
-            return StatusPresentation(
-                kind: .problem, symbol: "exclamationmark.triangle.fill",
-                title: silent ? "No speech in this recording" : "Couldn’t finish \(failure.hadTranscripts ? "summarizing" : "transcribing")",
-                detail: silent ? FailureWords.saved : FriendlyError.message(for: failure.reason, device: failure.device?.name),
-                actions: actions)
-        case .awaitingRecordings(let recordings):
-            return StatusPresentation(kind: .line, symbol: "clock", title: ProcessingStatus.awaitingDetail(recordings))
-        case .done:
-            guard let message = meeting.errorMessage, !message.isEmpty else { return nil }
-            return StatusPresentation(kind: .info, symbol: "info.circle.fill", title: message, actions: [.dismiss])
-        }
-    }
-
-    /// Where a conversation's summary runs, when that's what there is to say (docs/multipoint.md, "Where
-    /// summaries run"), in the Mac's words with "this iPhone": this iPhone's own countdown or wait, a summary
-    /// running here or in the cloud, a Mac's countdown over the link (with the choices sent to it), or a
-    /// Summarize request still waiting for a Mac while the cloud is on offer. Nil otherwise.
-    static func placement(_ planner: SummaryPlacementPlanner?, run: SummaryPlace?, live: LiveProgress?, status: ProcessingStatus,
-                          cloudOffered: Bool, sighting: MacSighting? = nil, now: Date = Date()) -> StatusPresentation? {
-        if let run {
-            let title = "Summarizing \(SummaryPlacementPlanner.where(run, thisDevice: PhoneSummaryPlacement.thisDeviceWords))"
-            return StatusPresentation(kind: .line, symbol: nil, title: title, isWorking: true, actions: [.stopSummary])
-        }
-        if let planner, let title = planner.line(at: now, thisDevice: PhoneSummaryPlacement.thisDeviceWords) {
-            return StatusPresentation(kind: .line, symbol: "clock", title: title,
-                                      detail: planner.phase == .waitingForMac ? MacSighting.line(sighting, now: now) : nil,
-                                      actions: planner.actions.map(Action.placement), countdownUntil: planner.deadline)
-        }
-        if let live, live.isCountingDown {
-            return StatusPresentation(kind: .line, symbol: "clock", title: live.line(at: now),
-                                      actions: live.placementActions.map(Action.placement), countdownUntil: live.countdownUntil)
-        }
-        if let live, live.phase == .summarizing, live.cloudModel != nil {
-            return StatusPresentation(kind: .line, symbol: nil, title: live.line(at: now), isWorking: true)
-        }
-        if cloudOffered, case .requested(.device(let request)) = status, request.mode == .summaryOnly, request.upgrade == nil {
-            return StatusPresentation(kind: .line, symbol: "clock", title: "Waiting for a Mac to summarize",
-                                      detail: MacSighting.line(sighting, now: now), actions: [.placement(.useCloud)])
-        }
-        return nil
-    }
-
-    /// A clearly better model is within reach (docs/multipoint.md, "Upgrade"): one quiet line naming what improves and
-    /// where ("Upgrade transcript on Vlad's MacBook Pro"), with Upgrade and Dismiss.
-    static func upgrade(_ offer: UpgradeOffer) -> StatusPresentation {
-        StatusPresentation(kind: .line, symbol: "arrow.up.circle", title: offer.line, actions: [.upgrade(offer), .dismissUpgrade(offer)])
-    }
-
-    /// The row's words for the same, when there are any: "Summarizing in 12 s", "Waiting for a Mac to summarize".
-    static func placementRow(_ planner: SummaryPlacementPlanner?, run: SummaryPlace?, live: LiveProgress?, now: Date = Date()) -> RowStatus? {
-        if let run {
-            return RowStatus(kind: .processing, text: "Summarizing \(SummaryPlacementPlanner.where(run, thisDevice: PhoneSummaryPlacement.thisDeviceWords))")
-        }
-        if let planner, let text = planner.shortLine(at: now) {
-            return RowStatus(kind: .waiting, text: text, countdownUntil: planner.deadline)
-        }
-        if let live, live.isCountingDown {
-            return RowStatus(kind: .waiting, text: live.brief(at: now), countdownUntil: live.countdownUntil)
-        }
-        return nil
-    }
-
-    /// The row's words and glyph when a conversation isn't ready; nil when everything is fine. `meeting`, when
-    /// given, tells a first summary from Summarize Again.
-    static func row(_ status: ProcessingStatus, meeting: Meeting? = nil) -> RowStatus? {
-        switch status {
-        case .recorded: return RowStatus(kind: .notTranscribed, text: "Not transcribed yet")
-        case .requested(.queued): return RowStatus(kind: .waiting, text: "Waiting on this iPhone")
-        case .requested(.paused): return RowStatus(kind: .waiting, text: "Paused")
-        case .requested(let waiting):
-            if case .device(let request) = waiting {
-                return RowStatus(kind: .waiting, text: request.upgrade?.waitingLine ?? waitingTitle(request.mode, summarized: meeting?.summary != nil))
-            }
-            return RowStatus(kind: .waiting, text: "Waiting for your Mac")
-        case .processing(let progress):
-            return RowStatus(kind: .processing, text: workingTitle(progress), fraction: progress.fraction)
-        case .failed: return RowStatus(kind: .failed, text: "Couldn’t finish")
-        case .awaitingRecordings(let recordings): return RowStatus(kind: .waiting, text: ProcessingStatus.awaitingLine(recordings))
-        case .transcribed, .done: return nil
-        }
-    }
-
-    /// What a request waiting for a Mac says. A Summarize request says "again" only when there's a summary already.
-    static func waitingTitle(_ mode: ProcessingRequest.Mode, summarized: Bool = false) -> String {
-        switch mode {
-        case .newAudio: return "Waiting for your Mac"
-        case .summaryOnly: return summarized ? "Waiting for your Mac to summarize again" : "Waiting for your Mac to summarize"
-        case .speakerRefresh: return "Waiting for your Mac to identify speakers again"
-        case .fullRetranscription: return "Waiting for your Mac to transcribe everything again"
-        }
-    }
-
-    /// Why work on this iPhone is paused, and when it goes on.
-    static func pausedLine(_ pause: PhoneProcessor.Pause) -> String {
-        switch pause {
-        case .recording: return "Continues after the recording"
-        case .background: return "Continues when Daybook is open"
-        case .heat: return "Continues when iPhone cools down"
-        case .lowPowerMode: return "Continues when Low Power Mode is off"
-        case .lowBattery: return "Continues when iPhone is charging"
-        }
-    }
-
-    static func workingTitle(_ progress: ProcessingStatus.Progress) -> String {
-        let verb: String
-        switch progress.stage {
-        case .transcribing: verb = "Transcribing"
-        case .identifyingSpeakers: verb = "Identifying speakers"
-        case .summarizing: verb = "Summarizing"
-        }
-        let place = progress.device.map { " on \($0.name)" } ?? " on this iPhone"
-        let figure = progress.fraction.map { " · \(Int(($0 * 100).rounded()))%" } ?? ""
-        return verb + place + figure
-    }
-}
-
-/// What a list row says about a conversation that isn't ready.
-struct RowStatus: Equatable {
-    enum Kind: Equatable { case notTranscribed, waiting, processing, failed }
-    var kind: Kind
-    var text: String
-    var fraction: Double?
-    /// A summary's countdown runs out then: the row counts down to it ("Summarizing in 12 s").
-    var countdownUntil: Date?
-
-    /// The words at a moment: a countdown's seconds move with it.
-    func text(at now: Date) -> String {
-        guard let until = countdownUntil else { return text }
-        return "Summarizing in \(max(1, Int(until.timeIntervalSince(now).rounded(.up)))) s"
-    }
-}
-
-/// When a Mac was last heard from, for "Last seen 2 h ago". The library carries the evidence: a
-/// Mac's claim heartbeats and finished requests, and the transcripts and summaries it wrote. The
-/// local link, which knows sooner, can inject its own through `\.macSighting`.
+/// When a Mac was last heard from, for "Last seen 2 h ago" (`ConversationStatusPresentation.MacStanding.phone`). The
+/// library carries the evidence: a Mac's claim heartbeats and finished requests, and the transcripts and summaries it
+/// wrote. The local link, which knows sooner, can inject its own through `\.macSighting`.
 struct MacSighting: Equatable {
     var name: String?
     var date: Date
 
-    /// The latest sign of a Mac at work in any conversation, other than this device's own requests.
-    static func latest(in meetings: [Meeting], excluding deviceID: String?) -> MacSighting? {
+    /// The latest sign of a Mac at work in any conversation, other than this device's own: its requests, the summaries
+    /// it made, and the transcripts of the recordings it `owns`, which it transcribes itself or a Mac does through a
+    /// request whose claim says so. An iPhone that transcribed alone has seen no Mac.
+    static func latest(in meetings: [Meeting], excluding deviceID: String?,
+                       owns: (RecordingTrack) -> Bool = { _ in false }) -> MacSighting? {
         var best: MacSighting?
         func consider(_ date: Date, _ name: String?) {
             if best == nil || date > best!.date { best = MacSighting(name: name, date: date) }
@@ -237,61 +22,12 @@ struct MacSighting: Equatable {
                 if let claim = request.claim, claim.device.id != deviceID { consider(claim.heartbeat, claim.device.name) }
                 if let outcome = request.outcome, outcome.device.id != deviceID { consider(outcome.finishedAt, outcome.device.name) }
             }
-            for run in meeting.transcripts { consider(run.createdAt, nil) }
-            if let summary = meeting.summary { consider(summary.createdAt, nil) }
+            for run in meeting.transcripts where !(meeting.tracks.first { $0.id == run.trackID }.map(owns) ?? false) {
+                consider(run.createdAt, nil)
+            }
+            if let summary = meeting.summary, deviceID == nil || summary.origin.deviceID != deviceID { consider(summary.createdAt, nil) }
         }
         return best
-    }
-
-    /// "Last seen 2 h ago" when no Mac has checked in for a while; nil when one has, recently.
-    static func line(_ sighting: MacSighting?, now: Date, recent: TimeInterval = 15 * 60) -> String? {
-        guard let sighting else { return ConversationStatusPresentation.MacStanding.noMacLine }
-        let age = now.timeIntervalSince(sighting.date)
-        guard age > recent else { return nil }
-        return "Last seen \(ago(age))"
-    }
-
-    /// "5 min ago", "2 h ago", "3 days ago".
-    static func ago(_ seconds: TimeInterval) -> String {
-        let minutes = Int(max(0, seconds) / 60)
-        if minutes < 60 { return "\(max(1, minutes)) min ago" }
-        let hours = minutes / 60
-        if hours < 48 { return "\(hours) h ago" }
-        return "\(hours / 24) days ago"
-    }
-}
-
-/// Plain-language reasons for processing failures. The Mac's own words stay one tap away.
-enum FriendlyError {
-    /// The recording worked but holds no speech; trying again can't help.
-    static func isNoSpeech(_ error: String) -> Bool { error.lowercased().contains("no speech") }
-
-    static func message(for error: String, device: String?) -> String {
-        let lower = error.lowercased()
-        let mac = device ?? "your Mac"
-        if lower.contains("download") || lower.contains("not installed") { return "The models it needs aren’t on \(mac) yet. \(FailureWords.saved)" }
-        if lower.contains("memory") || lower.contains("language model") { return "The summary model couldn’t start on \(mac). \(FailureWords.saved)" }
-        return "Something went wrong on \(mac). \(FailureWords.saved)"
-    }
-}
-
-/// Plain words for an error on this iPhone. Daybook's own errors already say what happened and what
-/// to do; the system's don't, so they get a sentence of their own and keep their words for Details.
-enum PlainError {
-    static func message(for error: Error, fallback: String) -> (message: String, details: String?) {
-        switch error {
-        case let error as PhoneRecorderError:
-            return (error.localizedDescription, error.details)
-        case is AudioProvidingError, is PhotoProvidingError, is PhotoStoreError:
-            return (error.localizedDescription, nil)
-        case let error as LibrarySyncError where error.isPlainSentence:
-            return (error.localizedDescription, nil)
-        case let error as AudioFetchError where error.isPlainSentence:
-            return (error.localizedDescription, nil)
-        default:
-            let words = error.localizedDescription
-            return (fallback, words.isEmpty || words == fallback ? nil : words)
-        }
     }
 }
 

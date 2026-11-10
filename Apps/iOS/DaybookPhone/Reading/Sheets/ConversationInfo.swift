@@ -37,7 +37,7 @@ struct ConversationInfo: View {
             }
             .navigationTitle("Info")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button(role: .close) { dismiss() }.tint(PhoneStyle.Ink.title) } }
         }
         .presentationDetents([.medium, .large], selection: $detent)
         .presentationDragIndicator(.visible)
@@ -130,6 +130,8 @@ struct ConversationInfo: View {
             placement?.stop(id)
         case .status(.dontWait):
             library.stopWaitingForRecordings(in: id, undoManager: undoManager)
+        case .status(.waitAgain):
+            library.waitAgainForMissingRecordings(in: id, undoManager: undoManager)
         case .status:
             break
         case .searchTag(let tag):

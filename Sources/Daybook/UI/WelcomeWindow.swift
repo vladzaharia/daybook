@@ -4,9 +4,9 @@ import DaybookDevices
 import DaybookUI
 import SwiftUI
 
-/// First-run Welcome window (Direction A §5.6): what Daybook is, how carefully it listens, allowing the microphone and
-/// computer audio, and how to begin. The pages and their words are the iPhone's too (DaybookUI's `WelcomePager`,
-/// `WelcomeWords`); each step can be skipped with Esc or the close button.
+/// First-run Welcome window (Direction A §5.6), four steps: what Daybook is, how carefully it listens, allowing the
+/// microphone and computer audio, and how to begin, with whether Daybook opens at login. The pages and their words are
+/// the iPhone's too (DaybookUI's `WelcomePager`, `WelcomeWords`); each step can be skipped with Esc or the close button.
 struct WelcomeWindow: View {
     enum Page: Int, CaseIterable, Hashable {
         case intro, quality, allow, ready
@@ -21,6 +21,15 @@ struct WelcomeWindow: View {
     /// The preset chosen on the quality page, named while it downloads.
     @State private var chosen: ModelPreset?
     @State private var permissions = CapturePermissions()
+    @State private var loginItem = LoginItem()
+    /// The Ready page's Open Daybook at login, once the person changed it.
+    @State private var opensAtLoginChoice: Bool?
+
+    /// On at first while When a call starts isn't Off (`WelcomeLogin`).
+    private var opensAtLogin: Binding<Bool> {
+        Binding(get: { opensAtLoginChoice ?? WelcomeLogin.initial(callPolicy: state.callPolicy, isOn: loginItem.isOn) },
+                set: { opensAtLoginChoice = $0 })
+    }
 
     var body: some View {
         WelcomePager(pages: Page.allCases, selection: $page) { page in
@@ -34,8 +43,8 @@ struct WelcomeWindow: View {
             case .allow:
                 WelcomeAllow(permissions: permissions) { go(to: .ready) }
             case .ready:
-                WelcomeReady(state: state, chosen: chosen, record: record, importAudio: importAudio, addDevice: addDevice,
-                             finish: finish)
+                WelcomeReady(state: state, chosen: chosen, opensAtLogin: opensAtLogin, record: record, importAudio: importAudio,
+                             addDevice: addDevice, finish: finish)
             }
         }
         .frame(width: 560, height: 520)
@@ -74,6 +83,8 @@ struct WelcomeWindow: View {
     }
 
     private func finish() {
+        // Leaving Ready by any of its ways on is continuing with what its row says; Welcome closed earlier adds nothing.
+        if page == .ready { WelcomeLogin.apply(opensAtLogin.wrappedValue, to: loginItem) }
         onboardingCompleted = true
         dismissWindow(id: WindowID.welcome)
     }
@@ -252,9 +263,20 @@ private struct WelcomeAllow: View {
 
 // MARK: - Ready
 
+/// Ready's Open Daybook at login (uxf-08): calls are noticed only while Daybook is open, so it's on at first whenever
+/// When a call starts isn't Off (or Daybook is a login item already). Nothing is added to Login Items until the person
+/// leaves the page with it on; then it registers through `LoginItem` (`SMAppService`), as Settings › General does.
+@MainActor
+enum WelcomeLogin {
+    static func initial(callPolicy: CallRecordingPolicy, isOn: Bool) -> Bool { isOn || callPolicy != .off }
+
+    static func apply(_ on: Bool, to item: LoginItem) { item.set(on) }
+}
+
 private struct WelcomeReady: View {
     let state: AppState
     let chosen: ModelPreset?
+    @Binding var opensAtLogin: Bool
     let record: () -> Void
     let importAudio: () -> Void
     let addDevice: () -> Void
@@ -269,7 +291,7 @@ private struct WelcomeReady: View {
         // The actions sit where the other steps put Continue, rather than floating mid-window; the mark again, closing
         // the welcome it opened.
         WelcomeStepPage(title: WelcomeWords.readyTitle,
-                        message: WelcomeWords.readyMessage(downloading: isDownloading, canTranscribe: state.canProcess),
+                        message: WelcomeWords.readyMessage(downloading: isDownloading, canTranscribe: state.canProcess, transcriptFirst: true),
                         showsMark: true) {
             if isDownloading {
                 let total = ModelSize.bytes(ids, in: state.modelCatalog), done = ModelSize.downloaded(ids, in: state)
@@ -296,6 +318,12 @@ private struct WelcomeReady: View {
                 }
                 .daybookControl(.standard, shape: .capsule)
             }
+            Toggle(isOn: $opensAtLogin) {
+                Text(WelcomeWords.openAtLogin)
+                Text(WelcomeWords.openAtLoginReason).foregroundStyle(DaybookPalette.Ink.secondary)
+            }
+            .toggleStyle(.checkbox)
+            .padding(.top, DaybookSpacing.s1)
             HStack(spacing: Space.s1) {
                 Text(WelcomeWords.recorderQuestion).foregroundStyle(Ink.secondary)
                 Button(WelcomeWords.addDevice, action: addDevice).buttonStyle(.daybookLink)

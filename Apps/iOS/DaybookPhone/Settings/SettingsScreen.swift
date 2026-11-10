@@ -129,6 +129,7 @@ struct SettingsScreen: View {
             } header: {
                 Text("Library")
             }
+            PersonalLockSection()
             Section {
                 SettingsLink(route: .about) {
                     SettingsRow(title: "About Daybook", detail: nil, systemImage: "info.circle")
@@ -139,7 +140,7 @@ struct SettingsScreen: View {
         .settingsScrollEnd()
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        .toolbar { ToolbarItem(placement: .topBarTrailing) { Button(role: .close) { dismiss() }.tint(PhoneStyle.Ink.title) } }
     }
 
     private var recordingSummary: String {
@@ -149,16 +150,32 @@ struct SettingsScreen: View {
     private var storageSummary: String { StatusSheetModel.audioOnThisIPhone(bytes: model.audio.usage.bytes) }
 
     private var modelsSummary: String {
-        let missing = Self.missingModelBytes(model.models, processesHere: model.settings.processesOnThisIPhone)
-        if missing > 0 { return "\(ByteSize.format(missing)) to download" }
-        return model.processingCapabilities.transcribes ? "Transcribes on this iPhone" : "Live transcription on this iPhone"
+        Self.modelsDetail(model.models, processesHere: model.settings.processesOnThisIPhone,
+                          transcribes: model.processingCapabilities.transcribes)
     }
 
-    /// What's left to download for live captions and, while this iPhone transcribes its own recordings, for that:
-    /// each model once, as Models lists them, though the voice-profile model serves both.
+    /// The Models row's words. While this iPhone transcribes its own recordings and the processing models asked for are
+    /// coming, how that whole set stands, the page's figure ("Downloading · 40%", "Waiting for Wi‑Fi", "Couldn’t
+    /// download"); else what's still to download (`missingModelBytes`); else what it does.
+    static func modelsDetail(_ models: PhoneModels, processesHere: Bool, transcribes: Bool) -> String {
+        if processesHere, let state = models.processingDownloadState {
+            switch state {
+            case .downloading: return ModelStatus.downloading(state.fraction ?? 0).label
+            case .waitingForWiFi: return ModelStatus.waitingForWiFi.label
+            case .failed: return ProcessingWords.downloadStopped
+            }
+        }
+        let missing = missingModelBytes(models, processesHere: processesHere)
+        if missing > 0 { return "\(ByteSize.format(missing)) to download" }
+        return transcribes ? "Transcribes on this iPhone" : "Live transcription on this iPhone"
+    }
+
+    /// What the row's figure counts (uxf-18): while this iPhone transcribes its own recordings, only what transcribing
+    /// still needs, the figure Welcome offered ("Transcription and speakers · 852 MB"); the summary model and live
+    /// captions' models are listed inside Models with their own sizes. Otherwise, live transcription's, the only models
+    /// it uses.
     static func missingModelBytes(_ models: PhoneModels, processesHere: Bool) -> Int64 {
-        let roles = models.roles + (processesHere ? [.transcription, .diarization, .speakerEmbedding] : [])
-        return models.missing(in: roles).reduce(0) { $0 + $1.approximateBytes }
+        processesHere ? models.processingMissingBytes : models.missingBytes
     }
 
     /// "12 built-in, 2 yours", as the Mac counts them.
@@ -203,6 +220,25 @@ struct SettingsScreen: View {
             if screen.hasPrefix("speaker-profile:"),
                let profile = model.library.controller.speakerProfiles.first(where: { $0.name == screen.dropFirst("speaker-profile:".count) }) {
                 path = [.speakerProfiles, .speakerProfile(profile.id)]
+            }
+        }
+    }
+}
+
+/// Require Face ID for Personal (or the passcode, on an iPhone without Face ID), and its one line (`PersonalLock`).
+/// Off by default; turning it off asks first, as unlocking does.
+private struct PersonalLockSection: View {
+    @Environment(PersonalLock.self) private var personalLock: PersonalLock?
+
+    var body: some View {
+        if let personalLock {
+            Section {
+                Toggle(isOn: Binding(get: { personalLock.isRequired }, set: { on in Task { await personalLock.setRequired(on) } })) {
+                    SettingsRow(title: SettingsWords.titleCased(PersonalLockWords.requirement(personalLock.method)), detail: nil,
+                                systemImage: PersonalLockWords.symbol)
+                }
+            } footer: {
+                SettingsFooter(PersonalLockWords.footer)
             }
         }
     }
@@ -333,8 +369,6 @@ private struct SettingsScrollEnd: ViewModifier {
 struct RecordingSettingsScreen: View {
     @Environment(PhoneAppModel.self) private var model
     @Environment(\.openURL) private var openURL
-    /// Use Calendar was turned on and iOS said no.
-    @State private var calendarRefused = false
 
     var body: some View {
         @Bindable var settings = model.settings
@@ -348,18 +382,12 @@ struct RecordingSettingsScreen: View {
                 Toggle("Lock Screen and Dynamic Island", isOn: $settings.showsLiveActivity)
             }
             Section {
-                Toggle("Use Calendar", isOn: Binding(get: { settings.usesCalendar }, set: { on in
-                    Task {
-                        await model.setUsesCalendar(on)
-                        calendarRefused = on && !settings.usesCalendar
-                    }
-                }))
-                // Refused just now, or taken away in Settings since.
-                if calendarRefused || (settings.usesCalendar && model.environment.calendar.access == .denied) {
-                    Button("Allow Calendars in Settings") {
-                        if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
-                    }
-                }
+                CalendarSettingsRow(isOn: settings.usesCalendar, access: model.environment.calendar.access, set: { on in
+                    await model.setUsesCalendar(on)
+                    return model.settings.usesCalendar
+                }, openSettings: {
+                    if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                })
             }
             Section {
                 LabeledContent("Format", value: "AAC, 48 kHz mono")

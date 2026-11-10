@@ -10,17 +10,20 @@ import Foundation
 ///
 /// | Status | Page | Row |
 /// |---|---|---|
-/// | Recorded | box (accent): "Not transcribed yet" + Transcribe | "Not transcribed yet" + dot |
+/// | Recorded | box (accent): "Not transcribed yet" + Transcribe | "Not transcribed yet" + waveform |
 /// | Transcribed | line: "Not summarized yet" + Summarize | the preview |
+/// | … its summary waiting for a Mac's summary model | line: "Waiting to summarize after the download · 38%", bar, Use the Cloud with a key; the download's own line when it waits for Wi‑Fi or stopped; box (accent): "Download models to summarize this conversation" + Download | the preview |
 /// | Queued here | line: "Waiting to transcribe after “Roadmap review”" + Cancel | "Waiting to transcribe" + clock |
-/// | Waiting for models | box (accent): "Download models to transcribe this conversation" + Choose Models…, Download | "Waiting for models" |
+/// | Waiting for models (nothing can stand in for them: no system speech model, or a language it doesn't cover) | box (accent): "Download models to transcribe this conversation" + Choose Models…, Download | "Waiting for models" |
+/// | … while they download | line: "Downloading models · 40%" + "3.0 of 7.6 GB", bar, Cancel; "Downloading models · Waiting for Wi‑Fi" + Download; box (problem): "Couldn’t download Gemma 4 12B" + Try Again | "Waiting for models" |
 /// | Paused here | line: "Paused" + Resume, or why ("Continues when Daybook is open") | "Paused" + pause glyph |
 /// | Requested, waiting for a Mac | line: "Waiting for your Mac" + "Last seen 2 h ago", Cancel for its own | the same |
 /// | Requested, this iPhone could do it | box (accent): "Download models to transcribe this conversation" + Download | the same |
-/// | Requested, no device can summarize | line: "Needs your Mac to summarize" | the same |
+/// | Requested, no device can summarize | line: "Needs your Mac to summarize"; "Download · 3.6 GB" where this iPhone could after a download | the same |
 /// | Processing | line: "Transcribing · 40%" (here), "Transcribing on Studio Mac · 40%" + bar | the same + 2 pt line |
 /// | Couldn't finish | box (problem): `FailureWords` + Details…, the fix ("Couldn’t summarize with Claude Sonnet 5.5" + Cloud Settings…, Summarize on This Mac) | "Couldn’t finish" + warning |
-/// | Waiting for a recording | line: "Waiting for audio from Alex's iPhone" + Don’t Wait | "Waiting for iPhone audio" |
+/// | Waiting for a recording | line: "Waiting for audio from Alex's iPhone" (" · Sending 40%", " · Last online 10:02", when known) + Don’t Wait | "Waiting for iPhone audio" |
+/// | A recording didn't arrive | box (problem): "Alex's iPhone audio didn’t arrive" + Don’t Wait, Wait Again | "iPhone audio didn’t arrive" |
 /// | Done | an upgrade's line, or a note to dismiss, else nothing | the preview |
 ///
 /// A working state is a bare line; a state that waits on the person is a quiet box with at most two actions.
@@ -51,10 +54,14 @@ public struct ConversationStatusPresentation: Equatable, Sendable {
         case cancelRequest(UUID)
         /// Stop waiting for a recording made alongside, and finish with the audio that's here.
         case dontWait
+        /// Wait once more for a recording made alongside that didn't arrive in time.
+        case waitAgain
         /// Stop the model download the work waits for.
         case cancelDownload
-        /// Download the models the work needs (this many bytes).
-        case downloadModels(bytes: Int64)
+        /// Download the models the work needs (this many bytes); `again` after a download stopped ("Try Again").
+        case downloadModels(bytes: Int64, again: Bool = false)
+        /// Download this device's own summary model (this many bytes), so it summarizes what no Mac is around to.
+        case downloadSummaryModel(bytes: Int64)
         case chooseModels
         case cloudSettings
         /// Summarize on this device instead ("This Mac", "This iPhone"), or ask your Mac.
@@ -78,7 +85,9 @@ public struct ConversationStatusPresentation: Equatable, Sendable {
             case .resume: return "Resume"
             case .cancel, .cancelRequest, .cancelDownload: return "Cancel"
             case .dontWait: return "Don’t Wait"
-            case .downloadModels: return "Download"
+            case .waitAgain: return "Wait Again"
+            case .downloadModels(_, let again): return again ? "Try Again" : "Download"
+            case .downloadSummaryModel(let bytes): return ProcessingWords.download(bytes)
             case .chooseModels: return "Choose Models…"
             case .cloudSettings: return "Cloud Settings…"
             case .summarizeHere(let device): return "Summarize on \(device)"
@@ -150,6 +159,14 @@ extension ConversationStatusPresentation {
         public var missingModelBytes: Int64
         /// The download the work waits for, under way.
         public var download: Download?
+        /// How this device's downloads stand, over the whole set asked for (a Mac's queue, an iPhone's processing
+        /// models): arriving, waiting for Wi‑Fi, or stopped. Said for the work that waits for them before `download`.
+        public var models: ModelDownloadState?
+        /// What downloading this device's own summary model takes, where it could summarize once that's here and no
+        /// one has asked for it yet (an iPhone with the memory for one); 0 otherwise.
+        public var summaryModelBytes: Int64
+        /// That summary model is asked for: arriving, waiting, or stopped (`models` says how).
+        public var summaryModelAsked: Bool
 
         public struct Download: Equatable, Sendable {
             public var name: String
@@ -158,29 +175,43 @@ extension ConversationStatusPresentation {
         }
 
         public init(processesHere: Bool, transcribes: Bool, summarizes: Bool, controlsQueue: Bool, managesModels: Bool,
-                    missingModelBytes: Int64 = 0, download: Download? = nil) {
+                    missingModelBytes: Int64 = 0, download: Download? = nil, models: ModelDownloadState? = nil,
+                    summaryModelBytes: Int64 = 0, summaryModelAsked: Bool = false) {
             self.processesHere = processesHere; self.transcribes = transcribes; self.summarizes = summarizes
             self.controlsQueue = controlsQueue; self.managesModels = managesModels
-            self.missingModelBytes = missingModelBytes; self.download = download
+            self.missingModelBytes = missingModelBytes; self.download = download; self.models = models
+            self.summaryModelBytes = summaryModelBytes; self.summaryModelAsked = summaryModelAsked
         }
 
-        /// A Mac: it does it all.
-        public static func mac(missingModelBytes: Int64 = 0, download: Download? = nil) -> LocalCapabilities {
-            LocalCapabilities(processesHere: true, transcribes: true, summarizes: true, controlsQueue: true, managesModels: true,
-                              missingModelBytes: missingModelBytes, download: download)
+        /// A Mac: it does it all, summaries once its summary model is here (`summarizes`).
+        public static func mac(summarizes: Bool = true, missingModelBytes: Int64 = 0, download: Download? = nil,
+                               models: ModelDownloadState? = nil) -> LocalCapabilities {
+            LocalCapabilities(processesHere: true, transcribes: true, summarizes: summarizes, controlsQueue: true, managesModels: true,
+                              missingModelBytes: missingModelBytes, download: download, models: models)
         }
 
         /// An iPhone: its own recordings when processing here is on, and summaries when its model is here.
-        /// `missingModelBytes` is what transcribing here still needs to download, with processing here on.
+        /// `missingModelBytes` is what transcribing here still needs to download; `download`, a transcribing model on its
+        /// way, with the whole set's figure; `models`, the set; `summaryModelBytes`, its summary model where it could run
+        /// one and no one has asked for it. All only with processing here on.
         public static func iPhone(processesHere: Bool = false, summarizes: Bool = false, missingModelBytes: Int64 = 0,
-                                  download: Download? = nil) -> LocalCapabilities {
+                                  download: Download? = nil, models: ModelDownloadState? = nil, summaryModelBytes: Int64 = 0,
+                                  summaryModelAsked: Bool = false) -> LocalCapabilities {
             LocalCapabilities(processesHere: processesHere, transcribes: false, summarizes: summarizes, controlsQueue: false, managesModels: false,
-                              missingModelBytes: processesHere ? missingModelBytes : 0, download: processesHere ? download : nil)
+                              missingModelBytes: processesHere ? missingModelBytes : 0, download: processesHere ? download : nil,
+                              models: processesHere ? models : nil, summaryModelBytes: processesHere ? summaryModelBytes : 0,
+                              summaryModelAsked: processesHere && summaryModelAsked)
         }
 
         /// This device would transcribe its own recordings once its models are here: an iPhone with processing on
         /// and models still to download. A Mac's own downloads are its queue's (`requested(.models)`).
         var transcribesOwnAfterDownload: Bool { processesHere && !managesModels && (missingModelBytes > 0 || download != nil) }
+
+        /// This device would summarize once its own summary model is here: an iPhone with processing on and the memory
+        /// for one, whose model isn't downloaded yet. A Mac's summarizer is its queue's.
+        var summarizesOwnAfterDownload: Bool {
+            processesHere && !managesModels && !summarizes && (summaryModelBytes > 0 || summaryModelAsked)
+        }
     }
 
     /// A Mac's live progress on this conversation over the local link: finer and sooner than the claim that syncs.
@@ -302,7 +333,8 @@ extension ConversationStatusPresentation {
         public var planner: SummaryPlacementPlanner?
         /// A summary running here or in the cloud.
         public var run: SummaryPlace?
-        /// The cloud is on offer for a Summarize request still waiting for a Mac.
+        /// The cloud is on offer for a Summarize request still waiting for a Mac, or for a summary waiting for this Mac's
+        /// summary model (`Inputs.summaryWaitsForModel`).
         public var cloudOffered: Bool
 
         public init(planner: SummaryPlacementPlanner? = nil, run: SummaryPlace? = nil, cloudOffered: Bool = false) {
@@ -335,6 +367,9 @@ extension ConversationStatusPresentation {
         public var queueWaitsForDownload = false
         /// What a conversation queued here was asked for.
         public var queuedMode: ProcessingRequest.Mode?
+        /// Its summary would wait for this device's summary model (a Mac that transcribes without one: transcript first),
+        /// since the cloud wouldn't take it at once: a transcript, or a Summarize waiting, says what it waits for.
+        public var summaryWaitsForModel = false
         /// Every recording it still needs transcribed was made or brought in on this device, which processes only
         /// its own (`OnDeviceProcessing`; always true on a Mac, which takes any).
         public var ownsUntranscribed: Bool
@@ -345,17 +380,24 @@ extension ConversationStatusPresentation {
         /// Rows: it's playing now, or its work just finished (the checkmark holds for a moment).
         public var isPlaying = false
         public var justFinished = false
+        /// Where each recording it waits for is, when this device knows (`ArrivalStatus`), by `AwaitedRecording.arrivalKey`.
+        public var arrivals: [String: ArrivalStatus]
+        /// This device's own recording of the conversation that a Mac waits for, while it isn't on its way yet (the
+        /// iPhone's: being saved, held back by full iCloud storage or the library's key, or sending).
+        public var unsent: ArrivalStatus?
 
         public init(words: DeviceWords, local: LocalCapabilities, isRecording: Bool = false, link: LinkWork? = nil, mac: MacStanding? = nil,
                     placement: Placement = Placement(), upgrade: UpgradeOffer? = nil, runningTitle: String? = nil,
-                    queueWaitsForDownload: Bool = false, queuedMode: ProcessingRequest.Mode? = nil, ownsUntranscribed: Bool = true,
-                    pause: ProcessingWords.PauseReason? = nil, cloudModel: String? = nil, isPlaying: Bool = false,
-                    justFinished: Bool = false) {
+                    queueWaitsForDownload: Bool = false, queuedMode: ProcessingRequest.Mode? = nil, summaryWaitsForModel: Bool = false,
+                    ownsUntranscribed: Bool = true, pause: ProcessingWords.PauseReason? = nil, cloudModel: String? = nil, isPlaying: Bool = false,
+                    justFinished: Bool = false, arrivals: [String: ArrivalStatus] = [:]) {
             self.words = words; self.local = local; self.isRecording = isRecording; self.link = link; self.mac = mac
             self.placement = placement; self.upgrade = upgrade; self.runningTitle = runningTitle
-            self.queueWaitsForDownload = queueWaitsForDownload; self.queuedMode = queuedMode; self.ownsUntranscribed = ownsUntranscribed
+            self.queueWaitsForDownload = queueWaitsForDownload; self.queuedMode = queuedMode
+            self.summaryWaitsForModel = summaryWaitsForModel; self.ownsUntranscribed = ownsUntranscribed
             self.pause = pause
             self.cloudModel = cloudModel; self.isPlaying = isPlaying; self.justFinished = justFinished
+            self.arrivals = arrivals
         }
     }
 }
@@ -368,6 +410,12 @@ extension ConversationStatusPresentation {
         guard !inputs.isRecording else { return nil }
         if let placing = placement(status, inputs: inputs, now: now) { return placing }
         if let link = inputs.link, !link.isFinished, let live = linkLine(link) { return live }
+        // This device's own recording a Mac waits for, not on its way yet: the line the Mac's page matches.
+        if let unsent = inputs.unsent, !status.isPending, !status.isFailure {
+            let held = unsent == .storageFull || unsent == .waitingForKey
+            return ConversationStatusPresentation(kind: .line, symbol: held ? "exclamationmark.icloud" : "arrow.up.circle",
+                                                  title: ProcessingStatus.unsentLine(unsent, here: inputs.words.here))
+        }
         let words = inputs.words, local = inputs.local
         switch status {
         case .processing(let progress):
@@ -391,6 +439,7 @@ extension ConversationStatusPresentation {
                                                   actions: local.controlsQueue ? [.cancel] : [])
 
         case .requested(.models):
+            if local.managesModels, let models = local.models { return modelsHere(models) }
             if local.download != nil { return downloadHere(local) }
             guard local.managesModels else {
                 return ConversationStatusPresentation(kind: .line, symbol: "arrow.down.circle", title: "Waiting for models")
@@ -410,6 +459,10 @@ extension ConversationStatusPresentation {
             let mine = request.requestedBy.id == words.thisDeviceID
             // What this device asked for and no device has started can be taken back.
             let cancel: [Action] = mine ? [.cancelRequest(request.id)] : []
+            if request.mode == .summaryOnly, request.upgrade == nil, inputs.summaryWaitsForModel {
+                // This Mac is the one it waits for, once its summary model is here.
+                return summaryWaits(meeting, inputs: inputs)
+            }
             if let upgrade = request.upgrade, !meeting.hasUntranscribedAudio {
                 // An upgrade waits for the device with the better model; Cancel brings the offer back.
                 return ConversationStatusPresentation(kind: .line, symbol: "clock", title: upgrade.waitingLine, actions: cancel)
@@ -428,13 +481,15 @@ extension ConversationStatusPresentation {
             }
             if request.mode == .summaryOnly, !local.summarizes, inputs.mac?.isNoMac == true {
                 // Nothing here or anywhere it can reach summarizes: a fact, not a wait.
-                return ConversationStatusPresentation(kind: .line, symbol: "desktopcomputer", title: Self.needsMacToSummarize,
-                                                      detail: inputs.mac?.detail(at: now), actions: cancel)
+                return needsMac(local, detail: inputs.mac?.detail(at: now), actions: cancel)
             }
+            // Asked of a Mac before this device could summarize: with its own model here now and no Mac around, it can.
+            let here: [Action] = request.mode == .summaryOnly && mine && local.summarizes && inputs.mac?.isNoMac == true
+                ? [.summarizeHere(words.hereTitle)] : []
             return ConversationStatusPresentation(kind: .line, symbol: "clock",
                                                   title: ProcessingWords.waitingForMac(request.mode, summarized: meeting.summary != nil, device: mac),
                                                   detail: inputs.mac?.detail(at: now),
-                                                  actions: cancel)
+                                                  actions: here + cancel)
 
         case .failed(let failure):
             return failed(failure, meeting: meeting, inputs: inputs)
@@ -448,16 +503,23 @@ extension ConversationStatusPresentation {
                                                   actions: [.transcribe(newAudio: newAudio)])
 
         case .transcribed:
+            // Transcript first: the summary follows the summary model's download.
+            if inputs.summaryWaitsForModel { return summaryWaits(meeting, inputs: inputs) }
             if !local.summarizes, !inputs.placement.cloudOffered, inputs.mac?.isNoMac == true {
                 // Summarize would only wait: nothing here, no Mac, and no cloud summarizes.
-                return ConversationStatusPresentation(kind: .line, symbol: "desktopcomputer", title: needsMacToSummarize,
-                                                      detail: inputs.mac?.detail(at: now))
+                return needsMac(local, detail: inputs.mac?.detail(at: now))
             }
             return ConversationStatusPresentation(kind: .line, symbol: "text.alignleft", title: "Not summarized yet", actions: [.summarize])
 
         case .awaitingRecordings(let recordings):
-            return ConversationStatusPresentation(kind: .line, symbol: "clock", title: ProcessingStatus.awaitingDetail(recordings),
+            return ConversationStatusPresentation(kind: .line, symbol: "clock",
+                                                  title: ProcessingStatus.awaitingDetail(recordings, arrivals: inputs.arrivals, now: now),
                                                   actions: [.dontWait])
+
+        case .missingRecordings(let recordings):
+            // What's here was summarized without it: said, never quietly done, with the two ways on.
+            return ConversationStatusPresentation(kind: .box(.problem), symbol: "exclamationmark.triangle.fill",
+                                                  title: ProcessingStatus.missingDetail(recordings), actions: [.dontWait, .waitAgain])
 
         case .done:
             if let offer = inputs.upgrade {
@@ -500,7 +562,8 @@ extension ConversationStatusPresentation {
         if let link = inputs.link, link.phase == .summarizing, let model = link.cloudModel {
             return ConversationStatusPresentation(kind: .line, symbol: nil, title: "Summarizing with \(model)", isWorking: true)
         }
-        if placement.cloudOffered, case .requested(.device(let request)) = status, request.mode == .summaryOnly, request.upgrade == nil {
+        if placement.cloudOffered, !inputs.summaryWaitsForModel, case .requested(.device(let request)) = status, request.mode == .summaryOnly,
+           request.upgrade == nil {
             let mine = request.requestedBy.id == words.thisDeviceID
             return ConversationStatusPresentation(kind: .line, symbol: "clock", title: "Waiting for a Mac to summarize",
                                                   detail: inputs.mac?.detail(at: now),
@@ -528,14 +591,79 @@ extension ConversationStatusPresentation {
     /// "Needs your Mac to summarize": no device this one can reach summarizes, and no cloud model is on offer.
     public static let needsMacToSummarize = "Needs your Mac to summarize"
 
-    /// A download this device makes to do the work itself: under way, a line with its figure and Cancel; else a box
-    /// with Download and its size.
+    /// "Needs your Mac to summarize", a fact with `actions`, and "Download · 3.6 GB" first where this device could
+    /// summarize once its own summary model is here. Once that's asked for, how the download stands instead.
+    static func needsMac(_ local: LocalCapabilities, detail: String?, actions: [Action] = []) -> ConversationStatusPresentation {
+        if local.summarizesOwnAfterDownload, local.summaryModelAsked, let models = local.models { return ownModels(models) }
+        let download: [Action] = local.summarizesOwnAfterDownload && local.summaryModelBytes > 0
+            ? [.downloadSummaryModel(bytes: local.summaryModelBytes)] : []
+        return ConversationStatusPresentation(kind: .line, symbol: "desktopcomputer", title: needsMacToSummarize, detail: detail,
+                                              actions: download + actions)
+    }
+
+    /// The downloads a Mac's work waits for, in the words every surface says them with (`ProcessingWords`): the whole
+    /// set arriving ("Downloading models · 40%", with what's here of the total) and Cancel; waiting for Wi‑Fi, with
+    /// Download to go on over this network now; or a download that stopped on its own ("Couldn’t download Gemma 4 12B")
+    /// with Try Again.
+    static func modelsHere(_ models: ModelDownloadState) -> ConversationStatusPresentation {
+        let title = ProcessingWords.modelDownloadLine(models)
+        switch models {
+        case .downloading:
+            return ConversationStatusPresentation(kind: .line, symbol: "arrow.down.circle", title: title,
+                                                  detail: ProcessingWords.modelDownloadDetail(models), progress: models.fraction,
+                                                  actions: [.cancelDownload])
+        case .waitingForWiFi(let bytes):
+            return ConversationStatusPresentation(kind: .line, symbol: "wifi", title: title, detail: ProcessingWords.modelDownloadDetail(models),
+                                                  actions: [.downloadModels(bytes: bytes)])
+        case .failed(_, let bytes):
+            return ConversationStatusPresentation(kind: .box(.problem), symbol: "exclamationmark.triangle.fill", title: title,
+                                                  actions: [.downloadModels(bytes: bytes, again: true)])
+        }
+    }
+
+    /// A summary waiting for this Mac's summary model (transcript first): "Waiting to summarize after the download · 38%"
+    /// with the bar while the models arrive (the whole set's figure); the download's own line when it waits for Wi‑Fi or
+    /// stopped; with nothing downloading, a box to download them. Use the Cloud whenever the cloud is on offer.
+    static func summaryWaits(_ meeting: Meeting, inputs: Inputs) -> ConversationStatusPresentation {
+        let local = inputs.local
+        let cloud: [Action] = inputs.placement.cloudOffered ? [.placement(.useCloud)] : []
+        switch local.models {
+        case .downloading?:
+            let fraction = local.models?.fraction
+            return ConversationStatusPresentation(kind: .line, symbol: "clock",
+                                                  title: ProcessingWords.summaryWaitsForDownload(summarized: meeting.summary != nil, fraction: fraction),
+                                                  progress: fraction, actions: cloud)
+        case let models?:
+            var line = modelsHere(models)
+            line.actions = Array((line.actions + cloud).prefix(2))
+            return line
+        case nil:
+            return ConversationStatusPresentation(kind: .box(.accent), symbol: "arrow.down.circle.fill",
+                                                  title: "Download models to summarize this conversation",
+                                                  detail: local.missingModelBytes > 0 ? ByteSize.format(local.missingModelBytes) : nil,
+                                                  actions: (cloud.isEmpty ? [.chooseModels] : cloud) + [.downloadModels(bytes: local.missingModelBytes)])
+        }
+    }
+
+    /// The downloads a device makes for its own work, without a queue of its own (an iPhone's), as the one set: arriving
+    /// or stopped as a Mac's (`modelsHere`); waiting for Wi‑Fi with Cancel, since they keep to Wi‑Fi unless its
+    /// Settings › Models allows cellular data.
+    static func ownModels(_ models: ModelDownloadState) -> ConversationStatusPresentation {
+        var line = modelsHere(models)
+        if case .waitingForWiFi = models { line.actions = [.cancelDownload] }
+        return line
+    }
+
+    /// A download this device makes to do the work itself: under way, a line with the whole set's figure and Cancel
+    /// (with what's here of the total, where the device says how the set stands); stopped, Try Again; else a box with
+    /// Download and its size.
     static func downloadHere(_ local: LocalCapabilities) -> ConversationStatusPresentation {
         if let download = local.download {
-            return ConversationStatusPresentation(kind: .line, symbol: "arrow.down.circle",
-                                                  title: "Downloading \(download.name) · \(ProcessingWords.percentText(download.fraction))",
+            if let models = local.models { return ownModels(models) }
+            return ConversationStatusPresentation(kind: .line, symbol: "arrow.down.circle", title: ProcessingWords.downloadingModels(download.fraction),
                                                   progress: download.fraction, actions: [.cancelDownload])
         }
+        if let models = local.models, models.needsAttention { return ownModels(models) }
         return ConversationStatusPresentation(kind: .box(.accent), symbol: "arrow.down.circle.fill",
                                               title: "Download models to transcribe this conversation",
                                               detail: local.missingModelBytes > 0 ? ByteSize.format(local.missingModelBytes) : nil,
@@ -565,8 +693,9 @@ extension ConversationStatusPresentation {
             if here, local.managesModels { fix = [.chooseModels] + (retry.map { [$0] } ?? []) }
             else { fix = retry.map { [$0] } ?? [] }
         case .cloud(let cloud):
-            // Elsewhere: this device's own summarizer, else your Mac when there's one to ask.
-            let elsewhere: [Action] = local.summarizes ? [.summarizeHere(inputs.words.hereTitle)]
+            // Elsewhere: this device's own summarizer (a Mac's, once its summary model is here), else your Mac when there's
+            // one to ask.
+            let elsewhere: [Action] = local.summarizes || local.managesModels ? [.summarizeHere(inputs.words.hereTitle)]
                 : inputs.mac?.isNoMac == true ? [] : [.useYourMac]
             switch cloud {
             case .badKey, .noCredit, .modelUnavailable:
@@ -637,11 +766,14 @@ public struct ConversationRowStatus: Equatable, Sendable {
     public enum Kind: Equatable, Sendable {
         case recording, processing, waiting, waitingForModels, paused, failed, notTranscribed, playing, justFinished
 
-        /// The row's glyph: nil for processing (the 2 pt gradient line) and not transcribed (the accent dot).
+        /// The row's glyph: nil for processing (the 2 pt gradient line). Waiting states are secondary symbols, audio
+        /// not transcribed yet among them (a waveform, never a dot that reads as "unread"); red only recording, orange
+        /// only a failure, mint only playing.
         public var symbol: String? {
             switch self {
             case .recording: return "record.circle.fill"
-            case .processing, .notTranscribed: return nil
+            case .processing: return nil
+            case .notTranscribed: return "waveform"
             case .waiting: return "clock"
             case .waitingForModels: return "arrow.down.circle"
             case .paused: return "pause.circle"
@@ -731,12 +863,20 @@ extension ConversationStatusPresentation {
             if inputs.local.transcribes, !mine, meeting.hasUntranscribedAudio {
                 return ConversationRowStatus(kind: .waiting, text: "Requested from \(request.requestedBy.name)")
             }
+            if request.mode == .summaryOnly, request.upgrade == nil, inputs.local.managesModels || inputs.summaryWaitsForModel {
+                // On a Mac, which is the kind of device it waits for: the transcript reads, and the summary is to come.
+                return ConversationRowStatus(kind: .waiting, text: ProcessingWords.waitingHereShort(.summaryOnly, summarized: meeting.summary != nil))
+            }
             // As the page: this device's own download, or a summary nothing can make.
             if mine, inputs.mac?.present(at: now) == nil, request.mode == .newAudio, inputs.ownsUntranscribed,
                meeting.hasUntranscribedTranscribableAudio, inputs.local.transcribesOwnAfterDownload {
                 return ConversationRowStatus(kind: .waitingForModels, text: "Waiting for models")
             }
             if request.mode == .summaryOnly, !inputs.local.summarizes, inputs.mac?.isNoMac == true {
+                // Its own summary model on its way: the summary waits for that, as the page says.
+                if inputs.local.summarizesOwnAfterDownload, inputs.local.summaryModelAsked, inputs.local.models != nil {
+                    return ConversationRowStatus(kind: .waitingForModels, text: "Waiting for models")
+                }
                 return ConversationRowStatus(kind: .waiting, text: needsMacToSummarize)
             }
             return ConversationRowStatus(kind: .waiting, text: ProcessingWords.waitingForMac(request.mode, summarized: meeting.summary != nil))
@@ -746,6 +886,8 @@ extension ConversationStatusPresentation {
             return meeting.tracks.isEmpty ? nil : ConversationRowStatus(kind: .notTranscribed, text: "Not transcribed yet")
         case .awaitingRecordings(let recordings):
             return ConversationRowStatus(kind: .waiting, text: ProcessingStatus.awaitingLine(recordings))
+        case .missingRecordings(let recordings):
+            return ConversationRowStatus(kind: .failed, text: ProcessingStatus.missingLine(recordings))
         case .transcribed, .done:
             return nil
         }

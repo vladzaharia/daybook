@@ -73,7 +73,11 @@ final class MultiSourceFusion {
         var tolerance: Double
         /// Lower is more trustworthy timing.
         var precisionRank: Int
+        /// Each word's confidence as the vote compares it (`comparableConfidences`).
+        var votingConfidence: [Double?] = []
         var trackID: UUID { transcript.trackID }
+        /// The recognizer that transcribed it.
+        var engine: String { transcript.processingSettings?.model?.variantKey ?? transcript.processingSettings?.modelID ?? transcript.modelID }
     }
 
     private struct Entry: Hashable { var source: Int; var word: Int }
@@ -157,6 +161,7 @@ final class MultiSourceFusion {
                 return a == b ? lhs.offset < rhs.offset : a < b
             }.map(\.element).prefix(64)
         sources = placed.map { makeSource($0, placements: placements) }
+        comparableConfidences()
         for index in sources.indices { integrate(index) }
         let (outputs, summary, added) = output()
         let reports = buildReports(summary: summary, latest: latest, supersededBy: supersededBy, placements: placements)
@@ -190,16 +195,33 @@ final class MultiSourceFusion {
         return group
     }
 
+    /// Where a recording on the same capture clock as a placed one sits (`TimelineClock.sharingCapture`): the placed
+    /// one's offset, at its own capture rate on the session clock the placed one's rate implies.
+    private func sharingCapture(_ id: UUID, with placed: UUID, at clock: (offset: Double, rate: Double)) -> (offset: Double, rate: Double) {
+        let shared = TimelineClock.sharingCapture(with: TimelineClock(offset: clock.offset, rate: clock.rate, method: .capture),
+                                                  placedCaptureRate: trackByID[placed]?.captureRate ?? 1,
+                                                  captureRate: trackByID[id]?.captureRate ?? 1, dependsOn: placed)
+        return (shared.offset, shared.rate)
+    }
+
     private func resolveTimeline(ordered: [TrackTranscript], reference: TrackTranscript) -> [UUID: TrackAlignment] {
         var result: [UUID: TrackAlignment] = [:]
         var clocks: [UUID: (offset: Double, rate: Double)] = [:]
         func place(_ alignment: TrackAlignment) {
             result[alignment.trackID] = alignment
-            for id in clockGroup(alignment.trackID) where clocks[id] == nil { clocks[id] = (alignment.offset, alignment.rate) }
+            clocks[alignment.trackID] = (alignment.offset, alignment.rate)
+            for id in clockGroup(alignment.trackID) where clocks[id] == nil {
+                clocks[id] = sharingCapture(id, with: alignment.trackID, at: (alignment.offset, alignment.rate))
+            }
         }
         let given = inputs.placements.filter { $0.value.offset.isFinite && $0.value.rate.isFinite && $0.value.rate > 0 }
         func placement(_ id: UUID) -> TrackPlacement? {
-            given[id] ?? trackByID[id]?.derivedFrom.flatMap { given[$0] }
+            if let own = given[id] { return own }
+            // A derived copy without a placement of its own follows its original's offset, never its rate.
+            guard let original = trackByID[id]?.derivedFrom, var followed = given[original] else { return nil }
+            let shared = sharingCapture(id, with: original, at: (followed.offset, followed.rate))
+            followed.offset = shared.offset; followed.rate = shared.rate
+            return followed
         }
         let origin = placement(reference.trackID)
         place(TrackAlignment(trackID: reference.trackID, method: .reference, offset: origin?.offset ?? explicitOffset(reference) ?? 0,
@@ -234,7 +256,8 @@ final class MultiSourceFusion {
                         copy.start = segment.start * clock.rate + clock.offset; copy.end = segment.end * clock.rate + clock.offset
                         return copy
                     }
-                    var estimate = TranscriptFusion.estimate(segments, reference: placedSegments, trackID: transcript.trackID, referenceOffset: 0)
+                    var estimate = TranscriptFusion.estimate(segments, reference: placedSegments, trackID: transcript.trackID, referenceOffset: 0,
+                                                             version: inputs.options.version)
                     guard estimate.method == .anchors else { continue }
                     estimate.referenceTrackID = other.trackID == reference.trackID ? nil : other.trackID
                     if best == nil || estimate.matchedAnchors > best!.matchedAnchors
@@ -387,6 +410,10 @@ final class MultiSourceFusion {
     /// Adds one source's words to the network: aligned with the existing columns by
     /// time-constrained edit distance, then joined where they repeat speech already there, or kept
     /// as distinct speech (someone else talking at the same time).
+    ///
+    /// Version 2 aligns the whole sequence at once, within a band of columns close enough in time to pair with each
+    /// word, so the work grows with words × band, and nothing is cut where a match could cross. Version 1 cut the
+    /// timeline every 240 items, and a fragment of a passage on the far side of a cut could be kept twice.
     private func integrate(_ s: Int) {
         let words = sources[s].words
         guard !columns.isEmpty else {
@@ -396,16 +423,20 @@ final class MultiSourceFusion {
             for index in columns.indices { time = max(time, columns[index].time); columns[index].time = time }
             return
         }
+        guard inputs.options.version < 2 else {
+            columns = align(source: s, words: 0..<words.count, columns: columns, banded: true)
+            return
+        }
         var output: [Column] = []
         output.reserveCapacity(columns.count + words.count)
         for region in regions(source: s) {
-            output += align(source: s, words: region.words, columns: Array(columns[region.columns]))
+            output += align(source: s, words: region.words, columns: Array(columns[region.columns]), banded: false)
         }
         columns = output
     }
 
-    /// Cuts the timeline where no match can cross (gaps wider than any tolerance) and every 240
-    /// items, so each alignment table stays small.
+    /// Version 1: cuts the timeline where no match can cross (gaps wider than any tolerance) and every
+    /// 240 items, so each alignment table stays small.
     private func regions(source s: Int) -> [(words: Range<Int>, columns: Range<Int>)] {
         let words = sources[s].words
         let gap = (words.map { tolerance(s, $0) }.max() ?? 0) + (columns.map(\.tolerance).max() ?? 0)
@@ -426,7 +457,42 @@ final class MultiSourceFusion {
         return zip(cuts, cuts.dropFirst()).map { ($0.word..<$1.word, $0.column..<$1.column) }.filter { !$0.0.isEmpty || !$0.1.isEmpty }
     }
 
-    private func align(source s: Int, words range: Range<Int>, columns region: [Column]) -> [Column] {
+    /// The columns each row of the alignment table may visit: after `w` words, at least those whose time is well
+    /// before every word already taken, and at most those not well after every word still to come ("well": more than
+    /// any word's and column's tolerances together). Where a source's word times aren't in order (overlapping
+    /// passages), the row widens to cover both. Both bounds only grow, and each row reaches the next, so a path from
+    /// the first cell to the last stays inside. `banded` false gives every row every column (version 1).
+    private func band(words: [Word], tolerances: [Double], region: [Column], banded: Bool) -> (lower: [Int], upper: [Int]) {
+        let n = words.count, m = region.count
+        guard banded else { return ([Int](repeating: 0, count: n + 1), [Int](repeating: m, count: n + 1)) }
+        let slack = (tolerances.max() ?? 0) + (region.map(\.tolerance).max() ?? 0)
+        let times = region.map(\.time)
+        func before(_ time: Double) -> Int {
+            var lo = 0, hi = m
+            while lo < hi { let mid = (lo + hi) / 2; if times[mid] < time { lo = mid + 1 } else { hi = mid } }
+            return lo
+        }
+        func atMost(_ time: Double) -> Int {
+            var lo = 0, hi = m
+            while lo < hi { let mid = (lo + hi) / 2; if times[mid] <= time { lo = mid + 1 } else { hi = mid } }
+            return lo
+        }
+        var taken = [Double](repeating: -.infinity, count: n + 1), coming = [Double](repeating: .infinity, count: n + 1)
+        for w in 0..<n { taken[w + 1] = max(taken[w], words[w].mid) }
+        for w in stride(from: n - 1, through: 0, by: -1) { coming[w] = min(coming[w + 1], words[w].mid) }
+        var lower = [Int](repeating: 0, count: n + 1), upper = [Int](repeating: m, count: n + 1)
+        for w in 0...n {
+            let earliest = min(taken[w], coming[w]), latest = max(taken[w], coming[w])
+            lower[w] = earliest == -.infinity ? 0 : before(earliest - slack)
+            upper[w] = latest == .infinity ? m : atMost(latest + slack)
+            if w > 0 { lower[w] = max(lower[w - 1], min(lower[w], upper[w - 1])); upper[w] = max(upper[w], upper[w - 1]) }
+            upper[w] = max(upper[w], lower[w])
+        }
+        lower[0] = 0; upper[n] = m
+        return (lower, upper)
+    }
+
+    private func align(source s: Int, words range: Range<Int>, columns region: [Column], banded: Bool) -> [Column] {
         let bit = UInt64(1) << UInt64(s)
         let all = sources[s].words
         let words = Array(all[range])
@@ -447,30 +513,43 @@ final class MultiSourceFusion {
         guard n > 0 else { region.forEach(append); return output }
 
         let columnKeys = region.map { Set($0.entries.map { sources[$0.source].words[$0.word].key }) }
-        func limit(_ w: Int, _ c: Int) -> Double { tolerance(s, words[w]) + region[c].tolerance }
+        let wordTolerances = words.map { tolerance(s, $0) }
+        func limit(_ w: Int, _ c: Int) -> Double { wordTolerances[w] + region[c].tolerance }
         func compatible(_ w: Int, _ c: Int) -> Bool { abs(words[w].mid - region[c].time) <= limit(w, c) }
-        // Edit distance; a word may only pair with a column at a compatible time.
-        let width = m + 1
-        var cost = [Int32](repeating: 0, count: (n + 1) * width)
-        var back = [UInt8](repeating: 2, count: (n + 1) * width)
-        for c in 0...m { cost[c] = Int32(c) }
+        // Edit distance; a word may only pair with a column at a compatible time. Row w holds the columns
+        // lower[w]...upper[w]; cells outside are never on the path.
+        let (lower, upper) = band(words: words, tolerances: wordTolerances, region: region, banded: banded)
+        var rowStart = [Int](repeating: 0, count: n + 2)
+        for w in 0...n { rowStart[w + 1] = rowStart[w] + upper[w] - lower[w] + 1 }
+        let unreachable = Int32.max / 2
+        var back = [UInt8](repeating: 2, count: rowStart[n + 1])
+        var previous = [Int32](), current = [Int32]()
+        current.reserveCapacity(m + 1)
+        for c in lower[0]...upper[0] { current.append(Int32(c)) }
         for w in 1...n {
-            cost[w * width] = Int32(w); back[w * width] = 1
-            for c in 1...m {
-                var best = cost[(w - 1) * width + c] + 1, direction: UInt8 = 1
-                let left = cost[w * width + c - 1] + 1
-                if left < best { best = left; direction = 2 }
-                if compatible(w - 1, c - 1) {
-                    let diagonal = cost[(w - 1) * width + c - 1] + (columnKeys[c - 1].contains(words[w - 1].key) ? 0 : 1)
+            swap(&previous, &current)
+            current.removeAll(keepingCapacity: true)
+            let above = (lower[w - 1], upper[w - 1])
+            for c in lower[w]...upper[w] {
+                var best = unreachable, direction: UInt8 = 1
+                if c >= above.0 && c <= above.1 { best = previous[c - above.0] + 1 }
+                if c > lower[w] {
+                    let left = current[c - 1 - lower[w]] + 1
+                    if left < best { best = left; direction = 2 }
+                }
+                if c >= 1, c - 1 >= above.0, c - 1 <= above.1, compatible(w - 1, c - 1) {
+                    let diagonal = previous[c - 1 - above.0] + (columnKeys[c - 1].contains(words[w - 1].key) ? 0 : 1)
                     if diagonal <= best { best = diagonal; direction = 0 }
                 }
-                cost[w * width + c] = best; back[w * width + c] = direction
+                current.append(best)
+                back[rowStart[w] + c - lower[w]] = direction
             }
         }
         var steps: [Step] = []
+        steps.reserveCapacity(n + m)
         var w = n, c = m
         while w > 0 || c > 0 {
-            switch back[w * width + c] {
+            switch w == 0 ? 2 : back[rowStart[w] + c - lower[w]] {
             case 0: steps.append(.both(w - 1, c - 1)); w -= 1; c -= 1
             case 1: steps.append(.word(w - 1)); w -= 1
             default: steps.append(.column(c - 1)); c -= 1
@@ -478,19 +557,42 @@ final class MultiSourceFusion {
         }
         steps.reverse()
 
+        // Columns and words near a time, for the uniqueness checks: everything compatible is within the slack.
+        let slack = (wordTolerances.max() ?? 0) + (region.map(\.tolerance).max() ?? 0)
+        let times = region.map(\.time)
+        func columnsNear(_ time: Double) -> Range<Int> {
+            var lo = 0, hi = m
+            while lo < hi { let mid = (lo + hi) / 2; if times[mid] < time - slack { lo = mid + 1 } else { hi = mid } }
+            var end = lo
+            hi = m
+            while end < hi { let mid = (end + hi) / 2; if times[mid] <= time + slack { end = mid + 1 } else { hi = mid } }
+            return lo..<end
+        }
+        let byTime = words.indices.sorted { words[$0].mid == words[$1].mid ? $0 < $1 : words[$0].mid < words[$1].mid }
+        let sortedMids = byTime.map { words[$0].mid }
+        func wordsNear(_ time: Double) -> ArraySlice<Int> {
+            var lo = 0, hi = n
+            while lo < hi { let mid = (lo + hi) / 2; if sortedMids[mid] < time - slack { lo = mid + 1 } else { hi = mid } }
+            var end = lo
+            hi = n
+            while end < hi { let mid = (end + hi) / 2; if sortedMids[mid] <= time + slack { end = mid + 1 } else { hi = mid } }
+            return byTime[lo..<end]
+        }
+
         // Decide which of this source's words repeat speech already in the network.
         var columnOf = [Int?](repeating: nil, count: n)
         var exact = [Bool](repeating: false, count: n)
         for step in steps { if case .both(let w, let c) = step { columnOf[w] = c; exact[w] = columnKeys[c].contains(words[w].key) } }
         func unique(_ w: Int, _ c: Int) -> Bool {
             let key = words[w].key
-            return !region.indices.contains { $0 != c && columnKeys[$0].contains(key) && compatible(w, $0) }
-                && !words.indices.contains { $0 != w && words[$0].key == key && abs(words[$0].mid - region[c].time) <= limit($0, c) }
+            return !columnsNear(words[w].mid).contains { $0 != c && columnKeys[$0].contains(key) && compatible(w, $0) }
+                && !wordsNear(region[c].time).contains { $0 != w && words[$0].key == key && abs(words[$0].mid - region[c].time) <= limit($0, c) }
         }
         func tight(_ w: Int, _ c: Int) -> Bool { abs(words[w].mid - region[c].time) <= limit(w, c) / 2 }
+        func inPassage(_ w: Int, _ segment: Int) -> Bool { w >= 0 && w < n && words[w].segment == segment }
         let passages = Dictionary(grouping: words.indices, by: { words[$0].segment })
         var anchored = [Bool](repeating: false, count: n)
-        for (segment, members) in passages {
+        for (segment, members) in passages.sorted(by: { $0.key < $1.key }) {
             let passageLength = sources[s].passageLengths[segment]
             if passageLength < 4 {
                 // Short replies ("yes", "okay") join only an unambiguous, closely timed counterpart:
@@ -505,7 +607,7 @@ final class MultiSourceFusion {
             let matches = members.filter { exact[$0] }.count
             guard matches >= 2, Double(matches) >= 0.3 * Double(members.count) else { continue }
             for w in members where exact[w] {
-                let neighbour = members.contains(w - 1) && exact[w - 1] || members.contains(w + 1) && exact[w + 1]
+                let neighbour = inPassage(w - 1, segment) && exact[w - 1] || inPassage(w + 1, segment) && exact[w + 1]
                 if neighbour || (words[w].key.count >= 2 && tight(w, columnOf[w]!) && unique(w, columnOf[w]!)) { anchored[w] = true }
             }
             let sorted = members.sorted()
@@ -530,14 +632,58 @@ final class MultiSourceFusion {
             while w <= sorted[sorted.count - 1], inside(w) { anchored[w] = true; w += 1 }
         }
 
+        // Version 2's guard: a run of four or more words this source would keep as distinct speech that repeats,
+        // word for word, a run of columns no word of this source is in, each within twice the pair's tolerance,
+        // is the same speech heard again (a timing slip, a passage that fell short of the matching rules), not
+        // someone else saying it. It joins those columns.
+        var joins = [Int?](repeating: nil, count: n)
+        if inputs.options.version >= 2 {
+            // Columns this source's own matched words join are spoken for.
+            let matched = Set(words.indices.filter { anchored[$0] }.compactMap { columnOf[$0] })
+            func free(_ c: Int) -> Bool { !matched.contains(c) && !region[c].entries.contains { $0.source == s } }
+            func repeats(_ w: Int, _ c: Int) -> Bool {
+                c < m && columnKeys[c].contains(words[w].key) && free(c) && abs(words[w].mid - region[c].time) <= 2 * limit(w, c)
+            }
+            var claimed = Set<Int>()
+            var w = 0
+            while w < n {
+                guard !anchored[w] else { w += 1; continue }
+                var end = w
+                while end + 1 < n, !anchored[end + 1] { end += 1 }
+                var start = w
+                while end - start + 1 >= 4 {
+                    // The earliest run of columns this stretch's next four words repeat.
+                    let candidates = columnsNear(words[start].mid).filter { c in
+                        !claimed.contains(c) && (0..<4).allSatisfy { repeats(start + $0, c + $0) && !claimed.contains(c + $0) }
+                    }
+                    guard let c = candidates.min(by: { abs(times[$0] - words[start].mid) < abs(times[$1] - words[start].mid) }) else { start += 1; continue }
+                    var length = 4
+                    while start + length <= end, repeats(start + length, c + length), !claimed.contains(c + length) { length += 1 }
+                    for k in 0..<length { joins[start + k] = c + k; claimed.insert(c + k) }
+                    start += length
+                }
+                w = end + 1
+            }
+        }
+        var joining = [Int: [Int]]()
+        for (w, c) in joins.enumerated() { if let c { joining[c, default: []].append(w) } }
+
         // Merge in alignment order.
         var originals: [Int] = []
         var inserted: [Int] = []
         var position = [Int?](repeating: nil, count: n)
+        func original(_ c: Int) -> Column {
+            var column = region[c]
+            for w in joining[c] ?? [] {
+                column.entries.append(entry(w))
+                column.tolerance = min(column.tolerance, tolerance(s, words[w]))
+            }
+            return column
+        }
         for step in steps {
             switch step {
             case .both(let w, let c):
-                var column = region[c]
+                var column = original(c)
                 if anchored[w] {
                     column.entries.append(entry(w))
                     column.tolerance = min(column.tolerance, tolerance(s, words[w]))
@@ -545,23 +691,25 @@ final class MultiSourceFusion {
                     originals.append(output.count); append(column)
                 } else {
                     originals.append(output.count); append(column)
-                    append(distinct(w))
+                    if joins[w] == nil { append(distinct(w)) }
                 }
             case .word(let w):
                 if anchored[w] {
                     position[w] = output.count; inserted.append(output.count)
                     append(Column(time: words[w].mid, tolerance: tolerance(s, words[w]), entries: [entry(w)], participants: bit))
-                } else {
+                } else if joins[w] == nil {
                     append(distinct(w))
                 }
             case .column(let c):
-                originals.append(output.count); append(region[c])
+                originals.append(output.count); append(original(c))
             }
         }
         // An inserted word is voted on by the sources transcribing on both sides of it.
+        var next = 0
         for index in inserted {
-            let before = originals.last { $0 < index }.map { output[$0].participants }
-            let after = originals.first { $0 > index }.map { output[$0].participants }
+            while next < originals.count && originals[next] < index { next += 1 }
+            let before = next > 0 ? output[originals[next - 1]].participants : nil
+            let after = next < originals.count ? output[originals[next]].participants : nil
             output[index].participants = ((before ?? after ?? 0) & (after ?? before ?? 0)) | bit
         }
         // Inside each anchored stretch of one passage, this source votes "no word" where it has none.
@@ -584,10 +732,35 @@ final class MultiSourceFusion {
 
     // MARK: Voting
 
+    /// Recognizers aren't calibrated against each other: the iPhone's model and the Mac's report confidence on
+    /// different scales. From version 2, when the sources come from more than one recognizer, each word's confidence
+    /// is compared as its rank among all the words that recognizer gave (the midpoint of its rank, 0–1); within one
+    /// recognizer the order is unchanged. Sources from a single recognizer vote with their confidences as they are.
+    private func comparableConfidences() {
+        for s in sources.indices { sources[s].votingConfidence = sources[s].words.map(\.confidence) }
+        let engines = Dictionary(grouping: sources.indices, by: { sources[$0].engine })
+        guard inputs.options.version >= 2, engines.count > 1 else { return }
+        for members in engines.values {
+            let values = members.flatMap { s in sources[s].words.compactMap(\.confidence) }.filter(\.isFinite).sorted()
+            guard !values.isEmpty else { continue }
+            func rank(_ value: Double) -> Double {
+                var lo = 0, hi = values.count
+                while lo < hi { let mid = (lo + hi) / 2; if values[mid] < value { lo = mid + 1 } else { hi = mid } }
+                var end = lo
+                hi = values.count
+                while end < hi { let mid = (end + hi) / 2; if values[mid] <= value { end = mid + 1 } else { hi = mid } }
+                return (Double(lo) + Double(end)) / 2 / Double(values.count)
+            }
+            for s in members {
+                sources[s].votingConfidence = sources[s].words.map { word in word.confidence.flatMap { $0.isFinite ? rank($0) : nil } }
+            }
+        }
+    }
+
     /// How much a source's word counts. Remote speech: the call audio is the original signal;
     /// local speech: the microphone (echo-cancelled when available) is closest to the owner.
-    /// Scaled by signal-to-noise ratio when measured, and by how the source was placed.
-    private func weight(_ s: Int, callSpeech: Bool, localTime: Double) -> Double {
+    /// Scaled by how the source was placed.
+    private func weight(_ s: Int, callSpeech: Bool) -> Double {
         var value: Double
         switch sources[s].role {
         case .call: value = callSpeech ? 1 : 0.6
@@ -595,20 +768,12 @@ final class MultiSourceFusion {
         case .room: value = callSpeech ? 0.5 : 0.8
         case .unknown: value = 1
         }
-        if let profile = inputs.signalQuality[sources[s].trackID], let snr = profile.snr(at: localTime) {
-            value *= min(1, max(0.3, 0.3 + 0.7 * Double(snr - 5) / 25))
-        }
         switch sources[s].alignment.method {
         case .anchors: value *= 0.9
         case .timestamps: value *= 0.6
         default: break
         }
         return value
-    }
-
-    private func localTime(_ s: Int, meeting time: Double) -> Double {
-        let alignment = sources[s].alignment
-        return alignment.rate > 0 ? (time - alignment.offset) / alignment.rate : time
     }
 
     /// ROVER-style vote per column. Each source scores weight × (0.5 + 0.5 × confidence); sources
@@ -641,8 +806,8 @@ final class MultiSourceFusion {
             var tallies: [String: (score: Double, supporters: [Entry], best: Entry, bestScore: Double, scores: [Int: Double])] = [:]
             for entry in column.entries {
                 let word = sources[entry.source].words[entry.word]
-                let score = weight(entry.source, callSpeech: callSpeech, localTime: (word.localStart + word.localEnd) / 2)
-                    * (0.5 + 0.5 * (word.confidence ?? 0.7))
+                let score = weight(entry.source, callSpeech: callSpeech)
+                    * (0.5 + 0.5 * (sources[entry.source].votingConfidence[entry.word] ?? 0.7))
                 if var tally = tallies[word.key] {
                     tally.score += score; tally.supporters.append(entry); tally.scores[entry.source, default: 0] += score
                     if score > tally.bestScore { tally.best = entry; tally.bestScore = score }
@@ -652,7 +817,7 @@ final class MultiSourceFusion {
                 }
             }
             let silent = sources.indices.filter { column.participants & (UInt64(1) << UInt64($0)) != 0 && present & (UInt64(1) << UInt64($0)) == 0 }
-            let silentScore = silent.reduce(0.0) { $0 + weight($1, callSpeech: callSpeech, localTime: localTime($1, meeting: column.time)) * 0.75 }
+            let silentScore = silent.reduce(0.0) { $0 + weight($1, callSpeech: callSpeech) * 0.75 }
             if tallies.count > 1 || (!silent.isEmpty && !tallies.isEmpty) { disputed += 1 }
             let ranked = order.sorted { a, b in
                 let x = tallies[a]!, y = tallies[b]!
@@ -896,7 +1061,7 @@ final class MultiSourceFusion {
         if let owner, owner == inputs.options.ownerSpeakerID, !inputs.speakers.contains(where: { $0.id == owner }) {
             added.append(Speaker(id: owner, name: inputs.options.ownerName, sourceTrackID: ownerTrack))
         }
-        let summary = FusionSummary(sources: [], words: total, corroboratedWords: corroborated, disputedWords: disputed,
+        let summary = FusionSummary(version: inputs.options.version, sources: [], words: total, corroboratedWords: corroborated, disputedWords: disputed,
                                     ownerSpeakerID: owner, speakerMappings: mappings)
         return (segments, summary, added)
     }

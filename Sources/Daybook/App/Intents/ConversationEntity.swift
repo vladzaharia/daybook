@@ -5,50 +5,56 @@ import DaybookKit
 import Foundation
 import os
 
-/// A conversation, for Shortcuts and Spotlight: its title, when it was, and its gist. Personal conversations are never
-/// named outside the app (the menu bar extra's rule), so they're never indexed or suggested; a shortcut made with one
-/// still opens it.
+/// A conversation, for Shortcuts and Spotlight: its title and when it was, as on the iPhone. Shortcuts reads both
+/// (`@Property`). Spotlight gets the title and dates only, never the summary: what it copies sits outside the
+/// library's encryption. Personal conversations are never named outside the app (`SpotlightPlan.isShown`, both apps'
+/// rule), so they're never indexed or suggested; a shortcut made with one still opens it.
 struct ConversationEntity: AppEntity, IndexedEntity, Equatable {
     static let typeDisplayRepresentation: TypeDisplayRepresentation = "Conversation"
     static let defaultQuery = ConversationQuery()
 
-    var id: UUID
-    var title: String
-    var date: Date
-    /// The summary's overview, when there is one.
-    var gist: String?
+    let id: UUID
+    @Property(title: "Title") var title: String
+    @Property(title: "Date") var date: Date
 
-    init(id: UUID, title: String, date: Date, gist: String?) {
+    init(id: UUID, title: String, date: Date) {
         self.id = id
         self.title = title
         self.date = date
-        self.gist = gist
+    }
+
+    init(_ entry: SpotlightPlan.Entry) {
+        self.init(id: entry.id, title: entry.title, date: entry.date)
     }
 
     init(_ meeting: Meeting) {
-        self.init(id: meeting.id, title: meeting.title, date: meeting.date,
-                  gist: meeting.summary?.overview.isEmpty == false ? meeting.summary?.overview : nil)
+        self.init(SpotlightPlan.Entry(meeting))
     }
 
+    /// The same conversation, as named now: a property is a reference, so equality reads the values.
+    static func == (lhs: ConversationEntity, rhs: ConversationEntity) -> Bool {
+        lhs.id == rhs.id && lhs.title == rhs.title && lhs.date == rhs.date
+    }
+
+    /// "Nov 10, 2026 at 9:00 AM": the subtitle in Shortcuts, and the description in Spotlight.
+    var when: String { date.formatted(date: .abbreviated, time: .shortened) }
+
     var displayRepresentation: DisplayRepresentation {
-        DisplayRepresentation(title: "\(title)", subtitle: "\(date.formatted(date: .abbreviated, time: .shortened))")
+        DisplayRepresentation(title: "\(title)", subtitle: "\(when)")
     }
 
     var attributeSet: CSSearchableItemAttributeSet {
         let attributes = defaultAttributeSet
         attributes.title = title
-        attributes.contentDescription = gist
+        attributes.contentDescription = when
         attributes.contentCreationDate = date
         attributes.metadataModificationDate = date
         return attributes
     }
 
-    /// Whether Daybook may name it outside its windows: anything not Personal.
-    static func isShown(_ meeting: Meeting) -> Bool { meeting.effectivePlacement != .personal }
-
-    /// What Spotlight and Shortcuts' suggestions list, newest first.
+    /// What Spotlight and Shortcuts' suggestions list, newest first (`SpotlightPlan.entries`).
     static func shown(in meetings: [Meeting]) -> [ConversationEntity] {
-        meetings.filter(isShown).sorted { $0.date > $1.date }.map(ConversationEntity.init)
+        SpotlightPlan.entries(meetings).map(ConversationEntity.init)
     }
 }
 
@@ -118,7 +124,7 @@ struct SpotlightConversationIndex: ConversationIndexing {
             try await index.deleteAppEntities(ofType: ConversationEntity.self)
             if !entities.isEmpty { try await index.indexAppEntities(entities) }
         } catch {
-            Self.log.notice("Conversations couldn't be indexed: \(error.localizedDescription, privacy: .public)")
+            Self.log.notice("Conversations couldn't be indexed (\(error.logCode, privacy: .public)): \(error.localizedDescription, privacy: .private)")
         }
     }
 
@@ -128,21 +134,22 @@ struct SpotlightConversationIndex: ConversationIndexing {
             if !removed.isEmpty { try await index.deleteAppEntities(identifiedBy: removed, ofType: ConversationEntity.self) }
             if !entities.isEmpty { try await index.indexAppEntities(entities) }
         } catch {
-            Self.log.notice("Conversations couldn't be indexed: \(error.localizedDescription, privacy: .public)")
+            Self.log.notice("Conversations couldn't be indexed (\(error.logCode, privacy: .public)): \(error.localizedDescription, privacy: .private)")
         }
     }
 }
 
-/// Keeps Spotlight's copy of the library's conversations in step with the library: everything once the library opens,
-/// then what changed, a moment after a burst of edits. A conversation moved to Personal, or to the Trash, goes.
+/// Keeps Spotlight's copy of the library's conversations in step with the library, by the plan both apps share
+/// (`SpotlightPlan`): everything once the library opens, then what changed, a moment after a burst of edits. A
+/// conversation moved to Personal, or to the Trash, goes.
 @MainActor
 final class ConversationSpotlight {
     private weak var state: AppState?
     private let index: any ConversationIndexing
     private let delay: Duration
     private var watch: ObservationWatch?
-    /// What Spotlight has now, by ID; nil before the first pass.
-    private var indexed: [UUID: ConversationEntity]?
+    /// What Spotlight has now.
+    private var plan = SpotlightPlan()
     /// The passes, one after another.
     private var work: Task<Void, Never>?
 
@@ -171,18 +178,12 @@ final class ConversationSpotlight {
 
     /// Sends Spotlight what's different from its copy.
     func refresh() {
-        guard let state, state.isReady else { return }
-        let next = Dictionary(uniqueKeysWithValues: ConversationEntity.shown(in: state.meetings).map { ($0.id, $0) })
+        guard let state, state.isReady, let pass = plan.pass(to: SpotlightPlan.entries(state.meetings)) else { return }
         let previous = work, index = self.index
-        if let indexed {
-            let changed = next.values.filter { indexed[$0.id] != $0 }.sorted { $0.date > $1.date }
-            let removed = indexed.keys.filter { next[$0] == nil }.sorted { $0.uuidString < $1.uuidString }
-            guard !changed.isEmpty || !removed.isEmpty else { return }
-            work = Task { await previous?.value; await index.update(changed, removing: removed) }
-        } else {
-            let all = next.values.sorted { $0.date > $1.date }
-            work = Task { await previous?.value; await index.replaceAll(with: all) }
+        let listed = pass.listed.map(ConversationEntity.init)
+        work = Task {
+            await previous?.value
+            if pass.startsOver { await index.replaceAll(with: listed) } else { await index.update(listed, removing: pass.removed) }
         }
-        indexed = next
     }
 }

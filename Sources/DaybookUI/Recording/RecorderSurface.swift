@@ -12,8 +12,9 @@ import SwiftUI
 // - compact: Floating Notes under 380 pt tall. The clock and small meters, a line for a note, the newest caption,
 //   and the controls.
 // - column: Floating Notes, and the iPhone in the hand. The panel puts the meters beside its 34 pt clock; the
-//   iPhone has your notes on top and the recorder below in a sheet of four sizes (`RecorderSheetColumn`).
-// - spread: the open iPhone Duo. Your notes on the left page; the recorder on the right.
+//   iPhone has the title, your notes, and the newest caption on top and the recorder below in a sheet of four sizes
+//   (`RecorderSheetColumn`).
+// - spread: the open iPhone Duo. The title and your notes on the left page; the whole recorder on the right.
 // - stage: table mode. The clock, level, and large captions on one half; a large Bookmark, Stop, and the tools
 //   on the other.
 
@@ -39,7 +40,7 @@ public struct RecorderSurfaceState {
     public var title: String
     /// Renames the conversation from its title; nil shows the title as it is.
     public var rename: ((String) -> Void)?
-    /// "Today · 10:15 AM", over the notes on a spread's left page.
+    /// "Today · 10:15 AM", under the title over the notes: in the hand, and on a spread's left page.
     public var byline: String?
     public var chips: [RecorderChip]
     public var meters: [RecorderMeter]
@@ -96,7 +97,10 @@ public struct RecorderSlots {
     public var notes: AnyView
     /// Live captions in the layout's style, or nothing.
     public var captions: AnyView
-    /// Beside the clock (the iPhone's camera).
+    /// In the hand, under the notes while the sheet is smaller than the whole recorder: the newest caption on one line,
+    /// or nothing while captions are off. It gives way first when the notes need the room.
+    public var captionLine: AnyView?
+    /// At the end of the phase's row in the iPhone's sheet (the camera), so it's there at rest.
     public var accessory: AnyView?
     /// Under the meters on a spread's recorder page and in the iPhone's largest sheet (the iPhone's live timeline).
     public var details: AnyView?
@@ -106,14 +110,17 @@ public struct RecorderSlots {
     public var log: AnyView?
     /// Table mode's Write Notes and camera, beside Stop.
     public var tools: AnyView?
+    /// Between Bookmark and Stop in the iPhone's sheet, from collapsed up, at the controls' size: Write by Hand.
+    public var write: ((RecorderControlMetrics) -> AnyView)?
     /// What a chip's menu offers.
     public var menu: (RecorderChip) -> AnyView
 
-    public init(notes: AnyView, captions: AnyView = AnyView(EmptyView()), accessory: AnyView? = nil, details: AnyView? = nil,
-                notice: AnyView? = nil, log: AnyView? = nil, tools: AnyView? = nil,
+    public init(notes: AnyView, captions: AnyView = AnyView(EmptyView()), captionLine: AnyView? = nil, accessory: AnyView? = nil,
+                details: AnyView? = nil, notice: AnyView? = nil, log: AnyView? = nil, tools: AnyView? = nil,
+                write: ((RecorderControlMetrics) -> AnyView)? = nil,
                 menu: @escaping (RecorderChip) -> AnyView = { _ in AnyView(EmptyView()) }) {
-        self.notes = notes; self.captions = captions; self.accessory = accessory; self.details = details; self.notice = notice
-        self.log = log; self.tools = tools; self.menu = menu
+        self.notes = notes; self.captions = captions; self.captionLine = captionLine; self.accessory = accessory; self.details = details
+        self.notice = notice; self.log = log; self.tools = tools; self.write = write; self.menu = menu
     }
 }
 
@@ -164,6 +171,34 @@ public struct RecorderSurface: View {
     }
 }
 
+/// Where a recorder's input is chosen: given the phase that names it ("● Recording · iPhone Microphone ▾",
+/// `RecorderPhase.choosesInput`) and its label, the control around the label (the iPhone's input picker).
+public struct RecorderInputControl {
+    public let wrap: @MainActor (RecorderPhase, AnyView) -> AnyView
+
+    public init(wrap: @escaping @MainActor (RecorderPhase, AnyView) -> AnyView) { self.wrap = wrap }
+}
+
+extension EnvironmentValues {
+    /// The recorder's input control; nil draws the phase as it is.
+    @Entry public var recorderInputControl: RecorderInputControl? = nil
+}
+
+/// The recorder's phase, as the input's control when it names one.
+private struct RecorderPhaseLine: View {
+    let phase: RecorderPhase
+    @Environment(\.recorderInputControl) private var inputControl
+
+    var body: some View {
+        let label = RecordingPhaseLabel(phase.phase, title: phase.title, detail: phase.detail, detailIsWarning: phase.detailIsWarning)
+        if phase.choosesInput, let inputControl {
+            inputControl.wrap(phase, AnyView(label))
+        } else {
+            label
+        }
+    }
+}
+
 /// The pieces every layout arranges.
 struct RecorderPieces {
     let state: RecorderSurfaceState
@@ -175,7 +210,7 @@ struct RecorderPieces {
     @ViewBuilder
     func phase(alignment: HorizontalAlignment = .leading) -> some View {
         if let phase = state.phase {
-            RecordingPhaseLabel(phase.phase, title: phase.title, detail: phase.detail, detailIsWarning: phase.detailIsWarning)
+            RecorderPhaseLine(phase: phase)
                 .frame(maxWidth: .infinity, alignment: alignment == .center ? .center : .leading)
         }
     }
@@ -303,6 +338,42 @@ private struct ColumnRecorder: View {
 
 // MARK: - Spread
 
+/// The conversation over its notes while recording: the title (tap to rename) over its byline, "Today · 12:18 AM".
+/// In the hand what records along follows the byline (its chips: "Studio Mac" with the red dot), since the sheet
+/// shows them only at full; at the accessibility sizes there the title stands alone, so the notes keep their room.
+/// The open Duo's left page has the same header, its chips in the whole recorder on the right page.
+struct RecorderNotesHeader: View {
+    let parts: RecorderPieces
+    var inHand = false
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    /// The chips folded into the byline.
+    private var chips: [RecorderChip] { inHand ? parts.state.chips : [] }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            RecorderTitle(parts.state.title, rename: parts.state.rename)
+            if !(inHand && typeSize.isAccessibilitySize), parts.state.byline != nil || !chips.isEmpty {
+                HStack(alignment: .center, spacing: DaybookSpacing.s2) {
+                    if let byline = parts.state.byline {
+                        Text(byline)
+                            .font(.subheadline)
+                            .monospacedDigit()
+                            .foregroundStyle(DaybookPalette.Ink.secondary)
+                            .lineLimit(1)
+                            // The chips shorten, then give way to their glyphs, before the byline does.
+                            .layoutPriority(1)
+                    }
+                    if !chips.isEmpty { RecorderChipRow(chips: chips) { parts.slots.menu($0) } }
+                }
+            }
+        }
+        // Past this the title alone would take the notes' room in the hand.
+        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 /// The open Duo's left page: the conversation and your notes.
 private struct SpreadNotesPage: View {
     let parts: RecorderPieces
@@ -313,14 +384,7 @@ private struct SpreadNotesPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 4) {
-                RecorderTitle(parts.state.title, rename: parts.state.rename)
-                if let byline = parts.state.byline {
-                    Text(byline)
-                        .font(.subheadline)
-                        .foregroundStyle(DaybookPalette.Ink.secondary)
-                }
-            }
+            RecorderNotesHeader(parts: parts)
             .padding(.horizontal, DaybookSpacing.s6)
             .padding(.top, DaybookSpacing.s5)
             .padding(.bottom, DaybookSpacing.s2)
@@ -333,15 +397,15 @@ private struct SpreadNotesPage: View {
 }
 
 /// The open Duo's right page: what the notebook's slots show (live captions when they're on, else the bookmark log),
-/// over the recorder's sheet at the foot, clear of the crease; it expands within the page, and the largest size takes
-/// it.
+/// over the recorder's sheet at the foot, clear of the crease. It rests as the whole recorder (the chips, the clock,
+/// the meters, and the live timeline), one row only while the keyboard is up; the largest size takes the page.
 private struct SpreadRecorderPage: View {
     let parts: RecorderPieces
     let expansion: Binding<RecorderSheetSize?>
     @Environment(\.creaseEdge) private var creaseEdge
 
     var body: some View {
-        RecorderSheetLayout(parts: parts, expansion: expansion, rest: RecorderSheetSize.resting(in: .spread(crease: nil), isWide: false), look: .page) {
+        RecorderSheetLayout(parts: parts, expansion: expansion, rest: RecorderSheetSize.resting(in: .spread(crease: nil), isWide: false), look: .page) { _ in
             // The captions take what's left and give way first, newest lines kept: Bookmark and Stop always fit.
             parts.slots.captions
                 .frame(minHeight: 0, maxHeight: .infinity, alignment: .bottom)

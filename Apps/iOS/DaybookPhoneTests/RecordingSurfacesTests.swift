@@ -184,23 +184,73 @@ final class RecordingSurfacesTests: XCTestCase {
   let say = "Let's hold the fourteenth."
   XCTAssertEqual(
    PhoneAppModel.activityCaption(
-    captionsOn: true, showing: true, forThisRecording: true, paused: false, newest: say), say)
+    captionsOn: true, showing: true, forThisRecording: true, paused: false, unlocked: true, newest: say), say)
   XCTAssertNil(
    PhoneAppModel.activityCaption(
-    captionsOn: false, showing: true, forThisRecording: true, paused: false, newest: say))
+    captionsOn: false, showing: true, forThisRecording: true, paused: false, unlocked: true, newest: say))
   XCTAssertNil(
    PhoneAppModel.activityCaption(
-    captionsOn: true, showing: false, forThisRecording: true, paused: false, newest: say))
+    captionsOn: true, showing: false, forThisRecording: true, paused: false, unlocked: true, newest: say))
   XCTAssertNil(
    PhoneAppModel.activityCaption(
-    captionsOn: true, showing: true, forThisRecording: false, paused: false, newest: say))
+    captionsOn: true, showing: true, forThisRecording: false, paused: false, unlocked: true, newest: say))
   XCTAssertNil(
    PhoneAppModel.activityCaption(
-    captionsOn: true, showing: true, forThisRecording: true, paused: true, newest: say))
+    captionsOn: true, showing: true, forThisRecording: true, paused: true, unlocked: true, newest: say))
   XCTAssertNil(
    PhoneAppModel.activityCaption(
-    captionsOn: true, showing: true, forThisRecording: true, paused: false, newest: nil),
+    captionsOn: true, showing: true, forThisRecording: true, paused: false, unlocked: true, newest: nil),
    "nothing heard yet, no line")
+  XCTAssertNil(
+   PhoneAppModel.activityCaption(
+    captionsOn: true, showing: true, forThisRecording: true, paused: false, unlocked: false, newest: say),
+   "locked, what was said never leaves the app, whatever a surface does with redaction")
+ }
+
+ /// A Personal conversation is never named outside the app: its Live Activity says only "Recording", and the
+ /// Lock Screen leaves the name's line out rather than say it twice.
+ func testBehaviorAPersonalConversationsLiveActivityIsCalledRecording() {
+  XCTAssertEqual(
+   RecordingActivityController.activityTitle("Session with Dr. Lee", personal: true), "Recording")
+  XCTAssertEqual(
+   RecordingActivityController.activityTitle("Design review", personal: false), "Design review")
+  let personal = RecordingActivityAttributes(
+   conversationID: UUID(),
+   title: RecordingActivityController.activityTitle("Session with Dr. Lee", personal: true))
+  XCTAssertFalse(personal.namesConversation)
+  XCTAssertTrue(
+   RecordingActivityAttributes(conversationID: UUID(), title: "Design review").namesConversation)
+ }
+
+ /// The Recorder widget names the newest conversation Daybook may name outside the app, never a Personal one, and
+ /// follows the library: a conversation made Personal leaves it at once.
+ func testBehaviorTheRecorderWidgetNeverNamesAPersonalConversation() async throws {
+  let library = PhoneLibrary(rootURL: try temporaryDirectory(), installation: "INSTALL-1")
+  let model = PhoneAppModel(
+   recorder: RecorderRig().recorder, library: library, posture: DevicePosture(),
+   options: LaunchOptions(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]))
+  try await library.reload()
+  let start = Date(timeIntervalSince1970: 1_800_000_000)
+  let sync = library.controller.newMeeting(title: "Weekly product sync", date: start)
+  _ = library.controller.newMeeting(
+   title: "Session with Dr. Lee", date: start.addingTimeInterval(60), placement: .personal)
+  try await waitUntil("the newest it may name") {
+   model.sharedState.published?.lastRecordingTitle == "Weekly product sync"
+  }
+  XCTAssertEqual(model.sharedState.published?.lastRecordingDate, start)
+
+  let call = library.controller.newMeeting(title: "Call with Mum", date: start.addingTimeInterval(120))
+  try await waitUntil("a newer one") { model.sharedState.published?.lastRecordingTitle == "Call with Mum" }
+  library.controller.update(call) { $0.placement = .personal }
+  try await waitUntil("made Personal") {
+   model.sharedState.published?.lastRecordingTitle == "Weekly product sync"
+  }
+  // Found Personal by its template: nothing left to name.
+  library.controller.update(sync) { $0.kind = .therapy }
+  try await waitUntil("nothing it may name") {
+   model.sharedState.published != nil && model.sharedState.published?.lastRecordingTitle == nil
+  }
+  XCTAssertNil(PhoneAppModel.lastRecording(in: library.controller.meetings))
  }
 
  func testANewCaptionUpdatesTheActivityAtMostEveryFewSeconds() {
@@ -272,6 +322,102 @@ final class RecordingSurfacesTests: XCTestCase {
    }
   }
   XCTAssertEqual(PhoneStyle.ActivityButton.all.count, 3)
+ }
+
+ // MARK: Hearing and background cost
+
+ private func recordingModel(_ rig: RecorderRig) throws -> PhoneAppModel {
+  PhoneAppModel(
+   recorder: rig.recorder,
+   library: PhoneLibrary(rootURL: try temporaryDirectory("library"), installation: "INSTALL-1"),
+   posture: DevicePosture(),
+   options: LaunchOptions(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]),
+   environment: try .test(self))
+ }
+
+ /// The recording surface and the Live Activity say "Microphone silent" while the hearing check does (five seconds of
+ /// zeros here), and stop as soon as it hears again. The activity's level is only that, so the voice sends nothing.
+ func testBehaviorMicrophoneSilentFollowsTheHearingCheckOnTheSurfaceAndTheLiveActivity() async throws {
+  let rig = RecorderRig()
+  let model = try recordingModel(rig)
+  try await model.startRecording()
+  rig.pump(1)
+  rig.recorder.updateLevels()
+  XCTAssertEqual(RecordingStatusWords.phase(PhoneRecorderStatus.inputs(model))?.detail, RecordingStatusWords.inputChoice("Synthetic Microphone"))
+  XCTAssertEqual(model.activityState().level, 1)
+  XCTAssertEqual(model.activityState().title(isStale: false), "Recording")
+
+  rig.inputs.current.signal = .silence
+  rig.pump(5.2)
+  rig.recorder.updateLevels()
+  let silent = try XCTUnwrap(RecordingStatusWords.phase(PhoneRecorderStatus.inputs(model)))
+  XCTAssertEqual(silent.detail, "Microphone silent")
+  XCTAssertTrue(silent.detailIsWarning)
+  XCTAssertEqual(model.activityState().level, 0)
+  XCTAssertEqual(model.activityState().title(isStale: false), "Microphone silent")
+
+  rig.inputs.current.signal = .tone(frequency: 440, amplitude: 0.3)
+  rig.pump(0.2)
+  rig.recorder.updateLevels()
+  XCTAssertEqual(RecordingStatusWords.phase(PhoneRecorderStatus.inputs(model))?.detail, RecordingStatusWords.inputChoice("Synthetic Microphone"))
+  XCTAssertEqual(model.activityState().title(isStale: false), "Recording")
+  try await model.stopRecording()
+ }
+
+ /// Out of sight, the meter reads twice a second (enough for the hearing check, the Live Activity, and the widgets)
+ /// unless a Mac draws this iPhone's level; in front, fifteen times.
+ func testBehaviorTheMeterSlowsOutOfSightUnlessAMacDrawsTheLevel() async throws {
+  XCTAssertEqual(PhoneAppModel.meterInterval(inFront: true, macsDrawingLevel: false), PhoneRecorder.levelInterval)
+  XCTAssertEqual(PhoneAppModel.meterInterval(inFront: false, macsDrawingLevel: true), PhoneRecorder.levelInterval)
+  XCTAssertEqual(PhoneAppModel.meterInterval(inFront: false, macsDrawingLevel: false), 0.5)
+
+  let rig = RecorderRig()
+  let model = try recordingModel(rig)
+  try await model.startRecording()
+  XCTAssertEqual(rig.recorder.meterInterval, PhoneRecorder.levelInterval)
+  model.scenePhaseChanged(.background)
+  XCTAssertEqual(rig.recorder.meterInterval, PhoneRecorder.backgroundLevelInterval)
+  model.scenePhaseChanged(.active)
+  XCTAssertEqual(rig.recorder.meterInterval, PhoneRecorder.levelInterval)
+  try await model.stopRecording()
+ }
+
+ /// Stopped while the iPhone was locked, the recording is saved and finishes once it's unlocked: the Live Activity and
+ /// the recorder after Stop say so in one line, the shared words, and Siri says it too. Never "No audio was recorded".
+ func testBehaviorAStopWhileLockedSaysItsSavedAndFinishesOnUnlock() {
+  var inputs = RecordingStatusInputs()
+  inputs.phase = .saving
+  inputs.waitsForUnlock = true
+  let phase = RecordingStatusWords.phase(inputs)
+  XCTAssertEqual(phase?.phase, .saved)
+  XCTAssertEqual(phase?.title, "Saved")
+  XCTAssertEqual(phase?.detail, "Finishes when you unlock iPhone")
+  XCTAssertEqual(phase?.detail, RecordingWords.finishesWhenUnlocked)
+  inputs.waitsForUnlock = false
+  XCTAssertEqual(RecordingStatusWords.phase(inputs)?.title, "Saving…", "once it's unlocked, it's being saved")
+
+  let started = Date(timeIntervalSince1970: 1_800_000_000)
+  let final = RecordingActivityAttributes.ContentState(
+   phase: .recording, timerStart: started, frozenElapsed: 754, level: 1, bookmarkCount: 2, caption: "Said just now", canResume: nil)
+  let saved = PhoneAppModel.savedUntilUnlockActivity(final)
+  XCTAssertEqual(saved.title(isStale: false), "Saved")
+  XCTAssertEqual(saved.title(isStale: true), "Saved", "never unconfirmed")
+  XCTAssertEqual(saved.endLine, "Finishes when you unlock iPhone")
+  XCTAssertNil(saved.caption)
+  XCTAssertEqual(saved.frozenElapsed, 754)
+  XCTAssertTrue(saved.hasEnded)
+  XCTAssertNil(saved.staleDate(from: started))
+  XCTAssertEqual(RecordingActivityController.dismissal(for: saved, now: started), .default, "until it's finished")
+  var plain = saved
+  plain.savedLine = nil
+  XCTAssertEqual(plain.endLine, "Saved to Daybook")
+
+  XCTAssertEqual(RecordingWords.savedUntilUnlock, "Saved to Daybook. It finishes when you unlock iPhone.")
+  XCTAssertEqual(PhoneRecorderError.locked.errorDescription, "The recording’s files can’t be opened until iPhone is unlocked.")
+  XCTAssertNotEqual(PhoneRecorderError.locked.errorDescription, PhoneRecorderError.nothingRecorded.errorDescription)
+  XCTAssertEqual(
+   AfterStop.outcome(isActive: false, isFiling: true, filing: nil, since: nil), .saving,
+   "the recorder after Stop stays on it while it waits")
  }
 }
 
@@ -431,6 +577,31 @@ final class RecorderScreenTests: XCTestCase {
    AfterStop.stay(for: .none), "nothing to show: the library at once, not after a pause")
  }
 
+ /// After Stop the iPhone follows the Mac's rule (`RecordMore`): Keep Recording into the same conversation for two
+ /// minutes, said while it's still being added too; then Record. A recording that stopped on its own says Record
+ /// Again; one that couldn't be added records anew.
+ func testBehaviorAfterStopKeepRecordingFollowsTheRuleBothAppsShare() {
+  let stop = Date(timeIntervalSinceReferenceDate: 800_000_000)
+  let saved = AfterStop.Outcome.saved(UUID())
+  XCTAssertEqual(
+   AfterStop.recordMore(saved, stoppedShort: false, stoppedAt: stop, now: stop.addingTimeInterval(9)),
+   .keepRecording)
+  XCTAssertEqual(
+   AfterStop.recordMore(.saving, stoppedShort: false, stoppedAt: stop, now: stop), .keepRecording,
+   "the words don't change as it lands")
+  XCTAssertEqual(
+   AfterStop.recordMore(saved, stoppedShort: false, stoppedAt: stop, now: stop.addingTimeInterval(121)),
+   .record, "writing held the moment past two minutes")
+  XCTAssertEqual(
+   AfterStop.recordMore(saved, stoppedShort: true, stoppedAt: stop, now: stop), .recordAgain)
+  XCTAssertEqual(
+   AfterStop.recordMore(
+    .failed(PhoneAppModel.notFiled), stoppedShort: false, stoppedAt: stop, now: stop), .record)
+  XCTAssertEqual(
+   AfterStop.recordMore(saved, stoppedShort: false, stoppedAt: stop, now: stop).title,
+   "Keep Recording")
+ }
+
  func testBehaviorBookmarksAndPhotosAreMarksInTheNotesLane() {
   let mark = Highlight(time: 4, text: "")
   let photo = CapturePhoto(fileName: "photo-a.heic", capturedAt: Date(), time: 6)
@@ -476,7 +647,9 @@ final class RecorderScreenTests: XCTestCase {
     .lineLimit(1)
    let slots = RecorderSlots(
     notes: AnyView(notes), captions: AnyView(captions),
-    accessory: AnyView(Circle().frame(width: 44, height: 44)))
+    captionLine: AnyView(Text("It keeps recording with the screen locked").font(.subheadline).lineLimit(1)),
+    accessory: AnyView(Circle().frame(width: 34, height: 34).padding(.vertical, -DaybookSpacing.s2)),  // as `CameraControl.phaseRow`
+    write: { AnyView(Circle().frame(width: $0.height, height: $0.height)) })
    let surface = RecorderSurface(
     state: state, levels: RecorderLevels(), actions: RecorderSurfaceActions(bookmark: {}, stop: {}),
     slots: slots
@@ -517,7 +690,7 @@ final class RecorderScreenTests: XCTestCase {
   let captions = LiveCaptionStrip(lines: lines, status: nil, style: .page)
   let slots = RecorderSlots(
    notes: AnyView(Color.clear), captions: AnyView(captions),
-   accessory: AnyView(Circle().frame(width: 44, height: 44)),
+   accessory: AnyView(Circle().frame(width: 34, height: 34).padding(.vertical, -DaybookSpacing.s2)),  // as `CameraControl.phaseRow`
    details: AnyView(Capsule().frame(height: 24)))
   for expansion in [nil, RecorderSheetSize.collapsed, .expanded, .full] {
    let surface = RecorderSurface(
@@ -546,7 +719,8 @@ final class RecorderScreenTests: XCTestCase {
 
  private func hosted(
   expansion: RecorderSheetSize?, paused: Bool = false, notice: Bool = false, size: CGSize,
-  layout: SurfaceLayout = .column, notes measuring: AnyView
+  layout: SurfaceLayout = .column, notes measuring: AnyView, captionLine: AnyView? = nil,
+  chips: [RecorderChip] = [], typeSize: DynamicTypeSize = .accessibility5
  ) -> (host: UIHostingController<AnyView>, window: UIWindow) {
   let pause =
    paused
@@ -555,19 +729,21 @@ final class RecorderScreenTests: XCTestCase {
     canResume: true) : nil
   let state = RecorderSurfaceState(
    phase: RecorderPhase(phase: paused ? .paused : .recording, title: paused ? "Paused" : "Recording"),
-   title: "Conversation at 4:07 AM", clock: .since(Date()), isLive: !paused, bookmarkCount: 2,
-   pause: pause, hasNotice: notice)
+   title: "Conversation at 4:07 AM", byline: "Today · 4:07 AM", chips: chips, clock: .since(Date()), isLive: !paused,
+   bookmarkCount: 2, pause: pause, hasNotice: notice)
   let slots = RecorderSlots(
    notes: measuring,
    captions: AnyView(Text("Then everything waits for the Mac to finish").font(.system(size: 26)).lineLimit(1)),
-   accessory: AnyView(Circle().frame(width: 44, height: 44)),
-   notice: notice ? AnyView(Text("The Mac declined to record too.").font(.footnote)) : nil)
+   captionLine: captionLine ?? AnyView(Text("It keeps recording with the screen locked").font(.subheadline).lineLimit(1)),
+   accessory: AnyView(Circle().frame(width: 34, height: 34).padding(.vertical, -DaybookSpacing.s2)),  // as `CameraControl.phaseRow`
+   notice: notice ? AnyView(Text("The Mac declined to record too.").font(.footnote)) : nil,
+   write: { AnyView(Circle().frame(width: $0.height, height: $0.height)) })
   let surface = RecorderSurface(
    state: state, levels: RecorderLevels(), actions: RecorderSurfaceActions(bookmark: {}, stop: {}),
    slots: slots, sheetExpansion: .constant(expansion)
   )
   .daybookSurface(layout, density: .touch)
-  .dynamicTypeSize(.accessibility5)
+  .dynamicTypeSize(typeSize)
   let host = UIHostingController(rootView: AnyView(surface))
   host.safeAreaRegions = []
   let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
@@ -653,7 +829,42 @@ final class RecorderScreenTests: XCTestCase {
  func testBehaviorTheSheetRestsAtTheSizeItsPostureCallsFor() {
   XCTAssertEqual(RecorderSheetSize.resting(in: .column, isWide: false), .collapsed, "closed, upright")
   XCTAssertEqual(RecorderSheetSize.resting(in: .column, isWide: true), .mini, "closed, on its side")
-  XCTAssertEqual(RecorderSheetSize.resting(in: .spread(crease: 475.5), isWide: true), .mini, "open")
+  XCTAssertEqual(
+   RecorderSheetSize.resting(in: .spread(crease: 475.5), isWide: true), .expanded,
+   "open: the whole recorder on the right page")
+  XCTAssertEqual(
+   RecorderSheetSize.resting(in: .spread(crease: 475.5), isWide: true).rendered(keyboardUp: true, hasNotice: false), .mini,
+   "one row only while the keyboard is up")
+ }
+
+ /// Regression: at rest in the hand nothing said which conversation was recording, or that a Mac recorded along.
+ /// Over the notes the title and the byline say it, with the chips folded in, and the newest caption sits on the
+ /// sheet; from expanded up the sheet has the captions' strip instead.
+ func testBehaviorAtRestInTheHandTheNotesSayWhatsRecording() throws {
+  final class Seen {
+   var line: CGFloat = 0
+   var notesTop: CGFloat = 0
+  }
+  let seen = Seen()
+  let line = Text("It keeps recording with the screen locked").font(.subheadline).lineLimit(1)
+   .background { GeometryReader { proxy in Color.clear.onAppear { seen.line = proxy.size.height } } }
+  let notes = GeometryReader { proxy in Color.clear.onAppear { seen.notesTop = proxy.frame(in: .global).minY } }
+  let mac = RecorderChip(target: .peer("mac"), symbol: "desktopcomputer", label: "Studio Mac", tone: .calm, showsDot: true,
+                         detail: "Studio Mac is recording too")
+  let size = CGSize(width: 402, height: 790)  // the 18 Pro inside its safe area
+  let (host, window) = hosted(
+   expansion: nil, size: size, notes: AnyView(notes), captionLine: AnyView(line), chips: [mac], typeSize: .large)
+  defer { window.isHidden = true }
+  host.view.layoutIfNeeded()
+  XCTAssertGreaterThan(seen.notesTop, 50, "the title and its byline over the notes")
+  XCTAssertGreaterThan(seen.line, 10, "the newest caption on the sheet")
+ }
+
+ /// The caption's line under the notes is the first thing to go: it shows only where the notes keep their minimum.
+ func testBehaviorTheCaptionLineGivesWayBeforeTheNotes() {
+  XCTAssertTrue(RecorderSheetSize.captionLineFits(height: 24, in: 300, minimumNotes: 88))
+  XCTAssertFalse(RecorderSheetSize.captionLineFits(height: 24, in: 100, minimumNotes: 88), "the notes keep two lines")
+  XCTAssertFalse(RecorderSheetSize.captionLineFits(height: 0, in: 300, minimumNotes: 88), "captions off: nothing")
  }
 
  func testBehaviorAnExpansionSurvivesFoldingAndNilRestsAtEachPosturesSize() {
@@ -661,7 +872,7 @@ final class RecorderScreenTests: XCTestCase {
   let open = RecorderSheetSize.resting(in: .spread(crease: 475.5), isWide: false)
   let closed = RecorderSheetSize.resting(in: .column, isWide: false)
   let turned = RecorderSheetSize.resting(in: .column, isWide: true)
-  XCTAssertEqual(RecorderSheetSize.selected(expansion: nil, rest: open, hasNotice: false), .mini)
+  XCTAssertEqual(RecorderSheetSize.selected(expansion: nil, rest: open, hasNotice: false), .expanded)
   XCTAssertEqual(RecorderSheetSize.selected(expansion: nil, rest: closed, hasNotice: false), .collapsed)
   for expansion in [RecorderSheetSize.expanded, .full] {
    XCTAssertEqual(RecorderSheetSize.selected(expansion: expansion, rest: open, hasNotice: false), expansion, "unfolded")

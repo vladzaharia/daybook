@@ -85,7 +85,15 @@ public struct FusionSpeakerMapping: Codable, Equatable, Sendable {
 /// What multi-source fusion did, for the interface and the processing pipeline. Deterministic for
 /// the same inputs, so two Macs fusing the same recordings store the same value.
 public struct FusionSummary: Codable, Equatable, Sendable {
-    public static let currentVersion = 1
+    /// The fusion that made a unified transcript (docs/alignment.md, "Fusion versions"). 1: words aligned in
+    /// 240-item regions. 2: one time-banded alignment with a guard against doubled runs, confidences compared within
+    /// each recognizer, names kept only where they stood, and phrase fits held to a clock's drift.
+    public static let currentVersion = 2
+    /// The versions this build can still fuse with: upkeep re-fuses a conversation with the version it has, so its
+    /// wording changes only when it's fused for a new reason.
+    public static let supportedVersions = 1...currentVersion
+    public static func supported(_ version: Int) -> Int { min(max(version, supportedVersions.lowerBound), supportedVersions.upperBound) }
+    /// The fusion version that made `version`.
     public var version: Int
     public var sources: [FusionSourceReport]
     public var words: Int
@@ -109,8 +117,12 @@ public struct FusionOptions: Equatable, Sendable {
     /// Speaker ID and default name used for the person recording.
     public var ownerSpeakerID: String
     public var ownerName: String
-    public init(minimumAudioConfidence: Double = 0.3, ownerSpeakerID: String = "owner", ownerName: String = "Me") {
+    /// Which fusion to run (`FusionSummary.currentVersion` unless upkeep keeps a conversation's own).
+    public var version: Int
+    public init(minimumAudioConfidence: Double = 0.3, ownerSpeakerID: String = "owner", ownerName: String = "Me",
+                version: Int = FusionSummary.currentVersion) {
         self.minimumAudioConfidence = minimumAudioConfidence; self.ownerSpeakerID = ownerSpeakerID; self.ownerName = ownerName
+        self.version = FusionSummary.supported(version)
     }
 }
 
@@ -138,10 +150,8 @@ public struct FusionInputs: Sendable {
     /// reference, and a derived recording without its own follows its original's. Pass the rate
     /// here rather than scaling segment times.
     public var placements: [UUID: TrackPlacement] = [:]
-    /// Measured by `MeetingAudioAlignment` / `AudioAligner` (normally `Meeting.audioAlignments`).
+    /// Pairwise measurements Daybook 0.2.2 stored (`Meeting.audioAlignments`), read but no longer written.
     public var audioAlignments: [TrackAudioAlignment]
-    /// Per-recording signal-to-noise profiles from `AudioAligner.signalQuality(of:)`.
-    public var signalQuality: [UUID: SignalQualityProfile]
     /// Wall-clock recording starts, used only when sound and text can't place a recording.
     public var recordingStartDates: [UUID: Date]
     /// The meeting's speakers, so existing identities are reused.
@@ -153,20 +163,19 @@ public struct FusionInputs: Sendable {
     /// passage all of whose sources are here is left out of the transcript, into `FusionResult.backgroundSegments`.
     public var background: [UUID: BackgroundAudio.Kind]
     public init(placements: [UUID: TrackPlacement] = [:], audioAlignments: [TrackAudioAlignment] = [],
-                signalQuality: [UUID: SignalQualityProfile] = [:], recordingStartDates: [UUID: Date] = [:],
-                speakers: [Speaker] = [], namedSpeakerIDs: Set<String> = [], options: FusionOptions = .init(),
-                background: [UUID: BackgroundAudio.Kind] = [:]) {
-        self.placements = placements; self.audioAlignments = audioAlignments; self.signalQuality = signalQuality
+                recordingStartDates: [UUID: Date] = [:], speakers: [Speaker] = [], namedSpeakerIDs: Set<String> = [],
+                options: FusionOptions = .init(), background: [UUID: BackgroundAudio.Kind] = [:]) {
+        self.placements = placements; self.audioAlignments = audioAlignments
         self.recordingStartDates = recordingStartDates; self.speakers = speakers; self.namedSpeakerIDs = namedSpeakerIDs
         self.options = options; self.background = background
     }
 
     /// Everything a meeting already stores: audio alignments, speakers, renamed speakers, and the
     /// passages that are background audio (unless the person included it).
-    public init(meeting: Meeting, placements: [UUID: TrackPlacement] = [:], signalQuality: [UUID: SignalQualityProfile] = [:],
-                recordingStartDates: [UUID: Date] = [:], options: FusionOptions = .init()) {
-        self.init(placements: placements, audioAlignments: meeting.audioAlignments ?? [], signalQuality: signalQuality,
-                  recordingStartDates: recordingStartDates, speakers: meeting.speakers, namedSpeakerIDs: meeting.renamedSpeakerIDs, options: options,
+    public init(meeting: Meeting, placements: [UUID: TrackPlacement] = [:], recordingStartDates: [UUID: Date] = [:],
+                options: FusionOptions = .init()) {
+        self.init(placements: placements, audioAlignments: meeting.audioAlignments ?? [], recordingStartDates: recordingStartDates,
+                  speakers: meeting.speakers, namedSpeakerIDs: meeting.renamedSpeakerIDs, options: options,
                   background: meeting.backgroundSegmentKinds())
     }
 }

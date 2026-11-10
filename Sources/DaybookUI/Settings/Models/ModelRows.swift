@@ -128,7 +128,8 @@ public struct ModelRoleRow: View {
             if status.isTransferring {
                 ModelActionButton("Cancel") { actions.cancel(key) }
             } else if status.canDownload {
-                ModelActionButton("Download") { actions.download(key) }
+                // After a download stopped, the same button tries again.
+                ModelActionButton(status.isFailed ? "Try Again" : "Download") { actions.download(key) }
                     .disabled(!choice.canDownload(space: space))
             }
         }
@@ -290,11 +291,13 @@ public struct ModelListRow<Actions: View>: View {
     }
 }
 
-/// Downloads what a section's choices still need: "Not downloaded yet · 852 MB" with Download, then the bar with what's
-/// arrived and Cancel, or, while none of it is arriving, what it waits for and Cancel, with no bar. Where there isn't
-/// room, it says how much is needed and Download waits.
+/// Downloads what a section's choices still need, titled with what that is ("Transcription and speakers"): under it
+/// "Not downloaded yet · 852 MB" with Download, then the bar with what's arrived and Cancel, or, while none of it is
+/// arriving, what it waits for and Cancel, with no bar. Where there isn't room, it says how much is needed and Download
+/// waits.
 public struct ModelDownloadRow: View {
     private let summary: ModelDownloadSummary
+    private let name: String
     private let space: ModelSpace
     private let download: () -> Void
     private let cancel: () -> Void
@@ -302,18 +305,29 @@ public struct ModelDownloadRow: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     private var stack: AnyLayout { ModelRowStack.layout(typeSize) }
 
-    public init(_ summary: ModelDownloadSummary, space: ModelSpace = .unknown, download: @escaping () -> Void, cancel: @escaping () -> Void) {
+    /// - Parameter name: What it downloads, in sentence case ("Live captions"); the iPhone title-cases it.
+    public init(_ summary: ModelDownloadSummary, name: String, space: ModelSpace = .unknown, download: @escaping () -> Void,
+                cancel: @escaping () -> Void) {
         self.summary = summary
+        self.name = name
         self.space = space
         self.download = download
         self.cancel = cancel
     }
 
-    public var body: some View {
+    /// The line under the row's name: where its download stands and its size ("Not downloaded yet · 853 MB",
+    /// "Waiting for Wi‑Fi · 853 MB", "Downloading · 0.4 of 1.6 GB"), or, where there isn't room, only how much it needs.
+    public static func status(_ summary: ModelDownloadSummary, space: ModelSpace = .unknown) -> ModelLine {
         let line = summary.line(space: space)
+        return line.needsAttention ? line : ModelLine(summary.title + " · " + line.text)
+    }
+
+    public var body: some View {
+        let line = Self.status(summary, space: space)
         stack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(summary.title)
+                Text(ModelSettingsText.label(name, density))
+                    .foregroundStyle(summary.needsAttention ? DaybookPalette.Ink.warning : Color.primary)
                 Text(line.text)
                     .font(density == .touch ? .footnote : .subheadline)
                     .foregroundStyle(line.needsAttention ? DaybookPalette.Ink.warning : Color.secondary)
@@ -328,74 +342,13 @@ public struct ModelDownloadRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             switch summary {
-            case .missing:
-                ModelActionButton("Download", action: download)
+            case .missing, .failed:
+                // After a download stopped, the same button tries again.
+                ModelActionButton(summary.needsAttention ? "Try Again" : "Download", action: download)
                     .disabled(!summary.canDownload(space: space))
             case .waiting, .downloading:
                 ModelActionButton("Cancel", action: cancel)
             }
-        }
-    }
-}
-
-/// Quick, Balanced, or Detailed: its models (two lines, the ones that set it apart first), what it downloads, and the
-/// memory it wants, with this device's recommendation marked. Custom is what the choices below add up to, so it isn't
-/// a button. `note` says when its download wouldn't fit.
-public struct ModelQualityRow: View {
-    private let option: ModelQualityOption
-    private let note: ModelLine?
-    private let choose: () -> Void
-    @Environment(\.daybookDensity) private var density
-
-    public init(_ option: ModelQualityOption, note: ModelLine? = nil, choose: @escaping () -> Void) {
-        self.option = option
-        self.note = note
-        self.choose = choose
-    }
-
-    public var body: some View {
-        if option.isCustom {
-            content
-                .accessibilityElement(children: .combine)
-                .accessibilityAddTraits(.isSelected)
-        } else {
-            Button(action: choose) { content.contentShape(Rectangle()) }
-                .buttonStyle(.plain)
-                .accessibilityElement(children: .combine)
-                .accessibilityAddTraits(option.isCurrent ? [.isSelected, .isButton] : .isButton)
-                .accessibilityHint(option.isRecommended ? ModelLabels.recommendedHint : "")
-        }
-    }
-
-    private var lineFont: Font { density == .touch ? .footnote : .subheadline }
-
-    private var content: some View {
-        HStack(alignment: .center, spacing: DaybookSpacing.s3) {
-            PresetRadio(isOn: option.isCurrent)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(option.title).foregroundStyle(.primary)
-                    if option.isRecommended { ModelLabelChip(ModelLabels.recommended) }
-                }
-                Text(option.names.joined(separator: ", "))
-                    .font(lineFont)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .truncationMode(.tail)
-                    .fixedSize(horizontal: false, vertical: true)
-                if let note {
-                    Text(note.text)
-                        .font(lineFont)
-                        .foregroundStyle(note.needsAttention ? DaybookPalette.Ink.warning : Color.secondary)
-                        .monospacedDigit()
-                }
-            }
-            Spacer(minLength: DaybookSpacing.s2)
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(ByteSize.format(option.bytes)).monospacedDigit()
-                Text(option.memory).font(lineFont).foregroundStyle(.secondary)
-            }
-            .fixedSize()
         }
     }
 }

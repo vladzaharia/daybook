@@ -64,7 +64,7 @@ public enum DaybookFont: String, CaseIterable, Sendable {
     case byline
     /// The summary's first paragraph.
     case lede
-    /// A heading on the page: body size at semibold.
+    /// A heading on the page, semibold and a size above the body.
     case heading
     /// Everything read on the page.
     case body
@@ -106,22 +106,27 @@ public enum DaybookFont: String, CaseIterable, Sendable {
         }
     }
 
-    /// The fixed size in the window or the panel, before `readingScale`.
+    /// The fixed size in the window or the panel, before `readingScale`. The window's page is typeset as a document:
+    /// a 15 pt body (about 80 characters to the 560 pt measure), a 19 pt lede, and 17 pt headings, so a heading
+    /// outranks the paragraph above it.
     public func size(_ density: DaybookDensity) -> CGFloat {
         switch (self, density) {
         case (.docTitle, .panel): return 17
-        case (.docTitle, _): return 28
+        case (.docTitle, _): return 30
         case (.sheetTitle, .panel): return 15
         case (.sheetTitle, _): return 22
         case (.rowTitle, _): return 13
         case (.rowDetail, _): return 12
         case (.byline, _): return 13
-        case (.lede, _): return 16
-        case (.heading, _): return 15
+        case (.lede, .panel): return 16
+        case (.lede, _): return 19
+        case (.heading, .panel): return 15
+        case (.heading, _): return 17
         case (.body, .panel): return 13
-        case (.body, _): return 14
+        case (.body, _): return 15
         case (.speaker, _): return 12
-        case (.marginTime, _), (.time, _): return 11
+        case (.marginTime, .panel), (.time, .panel): return 11
+        case (.marginTime, _), (.time, _): return 12
         case (.status, _), (.statusLead, _): return 12
         case (.colophon, _): return 11
         case (.captionNewest, _): return 14
@@ -156,9 +161,19 @@ public enum DaybookFont: String, CaseIterable, Sendable {
         return monospacedDigits ? font.monospacedDigit() : font
     }
 
-    /// The extra leading that brings body text to its line: 22 pt for 14 pt body on the Mac.
+    /// The extra leading that brings body text to its line: a 24 pt line for the window's 15 pt body, 21 for the
+    /// panel's 13.
     public static func bodyLineSpacing(_ density: DaybookDensity, scale: CGFloat = 1) -> CGFloat {
-        density == .touch ? 4 : 5 * scale
+        switch density {
+        case .touch: return 4
+        case .window: return 6 * scale
+        case .panel: return 5 * scale
+        }
+    }
+
+    /// The lede's: a 26 pt line for the window's 19 pt lede; under touch and in the panel, the body's.
+    public static func ledeLineSpacing(_ density: DaybookDensity, scale: CGFloat = 1) -> CGFloat {
+        density == .window ? 4 * scale : bodyLineSpacing(density, scale: scale)
     }
 }
 

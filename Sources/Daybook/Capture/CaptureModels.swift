@@ -7,6 +7,8 @@ enum CapturedTrackRole: String, Codable {
 
     /// How a sentence for the person names it.
     var spokenName: String { self == .microphone ? "microphone" : "call audio" }
+    /// How a sentence names its sound: "microphone audio", "call audio".
+    var audioName: String { self == .microphone ? "microphone audio" : "call audio" }
 
     /// Daybook's own recording errors already say what happened and what to do; anything else gets
     /// a plain sentence, with the system's words kept in the track's capture notes.
@@ -30,7 +32,11 @@ struct CapturedAudioTrack: Codable, Identifiable, Equatable {
     var method: String?
     /// Device switches and format conversions while recording.
     var notes: [String]?
+    /// Stretches of the timeline that hold no captured audio: silence put in, audio lost, or a clock jump.
+    var gaps: [CaptureGap]?
     var duration: TimeInterval { Double(frameCount) / sampleRate }
+    /// Seconds of audio lost because writing fell behind (a busy disk).
+    var lostSeconds: TimeInterval { (gaps ?? []).filter { $0.kind == .lost }.map(\.seconds).reduce(0, +) }
     /// Host time of the session anchor, recovered from this track's own timing.
     var sessionHostTimeSeconds: TimeInterval { firstSampleHostTimeSeconds - offsetSeconds }
 
@@ -39,6 +45,25 @@ struct CapturedAudioTrack: Codable, Identifiable, Equatable {
         ClockDriftEstimator.fit(anchors: clockAnchors ?? [], nominalRate: sampleRate,
                                 sessionHostTime: sessionHostTimeSeconds, fallbackOffset: offsetSeconds).clock
     }
+}
+
+/// Where a track's timeline holds no captured audio, and why. Padded gaps keep the file on the session's clock;
+/// a longer one starts a new clock segment instead.
+struct CaptureGap: Codable, Equatable {
+    enum Kind: String, Codable {
+        /// The source delivered nothing for a while (a device change, a restart): filled with silence.
+        case padded
+        /// Writing fell behind and the audio was dropped: filled with silence.
+        case lost
+        /// Longer than `PCMTrackWriter.largestPaddedGap`: not filled; the next anchor starts a new clock segment.
+        case skipped
+        /// The source's clock went back: the audio overlapping what was already written was dropped.
+        case overlap
+    }
+    var kind: Kind
+    /// The track frame where it falls.
+    var frame: Int64
+    var seconds: TimeInterval
 }
 
 /// A track Daybook computed from the captured originals, such as the microphone with the call's echo removed.
@@ -181,9 +206,10 @@ enum RecordingError: LocalizedError {
 }
 
 enum CaptureJSON {
+    /// Compact: a track's sidecar is rewritten every ten seconds while it records. Earlier, pretty-printed files read the same.
     static func encoder() -> JSONEncoder {
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.outputFormatting = [.sortedKeys]
         encoder.dateEncodingStrategy = .millisecondsSince1970
         return encoder
     }

@@ -47,13 +47,6 @@ final class LibraryListPhoneTests: XCTestCase {
         XCTAssertNil(playing?.text, "the gist stays")
     }
 
-    func testBehaviorAPausedRowReadsPausedWithThePauseGlyphNotAClock() {
-        // The shared row has a paused kind of its own; the reading status's older row mapped it to waiting.
-        let shared = ConversationRow.shared(RowStatus(kind: .waiting, text: "Paused"))
-        XCTAssertEqual(shared.kind, .paused)
-        XCTAssertEqual(shared.kind.symbol, "pause.circle")
-    }
-
     func testBehaviorASelectionOffersWhatTheMacsDoesInTheSameOrder() async throws {
         let library = PhoneLibrary(rootURL: try temporaryDirectory(), installation: "TEST")
         try await library.reload()
@@ -66,6 +59,39 @@ final class LibraryListPhoneTests: XCTestCase {
         let only = ConversationActionMenuItems.shown(one, on: .iPhone).flatMap(\.actions).map(\.id)
         XCTAssertFalse(only.contains(.copySummary), "no summary yet: left out on an iPhone")
         XCTAssertTrue(only.contains(.moveToTrash))
+    }
+
+    /// The conversation's More, a row's menu, and the selection bar carry an action out the same way: Work or Personal
+    /// is undone by one name from one conversation or several, and what needs a sheet or a question asks the session.
+    func testBehaviorMoreARowAndASelectionCarryOutAnActionTheSameWay() async throws {
+        let library = PhoneLibrary(rootURL: try temporaryDirectory(), installation: "TEST")
+        try await library.reload()
+        let a = library.controller.newMeeting(title: "A"), b = library.controller.newMeeting(title: "B")
+        let session = ReadingSession()
+        func perform(_ id: ConversationAction.ID, on ids: [UUID], undoManager: UndoManager? = nil) {
+            PhoneActions.perform(id, on: ids, library: library.controller, session: session, provider: LocalAudioProvider(),
+                                 placement: nil, undoManager: undoManager)
+        }
+        for ids in [[a], [a, b]] {
+            let undo = UndoManager()
+            undo.groupsByEvent = false
+            undo.beginUndoGrouping()
+            perform(.moveTo(.personal), on: ids, undoManager: undo)
+            undo.endUndoGrouping()
+            XCTAssertEqual(undo.undoActionName, "Move to Personal", "from More as from a row or the selection bar")
+            XCTAssertTrue(ids.allSatisfy { library.controller.meeting($0)?.placement == .personal })
+            undo.undo()
+            XCTAssertTrue(ids.allSatisfy { library.controller.meeting($0)?.placement == nil })
+        }
+        perform(.tags, on: [a])
+        XCTAssertEqual(session.sheet, .tags([a]))
+        perform(.moveToFolder, on: [a])
+        XCTAssertEqual(session.sheet, .move([a]))
+        perform(.versionHistory, on: [a])
+        XCTAssertEqual(session.sheet, .history(a))
+        perform(.moveToTrash, on: [a])
+        XCTAssertEqual(session.confirmingTrash, [a])
+        await library.controller.flush()
     }
 
     func testBehaviorTheTrashListsWhatWasMovedThereThroughTheSharedReader() async throws {

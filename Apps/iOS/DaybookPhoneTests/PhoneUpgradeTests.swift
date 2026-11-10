@@ -117,6 +117,16 @@ final class PhoneUpgradeTests: XCTestCase {
         rig.upgrades.offer(for: try XCTUnwrap(rig.controller.meeting(id)), now: rig.clock.now)
     }
 
+    /// The page's status as this iPhone draws it: the shared presentation, with an upgrade on offer, or the cloud.
+    private func pageStatus(_ rig: Rig, _ meeting: Meeting, _ status: ProcessingStatus, upgrade: UpgradeOffer? = nil,
+                            cloudOffered: Bool = false) -> ConversationStatusPresentation? {
+        var inputs = ConversationStatusPresentation.Inputs(words: .iPhone(id: rig.controller.thisDevice.id),
+                                                           local: .iPhone(processesHere: true, summarizes: true))
+        inputs.upgrade = upgrade
+        inputs.placement.cloudOffered = cloudOffered
+        return ConversationStatusPresentation.page(status, meeting: meeting, inputs: inputs, now: rig.clock.now)
+    }
+
     // MARK: Tests
 
     func testBehaviorAMacsBetterModelIsOfferedInTheIPhonesWordsAndAskedByName() async throws {
@@ -128,7 +138,8 @@ final class PhoneUpgradeTests: XCTestCase {
         let offer = try XCTUnwrap(try offer(rig, id))
         XCTAssertEqual(offer.line, "Upgrade summary on Vlad's MacBook Pro")
         // The page's line, with Upgrade and Dismiss.
-        let line = StatusPresentation.upgrade(offer)
+        let done = try XCTUnwrap(rig.controller.meeting(id))
+        let line = try XCTUnwrap(pageStatus(rig, done, ProcessingStatus.phone(done), upgrade: offer))
         XCTAssertEqual(line.kind, .line)
         XCTAssertEqual(line.title, "Upgrade summary on Vlad's MacBook Pro")
         XCTAssertEqual(line.actions, [.upgrade(offer), .dismissUpgrade(offer)])
@@ -143,9 +154,14 @@ final class PhoneUpgradeTests: XCTestCase {
         // The page says what it waits for, and offers nothing more meanwhile.
         let waiting = try XCTUnwrap(rig.controller.meeting(id))
         let status = ProcessingStatus.phone(waiting)
-        XCTAssertEqual(StatusPresentation.page(status, meeting: waiting, sighting: nil)?.title, "Waiting for Vlad's MacBook Pro to upgrade the summary")
-        XCTAssertEqual(StatusPresentation.row(status, meeting: waiting)?.text, "Waiting for Vlad's MacBook Pro to upgrade the summary")
-        XCTAssertNil(StatusPresentation.placement(nil, run: nil, live: nil, status: status, cloudOffered: true), "Not Use the Cloud's line")
+        XCTAssertEqual(pageStatus(rig, waiting, status)?.title, "Waiting for Vlad's MacBook Pro to upgrade the summary")
+        XCTAssertEqual(pageStatus(rig, waiting, status)?.actions, [.cancelRequest(asked.id)], "this iPhone asked: Cancel brings the offer back")
+        let rowInputs = ConversationStatusPresentation.Inputs(words: .iPhone(id: rig.controller.thisDevice.id), local: .iPhone())
+        XCTAssertEqual(ConversationStatusPresentation.row(status, meeting: waiting, inputs: rowInputs, now: rig.clock.now)?.text,
+                       "Waiting for Vlad's MacBook Pro", "the row's short line")
+        let cloud = pageStatus(rig, waiting, status, cloudOffered: true)
+        XCTAssertEqual(cloud?.title, "Waiting for Vlad's MacBook Pro to upgrade the summary", "Not Use the Cloud's line")
+        XCTAssertFalse(cloud?.actions.contains(.placement(.useCloud)) ?? true)
         XCTAssertNil(try self.offer(rig, id))
     }
 

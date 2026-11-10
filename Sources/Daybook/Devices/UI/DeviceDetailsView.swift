@@ -1,5 +1,7 @@
 import AppKit
+import DaybookDesign
 import DaybookKit
+import DaybookUI
 import SwiftUI
 
 /// More › Device Details…: a read-only popover with the recorder's status, versions, and serial
@@ -18,8 +20,7 @@ struct DeviceDetailsView: View {
         let detailed = session.direct as? any DetailedConnection
         VStack(alignment: .leading, spacing: Space.s4) {
             HStack(spacing: Space.s3) {
-                DeviceGlyph(symbol: session.kind.systemImage, size: 20, linked: session.isLinked)
-                    .frame(width: 28)
+                DeviceGlyph(session: session)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(session.device.name).font(.headline)
                     if let vendor = session.kind.vendor {
@@ -66,7 +67,7 @@ struct DeviceDetailsView: View {
 
             VStack(alignment: .leading, spacing: Space.s3) {
                 Button {
-                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) { browser.showsTechnicalDetails.toggle() }
+                    withAnimation(reduceMotion ? nil : DaybookMotion.fade) { browser.showsTechnicalDetails.toggle() }
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "chevron.right")

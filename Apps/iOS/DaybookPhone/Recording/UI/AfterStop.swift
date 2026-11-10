@@ -47,6 +47,19 @@ struct AfterStop: Equatable {
   case .saving, .none: return nil
   }
  }
+
+ /// What the control where Stop was does, by the rule both apps share (`RecordMore`): Keep Recording into the
+ /// conversation within two minutes of the Stop (said while it's still being added, so the words don't change as it
+ /// lands), Record Again after a recording that stopped on its own, else Record. One that couldn't be added records
+ /// anew.
+ static func recordMore(
+  _ outcome: Outcome, stoppedShort: Bool, stoppedAt: Date?, now: Date = Date()
+ ) -> RecordMore {
+  switch outcome {
+  case .saving, .saved: return RecordMore(stoppedShort: stoppedShort, stoppedAt: stoppedAt, now: now)
+  case .failed, .none: return .record
+  }
+ }
 }
 
 /// One cancellable timer for the saved moment. Any note-editing surface suspends it; leaving that
@@ -68,9 +81,11 @@ final class AfterStopLinger {
  }
 }
 
-/// After Stop on the iPhone, as Floating Notes shows it on the Mac: Saved with the conversation's length, its title
-/// and notes, Open where Bookmark was and Keep Recording where Stop was, for about ten seconds. Keep Recording records
-/// into the same conversation, after what was saved, so a Stop pressed by mistake doesn't split a meeting in two.
+/// After Stop on the iPhone, as Floating Notes shows it on the Mac: Saved with the conversation's length, what's
+/// becoming of it in a chip ("Transcribing · 40%", "Waiting for your Mac"), its title and notes, Open where Bookmark
+/// was and Keep Recording where Stop was, for about ten seconds. Keep Recording records into the same conversation,
+/// after what was saved, so a Stop pressed by mistake doesn't split a meeting in two; two minutes on (writing holds
+/// the moment), it's Record, for a new one (`RecordMore`).
 struct PhoneAfterStop: View {
  let afterStop: AfterStop
  let style: SurfaceStyle
@@ -80,20 +95,35 @@ struct PhoneAfterStop: View {
  @State private var writing = false
  @State private var inkSession = InkSession()
  @State private var linger = AfterStopLinger()
+ /// The Stop: the moment appears with it.
+ @State private var stoppedAt = Date()
+ /// Keep Recording's two minutes have passed.
+ @State private var windowPassed = false
 
  private var outcome: AfterStop.Outcome {
   AfterStop.outcome(
-   isActive: model.recorder.isActive, isFiling: model.isFiling, filing: model.lastFiling,
+   isActive: model.recorder.isActive,
+   isFiling: model.isFiling || model.waitsForUnlock(afterStop.conversationID) != nil, filing: model.lastFiling,
    since: afterStop.before)
  }
 
  var body: some View {
   let outcome = self.outcome
+  // Read once, so the words and what the press does agree.
+  let more = AfterStop.recordMore(
+   outcome, stoppedShort: model.recorder.unexpectedStop != nil,
+   stoppedAt: windowPassed ? nil : stoppedAt)
   GeometryReader { proxy in
    RecorderAfterStop(
-    state: state(outcome), actions: actions(outcome), notes: AnyView(notes(outcome))
+    state: state(outcome, more: more), actions: actions(outcome, more: more),
+    notes: AnyView(notes(outcome))
    )
    .daybookSurface(layout(proxy), density: .touch)
+  }
+  .task {
+   // Keep Recording gives way to Record once its two minutes pass.
+   do { try await Task.sleep(for: .seconds(RecordMore.window)) } catch { return }
+   windowPassed = true
   }
   .sensoryFeedback(trigger: outcome) { _, new in
    // Whether it saved, felt when it's known, not at the press.
@@ -134,10 +164,12 @@ struct PhoneAfterStop: View {
   return model.library.controller.meeting(id)
  }
 
- private func state(_ outcome: AfterStop.Outcome) -> RecorderAfterStopState {
+ private func state(_ outcome: AfterStop.Outcome, more: RecordMore) -> RecorderAfterStopState {
   let meeting = meeting(outcome)
   var inputs = RecordingStatusInputs()
   inputs.phase = outcome == .saving ? .saving : .saved
+  // Stopped while the iPhone was locked: Saved, and it finishes once it's unlocked.
+  inputs.waitsForUnlock = model.waitsForUnlock(afterStop.conversationID) == true
   inputs.duration = meeting?.duration
   let library = model.library.controller
   var problem: RecorderProblem?
@@ -149,21 +181,33 @@ struct PhoneAfterStop: View {
    phase: problem == nil ? RecordingStatusWords.phase(inputs) : nil,
    title: meeting?.title ?? afterStop.title,
    rename: meeting.map { meeting in { title in library.rename(meeting.id, to: title) } },
+   chips: chips(meeting),
    meta: date.map {
     $0.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).hour().minute())
    },
    problem: problem,
    openTitle: meeting?.summary != nil ? "Open Summary" : "Open",
    canOpen: meeting != nil,
-   recordTitle: meeting != nil ? "Keep Recording" : "Record",
+   recordMore: more,
    canRecord: model.recorder.state == .idle && !model.isFiling)
  }
 
- private func actions(_ outcome: AfterStop.Outcome) -> RecorderAfterStopActions {
+ /// What's becoming of the recording, as the Mac's panel says it: the conversation's processing, in the words its
+ /// library row says.
+ private func chips(_ meeting: Meeting?) -> [RecorderChip] {
+  guard let meeting else { return [] }
+  let context = PhoneRowStatus.context(
+   model: model, library: model.library.controller, player: reading.player)
+  let row = PhoneRowStatus.make(meeting, context: context, now: Date())
+  return RecordingStatusWords.processingChip(row).map { [$0] } ?? []
+ }
+
+ private func actions(_ outcome: AfterStop.Outcome, more: RecordMore) -> RecorderAfterStopActions {
   let model = self.model
   let reading = self.reading
   let done = self.done
   let meeting = meeting(outcome)
+  let into = more.recordsIntoSameConversation ? meeting : nil
   return RecorderAfterStopActions(
    open: {
     guard let meeting else { return }
@@ -171,9 +215,9 @@ struct PhoneAfterStop: View {
     done()
    },
    record: {
-    // Into the same conversation, after what was saved; a recording that couldn't be added starts anew.
+    // Into the same conversation, after what was saved; Record, or one that couldn't be added, starts anew.
     Task {
-     try? await model.startRecording(into: meeting?.id, title: meeting?.title, multipoint: nil)
+     try? await model.startRecording(into: into?.id, title: into?.title, multipoint: nil)
     }
    })
  }
@@ -193,12 +237,16 @@ struct PhoneAfterStop: View {
       NoteMark(id: $0.id.uuidString, kind: .bookmark, time: meeting.alignedTime(for: $0) ?? $0.time)
      },
      scrolls: true,
-     bottomInset: WritableNotes<EmptyView>.toolsHeight,
      onFocusChange: { writing = $0 },
      ink: .conversation(meeting.id, library: library, session: inkSession))
    }
    // Inset as the recording's notes are in the column, so they stay put as Stop lands.
    .padding(.horizontal, style == .notebook ? 0 : DaybookSpacing.s4)
+  } else if outcome == .saving {
+   // While it's being saved, the notes just written stay, read only, ink and marks too, until the conversation's
+   // editor takes over.
+   RecordingNotes(session: inkSession, isEditable: false)
+    .padding(.horizontal, style == .notebook ? 0 : DaybookSpacing.s4)
   } else {
    Color.clear
   }

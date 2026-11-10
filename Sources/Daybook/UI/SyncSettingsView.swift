@@ -77,10 +77,7 @@ struct SyncSettingsView: View {
             }
             .buttonStyle(.plain)
         } extras: {
-            if shown.isAttached {
-                Toggle("Transcribe synced recordings on this Mac", isOn: $state.processSyncedAudio)
-                    .controlSize(.regular)
-            }
+            // Transcribe synced recordings on this Mac is Settings › Models' (whether this Mac takes other devices' work).
             if shown.isFolderTransport, shown.folder == nil {
                 LabeledContent {
                     Button("Choose Folder…") { sync.chooseFolder() }

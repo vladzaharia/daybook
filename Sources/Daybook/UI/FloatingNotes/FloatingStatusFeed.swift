@@ -10,8 +10,8 @@ import Foundation
 import Observation
 
 // Where Floating Notes' status comes from: the device hub and every recorder session, the iPhone
-// link, recorder handoff, sync, and the few level facts that change rarely (call audio detected,
-// a silent microphone). The panel reads them through `FloatingStatusInputs.make`, and redraws for
+// link, recorder handoff, sync, and the few capture facts that change rarely (call audio detected,
+// a microphone that isn't hearing anything, the disk running out of room). The panel reads them through `FloatingStatusInputs.make`, and redraws for
 // what it read; the meters, which change 15 times a second, are sampled apart (`RecorderLevels`).
 
 extension FloatingStatusInputs {
@@ -32,9 +32,15 @@ extension FloatingStatusInputs {
         inputs.recording.here = AppState.thisDeviceWords
         inputs.recording.duration = meeting?.duration
         inputs.recording.inputDevice = inputDevice
+        // The band's phase is the input menu while recording (`MicrophoneMenu`).
+        inputs.recording.choosesInput = isRecording
         inputs.recording.microphoneSilent = isRecording && levels.isMicrophoneSilent
-        inputs.recording.includesCall = isRecording && state.includeComputerAudio
-        if isRecording, state.includeComputerAudio {
+        // Call audio stopped for the disk's last minutes: the storage chip says so, not a missing call.
+        let callStoppedForSpace = isRecording && state.recorder.callStoppedForSpace
+        inputs.recording.spaceLeft = isRecording ? state.recorder.spaceLeft : nil
+        inputs.recording.callStoppedForSpace = callStoppedForSpace
+        inputs.recording.includesCall = isRecording && state.includeComputerAudio && !callStoppedForSpace
+        if isRecording, state.includeComputerAudio, !callStoppedForSpace {
             if levels.isCapturingCall {
                 inputs.recording.call = levels.isCallAudioDetected ? .detected : .quiet
             } else if state.recorder.isRecording, state.recorder.elapsedTime > 5 {
@@ -71,6 +77,8 @@ extension FloatingStatusInputs {
     private static func phone(_ session: DeviceSession, state: AppState, along: CompanionRecording.State?) -> RecordingStatusInputs.Peer {
         var phone = RecordingStatusInputs.Peer(id: session.id, name: session.device.name, kind: .iPhone, isConnected: session.isLinked,
                                                along: along, lastConnected: session.direct?.lastConnectedAt)
+        // The phone this Mac records for, out of reach: its chip says so while this Mac keeps recording.
+        if let lead = state.phones.leadOutOfReach, lead.sessionID == session.id, lead.meetingID == state.recordingID { phone.outOfReach = true }
         if let id = UUID(uuidString: session.id), let recording = state.phoneLink.recordingStates[id], phone.isConnected {
             switch recording.phase {
             case .recording, .starting: phone.activity = .recording
@@ -101,13 +109,17 @@ extension FloatingStatusInputs {
             case .summarizing: return .summarizing
             }
         case .requested(.queued): return .waiting
-        case .requested(.models): return .models
+        case .requested(.models): return .models(state.modelDownloadState)
         case .requested(.paused): return .paused
         case .requested(.device(let request)): return .requested(device: request.requestedBy.name)
         case .failed(let failure): return .failed(FailureWords(failure, words: .mac(id: state.library.thisDevice.id)))
         case .recorded: return nil
-        case .transcribed: return .ready(summary: false)
+        case .transcribed:
+            // Transcript first: its summary waits for this Mac's summary model, as the page says.
+            guard state.summaryWaitsForModel(meeting), let models = state.modelDownloadState else { return .ready(summary: false) }
+            return .transcriptReady(waiting: ProcessingWords.summaryWaitsLine(models))
         case .awaitingRecordings(let recordings): return .awaiting(ProcessingStatus.awaitingLine(recordings))
+        case .missingRecordings: return meeting.summary != nil ? .ready(summary: true) : nil
         case .done:
             if meeting.summary != nil { return .ready(summary: true) }
             return meeting.unifiedTranscript.isEmpty ? nil : .ready(summary: false)
@@ -129,6 +141,7 @@ extension FloatingStatusInputs {
         }
         queue.waiting = state.processingQueue.count
         queue.awaitingModels = state.awaitingModels.count
+        queue.models = state.modelDownloadState
         return queue
     }
 
@@ -149,39 +162,72 @@ extension FloatingStatusInputs {
     }
 }
 
-// MARK: - The input device
+// MARK: - The microphone
 
-/// The default input device's name ("MacBook Pro Microphone"), kept current. Reading a device's
-/// name needs no permission and never touches the microphone.
+/// The Mac's inputs and the person's choice among them, kept current for Floating Notes' input menu and Settings ›
+/// Recording, and the name of the input recording uses ("MacBook Pro Microphone"): the recording's own while one
+/// runs, otherwise the one the choice resolves to now (`MicrophoneChoice`). Reading devices needs no permission and
+/// never touches a microphone.
 @MainActor
 @Observable
-final class InputDeviceName {
-    private(set) var name: String?
+final class MicrophoneInputs {
+    private(set) var devices: [MicrophoneChoice.Device] = []
+    private(set) var preference: MicrophoneChoice.Preference = .automatic
+    /// The input a recording would use now.
+    private(set) var resolved: MicrophoneChoice.Device?
+    @ObservationIgnored private let store: MicrophonePreferenceStore
     @ObservationIgnored private var listener: AudioObjectPropertyListenerBlock?
+    @ObservationIgnored private var observer: NSObjectProtocol?
+    private static let selectors = [kAudioHardwarePropertyDevices, kAudioHardwarePropertyDefaultInputDevice]
+
+    init(store: MicrophonePreferenceStore = .live) { self.store = store }
+
+    /// The input recording uses, or would.
+    var name: String? { MicrophoneInUse.shared.device?.name ?? resolved?.name }
+
+    /// What a menu of inputs lists after Automatic.
+    var menuDevices: [MicrophoneChoice.Device] { MicrophoneChoice.menuDevices(devices, preference: preference) }
 
     func start() {
         guard listener == nil else { return }
         refresh()
-        var address = CoreAudioProperty.address(kAudioHardwarePropertyDefaultInputDevice)
         let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             Task { @MainActor in self?.refresh() }
         }
-        if AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, .main, block) == noErr {
-            listener = block
+        for selector in Self.selectors {
+            var address = CoreAudioProperty.address(selector)
+            AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, .main, block)
+        }
+        listener = block
+        observer = NotificationCenter.default.addObserver(forName: MicrophonePreferenceStore.changed, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refresh() }
         }
     }
 
     func stop() {
-        guard let listener else { return }
-        var address = CoreAudioProperty.address(kAudioHardwarePropertyDefaultInputDevice)
-        AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, .main, listener)
-        self.listener = nil
+        if let listener {
+            for selector in Self.selectors {
+                var address = CoreAudioProperty.address(selector)
+                AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, .main, listener)
+            }
+        }
+        listener = nil
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+        observer = nil
+    }
+
+    /// Records from `preference` from now on; a recording under way moves to it at once.
+    func choose(_ preference: MicrophoneChoice.Preference) {
+        store.save(preference)
+        refresh()
     }
 
     private func refresh() {
-        let device: AudioObjectID? = CoreAudioProperty.scalar(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultInputDevice)
-        let value = device.flatMap { $0 == kAudioObjectUnknown ? nil : CoreAudioProperty.string($0, kAudioObjectPropertyName) }
-        if value != name { name = value }
+        let snapshot = CoreAudioInputs.snapshot(preference: store.load())
+        if snapshot.devices != devices { devices = snapshot.devices }
+        if snapshot.preference != preference { preference = snapshot.preference }
+        let now = snapshot.resolved
+        if now != resolved { resolved = now }
     }
 }
 
@@ -194,10 +240,10 @@ extension RecorderLevels.Readers {
     static func live(_ state: AppState) -> Self {
         let monitor = state.recorder.levels
         return Self(
-            microphone: { [weak monitor] in monitor.map { Double($0.microphone.meterValue) } },
+            microphone: { [weak monitor] in monitor.map { $0.microphone.meterValue } },
             call: { [weak monitor] in
                 guard let monitor, monitor.isCapturingCall else { return nil }
-                return Double(monitor.call.meterValue)
+                return monitor.call.meterValue
             },
             recorder: { [weak state] id in
                 guard let state, let conversation = state.recordingID else { return nil }

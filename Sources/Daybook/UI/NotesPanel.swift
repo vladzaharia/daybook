@@ -45,6 +45,8 @@ final class FloatingNotesWindow {
         #if DEBUG
         // `--notes-after-stop` shows the post-Stop sheet, which a simulated recording can't reach.
         if CommandLine.arguments.contains("--notes-after-stop") { watched = true }
+        // Shown as just stopped: Keep Recording records into it, as after a real Stop (`RecordMore`).
+        if watched, let focus, state.afterStop.conversationID != focus { state.afterStop.began(focus) }
         #endif
         model?.focus(focus, afterStop: watched)
         // Appearing automatically must not take typing focus from the meeting app.

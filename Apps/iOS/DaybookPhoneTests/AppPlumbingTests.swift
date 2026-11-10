@@ -77,7 +77,7 @@ final class AppPlumbingTests: XCTestCase {
         let mac = UUID()
         let session = MultipointSession(conversationID: UUID(), role: .macLed(macID: mac), leadStartedAt: Date(timeIntervalSince1970: 1_800_000_000))
         let encoded = try JournalCoding.encoder().encode(session.journaled)
-        XCTAssertTrue(String(decoding: encoded, as: UTF8.self).contains(#""role" : "macLed""#))
+        XCTAssertTrue(String(decoding: encoded, as: UTF8.self).contains(#""role":"macLed""#))
         let decoded = try JournalCoding.decoder().decode(CaptureMultipoint.self, from: encoded)
         XCTAssertEqual(decoded.role, .macLed)
         XCTAssertEqual(MultipointSession(conversationID: session.conversationID, journaled: decoded)?.role, .macLed(macID: mac))

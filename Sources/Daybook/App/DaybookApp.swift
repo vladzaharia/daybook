@@ -1,5 +1,6 @@
 import AppKit
 import DaybookCore
+import DaybookIntelligence
 import DaybookKit
 import SwiftUI
 
@@ -110,6 +111,8 @@ struct DaybookApp: App {
         Window("Daybook", id: WindowID.library) {
             LibraryView(state: state)
                 .defaultAppStorage(LaunchOptions.defaults)
+                // The rows, results, and the Trash's page ask it what the Personal lock hides.
+                .environment(state.personalLock)
                 .frame(minWidth: 720, minHeight: 480)
                 .task {
                     delegate.state = state
@@ -274,8 +277,9 @@ final class DaybookDelegate: NSObject, NSApplicationDelegate {
     /// Before quitting: what runs stops, recorders and phones that recorded along hear it, and everything is saved.
     private static func finish(_ state: AppState) async {
         // Cancelling gives back requests this Mac held, so another Mac can take them over once
-        // this one syncs again, or when their lease runs out if it never does.
-        state.cancelDownload(); state.cancelProcessing()
+        // this one syncs again, or when their lease runs out if it never does. A model download stops with it and stays
+        // owed for the next launch (the person's Cancel is `cancelDownload`).
+        state.cancelProcessing()
         if state.isRecording || state.isStartingRecording { await state.stopRecording() }
         // Recorders and phones that recorded along hear the stop before the link goes (briefly).
         await state.sources.recorders.settle(within: .seconds(5))
@@ -314,6 +318,8 @@ final class DaybookDelegate: NSObject, NSApplicationDelegate {
         // What a share left behind (`ExportFiles`), as the iPhone clears it at launch. A run on a library of its own
         // (`--library`) may sit beside the app mid-share, so it leaves them.
         if LaunchOptions.libraryURL == nil { Task.detached(priority: .utility) { ExportFiles.clear() } }
+        // Audio copies a crashed run's processing left (`ProcessingScratch`); a run still going keeps its own.
+        Task.detached(priority: .utility) { ProcessingScratch.clear() }
         #if DEBUG
         PerfProbe.start()
         switch LaunchOptions.value(after: "--appearance") {
@@ -337,7 +343,7 @@ final class DaybookDelegate: NSObject, NSApplicationDelegate {
         guard let state else { return nil }
         let menu = NSMenu()
         menu.addItem(DockMenuItem(state.isRecording ? "Stop Recording" : "Start Recording") {
-            Task { if state.isRecording { await state.stopRecording() } else { await state.startRecording() } }
+            Task { if state.isRecording { await state.stopRecording() } else { await state.startRecording(from: .elsewhere) } }
         })
         if let id = state.recordingID {
             menu.addItem(DockMenuItem("Add Bookmark") { state.addHighlight(id) })
@@ -386,7 +392,13 @@ private struct DebugLaunchActions: ViewModifier {
                 }
             }
             if let title = LaunchOptions.value(after: "--select") { state.selectedID = state.meetings.first { $0.title == title }?.id }
-            if LaunchOptions.value(after: "--page") == "transcript" { state.pageMode = .transcript }
+            // `--page transcript`; `summary-only` and `transcript-only` collapse a wide window's two pages to one.
+            switch LaunchOptions.value(after: "--page") {
+            case "transcript"?: state.pageMode = .transcript
+            case "summary-only"?: state.pageSpreadChosen = false
+            case "transcript-only"?: state.pageMode = .transcript; state.pageSpreadChosen = false
+            default: break
+            }
             if CommandLine.arguments.contains("--inspector") { LaunchOptions.defaults.set(true, forKey: AppState.Preference.isInspectorPresented) }
             if let pane = LaunchOptions.value(after: "--open-settings").flatMap(SettingsPane.init(rawValue:)) {
                 pane.open(with: openWindow, activating: false)

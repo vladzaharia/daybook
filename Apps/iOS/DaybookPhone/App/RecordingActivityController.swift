@@ -9,7 +9,10 @@ import WidgetKit
 /// sent when what it shows changes, and at least once a minute while recording, so its stale date
 /// (`ContentState.staleAfter`) keeps rolling: if the app stops (a crash, the system ending it), the
 /// activity goes stale and asks to open Daybook instead of counting on. The clock counts itself.
-/// Updates and the end go out in the order made (`LiveActivityRunner`).
+/// Its level is only whether the microphone hears (`ContentState.level(hearing:)`), so the voice never
+/// sends an update: a long recording in a pocket sends one a minute, and one each time it stops or starts
+/// hearing. The app offers it the state at the meter's pace, twice a second out of sight
+/// (`PhoneAppModel.meterInterval`). Updates and the end go out in the order made (`LiveActivityRunner`).
 @MainActor
 final class RecordingActivityController {
     private let runner = LiveActivityRunner<RecordingActivityAttributes>()
@@ -17,15 +20,24 @@ final class RecordingActivityController {
     private var lastSent = Date.distantPast
     private var lastLevelUpdate = Date.distantPast
     private var lastCaptionUpdate = Date.distantPast
-    /// Hearing-or-not changes at most this often, to stay inside the system's update budget.
+    /// Hearing-or-not changes at most this often, so a microphone on the edge of the hearing check can't spend the
+    /// system's update budget.
     static let levelInterval: TimeInterval = 2
 
     var isRunning: Bool { runner.isRunning }
 
-    func start(conversationID: UUID, title: String, state: RecordingActivityAttributes.ContentState) {
+    /// The name the activity shows: the conversation's title, or "Recording" for a Personal conversation, which is
+    /// never named outside the app (the Mac's menu bar doesn't either).
+    static func activityTitle(_ title: String, personal: Bool) -> String {
+        personal ? RecordingActivityAttributes.unnamed : title
+    }
+
+    /// Starts the activity, named after its conversation: a Personal one's says only "Recording" (`activityTitle`).
+    func start(conversationID: UUID, title: String, personal: Bool, state: RecordingActivityAttributes.ContentState) {
         let now = Date()
         // A previous run's activity (the app was killed mid-recording) no longer means anything.
-        let started = runner.request(RecordingActivityAttributes(conversationID: conversationID, title: title),
+        let attributes = RecordingActivityAttributes(conversationID: conversationID, title: Self.activityTitle(title, personal: personal))
+        let started = runner.request(attributes,
                                      content: ActivityContent(state: state, staleDate: state.staleDate(from: now), relevanceScore: 100),
                                      endingLeftovers: { $0.conversationID != conversationID })
         guard started else { return }
@@ -103,9 +115,25 @@ final class RecordingActivityController {
     }
 
     /// How long an ended activity stays: Saved briefly; a recording that stopped by itself until the
-    /// system takes it away (up to four hours), so a glance at the Lock Screen still tells.
+    /// system takes it away (up to four hours), so a glance at the Lock Screen still tells; and one saved while
+    /// the iPhone was locked ("Finishes when you unlock iPhone") until it's finished (`dismissFinished`).
     static func dismissal(for state: RecordingActivityAttributes.ContentState, now: Date = Date()) -> ActivityUIDismissalPolicy {
-        state.phase == .stopped ? .default : .after(now.addingTimeInterval(8))
+        state.phase == .stopped || state.savedLine != nil ? .default : .after(now.addingTimeInterval(8))
+    }
+
+    /// The conversations whose ended activities were taken away once their recording was finished (tests read it).
+    private(set) var dismissed: [UUID] = []
+
+    /// A recording saved while the iPhone was locked has been joined and filed: its ended activity, which said it
+    /// finishes when the iPhone is unlocked, goes. One recording in that conversation now keeps its own.
+    func dismissFinished(conversationID: UUID) {
+        dismissed.append(conversationID)
+        let running = runner.activity?.id
+        let ended = Activity<RecordingActivityAttributes>.activities.filter { $0.id != running && $0.attributes.conversationID == conversationID }
+        guard !ended.isEmpty else { return }
+        Task { @concurrent in
+            for activity in ended { await activity.end(nil, dismissalPolicy: .immediate) }
+        }
     }
 
     /// Ends activities left from a run that didn't finish (called at launch, before recovery).

@@ -226,7 +226,8 @@ final class LinkChannel: @unchecked Sendable {
     let connection: NWConnection
     let queue: DispatchQueue
     var onReady: (() -> Void)?
-    var onFrame: ((Data, Date) -> Void)?
+    /// A frame, with when it arrived on this side's clocks.
+    var onFrame: ((Data, LinkInstant) -> Void)?
     var onEnd: ((LinkChannelEnd) -> Void)?
     var onViabilityLost: (() -> Void)?
     private(set) var isReady = false
@@ -312,7 +313,7 @@ final class LinkChannel: @unchecked Sendable {
     private func receive() {
         connection.receiveMessage { [weak self] content, _, isComplete, error in
             guard let self, !self.isClosed else { return }
-            let receivedAt = self.clock.now()
+            let receivedAt = LinkInstant(self.clock)
             if let content, !content.isEmpty {
                 self.onFrame?(content, receivedAt)
             }

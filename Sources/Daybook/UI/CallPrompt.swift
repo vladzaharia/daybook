@@ -57,7 +57,7 @@ enum CallPromptQuestion: Equatable, Sendable {
 
     var subtitle: String {
         switch self {
-        case .record(let call, let event?): [event.title, event.peopleLine].compactMap { $0 }.joined(separator: " · ")
+        case .record(_, let event?): [event.title, event.peopleLine].compactMap { $0 }.joined(separator: " · ")
         case .record(let call, nil): call.windowTitle == call.appName ? "Record it?" : call.windowTitle
         case .meetingStarts(let event): ["Starting now", event.peopleLine].compactMap { $0 }.joined(separator: " · ")
         case .ended, .meetingEnded: "Stop recording?"
@@ -233,25 +233,28 @@ final class CallPromptHover: NSResponder {
     override func mouseExited(with event: NSEvent) { model?.isHovering = false }
 }
 
-/// The prompt: the app's icon, what happened, and the answers, with the time left drawn along its foot.
+/// The prompt: the app's icon, what happened, and the answers, with the time left drawn along its foot, on the floating
+/// layer's glass at a floating panel's radius, as a notification is.
 struct CallPromptView: View {
     let model: CallPromptModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var title: String { model.question.title }
     private var subtitle: String { model.question.subtitle }
+    private var card: RoundedRectangle { DaybookRadius.shape(DaybookRadius.panel) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.s3) {
-            HStack(alignment: .top, spacing: Space.s3) {
+        VStack(alignment: .leading, spacing: DaybookSpacing.s3) {
+            HStack(alignment: .top, spacing: DaybookSpacing.s3) {
                 if let app = model.question.app {
                     AppIcon(bundleID: app)
                 } else {
                     CalendarIcon()
                 }
+                // The paper's inks, never the glass's vibrant ones, which take their light from whatever is behind.
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.headline).lineLimit(1)
-                    Text(subtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                    Text(title).font(.headline).foregroundStyle(DaybookPalette.Ink.title).lineLimit(1)
+                    Text(subtitle).font(.subheadline).foregroundStyle(DaybookPalette.Ink.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 0)
                 if case .record(let call, _) = model.question {
@@ -260,7 +263,7 @@ struct CallPromptView: View {
                         Button("Always Record \(appName) Calls") { model.answer(.alwaysRecord) }
                         Button("Never for \(appName)") { model.answer(.never) }
                     } label: {
-                        Image(systemName: "ellipsis.circle")
+                        Image(systemName: "ellipsis.circle").foregroundStyle(DaybookPalette.Ink.secondary)
                     }
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
@@ -268,49 +271,56 @@ struct CallPromptView: View {
                     .accessibilityLabel("More")
                 }
             }
-            HStack(spacing: Space.s2) {
+            HStack(spacing: DaybookSpacing.s2) {
                 Spacer(minLength: 0)
+                // The panel is never active, so a prominent button would draw grey: the act that records or stops
+                // carries its glyph in the recording red instead.
                 if model.question.asksToRecord {
                     Button("Not Now") { model.answer(.notNow) }
-                    // The panel is never active, so a prominent button would draw grey: the record dot keeps its red.
-                    Button { model.answer(.record) } label: {
-                        Label {
-                            Text("Record")
-                        } icon: {
-                            Image(systemName: "record.circle.fill").foregroundStyle(DaybookPalette.Ink.record)
-                        }
-                    }
+                    Button { model.answer(.record) } label: { RecordingRedLabel(title: "Record", symbol: "record.circle.fill") }
                 } else {
                     Button("Keep Recording") { model.answer(.keepRecording) }
-                    Button("Stop") { model.answer(.stop) }
-                        .buttonStyle(.borderedProminent)
+                    Button { model.answer(.stop) } label: { RecordingRedLabel(title: "Stop", symbol: "stop.circle.fill") }
                 }
             }
             .controlSize(.regular)
         }
-        .padding(Space.s4)
+        .padding(DaybookSpacing.s4)
         .frame(width: CallPromptWindow.size.width, height: CallPromptWindow.size.height, alignment: .topLeading)
-        .background(DaybookPalette.paper, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        // Paper, as Floating Notes is, on the floating layer's glass: it reads over any call, in either appearance.
+        .background(DaybookPalette.paper.opacity(0.85), in: card)
+        .glassSurface(in: card)
         .overlay(alignment: .bottom) {
-            // The time left: a hairline that drains, holding while the pointer is over the prompt.
+            // The time left: a calm hairline that drains, holding while the pointer is over the prompt. Inset by the
+            // corner radius, so it never meets the curve.
             GeometryReader { geometry in
                 Capsule()
-                    .fill(DaybookPalette.Ink.link.opacity(0.55))
+                    .fill(DaybookPalette.Ink.meta)
                     .frame(width: geometry.size.width * model.remaining, height: 2)
                     .animation(reduceMotion ? nil : .linear(duration: 0.1), value: model.remaining)
             }
             .frame(height: 2)
-            .padding(.horizontal, 14)
-            .padding(.bottom, 3)
+            .padding(.horizontal, DaybookRadius.panel)
+            .padding(.bottom, DaybookSpacing.s1)
             .accessibilityHidden(true)
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(.separator, lineWidth: 0.5)
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(title)
     }
+}
 
+/// A push button's words with its glyph in the recording red: Record, and Stop once the call has ended.
+private struct RecordingRedLabel: View {
+    let title: String
+    let symbol: String
+
+    var body: some View {
+        Label {
+            Text(title)
+        } icon: {
+            Image(systemName: symbol).foregroundStyle(DaybookPalette.Ink.record)
+        }
+    }
 }
 
 /// A meeting's icon, in the calendar's red.
@@ -356,34 +366,37 @@ extension AppState {
 
     /// Asks whether to record a meeting with other people that's starting with no call to announce it (Use Calendar).
     /// Record records it under its title, as the person's own recording, and asks again once it's over whether to stop.
+    /// In a Focus whose Daybook filter turns Ask to Record Meetings off, it's let go unasked, as a call is (`CallPolicy`).
     func askToRecord(_ meeting: MeetingEvent) {
         askedMeetings.insert(meeting.id)
+        guard personalLock.focus.asksToRecord else { return }
         CallPromptWindow.shared.ask(.meetingStarts(meeting)) { [weak self] answer in
             guard let self, answer == .record, self.recordingID == nil, !self.isStartingRecording else { return }
             Task {
-                await self.startRecording(title: meeting.title)
+                await self.startRecording(title: meeting.title, from: .elsewhere)
                 if let id = self.recordingID { self.calendarMeeting = (id, meeting) }
             }
         }
     }
 
-    /// The meeting recorded from its start is over: asked whether to stop, never stopped.
+    /// The meeting recorded from its start is over: asked whether to stop, never stopped. Stopped here, it's final:
+    /// after Stop the panel offers Record, for the next meeting, rather than Keep Recording.
     func askToStop(after meeting: MeetingEvent) {
         let recording = recordingID
         CallPromptWindow.shared.ask(.meetingEnded(meeting)) { [weak self] answer in
             guard answer == .stop, let self, self.recordingID == recording else { return }
-            Task { await self.stopRecording(manual: true) }
+            Task { await self.stopRecording(manual: true, meetingOver: true) }
         }
     }
 
     /// A recording the person started, during `call`, which has now ended: asked whether to stop, never stopped. No
-    /// answer in time keeps it recording.
+    /// answer in time keeps it recording; Stop is final, as for a meeting.
     func askToStop(after call: MeetingCandidate) {
         let recording = recordingID
         CallPromptWindow.shared.ask(.ended(call)) { [weak self] answer in
             // Only the recording it asked about: never one started since.
             guard answer == .stop, let self, self.recordingID == recording else { return }
-            Task { await self.stopRecording(manual: true) }
+            Task { await self.stopRecording(manual: true, meetingOver: true) }
         }
     }
 
@@ -396,7 +409,7 @@ extension AppState {
             monitor.callRecordingStarted()
             guard recordingID == nil, !isStartingRecording else { return }
             // Started for a call, it stops when the call ends, as one recorded automatically does.
-            Task { await startRecording(title: event?.title ?? call.windowTitle, automatic: true) }
+            Task { await startRecording(title: event?.title ?? call.windowTitle, automatic: true, from: .elsewhere) }
         case .never:
             callAppChoices[call.bundleID] = .never
             monitor.suppressCurrentMeeting()

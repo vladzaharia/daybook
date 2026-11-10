@@ -1,8 +1,23 @@
+import DaybookCore
 import DaybookDevices
 import DaybookKit
 import DaybookLink
 import Foundation
 import Observation
+
+/// What sync says that decides where an outgoing recording stands (`MultipointCoordinator.refreshOutgoing`).
+private struct OutgoingSyncState: Equatable {
+    var storageFull: Bool
+    var encryption: LibraryEncryptionState
+    var lastSynced: Date?
+    var pendingUploads: Int
+    var courier: CourierStatus
+
+    @MainActor init(_ app: PhoneAppModel) {
+        storageFull = app.sync.isStorageFull; encryption = app.sync.encryption; lastSynced = app.sync.lastSynced
+        pendingUploads = app.sync.pendingUploads; courier = app.sync.courier
+    }
+}
 
 /// Recording with Macs and the recorders this iPhone manages (docs/multipoint.md): a Mac's record
 /// requests and this iPhone's to Macs, the session the recording screen shows, stops owed to Macs across
@@ -19,6 +34,18 @@ final class MultipointCoordinator {
     /// A shared recording this iPhone takes part in only through its recorder: its button started it
     /// while Daybook was in the background, where iOS doesn't let this iPhone start its microphone.
     var recorderOnly: RecorderOnlyRecording?
+    /// The Mac this recording follows can't be reached, and this iPhone keeps recording (`LeaderWatch`): the recording
+    /// screen and a notification say so. Its words.
+    private(set) var leadOutOfReach: String?
+    /// Reads the Mac's sync presence, by its ID. Nil reads sync's list (`PhoneSync.devices`); tests supply their own.
+    @ObservationIgnored var leaderPresence: (@MainActor (UUID) -> KnownSyncDevice?)?
+    /// When this iPhone's microphone last heard something as loud as speech. Nil reads the recorder's; tests supply
+    /// their own.
+    @ObservationIgnored var lastHeardSpeech: (@MainActor () -> Date?)?
+    @ObservationIgnored private var presenceListedAt: Date?
+    /// This iPhone's recordings a Mac waits for, until they're on their way through sync, by conversation
+    /// (`MultipointCoordinator+Arrival.swift`).
+    var outgoing: [UUID: OutgoingRecording] = [:]
     /// Recording here asks the connected Macs on its own (a cascading start). Tests of the person's own
     /// "Record on Studio Mac too" turn it off.
     @ObservationIgnored var cascadesToMacs = true
@@ -59,8 +86,6 @@ final class MultipointCoordinator {
     static let owedStopsFile = "owed-stops.json"
     /// How long a start that gets no answer is asked again.
     static let startRetryWindow: TimeInterval = 30
-    /// A Mac this iPhone records for, not heard from for this long, is taken to have stopped.
-    static let leaderSilenceLimit: TimeInterval = 30 * 60
 
     init(app: PhoneAppModel, sharing: LinkSharing) {
         self.app = app
@@ -94,13 +119,20 @@ final class MultipointCoordinator {
                 Dictionary(coordinator.link.macs.map { ($0.id, coordinator.letsMacStartRecording($0)) }, uniquingKeysWith: { a, _ in a })
             } ?? [:]
         }, initial: false) { [weak self] _ in self?.sendRecordPermissions() })
+        // Where this iPhone's recordings a Mac waits for stand follows sync.
+        watches.append(ObservationWatch.distinctValues(of: { [weak self] in self?.app.map(OutgoingSyncState.init) }, initial: false) { [weak self] _ in
+            self?.refreshOutgoing()
+        })
         devices.hub.onRecorderButton = { [weak self] session, on in self?.recorderButton(session, on) }
         devices.cascade.onChange = { [weak self] in self?.sharing.sendRecordingState(force: true) }
     }
 
-    /// This iPhone's recording ended: the Mac that started it from its page no longer may stop it.
+    /// This iPhone's recording ended: the Mac that started it from its page no longer may stop it, and one it followed
+    /// is no longer out of reach.
     func recordingEnded() {
         startedFromMac = nil
+        setLeadOutOfReach(nil)
+        presenceListedAt = nil
     }
 
     // MARK: Asking Macs
@@ -216,14 +248,51 @@ final class MultipointCoordinator {
         }
     }
 
-    /// While recording for a Mac: one that has been unreachable for `leaderSilenceLimit` won't stop
-    /// this recording itself, so this iPhone does.
+    /// While recording for a Mac (checked as the meter moves): one that can't be reached is followed on evidence, not
+    /// on silence (`LeaderWatch`). After about two minutes the recording screen and a notification say it's out of
+    /// reach while this iPhone keeps recording; its sync presence saying it stopped since stops this iPhone as its stop
+    /// would have; and after 30 minutes with no word either way, this iPhone stops only if its own microphone has heard
+    /// nothing like speech for 10 minutes.
     func checkLead(now: Date = Date()) {
-        guard let current = session, case .macLed(let lead) = current.role,
-              let mac = link.macs.first(where: { $0.id == lead }), !mac.isConnected,
-              let last = mac.lastConnectedAt, now.timeIntervalSince(last) > Self.leaderSilenceLimit else { return }
-        stopFollowing(lead: mac.name, conversation: current.conversationID,
-                      because: "\(mac.name) couldn’t be reached for \(Int(Self.leaderSilenceLimit / 60)) minutes, so this iPhone stopped recording.")
+        guard let current = session, case .macLed(let lead) = current.role, recorder.isActive,
+              let mac = link.macs.first(where: { $0.id == lead }) else {
+            setLeadOutOfReach(nil)
+            return
+        }
+        let silentSince = mac.isConnected ? nil : mac.lastConnectedAt
+        let presence = silentSince == nil ? nil : (leaderPresence.map { $0(lead) } ?? syncPresence(of: mac))
+        let evidence = silentSince.map { LeaderWatch.evidence(presence, conversation: current.conversationID, silentSince: $0, now: now) } ?? .unknown
+        let heard = lastHeardSpeech.map { $0() } ?? recorder.lastHeardSpeechAt
+        switch LeaderWatch.verdict(silentSince: silentSince, evidence: evidence, lastHeardSpeech: heard, recordingSince: recorder.startedAt,
+                                   now: now) {
+        case .following:
+            setLeadOutOfReach(nil)
+        case .outOfReach:
+            setLeadOutOfReach(LeaderWatch.outOfReach(mac.name, here: "this iPhone"))
+            // Its presence is listed again at most once a minute while it's out of reach.
+            if leaderPresence == nil, presenceListedAt.map({ now.timeIntervalSince($0) >= 60 || now < $0 }) ?? true, let app {
+                presenceListedAt = now
+                Task { await app.sync.refreshDevices() }
+            }
+        case .leaderStopped:
+            stopFollowing(lead: mac.name, conversation: current.conversationID,
+                          because: LeaderWatch.leaderStopped(mac.name, here: "this iPhone"))
+        case .quietAndUnreachable:
+            stopFollowing(lead: mac.name, conversation: current.conversationID,
+                          because: LeaderWatch.stoppedUnreachable(mac.name, here: "this iPhone"))
+        }
+    }
+
+    /// A Mac's presence: its link ID is its sync replica's.
+    private func syncPresence(of mac: PhoneLink.Mac) -> KnownSyncDevice? {
+        app?.sync.devices.first { $0.id == mac.id.uuidString }
+    }
+
+    /// Says the Mac is out of reach (the recording screen's notice, and a notification), or takes it back.
+    private func setLeadOutOfReach(_ words: String?) {
+        guard words != leadOutOfReach else { return }
+        leadOutOfReach = words
+        if let words { app?.notices.leaderOutOfReach(words) } else { app?.notices.leaderBack() }
     }
 
     /// Whether a Mac may stop this iPhone's recording: the one that started it, or one this iPhone
@@ -239,6 +308,7 @@ final class MultipointCoordinator {
         sharing.sendRecordingState(force: true)
         sendPendingStop(to: macID)
         macConnectedDuringCascade(macID)
+        reportOutgoing(to: macID)
     }
 
     // MARK: Stops owed to Macs

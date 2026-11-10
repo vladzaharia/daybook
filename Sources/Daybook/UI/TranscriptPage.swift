@@ -12,7 +12,10 @@ extension TranscriptPage where Header == MacTranscriptHeader, Placeholder == Emp
     /// The transcript of a conversation on this Mac, with its saved live captions (`AppState.savedCaptions(for:)`, read
     /// off the main actor). A jump asked for elsewhere (a search hit, a saved caption search found, a photo's moment, a
     /// summary line's evidence: `AppState.pageScrollTarget`) moves the page once and is then cleared.
-    init(state: AppState, player: AudioPlaybackController, meeting: Meeting, play: @escaping (PlaybackTarget) -> Void) {
+    /// - Parameter titled: The title, byline, and status over the transcript; beside the summary (a spread) they're the
+    ///   summary's, and the transcript starts with its first speaker.
+    init(state: AppState, player: AudioPlaybackController, meeting: Meeting, titled: Bool = true,
+         play: @escaping (PlaybackTarget) -> Void) {
         let captions = state.savedCaptions(for: meeting)
         self.init(meeting: meeting,
                   host: .mac(state: state, player: player, meetingID: meeting.id, play: play),
@@ -26,23 +29,27 @@ extension TranscriptPage where Header == MacTranscriptHeader, Placeholder == Emp
                   scrolled: { state.pageScrollTarget = nil },
                   playerInset: 56,
                   captions: captions) {
-            MacTranscriptHeader(state: state, player: player, meeting: meeting, play: play)
+            MacTranscriptHeader(state: state, player: player, meeting: meeting, titled: titled, play: play)
         }
     }
 }
 
-/// The title and byline, then the same status line as the summary page, so turning the page keeps them in view.
+/// The title and byline, then the same status line as the summary page, so turning the page keeps them in view. Beside
+/// the summary there are none: they head the summary's page, once for both.
 struct MacTranscriptHeader: View {
     let state: AppState
     let player: AudioPlaybackController
     let meeting: Meeting
+    var titled = true
     let play: (PlaybackTarget) -> Void
     @Environment(\.readingWidth) private var readingWidth
 
     var body: some View {
         Group {
-            PageHeader(state: state, player: player, meeting: meeting, play: play)
-            ConversationStatus(state: state, meeting: meeting)
+            if titled {
+                PageHeader(state: state, player: player, meeting: meeting, play: play)
+                ConversationStatus(state: state, meeting: meeting)
+            }
         }
         // The page's own rows fold their times inline on a narrow page; these do too.
         .environment(\.pageIsNarrow, readingWidth == .narrow)
@@ -74,7 +81,7 @@ extension TranscriptHost {
             },
             showNotes: {
                 SummaryJump.window.show(SummaryJump.notes, in: meetingID)
-                state.pageMode = .summary
+                state.turnPage(to: .summary)
             },
             photos: .mac(state: state, play: play))
     }
@@ -139,7 +146,8 @@ extension ConversationFind {
 }
 
 /// Edit › Find in Conversation… (⌘F), Find Next (⌘G), and Find Previous (⇧⌘G), for the conversation on the page. The
-/// transcript's own keys answer first while it shows; from the summary, Find in Conversation turns to the transcript.
+/// transcript's own keys answer first while it shows, beside the summary too; from the summary alone, Find in
+/// Conversation turns to the transcript.
 struct ConversationFindCommands: Commands {
     let state: AppState
     @FocusedValue(\.shownConversation) private var shown
@@ -151,7 +159,7 @@ struct ConversationFindCommands: Commands {
             Divider()
             Button("Find in Conversation…") {
                 guard let meeting else { return }
-                state.pageMode = .transcript
+                state.turnPage(to: .transcript)
                 ConversationFind.window.show(in: meeting.id)
             }
             .keyboardShortcut("f")
@@ -165,11 +173,11 @@ struct ConversationFindCommands: Commands {
         }
     }
 
-    /// Steps when Find shows; otherwise opens it on the transcript, as Find in Conversation does.
+    /// Steps when Find shows over the transcript; otherwise opens it there, as Find in Conversation does.
     private func find(_ step: () -> Void) {
         guard let meeting else { return }
-        if ConversationFind.window.isShown, state.pageMode == .transcript { return step() }
-        state.pageMode = .transcript
+        if ConversationFind.window.isShown, state.pageSides(meeting).shows(.transcript) { return step() }
+        state.turnPage(to: .transcript)
         ConversationFind.window.show(in: meeting.id)
     }
 }

@@ -1,5 +1,6 @@
 import CoreTransferable
 import DaybookCaptions
+import DaybookDesign
 import DaybookKit
 import Foundation
 import UniformTypeIdentifiers
@@ -28,10 +29,66 @@ final class LibraryListTests: XCTestCase {
         XCTAssertEqual(ConversationRowView.title(Meeting(title: "  ")), "Untitled Conversation")
     }
 
+    func testBehaviorTheTrashPagesBylineReadsAsAPagesDoes() {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let parts = TrashedConversationPage.byline(Meeting(title: "Old standup", date: date))
+        XCTAssertEqual(parts, ["Notes only", date.formatted(.dateTime.weekday(.abbreviated).day().month(.wide).hour().minute())],
+                       "The page's byline and its date, not the row's")
+        XCTAssertNotEqual(parts.last, TrashRowView.detail(Meeting(title: "Old standup", date: date)))
+    }
+
     func testBehaviorAPausedRowShowsThePauseGlyphOnBothApps() {
         XCTAssertEqual(ConversationRowStatus.Kind.paused.symbol, "pause.circle")
         XCTAssertEqual(ConversationRowStatus.Kind.waitingForModels.symbol, "arrow.down.circle")
         XCTAssertEqual(ConversationRowStatus.Kind.justFinished.symbol, "checkmark.circle.fill")
+    }
+
+    /// VM-14: one glyph language. Waiting states are secondary symbols in one slot, audio not transcribed yet among
+    /// them as a waveform (never a dot that reads as "unread"); only work running draws the gradient line.
+    func testBehaviorEveryWaitingGlyphIsASymbolAndOnlyWorkDrawsTheLine() {
+        XCTAssertEqual(ConversationRowStatus.Kind.notTranscribed.symbol, "waveform")
+        XCTAssertEqual(ConversationRowStatus.Kind.waiting.symbol, "clock")
+        XCTAssertNil(ConversationRowStatus.Kind.processing.symbol, "the gradient line")
+        let symbols: [ConversationRowStatus.Kind] = [.recording, .waiting, .waitingForModels, .paused, .failed, .notTranscribed, .playing, .justFinished]
+        XCTAssertTrue(symbols.allSatisfy { $0.symbol != nil })
+        XCTAssertEqual(RowGlyph.slot, 16)
+    }
+
+    /// VI-11, P5: under touch a row's glyph, its slot, and the processing line grow with the words beside them; the
+    /// Mac's window and panel keep their fixed sizes.
+    @MainActor
+    func testBehaviorARowsGlyphScalesWithDynamicTypeOnlyUnderTouch() {
+        XCTAssertEqual(RowGlyph.touchGlyph, 13, "the footnote's size at the default text size")
+        XCTAssertEqual(RowGlyph.lineWidth, 44)
+        let large = RowGlyph.Metrics(glyph: 31, slot: 38, line: 105)
+        XCTAssertEqual(RowGlyph.metrics(.touch, scaled: large), large, "at AX5 the clock, its slot, and the line grow together")
+        let fixed = RowGlyph.Metrics(glyph: RowGlyph.fixedGlyph, slot: 16, line: 44)
+        XCTAssertEqual(RowGlyph.metrics(.window, scaled: large), fixed)
+        XCTAssertEqual(RowGlyph.metrics(.panel, scaled: large), fixed)
+        XCTAssertEqual(RowGlyph.fixedGlyph, 11)
+    }
+
+    /// VM-13: in a window every row is two lines; its tags end the date's line, by name while they fit beside the
+    /// gist's start, with a count for the rest, else the count alone.
+    func testBehaviorAWindowRowEndsItsDateLineWithItsTagsOrACount() {
+        XCTAssertEqual(RowTags.arrangements(["launch", "beta"]), [["launch", "beta"], ["launch", "+1"], ["+2"]])
+        XCTAssertEqual(RowTags.arrangements(["launch"]), [["launch"], ["+1"]])
+        XCTAssertEqual(RowTags.arrangements(["a", "b", "c", "d"]), [["a", "b", "c", "+1"], ["a", "b", "+2"], ["a", "+3"], ["+4"]],
+                       "three by name at most")
+        XCTAssertEqual(RowTags.arrangements([]), [])
+        XCTAssertTrue(ConversationRowView.spokenLabel(ready(), status: nil, timeLabel: "9:41 AM").hasSuffix("Tags: launch, beta"),
+                      "VoiceOver reads every tag, whatever fits")
+    }
+
+    /// VM-15: a window's gist takes one line, two once its list column is 360 pt wide; a panel's one, the iPhone's two
+    /// (three at accessibility sizes).
+    func testBehaviorAWideListColumnGivesTheGistTwoLinesInAWindowOnly() {
+        XCTAssertEqual(ConversationRowView.twoLineGistWidth, 360)
+        XCTAssertEqual(ConversationRowView.previewLines(.window, accessibilitySize: false, wideList: false), 1)
+        XCTAssertEqual(ConversationRowView.previewLines(.window, accessibilitySize: false, wideList: true), 2)
+        XCTAssertEqual(ConversationRowView.previewLines(.panel, accessibilitySize: false, wideList: true), 1)
+        XCTAssertEqual(ConversationRowView.previewLines(.touch, accessibilitySize: false, wideList: false), 2)
+        XCTAssertEqual(ConversationRowView.previewLines(.touch, accessibilitySize: true, wideList: true), 3)
     }
 
     func testBehaviorTheMacDimsWhatDoesntApplyAndTheIPhoneLeavesItOut() {

@@ -1,4 +1,6 @@
+import DaybookIntelligence
 import DaybookKit
+import DaybookUI
 import SwiftUI
 import UIKit
 
@@ -6,6 +8,8 @@ import UIKit
 struct DaybookPhoneApp: App {
     @UIApplicationDelegateAdaptor(PhoneAppDelegate.self) private var delegate
     @State private var model: PhoneAppModel
+    /// The lock for Personal conversations (Settings › Require Face ID for Personal; `PersonalLock`).
+    @State private var personalLock: PersonalLock
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -13,8 +17,9 @@ struct DaybookPhoneApp: App {
         // Hosting unit tests, the app reaches nothing real: the tests build their own models.
         let hostsTests = options.isRunningTests
         let environment: PhoneAppEnvironment = hostsTests ? .inert : .live(options)
-        // Exports a share sheet never finished with (the app quit first).
+        // Exports a share sheet never finished with (the app quit first), and audio copies processing left when it crashed.
         ExportFiles.clear()
+        ProcessingScratch.clear()
         // Synthetic audio in tests and simulator demos, so nothing ever opens a real microphone there.
         let recorderEnvironment: PhoneRecorderEnvironment = options.syntheticAudio || hostsTests ? .synthetic() : .live()
         let root = options.libraryPath.map { URL(fileURLWithPath: $0, isDirectory: true) }
@@ -43,7 +48,7 @@ struct DaybookPhoneApp: App {
         }
         // Storage errors surface when loading, and retry the same durable location.
         let library = PhoneLibrary(rootURL: root, sync: sync)
-        BackupExclusion.apply(libraryRoot: root, inbox: library.inboxURL, library: BackupExclusion.library(
+        BackupExclusion.apply(to: library, BackupExclusion.library(
             includesLibrary: settings.includesLibraryInBackups, encrypted: LibrarySyncEngine.hasSyncedEncryptedLibrary(localRoot: root),
             includesEncryptedLibrary: settings.includesEncryptedLibraryInBackups))
         let model = PhoneAppModel(recorder: PhoneRecorder(environment: recorderEnvironment), library: library,
@@ -68,6 +73,15 @@ struct DaybookPhoneApp: App {
         RecordingCommands.handler = model
         // Notifications, Open Conversation, and New Note open Daybook through the model.
         AppDestinations.model = model
+        // The lock reads this iPhone's preferences and finds conversations in the library; every reading session asks it,
+        // so it's there before the first one is made.
+        let personalLock = PersonalLock(defaults: environment.defaults, platform: .iPhone, authenticator: SystemPersonalLockAuthenticator())
+        personalLock.lookup = { [weak controller = library.controller] id in controller?.meeting(id) }
+        #if DEBUG
+        if let demo = PersonalLockDemo.state() { PersonalLockDemo.apply(demo, to: personalLock, platform: .iPhone) }
+        #endif
+        ReadingSession.appLock = personalLock
+        _personalLock = State(initialValue: personalLock)
         // CoreBluetooth state restoration needs the central manager back before launch finishes, so
         // recorders start here rather than when the first view appears.
         if !hostsTests { model.devices.start() }
@@ -87,12 +101,18 @@ struct DaybookPhoneApp: App {
                 }
             }
             .environment(model)
+            .environment(personalLock)
             .environment(model.posture)
             .environment(\.debugLaunch, model.options)
             .environment(\.audioProvider, model.audio)
             .environment(\.summaryPlacement, model.placement)
             .environment(\.upgrades, model.upgrades)
             .task { await model.launch() }
+            // The Focus that's on now, in case it changed while Daybook wasn't running.
+            .task {
+                guard !model.options.isRunningTests, PersonalLockDemo.state() == nil else { return }
+                await DaybookFocusFilter.catchUp(personalLock)
+            }
             // Files shared to Daybook (Voice Memos, call recordings saved from Notes, Files' Share),
             // or a widget opening the library, a conversation, or a new note.
             .onOpenURL { url in
@@ -103,7 +123,13 @@ struct DaybookPhoneApp: App {
                 }
             }
         }
-        .onChange(of: scenePhase) { _, phase in model.scenePhaseChanged(phase) }
+        .onChange(of: scenePhase) { _, phase in
+            // While the app isn't in front and Personal is unlocked, the app switcher's picture shows none of it.
+            PersonalLockCoverWindow.show(PersonalLockCover.shows(personalLock, isActive: phase == .active))
+            model.scenePhaseChanged(phase)
+            // Unlocked lasts until the app leaves the screen.
+            if phase == .background { personalLock.lock() }
+        }
         .backgroundTask(.appRefresh(PhoneSync.refreshIdentifier)) {
             // Recorders first: their timers didn't run while the app was suspended.
             await model.devices.backgroundRefresh()
@@ -111,5 +137,27 @@ struct DaybookPhoneApp: App {
             // The next meetings' reminders, for whoever hasn't opened Daybook in a while.
             await model.remindMeetings()
         }
+    }
+}
+
+/// The cover over everything the app shows, sheets included, while it isn't in front and Personal is unlocked
+/// (`PersonalLockCover`): a window of its own above the app's, so the app switcher's picture is paper and the mark.
+@MainActor
+enum PersonalLockCoverWindow {
+    private static var window: UIWindow?
+
+    static func show(_ shows: Bool) {
+        guard shows else {
+            window?.isHidden = true
+            window = nil
+            return
+        }
+        guard window == nil,
+              let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else { return }
+        let cover = UIWindow(windowScene: scene)
+        cover.windowLevel = .alert + 1
+        cover.rootViewController = UIHostingController(rootView: PersonalLockCover())
+        cover.isHidden = false
+        window = cover
     }
 }

@@ -142,6 +142,8 @@ struct TemplateForm: View {
     private static let labelWidth: CGFloat = 84
     /// How far the editor's first line sits below its border.
     private static let editorTextInset: CGFloat = 6
+    /// The narrowest the help under a field is measured, so the window's minimum height stays a few lines of it.
+    private static let helpMinWidth: CGFloat = 240
 
     /// A fixed label column, so the labels share a trailing edge and every field, the editor, and their help share one
     /// leading edge. (Rows of HStacks rather than a `Grid`, which can't give the editor the window's remaining height.)
@@ -184,7 +186,8 @@ struct TemplateForm: View {
                                               lineWidth: instructionsFocused ? 1.5 : 1)
                         }
                         .daybookMotion(DaybookMotion.hover, value: instructionsFocused)
-                        .frame(minHeight: 240, maxHeight: .infinity)
+                        // Short enough that the help under it shows whole at the window's smallest.
+                        .frame(minHeight: 220, maxHeight: .infinity)
                         .accessibilityLabel(TemplateWords.instructions)
                     helpText(TemplateWords.instructionsHelp)
                 }
@@ -214,12 +217,15 @@ struct TemplateForm: View {
         Text(text).frame(width: Self.labelWidth, alignment: .trailing)
     }
 
-    /// Help under a field. Not `fixedSize`: the window's minimum size is measured at zero width, where a
-    /// fixed-height paragraph would be one word per line and thousands of points tall.
+    /// Help under a field, every line of it: the editor above takes only the height the help leaves. The window's
+    /// minimum size is measured at zero width, where a fixed-height paragraph would be one word per line and thousands
+    /// of points tall, so the help never measures narrower than a field.
     private func helpText(_ text: String) -> some View {
         Text(text)
             .font(.subheadline)
             .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(minWidth: Self.helpMinWidth, maxWidth: .infinity, alignment: .leading)
             .layoutPriority(1)
     }
     #endif

@@ -132,8 +132,16 @@ public enum ProcessingWords {
         }
     }
 
-    /// The short form, for a row or a chip: "Waiting to transcribe".
-    public static func waitingHereShort(_ mode: ProcessingRequest.Mode? = nil) -> String { "Waiting to \(infinitive(mode))" }
+    /// The short form, for a row or a chip: "Waiting to transcribe", "Waiting to summarize again".
+    public static func waitingHereShort(_ mode: ProcessingRequest.Mode? = nil, summarized: Bool = false) -> String {
+        "Waiting to \(infinitive(mode, summarized: summarized))"
+    }
+
+    /// A summary waiting for this device's summary model to download, while the transcript reads (transcript first):
+    /// "Waiting to summarize after the download · 38%", with the whole set's figure while it arrives.
+    public static func summaryWaitsForDownload(summarized: Bool = false, fraction: Double? = nil) -> String {
+        "Waiting to \(infinitive(.summaryOnly, summarized: summarized)) after the download" + (fraction.map { " · \(percentText($0))" } ?? "")
+    }
 
     /// A request waiting for a device that processes: "Waiting for your Mac", "Waiting for Studio Mac to summarize
     /// again". `device` is the Mac it waits for, when one is known to be around; nil says "your Mac".
@@ -175,4 +183,89 @@ extension ProcessingRequest.Upgrade {
     /// An upgrade waiting for the device that has the better model, for a list row: "Waiting for Studio Mac". The
     /// page says what improves (`waitingLine`).
     public var shortLine: String { "Waiting for \(device?.name ?? "your Mac")" }
+}
+
+// MARK: - Model downloads
+
+/// This device's model downloads, as one fact for every surface that mentions them (the page, the list, Floating Notes,
+/// the menu bar, the empty library): what's arriving over the whole set asked for, that they wait for Wi‑Fi, or that
+/// one stopped. With nothing downloading or owed there's no state, and nothing to say.
+public enum ModelDownloadState: Equatable, Sendable {
+    /// Arriving: so much of the whole set is here, a model that finished counting whole.
+    case downloading(done: Int64, total: Int64)
+    /// Asked for, and waiting for Wi‑Fi: downloads that go on by themselves don't use an expensive or constrained
+    /// network (a hotspot, Low Data Mode). `bytes`: what they'll download.
+    case waitingForWiFi(bytes: Int64)
+    /// A download stopped on its own: the model's name, and what downloading everything still missing takes.
+    case failed(model: String, bytes: Int64)
+
+    /// How far the set has got, while it's arriving.
+    public var fraction: Double? {
+        guard case .downloading(let done, let total) = self else { return nil }
+        return total > 0 ? min(1, max(0, Double(done) / Double(total))) : 0
+    }
+
+    /// What's left to download: the rest of the set, or what waits or stopped.
+    public var bytes: Int64 {
+        switch self {
+        case .downloading(let done, let total): return max(0, total - done)
+        case .waitingForWiFi(let bytes), .failed(_, let bytes): return bytes
+        }
+    }
+
+    /// It needs the person: a download stopped.
+    public var needsAttention: Bool { if case .failed = self { return true } else { return false } }
+}
+
+extension ProcessingWords {
+    /// "Downloading models · 40%": one phrase over the whole set asked for, never a model at a time, so the wait never
+    /// looks done and then starts over.
+    public static func downloadingModels(_ fraction: Double) -> String { "Downloading models · \(percentText(fraction))" }
+
+    /// "Downloading models · Waiting for Wi‑Fi", in the words a model's own row uses (`ModelStatus.waitingForWiFi`).
+    public static var modelsWaitForWiFi: String { "Downloading models · \(ModelStatus.waitingForWiFi.label)" }
+
+    /// A download that stopped on its own: "Couldn’t download Gemma 4 12B".
+    public static func couldNotDownload(_ model: String) -> String { "\(downloadStopped) \(model)" }
+
+    /// The same under a row that names the model already.
+    public static let downloadStopped = "Couldn’t download"
+
+    /// What a menu offers to download what's still missing: "Download · 0.9 GB".
+    public static func download(_ bytes: Int64) -> String { bytes > 0 ? "Download · \(ByteSize.format(bytes))" : "Download" }
+
+    /// The one line for a state: "Downloading models · 40%", "Downloading models · Waiting for Wi‑Fi", "Couldn’t download
+    /// Gemma 4 12B".
+    public static func modelDownloadLine(_ state: ModelDownloadState) -> String {
+        switch state {
+        case .downloading: return downloadingModels(state.fraction ?? 0)
+        case .waitingForWiFi: return modelsWaitForWiFi
+        case .failed(let model, _): return couldNotDownload(model)
+        }
+    }
+
+    /// Under the line: the total while it arrives ("3.0 of 7.6 GB"), what's left otherwise ("7.6 GB").
+    public static func modelDownloadDetail(_ state: ModelDownloadState) -> String? {
+        switch state {
+        case .downloading(let done, let total): return total > 0 ? ByteSize.progress(done, of: total) : nil
+        case .waitingForWiFi(let bytes), .failed(_, let bytes): return bytes > 0 ? ByteSize.format(bytes) : nil
+        }
+    }
+
+    /// A summary waiting for this device's summary model, by how its download stands: "Waiting to summarize after the
+    /// download · 38%" while it arrives, else the download's own line ("Downloading models · Waiting for Wi‑Fi",
+    /// "Couldn’t download Gemma 4 12B").
+    public static func summaryWaitsLine(_ state: ModelDownloadState, summarized: Bool = false) -> String {
+        if case .downloading = state { return summaryWaitsForDownload(summarized: summarized, fraction: state.fraction) }
+        return modelDownloadLine(state)
+    }
+
+    /// Short, for a narrow chip: "40%", "Wi‑Fi", "Models".
+    public static func modelDownloadShort(_ state: ModelDownloadState) -> String {
+        switch state {
+        case .downloading: return percentText(state.fraction ?? 0)
+        case .waitingForWiFi: return "Wi‑Fi"
+        case .failed: return "Models"
+        }
+    }
 }

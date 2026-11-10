@@ -1,6 +1,7 @@
 import AppKit
 import DaybookDevices
 import DaybookKit
+import DaybookUI
 import Foundation
 @preconcurrency import UserNotifications
 
@@ -11,6 +12,12 @@ struct RecordingNotification: Equatable {
         case stopped = "recording-stopped"
         /// A call started recording on its own while Floating Notes wasn't showing.
         case recording = "recording-started"
+        /// The microphone isn't hearing anything while recording (the rolling hearing check).
+        case microphoneSilent = "microphone-silent"
+        /// The disk has room for under half an hour more.
+        case lowSpace = "low-space"
+        /// The phone this Mac records for can't be reached; this Mac keeps recording (`LeaderWatch`).
+        case leadOutOfReach = "lead-out-of-reach"
     }
 
     var kind: Kind
@@ -29,7 +36,8 @@ struct RecordingNotification: Equatable {
 enum RecordingNotificationResponse: Equatable {
     /// The notification itself: open what it's about.
     case open(RecordingNotification.Kind, UUID)
-    case recordAgain
+    /// "Recording stopped"'s Record Again: into the conversation that stopped.
+    case recordAgain(UUID)
 }
 
 /// Posts and removes notifications. The system's center in the app; tests keep a list.
@@ -47,6 +55,10 @@ protocol RecordingNotificationPosting: AnyObject {
 /// - "Recording stopped" when a recording ends without Stop (a microphone that went, sleep, a disk that couldn't keep
 ///   up: `AppState.unexpectedStops`), naming the conversation unless it's Personal, saying why, with Record Again.
 /// - "Recording" when a call starts recording on its own while Floating Notes isn't showing, naming the call.
+/// - "Microphone silent" while the microphone hears nothing (`CaptureLevelMonitor.isMicrophoneSilent`), and "Low on
+///   space" once the disk has room for under half an hour, each naming the conversation unless it's Personal.
+/// - "Out of reach" while the phone this Mac records for can't be reached and this Mac keeps recording
+///   (`PhoneCoordinator.leadOutOfReach`).
 ///
 /// Each goes once it's no longer true: the stop's when it's been seen in the app or the next recording starts, the
 /// start's when that recording ends. Permission is asked the first time someone records or turns on Record calls
@@ -61,12 +73,21 @@ final class RecordingNotifications {
         var callName: String?
         var automaticRecording = false
         var stops: [UUID: String] = [:]
+        /// The recording's microphone isn't hearing anything.
+        var notHearing = false
+        /// The recording's disk is running out of room: what Floating Notes' chip says.
+        var lowSpace: String?
+        /// The phone this recording follows is out of reach: the sentence Floating Notes' chip says.
+        var outOfReach: String?
     }
 
     static let recordAgainAction = "record-again"
     static let recordAgainTitle = "Record Again"
     static let stoppedTitle = "Recording stopped"
     static let recordingTitle = "Recording"
+    static let microphoneSilentTitle = "Microphone silent"
+    static let lowSpaceTitle = "Low on space"
+    static let outOfReachTitle = LeaderWatch.outOfReachLabel
 
     private weak var state: AppState?
     private let center: any RecordingNotificationPosting
@@ -104,9 +125,15 @@ final class RecordingNotifications {
     private func snapshot() -> Snapshot {
         guard let state else { return Snapshot() }
         let automatic = state.recordingID != nil && state.recordingWasStartedAutomatically
+        let recording = state.recordingID != nil && state.recorder.isRecording
+        let space = recording && (state.recorder.spaceLeft != nil || state.recorder.callStoppedForSpace)
+            ? RecordingStatusWords.storageDetail(spaceLeft: state.recorder.spaceLeft.map(Self.spaceStep),
+                                                 callStopped: state.recorder.callStoppedForSpace) : nil
         return Snapshot(recordingID: state.recordingID, automatic: automatic,
                         callName: automatic ? state.monitor.activeCandidate?.callName : nil,
-                        automaticRecording: state.automaticRecording, stops: state.unexpectedStops)
+                        automaticRecording: state.automaticRecording, stops: state.unexpectedStops,
+                        notHearing: recording && state.recorder.levels.isMicrophoneSilent, lowSpace: space,
+                        outOfReach: state.phones.leadOutOfReach.flatMap { $0.meetingID == state.recordingID ? $0.message : nil })
     }
 
     /// What changed since the last snapshot, posted and taken back. Internal so tests drive it with snapshots.
@@ -116,10 +143,14 @@ final class RecordingNotifications {
             asked = true
             center.requestAuthorization()
         }
-        // A recording that ended: its "Recording" goes.
+        // A recording that ended: its "Recording" goes, and what it said about the microphone and the disk.
         if let ended = last.recordingID, ended != next.recordingID {
             take(RecordingNotification.identifier(.recording, ended))
+            take(RecordingNotification.identifier(.microphoneSilent, ended))
+            take(RecordingNotification.identifier(.lowSpace, ended))
+            take(RecordingNotification.identifier(.leadOutOfReach, ended))
         }
+        if let id = next.recordingID { updateCaptureNotices(id, from: last.recordingID == id ? last : Snapshot(), to: next) }
         // A new recording: "Recording stopped" and its Record Again are out of date.
         if let started = next.recordingID, started != last.recordingID {
             for id in posted.filter({ $0.hasPrefix(RecordingNotification.Kind.stopped.rawValue) }) { take(id) }
@@ -135,6 +166,47 @@ final class RecordingNotifications {
             put(RecordingNotification(kind: .stopped, conversationID: id, title: Self.stoppedTitle, subtitle: shownTitle(id),
                                       body: reason))
         }
+    }
+
+    /// While recording: the microphone that stopped hearing and the disk running out of room are said while Daybook is
+    /// behind, once each time they start, and taken back once they're over.
+    private func updateCaptureNotices(_ id: UUID, from last: Snapshot, to next: Snapshot) {
+        if next.notHearing != last.notHearing {
+            let identifier = RecordingNotification.identifier(.microphoneSilent, id)
+            if next.notHearing, !isInForeground() {
+                put(RecordingNotification(kind: .microphoneSilent, conversationID: id, title: Self.microphoneSilentTitle,
+                                          subtitle: shownTitle(id), body: RecordingStatusWords.microphoneSilentHelp))
+            } else if !next.notHearing {
+                take(identifier)
+            }
+        }
+        if next.outOfReach != last.outOfReach {
+            let identifier = RecordingNotification.identifier(.leadOutOfReach, id)
+            if let line = next.outOfReach {
+                if !isInForeground() {
+                    put(RecordingNotification(kind: .leadOutOfReach, conversationID: id, title: Self.outOfReachTitle, subtitle: shownTitle(id),
+                                              body: line))
+                }
+            } else {
+                take(identifier)
+            }
+        }
+        if next.lowSpace != last.lowSpace {
+            let identifier = RecordingNotification.identifier(.lowSpace, id)
+            if let line = next.lowSpace {
+                // Posted while behind; one already showing keeps up with the minutes (in steps of five).
+                if posted.contains(identifier) || !isInForeground() {
+                    put(RecordingNotification(kind: .lowSpace, conversationID: id, title: Self.lowSpaceTitle, subtitle: shownTitle(id), body: line))
+                }
+            } else {
+                take(identifier)
+            }
+        }
+    }
+
+    /// The room left as a notification keeps up with it: in five-minute steps, by the minute in the last five.
+    static func spaceStep(_ seconds: TimeInterval) -> TimeInterval {
+        seconds > 300 ? (seconds / 300).rounded(.down) * 300 : (seconds / 60).rounded(.down) * 60
     }
 
     /// "Zoom call", capitalized: the call's own name, or "Call" when it's not known.
@@ -160,20 +232,21 @@ final class RecordingNotifications {
         center.remove([identifier])
     }
 
-    /// A click: Record Again records a new conversation once the library is open; the notification itself opens what
+    /// A click: Record Again records into the conversation that stopped, after what was saved, once the library is open,
+    /// as Floating Notes' Record Again does, so a call cut short isn't split in two; the notification itself opens what
     /// it's about.
     func respond(_ response: RecordingNotificationResponse) {
         guard let state else { return }
         switch response {
-        case .recordAgain:
+        case .recordAgain(let id):
             Task { @MainActor in
                 guard await LibraryOpening.opens(state) else { return }
-                await state.startRecording()
+                await state.recordAgain(into: id)
             }
         case .open(.stopped, let id):
             if state.meetings.contains(where: { $0.id == id }) { state.showConversation(id) }
             openLibrary()
-        case .open(.recording, _):
+        case .open(.recording, _), .open(.microphoneSilent, _), .open(.lowSpace, _), .open(.leadOutOfReach, _):
             state.showFloatingNotes(focus: state.recordingID)
         }
     }
@@ -193,7 +266,9 @@ final class SystemRecordingNotifications: NSObject, RecordingNotificationPosting
                                                title: RecordingNotifications.recordAgainTitle, options: [.foreground])
         center.setNotificationCategories([
             UNNotificationCategory(identifier: RecordingNotification.Kind.stopped.rawValue, actions: [recordAgain], intentIdentifiers: []),
-            UNNotificationCategory(identifier: RecordingNotification.Kind.recording.rawValue, actions: [], intentIdentifiers: [])
+            UNNotificationCategory(identifier: RecordingNotification.Kind.recording.rawValue, actions: [], intentIdentifiers: []),
+            UNNotificationCategory(identifier: RecordingNotification.Kind.microphoneSilent.rawValue, actions: [], intentIdentifiers: []),
+            UNNotificationCategory(identifier: RecordingNotification.Kind.lowSpace.rawValue, actions: [], intentIdentifiers: [])
         ])
     }
 
@@ -209,8 +284,8 @@ final class SystemRecordingNotifications: NSObject, RecordingNotificationPosting
         content.body = notification.body
         content.categoryIdentifier = notification.kind.rawValue
         content.userInfo = ["conversation": notification.conversationID.uuidString, "kind": notification.kind.rawValue]
-        // A recording that stopped is worth a sound; one that started isn't.
-        if notification.kind == .stopped { content.sound = .default }
+        // Audio being lost is worth a sound; a recording that started isn't.
+        if notification.kind != .recording { content.sound = .default }
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: notification.identifier, content: content, trigger: nil))
     }
 
@@ -227,8 +302,8 @@ final class SystemRecordingNotifications: NSObject, RecordingNotificationPosting
         let id = (info["conversation"] as? String).flatMap(UUID.init(uuidString:))
         let action = response.actionIdentifier
         Task { @MainActor in
-            if action == RecordingNotifications.recordAgainAction {
-                self.respond?(.recordAgain)
+            if action == RecordingNotifications.recordAgainAction, let id {
+                self.respond?(.recordAgain(id))
             } else if let kind, let id {
                 self.respond?(.open(kind, id))
             } else {

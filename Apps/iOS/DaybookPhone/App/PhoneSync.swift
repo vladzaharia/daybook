@@ -264,6 +264,12 @@ final class PhoneSync {
         }
     }
 
+    /// The network came back or changed: what the courier holds goes now (docs/icloud-sync.md, "Courier (CloudKit)").
+    func networkChanged() {
+        guard isConnected else { return }
+        controller?.flushCourier()
+    }
+
     /// Lists the library's devices (presence) for "Waiting for your Mac · last seen 2 h ago".
     func refreshDevices() async {
         guard isConnected, let controller else { return }
@@ -280,9 +286,21 @@ final class PhoneSync {
     /// Asks iOS for a background refresh. Call when the app leaves the foreground. Scheduled whether or not
     /// sync is connected: the same task also resumes recorders' automatic imports, and a pass checks itself.
     func scheduleBackgroundRefresh() {
-        let request = BGAppRefreshTaskRequest(identifier: Self.refreshIdentifier)
-        request.earliestBeginDate = Date(timeIntervalSinceNow: Self.refreshInterval)
-        try? BGTaskScheduler.shared.submit(request)
+        let identifier = Self.refreshIdentifier, earliest = Date(timeIntervalSinceNow: Self.refreshInterval)
+        if #available(iOS 27.0, *) {
+            // iOS 27 answers off the main thread, with every reason it won't; refused, the next time in front syncs.
+            Task.detached(priority: .utility) {
+                try? await BGTaskScheduler.shared.submitTaskRequest(Self.refreshRequest(identifier, earliest: earliest))
+            }
+        } else {
+            try? BGTaskScheduler.shared.submit(Self.refreshRequest(identifier, earliest: earliest))
+        }
+    }
+
+    private nonisolated static func refreshRequest(_ identifier: String, earliest: Date) -> BGAppRefreshTaskRequest {
+        let request = BGAppRefreshTaskRequest(identifier: identifier)
+        request.earliestBeginDate = earliest
+        return request
     }
 
     /// The `BGAppRefreshTask` body: one bounded pass, then the next request. iOS cancels the task

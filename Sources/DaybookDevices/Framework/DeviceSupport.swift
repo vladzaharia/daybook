@@ -4,8 +4,8 @@ import AppKit
 import Foundation
 import UserNotifications
 
-/// Keeps this device from idle-sleeping while a transfer or live capture runs, so an hour-long import
-/// doesn't stop halfway. The display may still sleep.
+/// Keeps this device from idle-sleeping while a transfer, a live capture, or the Mac's own recording runs, so neither an
+/// hour-long import nor a long call stops halfway. The display may still sleep.
 @MainActor
 public final class SleepAssertion {
     private var token: NSObjectProtocol?
@@ -23,6 +23,15 @@ public final class SleepAssertion {
             self.token = nil
         }
     }
+}
+
+/// Time to finish work the person no longer sees once the app leaves the screen: an import, from the moment its
+/// audio has arrived until it's in the library. `ProcessInfo` activities don't keep an iOS app running, so the iPhone
+/// app sets `hold` to a background task (`UIApplication.beginBackgroundTask`); elsewhere it holds nothing (the Mac
+/// keeps `SleepAssertion`). Returns what ends it.
+@MainActor
+public enum DeviceBackgroundTime {
+    public static var hold: (_ name: String) -> (@MainActor () -> Void) = { _ in {} }
 }
 
 /// Where opening a device notification takes the person, carried in the notification's `userInfo` for the

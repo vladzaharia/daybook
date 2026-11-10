@@ -44,20 +44,8 @@ struct DeviceRow: View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             let line = session.statusLine(model: model, now: context.date)
             SettingsRow(title: session.device.name, detail: line.text, systemImage: session.kind.systemImage,
-                        tone: session.isLinked ? .active : .neutral, detailNeedsAttention: line.tone == .attention)
+                        tone: DeviceGlyph.tone(linked: session.isLinked), detailNeedsAttention: line.tone == .attention)
         }
-    }
-}
-
-/// The recorder's symbol on a card's tile: teal while it's linked, secondary otherwise. `size` is the glyph
-/// column it sits in.
-struct DeviceGlyph: View {
-    let session: DeviceSession
-    var size: CGFloat
-
-    var body: some View {
-        DaybookTile(symbol: session.kind.systemImage, tone: session.isLinked ? .active : .neutral, size: .card)
-            .frame(width: size)
     }
 }
 

@@ -23,7 +23,7 @@ final class StatusSheetModelTests: XCTestCase {
     return recorder
   }
 
-  private func line(_ recorder: StatusInputs.Recorder?) -> StatusLineItem {
+  private func line(_ recorder: StatusInputs.Recorder) -> StatusLineItem {
     StatusSheetModel.recorderLine(recorder, now: now)
   }
 
@@ -71,9 +71,6 @@ final class StatusSheetModelTests: XCTestCase {
   }
 
   func testRecorderLineSaysWhatTheRecorderIsDoing() {
-    XCTAssertEqual(line(nil).text, "None added")
-    XCTAssertEqual(line(nil).tone, .calm)
-
     let connected = line(recorder { $0.newCount = 2 })
     XCTAssertEqual(connected.title, "Soundcore Work")
     XCTAssertEqual(connected.text, "Connected · 80% · 2 new")
@@ -247,7 +244,8 @@ final class StatusSheetModelTests: XCTestCase {
     )
   }
 
-  func testTheCompactLineFollowsTheRecorderThatIsBusy() {
+  /// ux-flows P4, uxf-10: a line for each recorder added, and none for a recorder that isn't: no "None added".
+  func testBehaviorEachRecorderAddedHasItsLineAndNoneAddedSaysNothing() {
     let idle = recorder {
       $0.id = "a"
       $0.name = "Soundcore Work"
@@ -257,13 +255,20 @@ final class StatusSheetModelTests: XCTestCase {
       $0.name = "Soundcore Work 2"
       $0.importing = .init(position: 1, total: 1, fraction: 0.5)
     }
-    XCTAssertEqual(StatusSheetModel.primaryRecorder([idle, busy])?.id, "b")
-    XCTAssertEqual(StatusSheetModel.primaryRecorder([idle])?.id, "a")
+    var inputs = StatusInputs()
+    inputs.recorders = [idle, busy]
+    XCTAssertEqual(StatusSheetModel.lines(inputs, now: now).map(\.id), ["recorder-a", "recorder-b"])
+    XCTAssertEqual(
+      StatusSheetModel.strip(StatusSheetModel.lines(inputs, now: now))?.id, "recorder-b",
+      "the busy one is what the strip says")
+    inputs.recorders = []
+    XCTAssertEqual(StatusSheetModel.lines(inputs, now: now), [], "nothing added, nothing checked yet")
+    XCTAssertFalse(StatusSheetModel.sections(inputs, now: now).contains(.recorders), "no Add Recorder… card")
   }
 
   // MARK: The Mac line
 
-  func testMacLineShowsLiveProgressPresenceAndWaitingWork() {
+  func testMacLineShowsLiveProgressPresenceAndWaitingWork() throws {
     var inputs = StatusInputs()
     inputs.mac = .connected(name: "Studio Mac")
     inputs.liveProgress = [
@@ -271,7 +276,7 @@ final class StatusSheetModelTests: XCTestCase {
         LinkProcessingProgress(
           meetingID: UUID(), phase: .transcribing, fraction: 0.4, macName: "Studio Mac"))
     ]
-    let transcribing = StatusSheetModel.macLine(inputs, now: now)
+    let transcribing = try XCTUnwrap(StatusSheetModel.macLine(inputs, now: now))
     XCTAssertEqual(transcribing.title, "Studio Mac")
     XCTAssertEqual(transcribing.text, "Transcribing · 40%")
     XCTAssertEqual(transcribing.progress, 0.4)
@@ -283,7 +288,7 @@ final class StatusSheetModelTests: XCTestCase {
         LinkProcessingProgress(
           meetingID: UUID(), phase: .failed, macName: "Studio Mac", detail: "Out of space"))
     ]
-    XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now).tone, .attention)
+    XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now)?.tone, .attention)
 
     inputs.liveProgress = []
     inputs.queue = [
@@ -294,30 +299,50 @@ final class StatusSheetModelTests: XCTestCase {
         id: UUID(), title: "B", line: "Waiting", requestedHere: false, progress: nil,
         isRunning: false),
     ]
-    XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now).text, "Connected · 2 waiting")
-    XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now).tone, .linked)
+    XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now)?.text, "Connected · 2 waiting")
+    XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now)?.tone, .linked)
     // Narrow (a long Mac name), the waiting work stays rather than being cut off.
-    XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now).shortText, "2 waiting")
+    XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now)?.shortText, "2 waiting")
 
     inputs.queue = []
-    XCTAssertNil(StatusSheetModel.macLine(inputs, now: now).shortText, "Connected alone stays")
+    XCTAssertNil(StatusSheetModel.macLine(inputs, now: now)?.shortText, "Connected alone stays")
     inputs.mac = .seen(name: "Studio Mac", lastSeen: now.addingTimeInterval(-7_200))
     XCTAssertEqual(
-      StatusSheetModel.macLine(inputs, now: now).text,
+      StatusSheetModel.macLine(inputs, now: now)?.text,
       RecorderStatusWords.lastSeen(now.addingTimeInterval(-7_200), now: now),
       "dated as every device's absence is")
-    XCTAssertTrue(StatusSheetModel.macLine(inputs, now: now).text.hasPrefix("Last seen today"))
+    XCTAssertTrue(StatusSheetModel.macLine(inputs, now: now)?.text.hasPrefix("Last seen today") == true)
+    // ux-flows P4, uxf-10: a Mac speaks only while it exists: none synced, or none known, says nothing.
+    inputs.mac = .seen(name: "Studio Mac", lastSeen: now.addingTimeInterval(-31 * 86_400))
+    XCTAssertNil(StatusSheetModel.macLine(inputs, now: now), "last synced more than 30 days ago")
     inputs.mac = .noMac
-    XCTAssertEqual(
-      StatusSheetModel.macLine(inputs, now: now).text, "Hasn’t synced this library yet")
+    XCTAssertNil(StatusSheetModel.macLine(inputs, now: now), "no “Hasn’t synced this library yet”")
     inputs.mac = .unavailable("iCloud is off")
-    XCTAssertEqual(
-      StatusSheetModel.macLine(inputs, now: now).text, "Needs iCloud",
-      "the iCloud line below says why"
-    )
-    XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now).tone, .calm)
+    XCTAssertNil(StatusSheetModel.macLine(inputs, now: now), "iCloud's own line says why")
     inputs.mac = .checking
-    XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now).text, "Looking for it…")
+    XCTAssertNil(StatusSheetModel.macLine(inputs, now: now))
+    // A Mac paired over the link keeps its line whatever sync says.
+    let studio = UUID()
+    inputs.pairedMacs = [
+      StatusInputs.Mac(id: studio, name: "Studio Mac", line: "Last seen yesterday", isConnected: false)
+    ]
+    let paired = StatusSheetModel.lines(inputs, now: now)
+    XCTAssertEqual(paired.map(\.id), ["mac-\(studio.uuidString)"])
+    XCTAssertEqual(paired.first?.text, "Last seen yesterday")
+    XCTAssertEqual(paired.first?.tone, .calm)
+    inputs.pairedMacs[0].isConnected = true
+    inputs.pairedMacs[0].line = "Connected"
+    XCTAssertEqual(StatusSheetModel.lines(inputs, now: now).first?.tone, .linked)
+    inputs.pairedMacs[0].isRecording = true
+    XCTAssertEqual(StatusSheetModel.lines(inputs, now: now).first?.tone, .recording)
+    // Two Macs, one line each, the one at work first and the other not named twice.
+    inputs.pairedMacs[0].isRecording = false
+    inputs.pairedMacs.append(
+      StatusInputs.Mac(id: UUID(), name: "MacBook Air", line: "Last seen today, 9:12 AM", isConnected: false))
+    inputs.mac = .connected(name: "Studio Mac")
+    XCTAssertEqual(
+      StatusSheetModel.lines(inputs, now: now).map(\.title), ["Studio Mac", "MacBook Air"])
+    inputs.pairedMacs = []
 
     // Coarse progress from a synced claim, when the link has nothing.
     inputs.mac = .seen(name: "Studio Mac", lastSeen: now)
@@ -326,10 +351,10 @@ final class StatusSheetModelTests: XCTestCase {
         id: UUID(), title: "A", line: "Summarizing on Studio Mac · 60%", requestedHere: false,
         progress: 0.6, isRunning: true)
     ]
-    XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now).text, "Summarizing · 60%")
+    XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now)?.text, "Summarizing · 60%")
   }
 
-  func testMacLineCountsDownWithAMacsCountdownOrThisIPhonesToAMac() {
+  func testMacLineCountsDownWithAMacsCountdownOrThisIPhonesToAMac() throws {
     var inputs = StatusInputs()
     inputs.mac = .connected(name: "Studio Mac")
     let id = UUID()
@@ -339,7 +364,7 @@ final class StatusSheetModelTests: XCTestCase {
           meetingID: id, phase: .summaryCountdown, macName: "Studio Mac",
           countdown: LinkSummaryCountdown(secondsLeft: 12, cloudOffered: true)), receivedAt: now)
     ]
-    let mac = StatusSheetModel.macLine(inputs, now: now)
+    let mac = try XCTUnwrap(StatusSheetModel.macLine(inputs, now: now))
     XCTAssertEqual(mac.title, "Studio Mac")
     XCTAssertEqual(mac.text, "Summarizing in 12 s")
     XCTAssertEqual(mac.countdownUntil, now.addingTimeInterval(12))
@@ -356,71 +381,74 @@ final class StatusSheetModelTests: XCTestCase {
     entry.mac = "Studio Mac"
     entry.countdownPlace = "on Studio Mac"
     inputs.queue = [entry]
-    XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now).text, "Summarizing in 15 s")
+    XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now)?.text, "Summarizing in 15 s")
     XCTAssertEqual(
-      StatusSheetModel.macLine(inputs, now: now).text(at: now.addingTimeInterval(5)),
+      StatusSheetModel.macLine(inputs, now: now)?.text(at: now.addingTimeInterval(5)),
       "Summarizing in 10 s")
-    XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now).tone, .calm)
+    XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now)?.tone, .calm)
     // Counting down to summarizing on this iPhone: nothing for the Mac's line.
     entry.mac = nil
     entry.countdownPlace = "on this iPhone"
     inputs.queue = [entry]
-    XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now).text, "Connected")
+    XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now)?.text, "Connected")
   }
 
-  func testSyncLineTone() {
+  /// iCloud has a line only while it's a problem, as on Floating Notes' home.
+  func testSyncLineOnlyWhenItsAProblem() {
     var inputs = StatusInputs()
     inputs.syncLine = "Up to date"
     inputs.syncTone = .upToDate
-    XCTAssertEqual(StatusSheetModel.syncLine(inputs).tone, .calm)
+    XCTAssertNil(StatusSheetModel.syncLine(inputs))
     inputs.syncTone = .working
-    XCTAssertEqual(StatusSheetModel.syncLine(inputs).tone, .working)
+    inputs.syncLine = "Syncing 3 changes"
+    XCTAssertNil(StatusSheetModel.syncLine(inputs), "syncing is nothing to say")
+    inputs.syncTone = .checking
+    XCTAssertNil(StatusSheetModel.syncLine(inputs))
     inputs.syncTone = .attention
-    XCTAssertEqual(StatusSheetModel.syncLine(inputs).tone, .attention)
-    XCTAssertEqual(StatusSheetModel.syncLine(inputs).symbol, "exclamationmark.icloud")
-    XCTAssertEqual(StatusSheetModel.lines(inputs, now: now).map(\.id), ["recorder", "mac", "sync"])
+    inputs.syncLine = "iCloud storage is full"
+    XCTAssertEqual(StatusSheetModel.syncLine(inputs)?.tone, .attention)
+    XCTAssertEqual(StatusSheetModel.syncLine(inputs)?.symbol, "exclamationmark.icloud")
+    XCTAssertEqual(StatusSheetModel.lines(inputs, now: now).map(\.id), ["sync"])
   }
 
   // MARK: Detents
 
-  func testEachDetentAddsToTheOneBefore() {
+  /// VI-18, uxf-10: the sheet doesn't repeat the lines its cards say, and has a card only for what exists.
+  func testBehaviorTheSheetShowsACardForWhatExistsAndNoRepeatedLines() {
     var inputs = StatusInputs()
+    XCTAssertEqual(
+      StatusSheetModel.sections(inputs, now: now), [.iphone],
+      "nothing added: this iPhone and the audio kept on it, no Add Recorder… or Pair with Your Mac… card")
+
     inputs.recorders = [recorder { $0.newCount = 1 }]
-    inputs.hostsRecordButton = true
-    XCTAssertEqual(StatusSheetModel.sections(for: .compact, inputs), [.quickActions, .lines])
-    // At most three groups below the lines, each a heading and one card.
-    XCTAssertEqual(
-      StatusSheetModel.sections(for: .medium, inputs), [.quickActions, .lines, .recorders, .macs])
-    XCTAssertEqual(
-      StatusSheetModel.sections(for: .large, inputs),
-      [.quickActions, .lines, .recorders, .macs, .iphone])
+    inputs.mac = .seen(name: "Studio Mac", lastSeen: now)
+    XCTAssertEqual(StatusSheetModel.sections(inputs, now: now), [.recorders, .macs, .iphone])
     XCTAssertFalse(StatusSheetModel.showsManagement(.medium))
     XCTAssertTrue(
       StatusSheetModel.showsManagement(.large),
       "the recorder cards grow their storage, actions, and waiting recordings")
 
-    // The notebook's panel doesn't repeat Record: it's at the foot of the left page.
-    inputs.hostsRecordButton = false
-    XCTAssertEqual(StatusSheetModel.sections(for: .compact, inputs), [.lines])
-
-    // Live captions appear at medium only while a recorder streams.
+    // Live captions first, while a recorder streams.
     inputs.hasLiveCaptions = true
-    XCTAssertEqual(
-      StatusSheetModel.sections(for: .medium, inputs), [.lines, .captions, .recorders, .macs])
-    XCTAssertEqual(StatusSheetModel.sections(for: .compact, inputs), [.lines])
+    XCTAssertEqual(StatusSheetModel.sections(inputs, now: now), [.captions, .recorders, .macs, .iphone])
 
-    // With no recorder, the group still offers Add Recorder….
+    // iCloud has no card: its line, while it's a problem, leads the sheet.
     inputs.hasLiveCaptions = false
-    inputs.recorders = []
-    XCTAssertEqual(
-      StatusSheetModel.sections(for: .large, inputs), [.lines, .recorders, .macs, .iphone])
+    inputs.syncTone = .attention
+    inputs.syncLine = "Signed out"
+    XCTAssertEqual(StatusSheetModel.sections(inputs, now: now), [.lines, .recorders, .macs, .iphone])
 
-    // This iPhone's own work shows from medium on, in its card.
-    inputs.phone = QueueStatusWords.Queue(running: .transcribing, fraction: 0.4)
-    XCTAssertEqual(
-      StatusSheetModel.sections(for: .medium, inputs), [.lines, .recorders, .macs, .iphone])
-    XCTAssertEqual(StatusSheetModel.sections(for: .compact, inputs), [.lines])
-    XCTAssertEqual(StatusDetent.compact.density, .lines)
+    // A Mac last seen long ago has no card, unless work waits for one.
+    inputs.syncTone = .upToDate
+    inputs.recorders = []
+    inputs.mac = .seen(name: "Studio Mac", lastSeen: now.addingTimeInterval(-40 * 86_400))
+    XCTAssertEqual(StatusSheetModel.sections(inputs, now: now), [.iphone])
+    XCTAssertEqual(StatusSheetModel.macRows(inputs, now: now), [])
+    inputs.queue = [
+      StatusQueueEntry(
+        id: UUID(), title: "A", line: "Waiting", requestedHere: true, progress: nil, isRunning: false)
+    ]
+    XCTAssertEqual(StatusSheetModel.sections(inputs, now: now), [.macs, .iphone])
     XCTAssertEqual(StatusDetent.medium.density, .cards)
     XCTAssertEqual(StatusDetent.large.density, .manage)
   }
@@ -616,7 +644,7 @@ final class StatusSheetModelTests: XCTestCase {
     var inputs = StatusInputs()
     inputs.mac = .connected(name: "Studio Mac")
     inputs.queue = queue
-    XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now).text, "Connected · 1 waiting")
+    XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now)?.text, "Connected · 1 waiting")
   }
 
   func testAConversationUnderItsMacDoesntNameItAgain() {
@@ -751,10 +779,10 @@ final class StatusSheetModelTests: XCTestCase {
     XCTAssertEqual(live.line, "Studio Mac couldn’t finish")
   }
 
-  func testAMacRecordingByItsPresenceShowsAsRecording() {
+  func testAMacRecordingByItsPresenceShowsAsRecording() throws {
     var inputs = StatusInputs()
     inputs.mac = .recording(name: "Studio Mac", lastSeen: now)
-    let line = StatusSheetModel.macLine(inputs, now: now)
+    let line = try XCTUnwrap(StatusSheetModel.macLine(inputs, now: now))
     XCTAssertEqual(line.title, "Studio Mac")
     XCTAssertEqual(line.text, "Recording")
     XCTAssertEqual(line.tone, .recording)
@@ -763,140 +791,7 @@ final class StatusSheetModelTests: XCTestCase {
         id: UUID(), title: "A", line: "Waiting", requestedHere: true, progress: nil,
         isRunning: false)
     ]
-    XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now).text, "Recording · 1 waiting")
-  }
-
-  func testCompactDetentGrowsWithTextSize() {
-    // Up to the accessibility sizes, three lines one row each; past them, one line over four rows.
-    for sizes in [
-      DynamicTypeSize.allCases.filter { !$0.isAccessibilitySize },
-      DynamicTypeSize.allCases.filter(\.isAccessibilitySize),
-    ] {
-      var previous: CGFloat = 0
-      for size in sizes {
-        let height = StatusCompactDetent.height(for: size, maximum: 800)
-        XCTAssertGreaterThan(height, previous, "\(size) is taller than the size before")
-        previous = height
-      }
-    }
-    // Record (68 pt with the glass) under the grabber's room, then three lines.
-    XCTAssertGreaterThanOrEqual(
-      StatusCompactDetent.height(for: .large, maximum: 800),
-      StatusCompactDetent.recordTop + 68 + 16 + 3 * 18 + 16)
-    XCTAssertLessThanOrEqual(
-      StatusCompactDetent.height(for: .xxxLarge, maximum: 678), 678 * 0.55, "about half the screen")
-    // At the largest size, the Record row and one line take at most 55% of the Duo's cover (it was 70%).
-    XCTAssertLessThanOrEqual(
-      StatusCompactDetent.height(for: .accessibility5, maximum: 678), 678 * 0.55)
-    // This iPhone's line, while it has work, takes a row more.
-    XCTAssertGreaterThan(
-      StatusCompactDetent.height(for: .large, maximum: 800, lines: 4),
-      StatusCompactDetent.height(for: .large, maximum: 800))
-    XCTAssertEqual(
-      StatusCompactDetent.height(for: .accessibility3, maximum: 800, lines: 4),
-      StatusCompactDetent.height(for: .accessibility3, maximum: 800),
-      "one line at the accessibility sizes, whatever there is")
-  }
-
-  /// ui-iphone-02, hig-ios-05: at the accessibility sizes a line's title wraps as its words do ("Vlad’s / MacBook Pro"
-  /// over "Last seen / today, 2:29 AM"), so compact makes room for the four rows they share (a one-line title leaves
-  /// its words three) and the progress line, on the iPhone's sheet and the Duo's panel alike, short of the cap.
-  func testCompactDetentHoldsAWrappedTitleAndItsWordsAtTheAccessibilitySizes() {
-    for size in DynamicTypeSize.allCases.filter(\.isAccessibilitySize) {
-      let line = StatusCompactDetent.lineHeight(.subheadline, at: size)
-      let rows = CGFloat(StatusMetrics.stackedRows)
-      XCTAssertEqual(rows, 4, "a title and its words, four rows between them")
-      let lines = StatusCompactDetent.linesHeight(for: size)
-      // The title's two lines, 2 pt, the words' two lines, then 4 pt and the 2 pt progress line.
-      XCTAssertGreaterThanOrEqual(lines, rows * line + 2 + 4 + 2, "\(size)")
-      let record =
-        max(
-          60,
-          StatusCompactDetent.lineHeight(
-            .title3, at: min(size, StatusCompactDetent.recordLargestSize))
-            + 8) + 8
-      XCTAssertGreaterThanOrEqual(
-        StatusCompactDetent.height(for: size, maximum: 2_000),
-        StatusCompactDetent.recordTop + record + StatusCompactDetent.recordGap + lines + 16,
-        "\(size)")
-    }
-    // Even at the largest size, an iPhone 18 Pro's sheet holds it uncapped.
-    let largest = StatusCompactDetent.height(for: .accessibility5, maximum: 2_000)
-    XCTAssertEqual(StatusCompactDetent.height(for: .accessibility5, maximum: 800), largest)
-  }
-
-  /// The notebook's combined tray keeps its action row and status card within the pane, grows in order,
-  /// and scrolls status lines when the compact-height bound requires it.
-  func testBehaviorThePanelOnASidewaysIPhoneStaysWithinItsCapAndGrowsInOrder() {
-    let page: CGFloat = 380
-    for size in DynamicTypeSize.allCases {
-      for lines in [StatusCompactDetent.lineCount, StatusCompactDetent.lineCount + 1] {
-        let layout = StatusPanelLayout(lines: lines, typeSize: size)
-        let compact = StatusPanel.contentHeight(.compact, in: page, layout: layout)
-        let medium = StatusPanel.contentHeight(.medium, in: page, layout: layout)
-        let large = StatusPanel.contentHeight(.large, in: page, layout: layout)
-        XCTAssertGreaterThan(compact, 0, "\(size)")
-        XCTAssertLessThanOrEqual(
-          StatusPanel.footprint(.compact, in: page, layout: layout), page * 0.55,
-          "\(size), \(lines) lines")
-        XCTAssertLessThanOrEqual(compact, medium, "\(size): Expand never shrinks the panel")
-        XCTAssertLessThanOrEqual(medium, large, "\(size)")
-        XCTAssertLessThan(
-          StatusPanel.footprint(.large, in: page, layout: layout), page,
-          "\(size): large stays on the page")
-        let whole =
-          StatusCompactDetent.linesHeight(for: size, lines: lines) + PhoneStyle.Space.s1
-          + PhoneStyle.Space.s4
-        let compactFootprint = StatusPanel.footprint(.compact, in: page, layout: layout)
-        XCTAssertEqual(
-          StatusPanel.scrollsCompact(in: page, layout: layout), compact < whole,
-          "\(size), \(lines) lines: scroll whenever they do not fit")
-        if compactFootprint < page * 0.55 - 0.01, !size.isAccessibilitySize {
-          XCTAssertEqual(compact, whole, "\(size), \(lines) lines")
-        } else {
-          XCTAssertLessThan(
-            compact, whole, "\(size), \(lines) lines scroll within combined-tray cap")
-        }
-      }
-    }
-    let largest = StatusPanelLayout(lines: StatusCompactDetent.lineCount, typeSize: .accessibility5)
-    XCTAssertLessThanOrEqual(
-      StatusPanel.footprint(.compact, in: page, layout: largest), page * 0.55)
-    XCTAssertLessThanOrEqual(page * 0.55, StatusPanel.footprint(.medium, in: page, layout: largest))
-    XCTAssertLessThan(
-      StatusPanel.contentHeight(.compact, in: page, layout: largest),
-      StatusCompactDetent.linesHeight(for: .accessibility5) + PhoneStyle.Space.s1
-        + PhoneStyle.Space.s4,
-      "the line scrolls inside the cap")
-
-    // The open Duo's library page has enough height for compact lines at default text size.
-    let duoPage: CGFloat = 635
-    let regular = StatusPanelLayout(lines: StatusCompactDetent.lineCount + 1, typeSize: .large)
-    let whole =
-      StatusCompactDetent.linesHeight(for: .large, lines: regular.lines)
-      + PhoneStyle.Space.s1 + PhoneStyle.Space.s4
-    XCTAssertEqual(StatusPanel.contentHeight(.compact, in: duoPage, layout: regular), whole)
-    XCTAssertFalse(StatusPanel.scrollsCompact(in: duoPage, layout: regular))
-
-    let withNotice = StatusPanelLayout(lines: regular.lines, typeSize: .large, notice: true)
-    XCTAssertGreaterThan(
-      StatusPanel.footprint(.compact, in: duoPage, layout: withNotice),
-      StatusPanel.footprint(.compact, in: duoPage, layout: regular),
-      "import progress grows the action area when the 55% cap allows it")
-    XCTAssertLessThanOrEqual(
-      StatusPanel.footprint(.compact, in: duoPage, layout: withNotice), duoPage * 0.55)
-
-    let statusOnly = StatusPanelLayout(
-      lines: regular.lines, typeSize: .large, hostsQuickActions: false)
-    XCTAssertEqual(StatusPanel.contentHeight(.compact, in: duoPage, layout: statusOnly), whole)
-    XCTAssertLessThan(
-      StatusPanel.footprint(.compact, in: duoPage, layout: statusOnly),
-      StatusPanel.footprint(.compact, in: duoPage, layout: regular),
-      "Trash keeps status but has no Record, Import, or Search actions")
-  }
-
-  func testQuickActionGapIsEightPoints() {
-    XCTAssertEqual(StatusQuickActionLayout.spacing, 8)
+    XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now)?.text, "Recording · 1 waiting")
   }
 
   // MARK: This iPhone's own work
@@ -936,9 +831,16 @@ final class StatusSheetModelTests: XCTestCase {
     XCTAssertEqual(line?.title, "This iPhone")
     XCTAssertEqual(line?.text, "Transcribing · 40% · 1 waiting")
     XCTAssertEqual(line?.progress, 0.4)
+    inputs.recorders = [recorder()]
+    inputs.mac = .connected(name: "Studio Mac")
+    inputs.syncTone = .attention
+    inputs.syncLine = "Signed out"
     XCTAssertEqual(
-      StatusSheetModel.lines(inputs, now: now).map(\.id), ["recorder", "mac", "queue", "sync"],
+      StatusSheetModel.lines(inputs, now: now).map(\.id), ["recorder-sc", "mac", "queue", "sync"],
       "this iPhone's line after the devices, before iCloud, as the Mac's home orders its own")
+    inputs = StatusInputs()
+    inputs.phone = work.line
+    inputs.phoneQueue = work.entries
 
     // Paused for the battery: when it goes on, also where it's narrow.
     let pausedQueue = ProcessingStatus.LocalQueue(
@@ -963,8 +865,8 @@ final class StatusSheetModelTests: XCTestCase {
     inputs.phone = idle.line
     inputs.phoneQueue = idle.entries
     XCTAssertNil(StatusSheetModel.phoneLine(inputs, now: now))
-    XCTAssertFalse(StatusSheetModel.sections(for: .medium, inputs).contains(.iphone))
-    XCTAssertEqual(StatusSheetModel.lines(inputs, now: now).count, 3)
+    XCTAssertEqual(StatusSheetModel.sections(inputs, now: now), [.iphone], "its card holds only the audio kept on it")
+    XCTAssertEqual(StatusSheetModel.lines(inputs, now: now), [])
   }
 
   /// A summary counting down to this iPhone, or running in the cloud, is this iPhone's own work, not a Mac's.
@@ -1004,14 +906,14 @@ final class StatusSheetModelTests: XCTestCase {
   // MARK: Where a line leads
 
   /// ux-iphone-02: a line that needs the person leads to its fix; the rest show more.
-  func testBehaviorALineThatNeedsThePersonLeadsToItsFix() {
+  func testBehaviorALineThatNeedsThePersonLeadsToItsFix() throws {
     var inputs = StatusInputs()
     let reason = CloudAvailability.signedOutMessage
     inputs.syncTone = .attention
     inputs.syncOff = true
     inputs.syncLine = StatusSheetModel.unavailablePhrase(reason)
     inputs.syncShort = "Off"
-    let sync = StatusSheetModel.syncLine(inputs)
+    let sync = try XCTUnwrap(StatusSheetModel.syncLine(inputs))
     XCTAssertEqual(sync.text, "Signed out", "the reason, not a bare Off")
     XCTAssertEqual(sync.shortText, "Off", "Off where it's narrow")
     XCTAssertEqual(sync.symbol, "icloud.slash")
@@ -1033,13 +935,11 @@ final class StatusSheetModelTests: XCTestCase {
       StatusInputs.Mac(
         id: studio, name: "Studio Mac", line: "Connected", isConnected: true, notProcessing: true)
     ]
-    let mac = StatusSheetModel.macLine(inputs, now: now)
+    let mac = try XCTUnwrap(StatusSheetModel.macLine(inputs, now: now))
     XCTAssertEqual(mac.tone, .attention)
     XCTAssertEqual(StatusSheetModel.route(for: mac, inputs), .showFix(.macs))
     XCTAssertEqual(StatusSheetModel.hint(for: .showFix(.macs)), "Shows how to fix it")
-    XCTAssertTrue(
-      StatusSheetModel.sections(for: .medium, inputs).contains(.macs),
-      "the step up to medium shows the card")
+    XCTAssertTrue(StatusSheetModel.sections(inputs, now: now).contains(.macs), "the sheet shows the card")
     let row = StatusSheetModel.macRows(inputs, now: now).first
     XCTAssertEqual(row?.text, "Not set up to transcribe", "not \"Connected\"")
     XCTAssertEqual(row?.fix, "Finish in Daybook › Settings on Studio Mac.")
@@ -1054,9 +954,19 @@ final class StatusSheetModelTests: XCTestCase {
     failing.liveProgress = [
       LiveProgress(LinkProcessingProgress(meetingID: UUID(), phase: .failed, macName: "Studio Mac"))
     ]
-    let failed = StatusSheetModel.macLine(failing, now: now)
+    let failed = try XCTUnwrap(StatusSheetModel.macLine(failing, now: now))
     XCTAssertEqual(failed.text, "Couldn’t finish")
     XCTAssertEqual(StatusSheetModel.route(for: failed, failing), .showFix(.macs))
+
+    // A paired Mac that can't connect (its pairing to make again, Local Network): its page.
+    let damaged = UUID()
+    var link = StatusInputs()
+    link.pairedMacs = [
+      StatusInputs.Mac(id: damaged, name: "Studio Mac", line: "Pair again", isConnected: false, problem: true)
+    ]
+    let pairing = try XCTUnwrap(StatusSheetModel.lines(link, now: now).first)
+    XCTAssertEqual(pairing.tone, .attention)
+    XCTAssertEqual(StatusSheetModel.route(for: pairing, link), .open(.mac(damaged)))
 
     // A recorder's problem: its page.
     let problem = line(
@@ -1123,35 +1033,65 @@ final class StatusSheetModelTests: XCTestCase {
       "at the top of the card, it names the Mac")
   }
 
-  // MARK: At the accessibility sizes
+  // MARK: The strip
 
-  /// hig-ios-05: compact at the accessibility sizes keeps the line that matters most, so the list stays usable.
-  func testBehaviorAtTheAccessibilitySizesCompactKeepsTheLineThatMattersMost() {
+  /// ui-iphone (P1): the strip at the library's foot says one line, and only one with something to say: what needs
+  /// the person, then what records elsewhere, then what's working or counting down; nothing when all is calm.
+  func testBehaviorTheStripSaysTheOneLineWithSomethingToSayOrNothing() {
     var inputs = StatusInputs()
     inputs.recorders = [recorder()]
     inputs.mac = .seen(name: "Studio Mac", lastSeen: now)
+    inputs.syncTone = .upToDate
     inputs.syncLine = "Up to date"
-    inputs.syncTone = .upToDate
-    let lines = StatusSheetModel.lines(inputs, now: now)
-    XCTAssertEqual(StatusSheetModel.compactLines(lines, accessibilitySize: false), lines)
     XCTAssertEqual(
-      StatusSheetModel.compactLines(lines, accessibilitySize: true).map(\.id), ["recorder-sc"],
-      "connected beats calm")
+      StatusSheetModel.lines(inputs, now: now).map(\.id), ["recorder-sc", "mac"],
+      "a connected recorder and a Mac seen today, iCloud up to date")
+    XCTAssertNil(
+      StatusSheetModel.strip(StatusSheetModel.lines(inputs, now: now)),
+      "connected and calm say nothing at rest")
+
+    inputs.liveProgress = [
+      LiveProgress(
+        LinkProcessingProgress(
+          meetingID: UUID(), phase: .transcribing, fraction: 0.55, macName: "Studio Mac"))
+    ]
+    let working = StatusSheetModel.strip(StatusSheetModel.lines(inputs, now: now))
+    XCTAssertEqual(working?.title, "Studio Mac")
+    XCTAssertEqual(working?.text, "Transcribing · 55%")
+    XCTAssertEqual(working?.progress, 0.55, "with its gradient line")
+
+    inputs.recorders = [recorder { $0.isListeningLive = true }]
+    XCTAssertEqual(
+      StatusSheetModel.strip(StatusSheetModel.lines(inputs, now: now))?.id, "recorder-sc",
+      "what records elsewhere before what works")
+
     inputs.syncTone = .attention
-    inputs.syncLine = "Sync paused"
-    XCTAssertEqual(
-      StatusSheetModel.compactLines(
-        StatusSheetModel.lines(inputs, now: now), accessibilitySize: true
-      )
-      .map(\.id), ["sync"],
-      "what needs the person first")
-    inputs.recorders = []
-    inputs.syncTone = .upToDate
-    XCTAssertEqual(
-      StatusSheetModel.compactLines(
-        StatusSheetModel.lines(inputs, now: now), accessibilitySize: true
-      )
-      .map(\.id), ["mac"],
-      "“None added” last")
+    inputs.syncOff = true
+    inputs.syncLine = "Signed out"
+    let problem = StatusSheetModel.strip(StatusSheetModel.lines(inputs, now: now))
+    XCTAssertEqual(problem?.id, "sync", "what needs the person first")
+    XCTAssertEqual(problem?.text, "Signed out")
+    XCTAssertEqual(problem?.tone, .attention)
+
+    // A countdown is calm but is something to say; a paused queue that will continue isn't.
+    var counting = StatusInputs()
+    counting.phone = QueueStatusWords.Queue(countdown: now.addingTimeInterval(12))
+    XCTAssertEqual(StatusSheetModel.strip(StatusSheetModel.lines(counting, now: now))?.id, "queue")
+    var paused = StatusInputs()
+    paused.phone = QueueStatusWords.Queue(waiting: 2, pause: .lowBattery)
+    XCTAssertEqual(StatusSheetModel.lines(paused, now: now).map(\.id), ["queue"])
+    XCTAssertNil(StatusSheetModel.strip(StatusSheetModel.lines(paused, now: now)))
+  }
+
+  /// The strip's tap: a line that needs the person opens where it's fixed, inside the sheet; any other line, the sheet
+  /// at medium.
+  func testBehaviorTappingTheStripAsksForTheSheetWhereTheLineLeads() {
+    XCTAssertEqual(StatusRequest(.open(.icloud)).route, .icloud)
+    XCTAssertEqual(StatusRequest(.open(.icloud)).detent, .large, "a full screen opens at full height")
+    XCTAssertEqual(StatusRequest(.showFix(.macs)).fix, .macs)
+    XCTAssertEqual(StatusRequest(.showFix(.macs)).detent, .medium)
+    XCTAssertNil(StatusRequest(.showMore).route)
+    XCTAssertNil(StatusRequest(.showMore).fix)
+    XCTAssertEqual(StatusSheetModel.title, "Devices", "the sheet's title, and More's item for it")
   }
 }

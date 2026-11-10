@@ -227,22 +227,6 @@ final class MultiSourceFusionTests: XCTestCase {
         XCTAssertEqual(result.segments.first { $0.text == owner }?.speakerID, "owner")
     }
 
-    func testSignalQualityDecidesBetweenRecordersForLocalSpeech() {
-        let left = UUID(), right = UUID()
-        let tracks = [RecordingTrack(id: left, source: .soundcore, relativePath: "l", fileName: "l", offset: 0, sha256: "l"),
-                      RecordingTrack(id: right, source: .imported, relativePath: "r", fileName: "r", offset: 0, sha256: "r")]
-        let a = transcript(left, [[Line(start: 0, text: "Please book the larger meeting room for Thursday", speaker: "l:1", confidence: 0.8)]],
-                           edits: ["larger": ("lager", 0.8)])
-        let b = transcript(right, [[Line(start: 0, text: "Please book the larger meeting room for Thursday", speaker: "r:1", confidence: 0.8)]], created: 2)
-        func fused(_ leftSNR: Float, _ rightSNR: Float) -> String {
-            TranscriptFusion.fuse([a, b], tracks: tracks, inputs: FusionInputs(signalQuality: [
-                left: SignalQualityProfile(interval: 1, snr: Array(repeating: leftSNR, count: 10)),
-                right: SignalQualityProfile(interval: 1, snr: Array(repeating: rightSNR, count: 10))])).segments.map(\.text).joined()
-        }
-        XCTAssertEqual(fused(5, 30), "Please book the larger meeting room for Thursday")
-        XCTAssertEqual(fused(30, 5), "Please book the lager meeting room for Thursday")
-    }
-
     func testProvenanceRecordsWhichSourceSuppliedEachWord() throws {
         let result = fuseAll()
         let third = try XCTUnwrap(result.segments.first { $0.text == r3 })
@@ -311,7 +295,7 @@ final class MultiSourceFusionTests: XCTestCase {
 
         meeting.tracks.append(tracks[3])
         meeting.transcripts.append(roomTranscript)
-        meeting.recordAudioAlignments([roomRecord])
+        meeting.audioAlignments = [roomRecord]
         let issues = meeting.applyFusion(TranscriptFusion.fuse(meeting: meeting))
         XCTAssertTrue(issues.isEmpty, "\(issues)")
         let after = try XCTUnwrap(meeting.unifiedTranscript.first { $0.id == target.id })
@@ -339,7 +323,7 @@ final class MultiSourceFusionTests: XCTestCase {
         combined.segments = combined.segments.filter { ![o3, r4].contains($0.text) } + merged.segments
         combined.words = nil
         var meeting = Meeting(tracks: tracks, transcripts: [systemTranscript, micTranscript, combined])
-        meeting.recordAudioAlignments([roomRecord])
+        meeting.audioAlignments = [roomRecord]
         meeting.applyFusion(TranscriptFusion.fuse(meeting: meeting))
         let reply = try XCTUnwrap(meeting.unifiedTranscript.first { $0.text == o3 })
         let remote = try XCTUnwrap(meeting.unifiedTranscript.first { $0.text == r4 })
@@ -372,7 +356,7 @@ final class MultiSourceFusionTests: XCTestCase {
         XCTAssertEqual(first.segments, second.segments)
         XCTAssertEqual(first.summary, second.summary)
         var meeting = Meeting(tracks: tracks, transcripts: transcripts)
-        meeting.recordAudioAlignments([roomRecord])
+        meeting.audioAlignments = [roomRecord]
         meeting.applyFusion(TranscriptFusion.fuse(meeting: meeting))
         let decoded = try JSONDecoder().decode(Meeting.self, from: JSONEncoder().encode(meeting))
         XCTAssertEqual(decoded, meeting)
@@ -389,27 +373,12 @@ final class MultiSourceFusionTests: XCTestCase {
         var local = base, remote = base
         var older = roomRecord; older.measuredAt = Date(timeIntervalSince1970: 100)
         var newer = roomRecord; newer.measuredAt = Date(timeIntervalSince1970: 200); newer.alignment?.confidence = 0.95
-        local.recordAudioAlignments([older]); remote.recordAudioAlignments([newer])
+        local.audioAlignments = [older]; remote.audioAlignments = [newer]
         remote.applyFusion(TranscriptFusion.fuse(meeting: remote))
         let merged = MeetingMerge.merge(base: base, local: local, remote: remote)
         XCTAssertEqual(merged.meeting.audioAlignments, [newer])
         XCTAssertFalse(merged.warnings.contains { $0.contains("audio-alignment") })
         XCTAssertEqual(merged.meeting.unifiedTranscript, remote.unifiedTranscript)
         XCTAssertEqual(merged.meeting.fusionSummary, remote.fusionSummary)
-    }
-
-    // MARK: Planning audio alignment
-
-    func testPlansRecorderAgainstRawMicrophoneThenCallAndSkipsMeasuredPairs() {
-        var meeting = Meeting(tracks: tracks)
-        let start = Date(timeIntervalSince1970: 5_000)
-        let requests = MeetingAudioAlignment.requests(for: meeting, recordingStartDates: [room: start, micRaw: start.addingTimeInterval(97)])
-        XCTAssertEqual(requests.map(\.trackID), [room, room])
-        XCTAssertEqual(requests.map(\.referenceTrackID), [micRaw, system])
-        XCTAssertEqual(requests[0].expectedOffset, -97)
-        XCTAssertEqual(requests[0].searchRadius, 600)
-        XCTAssertNil(requests[1].expectedOffset)
-        meeting.recordAudioAlignments([roomRecord])
-        XCTAssertEqual(MeetingAudioAlignment.requests(for: meeting).map(\.referenceTrackID), [system])
     }
 }

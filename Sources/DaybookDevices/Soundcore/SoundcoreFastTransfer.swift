@@ -207,22 +207,32 @@ final class SoundcoreFastTransfer {
         stage = .opening
         holdBackground()
         let credentials = SoundcoreWiFi.credentials()
+        // Marked before `1A 05` goes out, not once it's answered: Bluetooth dropping as the access point starts would
+        // otherwise leave it open with nothing to close it at the next connection.
+        host.accessPointMayBeOpen(credentials.ssid)
         let accessPoint: SoundcoreAccessPoint
         do {
             accessPoint = try await bluetooth.openAccessPoint(ssid: credentials.ssid, password: credentials.password)
         } catch SoundcoreError.timedOut {
             // It may have opened without its answer arriving: closing it is harmless either way.
-            try? await bluetooth.closeAccessPoint()
+            if (try? await bluetooth.closeAccessPoint()) != nil { host.accessPointMayBeOpen(nil) }
             throw SoundcoreError.timedOut
+        } catch SoundcoreError.rejected {
+            // It said no: nothing opened.
+            host.accessPointMayBeOpen(nil)
+            throw SoundcoreError.rejected
         }
-        try stillStarting()
+        do { try stillStarting() } catch {
+            // Ended before Bluetooth was let go: the access point is closed while the link is still here.
+            if (try? await bluetooth.closeAccessPoint()) != nil { host.accessPointMayBeOpen(nil) }
+            throw error
+        }
         // A join this device couldn't tell from staying on its own network (`SoundcoreHotspot.canCheckJoin`) isn't
         // tried: the access point is closed while Bluetooth is still here, and the transfer stays on it.
         guard hotspot.canCheckJoin(recorder: accessPoint.host) else {
-            try? await bluetooth.closeAccessPoint()
+            if (try? await bluetooth.closeAccessPoint()) != nil { host.accessPointMayBeOpen(nil) }
             throw SoundcoreHotspotError.notJoined
         }
-        host.accessPointMayBeOpen(accessPoint.ssid)
         let key = bluetooth.handOverKey()
         leftBluetooth = true
         host.leaveBluetoothForWiFi()

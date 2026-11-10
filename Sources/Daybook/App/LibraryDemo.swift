@@ -2,6 +2,7 @@
 import AppKit
 import DaybookCaptions
 import DaybookCore
+import DaybookDevices
 import DaybookIntelligence
 import DaybookKit
 import Foundation
@@ -77,6 +78,11 @@ enum LibraryDemo {
                 state.multiSelection = Set(state.meetings.filter { titles.contains($0.title) }.map(\.id))
             }
             if let notice = LaunchOptions.value(after: "--notice") { state.notice = notice }
+            // `--lock-demo` (PersonalLockDemo): the place shows what it would after choosing it, so with Personal
+            // locked its page waits for Unlock rather than showing the demo's Work conversation beside it.
+            if PersonalLockDemo.state() != nil, let id = state.selectedID, !state.visibleMeetings.contains(where: { $0.id == id }) {
+                state.selectQuietly(state.visibleMeetings.first?.id)
+            }
         }
     }
 
@@ -138,6 +144,15 @@ enum LibraryDemo {
         if let waiting = id(queued) { state.processingQueue = [state.makeJob(meetingID: waiting, mode: .newAudio)] }
         if let held = id(paused) { state.pausedIDs = [held] }
         if let models = id(waitingForModels) { state.awaitingModels = [models] }
+        // On this Mac the walkthrough waits for an iPhone's audio, which says where it is: "· Sending 40%".
+        if let walkthrough = id(ReadingDemo.Title.awaiting), let meeting = state.meetings.first(where: { $0.id == walkthrough }) {
+            var phone = CompanionRecording(deviceID: "demo-iphone", deviceKind: DaybookPhoneIntegration.id, deviceName: "Alex’s iPhone",
+                                           macStartedAt: meeting.date, state: .stopped, startedByDaybook: true)
+            phone.macEndedAt = meeting.date.addingTimeInterval(20)
+            phone.recordingID = UUID().uuidString
+            state.update(walkthrough) { $0.companions = [phone] }
+            state.phones.demoArrivals[walkthrough] = [AwaitedRecording.arrivalKey(deviceKind: phone.deviceKind, deviceName: phone.deviceName): .sending(0.4)]
+        }
     }
 }
 

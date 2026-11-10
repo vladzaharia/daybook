@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookDesign
 @testable import DaybookKit
 import DaybookLink
 import DaybookTestSupport
@@ -150,6 +151,14 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         XCTAssertEqual(row.kind, .waiting)
         XCTAssertNotNil(row.countdownUntil, "The row counts down")
         XCTAssertEqual(row.text?.hasPrefix("Summarizing in "), true)
+        // VM-16: the list's subtitle counts down to the same moment, on the same ticks, so the two say the same number.
+        let until = try XCTUnwrap(row.countdownUntil)
+        XCTAssertEqual(MacListSubtitle.countdown(rig.state), until, "the subtitle ticks on the row's deadline")
+        let tick = CountdownPhase.tick(before: until, at: Date())
+        for offset in [0.0, 1, 2.5, 7] {
+            let moment = tick.addingTimeInterval(offset)
+            XCTAssertEqual(MacListSubtitle.text(rig.state, results: 0, at: moment), row.text(at: moment), "\(offset) s on")
+        }
         guard case .summaryCountdown(_, let cloud)? = FloatingStatusInputs.work(for: meeting, state: rig.state) else {
             return XCTFail("Floating Notes shows the countdown")
         }
@@ -288,6 +297,30 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         try await rig.processed(id)
         XCTAssertEqual(cloud.summarized, [id])
         XCTAssertTrue(rig.inference.summarized.isEmpty)
+    }
+
+    /// A Personal conversation is never sent to the cloud on its own: under Always it counts down as Offer First does,
+    /// and Use the Cloud is the person's choice for that one conversation.
+    func testBehaviorAlwaysCountsDownForAPersonalConversation() async throws {
+        let cloud = FakeCloud()
+        let rig = try await rig(cloud: cloud, policy: .always, seconds: 30)
+        let filed = try await conversation(rig, "Filed in Personal", frequency: 345)
+        rig.state.library.update(filed) { $0.placement = .personal }
+        rig.state.enqueue(filed)
+        try await countingDown(rig, filed)
+        XCTAssertEqual(rig.state.placements[filed]?.actions, [.useCloud, .startNow])
+        rig.state.chooseSummaryPlacement(.startNow, for: filed)
+        try await rig.processed(filed)
+        XCTAssertTrue(cloud.summarized.isEmpty, "Never sent on its own")
+        XCTAssertEqual(rig.inference.summarized.count, 1, "Summarized here")
+
+        let therapy = try await conversation(rig, "Therapy template", frequency: 355)
+        rig.state.library.update(therapy) { $0.kind = .therapy }
+        rig.state.enqueue(therapy)
+        try await countingDown(rig, therapy)
+        rig.state.chooseSummaryPlacement(.useCloud, for: therapy)
+        try await rig.processed(therapy)
+        XCTAssertEqual(cloud.summarized, [therapy], "Use the Cloud still sends it")
     }
 
     /// A speaker named while the summary is being written: the name follows into it, as into a summary already there,
@@ -571,5 +604,65 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         XCTAssertFalse(rig.state.processingCapabilities.summarizes)
         XCTAssertNil(rig.state.processingCapabilities.models?["summarization"])
         await phone.tearDown(rig.state)
+    }
+
+    // MARK: Transcript first (uxf-01, uxf-03)
+
+    /// Under Always with a key, no summary model is needed on this Mac at all: the transcript is made here and the
+    /// summary goes to the cloud, with nothing waiting for a download.
+    func testBehaviorUnderAlwaysTheCloudSummarizesWithNoSummaryModelHere() async throws {
+        let cloud = FakeCloud()
+        let rig = try await rig(cloud: cloud, policy: .always)
+        rig.state.installedModels.remove(rig.state.summaryModel)
+        XCTAssertFalse(rig.state.summaryOptions.thisDeviceCanSummarize, "No summary model here")
+        let id = try await conversation(rig, "Always, no model", frequency: 385)
+        XCTAssertFalse(rig.state.summaryWaitsForModel(try XCTUnwrap(rig.meeting(id))), "The cloud takes it at once")
+        rig.state.enqueue(id)
+        XCTAssertTrue(rig.state.awaitingModels.isEmpty, "Nothing waits for the summary model")
+        try await rig.processed(id)
+        XCTAssertEqual(cloud.summarized, [id])
+        XCTAssertTrue(rig.inference.summarized.isEmpty)
+        XCTAssertTrue(rig.state.queue.awaitingSummaryModel.isEmpty)
+        XCTAssertEqual(rig.meeting(id)?.summary?.origin.cloudModel, "Claude Sonnet 5.5")
+
+        // A Personal conversation isn't sent on its own: it waits for the model here, with Use the Cloud.
+        let personal = try await conversation(rig, "Personal, no model", frequency: 395)
+        rig.state.library.update(personal) { $0.placement = .personal }
+        rig.state.enqueue(personal)
+        try await rig.processed(personal)
+        XCTAssertEqual(rig.state.queue.awaitingSummaryModel, [personal])
+        XCTAssertEqual(cloud.summarized, [id], "Never sent on its own")
+    }
+
+    /// Offer First with a key and no summary model: the transcript is done and the summary waits for the model, the page
+    /// saying so with Use the Cloud, which sends it there now (from the page or a phone).
+    func testBehaviorASummaryWaitingForTheModelOffersUseTheCloud() async throws {
+        let cloud = FakeCloud()
+        let rig = try await rig(cloud: cloud, seconds: 30)
+        rig.state.installedModels.remove(rig.state.summaryModel)
+        let id = try await conversation(rig, "Waiting for the model", frequency: 405)
+        rig.state.enqueue(id)
+        try await rig.processed(id)
+        XCTAssertEqual(rig.state.queue.awaitingSummaryModel, [id], "No countdown holds the queue: it waits for the model")
+        XCTAssertNil(rig.state.placements[id])
+        let meeting = try XCTUnwrap(rig.meeting(id))
+        let status = rig.state.processingStatus(for: meeting)
+        XCTAssertEqual(status, .transcribed)
+        // The page as the Mac draws it, while the summary model downloads.
+        var inputs = ConversationStatusPresentation.Inputs(words: rig.state.statusWords,
+                                                           local: .mac(summarizes: false, models: .downloading(done: 385, total: 1_000)))
+        inputs.summaryWaitsForModel = rig.state.summaryWaitsForModel(meeting)
+        inputs.placement.cloudOffered = rig.state.cloudOnOffer
+        XCTAssertEqual(ConversationStatusPresentation.page(status, meeting: meeting, inputs: inputs),
+                       ConversationStatusPresentation(kind: .line, symbol: "clock", title: "Waiting to summarize after the download · 38%",
+                                                      progress: 0.385, actions: [.placement(.useCloud)]))
+        XCTAssertEqual(FloatingStatusInputs.work(for: meeting, state: rig.state), .ready(summary: false), "Nothing downloading: no wait to name")
+
+        rig.state.chooseSummaryPlacement(.useCloud, for: id)
+        try await rig.processed(id)
+        XCTAssertEqual(cloud.summarized, [id])
+        XCTAssertTrue(rig.inference.summarized.isEmpty)
+        XCTAssertTrue(rig.state.queue.awaitingSummaryModel.isEmpty)
+        XCTAssertFalse(rig.state.queue.isOwed(id))
     }
 }

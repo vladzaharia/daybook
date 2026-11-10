@@ -15,7 +15,8 @@ enum DaybookStyle {
     /// Filled buttons with white labels (4.5:1 or better in both appearances).
     static let prominentFill = DaybookPalette.prominentFill
     /// The reading surface behind the page, the transcript, and floating notes: barely warmer than white.
-    /// In dark mode one step below the list column (`#1E1E1E`), so the page recedes and neon reads brighter.
+    /// In dark mode one step below the list column (`#18181B`, `DaybookPalette.paper`), so the page recedes and neon
+    /// reads brighter.
     static let paper = DaybookPalette.paper
     /// Bookmarks, and nothing else. Neon amber in dark mode.
     static let bookmark = DaybookPalette.bookmark
@@ -34,9 +35,6 @@ enum DaybookStyle {
     /// A glyph for audio that's live (playing, listening): neon mint in Dark Mode, link ink in Light
     /// (`DaybookPalette.liveGlyph`, which follows the appearance itself).
     static func liveGlyph(_ scheme: ColorScheme) -> Color { DaybookPalette.liveGlyph }
-    /// Daybook's signature, corner to corner: the Privacy lock and Welcome's bullets. Progress draws it
-    /// left to right (`WorkProgress`).
-    static let brandGradient = DaybookPalette.brandGradient(.mark)
 
     /// Text on paper. Chrome keeps the system label colours.
     typealias Ink = DaybookPalette.Ink
@@ -47,21 +45,10 @@ enum DaybookStyle {
 
     // MARK: Page geometry
 
-    /// The text measure: about 72 characters at the body size.
+    /// The text measure: about 80 characters of the 15 pt body.
     static let measure = ReadingGeometry.measure
     /// Times hang in this margin to the left of the measure.
     static let margin = ReadingGeometry.margin
-    /// Below this detail width, times fold inline and the measure fills the column.
-    static let narrowWidth = ReadingGeometry.narrowBelow
-}
-
-extension DaybookPalette.Ink {
-    /// The Ink scale for the notes `NSTextView`, the same values as the colours above.
-    static let titleNS = DaybookPalette.Shade.title.nsColor
-    static let bodyNS = DaybookPalette.Shade.body.nsColor
-    static let secondaryNS = DaybookPalette.Shade.secondary.nsColor
-    static let metaNS = DaybookPalette.Shade.meta.nsColor
-    static let faintNS = DaybookPalette.Shade.faint.nsColor
 }
 
 /// Text on paper reads `Ink.body`, `Ink.meta`, and so on.
@@ -79,7 +66,8 @@ typealias DaybookMark = DaybookDesign.DaybookMark
 
 /// View › Make Text Bigger's steps for the reading surface (`readingScale`, DaybookDesign).
 enum ReadingScale {
-    static let steps: [CGFloat] = [12, 13, 14, 16, 18, 20, 22].map { $0 / 14 }
+    /// The body's size at each step; Actual Size is the 15 pt body.
+    static let steps: [CGFloat] = [13, 14, 15, 17, 19, 21, 23].map { $0 / DaybookFont.body.size(.window) }
     static func bigger(_ value: Double) -> Double { Double(steps.first { $0 > CGFloat(value) + 0.001 } ?? steps.last!) }
     static func smaller(_ value: Double) -> Double { Double(steps.last { $0 < CGFloat(value) - 0.001 } ?? steps.first!) }
 }
@@ -99,45 +87,13 @@ enum TypeStyle {
     static let colophon = DaybookFont.colophon.font(.window)
     static let rowTitle = DaybookFont.rowTitle.font(.window)
     static let rowDetail = DaybookFont.rowDetail.font(.window)
-    /// Line spacing that brings 14 pt body text to a 22 pt line.
+    /// Line spacing that brings 15 pt body text to a 24 pt line.
     static func bodyLineSpacing(_ scale: CGFloat = 1) -> CGFloat { DaybookFont.bodyLineSpacing(.window, scale: scale) }
 }
 
-// MARK: - Liquid Glass, only on the floating layer
+// MARK: - Bars and boxes
 
 extension View {
-    /// Liquid Glass on macOS 26 and later; a material capsule with a hairline and shadow on macOS 15.
-    @ViewBuilder
-    func glassSurface(in shape: some Shape, tint: Color? = nil, interactive: Bool = false) -> some View {
-        if #available(macOS 26, *) {
-            glassEffect(.regular.tint(tint).interactive(interactive), in: shape)
-        } else {
-            background(.regularMaterial, in: shape)
-                .overlay(shape.stroke(Color(nsColor: .separatorColor), lineWidth: 0.5))
-                .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
-        }
-    }
-
-    /// Glass buttons belong only inside floating strips (the player and the floating notes controls).
-    @ViewBuilder
-    func glassButtonStyle(prominent: Bool = false) -> some View {
-        if #available(macOS 26, *) {
-            if prominent { buttonStyle(.glassProminent) } else { buttonStyle(.glass) }
-        } else {
-            if prominent { buttonStyle(.borderedProminent) } else { buttonStyle(.bordered) }
-        }
-    }
-
-    /// Pins a bar to the top edge. On macOS 26 it joins the toolbar's scroll edge effect.
-    @ViewBuilder
-    func topBar(@ViewBuilder _ content: () -> some View) -> some View {
-        if #available(macOS 26, *) {
-            safeAreaBar(edge: .top, spacing: 0, content: content)
-        } else {
-            safeAreaInset(edge: .top, spacing: 0, content: content)
-        }
-    }
-
     /// Pins a bar to the bottom edge, letting content scroll beneath it on macOS 26.
     @ViewBuilder
     func bottomBar(@ViewBuilder _ content: () -> some View) -> some View {
@@ -151,6 +107,19 @@ extension View {
     /// The quiet filled box used by status lines that need the person, notices, and quotes.
     func quietBox(cornerRadius: CGFloat = 8) -> some View {
         background(DaybookStyle.quietFill, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    }
+
+    /// Liquid Glass on macOS 26 and later; a material surface with a hairline and shadow on macOS 15. The call
+    /// prompt's card sits on it.
+    @ViewBuilder
+    func glassSurface(in shape: some Shape, tint: Color? = nil, interactive: Bool = false) -> some View {
+        if #available(macOS 26, *) {
+            glassEffect(.regular.tint(tint).interactive(interactive), in: shape)
+        } else {
+            background(.regularMaterial, in: shape)
+                .overlay(shape.stroke(Color(nsColor: .separatorColor), lineWidth: 0.5))
+                .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+        }
     }
 }
 
@@ -191,13 +160,4 @@ struct SidebarLabelStyle: LabelStyle {
 
 extension LabelStyle where Self == SidebarLabelStyle {
     static var sidebar: SidebarLabelStyle { SidebarLabelStyle() }
-}
-
-/// Lets neighbouring glass shapes blend on macOS 26.
-struct GlassGroup<Content: View>: View {
-    var spacing: CGFloat?
-    @ViewBuilder var content: Content
-    var body: some View {
-        if #available(macOS 26, *) { GlassEffectContainer(spacing: spacing) { content } } else { content }
-    }
 }

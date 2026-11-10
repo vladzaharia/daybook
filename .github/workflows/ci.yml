@@ -148,6 +148,11 @@ jobs:
         with:
           path: .build
           key: ${{ steps.key.outputs.build }}
+      # Daybook's own code builds without a warning. The dependencies print dozens, so this reads the log by path
+      # rather than passing -warnings-as-errors; after the cache is saved, and the tests still run when it fails.
+      - name: No warnings in Daybook's own code
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: scripts/ci/own-warnings.sh build/test-results/build.log
       # One step per test target group (each target is its own test bundle), so a failure names its
       # area and every group still runs. The two timing-budget tests run on their own afterwards.
       # DAYBOOK_TEST_TIMEOUT_SCALE doubles every test wait (Tests/DaybookTestSupport): hosted runners

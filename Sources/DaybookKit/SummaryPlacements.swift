@@ -10,6 +10,9 @@ import Observation
 /// `onSettled` says so and the app acts: runs it here or in the cloud, or writes the request a Mac carries
 /// out. A caller that would rather wait for the answer uses `place(_:immediately:)`. The entry stays until
 /// the app ends it, so the status can say "Summarizing with Claude Sonnet 5.5" while the cloud works.
+///
+/// Whether a conversation is Personal is asked of the app's library as its planner begins (`isPersonal`): a Personal
+/// one is never sent to the cloud on its own (`SummaryPlacementPlanner.isPersonal`).
 @MainActor
 @Observable
 public final class SummaryPlacements {
@@ -22,6 +25,8 @@ public final class SummaryPlacements {
     @ObservationIgnored public var onSettled: ((UUID, SummaryPlacementPlanner.Phase) -> Void)?
     /// Any planner changed in a way worth telling another device (a countdown began, retargeted, or ended).
     @ObservationIgnored public var onChange: ((UUID) -> Void)?
+    /// Whether the conversation is Personal (`Meeting.effectivePlacement`), from the app's library.
+    @ObservationIgnored public var isPersonal: (UUID) -> Bool = { _ in false }
 
     private let clock: () -> Date
     private let runsTimer: Bool
@@ -58,7 +63,7 @@ public final class SummaryPlacements {
             return existing.started
         }
         let planner = SummaryPlacementPlanner(options: options, preferences: preferences, at: clock(),
-                                              immediately: immediately, waitsForMacs: waitsForMacs)
+                                              immediately: immediately, waitsForMacs: waitsForMacs, personal: isPersonal(id))
         set(id, planner)
         return planner.started
     }
@@ -71,7 +76,8 @@ public final class SummaryPlacements {
             perform(.useCloud, for: id)
             return planners[id]?.started
         }
-        var planner = SummaryPlacementPlanner(options: options, preferences: preferences, at: clock(), waitsForMacs: waitsForMacs)
+        var planner = SummaryPlacementPlanner(options: options, preferences: preferences, at: clock(), waitsForMacs: waitsForMacs,
+                                              personal: isPersonal(id))
         planner.perform(.useCloud, at: clock())
         set(id, planner)
         return planner.started
@@ -84,7 +90,7 @@ public final class SummaryPlacements {
         guard options.thisDeviceCanSummarize else { return nil }
         let here = SummaryOptions(thisDeviceCanSummarize: true, reachableMacs: [], cloud: nil)
         let planner = SummaryPlacementPlanner(options: here, preferences: preferences, at: clock(), immediately: true,
-                                              waitsForMacs: waitsForMacs)
+                                              waitsForMacs: waitsForMacs, personal: isPersonal(id))
         set(id, planner)
         return planner.started
     }

@@ -20,7 +20,7 @@ struct MenuBarView: View {
             Button("Add Bookmark") { if let id = state.recordingID { state.addHighlight(id) } }
                 .keyboardShortcut("d")
         } else {
-            Button("Start Recording") { Task { await state.startRecording() } }
+            Button("Start Recording") { Task { await state.startRecording(from: .elsewhere) } }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(!state.isReady || state.isStartingRecording)
         }
@@ -120,7 +120,8 @@ private struct MenuBarStatusItems: View {
 /// what each state says. The words are the ones Floating Notes' home and the iPhone's status sheet use
 /// (`RecorderStatusWords`, `PeerStatusWords`, `ProcessingWords`, `SyncStatus`), each naming what it's about, since a
 /// menu has no title column; a Personal conversation is "a personal conversation". It speaks only when there's
-/// something to say: this Mac's work and a summary's countdown with its choices, a model downloading, a recorder
+/// something to say: this Mac's work and a summary's countdown with its choices, model downloads (one phrase over the
+/// whole set, or one that stopped, or waiting for Wi‑Fi), a recorder
 /// that's moving, importing, listening live, recording, has new recordings, or needs the person, a paired iPhone
 /// that's recording or paused, and iCloud when it's a problem.
 enum MenuBarStatus {
@@ -141,15 +142,11 @@ enum MenuBarStatus {
 
     struct Inputs: Equatable {
         var work: Work?
-        var download: Download?
+        /// How this Mac's model downloads stand.
+        var models: ModelDownloadState?
         var recorders: [RecorderFacts] = []
         var phones: [PeerFacts] = []
         var sync: SyncStatus = .off
-    }
-
-    struct Download: Equatable {
-        var name: String
-        var fraction: Double
     }
 
     /// What choosing an item opens.
@@ -183,9 +180,9 @@ enum MenuBarStatus {
     static func lines(_ inputs: Inputs, now: Date = Date()) -> [Line] {
         var lines: [Line] = []
         if let work = inputs.work { lines.append(workLine(work, now: now)) }
-        if let download = inputs.download {
-            lines.append(Line(id: "download", title: "Downloading \(download.name) · \(ProcessingWords.percentText(download.fraction))",
-                              opens: .modelSettings))
+        // "Downloading models · 40%" over the whole set, as every surface says it; or that one stopped, or waits for Wi‑Fi.
+        if let models = inputs.models {
+            lines.append(Line(id: "download", title: ProcessingWords.modelDownloadLine(models), opens: .modelSettings))
         }
         for facts in inputs.recorders { lines += recorderLines(facts, now: now) }
         for peer in inputs.phones where peer.activity != .idle {
@@ -254,9 +251,8 @@ enum MenuBarStatus {
                 break
             }
             inputs.work = work
-        } else if let id = state.downloadingID {
-            inputs.download = Download(name: state.modelCatalog.name(for: id), fraction: state.downloadProgress.fraction)
         }
+        inputs.models = state.modelDownloadState
         for session in state.devices.sessions {
             if session.kind.id == DaybookPhoneIntegration.id {
                 guard session.direct != nil else { continue }

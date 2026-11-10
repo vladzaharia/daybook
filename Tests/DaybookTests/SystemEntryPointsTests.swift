@@ -1,6 +1,8 @@
+import CoreSpotlight
 import DaybookCore
 import DaybookDevices
 import DaybookTestSupport
+import DaybookUI
 import Foundation
 @preconcurrency import UserNotifications
 import XCTest
@@ -121,7 +123,7 @@ final class SystemEntryPointsTests: XCTestCase {
         let center = FakeNotificationCenter()
         let notifier = notifications(state, center: center)
         let id = state.newMeeting(title: "Therapy")
-        state.setPlacement([id], .personal)
+        state.library.setPlacement([id], .personal)
         notifier.update(to: .init(stops: [id: "Recording stopped because the Mac went to sleep. Everything up to then is saved."]))
         XCTAssertEqual(center.showing.count, 1)
         XCTAssertNil(center.showing.first?.subtitle, "Personal: unnamed")
@@ -165,6 +167,46 @@ final class SystemEntryPointsTests: XCTestCase {
         await state.flush()
     }
 
+    /// While Daybook is behind the call: a microphone that stops hearing, and a disk running out of room, are said once
+    /// each time they start, naming the conversation, and taken back when they're over or the recording ends. In front,
+    /// Floating Notes says them.
+    func testBehaviorAMicrophoneThatStopsHearingAndLowSpaceAreSaidOutsideDaybook() async throws {
+        let state = await state()
+        let center = FakeNotificationCenter()
+        let notifier = notifications(state, center: center)
+        let id = state.newMeeting(title: "Design review")
+        notifier.update(to: .init(recordingID: id))
+        notifier.update(to: .init(recordingID: id, notHearing: true))
+        let silent = try XCTUnwrap(center.showing.first)
+        XCTAssertEqual(silent.kind, .microphoneSilent)
+        XCTAssertEqual(silent.title, "Microphone silent")
+        XCTAssertEqual(silent.subtitle, "Design review")
+        XCTAssertEqual(silent.body, RecordingStatusWords.microphoneSilentHelp)
+        notifier.update(to: .init(recordingID: id, notHearing: true))
+        XCTAssertEqual(center.posted.count, 1, "said once")
+        notifier.update(to: .init(recordingID: id))
+        XCTAssertTrue(center.showing.isEmpty, "hearing again, it goes")
+
+        let line = RecordingStatusWords.storageDetail(spaceLeft: 25 * 60, callStopped: false)
+        notifier.update(to: .init(recordingID: id, lowSpace: line))
+        XCTAssertEqual(center.showing.map(\.kind), [.lowSpace])
+        XCTAssertEqual(center.showing.first?.title, "Low on space")
+        XCTAssertEqual(center.showing.first?.body, line)
+        let later = RecordingStatusWords.storageDetail(spaceLeft: 20 * 60, callStopped: false)
+        notifier.update(to: .init(recordingID: id, notHearing: true, lowSpace: later))
+        XCTAssertEqual(center.showing.filter { $0.kind == .lowSpace }.last?.body, later, "it keeps up with the minutes")
+        XCTAssertEqual(RecordingNotifications.spaceStep(25 * 60 + 20), 25 * 60, "in five-minute steps")
+        XCTAssertEqual(RecordingNotifications.spaceStep(4 * 60 + 50), 4 * 60, "by the minute in the last five")
+        notifier.update(to: .init())
+        XCTAssertTrue(center.showing.isEmpty, "the recording ended: both go")
+
+        let inFront = FakeNotificationCenter()
+        let front = notifications(state, center: inFront, inFront: true)
+        front.update(to: .init(recordingID: id, notHearing: true, lowSpace: line))
+        XCTAssertTrue(inFront.posted.isEmpty, "in front, Floating Notes says it")
+        await state.flush()
+    }
+
     /// Permission is asked the first time someone records or turns on Record calls automatically, and only then.
     func testBehaviorPermissionIsAskedAtTheFirstRecordingOrAutomaticRecording() async throws {
         let state = await state()
@@ -185,8 +227,10 @@ final class SystemEntryPointsTests: XCTestCase {
         XCTAssertEqual(DeviceNotifications.authorizationOptions, [.alert, .sound])
     }
 
-    /// The stop's notification opens its conversation; Record Again records a new one.
-    func testBehaviorAClickOpensTheConversationAndRecordAgainRecords() async throws {
+    /// The stop's notification opens its conversation; its Record Again records into that same conversation, as the
+    /// panel's does, so a call cut short isn't split in two, and leaves the window on what it showed.
+    /// Regression: it started a new conversation.
+    func testBehaviorAClickOpensTheConversationAndRecordAgainRecordsIntoIt() async throws {
         let microphone = FakeCaptureSource(method: "microphone")
         let state = await state(capture: Self.fakeCapture(microphone))
         let center = FakeNotificationCenter()
@@ -199,9 +243,12 @@ final class SystemEntryPointsTests: XCTestCase {
         XCTAssertEqual(state.selectedID, id)
         XCTAssertEqual(opened, 1)
 
-        notifier.respond(.recordAgain)
-        try await waitUntil("a new recording") { state.recordingID != nil }
-        XCTAssertNotEqual(state.recordingID, id)
+        let other = state.newMeeting(title: "Other")
+        notifier.respond(.recordAgain(id))
+        try await waitUntil("the recording") { state.recordingID != nil }
+        XCTAssertEqual(state.recordingID, id, "into the conversation that stopped")
+        XCTAssertEqual(state.meetings.count, 2, "no new conversation")
+        XCTAssertEqual(state.selectedID, other, "the window is left as it was")
         XCTAssertTrue(microphone.started)
         await state.stopRecording()
         await state.flush()
@@ -281,8 +328,8 @@ final class SystemEntryPointsTests: XCTestCase {
         let work = state.newMeeting(title: "Roadmap")
         let personal = state.newMeeting(title: "Therapy")
         let unsorted = state.newMeeting(title: "Conversation at 9:00 AM")
-        state.setPlacement([work], .work)
-        state.setPlacement([personal], .personal)
+        state.library.setPlacement([work], .work)
+        state.library.setPlacement([personal], .personal)
         let index = FakeConversationIndex()
         let spotlight = ConversationSpotlight(state: state, index: index, delay: .milliseconds(10))
         spotlight.start()
@@ -292,7 +339,7 @@ final class SystemEntryPointsTests: XCTestCase {
 
         state.update(work) { $0.title = "Roadmap review" }
         try await waitUntil("the rename to reach Spotlight") { index.indexed[work]?.title == "Roadmap review" }
-        state.setPlacement([unsorted], .personal)
+        state.library.setPlacement([unsorted], .personal)
         try await waitUntil("a conversation moved to Personal to leave Spotlight") { index.indexed[unsorted] == nil }
         XCTAssertNil(index.indexed[personal])
 
@@ -308,6 +355,34 @@ final class SystemEntryPointsTests: XCTestCase {
         try await waitUntil("a conversation in the Trash to leave Spotlight") { index.indexed[work] == nil }
         spotlight.stop()
         await spotlight.settled()
+        await state.flush()
+    }
+
+    /// Regression (F-11): Spotlight was given the summary's overview, a copy of what was said outside the library's
+    /// encryption. It gets the title and dates, as on the iPhone; Shortcuts reads the title and date as properties.
+    func testBehaviorSpotlightGetsTheTitleAndDatesNeverTheSummary() async throws {
+        let state = await state()
+        let id = state.newMeeting(title: "Pricing review")
+        state.update(id) { $0.summary = MeetingSummary(title: "Pricing", overview: "Priya wants the annual plan first.") }
+        let meeting = try XCTUnwrap(state.meetings.first { $0.id == id })
+        XCTAssertFalse(meeting.summary?.overview.isEmpty ?? true)
+        let entity = ConversationEntity(meeting)
+        let attributes = entity.attributeSet
+        XCTAssertEqual(attributes.title, "Pricing review")
+        XCTAssertEqual(attributes.contentDescription, meeting.date.formatted(date: .abbreviated, time: .shortened), "its date says what it is")
+        XCTAssertEqual(attributes.contentCreationDate, meeting.date)
+        XCTAssertNil(attributes.textContent)
+        let indexed = [attributes.title, attributes.displayName, attributes.contentDescription, attributes.textContent].compactMap { $0 }
+        XCTAssertFalse(indexed.contains { $0.contains("Priya") }, "nothing that was said")
+        XCTAssertEqual(String(localized: entity.$title.title), "Title")
+        XCTAssertEqual(String(localized: entity.$date.title), "Date")
+
+        state.update(id) { $0.summary?.overview = "Changed." }
+        let summarized = try XCTUnwrap(state.meetings.first { $0.id == id })
+        XCTAssertEqual(ConversationEntity(summarized), entity, "a new summary isn't a change for Spotlight")
+        state.update(id) { $0.title = "Pricing decision" }
+        let renamed = try XCTUnwrap(state.meetings.first { $0.id == id })
+        XCTAssertNotEqual(ConversationEntity(renamed), entity, "a rename is")
         await state.flush()
     }
 }

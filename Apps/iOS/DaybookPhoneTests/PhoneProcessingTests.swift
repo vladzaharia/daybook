@@ -509,6 +509,34 @@ final class PhoneProcessingTests: XCTestCase {
         XCTAssertFalse(rig.processor.isStartedByPerson(mac, work: .transcribe([])))
     }
 
+    /// Regression (iOS 27's `submitTaskRequest`): `begin` said yes before the system had answered. Its result is now the
+    /// system's answer, and a refusal forgets the request, so asking again for the same job asks the system again.
+    func testBehaviorBeginReportsTheSystemsAnswer() async throws {
+        let scheduler = ScriptedScheduler()
+        scheduler.refuses = true
+        let continued = ContinuedProcessing(scheduler: scheduler)
+        let job = UUID()
+        let refused = await continued.begin(job: job, title: "Transcribing", subtitle: "1 conversation").value
+        XCTAssertFalse(refused)
+        XCTAssertFalse(continued.isRunning)
+
+        scheduler.refuses = false
+        let accepted = await continued.begin(job: job, title: "Transcribing", subtitle: "1 conversation").value
+        XCTAssertTrue(accepted, "a refused job asks again")
+        XCTAssertEqual(scheduler.submitted.count, 1)
+        try await waitUntil("the system to start the task") { continued.isRunning }
+        let again = await continued.begin(job: job, title: "Transcribing", subtitle: "1 conversation").value
+        XCTAssertTrue(again)
+        XCTAssertEqual(scheduler.submitted.count, 1, "an accepted job isn't asked for twice")
+        continued.end(success: true)
+        XCTAssertEqual(scheduler.tasks.first?.completed, true)
+        let next = await continued.begin(job: UUID(), title: "Transcribing", subtitle: "1 conversation").value
+        XCTAssertTrue(next)
+        XCTAssertEqual(scheduler.submitted.count, 2, "a new job asks anew")
+        let unscheduled = await ContinuedProcessing(scheduler: nil).begin(job: job, title: "", subtitle: "").value
+        XCTAssertFalse(unscheduled, "no scheduler, no task")
+    }
+
     func testBehaviorWithoutAContinuedTaskLeavingTheScreenPausesTheWork() async throws {
         let rig = try await rig()
         rig.scheduler.refuses = true
@@ -653,6 +681,101 @@ final class PhoneProcessingTests: XCTestCase {
         await simulator.refresh()
         XCTAssertFalse(simulator.capabilities(enabled: true).summarizes)
         XCTAssertTrue(simulator.capabilities(enabled: true).transcribes)
+    }
+
+    /// Transcripts without a download: while the chosen transcription model isn't on this iPhone, the system's speech model
+    /// stands in (here a system model on Apple Vision's engine, since Simulator has no transcriber), with no speakers until
+    /// their models are downloaded and with them after; once the chosen model is here, it transcribes again.
+    func testBehaviorTheSystemsSpeechModelStandsInWhileTheChosenModelDownloads() async throws {
+        let root = try temporaryDirectory()
+        let json = """
+            {"schemaVersion": 1, "minimumReaderVersion": 1, "families": [{"id": "system-speech", "name": "System Speech",
+             "engine": "appleVision", "roles": ["transcription"],
+             "variants": [{"id": "system", "name": "System Speech", "systemProvided": true, "revisions": []}]}]}
+            """
+        var manifest = try ModelCatalog.readBuiltInManifest().manifest
+        manifest.families += try ModelManifestReader.read(Data(json.utf8)).manifest.families
+        let catalog = ModelCatalog(builtIn: manifest)
+        func models() async -> PhoneModels {
+            let models = PhoneModels(root: root, defaults: makeTestDefaults("PhoneProcessingTests"), catalog: catalog,
+                                     fetcher: PhoneModelsTests.RecordingFetcher(), network: PhoneModelsTests.ScriptedNetwork().network,
+                                     physicalMemory: 12_000_000_000, memoryLimit: 8_400_000_000, runsLanguageModels: true)
+            await models.refresh()
+            return models
+        }
+        let standIn = "system-speech/system"
+
+        let fresh = await models()
+        XCTAssertEqual(fresh.choice(for: .transcription)?.key, "parakeet/ultra", "The choice is unchanged")
+        XCTAssertEqual(fresh.transcriptionStandIn?.key, standIn)
+        XCTAssertEqual(fresh.capabilities(enabled: true), ProcessingCapabilities(transcribes: true, findsSpeakers: false, summarizes: false,
+                                                                                models: ["transcription": standIn]))
+        let alone = try XCTUnwrap(fresh.processingEngine(), "It transcribes with nothing downloaded")
+        XCTAssertEqual(alone.configuration.transcriptionModel.id, standIn)
+        XCTAssertFalse(alone.configuration.detectSpeakers, "No speakers until their models are here")
+        XCTAssertNil(alone.configuration.voiceEmbeddingModel)
+        XCTAssertTrue(fresh.processingMissing.contains { $0.key == "parakeet/ultra" }, "The chosen model still downloads")
+
+        for key in ["nemotron-3-diarization/offline", "community-1/offline"] { try installSynthetic(key, in: root, catalog: catalog) }
+        let speakers = await models()
+        let withSpeakers = try XCTUnwrap(speakers.processingEngine())
+        XCTAssertEqual(withSpeakers.configuration.transcriptionModel.id, standIn)
+        XCTAssertTrue(withSpeakers.configuration.detectSpeakers)
+        XCTAssertEqual(withSpeakers.configuration.speakerModel.id, "nemotron-3-diarization/offline")
+        XCTAssertEqual(withSpeakers.configuration.voiceEmbeddingModel?.id, "community-1/offline")
+        XCTAssertTrue(speakers.capabilities(enabled: true).findsSpeakers)
+
+        try installSynthetic("parakeet/ultra", in: root, catalog: catalog)
+        let chosen = await models()
+        XCTAssertNil(chosen.transcriptionStandIn, "Nothing stands in once the chosen model is here")
+        XCTAssertEqual(try XCTUnwrap(chosen.processingEngine()).configuration.transcriptionModel.id, "parakeet/ultra")
+        XCTAssertEqual(chosen.capabilities(enabled: true).models?["transcription"], "parakeet/ultra")
+        XCTAssertEqual(chosen.capabilities(enabled: false), ProcessingCapabilities(transcribes: false, findsSpeakers: false, summarizes: false))
+    }
+
+    /// xdev-settings-08: the iPhone transcribes in the library's language, which any device may change; a job keeps the
+    /// language it started with. No model for other languages runs here, so a language Parakeet doesn't cover goes to it
+    /// as a hint, as on a Mac without one.
+    func testBehaviorTheIPhoneTranscribesInTheLibrarysLanguage() async throws {
+        let root = try temporaryDirectory()
+        let catalog = ModelCatalog.builtIn
+        for key in ["parakeet/ultra", "nemotron-3-diarization/offline", "community-1/offline"] {
+            try installSynthetic(key, in: root, catalog: catalog)
+        }
+        let models = PhoneModels(root: root, defaults: makeTestDefaults("PhoneProcessingTests"), fetcher: PhoneModelsTests.RecordingFetcher(),
+                                 network: PhoneModelsTests.ScriptedNetwork().network, physicalMemory: 12_000_000_000,
+                                 memoryLimit: 8_400_000_000, runsLanguageModels: true)
+        await models.refresh()
+        let automatic = try XCTUnwrap(models.processingEngine()).configuration
+        XCTAssertNil(automatic.transcriptionLanguage, "Automatic")
+        XCTAssertNil(automatic.languageFallbackModel, "no model for other languages on an iPhone")
+
+        var language: String? = "de"
+        models.transcriptionLanguage = { language }
+        let german = try XCTUnwrap(models.processingEngine())
+        XCTAssertEqual(german.configuration.transcriptionLanguage, "de")
+        XCTAssertEqual(german.configuration.transcriptionModel.id, "parakeet/ultra")
+        XCTAssertTrue(german.configuration.detectSpeakers)
+        XCTAssertNotEqual(german.configuration.fingerprint, automatic.fingerprint, "the language is part of how it was made")
+        XCTAssertEqual(german.configuration.speakerMatchThreshold, ProcessingPreferences().speakerMatchThreshold,
+                       "the speaker settings' defaults, which only a Mac changes")
+
+        language = "fr"
+        XCTAssertEqual(german.configuration.transcriptionLanguage, "de", "a job keeps the language it started with")
+        XCTAssertEqual(try XCTUnwrap(models.processingEngine()).configuration.transcriptionLanguage, "fr", "the next one takes the new one")
+        language = "ja"
+        XCTAssertEqual(models.transcriptionRoute, TranscriptionRoute(model: "parakeet/ultra", language: "ja"))
+        XCTAssertEqual(models.capabilities(enabled: true).models?["transcription"], "parakeet/ultra")
+
+        // The app's models read the library's setting, where a Mac's change arrives through sync.
+        let library = PhoneLibrary(rootURL: try temporaryDirectory("language-library"), installation: "INSTALL-1")
+        let app = PhoneAppModel(recorder: RecorderRig().recorder, library: library, posture: DevicePosture(),
+                                options: DebugLaunch(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]),
+                                environment: try PhoneAppEnvironment.test(self))
+        try await library.controller.load()
+        XCTAssertNil(app.models.transcriptionLanguage())
+        library.controller.setTranscriptionLanguage("pt-BR")
+        XCTAssertEqual(app.models.transcriptionLanguage(), "pt")
     }
 
     /// A verified-looking install: the receipt the store writes, and sparse files of the catalog's sizes.

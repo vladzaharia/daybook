@@ -85,7 +85,7 @@ public struct SyncReplicaConfiguration: Sendable {
     public var holdsEditBursts = false
 
     public init(audioPolicy: SyncAudioPolicy = .eager, device: SyncDeviceIdentity? = nil,
-                audioCache: AudioCachePolicy? = nil, presenceRefreshInterval: TimeInterval = 600,
+                audioCache: AudioCachePolicy? = nil, presenceRefreshInterval: TimeInterval = SyncReplicaConfiguration.standardPresenceRefresh,
                 cloud: SyncCloudFiles = .system, keyStore: (any LibraryKeyStore)? = nil,
                 network: @escaping @Sendable () -> SyncNetworkCondition = { .unrestricted },
                 sealsNewLibrary: Bool = LibrarySyncEngine.sealsNewLibraries, compaction: SyncCompactionPolicy? = .standard) {
@@ -93,6 +93,9 @@ public struct SyncReplicaConfiguration: Sendable {
         self.presenceRefreshInterval = presenceRefreshInterval; self.cloud = cloud; self.keyStore = keyStore
         self.network = network; self.sealsNewLibrary = sealsNewLibrary; self.compaction = compaction
     }
+
+    /// How often a device rewrites its presence record while it runs, by default (`presenceRefreshInterval`).
+    public static let standardPresenceRefresh: TimeInterval = 600
 
     public static func mac(displayName: String, canProcess: Bool) -> Self {
         Self(audioPolicy: .eager, device: SyncDeviceIdentity(deviceClass: .mac, displayName: displayName, canProcess: canProcess))
@@ -221,6 +224,15 @@ public struct SyncDeviceActivity: Codable, Equatable, Sendable {
     public var isRecording: Bool { recordingConversationID != nil || recorders?.contains(where: \.isRecording) == true }
 }
 
+/// Something a device's presence says stands in the way of its sync, so others can say why its work hasn't arrived
+/// ("Alex's iPhone is out of iCloud storage"). An open value: one a newer Daybook writes is kept, and read as unknown.
+public struct SyncPresenceProblem: RawRepresentable, Codable, Hashable, Sendable {
+    public var rawValue: String
+    public init(rawValue: String) { self.rawValue = rawValue }
+    /// iCloud refuses what it sends: the person's iCloud storage is full.
+    public static let storageFull = SyncPresenceProblem(rawValue: "storageFull")
+}
+
 /// Whether a device holds an encrypted library's current key (`id`, hex), as its presence says.
 public struct SyncDeviceKeyState: Codable, Equatable, Sendable {
     public enum State: String, Codable, Sendable { case waiting, ready }
@@ -255,7 +267,25 @@ public struct KnownSyncDevice: Equatable, Identifiable, Sendable {
     /// What it does with its own models for other devices, as its presence record says. Nil: unknown (an earlier
     /// Daybook, or a device that doesn't say).
     public var capabilities: SyncDeviceCapabilities?
+    /// Files it still had to upload when it last wrote its presence. Nil: an earlier Daybook, or not said.
+    public var pendingUploads: Int?
+    /// What stands in the way of its sync, as it last said (`SyncPresenceProblem`). Nil: nothing, or not said.
+    public var problem: SyncPresenceProblem?
+    /// When this device, by its own clock, saw the record change to what it says now. Nil until it has seen one change
+    /// (the first read since launch): `lastHeard` is then the writer's own `lastSeen`.
+    public var heardAt: Date?
     public var reportsPresence: Bool { lastSeen != nil }
+    /// When it was last heard from: when this device saw its presence change, or else when it says it wrote it. Judged
+    /// on this device's clock wherever it can be, so a writer's clock, or iCloud's delay, doesn't make it come and go.
+    public var lastHeard: Date? { heardAt ?? lastSeen }
+    /// A device heard from within this long is present: two and a half times the interval at which a running device
+    /// rewrites its presence, so one late rewrite never makes it look gone.
+    public static let presenceWindow: TimeInterval = 2.5 * SyncReplicaConfiguration.standardPresenceRefresh
+    /// Present now: heard from within `presenceWindow` (`now` on this device's clock).
+    public func isPresent(at now: Date = Date()) -> Bool {
+        guard let heard = lastHeard else { return false }
+        return now.timeIntervalSince(heard) <= Self.presenceWindow
+    }
     /// Its Daybook reads and writes encrypted libraries. A device without presence (an older Daybook) doesn't.
     public var readsEncryptedLibraries: Bool { features.contains(LibrarySyncEngine.sealingFeature) }
     public init(id: String, deviceClass: SyncDeviceClass? = nil, displayName: String? = nil, canProcess: Bool? = nil,
@@ -304,7 +334,7 @@ extension Array where Element == KnownSyncDevice {
     /// Nil means no such device has synced this library (or none has written presence yet).
     public var latestProcessor: KnownSyncDevice? {
         filter { !$0.isCurrentDevice && $0.canProcess == true && $0.lastSeen != nil }
-            .max { ($0.lastSeen ?? .distantPast) < ($1.lastSeen ?? .distantPast) }
+            .max { ($0.lastHeard ?? .distantPast) < ($1.lastHeard ?? .distantPast) }
     }
     /// Other replicas that wrote to the journal without a presence record (an older Daybook on a Mac).
     public var hasPeersWithoutPresence: Bool { contains { !$0.isCurrentDevice && !$0.reportsPresence } }

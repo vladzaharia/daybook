@@ -31,6 +31,9 @@ public enum TranscriptionLanguages {
         }
     }
 
+    /// This device's language ("en" for en-GB): what the system's speech model transcribes in for Automatic.
+    public static var deviceLanguage: String? { normalize(Locale.current.language.languageCode?.identifier) }
+
     /// Whether a `languages` capability covers every language (nil, empty, or "*").
     public static func coversEverything(_ languages: [String]?) -> Bool {
         guard let languages, !languages.isEmpty else { return true }
@@ -55,6 +58,15 @@ public enum TranscriptionLanguages {
             else { codes.formUnion(model.capabilities.languages!.compactMap(normalize)) }
         }
         return codes.sorted { name($0).localizedCaseInsensitiveCompare(name($1)) == .orderedAscending }
+    }
+
+    /// The language row's list, the same on both apps because the language is the library's: every language a
+    /// transcription model in the catalog covers, whatever this device runs, by name, and `stored` where none does (one
+    /// a newer catalog offered on another device).
+    public static func libraryChoices(in catalog: ModelCatalog, keeping stored: String?) -> [String] {
+        var codes = choices(in: catalog)
+        if let stored = normalize(stored), !codes.contains(stored) { codes.append(stored) }
+        return codes
     }
 
     /// The language's name in the reader's language ("German"), or the code when unknown.
@@ -99,6 +111,18 @@ public enum TranscriptionRouting {
         return TranscriptionRoute(model: selected, fallback: other.key)
     }
 
+    /// The route a job queued now takes on this device, on both apps: `selected` in the library's `language`
+    /// (`LibraryController.transcriptionLanguage`, nil for Automatic), with this device's model for other languages
+    /// (`otherLanguagesModel` from its `chosen` one, among the models that run here; the iPhone has none today, so a
+    /// language its model doesn't cover goes to that model as a hint).
+    public static func route(selected: String, language: String?, otherLanguagesChoice chosen: String?, catalog: ModelCatalog,
+                             engines: [ModelEngineDescriptor], installed: Set<String>,
+                             appVersion: ModelVersion? = ModelVersion.app) -> TranscriptionRoute {
+        let other = otherLanguagesModel(selected: selected, chosen: chosen, catalog: catalog, engines: engines, installed: installed,
+                                        appVersion: appVersion)
+        return route(selected: selected, language: language, otherLanguages: other, catalog: catalog)
+    }
+
     /// The model for languages `selected` doesn't cover: the person's choice when it still serves,
     /// otherwise the best transcription model that covers every language, preferring one already
     /// installed, in the presets' order (Detailed first). Nil when `selected` covers everything.
@@ -119,6 +143,31 @@ public enum TranscriptionRouting {
         let ordered = presetOrder.compactMap { catalog.model($0) } + catalog.models(for: .transcription)
         let candidates = ordered.filter { usable($0) && TranscriptionLanguages.coversEverything($0.capabilities.languages) }
         return (candidates.first { installed.contains($0.key) } ?? candidates.first)?.key
+    }
+
+    /// The route a job takes while the model `route` names isn't on this device yet (docs/models.md, "Apple Speech"):
+    /// the system's speech model, when this device has it (`installed` holds system models only while they're available)
+    /// and it covers the language: the chosen one, or for Automatic the device's (`deviceLanguage`), which it then
+    /// transcribes in. The language and the language check's model stay as routed. Nil when the routed model is here, or
+    /// no system model can stand in, so the job waits for the download as before. Read from the catalog
+    /// (`systemProvided`, `languages`, the transcription rank, best first), never model IDs.
+    public static func interim(for route: TranscriptionRoute, deviceLanguage: String? = TranscriptionLanguages.deviceLanguage,
+                               catalog: ModelCatalog, engines: [ModelEngineDescriptor], installed: Set<String>,
+                               appVersion: ModelVersion? = ModelVersion.app) -> TranscriptionRoute? {
+        let routed = catalog.model(route.model)?.key ?? route.model
+        guard !installed.contains(routed),
+              let language = TranscriptionLanguages.normalize(route.language) ?? TranscriptionLanguages.normalize(deviceLanguage) else {
+            return nil
+        }
+        let standIns = catalog.models(for: .transcription).filter { model in
+            model.isSystemModel && model.key != routed && installed.contains(model.key)
+                && model.availability(engines: engines, appVersion: appVersion).isAvailable
+                && TranscriptionLanguages.covers(model.capabilities.languages, language)
+        }
+        guard let standIn = standIns.max(by: { ($0.quality(for: .transcription) ?? 0) < ($1.quality(for: .transcription) ?? 0) }) else {
+            return nil
+        }
+        return TranscriptionRoute(model: standIn.key, fallback: route.fallback == standIn.key ? nil : route.fallback, language: route.language)
     }
 
     /// Whether `other` covers some language `languages` doesn't.

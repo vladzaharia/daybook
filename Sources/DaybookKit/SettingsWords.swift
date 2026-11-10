@@ -36,6 +36,17 @@ public enum SettingsWords {
         return result
     }
 
+    // MARK: Transcription language
+
+    /// Settings › Models › Transcription's language row on both apps: its label, its first choice, and what a choice
+    /// reads as ("Automatic", "German").
+    public static let languageLabel = "Language"
+    public static let automaticLanguage = "Automatic"
+
+    public static func languageName(_ code: String?, locale: Locale = .current) -> String {
+        code.map { TranscriptionLanguages.name($0, locale: locale) } ?? automaticLanguage
+    }
+
     // MARK: Cloud
 
     public static func provider(_ provider: CloudProvider) -> String { provider == .anthropic ? "Anthropic" : "OpenAI" }
@@ -127,6 +138,20 @@ public enum SettingsWords {
     static func isLaptop(_ text: String?) -> Bool {
         guard let text else { return false }
         return text.range(of: "MacBook", options: .caseInsensitive) != nil
+    }
+
+    // MARK: Calendar
+
+    /// Settings › Recording's toggle (DaybookUI's `CalendarSettingsRow`): Calendar is the app's name, so it reads the
+    /// same on both.
+    public static let useCalendar = "Use Calendar"
+    /// The problem line while the system refuses Daybook its calendars.
+    public static let calendarRefused = "Daybook can’t read your calendars."
+
+    /// Whether Use Calendar says it can't read the calendars: it was turned on just now and refused, or it's on and
+    /// access was taken away in the system's settings since.
+    public static func calendarIsRefused(justNow: Bool, isOn: Bool, access: CalendarAccess) -> Bool {
+        justNow || (isOn && access == .denied)
     }
 
     // MARK: Casing

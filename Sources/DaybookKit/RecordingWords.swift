@@ -104,6 +104,37 @@ public enum RecordingWords {
         return track.source.recordingName
     }
 
+    /// Audio a recording lost while the device couldn't keep up, as its capture details and the conversation say it:
+    /// "2.4 s of call audio were lost while the disk was busy." `name` is what the sound was ("call audio",
+    /// "microphone audio"); `because` says why, after "while".
+    public nonisolated static func lostAudio(_ seconds: TimeInterval, of name: String, while because: String = "the disk was busy") -> String {
+        let amount = Self.seconds(seconds)
+        return "\(amount) of \(name) \(amount == "1 s" || amount == "1 min" ? "was" : "were") lost while \(because)."
+    }
+
+    /// What a recording rebuilt at launch says, in its conversation on both apps, when Daybook ended while it recorded:
+    /// what was written is kept, and the last seconds may not have reached the disk.
+    public nonisolated static let recoveredAfterQuit = "Daybook quit while recording. The recording was recovered; the last seconds may be missing."
+    /// And when Stop had ended it and Daybook was ended while saving it: nothing is missing.
+    public nonisolated static let savedAfterInterruptedSave = "Saved after Daybook was interrupted while saving."
+
+    /// Under "Saved", for a recording stopped while the iPhone was locked: it's whole, and it's joined and filed once
+    /// the iPhone is unlocked (the Live Activity, the recorder after Stop).
+    public nonisolated static let finishesWhenUnlocked = "Finishes when you unlock iPhone"
+    /// What Siri and Shortcuts say of that Stop.
+    public nonisolated static let savedUntilUnlock = "Saved to Daybook. It finishes when you unlock iPhone."
+
+    /// A short stretch of audio in seconds as a sentence says it: "0.4 s", "2.4 s", "42 s", "3 min".
+    public nonisolated static func seconds(_ value: TimeInterval) -> String {
+        let value = max(0, value)
+        if value < 10 {
+            let tenths = (value * 10).rounded() / 10
+            return tenths == tenths.rounded() ? "\(Int(tenths)) s" : String(format: "%.1f s", tenths)
+        }
+        if value < 90 { return "\(Int(value.rounded())) s" }
+        return "\(Int((value / 60).rounded())) min"
+    }
+
     /// The glyph beside a recording, the same on both apps: the device it came from when one did ("iphone" for an
     /// iPhone's microphone, the recorder's own glyph), otherwise what it is ("mic", "desktopcomputer" for computer
     /// audio, "doc" for a file).

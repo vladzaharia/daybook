@@ -43,10 +43,19 @@ struct RecordingActivityAttributes: ActivityAttributes {
         /// Paused, whether recording can continue now: false during the call, when only Stop is
         /// offered. Nil from an earlier build, which offered Resume.
         var canResume: Bool? = nil
+        /// Saved, what the Lock Screen says in place of "Saved to Daybook": a recording stopped while the iPhone was
+        /// locked finishes once it's unlocked (the app's words). Optional, so activities started by an earlier build
+        /// still decode.
+        var savedLine: String? = nil
     }
 
     var conversationID: UUID
     var title: String
+
+    /// The title of a Personal conversation's activity: no name (`RecordingActivityController.activityTitle`).
+    static let unnamed = "Recording"
+    /// Whether the activity names its conversation: a Personal one's doesn't, and the Lock Screen leaves the line out.
+    var namesConversation: Bool { title != Self.unnamed }
 }
 
 extension RecordingActivityAttributes.ContentState {
@@ -69,14 +78,14 @@ extension RecordingActivityAttributes.ContentState {
         }
     }
 
-    /// "Recording", "Paused", "Saving…", "Saved", "Recording stopped", or "Open Daybook to check" once the
-    /// system marks it stale.
+    /// "Recording" ("Microphone silent" while it hears nothing, the recording surface's words), "Paused", "Saving…",
+    /// "Saved", "Recording stopped", or "Open Daybook to check" once the system marks it stale.
     func title(isStale: Bool) -> String {
         switch phase {
         case .saved: return "Saved"
         case .stopped: return "Recording stopped"
         case _ where isStale: return SharedRecordingState.unconfirmedLine
-        case .recording: return "Recording"
+        case .recording: return level == 0 ? "Microphone silent" : "Recording"
         case .paused: return "Paused"
         case .saving: return "Saving…"
         }
@@ -118,7 +127,7 @@ extension RecordingActivityAttributes.ContentState {
     /// to the frozen time is.
     var endLine: String? {
         switch phase {
-        case .saved: return "Saved to Daybook"
+        case .saved: return savedLine ?? "Saved to Daybook"
         case .stopped: return (frozenElapsed ?? 0) > 0 ? "Everything up to then is saved" : "No audio was recorded"
         case .recording, .paused, .saving: return nil
         }

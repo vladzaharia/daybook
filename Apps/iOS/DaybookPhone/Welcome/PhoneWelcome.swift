@@ -19,19 +19,22 @@ struct PhoneWelcome: View {
     @State private var page: Page = PhoneWelcome.initialPage
     @State private var microphone = PhoneWelcome.microphoneState()
     @State private var showingPairing = false
+    /// The Models page's rows the person left checked; nil until they change one (`PhoneWelcomeOffer.initialChoice`).
+    @State private var chosenModels: Set<PhoneWelcomeOffer.Part>?
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         WelcomePager(pages: pages, selection: $page) { page in
             switch page {
             case .intro:
-                WelcomeIntroPage(device: .iPhone) { go(from: .intro) }
+                WelcomeIntroPage(device: .iPhone, summaries: promisesSummaries) { go(from: .intro) }
             case .allow:
                 PhoneWelcomeAllow(state: microphone, allow: allowMicrophone, openSettings: openSettings) { go(from: .allow) }
             case .pair:
                 PhoneWelcomePair(paired: model.link.macs.first?.name, pair: { showingPairing = true }) { go(from: .pair) }
             case .models:
-                PhoneWelcomeModels(models: model.models, freeBytes: PhoneWelcome.freeBytes(), download: downloadModels) {
+                PhoneWelcomeModels(models: model.models, freeBytes: PhoneWelcome.freeBytes(), chosen: $chosenModels,
+                                   download: downloadModels) {
                     go(from: .models)
                 }
             case .ready:
@@ -57,14 +60,29 @@ struct PhoneWelcome: View {
 
     private var readyMessage: String {
         let models = model.models
-        let downloading = models.processingRoles.compactMap(models.choice(for:)).contains {
-            if case .downloading = models.status(of: $0) { return true }
-            if case .waitingForWiFi = models.status(of: $0) { return true }
-            return false
-        }
-        return WelcomeWords.readyMessage(downloading: downloading && model.settings.processesOnThisIPhone,
+        // What the transcript waits for: the models transcribing needs (the summary model lands after them).
+        let statuses = PhoneModels.transcribingRoles.compactMap(models.choice(for:)).map { models.status(of: $0) }
+        let arriving = statuses.contains { $0.isTransferring && $0 != .waitingForWiFi }
+        // Asked for and waiting for Wi‑Fi: the transcript waits for it too, and the line says so.
+        let waitsForWiFi = !arriving && statuses.contains(.waitingForWiFi)
+        let mac = Self.macTranscribes(model.macPresence)
+        return WelcomeWords.readyMessage(downloading: (arriving || waitsForWiFi) && model.settings.processesOnThisIPhone,
                                          canTranscribe: model.processingCapabilities.transcribes,
-                                         transcribesElsewhere: Self.macTranscribes(model.macPresence))
+                                         transcribesElsewhere: mac, waitsForWiFi: waitsForWiFi,
+                                         summarizesElsewhere: mac && !Self.summarizesHere(models, processesHere: model.settings.processesOnThisIPhone))
+    }
+
+    /// The intro promises a short summary only where one will be made: this iPhone could run a summary model, or a Mac
+    /// known to this library makes them.
+    private var promisesSummaries: Bool {
+        model.models.summaryModel != nil || Self.macTranscribes(model.macPresence)
+    }
+
+    /// This iPhone summarizes its own recordings: its summary model is here or on its way, and processing here is on.
+    static func summarizesHere(_ models: PhoneModels, processesHere: Bool) -> Bool {
+        guard processesHere, let summary = models.summaryModel else { return false }
+        let status = models.status(of: summary)
+        return status.isReady || status.isTransferring
     }
 
     /// A Mac that transcribes this library is known: connected now, or by its last sync. Pairing alone doesn't say;
@@ -87,10 +105,14 @@ struct PhoneWelcome: View {
         if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
     }
 
-    private func downloadModels() {
+    /// Downloads the rows left checked: what transcribing needs first, then the summary model, which waits its turn
+    /// behind them (`PhoneModels.download`), so it never delays a transcript.
+    private func downloadModels(_ parts: Set<PhoneWelcomeOffer.Part>) {
         model.settings.processesOnThisIPhone = true
         model.processingChanged()
-        for missing in model.models.processingMissing { model.models.download(missing) }
+        let models = model.models
+        if parts.contains(.transcription) { for missing in models.processingMissing { models.download(missing) } }
+        if parts.contains(.summaries), let summary = models.summaryModel, models.status(of: summary).canDownload { models.download(summary) }
         go(from: .models)
     }
 
@@ -285,11 +307,58 @@ private struct PhoneWelcomePair: View {
 
 // MARK: - Models
 
-/// This iPhone's own models for transcribing what it records: their size, Download and Continue, or Not Now.
+/// What Welcome's Models page offers this iPhone (docs/iphone.md, "Welcome"): what transcribing here still needs and,
+/// where this iPhone can run a summary model, that model, each a row. Never a summary the iPhone can't make.
+struct PhoneWelcomeOffer: Equatable {
+    enum Part: Hashable { case transcription, summaries }
+
+    struct Row: Equatable {
+        var part: Part
+        var bytes: Int64
+    }
+
+    var rows: [Row]
+
+    init(rows: [Row]) { self.rows = rows }
+
+    /// "Transcription and speakers", then "Summaries" where a summary model fits this iPhone and isn't here yet.
+    @MainActor init(models: PhoneModels) {
+        var rows: [Row] = []
+        let transcribing = models.processingMissingBytes
+        if transcribing > 0 { rows.append(Row(part: .transcription, bytes: transcribing)) }
+        let summary = models.summaryModelBytes
+        if summary > 0 { rows.append(Row(part: .summaries, bytes: summary)) }
+        self.rows = rows
+    }
+
+    /// Each row can be left out only where there are two: one alone is the page's whole offer.
+    var choosesRows: Bool { rows.count > 1 }
+
+    /// What the rows in `chosen` download together.
+    func bytes(_ chosen: Set<Part>) -> Int64 { rows.filter { chosen.contains($0.part) }.reduce(0) { $0 + $1.bytes } }
+
+    /// Every row checked at first, each that fits beside the ones before it in `free` (unknown: all of them).
+    func initialChoice(free: Int64?) -> Set<Part> {
+        var chosen = Set<Part>()
+        for row in rows where free.map({ bytes(chosen) + row.bytes <= $0 }) ?? true { chosen.insert(row.part) }
+        return chosen
+    }
+
+    /// What checking `row` would need beside the rest of `chosen`, when that's more than `free`; nil when it fits.
+    func shortfall(_ row: Row, chosen: Set<Part>, free: Int64?) -> Int64? {
+        guard let free else { return nil }
+        let needed = bytes(chosen.subtracting([row.part])) + row.bytes
+        return needed > free ? needed : nil
+    }
+}
+
+/// This iPhone's own models: what transcribing what it records needs and, where it can run one, the summary model,
+/// each with its size and checked; the total on Download and Continue, or Not Now.
 private struct PhoneWelcomeModels: View {
     let models: PhoneModels
     let freeBytes: Int64?
-    let download: () -> Void
+    @Binding var chosen: Set<PhoneWelcomeOffer.Part>?
+    let download: (Set<PhoneWelcomeOffer.Part>) -> Void
     let skip: () -> Void
 
     /// Whether this iPhone can transcribe its own recordings at all.
@@ -299,46 +368,35 @@ private struct PhoneWelcomeModels: View {
         return true
     }
 
-    private var missing: Int64 { models.processingMissingBytes }
-    private var fits: Bool { freeBytes.map { missing <= $0 } ?? true }
+    private var offer: PhoneWelcomeOffer { PhoneWelcomeOffer(models: models) }
+    /// Only rows still offered: one that finished downloading meanwhile goes.
+    private var parts: Set<PhoneWelcomeOffer.Part> {
+        (chosen ?? offer.initialChoice(free: freeBytes)).intersection(offer.rows.map(\.part))
+    }
+    private var total: Int64 { offer.bytes(parts) }
+    private var fits: Bool { freeBytes.map { total <= $0 } ?? true }
+    /// The whole set's figure while what transcribing needs arrives, as every surface says it.
     private var downloading: Double? {
-        let chosen = [ModelRole.transcription, .diarization, .speakerEmbedding].compactMap(models.choice(for:))
-        let fractions = chosen.compactMap { model -> Double? in
-            if case .downloading(let fraction) = models.status(of: model) { return fraction }
-            return nil
-        }
-        return fractions.isEmpty ? nil : fractions.reduce(0, +) / Double(fractions.count)
+        guard models.transcribingDownload != nil, case .downloading? = models.processingDownloadState else { return nil }
+        return models.processingDownloadState?.fraction
     }
 
     var body: some View {
+        let offer = self.offer
         WelcomeStepPage(title: WelcomeWords.phoneModelsTitle, message: WelcomeWords.phoneModelsMessage) {
             if let downloading {
                 WelcomeDownloadProgress(WelcomeWords.downloading(nil), fraction: downloading)
                     .padding(.top, DaybookSpacing.s6)
-            } else if missing > 0 {
+            } else if !offer.rows.isEmpty {
                 WelcomeCard {
-                    HStack(spacing: DaybookSpacing.s3) {
-                        DaybookTile(symbol: "text.bubble", size: .row)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(WelcomeWords.phoneModelsRow).foregroundStyle(DaybookPalette.Ink.title)
-                            // Its size, or what it needs when the iPhone can't hold it.
-                            if !fits, let freeBytes {
-                                Text(WelcomeWords.needsSpace(Self.size(missing), free: Self.size(freeBytes)))
-                                    .font(.subheadline)
-                                    .foregroundStyle(DaybookPalette.Ink.warning)
-                            } else {
-                                Text(Self.size(missing))
-                                    .font(.subheadline)
-                                    .monospacedDigit()
-                                    .foregroundStyle(DaybookPalette.Ink.secondary)
-                            }
+                    ForEach(offer.rows, id: \.part) { row in
+                        PhoneWelcomeModelRow(row: row, chooses: offer.choosesRows, isChosen: parts.contains(row.part),
+                                             shortfall: offer.shortfall(row, chosen: parts, free: freeBytes), freeBytes: freeBytes) {
+                            var next = parts
+                            if next.contains(row.part) { next.remove(row.part) } else { next.insert(row.part) }
+                            chosen = next
                         }
-                        .fixedSize(horizontal: false, vertical: true)
-                        Spacer(minLength: 0)
                     }
-                    .padding(.horizontal, DaybookSpacing.s4)
-                    .padding(.vertical, DaybookSpacing.s3)
-                    .accessibilityElement(children: .combine)
                 }
                 .padding(.top, DaybookSpacing.s6)
             }
@@ -348,17 +406,72 @@ private struct PhoneWelcomeModels: View {
                 .multilineTextAlignment(.center)
                 .padding(.top, DaybookSpacing.s4)
         } actions: {
-            if missing > 0 && downloading == nil {
-                WelcomePrimaryButton(WelcomeWords.downloadAndContinue, action: download)
-                    .disabled(!fits)
+            if !parts.isEmpty && downloading == nil {
+                WelcomePrimaryButton(offer.choosesRows ? WelcomeWords.downloadAndContinue(ByteSize.format(total)) : WelcomeWords.downloadAndContinue) {
+                    download(parts)
+                }
+                .disabled(!fits)
                 WelcomeNotNowButton(action: skip)
             } else {
                 WelcomePrimaryButton(WelcomeWords.next, action: skip)
             }
         }
     }
+}
 
-    static func size(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) }
+/// One row of the Models page's card: what it holds, its size (or the room it needs, in the warning ink), and, where
+/// the page offers two, whether it's checked. A row that can't fit beside the rest can't be checked.
+private struct PhoneWelcomeModelRow: View {
+    let row: PhoneWelcomeOffer.Row
+    let chooses: Bool
+    let isChosen: Bool
+    let shortfall: Int64?
+    let freeBytes: Int64?
+    let toggle: () -> Void
+
+    var body: some View {
+        if chooses {
+            Button(action: toggle) { content }
+                .buttonStyle(.plain)
+                .disabled(shortfall != nil && !isChosen)
+                .accessibilityAddTraits(isChosen ? .isSelected : [])
+        } else {
+            content
+        }
+    }
+
+    private var content: some View {
+        HStack(spacing: DaybookSpacing.s3) {
+            DaybookTile(symbol: row.part == .transcription ? "text.bubble" : "text.alignleft", size: .row)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(row.part == .transcription ? WelcomeWords.phoneModelsRow : WelcomeWords.phoneSummariesRow)
+                    .foregroundStyle(DaybookPalette.Ink.title)
+                // Its size, or what it needs when the iPhone can't hold it beside the rest.
+                if let shortfall, let freeBytes {
+                    Text(WelcomeWords.needsSpace(ByteSize.format(shortfall), free: ByteSize.format(freeBytes)))
+                        .font(.subheadline)
+                        .foregroundStyle(DaybookPalette.Ink.warning)
+                } else {
+                    Text(ByteSize.format(row.bytes))
+                        .font(.subheadline)
+                        .monospacedDigit()
+                        .foregroundStyle(DaybookPalette.Ink.secondary)
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            if chooses {
+                Image(systemName: isChosen ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(isChosen ? DaybookPalette.Ink.link : DaybookPalette.Ink.meta)
+                    .accessibilityHidden(true)
+            }
+        }
+        .padding(.horizontal, DaybookSpacing.s4)
+        .padding(.vertical, DaybookSpacing.s3)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+    }
 }
 
 // MARK: - Ready

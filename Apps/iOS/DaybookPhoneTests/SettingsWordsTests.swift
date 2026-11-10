@@ -1,4 +1,5 @@
 import DaybookKit
+import DaybookUI
 import SwiftUI
 import XCTest
 @testable import DaybookPhone
@@ -59,6 +60,23 @@ final class SettingsWordsTests: XCTestCase {
         XCTAssertEqual(RecorderStatusWords.storageFigure(hours: 0.4, low: true), "< 1 hr")
     }
 
+    // MARK: Models
+
+    /// Settings › Models › Transcription › Language is the Mac's row (DaybookUI's `TranscriptionLanguageSettings`), in the
+    /// same words and with the same list, though no model for some of its languages runs on an iPhone (xdev-settings-08).
+    func testTheLanguageRowIsTheMacsWithTheSameList() throws {
+        let english = Locale(identifier: "en_US")
+        XCTAssertEqual(SettingsWords.titleCased(SettingsWords.languageLabel), "Language")
+        let models = PhoneModels(root: try temporaryDirectory(), defaults: makeTestDefaults("SettingsWordsTests"),
+                                 fetcher: PhoneModelsTests.RecordingFetcher(), network: PhoneModelsTests.ScriptedNetwork().network,
+                                 backgroundTime: PhoneModelsTests.FakeBackgroundTime())
+        let items = TranscriptionLanguageSettings.items(in: models.catalog, keeping: nil, locale: english)
+        XCTAssertEqual(items, TranscriptionLanguageSettings.items(in: .builtIn, keeping: nil, locale: english), "the Mac's list")
+        XCTAssertEqual(items.first, .init(id: "", title: "Automatic"))
+        XCTAssertTrue(items.contains(.init(id: "ja", title: "Japanese")))
+        XCTAssertFalse(models.engines.contains { $0.id == .whisperKit }, "Japanese's model doesn't run here")
+    }
+
     // MARK: Storage
 
     func testStorageSaysWhatTheAudioIsWithoutRepeatingTheTotal() {
@@ -94,19 +112,25 @@ final class SettingsWordsTests: XCTestCase {
 
     // MARK: Models
 
-    func testTheModelsRowCountsTheSharedVoiceProfileModelOnce() throws {
+    func testTheModelsRowCountsWhatTranscribingHereNeedsAsWelcomeDoes() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("SettingsWordsTests-\(UUID())", isDirectory: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         let models = PhoneModels(root: root, defaults: makeTestDefaults("SettingsWordsTests"), fetcher: PhoneModelsTests.RecordingFetcher(),
                                  network: PhoneModelsTests.ScriptedNetwork().network, physicalMemory: 12 * 1_073_741_824)
-        let shared = try XCTUnwrap(models.choice(for: .speakerEmbedding))
-        XCTAssertTrue(models.missing.map(\.key).contains(shared.key) && models.processingMissing.map(\.key).contains(shared.key),
-                      "live captions and transcribing here both use the voice-profile model")
         let live = SettingsScreen.missingModelBytes(models, processesHere: false)
-        XCTAssertEqual(live, models.missingBytes)
-        let both = SettingsScreen.missingModelBytes(models, processesHere: true)
-        XCTAssertEqual(both, models.missingBytes + models.processingMissingBytes - shared.approximateBytes,
-                       "the row's figure is what Models' sections add up to, with the shared model once")
+        XCTAssertEqual(live, models.missingBytes, "live transcription's models, the only ones it uses")
+        let transcribing = SettingsScreen.missingModelBytes(models, processesHere: true)
+        XCTAssertEqual(transcribing, models.processingMissingBytes,
+                       "transcribing here: Welcome's figure (Transcription and speakers), live captions' models aside (uxf-18)")
+        XCTAssertEqual(SettingsScreen.modelsDetail(models, processesHere: true, transcribes: false),
+                       "\(ByteSize.format(transcribing)) to download")
+
+        // Asked for, off Wi‑Fi: how the whole set stands, as the page says it; and nothing of it with processing off.
+        for model in models.processingMissing { models.download(model) }
+        XCTAssertEqual(SettingsScreen.modelsDetail(models, processesHere: true, transcribes: false), "Waiting for Wi‑Fi")
+        XCTAssertEqual(SettingsScreen.modelsDetail(models, processesHere: false, transcribes: false),
+                       "\(ByteSize.format(models.missingBytes)) to download")
+        models.cancelProcessingDownloads()
     }
 
     // MARK: Library

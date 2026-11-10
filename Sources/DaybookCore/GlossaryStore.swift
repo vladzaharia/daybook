@@ -1,14 +1,20 @@
 import Foundation
+import Synchronization
 
 public actor GlossaryStore {
     public nonisolated let rootURL: URL
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
+    private let backupExclusion = Mutex(false)
     public init(rootURL: URL? = nil) throws {
         self.rootURL = (rootURL ?? LibraryLocation.defaultRoot).standardizedFileURL
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try LocalFiles.directory(self.rootURL)
     }
+    /// Keeps `glossary.json` and its recovery copy out of backups as they're saved, as `MeetingStore` does the
+    /// library's other settings (`MeetingStore.excludeSettingsFromBackup`).
+    public nonisolated func excludeFromBackup(_ excluded: Bool) { backupExclusion.withLock { $0 = excluded } }
+    public nonisolated var excludesFromBackup: Bool { backupExclusion.withLock { $0 } }
     public func list() throws -> [GlossaryTerm] {
         let url = rootURL.appendingPathComponent("glossary.json")
         let backup = rootURL.appendingPathComponent("glossary.recovery.json")
@@ -17,7 +23,7 @@ public actor GlossaryStore {
         catch {
             let bytes = try Data(contentsOf: backup)
             let recovered = try decoder.decode([GlossaryTerm].self, from: bytes)
-            try LocalFiles.atomicWrite(bytes, to: url)
+            try LocalFiles.atomicWrite(bytes, to: url, backupExcluded: excludesFromBackup)
             return recovered
         }
     }
@@ -25,10 +31,11 @@ public actor GlossaryStore {
         let url = rootURL.appendingPathComponent("glossary.json")
         let backup = rootURL.appendingPathComponent("glossary.recovery.json")
         let bytes = try encoder.encode(terms)
+        let excluded = excludesFromBackup
         if let old = try? Data(contentsOf: url), (try? decoder.decode([GlossaryTerm].self, from: old)) != nil {
-            try LocalFiles.atomicWrite(old, to: backup)
-        } else if !FileManager.default.fileExists(atPath: backup.path) { try LocalFiles.atomicWrite(bytes, to: backup) }
-        try LocalFiles.atomicWrite(bytes, to: url)
+            try LocalFiles.atomicWrite(old, to: backup, backupExcluded: excluded)
+        } else if !FileManager.default.fileExists(atPath: backup.path) { try LocalFiles.atomicWrite(bytes, to: backup, backupExcluded: excluded) }
+        try LocalFiles.atomicWrite(bytes, to: url, backupExcluded: excluded)
     }
     public func propose(_ candidates: [GlossaryTerm], for meetingID: UUID) throws {
         var terms = try list()

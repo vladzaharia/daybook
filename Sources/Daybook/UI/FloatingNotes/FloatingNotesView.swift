@@ -11,7 +11,7 @@ import SwiftUI
 @Observable
 final class FloatingNotesModel {
     let state: AppState
-    let input = InputDeviceName()
+    let input = MicrophoneInputs()
     let levels = RecorderLevels()
     /// The conversation shown when nothing is recording; nil is the home.
     private(set) var focusID: UUID?
@@ -94,7 +94,7 @@ struct FloatingNotesView: View {
     let model: FloatingNotesModel
     let state: AppState
     let chrome: PanelChrome
-    let input: InputDeviceName
+    let input: MicrophoneInputs
     /// Live captions are running for the recording. Kept here, rather than reading the captions,
     /// so a revised word redraws only the caption strip.
     @State private var captionsShowing: UUID?
@@ -151,7 +151,7 @@ struct FloatingNotesView: View {
                 // Full, the band holds the phase and the chips get a row of their own under it;
                 // compact, the band holds both.
                 StatusBand(chrome: chrome, phase: FloatingStatus.phase(inputs), chips: compact ? chips : [],
-                           context: context(compact: compact, chips: chips), compact: compact)
+                           context: context(compact: compact, chips: chips), compact: compact, input: input)
             }
             .daybookMotion(DaybookMotion.state, value: surface)
             .daybookMotion(DaybookMotion.state, value: compact)
@@ -272,6 +272,7 @@ private struct StatusBand: View {
     let chips: [RecorderChip]
     let context: PanelContext
     let compact: Bool
+    let input: MicrophoneInputs
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -304,10 +305,16 @@ private struct StatusBand: View {
         }
     }
 
+    @ViewBuilder
     private func phaseLabel(_ phase: RecorderPhase, yields: Bool) -> some View {
-        RecordingPhaseLabel(phase.phase, title: phase.title, detail: phase.detail, detailIsWarning: phase.detailIsWarning,
-                            detailYields: yields, metrics: .panel)
-            .help(phase.detailIsWarning ? RecordingStatusWords.microphoneSilentHelp : phase.detail ?? "")
+        let label = RecordingPhaseLabel(phase.phase, title: phase.title, detail: phase.detail, detailIsWarning: phase.detailIsWarning,
+                                        detailYields: yields, metrics: .panel)
+        // Recording, the phase is the input menu: Automatic and each input.
+        if phase.choosesInput {
+            MicrophoneMenu(inputs: input, phase: phase) { label }
+        } else {
+            label.help(phase.detailIsWarning ? RecordingStatusWords.microphoneSilentHelp : phase.detail ?? "")
+        }
     }
 
     /// Compact snaps the panel short (the status bar, one caption line, the controls); Expand returns.
@@ -346,10 +353,18 @@ struct ChipMenuItems: View {
                 Button("Show \(session.device.name)") { context.showDevice(id) }
             }
         case .peer(let id):
+            // The phone this recording follows is out of reach: this Mac keeps recording until it's stopped here.
+            if state.phones.leadOutOfReach?.sessionID == id, state.recordingID != nil {
+                Button("Stop Recording") { Task { await state.stopRecording() } }
+            }
             if let session = state.devices.session(id) {
                 Button("Show \(session.device.name)") { context.showDevice(id) }
             }
         case .processing:
+            if let meeting = context.meeting, state.awaitingModels.contains(meeting.id) {
+                // Waiting for models: the download comes first.
+                ModelDownloadMenuItems(state: state)
+            }
             if let meeting = context.meeting {
                 if let planner = state.placements[meeting.id], !planner.actions.isEmpty {
                     // Where its summary runs: Use the Cloud, Start Now.
@@ -358,7 +373,7 @@ struct ChipMenuItems: View {
                     }
                 } else if state.processingID == meeting.id {
                     Button("Pause Transcription") { state.pauseProcessing(meeting.id) }
-                } else if state.pausedIDs.contains(meeting.id) || (meeting.status == .failed && !FriendlyError.isNoSpeech(meeting.errorMessage ?? "")) {
+                } else if state.pausedIDs.contains(meeting.id) || (meeting.status == .failed && !isNoSpeech(meeting)) {
                     Button(meeting.status == .failed ? "Try Again" : "Resume Transcription") {
                         state.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting))
                     }
@@ -366,9 +381,12 @@ struct ChipMenuItems: View {
                 Button("Open in Daybook") { context.open() }
             }
             if let meeting = context.meeting, state.awaitingModels.contains(meeting.id) {
-                Button("Open Settings…") { openSettingsPane(.models) }
+                Button("Choose Models…") { openSettingsPane(.models) }
             }
         case .queue:
+            if state.processingID == nil, !state.awaitingModels.isEmpty || state.modelDownloadState != nil {
+                ModelDownloadMenuItems(state: state)
+            }
             if let id = state.processingID, let planner = state.placements[id], !planner.actions.isEmpty {
                 ForEach(planner.actions, id: \.self) { action in
                     Button(action.title) { state.chooseSummaryPlacement(action, for: id) }
@@ -379,11 +397,11 @@ struct ChipMenuItems: View {
                 Button("Open in Daybook") { context.openConversation(id) }
             }
             if !state.awaitingModels.isEmpty {
-                Button("Open Settings…") { openSettingsPane(.models) }
+                Button("Choose Models…") { openSettingsPane(.models) }
             }
         case .sync:
             Button("Open Sync Settings…") { openSettingsPane(.library) }
-        case .call:
+        case .call, .storage:
             EmptyView()
         }
     }
@@ -392,6 +410,33 @@ struct ChipMenuItems: View {
         LaunchOptions.defaults.set(pane.rawValue, forKey: SettingsPane.storageKey)
         openSettingsWindow.settings()
         NSApp.activate()
+    }
+
+    /// A recording with no speech: trying again can't help, so there's no Try Again (`ProcessingRequest.FailureKind.noSpeech`).
+    private func isNoSpeech(_ meeting: Meeting) -> Bool {
+        if case .failed(let failure) = state.processingStatus(for: meeting) { return failure.isNoSpeech }
+        return false
+    }
+}
+
+/// What a chip about models offers first (`AppState.modelDownloadState`): Cancel Download while they arrive, Try Again
+/// after one stopped, and otherwise what downloading them takes ("Download · 0.9 GB"), over whatever network this is.
+private struct ModelDownloadMenuItems: View {
+    let state: AppState
+
+    var body: some View {
+        switch state.modelDownloadState {
+        case .downloading?:
+            Button("Cancel Download") { state.cancelDownload() }
+        case .failed?:
+            Button("Try Again") { state.downloadModels(state.missingSelectedModels) }
+        case .waitingForWiFi(let bytes)?:
+            Button(ProcessingWords.download(bytes)) { state.downloadModels(state.missingSelectedModels) }
+        case nil:
+            if let bytes = state.missingSelectedBytes {
+                Button(ProcessingWords.download(bytes)) { state.downloadModels(state.missingSelectedModels) }
+            }
+        }
     }
 }
 

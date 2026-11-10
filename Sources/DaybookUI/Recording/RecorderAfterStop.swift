@@ -2,8 +2,55 @@ import DaybookDesign
 import SwiftUI
 
 // After Stop, on both recorders (docs/interface.md, "After Stop"): Saved, the conversation and your notes, and what's
-// becoming of it in the chips. Open takes Bookmark's place and Record (or Keep Recording) takes Stop's. A recording
-// that stopped short says so in a quiet warning box, with Record Again into the same conversation.
+// becoming of it in the chips. Open takes Bookmark's place and Keep Recording, Record Again, or Record takes Stop's, by
+// one rule (`RecordMore`). A recording that stopped short says so in a quiet warning box.
+
+/// What the control in Stop's place does once a recording has ended: one rule on both apps (docs/interface.md, "After
+/// Stop"). For two minutes after a Stop, or until something ends the moment sooner (another recording starts, the
+/// call's meeting ends, the next meeting starts), Keep Recording records into the same conversation, after what was
+/// saved, so a Stop pressed too soon doesn't split a meeting in two. After that, Record starts a new conversation, for
+/// the next call. A recording that stopped on its own offers Record Again into the same conversation for as long as
+/// it shows.
+public enum RecordMore: Equatable, Sendable {
+    /// Into the same conversation, within `window` of a Stop.
+    case keepRecording
+    /// Into the same conversation, after a recording that stopped on its own.
+    case recordAgain
+    /// A new conversation.
+    case record
+
+    /// How long after a Stop Keep Recording records into the same conversation.
+    public static let window: TimeInterval = 2 * 60
+
+    /// - Parameters:
+    ///   - stoppedShort: The recording ended on its own: the microphone went, the Mac slept, storage couldn't keep up.
+    ///   - stoppedAt: When it was stopped; nil when there's nothing to record into (it wasn't saved), or something
+    ///     has ended the moment early.
+    public init(stoppedShort: Bool, stoppedAt: Date?, now: Date = Date()) {
+        if stoppedShort {
+            self = .recordAgain
+        } else if let stoppedAt, now.timeIntervalSince(stoppedAt) < Self.window {
+            self = .keepRecording
+        } else {
+            self = .record
+        }
+    }
+
+    /// When Keep Recording gives way to Record, after a Stop at `stoppedAt`.
+    public static func windowEnds(after stoppedAt: Date) -> Date { stoppedAt.addingTimeInterval(window) }
+
+    /// The control's words.
+    public var title: String {
+        switch self {
+        case .keepRecording: return "Keep Recording"
+        case .recordAgain: return "Record Again"
+        case .record: return "Record"
+        }
+    }
+
+    /// It records into the conversation that ended, after what was saved; Record makes a new one.
+    public var recordsIntoSameConversation: Bool { self != .record }
+}
 
 /// A state after Stop that needs the person: one box, with at most one action of its own.
 public struct RecorderProblem {
@@ -24,7 +71,7 @@ public struct RecorderProblem {
 
 /// What the recorder shows after Stop.
 public struct RecorderAfterStopState {
-    /// "✓ SAVED · 18 min", drawn in the surface; nil when the host draws it.
+    /// "✓ Saved · 18 min", drawn in the surface; nil when the host draws it.
     public var phase: RecorderPhase?
     public var title: String
     public var rename: ((String) -> Void)?
@@ -36,18 +83,18 @@ public struct RecorderAfterStopState {
     public var openTitle: String
     /// There's a conversation to open (it's in the library).
     public var canOpen: Bool
-    /// "Record", "Record Again", or "Keep Recording".
-    public var recordTitle: String
+    /// What the control in Stop's place does (`RecordMore`).
+    public var recordMore: RecordMore
     public var canRecord: Bool
     public var isStartingRecording: Bool
     public var topInset: CGFloat
     public var keyboardShortcuts: Bool
 
     public init(phase: RecorderPhase? = nil, title: String, rename: ((String) -> Void)? = nil, chips: [RecorderChip] = [], meta: String? = nil,
-                problem: RecorderProblem? = nil, openTitle: String = "Open", canOpen: Bool = true, recordTitle: String = "Record",
+                problem: RecorderProblem? = nil, openTitle: String = "Open", canOpen: Bool = true, recordMore: RecordMore = .record,
                 canRecord: Bool = true, isStartingRecording: Bool = false, topInset: CGFloat = 0, keyboardShortcuts: Bool = false) {
         self.phase = phase; self.title = title; self.rename = rename; self.chips = chips; self.meta = meta; self.problem = problem
-        self.openTitle = openTitle; self.canOpen = canOpen; self.recordTitle = recordTitle; self.canRecord = canRecord
+        self.openTitle = openTitle; self.canOpen = canOpen; self.recordMore = recordMore; self.canRecord = canRecord
         self.isStartingRecording = isStartingRecording; self.topInset = topInset; self.keyboardShortcuts = keyboardShortcuts
     }
 }
@@ -197,19 +244,19 @@ public struct RecorderAfterStop: View {
             .disabled(!state.canOpen)
             // ⌘O is the panel's own, whatever it shows; here it's only said.
             .help(state.keyboardShortcuts ? "Open in Daybook (⌘O)" : "")
-            .accessibilityShowsLargeContentViewer { Label(state.openTitle, systemImage: "arrow.up.forward") }
+            .accessibilityShowsLargeContentViewer { Label(state.openTitle, systemImage: OpenControlLabel.symbol) }
         } trailing: {
             Button(action: actions.record) {
                 Group {
                     if let size = metrics.size {
-                        RecordControlLabel(title: state.isStartingRecording ? "Starting…" : state.recordTitle, size: size)
+                        RecordControlLabel(title: state.isStartingRecording ? "Starting…" : state.recordMore.title, size: size)
                     } else {
                         // Under touch the words keep one line, a little smaller if they must; at the accessibility
                         // sizes they wrap rather than cut ("Keep Recording").
                         HStack(spacing: 8) {
                             Circle().fill(DaybookPalette.Ink.record).frame(width: 12, height: 12)
                                 .daybookGlow(DaybookPalette.Ink.record, radius: 3)
-                            TouchControlWords(state.isStartingRecording ? "Starting…" : state.recordTitle)
+                            TouchControlWords(state.isStartingRecording ? "Starting…" : state.recordMore.title)
                         }
                         .font(.headline)
                         .foregroundStyle(DaybookPalette.Ink.title)
@@ -222,15 +269,19 @@ public struct RecorderAfterStop: View {
             .daybookControl(.standard, shape: .roundedRectangle(radius: metrics.radius))
             .disabled(!state.canRecord || state.isStartingRecording)
             .modifier(RecorderShortcut(enabled: state.keyboardShortcuts, key: "r", modifiers: [.command, .shift], help: "Start Recording (⇧⌘R)"))
-            .accessibilityShowsLargeContentViewer { Label(state.recordTitle, systemImage: "record.circle") }
+            .accessibilityShowsLargeContentViewer { Label(state.recordMore.title, systemImage: "record.circle") }
         }
     }
 }
 
-/// Open: the link teal and the arrow out of the recorder. Under touch the words wrap rather than cut.
+/// Open: the link teal and a forward chevron. It goes to the conversation in Daybook, so not the arrow out of the
+/// app (`arrow.up.forward`), which says another app or the web. Under touch the words wrap rather than cut.
 public struct OpenControlLabel: View {
     private let title: String
     private let size: CGFloat?
+
+    /// The glyph after the words: navigation within the app.
+    public static let symbol = "chevron.forward"
 
     public init(title: String, size: CGFloat? = nil) {
         self.title = title
@@ -244,7 +295,7 @@ public struct OpenControlLabel: View {
             } else {
                 Text(title).lineLimit(1)
             }
-            Image(systemName: "arrow.up.forward").font(size.map { .system(size: $0 * 0.75, weight: .semibold) } ?? .subheadline.weight(.semibold))
+            Image(systemName: Self.symbol).font(size.map { .system(size: $0 * 0.75, weight: .semibold) } ?? .subheadline.weight(.semibold))
         }
         .font(size.map { .system(size: $0, weight: .semibold) } ?? .headline)
         .foregroundStyle(DaybookPalette.Ink.link)

@@ -57,20 +57,6 @@ struct DevicePageTitle<Glyph: View>: View {
     }
 }
 
-/// A device kind's symbol: teal while the recorder is linked, secondary otherwise, as on the iPhone.
-struct DeviceGlyph: View {
-    let symbol: String
-    var size: CGFloat = 28
-    var linked = false
-
-    var body: some View {
-        Image(systemName: symbol)
-            .font(.system(size: size, weight: .regular))
-            .foregroundStyle(linked ? DaybookStyle.accent : Ink.secondary)
-            .accessibilityHidden(true)
-    }
-}
-
 /// The 7 pt dot before a status line: teal when connected (pulsing while connecting), warning
 /// when unavailable, meta otherwise.
 struct DeviceStatusDot: View {
@@ -94,34 +80,6 @@ struct DeviceStatusDot: View {
     }
 }
 
-/// One quiet-filled box on the column, its outer edge on the text's edge as a conversation's
-/// status boxes are, with their padding and corners.
-struct DeviceBox<Content: View>: View {
-    @ViewBuilder var content: Content
-    var body: some View {
-        content
-            .padding(Space.s3)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(DaybookStyle.quietFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-    }
-}
-
-/// A state that needs the person, as a conversation's status box (`StatusBox`): a problem (warning),
-/// or something to know (quiet), spanning the column, its actions under the message when it's narrow.
-struct DeviceAttentionBox<Actions: View>: View {
-    var kind: StatusBoxKind = .info
-    let symbol: String
-    let title: String
-    var message: String?
-    @ViewBuilder var actions: Actions
-
-    var body: some View {
-        StatusBox(kind: kind, symbol: symbol, title: title, message: message, actions: actions)
-            .padding(.top, Space.s4)
-            .transition(.opacity)
-    }
-}
-
 /// The one prominent action in a box.
 struct DeviceBoxPrimaryButton: View {
     let title: String
@@ -130,13 +88,6 @@ struct DeviceBoxPrimaryButton: View {
         Button(title, action: action)
             .buttonStyle(.borderedProminent)
             .tint(DaybookStyle.prominentFill)
-    }
-}
-
-/// The M4 transition: a status line or notice slides in from the top; it only fades under Reduce Motion.
-extension AnyTransition {
-    static func deviceNotice(reduceMotion: Bool) -> AnyTransition {
-        reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top))
     }
 }
 

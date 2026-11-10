@@ -43,6 +43,14 @@ public final class LibraryController {
     /// the durability barrier (`flushDurably`) flushes what each wrote. Nil until `load`.
     @ObservationIgnored private(set) var store: MeetingStore?
     @ObservationIgnored private var glossaryStore: GlossaryStore?
+    /// The library's settings files (`library.json`, `glossary.json`, and their copies) stay out of backups as they're
+    /// saved: the iPhone's rule for an encrypted library (`BackupExclusion`). Off on the Mac.
+    @ObservationIgnored public var excludesSettingsFromBackup = false {
+        didSet {
+            store?.excludeSettingsFromBackup(excludesSettingsFromBackup)
+            glossaryStore?.excludeFromBackup(excludesSettingsFromBackup)
+        }
+    }
     /// Saves, coalesced and written in the background (`LibrarySaveQueue`).
     private let saves = LibrarySaveQueue()
     /// Saves that failed, until one of the same thing succeeds.
@@ -68,6 +76,8 @@ public final class LibraryController {
     private var settingsEditedDuringSync = false
     /// The saves being made are the pass's own.
     private var savingSyncResult = false
+    /// The library settings as a pass last encoded them, so a pass with unchanged settings doesn't encode them again.
+    @ObservationIgnored private var encodedSettings: (metadata: LibraryMetadata, data: Data)?
 
     public init(rootURL: URL, sync: LibrarySyncController?) {
         self.rootURL = rootURL
@@ -93,6 +103,8 @@ public final class LibraryController {
         guard !isLoaded else { return }
         let store = try MeetingStore(rootURL: rootURL)
         let glossaryStore = try GlossaryStore(rootURL: rootURL)
+        store.excludeSettingsFromBackup(excludesSettingsFromBackup)
+        glossaryStore.excludeFromBackup(excludesSettingsFromBackup)
         self.store = store; self.glossaryStore = glossaryStore
         meetings = try await store.list()
         var warnings = await store.warnings
@@ -447,11 +459,15 @@ public final class LibraryController {
     }
 
     /// Fuses a conversation's transcripts again, and carries saved corrections over, off the main
-    /// actor. Skipped if its recordings or transcripts changed meanwhile.
-    public func realign(_ id: UUID) async {
+    /// actor. Skipped if its recordings or transcripts changed meanwhile. `keepingVersion` is for upkeep the
+    /// person didn't ask for (background audio heard later, stranded words): it fuses with the version the
+    /// conversation was last fused with (`FusionSummary.version`), so its wording changes with a new Daybook
+    /// only when it's fused for a new reason (docs/alignment.md, "Fusion versions").
+    public func realign(_ id: UUID, keepingVersion: Bool = false) async {
         guard let snapshot = meeting(id) else { return }
+        let version = keepingVersion ? snapshot.fusionSummary?.version ?? 1 : FusionSummary.currentVersion
         let (prepared, settled) = await detachedWork(priority: .userInitiated) {
-            let fusion = SourceFusion.fuse(snapshot)
+            let fusion = SourceFusion.fuse(snapshot, version: version)
             return (snapshot.preparingFusion(fusion.fusion), fusion.settled)
         }
         // Applied even when the caller was cancelled meanwhile: it matches the transcripts kept.
@@ -466,7 +482,7 @@ public final class LibraryController {
     public func relabelStrandedWords() async {
         for id in meetings.filter({ $0.unifiedTranscript.hasStrandedWords }).map(\.id) {
             guard !Task.isCancelled else { return }
-            await realign(id)
+            await realign(id, keepingVersion: true)
         }
     }
 
@@ -482,7 +498,7 @@ public final class LibraryController {
             meeting.tracks[index].backgroundAudio = analysis
         }
         guard let after = meeting(id), after.backgroundSegmentKinds() != before.backgroundSegmentKinds() else { return true }
-        await realign(id)
+        await realign(id, keepingVersion: true)
         return true
     }
 
@@ -539,6 +555,37 @@ public final class LibraryController {
         let stored = metadata.templates.first { $0.id == id }
         metadata.templates.removeAll { $0.id == id }
         metadata.templates.append(.edit(id, value: nil, replacing: stored)); persistMetadata()
+    }
+
+    // MARK: The library's choices
+
+    /// The language the library's conversations are transcribed in ("de"), nil for Automatic: a synced library setting
+    /// (`LibraryMetadata.choices`), so a change on one device changes what every device transcribes with once it syncs.
+    public var transcriptionLanguage: String? { TranscriptionLanguages.normalize(metadata.transcriptionLanguage) }
+
+    /// The library's transcription language, chosen on this device (nil for Automatic). The later change wins everywhere.
+    public func setTranscriptionLanguage(_ code: String?, at now: Date = Date()) {
+        choose(.transcriptionLanguage, TranscriptionLanguages.normalize(code), at: now)
+    }
+
+    /// A language this device chose before it was the library's, written only while the library has none (no device
+    /// has chosen one, Automatic included). Returns whether it was written.
+    @discardableResult
+    public func adoptTranscriptionLanguage(_ code: String?, at now: Date = Date()) -> Bool {
+        guard metadata.choice(.transcriptionLanguage) == nil, let code = TranscriptionLanguages.normalize(code) else { return false }
+        choose(.transcriptionLanguage, code, at: now)
+        return true
+    }
+
+    private func choose(_ name: LibraryChoice.Name, _ selection: String?, at now: Date) {
+        let stored = metadata.choice(name)
+        // The choice the library holds already: nothing new to save or sync.
+        if let stored, !stored.isDeletion, stored.unreadableValue == nil, stored.value?.selection == selection { return }
+        var choices = metadata.choices ?? []
+        choices.removeAll { $0.id == name.rawValue }
+        choices.append(.edit(name.rawValue, value: LibraryChoice(selection: selection), replacing: stored, at: now))
+        metadata.choices = choices
+        persistMetadata()
     }
 
     // MARK: Recorder ownership
@@ -861,29 +908,47 @@ public final class LibraryController {
             try Task.checkCancellation()
             let snapshot = meetings
             let deleted = Set(trashedMeetingIDs())
-            let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-            guard let result = try await sync.synchronize(meetings: snapshot, deletedMeetingIDs: deleted, metadata: encoder.encode(metadata),
+            guard let result = try await sync.synchronize(meetings: snapshot, deletedMeetingIDs: deleted, metadata: try encodedMetadata(),
                                                           limits: limits, protecting: active.map { [$0] } ?? [], scope: scope) else { return nil }
             // Save edits made while iCloud hydrated files before applying the pass.
             await flush()
             try Task.checkCancellation()
             guard sync.canApply(result) else { return nil }
             var mergeWarnings = result.warnings
+            // Each conversation that arrived merges with this device's copy off the main actor (a long one's merge takes
+            // a while), against what this device had when the pass began.
+            let base = Dictionary(snapshot.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let remotes = result.meetings.filter { !result.deletedMeetingIDs.contains($0.id) }
+            var indexByID = Dictionary(meetings.indices.map { (meetings[$0].id, $0) }, uniquingKeysWith: { first, _ in first })
+            let locals = remotes.map { remote in indexByID[remote.id].map { meetings[$0] } }
+            let revisionBefore = revision
+            let merges = await Self.merge(remotes, locals: locals, base: base)
+            try Task.checkCancellation()
+            guard sync.canApply(result) else { return nil }
+            // What the person changed meanwhile is merged again here, with what's there now.
+            let changedMeanwhile = revision != revisionBefore
+            if changedMeanwhile { indexByID = Dictionary(meetings.indices.map { (meetings[$0].id, $0) }, uniquingKeysWith: { first, _ in first }) }
             savingSyncResult = true
             defer { savingSyncResult = false }
-            for remote in result.meetings where !result.deletedMeetingIDs.contains(remote.id) {
+            for (offset, remote) in remotes.enumerated() {
                 try Task.checkCancellation()
+                let local = indexByID[remote.id].map { meetings[$0] }
+                // Removed here while it merged (the Trash): the next pass carries that.
+                if local == nil, locals[offset] != nil { continue }
                 var merged = remote
-                let local = meetings.first(where: { $0.id == remote.id })
                 if let local {
-                    let rebased = MeetingMerge.merge(base: snapshot.first { $0.id == remote.id }, local: local, remote: remote)
-                    merged = rebased.meeting; mergeWarnings += rebased.warnings
+                    let rebased = !changedMeanwhile || local == locals[offset] ? merges[offset]
+                        : MeetingMerge.merge(base: base[remote.id], local: local, remote: remote)
+                    if let rebased { merged = rebased.meeting; mergeWarnings += rebased.warnings }
                 }
                 // A status such as transcribing describes the device doing the work. It's kept as synced: rewriting it
                 // here would publish it back and conflict with that device's next status. Views read processing
                 // from `ProcessingStatus`, which never shows another device's work as running here.
                 if merged != local {
-                    if let index = meetings.firstIndex(where: { $0.id == merged.id }) { meetings[index] = merged } else { meetings.append(merged) }
+                    if let index = indexByID[merged.id] { meetings[index] = merged } else {
+                        indexByID[merged.id] = meetings.count
+                        meetings.append(merged)
+                    }
                     persist(merged)
                 } else if persistenceErrors[.meeting(merged.id)] != nil {
                     // Retry a prior failed save even when the in-memory snapshot is unchanged.
@@ -944,6 +1009,26 @@ public final class LibraryController {
             sync.passCancelled()
         } catch { sync.reportFailure(error.localizedDescription) }
         return applied
+    }
+
+    /// The library settings for a pass, encoded once for as long as they don't change.
+    private func encodedMetadata() throws -> Data {
+        if let encodedSettings, encodedSettings.metadata == metadata { return encodedSettings.data }
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(metadata)
+        encodedSettings = (metadata, data)
+        return data
+    }
+
+    /// Merges each conversation that arrived with this device's copy (`locals`, nil where it has none), off the main
+    /// actor. Nil where there's nothing to merge.
+    nonisolated private static func merge(_ remotes: [Meeting], locals: [Meeting?], base: [UUID: Meeting]) async -> [MeetingMergeResult?] {
+        guard locals.contains(where: { $0 != nil }) else { return locals.map { _ in nil } }
+        return await Task.detached(priority: .userInitiated) {
+            zip(remotes, locals).map { remote, local in
+                local.map { MeetingMerge.merge(base: base[remote.id], local: $0, remote: remote) }
+            }
+        }.value
     }
 }
 

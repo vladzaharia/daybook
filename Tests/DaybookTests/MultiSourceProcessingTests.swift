@@ -213,7 +213,7 @@ final class MultiSourceProcessingTests: XCTestCase {
         let rig = try await rig()
         let calls = Priors()
         rig.state.sources.alignAudio = { _, reference, expected, radius in
-            calls.add(expected, radius, reference.lastPathComponent)
+            calls.add(expected, radius, reference.url.lastPathComponent)
             return AudioAlignment(offset: 2.4, confidence: 0.9)
         }
         let id = rig.state.newMeeting(title: "Zoom call", date: start)
@@ -399,7 +399,7 @@ final class MultiSourceProcessingTests: XCTestCase {
 
         let references = Priors()
         rig.state.sources.alignAudio = { _, reference, expected, _ in
-            references.add(expected, 0, reference.lastPathComponent)
+            references.add(expected, 0, reference.url.lastPathComponent)
             return AudioAlignment(offset: 119.6, confidence: 0.88)
         }
         rig.state.enqueue(workshop)

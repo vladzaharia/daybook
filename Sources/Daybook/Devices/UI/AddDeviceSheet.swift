@@ -119,7 +119,7 @@ struct AddDeviceSheet: View {
     private func go(to next: Step, forward: Bool = true) {
         self.forward = forward
         prepare(next)
-        withAnimation(reduceMotion ? .easeOut(duration: 0.15) : .snappy(duration: 0.3)) { step = next }
+        withAnimation(DaybookMotion.resolved(DaybookMotion.state, reduceMotion: reduceMotion)) { step = next }
     }
 
     private func close() {

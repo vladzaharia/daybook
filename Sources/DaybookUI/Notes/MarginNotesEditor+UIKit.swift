@@ -121,9 +121,25 @@ extension MarginNotesEditor: UIViewRepresentable {
             guard let view = textView as? MarginTextView else { return }
             if let text = view.textToWriteBack() {
                 lastWritten = text
-                parent.text = text
+                hand(text, rewriting: view.isWritingToolsActive)
             }
             view.textDidChange()
+        }
+
+        /// Hands the text on. Writing Tools' rewrite goes as one (`NoteTimeline.rewriting`), so a recording doesn't
+        /// stamp the paragraphs it wrote with the moment of the rewrite.
+        func hand(_ text: String, rewriting: Bool) {
+            if rewriting {
+                NoteTimeline.rewriting { parent.text = text }
+            } else {
+                parent.text = text
+            }
+        }
+
+        /// Writing Tools leaves the handwriting alone: each block is an attachment character, which a rewrite over it
+        /// would drop.
+        public func textView(_ textView: UITextView, writingToolsIgnoredRangesInEnclosingRange enclosingRange: NSRange) -> [NSValue] {
+            NoteParagraphs.attachments(in: textView.textStorage, within: enclosingRange).map { NSValue(range: $0) }
         }
 
         public func textViewDidChangeSelection(_ textView: UITextView) {
@@ -425,12 +441,6 @@ public final class MarginTextView: UITextView {
     public var laneTimes: [(text: String, baseline: CGFloat)] {
         layoutIfNeeded()
         return gutter.labels.map { ($0.text, $0.baseline) }
-    }
-
-    /// The marks drawn in the lane, top to bottom (for tests and diagnostics).
-    public var laneMarks: [(mark: NoteMark, frame: CGRect)] {
-        layoutIfNeeded()
-        return gutter.ticks.map { ($0.mark, $0.rect) }
     }
 
     /// Keeps the caret above the keyboard when the page, not this view, scrolls.

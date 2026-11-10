@@ -13,11 +13,31 @@ import SwiftUI
 /// |---|---|---|
 /// | `reading == false` | the list | list on the left, `openID`'s page on the right |
 /// | `reading == true` | the conversation, pushed, showing `pageMode` | summary on the left, transcript on the right |
+///
+/// A Personal conversation behind the lock (`PersonalLock`) opens only once the person unlocks it: opening one, a
+/// search hit in one, or the Personal place asks first, and when the lock comes back what was open of it closes.
 @MainActor
 @Observable
 final class ReadingSession {
-    /// The list's place: a section, a folder, or the Trash.
-    var place: ReadingPlace = .library(.section(.all))
+    /// The app's lock, set at launch before any session is made (`DaybookPhoneApp`).
+    static var appLock: PersonalLock?
+    /// The lock this session asks: the app's, or a test's.
+    @ObservationIgnored let personalLock: PersonalLock?
+
+    init(personalLock: PersonalLock?) {
+        self.personalLock = personalLock
+        personalLock?.observe { [weak self] event in self?.personalLockChanged(event) }
+    }
+
+    /// A session that asks the app's lock.
+    convenience init() { self.init(personalLock: ReadingSession.appLock) }
+
+    /// The list's place: a section, a folder, or the Trash. Choosing Personal while it's locked asks to unlock it.
+    var place: ReadingPlace = .library(.section(.all)) {
+        didSet {
+            if place == .library(.section(.personal)), let personalLock, personalLock.isLocked { Task { await personalLock.unlock() } }
+        }
+    }
     /// The conversation on the page, if any.
     var openID: UUID?
     /// A conversation is open as the main thing being read (pocket: pushed; notebook: both pages).
@@ -31,13 +51,6 @@ final class ReadingSession {
     var isNotebook = false
     /// The conversation in the Trash that the notebook's right page shows, read only, beside the Trash.
     var trashedID: UUID?
-
-    /// Only a conversation opened across both pages gets a spine rail, and never under a sheet.
-    var spineMeetingID: UUID? {
-        guard reading, sheet == nil, !showsSummarySettingsSheet,
-              !showsRecordingPicker, cameraFor == nil else { return nil }
-        return openID
-    }
 
     /// The top of what's visible on each page, so a page reopens where it was left.
     var summaryAnchor: String?
@@ -63,8 +76,6 @@ final class ReadingSession {
 
     // Sheets
     var sheet: ReadingSheet?
-    /// The summary's status can present Settings in a system sheet of its own.
-    var showsSummarySettingsSheet = false
     /// The camera is open to add a photo to this conversation.
     var cameraFor: UUID?
     /// Files is open to add a recording to a conversation (Add Recording…; `addRecording(to:)`).
@@ -76,6 +87,8 @@ final class ReadingSession {
     var confirmation: ConfirmationBeat?
     /// A new note: its notes take the keyboard when the page appears.
     var focusNotesFor: UUID?
+    /// Write by Hand from the More menu: these notes take a finger's writing (`writeByHand(_:)`).
+    var writeByHandFor: UUID?
     /// Something couldn't be done (the audio isn't here to share): an alert naming it.
     var alert: ReadingAlert?
     /// Conversations waiting for the person to confirm moving them to the Trash.
@@ -92,8 +105,34 @@ final class ReadingSession {
         var flash: Bool
     }
 
+    /// Whether opening `id` waits for the person to unlock it first; if so, it opens (`then`) once they have.
+    private func waitsToUnlock(_ id: UUID, then open: @escaping () -> Void) -> Bool {
+        guard let personalLock, personalLock.hides(id) else { return false }
+        Task { if await personalLock.unlock() { open() } }
+        return true
+    }
+
+    /// The lock came back: a Personal conversation that was open closes, and a sheet over it goes. A Focus that leaves
+    /// Personal out leaves its place too.
+    private func personalLockChanged(_ event: PersonalLock.Event) {
+        guard let personalLock else { return }
+        switch event {
+        case .locked:
+            if let id = openID, personalLock.hides(id) {
+                openID = nil
+                reading = false
+                chosen = false
+                sheet = nil
+            }
+            selection = selection.filter { !personalLock.hides($0) }
+        case .focusChanged:
+            if !personalLock.focus.showsPersonal, place == .library(.section(.personal)) { place = .library(.section(.all)) }
+        }
+    }
+
     /// Opens a conversation as the thing being read.
     func open(_ id: UUID, mode: PageMode? = nil) {
+        if waitsToUnlock(id, then: { [weak self] in self?.open(id, mode: mode) }) { return }
         if openID != id {
             summaryAnchor = nil
             transcriptAnchor = nil
@@ -138,6 +177,7 @@ final class ReadingSession {
 
     /// Shows a conversation on the notebook's right page without leaving the list.
     func select(_ id: UUID) {
+        if waitsToUnlock(id, then: { [weak self] in self?.select(id) }) { return }
         if openID != id {
             summaryAnchor = nil
             transcriptAnchor = nil
@@ -152,10 +192,12 @@ final class ReadingSession {
     }
 
     /// On two pages with nothing open, the right page shows the newest of the place, else of All, without choosing
-    /// it. Beside the Trash it shows what's in the Trash instead (`trashedID`), never one of the library's.
+    /// it, and never one the Personal lock hides. Beside the Trash it shows what's in the Trash instead (`trashedID`),
+    /// never one of the library's.
     func showNewest(of meetings: [Meeting]) {
         guard openID == nil, !place.isTrash else { return }
-        if let newest = place.libraryPlace.meetings(in: meetings).first ?? LibraryPlace.section(.all).meetings(in: meetings).first {
+        let shown = meetings.filter { personalLock?.hides($0) != true && personalLock?.lists($0) != false }
+        if let newest = place.libraryPlace.meetings(in: shown).first ?? LibraryPlace.section(.all).meetings(in: shown).first {
             openID = newest.id
             chosen = false
         }
@@ -188,6 +230,12 @@ final class ReadingSession {
         if isNotebook { reading = true }
     }
 
+    /// Write by Hand from the More menu: the summary turns to the notes, and a finger writes on them.
+    func writeByHand(_ id: UUID) {
+        writeByHandFor = id
+        showOnSummary(SummaryBlockID.notes)
+    }
+
     func showOnSummary(_ block: String) {
         nextToken += 1
         summaryRequest = ScrollRequest(target: block, token: nextToken, flash: false)
@@ -196,6 +244,7 @@ final class ReadingSession {
 
     /// Opens a search hit at its passage: the transcript for a passage, the summary otherwise.
     func open(_ hit: SearchHit) {
+        if waitsToUnlock(hit.meetingID, then: { [weak self] in self?.open(hit) }) { return }
         if hit.field == .transcript, let segment = hit.segmentID {
             open(hit.meetingID, mode: .transcript)
             showInTranscript(segment)
@@ -276,10 +325,10 @@ struct ReadingAlert: Equatable {
     }
 
     /// Daybook's own errors already say what to do in plain words; anything else gets `fallback`,
-    /// with its words behind Details.
+    /// with its words behind Details (`ProblemWords`, the Mac's rule too).
     init(title: String, error: Error, fallback: String) {
-        let plain = PlainError.message(for: error, fallback: fallback)
-        self.init(title: title, message: plain.message, details: plain.details)
+        let words = ProblemWords(title: title, fallback: fallback, error: error)
+        self.init(title: words.title, message: words.message, details: words.details)
     }
 }
 

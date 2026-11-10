@@ -15,7 +15,8 @@ struct CaptureSegment: Codable, Equatable, Sendable {
     var closed: Bool
     /// Host time (seconds) of the first sample.
     var firstSampleHostTime: TimeInterval
-    /// Frame/host-time pairs about once a second, for measuring the microphone clock's drift.
+    /// Frame/host-time pairs for measuring the microphone clock's drift: about once a second for a run's first minute,
+    /// then about every ten seconds (`ClockAnchorSchedule`).
     var clockAnchors: [ClockAnchor]
     /// Format conversions and device switches inside this segment.
     var notes: [String]?
@@ -107,13 +108,23 @@ struct CaptureMultipoint: Codable, Equatable, Sendable {
 /// rebuild the recording, with its notes and bookmarks, if Daybook is killed. The phone's
 /// counterpart of the Mac's capture-session.json and per-track sidecars.
 struct PhoneCaptureJournal: Codable, Equatable, Sendable {
-    enum State: String, Codable, Sendable { case recording, paused, stopped }
+    enum State: String, Codable, Sendable {
+        case recording, paused
+        /// Stop has ended the capture (every segment closed, `endedAt` set) and the recording is being joined and filed:
+        /// written before the audio session is given back, so a recording iOS ends Daybook during is recovered as
+        /// saved, not as cut short while recording (`PhoneRecording.Recovery`).
+        case stopping
+        case stopped
+    }
 
     struct FinalFile: Codable, Equatable, Sendable {
         var fileName: String
         var frameCount: Int64
-        /// True when segments were joined (decoded, padded, encoded once).
+        /// True when segments were joined: their packets copied into one file in order, with silence in the gaps.
         var joined: Bool
+        /// True when joining decoded and encoded them again, because their formats differed. Nil otherwise, and in
+        /// journals written before joining copied packets.
+        var reencoded: Bool? = nil
     }
 
     static let fileName = "phone-capture.json"
@@ -174,22 +185,30 @@ struct PhoneCaptureJournal: Codable, Equatable, Sendable {
 
     static func url(in directory: URL) -> URL { directory.appendingPathComponent(fileName) }
 
+    /// Throws `PhoneRecorderError.locked` when the journal is there but can't be read now (the iPhone is locked).
     static func load(from directory: URL) throws -> PhoneCaptureJournal {
-        try JournalCoding.decoder().decode(PhoneCaptureJournal.self, from: Data(contentsOf: url(in: directory)))
+        let url = url(in: directory)
+        let data: Data
+        do { data = try Data(contentsOf: url) } catch {
+            throw StagingProtection.isUnreadable(error) || StagingProtection.cannotOpen(url) ? PhoneRecorderError.locked : error
+        }
+        return try JournalCoding.decoder().decode(PhoneCaptureJournal.self, from: data)
     }
 
-    /// Owner-only, atomic.
+    /// Owner-only, atomic, and kept until unlock (`StagingProtection`): a locked iPhone can write it, a new file each
+    /// time, but not read it back.
     func write(to directory: URL) throws {
         let url = Self.url(in: directory)
-        try JournalCoding.encoder().encode(self).write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        try JournalCoding.encoder().encode(self).write(to: url, options: [.atomic, StagingProtection.writing])
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 }
 
 enum JournalCoding {
+    /// Compact: the journal is rewritten every few seconds while recording. Earlier, pretty-printed journals read the same.
     static func encoder() -> JSONEncoder {
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.outputFormatting = [.sortedKeys]
         encoder.dateEncodingStrategy = .millisecondsSince1970
         return encoder
     }
@@ -222,7 +241,9 @@ struct PhoneRecording: Sendable, Equatable {
     var warnings: [String]
     /// The staging folder; the library removes it once the recording is filed.
     var stagingDirectory: URL
-    var recovered: Bool
+    /// How the run that made it ended, for a recording rebuilt at launch from what that run left; nil for one Stop
+    /// finished.
+    var recovery: Recovery?
     /// Photos taken while recording; their files are in `stagingDirectory`.
     var photos: [CapturePhoto] = []
     /// Handwriting in the notes.
@@ -232,6 +253,17 @@ struct PhoneRecording: Sendable, Equatable {
     /// What a Mac recording along wrote over the link, as that Mac files it (`PhoneCaptureJournal.sharedNotes`).
     var sharedNotes: [TimedNote] = []
     var sharedBookmarks: [Highlight] = []
+
+    /// How a recording rebuilt at launch had ended (`PhoneCaptureJournal.state`).
+    enum Recovery: Equatable, Sendable {
+        /// Daybook ended while it recorded or was paused: the last seconds may be missing.
+        case quitWhileRecording
+        /// Stop had ended it, and Daybook was ended before it was saved: it's whole.
+        case interruptedWhileSaving
+    }
+
+    /// Rebuilt at launch from what an earlier run left.
+    var recovered: Bool { recovery != nil }
 }
 
 enum PhoneRecorderError: LocalizedError, Equatable {
@@ -243,6 +275,8 @@ enum PhoneRecorderError: LocalizedError, Equatable {
     case encoderUnavailable(String)
     case diskBacklog
     case nothingRecorded
+    /// The recording's files are there but can't be read until the iPhone is unlocked: never "No audio was recorded".
+    case locked
 
     var errorDescription: String? {
         switch self {
@@ -254,6 +288,7 @@ enum PhoneRecorderError: LocalizedError, Equatable {
         case .encoderUnavailable: return "Recording couldn’t continue. Everything up to then is saved."
         case .diskBacklog: return "Storage couldn’t keep up with the recording. Everything up to then is saved."
         case .nothingRecorded: return "No audio was recorded."
+        case .locked: return "The recording’s files can’t be opened until iPhone is unlocked."
         }
     }
 
@@ -262,4 +297,8 @@ enum PhoneRecorderError: LocalizedError, Equatable {
         if case .encoderUnavailable(let detail) = self { return "The audio encoder stopped (\(detail))." }
         return nil
     }
+}
+
+extension PhoneRecorderError: PlainSentenceError {
+    var plainDetails: String? { details }
 }

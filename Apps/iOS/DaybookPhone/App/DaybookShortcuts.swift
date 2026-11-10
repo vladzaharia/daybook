@@ -1,7 +1,8 @@
 import AppIntents
 
 /// Siri phrases and Shortcuts actions. The same intents back the Action button (choose Shortcut, or
-/// the Record Conversation control) and Spotlight.
+/// the Record Conversation control) and Spotlight. An action the Mac has too is said as it is there
+/// (`ShortcutPhrasesTests` holds them together).
 struct DaybookShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(intent: StartRecordingIntent(),

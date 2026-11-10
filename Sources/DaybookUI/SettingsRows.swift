@@ -7,9 +7,8 @@ import SwiftUI
 
 /// The measurements every Settings row shares, so titles line up whatever the symbol.
 public enum SettingsMetrics {
-    /// The symbol tile at the default text size; it grows with Dynamic Type, up to `tileLimit`.
+    /// The symbol tile at the default text size; it grows with Dynamic Type, up to `DaybookTileSize.row.limit`.
     public static let tile: CGFloat = DaybookTileSize.row.base
-    public static let tileLimit: CGFloat = DaybookTileSize.row.limit
     /// Between the tile column and the text.
     public static let gap: CGFloat = DaybookSpacing.s3
     /// Between a page and the open Duo's crease. Lists inset their cards a further 16–20 pt, so cards end

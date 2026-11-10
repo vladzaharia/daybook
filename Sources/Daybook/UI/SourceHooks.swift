@@ -13,10 +13,11 @@ struct SourceHooks: View {
     var body: some View {
         let recordingNow = state.recordingID == meeting.id
         let awaited = meeting.awaitedRecordings()
+        let arrivals = awaited.isEmpty ? [:] : state.arrivals(for: meeting)
         ForEach(meeting.companions ?? []) { link in
             // Once this Mac stopped, a link waits only while the page says so too (`awaitedRecordings`).
             if (recordingNow && link.macEndedAt == nil) || awaited.contains(Self.awaited(link)),
-               let line = Self.companionLine(link, recordingNow: recordingNow) {
+               let line = Self.companionLine(link, recordingNow: recordingNow, arrivals: arrivals) {
                 // Laid out like a recording row (glyph column, then words), since it is one to come.
                 row(symbol: "clock") { Text(line).foregroundStyle(.secondary) }
             }
@@ -71,12 +72,14 @@ struct SourceHooks: View {
     static let waitingLineLifetime: TimeInterval = 2 * 86_400
 
     /// The link's line, while this Mac records the conversation (`recordingNow`) or after. A link an
-    /// interrupted recording left open reads as waiting, and every waiting line goes after a while. Waiting reads
-    /// as the page's status line does (`ProcessingStatus.awaitingDetail`), and neither ends in a period.
-    static func companionLine(_ link: CompanionRecording, recordingNow: Bool, now: Date = Date()) -> String? {
+    /// interrupted recording left open reads as waiting, and every waiting line goes after a while (from Wait Again,
+    /// once chosen). Waiting reads as the page's status line does (`ProcessingStatus.awaitingDetail`, with where the
+    /// recording is when this Mac knows), and neither ends in a period.
+    static func companionLine(_ link: CompanionRecording, recordingNow: Bool, arrivals: [String: ArrivalStatus] = [:],
+                              now: Date = Date()) -> String? {
         let live = recordingNow && link.macEndedAt == nil
-        if !live, now.timeIntervalSince(link.macEndedAt ?? link.macStartedAt) > waitingLineLifetime { return nil }
-        let waiting = ProcessingStatus.awaitingDetail([awaited(link)])
+        if !live, now.timeIntervalSince(link.waitingSince) > waitingLineLifetime { return nil }
+        let waiting = ProcessingStatus.awaitingDetail([awaited(link)], arrivals: arrivals, now: now)
         switch link.state {
         case .starting: return live ? "Starting \(link.deviceName)…" : nil
         case .recording, .alreadyRecording: return live ? "Also recording on \(link.deviceName)" : waiting

@@ -122,7 +122,7 @@ final class ModelEngineTests: XCTestCase {
     func testTheStandardRegistryDeclaresEachEngine() {
         let registry = ModelEngineRegistry.standard
         XCTAssertEqual(registry.descriptors.map(\.id), [.whisperKit, .community1, .sortformer, .mlxLanguage, .parakeet, .nemotronDiarizer,
-                                                        .nemotronStreaming, .appleFoundationModels, .appleVision])
+                                                        .nemotronStreaming, .appleFoundationModels, .appleSpeech, .appleVision])
         XCTAssertEqual(registry.engine(.nemotronStreaming)?.descriptor.roles, [.liveTranscription])
         XCTAssertEqual(registry.engine(.appleVision)?.descriptor.roles, [.imageDescription])
         XCTAssertEqual(registry.engine(.appleVision)?.descriptor.residency, .system)
@@ -139,6 +139,8 @@ final class ModelEngineTests: XCTestCase {
         XCTAssertEqual(registry.engine(.mlxLanguage)?.descriptor.versionString, "3 (mlx-swift-lm 3.32.3)")
         XCTAssertEqual(registry.engine(.appleFoundationModels)?.descriptor.roles, [.smallTasks])
         XCTAssertEqual(registry.engine(.appleFoundationModels)?.descriptor.residency, .system)
+        XCTAssertEqual(registry.engine(.appleSpeech)?.descriptor.roles, [.transcription])
+        XCTAssertEqual(registry.engine(.appleSpeech)?.descriptor.residency, .system)
         XCTAssertTrue(registry.descriptors.allSatisfy { $0.platforms.contains(.macOS) })
         XCTAssertNil(registry.engine(.mlxAudio), "Qwen3-ASR arrives with its engine")
     }

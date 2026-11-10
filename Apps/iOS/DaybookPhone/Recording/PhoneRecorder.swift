@@ -39,8 +39,18 @@ struct PhoneRecorderEnvironment {
 ///   offers to (`canResume`). Each run is a segment; Stop joins them into one file with silence in
 ///   the gaps.
 /// - Route changes (AirPods, a wired mic, the built-in mic) restart input on the new hardware
-///   format; the writer converts and pads, and the journal notes the change.
+///   format; the writer converts and pads, and the journal notes the change. A headset coming or
+///   going asks the session for the input the person's choice resolves to (`AudioInputPlan`), so
+///   AirPods connecting mid-meeting don't take over from the built-in microphone; an input chosen in
+///   the system's picker (`inputChosen`) is remembered for later recordings.
 /// - Media-services resets rebuild the session and input and continue in a new segment.
+/// - Stop has two steps: capture ends (input stops, every segment closes, the journal says `stopping`, and the
+///   audio session is given back; `StopEvents.captureEnded`), then the segments are joined, by copying their
+///   packets (`RecordingAssembler`). A recording iOS ends Daybook during is recovered as saved, not as cut short.
+///   While the iPhone is locked the join waits for an unlock (`waitingCapture`): the parts are kept until unlock
+///   (`StagingProtection`), so they can't be read back before.
+/// - Hearing: the microphone isn't hearing after 5 s without a non-zero sample, or 20 s under −90 dBFS
+///   (`HearingCheck`), rolling, so it's said whenever it happens and clears when sound comes back.
 /// - Crash safety: segments are written as fragmented M4A (readable up to the last fragment the
 ///   audio passed: 2–4 s behind at the default interval) and the
 ///   journal sidecar records segments, timing, notes, and bookmarks. `recover(in:)` rebuilds a
@@ -65,8 +75,12 @@ final class PhoneRecorder {
 
     private(set) var state: State = .idle
     private(set) var level = AudioLevel.silent
-    /// Several seconds without a single non-zero sample: muted, unplugged, or blocked.
+    /// The microphone isn't hearing anything now (`HearingCheck`): muted, unplugged, blocked, or covered. Rolling: it
+    /// clears as soon as it hears again.
     private(set) var isMicrophoneSilent = false
+    /// When the microphone last heard something as loud as speech (`AudioLevelMeter.audibleThreshold`): following a Mac
+    /// it can't reach, this iPhone stops only in a quiet room (`LeaderWatch`). Changes with every word, so unobserved.
+    @ObservationIgnored private(set) var lastHeardSpeechAt: Date?
     /// The conversation being recorded.
     private(set) var captureID: UUID?
     /// This recording's own ID (one conversation can hold several of this iPhone's recordings).
@@ -103,16 +117,29 @@ final class PhoneRecorder {
     /// The staging folder of the last recording Stop couldn't finish (`lastFailure` says why), kept for its
     /// notes and for recovery. Cleared when the next recording starts.
     private(set) var unfinishedFolder: URL?
+    /// The last recording Stop ended while the iPhone was locked: whole on disk, its journal saying `stopping`, and
+    /// still to be joined, which reads its parts back and so waits for an unlock (`StagingProtection`). Its caller
+    /// finishes it (`finish(_:)`). Cleared when the next recording starts.
+    private(set) var waitingCapture: StoppedCapture?
+    /// Whether files kept until unlock can be read now (`PhoneAppEnvironment.protectedData`): when they can't, Stop
+    /// ends the capture and leaves the join (`waitingCapture`).
+    @ObservationIgnored var protectedDataAvailable: () -> Bool = { true }
 
     /// State, pauses, routes, and bookmarks changed (not levels).
     @ObservationIgnored var onChange: (() -> Void)?
     /// About fifteen times a second while recording.
     @ObservationIgnored var onLevel: ((AudioLevel) -> Void)?
+    /// The encoder or storage failed: the recording is about to be finished as it stands (`onUnexpectedStop` says
+    /// when it has been), so its caller can hold background time for it from now.
+    @ObservationIgnored var onStoppingByItself: (() -> Void)?
     /// The encoder or storage failed; the recording was finished as it stood.
     @ObservationIgnored var onUnexpectedStop: ((PhoneRecording?) -> Void)?
     /// The interruption ended and iOS asked to continue, but recording couldn't (another app still
     /// holds the microphone, say): it stays paused, with Resume.
     @ObservationIgnored var onResumeFailed: ((Error) -> Void)?
+    /// The recording is paused and won't go on by itself: an interruption ended without iOS asking to continue, or the
+    /// microphone couldn't restart. Resume continues it.
+    @ObservationIgnored var onNeedsResume: (() -> Void)?
     /// A copy of the live input for listeners such as live captions: each buffer after the writer has
     /// it, on the audio thread, with its host time. It must return at once and never throw; the
     /// recording doesn't wait for it or depend on it. Read when input starts (start, resume, restart).
@@ -126,6 +153,9 @@ final class PhoneRecorder {
     @ObservationIgnored private var directory: URL?
     /// The meter's and the journal's ticks while recording (`startTicks`).
     @ObservationIgnored private var ticks: [Task<Void, Never>] = []
+    /// When the microphone last started listening (a start, a resume, a restart), on the host clock: the hearing check
+    /// counts from there.
+    @ObservationIgnored private var listeningSince: TimeInterval = 0
     @ObservationIgnored private var notesSave: Task<Void, Never>?
     @ObservationIgnored private var cancelStart = false
     @ObservationIgnored private let journalQueue = DispatchQueue(label: "local.daybook.phone.journal", qos: .utility)
@@ -133,9 +163,13 @@ final class PhoneRecorder {
     /// once, until a write succeeds again.
     @ObservationIgnored private let journalHealth = JournalHealth()
 
-    static let silentMicrophoneSeconds: TimeInterval = 3
-    /// Between level readings while recording (`onLevel`).
+    /// Between level readings while recording (`onLevel`), for a meter someone sees.
     static let levelInterval: TimeInterval = 1.0 / 15
+    /// Between level readings while no one sees a meter (Daybook out of sight, no Mac drawing this iPhone's level):
+    /// enough for the hearing check, the Live Activity, and the widgets.
+    static let backgroundLevelInterval: TimeInterval = 0.5
+    /// Between level readings now: `levelInterval` or `backgroundLevelInterval`, as the app model sets it.
+    @ObservationIgnored var meterInterval: TimeInterval = levelInterval
     /// Between journal writes while recording, besides those a change makes.
     static let journalInterval: TimeInterval = 5
     /// The pause message when iOS gives no reason (a call, Siri, an alarm).
@@ -177,20 +211,20 @@ final class PhoneRecorder {
         guard state == .idle else { throw PhoneRecorderError.alreadyRecording }
         state = .starting
         cancelStart = false
-        lastError = nil; lastFailure = nil; unexpectedStop = nil; unfinishedFolder = nil; canResume = false; pauseMessage = nil
+        lastError = nil; lastFailure = nil; unexpectedStop = nil; unfinishedFolder = nil; waitingCapture = nil; canResume = false; pauseMessage = nil
         captureID = id; self.recordingID = recordingID; self.title = title; startedAt = nil
         notes = ""; timedNotes = []; ink = []; highlights = []; photos = []; sharedNotes = [:]; sharedBookmarks = [:]
-        level = .silent; isMicrophoneSilent = false
+        level = .silent; isMicrophoneSilent = false; lastHeardSpeechAt = nil
         do {
             guard !FileManager.default.fileExists(atPath: PhoneCaptureJournal.url(in: directory).path) else {
                 throw PhoneRecorderError.directoryInUse
             }
             guard await environment.session.requestRecordPermission() else { throw PhoneRecorderError.microphoneDenied }
             try checkStartCancelled()
-            // Class C protection: the recording keeps writing while the phone is locked.
+            // Kept until unlock (class B), and everything made in it with it: a locked iPhone keeps writing the parts
+            // already open and can make new ones (`StagingProtection`).
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
-                                                    attributes: [.posixPermissions: 0o700,
-                                                                 .protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+                                                    attributes: [.posixPermissions: 0o700, .protectionKey: StagingProtection.type])
             self.directory = directory
             environment.session.onEvent = { [weak self] event in self?.handle(event) }
             try environment.session.activate()
@@ -242,10 +276,22 @@ final class PhoneRecorder {
         onChange?()
     }
 
+    /// What Stop tells its caller as it goes, on the main actor.
+    struct StopEvents {
+        /// Capture has ended: input stopped, every segment closed, the journal says the recording is being saved, and
+        /// the audio session is given back. What's left is joining the segments, and the caller's filing.
+        var captureEnded: () -> Void = {}
+        /// Joining will decode the segments and encode them again, which takes a while
+        /// (`RecordingAssembler.expectsLongJoin`).
+        var longJoin: () -> Void = {}
+        /// How far that join has got, 0…1.
+        var joinProgress: @MainActor @Sendable (Double) -> Void = { _ in }
+    }
+
     /// Finishes the recording and returns it ready to file. Nil if nothing was recorded or the file
     /// couldn't be built (`lastFailure` says which); the staging folder then stays for recovery.
     @discardableResult
-    func stop() async -> PhoneRecording? {
+    func stop(_ events: StopEvents = StopEvents()) async -> PhoneRecording? {
         switch state {
         case .starting:
             cancelStart = true
@@ -267,29 +313,58 @@ final class PhoneRecorder {
             await writer.waitUntilWritten()
             await writer.closeSegment()
         }
-        environment.session.deactivate()
-        var recording: PhoneRecording?
+        // Capture has ended. The journal says so before the session goes: a recording iOS ends Daybook during from
+        // here on (a Stop from the Lock Screen, Siri, or a Mac, in the background) is whole, and recovered as saved.
+        var saving: PhoneCaptureJournal?
         if var journal, let directory {
             sync(&journal)
             journal.endedAt = environment.clock.now()
-            journal.state = .stopped
-            let snapshot = journal
-            // Snapshots queued earlier (a pause, a segment opening) must land before the finished
-            // journal, or a late one would overwrite it with a copy that has no final file.
-            await drainJournalWrites()
+            journal.state = .stopping
+            self.journal = journal
+            // On the journal's queue, after the snapshots queued earlier (a pause, a segment opening): a late one would
+            // overwrite this with a copy that's still recording.
+            let stopping = journal
+            await withCheckedContinuation { (written: CheckedContinuation<Void, Never>) in
+                journalQueue.async {
+                    try? stopping.write(to: directory)
+                    written.resume()
+                }
+            }
+            saving = journal
+        }
+        environment.session.deactivate()
+        events.captureEnded()
+        var recording: PhoneRecording?
+        if let snapshot = saving, let directory, !protectedDataAvailable() {
+            // Locked: the recording is whole on disk and its journal says so. Joining reads its parts back, which waits
+            // for an unlock; the caller finishes it then.
+            waitingCapture = StoppedCapture(directory: directory, journal: snapshot)
+        } else if let snapshot = saving, let directory {
+            let pieces = PhoneCaptureFinisher.pieces(snapshot, in: directory), format = snapshot.format
+            let long = await Task.detached(priority: .userInitiated) { RecordingAssembler.expectsLongJoin(pieces, format: format) }.value
+            if long { events.longJoin() }
+            let report = events.joinProgress
             do {
                 let finished = try await Task.detached(priority: .userInitiated) { () throws -> (PhoneCaptureJournal, PhoneRecording) in
                     var journal = snapshot
-                    let recording = try PhoneCaptureFinisher.finish(&journal, in: directory, recovered: false)
+                    let recording = try await PhoneCaptureFinisher.finish(&journal, in: directory, recovery: nil, progress: { fraction in
+                        Task { @MainActor in report(fraction) }
+                    })
                     return (journal, recording)
                 }.value
                 self.journal = finished.0
                 recording = finished.1
+            } catch PhoneRecorderError.locked {
+                // Locked as it joined: the journal still says `stopping`, and the join starts again once it's unlocked.
+                waitingCapture = StoppedCapture(directory: directory, journal: snapshot)
             } catch {
                 lastError = error.localizedDescription
                 lastFailure = error as? PhoneRecorderError
                 unfinishedFolder = directory
-                try? snapshot.write(to: directory)
+                // It stopped as it should have: the next launch joins and files it, as it finds it.
+                var kept = snapshot
+                kept.state = .stopped
+                try? kept.write(to: directory)
             }
         }
         reset()
@@ -323,10 +398,11 @@ final class PhoneRecorder {
 
     // MARK: Notes and bookmarks (exactly as the Mac)
 
-    /// Replaces the notes. New paragraphs get the conversation time; edited ones keep theirs.
+    /// Replaces the notes. New paragraphs get the conversation time (none from Writing Tools' rewrite); edited ones keep theirs.
     func editNotes(_ text: String) {
         guard text != notes else { return }
-        timedNotes = NoteTimeline.reconcile(previous: timedNotes, text: text, captureTime: isCapturing ? elapsedTime : nil)
+        timedNotes = NoteTimeline.reconcile(previous: timedNotes, text: text,
+                                            captureTime: NoteTimeline.captureTime(recording: isCapturing ? elapsedTime : nil))
         notes = text
         saveNotesSoon()
     }
@@ -398,7 +474,7 @@ final class PhoneRecorder {
         let url = directory.appendingPathComponent(entry.fileName)
         let data = photo.data
         try await Task.detached(priority: .userInitiated) {
-            try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            try data.write(to: url, options: [.atomic, StagingProtection.writing])
         }.value
         guard self.directory == directory, isCapturing else {
             try? FileManager.default.removeItem(at: url)
@@ -478,17 +554,33 @@ final class PhoneRecorder {
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
+    /// Joins a recording Stop left while the iPhone was locked (`waitingCapture`), once it's unlocked, and returns it
+    /// ready to file, as Stop would have. Throws `PhoneRecorderError.locked` while its parts can't be read yet, and
+    /// `nothingRecorded` when none of them has audio.
+    nonisolated static func finish(_ capture: StoppedCapture) async throws -> PhoneRecording {
+        try await Task.detached(priority: .userInitiated) {
+            var journal = capture.journal
+            return try await PhoneCaptureFinisher.finish(&journal, in: capture.directory, recovery: nil)
+        }.value
+    }
+
     /// Rebuilds a recording from a folder that no recorder is writing: after a crash, after the app
-    /// was killed while paused, or when filing failed after Stop.
+    /// was killed while paused, or when filing failed after Stop. Throws `PhoneRecorderError.locked` when the folder
+    /// can't be read until the iPhone is unlocked.
     nonisolated static func recover(in directory: URL) async throws -> PhoneRecording {
         try await Task.detached(priority: .utility) {
             var journal = try PhoneCaptureJournal.load(from: directory)
-            let crashed = journal.state != .stopped
+            let recovery: PhoneRecording.Recovery?
+            switch journal.state {
+            case .recording, .paused: recovery = .quitWhileRecording
+            case .stopping: recovery = .interruptedWhileSaving
+            case .stopped: recovery = nil
+            }
             Self.adoptOrphanSegments(&journal, in: directory)
-            var recording = try PhoneCaptureFinisher.finish(&journal, in: directory, recovered: crashed)
+            var recording = try await PhoneCaptureFinisher.finish(&journal, in: directory, recovery: recovery)
             // Cut short, it ended where its assembled audio does: counted frames can trail or lead what
             // reached the disk, and a segment the journal never heard of counts none.
-            if crashed, journal.endedAt == nil { recording.endedAt = recording.startedAt.addingTimeInterval(recording.duration) }
+            if recovery != nil, journal.endedAt == nil { recording.endedAt = recording.startedAt.addingTimeInterval(recording.duration) }
             return recording
         }.value
     }
@@ -524,7 +616,10 @@ final class PhoneRecorder {
             canResume = true
             persistJournal()
             onChange?()
-            guard shouldResume else { return }
+            guard shouldResume else {
+                onNeedsResume?()
+                return
+            }
             Task {
                 do { try await resume() } catch { onResumeFailed?(error) }
             }
@@ -532,12 +627,36 @@ final class PhoneRecorder {
             inputRoute = route
             guard isCapturing else { return }
             journal?.routes.append(CaptureRouteEvent(time: elapsedTime, input: route, reason: reason))
+            // A headset came or went: record from what the choice resolves to now, so AirPods connecting mid-meeting
+            // don't take over from the built-in microphone, and a chosen headset coming back is used again.
+            if reason == "new-device" || reason == "device-removed" {
+                environment.session.applyInputChoice()
+                noteInputChange(reason: "choice")
+            }
             persistJournal()
             onChange?()
         case .mediaServicesReset:
             guard state == .recording || isPaused else { return }
             Task { await rebuildAfterMediaServicesReset() }
         }
+    }
+
+    /// The person chose an input in the system's input picker: it's remembered for the recordings after this one, and
+    /// recorded from now (with far-field capture when it's AirPods that can hear the room).
+    func inputChosen() {
+        guard isCapturing else { return }
+        environment.session.rememberCurrentInput()
+        noteInputChange(reason: "chosen")
+        persistJournal()
+        onChange?()
+    }
+
+    /// The session moved to another input on its own account: said where the route events are.
+    private func noteInputChange(reason: String) {
+        let now = environment.session.currentInput
+        guard now != inputRoute else { return }
+        inputRoute = now
+        journal?.routes.append(CaptureRouteEvent(time: elapsedTime, input: now, reason: reason))
     }
 
     private func pause(_ reason: PauseReason, message: String) async {
@@ -591,6 +710,7 @@ final class PhoneRecorder {
         }
         persistJournal()
         onChange?()
+        if state == .paused(.inputFailed) { onNeedsResume?() }
     }
 
     private func inputEvent(_ event: AudioInputEvent) {
@@ -603,6 +723,7 @@ final class PhoneRecorder {
                 await pause(.inputFailed, message: reason)
                 canResume = true
                 onChange?()
+                onNeedsResume?()
             }
         }
     }
@@ -612,6 +733,7 @@ final class PhoneRecorder {
         lastError = error.localizedDescription
         unexpectedStop = error
         journal?.warnings.append(error.localizedDescription)
+        onStoppingByItself?()
         Task {
             let recording = await stop()
             onUnexpectedStop?(recording)
@@ -632,6 +754,7 @@ final class PhoneRecorder {
         inputGeneration = UUID()
         let input = environment.makeInput()
         writer.setAcceptingAudio(true)
+        listeningSince = environment.clock.hostTime()
         let tap = audioTap
         try input.start(onBuffer: { buffer, host in
                             writer.append(buffer, hostTime: host)
@@ -690,12 +813,9 @@ final class PhoneRecorder {
         }
     }
 
-    private func drainJournalWrites() async {
-        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in journalQueue.async { done.resume() } }
-    }
-
     private func persistJournal() {
-        guard var journal, let directory else { return }
+        // Stopping, Stop writes the journal itself: a write queued now could land over the finished one.
+        guard state != .stopping, var journal, let directory else { return }
         sync(&journal)
         self.journal = journal
         let snapshot = journal, health = journalHealth
@@ -728,14 +848,14 @@ final class PhoneRecorder {
         onChange?()
     }
 
-    /// While recording: the meter reads about fifteen times a second, and the journal is written every
-    /// few seconds besides the writes a change makes. Each tick is a task on the main actor, stopped with
-    /// the recording.
+    /// While recording: the meter reads every `meterInterval` (fifteen times a second while someone sees a meter, twice
+    /// otherwise), and the journal is written every few seconds besides the writes a change makes. Each tick is a task
+    /// on the main actor, stopped with the recording.
     private func startTicks() {
         stopTicks()
         ticks = [
-            Self.repeating(every: Self.levelInterval) { [weak self] in self?.updateLevels() != nil },
-            Self.repeating(every: Self.journalInterval) { [weak self] in self?.persistJournal() != nil },
+            Self.repeating(every: { [weak self] in self?.meterInterval ?? Self.levelInterval }) { [weak self] in self?.updateLevels() != nil },
+            Self.repeating(every: { Self.journalInterval }) { [weak self] in self?.persistJournal() != nil },
         ]
     }
 
@@ -744,11 +864,12 @@ final class PhoneRecorder {
         ticks = []
     }
 
-    /// Runs `tick` every `interval` seconds until cancelled, or until it says the recorder is gone.
-    private static func repeating(every interval: TimeInterval, _ tick: @escaping @MainActor () -> Bool) -> Task<Void, Never> {
+    /// Runs `tick` every `interval()` seconds until cancelled, or until it says the recorder is gone.
+    private static func repeating(every interval: @escaping @MainActor () -> TimeInterval,
+                                  _ tick: @escaping @MainActor () -> Bool) -> Task<Void, Never> {
         Task { @MainActor in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(interval))
+                try? await Task.sleep(for: .seconds(interval()))
                 guard !Task.isCancelled, tick() else { return }
             }
         }
@@ -764,10 +885,24 @@ final class PhoneRecorder {
         }
         guard state == .recording else { return }
         let reading = writer.meter.read()
-        if abs(reading.rms - level.rms) >= 0.5 || abs(reading.peak - level.peak) >= 0.5 { level = reading }
-        let silent = elapsedTime >= Self.silentMicrophoneSeconds && !writer.meter.receivedSignal
+        if abs(reading.rms - level.rms) >= 0.5 || abs(reading.peak - level.peak) >= 0.5 { level = reading.level }
+        if reading.rms >= AudioLevelMeter.audibleThreshold { lastHeardSpeechAt = Date() }
+        let silent = HearingCheck.isNotHearing(reading, listeningSince: listeningSince, now: environment.clock.hostTime())
         if silent != isMicrophoneSilent { isMicrophoneSilent = silent }
         onLevel?(level)
+    }
+}
+
+/// A recording whose capture Stop has ended (every part closed, the journal saying `stopping`) and that's still to be
+/// joined: what Stop leaves while the iPhone is locked (`PhoneRecorder.waitingCapture`).
+struct StoppedCapture: Equatable, Sendable {
+    var directory: URL
+    var journal: PhoneCaptureJournal
+
+    var conversationID: UUID { journal.id }
+    /// Where the recording ends, by its parts' counted frames.
+    var duration: TimeInterval {
+        journal.segments.map { $0.startOffset + Double($0.frameCount) / journal.sampleRate }.max() ?? 0
     }
 }
 

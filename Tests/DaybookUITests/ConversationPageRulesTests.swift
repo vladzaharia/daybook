@@ -53,6 +53,8 @@ final class ConversationPageRulesTests: XCTestCase {
 
     func testBehaviorABoxStacksItsActionsWhenNarrowAndSpacesThemForAFinger() {
         XCTAssertFalse(StatusBlockLayout.stacksActions(width: 640, density: .window), "the Mac's page: beside the words")
+        XCTAssertFalse(StatusBlockLayout.stacksActions(width: 480, density: .window),
+                       "the Mac's narrow page: its words decide, not its width")
         XCTAssertTrue(StatusBlockLayout.stacksActions(width: 402, density: .touch), "an iPhone: under them")
         XCTAssertFalse(StatusBlockLayout.stacksActions(width: 600, density: .touch), "the open Duo as one page: beside them")
         XCTAssertTrue(StatusBlockLayout.stacksActions(width: 640, density: .panel), "Floating Notes: always under")
@@ -60,6 +62,12 @@ final class ConversationPageRulesTests: XCTestCase {
         XCTAssertEqual(StatusBlockLayout.attention(.problem), .problem)
         XCTAssertEqual(StatusBlockLayout.attention(.accent), .accent)
         XCTAssertEqual(StatusBlockLayout.attention(.info), .info)
+    }
+
+    func testBehaviorACountdownKeepsTheWidthOfItsWidestSecond() {
+        XCTAssertEqual(StatusBlockLayout.countdownWidth("Summarizing on this Mac in 12 s"), "Summarizing on this Mac in 00 s")
+        XCTAssertEqual(StatusBlockLayout.countdownWidth("Summarizing in 9 s"), "Summarizing in 0 s")
+        XCTAssertEqual(StatusBlockLayout.countdownWidth("Summarizing on Studio Mac in 30 s"), "Summarizing on Studio Mac in 00 s")
     }
 
     func testBehaviorANewSummaryRevealsBlockByBlockUpToSix() {
@@ -94,5 +102,26 @@ final class ConversationPageRulesTests: XCTestCase {
         XCTAssertEqual(SummaryMarkdownMetrics.bullet(density: .window, scale: 1.2).column, 16 * 1.2, accuracy: 0.001)
         XCTAssertEqual(SummaryMarkdownMetrics.bullet(density: .touch).dot, 6)
         XCTAssertEqual(SummaryMarkdownMetrics.bullet(density: .touch).column, 20)
+    }
+
+    func testBehaviorMarksAndTimesHangInTheMarginWhereItHangs() {
+        XCTAssertTrue(SummaryMarkdownMetrics.marksHang(density: .window, width: .regular),
+                      "A window's lists share the page's left edge, their marks in the margin")
+        XCTAssertFalse(SummaryMarkdownMetrics.marksHang(density: .window, width: .narrow), "A narrow page keeps its marks' column")
+        XCTAssertFalse(SummaryMarkdownMetrics.marksHang(density: .touch, width: .regular), "Under touch they keep it at every size")
+        XCTAssertTrue(SummaryMarkdownMetrics.timesHang(width: .regular), "When it was said, in the margin with the notes' times")
+        XCTAssertFalse(SummaryMarkdownMetrics.timesHang(width: .narrow))
+        XCTAssertFalse(SummaryMarkdownMetrics.showsMark(marker: "•", timed: true), "A bullet's time stands in for its dot")
+        XCTAssertTrue(SummaryMarkdownMetrics.showsMark(marker: "•", timed: false))
+        XCTAssertTrue(SummaryMarkdownMetrics.showsMark(marker: "2.", timed: true), "A number stays beside its time")
+    }
+
+    /// VI-14, P6: under touch every next step is laid out alike, its owner and time on one line under it; a window keeps
+    /// the time in the margin's lane.
+    func testBehaviorANextStepsOwnerAndTimeShareOneLineUnderItOnlyUnderTouch() {
+        XCTAssertTrue(SummaryMarkdownMetrics.stepMetaLine(density: .touch),
+                      "\"Daniel · 0:27\" under every step, at every width and text size, the step on the full measure")
+        XCTAssertFalse(SummaryMarkdownMetrics.stepMetaLine(density: .window), "The Mac's page keeps the lane of times")
+        XCTAssertFalse(SummaryMarkdownMetrics.stepMetaLine(density: .panel))
     }
 }

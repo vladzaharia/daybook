@@ -29,7 +29,7 @@ the Mac's port, and sit in the middle of a connection (ARP or DNS-SD spoofing).
 **Worth protecting.**
 - Control: starting and stopping recordings, marking bookmarks.
 - Content of the traffic: conversation IDs, timings, Mac and phone names, processing progress.
-  Audio and transcripts never travel over the link.
+  Audio never travels over the link; the live captions and notes of a shared recording do.
 - The pairing key, which grants all of the above later on any network.
 
 **What the design ensures.**
@@ -237,10 +237,11 @@ DNS-SD's `PolicyDenied` (−65570); the client reads that as `localNetworkDenied
 | `bookmark` | `LinkBookmark` | both | conversation, recording time, created-at, label: a bookmark made during a shared recording, by its ID |
 | `bookmark.change` | `LinkBookmarkChange` | both | a shared bookmark's label changed, or it was deleted; changed-at |
 | `note` | `LinkNote` | both | a paragraph written, edited, or deleted during a shared recording: its anchor ID, text, the time its writer files it at, made-at, changed-at |
-| `captions` | `LinkCaptions` | iPhone → Mac | the live captions an iPhone makes of a shared recording, the lines that changed since it last sent (each with its ID, times in its recording, text, tentative, the voice and person live speakers heard, and the recorder that heard it, if not the phone), and when its recording began on its clock; only to a Mac recording the same conversation that lists `liveCaptions` |
+| `captions` | `LinkCaptions` | both | the live captions a device makes of a shared recording, the lines that changed since it last sent (each with its ID, times in its recording, text, tentative, the voice and person live speakers heard, and the recorder that heard it, if not the sender: a recorder's lines are placed from where its live stream starts on the phone's clock, not from its recording's start), the IDs of lines it sent that its recognizer took back (`removed`, which the receiver drops; nil from an older build), and when its recording began on its clock; only to a device recording the same conversation that lists `liveCaptions`. An iPhone sends every line it and its recorders heard; a Mac sends only its Call lines |
 | `levels` | `LinkLevels` | iPhone → Mac | an iPhone's input level during a shared recording, for the Mac's meters: its meter's readings since it last sent (0…1, oldest first, `interval` apart, at most 30), about five times a second; only to a Mac recording the same conversation that lists `liveLevels`, and never queued behind other messages (one still on its way drops the next) |
 | `processing.progress` | `LinkProcessingProgress` | Mac → phone | meeting, phase, fraction, Mac name, detail; while a summary counts down, phase `summaryCountdown` with `countdown` (seconds left as sent, whether Use the Cloud is on offer); in the cloud, `cloudModel` (both optional) |
-| `processing.nudge` | `LinkProcessingNudge` | phone → Mac | "I just wrote request X": the request itself travels through sync |
+| `processing.nudge` | `LinkProcessingNudge` | phone → Mac | "I just wrote request X": the request itself travels through sync; the Mac syncs and asks the courier at once |
+| `recording.arrival` | `LinkRecordingArrival` | iPhone → Mac | where a recording of the iPhone's that the Mac waits for stands: `filing`, `sending` (with a fraction when known), `sent`, `storageFull`, `waitingForKey`; the conversation and the recording's ID; sent as it changes and as a Mac connects, only to a Mac listing `recordingArrival` (docs/multipoint.md, "Mac first") |
 | `record.permission` | `LinkRecordPermission` | both | the sender's Can start recording for the receiver (`allowed`), as a session begins and when it changes; from a Mac, once, `asksReceiverOff` (an off from an earlier build, below), which the iPhone answers with `turnedOff`; only to a peer listing `recordPermission` |
 | `processing.choice` | `LinkSummaryChoice` | phone → Mac | the person's choice for a summary the Mac counts down to: `useCloud` or `startNow`, the meeting, sent-at; only to a Mac listing `summaryPlacement` (docs/multipoint.md, "Where summaries run") |
 | `recorder.handoff.request` | `LinkRecorderHandoffRequest` | both | take (or give) a recorder, by kind and serial, addressed by the owner's sync ID |
@@ -248,8 +249,8 @@ DNS-SD's `PolicyDenied` (−65570); the client reads that as `localNetworkDenied
 | `recorder.release` | `LinkRecorderRelease` | both | the old owner let go: imports that were waiting, recordings it imported recently, the recording in progress and the conversation waiting for it (with whether it stops when that conversation's recording does; optional) |
 | `libraryKey.request` | `LinkLibraryKeyRequest` | both | an encrypted library's ID and the key IDs the sender waits for |
 | `libraryKey.grant` | `LinkLibraryKeyGrant` | both | library ID, key ID, the key's 32 bytes |
-| `ping` / `pong` | sequence, interval | both | presence |
-| `clock.request` / `clock.reply` | t1 / t1 t2 t3 | both | NTP-style samples |
+| `ping` / `pong` | sequence, interval, `acked` (optional) | both | presence; `acked` is the highest `seq` of the notes and bookmarks the sender has received in this session (below) |
+| `clock.request` / `clock.reply` | t1 / t1 t2 t3; `m1` / `m1` `m2` `m3` (optional) | both | NTP-style samples; `m` are the same moments on each side's continuous clock |
 | `unpair`, `goodbye` | | both | |
 | `pair.*` | begin, accept, refuse, commit, reveal, confirm, fail | pairing only | |
 
@@ -353,10 +354,13 @@ start reads as a start the person chose, and `sharedConversationID` isn't read.
 - **Features.** `cascade` (`LinkCapabilities.cascadeFeature`): the device joins and stops shared
   recordings on its own, reads `cascade` and `sharedConversationID`, and accepts a stop from a device
   recording a conversation with it. `sharedNotes`: it takes `note`, `bookmark.change`, and `bookmark` in
-  both directions. Both apps list both. `liveCaptions` (the Mac lists it): it shows another device's
-  `captions` of a shared recording beside its own; an older Mac is never sent them. `liveLevels` (the
+  both directions. Both apps list both. `liveCaptions` (both apps list it; an iPhone since November
+  2026): it shows another device's `captions` of a shared recording beside its own; an older device is
+  never sent them. `liveLevels` (the
   Mac lists it): it draws another device's input level (`levels`) beside its own meters; an older Mac
   is never sent them, and a Mac shows an older iPhone, which sends none, with a flat meter.
+  `recordingArrival` (the Mac lists it): it says where a recording of the iPhone's it waits for stands
+  (`recording.arrival`); an older Mac is never sent it, and says the wait without the clause.
 - **Cascading start.** `LinkRecordRequest.cascade` says what started the requester's recording
   (`person`, `recorder`, `automatic`, or another `device`; an open value), whether the requester records
   the conversation itself (`requesterRecords`; false for an iPhone whose recorder records while it
@@ -374,6 +378,15 @@ start reads as a start the person chose, and `sharedConversationID` isn't read.
 - **In order.** Each kind of message that must arrive in order goes out one after another: the Mac's
   recording state, its progress, and its notes; the iPhone's recording state, its bookmarks with its
   notes, its nudges, and its summary choices (`PhoneLink.SendChannel`).
+- **Until acknowledged.** A session can be dead for up to its timeout (15 s, a minute while an iPhone
+  records in the background) before either side knows, and a send into it doesn't fail. So each
+  session numbers the notes, bookmarks, and bookmark changes it sends (the frame's `seq`, beside
+  `body`), each side's heartbeats carry the highest number it has received (`acked`), and what a
+  session ends without hearing acknowledged is sent again, before anything new, when the same device
+  connects next (`LinkReliableOutbox`, `LinkReliableKeep`). Kept in memory, at most 256 per device, for
+  an hour, three sends at most. Both apps keep notes and bookmarks by ID, so one that arrives twice
+  changes nothing. An older build ignores `seq` and sends heartbeats without `acked`: nothing is kept
+  for it, and it gets a note again at most once (a session that ended before its first heartbeat).
 
 ## Recording state
 
@@ -386,7 +399,10 @@ clock, keeps a phase for 45 s (it's repeated while recording), and a recorder's 
 minutes past its as-of time. A recorder entry it can't read is dropped, never the whole state.
 
 A device recording because the other asked follows it: when the one that asked says it isn't
-recording that conversation any more, or has been unreachable for 30 minutes, it stops too.
+recording that conversation any more, it stops too. One it can't reach is followed on evidence, not
+silence: after two minutes it says so and keeps recording, the leader's sync presence decides when it
+says something, and after 30 minutes with no word it stops only in a quiet room (docs/multipoint.md,
+"Who stops whom").
 
 ## Clock samples
 
@@ -399,6 +415,18 @@ The estimate is NTP's clock filter: of the last 8 samples (at most 15 minutes ol
 the shortest round trip. `LinkClockEstimate` holds the offset (peer − local), the round trip and
 `uncertainty` (half the round trip, the most a lopsided path can move it), and converts dates
 both ways. It appears on `LinkPeer.clock` and in `.peerUpdated`.
+
+Each sample also carries the same moments on each side's continuous clock (`m1`…`m4`,
+`mach_continuous_time`, the clock the iPhone's first-sample anchor is kept on), which no wall-clock
+step moves. Over the whole session the filter fits the two continuous clocks' drift by least squares,
+using the samples whose round trip is within twice the shortest (plus 2 ms), once they span a minute
+(`LinkConfiguration.clockDriftMinimumSpan`), and moves the chosen sample's offset on to the latest
+sample by it, so a shortest trip minutes old doesn't age. The estimate adds `drift` (peer seconds per
+second here, minus 1), the span it rests on, and the continuous-clock offset (`monotonicOffset` at
+`monotonicAt`). A wall clock stepped on either side (NTP, the person) shows as a jump of more than
+50 ms, beyond the two round trips, between a sample's wall and continuous offsets: the samples from
+before it leave the window, and the drift stays as it was. A peer that sends no continuous stamps (an
+older build) gets the estimate as before, with no drift.
 
 For multipoint, this replaces "the recorders' clocks only, ±120 s" (docs/multipoint.md) with a
 measured prior good to a few milliseconds on a quiet LAN. A phone recording can be placed by
@@ -428,6 +456,10 @@ clock before any sound is compared.
     with slow heartbeats and slow retries.
   - `.background`: say goodbye, close everything, stop browsing and path monitoring. iOS would
     suspend the app anyway; calling `.foreground` again reconnects.
+- **Events.** Each `events()` stream keeps every control and app event, however far its reader
+  falls behind; only another device's live feeds, `levels` and `captions`, keep just the newest 64
+  waiting, the older dropped and counted (`droppedLiveEvents`). A stream released or cancelled stops
+  listening.
 - **Mac sleep and wake.** Call `systemDidWake()` from `NSWorkspace.didWakeNotification`. It probes
   every phone and reopens the listener if it failed. The listener also reopens on its own after a
   failure, with backoff, falling back to any port, which Bonjour carries. The Mac app's `PhoneLink`
@@ -560,7 +592,7 @@ iCloud Keychain. There's no Mac-to-Mac path; two Macs rely on iCloud Keychain or
 
 ## Tests
 
-`swift test --filter DaybookLinkTests`: 93 tests, about 9 s. Everything runs on 127.0.0.1 inside
+`swift test --filter DaybookLinkTests`: 102 tests, about 13 s. Everything runs on 127.0.0.1 inside
 the test process, and nothing is advertised.
 - **Pairings that can't be read** (`LinkKeyStoreTests`, `LinkDiscoveryTests`): a damaged item is left out
   and listed apart, the others keep working, pairing again replaces it, unpairing removes it, a damaged
@@ -602,6 +634,9 @@ the test process, and nothing is advertised.
   - background, foreground and background recording;
   - clock offset of +2.5 s through a 40 ms + 40 ms relay is within 20 ms, and a lopsided
     60/10 ms path stays within the reported uncertainty;
+  - a phone whose continuous clock runs 1% fast is measured so over loopback;
+  - a note sent into a session that has silently died (a frozen relay) arrives on the next session,
+    and one already acknowledged isn't sent again (`LinkDeliveryTests`);
   - record control: acknowledged, refused with a reason, idempotent repeat, unsupported, and
     timeout; a repeat on a new connection while the first is still being answered reaches the app
     once and gets that answer;
@@ -635,6 +670,12 @@ the test process, and nothing is advertised.
 - **Units:** wire round trips (with the optional request fields and recorders), older requests and
   unreadable recorders decoding, frames, TXT tags, backoff, clock filter, key store (memory, and
   the keychain store's move to the data-protection keychain against a keychain in memory).
+- **Delivery** (`LinkDeliveryTests`): a reader that stalls gets every control and app event in order and
+  only the newest 64 live ones, the rest counted, and a stream released or cancelled stops listening;
+  notes numbered and acknowledged, an older build's heartbeat keeping nothing, and what's kept between
+  sessions bounded by sends and age; a 100 ppm drift found within 10 ppm over an hour of samples with
+  some trips queued, a wall step that leaves the drift alone while the offset follows it, and no drift
+  from a peer without continuous stamps.
 
 The relay in `LinkTestSupport.swift` is a loopback TCP proxy with per-direction delay that can
 freeze (hold connections open, pass nothing) or drop every connection.
@@ -661,4 +702,7 @@ freeze (hold connections open, pass nothing) or drop every connection.
 - **Keychain.** `KeychainLinkKeyStore` in the signed apps: access after first unlock on iPhone;
   on the Mac, that a pairing made by an earlier version moves out of the login keychain without a
   prompt and keeps connecting. Tests use memory storage.
-- **Clock accuracy on real Wi-Fi**, where delay is noisier and more lopsided than the relay's.
+- **Clock accuracy on real Wi-Fi**, where delay is noisier and more lopsided than the relay's, and the
+  real drift between an iPhone's and a Mac's continuous clocks over a long recording.
+- **A session that dies quietly** (Wi-Fi gone, the phone pocketed) and the resend of its notes and
+  bookmarks when it comes back.

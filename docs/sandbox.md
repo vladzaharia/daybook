@@ -86,7 +86,7 @@ Store build takes a Developer ID release from after it.
 | Metal, MLX, Core ML, Speech, Foundation Models, Vision, menu bar | | none |
 | Notifications (a recording that stopped, an automatic start; a recorder's imports) | `RecordingNotifications`, `DeviceNotifications` | none |
 | App Intents: Shortcuts, Siri, Spotlight's actions (Start and Stop Recording, Add Bookmark, New Note, Show Floating Notes, Open Conversation) | `DaybookIntents`, `ConversationEntity` | none; they run in the app's process, which the system launches when needed |
-| Spotlight: conversations' titles, dates, and gists, never a Personal one's | `ConversationSpotlight` (Core Spotlight through `IndexedEntity`) | none; the index is this Mac's |
+| Spotlight: conversations' titles and dates, never a Personal one's | `ConversationSpotlight`, by DaybookKit's `SpotlightPlan` (Core Spotlight through `IndexedEntity`) | none; the index is this Mac's |
 | `Process` | the smoke test's `/usr/bin/say` | inherits the sandbox; its output goes to the container's temporary folder |
 
 No login item, Apple Events, XPC services, or helpers. The intents, Spotlight, and the recording's notifications

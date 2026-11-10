@@ -2,10 +2,17 @@ import Foundation
 import os
 import Synchronization
 
-/// Where a device keeps the live captions it made: `<library>/LiveCaptions/<conversation id>.json`,
-/// outside `Meetings/`, so sync and other devices never see them. The same on the Mac and the iPhone:
-/// each file readable only by this user (0600, in a 0700 folder) and protected until the device is
-/// first unlocked, with one rule for when a transcript replaces them (`isReplaced`).
+/// Where a device keeps the live captions it made: one file per recording,
+/// `<library>/LiveCaptions/<conversation id>.<recording id>.json` (`<conversation id>.json` for captions saved
+/// before recordings were kept apart), outside `Meetings/`, so sync and other devices never see them. The same
+/// on the Mac and the iPhone: each file readable only by this user (0600, in a 0700 folder), with one rule for when
+/// a transcript replaces them (`LiveCaptionCoverage`). A second recording into a conversation keeps its own captions
+/// beside the first's.
+///
+/// Their data protection (`protection`): the iPhone writes them while it records, often locked, so they're kept as
+/// its recording in progress is, until unlock (`completeUnlessOpen`): a locked iPhone can write them, a new file each
+/// time, but can't read one back, so reading falls back to the copy this store wrote last, and filing them with their
+/// recording (`update`) works while it's locked. The Mac's are protected until its first unlock.
 ///
 /// Writes run on one serial queue, off the caller's actor: a recording's saves never hold up the main
 /// thread, they land in the order they were made, and a snapshot older than one already written is left
@@ -18,17 +25,22 @@ public final class LiveCaptionStore: Sendable {
     /// How long after a write that failed it's tried again, each time, until one lands or a later write of the
     /// same captions does.
     public let retryDelays: [TimeInterval]
+    /// The files' data protection class.
+    public let protection: FileProtectionType
     private let queue = DispatchQueue(label: "local.daybook.live-captions", qos: .utility)
-    /// What this store last wrote for each conversation.
-    private let written = Mutex<[UUID: Written]>([:])
-    /// Captions whose write failed, by conversation, until one lands.
-    private let unsaved = Mutex<[UUID: Unsaved]>([:])
+    /// What this store last wrote for each recording.
+    private let written = Mutex<[LiveCaptionKey: Written]>([:])
+    /// Captions whose write failed, by recording, until one lands.
+    private let unsaved = Mutex<[LiveCaptionKey: Unsaved]>([:])
     private static let log = Logger(subsystem: "local.daybook", category: "LiveCaptions")
 
     private struct Written {
         var updatedAt: Date
         /// The recording they were filed with, kept by later saves that don't know it yet.
         var trackID: UUID?
+        /// What was written, until the file is read back: what reading falls back to while the file is there but
+        /// can't be opened (a locked iPhone).
+        var copy: LiveCaptions?
     }
 
     private struct Unsaved {
@@ -38,34 +50,93 @@ public final class LiveCaptionStore: Sendable {
         var waiting = false
     }
 
-    public init(libraryRoot: URL, retryDelays: [TimeInterval] = [2, 10, 30, 120]) {
+    public init(libraryRoot: URL, retryDelays: [TimeInterval] = [2, 10, 30, 120], protection: FileProtectionType = LiveCaptionStore.defaultProtection) {
         directory = libraryRoot.appendingPathComponent("LiveCaptions", isDirectory: true)
         self.retryDelays = retryDelays
+        self.protection = protection
     }
 
-    public func url(for meetingID: UUID) -> URL { directory.appendingPathComponent("\(meetingID.uuidString).json") }
+    /// Until unlock on the iPhone, which writes them while it records, locked; until the first unlock on the Mac.
+    public static var defaultProtection: FileProtectionType {
+        #if os(iOS)
+        .completeUnlessOpen
+        #else
+        .completeUntilFirstUserAuthentication
+        #endif
+    }
+
+    /// One recording's file.
+    public func url(for key: LiveCaptionKey) -> URL {
+        let name = key.captureID.map { "\(key.meetingID.uuidString).\($0.uuidString)" } ?? key.meetingID.uuidString
+        return directory.appendingPathComponent("\(name).json")
+    }
+
+    /// The file of captions saved before recordings were kept apart.
+    public func url(for meetingID: UUID) -> URL { url(for: LiveCaptionKey(meetingID: meetingID)) }
+
+    /// The recording a file in the folder holds, by its name.
+    public static func key(of file: URL) -> LiveCaptionKey? {
+        guard file.pathExtension == "json" else { return nil }
+        let parts = file.deletingPathExtension().lastPathComponent.split(separator: ".")
+        guard let meetingID = parts.first.flatMap({ UUID(uuidString: String($0)) }) else { return nil }
+        switch parts.count {
+        case 1: return LiveCaptionKey(meetingID: meetingID)
+        case 2: return UUID(uuidString: String(parts[1])).map { LiveCaptionKey(meetingID: meetingID, captureID: $0) }
+        default: return nil
+        }
+    }
 
     // MARK: Reading
 
-    /// A conversation's saved captions: one small file, read now, or what a write that failed would have left there.
-    public func captions(for meetingID: UUID) -> LiveCaptions? {
-        if let owed = unsaved.withLock({ $0[meetingID]?.captions }) { return owed }
-        guard let data = try? Data(contentsOf: url(for: meetingID)) else { return nil }
-        return try? JSONDecoder().decode(LiveCaptions.self, from: data)
+    /// One recording's saved captions: one small file, read now, or what a write that failed would have left there.
+    /// A file that's there but can't be read now (a locked iPhone) reads as the copy this store wrote last.
+    public func captions(for key: LiveCaptionKey) -> LiveCaptions? {
+        if let owed = unsaved.withLock({ $0[key]?.captions }) { return owed }
+        let data: Data
+        do { data = try Data(contentsOf: url(for: key)) } catch {
+            guard !Self.isMissing(error) else { return nil }
+            return written.withLock { $0[key]?.copy }
+        }
+        guard let captions = try? JSONDecoder().decode(LiveCaptions.self, from: data) else { return nil }
+        // Read back: the file stands for itself from now on.
+        written.withLock { table in
+            if let copy = table[key]?.copy, copy.updatedAt <= captions.updatedAt { table[key]?.copy = nil }
+        }
+        return captions
     }
 
-    /// The conversations that have captions saved.
-    public func conversations() -> [UUID] {
+    private static func isMissing(_ error: Error) -> Bool {
+        let error = error as NSError
+        return (error.domain == NSCocoaErrorDomain && error.code == NSFileReadNoSuchFileError)
+            || (error.domain == NSPOSIXErrorDomain && error.code == Int(ENOENT))
+    }
+
+    /// Each recording's saved captions of a conversation, the oldest recording's first.
+    public func captures(of meetingID: UUID) -> [LiveCaptions] {
+        keys().filter { $0.meetingID == meetingID }.compactMap(captions(for:)).sorted { $0.origin < $1.origin }
+    }
+
+    /// A conversation's newest recording's captions.
+    public func captions(for meetingID: UUID) -> LiveCaptions? { captures(of: meetingID).last }
+
+    /// The recordings that have captions saved.
+    public func keys() -> [LiveCaptionKey] {
         let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
-        let saved = files.compactMap { $0.pathExtension == "json" ? UUID(uuidString: $0.deletingPathExtension().lastPathComponent) : nil }
+        let saved = files.compactMap(Self.key(of:))
         let owed = unsaved.withLock { Array($0.keys) }.filter { !saved.contains($0) }
         return saved + owed
     }
 
-    /// Every conversation's saved captions, by conversation, read now: a few small files, since a
-    /// transcript's arrival deletes the ones it replaces.
-    public func allCaptions() -> [UUID: LiveCaptions] {
-        Dictionary(conversations().compactMap { id in captions(for: id).map { (id, $0) } }, uniquingKeysWith: { first, _ in first })
+    /// The conversations that have captions saved.
+    public func conversations() -> [UUID] {
+        var seen = Set<UUID>()
+        return keys().map(\.meetingID).filter { seen.insert($0).inserted }
+    }
+
+    /// Every conversation's saved captions, each recording's, by conversation, read now: a few small files,
+    /// since a transcript's arrival deletes the ones it replaces.
+    public func allCaptures() -> [UUID: [LiveCaptions]] {
+        Dictionary(grouping: keys().compactMap(captions(for:)), by: \.meetingID).mapValues { $0.sorted { $0.origin < $1.origin } }
     }
 
     // MARK: Writing
@@ -81,58 +152,58 @@ public final class LiveCaptionStore: Sendable {
         try await onQueue { try self.write(captions) }
     }
 
-    /// Changes a conversation's saved captions in place, after every write already asked for: `change`
+    /// Changes one recording's saved captions in place, after every write already asked for: `change`
     /// returns false to leave them as they are. Returns what was written, if anything.
     @discardableResult
-    public func update(_ meetingID: UUID, _ change: @escaping @Sendable (inout LiveCaptions) -> Bool) async throws -> LiveCaptions? {
+    public func update(_ key: LiveCaptionKey, _ change: @escaping @Sendable (inout LiveCaptions) -> Bool) async throws -> LiveCaptions? {
         try await onQueue {
-            guard var captions = self.captions(for: meetingID), change(&captions) else { return nil }
+            guard var captions = self.captions(for: key), change(&captions) else { return nil }
             try self.write(captions, replacing: true)
             return captions
         }
     }
 
-    /// Removes a conversation's captions.
-    public func remove(_ meetingID: UUID) async {
-        try? await onQueue { self.delete(meetingID) }
+    /// The same, for a conversation's newest recording's captions.
+    @discardableResult
+    public func update(_ meetingID: UUID, _ change: @escaping @Sendable (inout LiveCaptions) -> Bool) async throws -> LiveCaptions? {
+        let key = await onQueueQuietly { self.captions(for: meetingID)?.key }
+        guard let key else { return nil }
+        return try await update(key, change)
     }
 
-    /// Removes the captions a transcript has replaced (`isReplaced`), and those of conversations moved
-    /// to the Trash. `conversations`: every conversation in the library, with when each of its
-    /// transcripts was made. `keeping`: conversations being captioned now. `trashed`: the conversations
+    /// Removes a conversation's captions, every recording's.
+    public func remove(_ meetingID: UUID) async {
+        try? await onQueue { for key in self.keys() where key.meetingID == meetingID { self.delete(key) } }
+    }
+
+    /// Removes the captions transcripts have replaced (every line, `LiveCaptionCoverage.replacesAll`), and
+    /// those of conversations moved to the Trash. `coverage`: every conversation in the library, with its
+    /// recordings and transcripts. `keeping`: conversations being captioned now. `trashed`: the conversations
     /// in the Trash, on a device where a recording's conversation only joins the library once it's
     /// filed (the iPhone: one stopped a moment ago, or one a crash left for recovery), so captions of a
     /// conversation the library doesn't have yet stay; nil where a conversation exists from the moment
     /// it's recorded (the Mac), so captions of any conversation not in the library go.
     /// Reads only the captions of conversations that have a transcript, off the caller's actor.
-    public func prune(_ conversations: [UUID: [Date]], keeping: Set<UUID>, trashed: Set<UUID>? = nil) async {
+    public func prune(_ coverage: [UUID: LiveCaptionCoverage], keeping: Set<UUID>, trashed: Set<UUID>? = nil) async {
         try? await onQueue {
-            for id in self.conversations() where !keeping.contains(id) {
-                guard let made = conversations[id] else {
-                    if trashed?.contains(id) ?? true { self.delete(id) }
+            for key in self.keys() where !keeping.contains(key.meetingID) {
+                guard let known = coverage[key.meetingID] else {
+                    if trashed?.contains(key.meetingID) ?? true { self.delete(key) }
                     continue
                 }
-                guard !made.isEmpty, let captions = self.captions(for: id) else { continue }
-                if Self.isReplaced(captions, transcriptsMadeAt: made) { self.delete(id) }
+                guard known.hasTranscript, let captions = self.captions(for: key) else { continue }
+                if known.replacesAll(captions) { self.delete(key) }
             }
         }
     }
 
     // MARK: When a transcript replaces them
 
-    /// The one rule for both apps: the official transcript replaces live captions once one is made
-    /// after they began. A transcript from before them (an earlier recording of the conversation)
-    /// doesn't cover what they heard.
-    public static func isReplaced(_ captions: LiveCaptions, transcriptsMadeAt made: [Date]) -> Bool {
-        made.contains { $0 >= captions.createdAt }
-    }
-
-    /// The captions to show for a conversation: its own, until a transcript replaces them, and only
-    /// with words to read.
-    public static func shown(_ captions: LiveCaptions?, conversation: UUID, transcriptsMadeAt made: [Date]) -> LiveCaptions? {
-        guard let captions, captions.meetingID == conversation, !isReplaced(captions, transcriptsMadeAt: made),
-              captions.hasWords else { return nil }
-        return captions
+    /// The captions to show for a conversation: its own, the lines no transcript replaces yet
+    /// (`LiveCaptionCoverage`), and only with words to read.
+    public static func shown(_ captions: LiveCaptions?, conversation: UUID, coverage: LiveCaptionCoverage) -> LiveCaptions? {
+        guard let captions, captions.meetingID == conversation else { return nil }
+        return coverage.shown(captions)
     }
 
     // MARK: On the queue
@@ -143,75 +214,93 @@ public final class LiveCaptionStore: Sendable {
         }
     }
 
+    private func onQueueQuietly<Value: Sendable>(_ work: @escaping @Sendable () -> Value) async -> Value {
+        await withCheckedContinuation { continuation in queue.async { continuation.resume(returning: work()) } }
+    }
+
     /// `replacing`: an edit of what's saved (filing, speakers labelled afterwards), which wins whatever
     /// its time.
     private func write(_ captions: LiveCaptions, replacing: Bool = false) throws {
         var captions = captions
-        let id = captions.meetingID
-        let last = written.withLock { $0[id] }
+        captions.parts = nil
+        let key = captions.key
+        let last = written.withLock { $0[key] }
         if !replacing, let last, captions.updatedAt < last.updatedAt { return }
-        if captions.trackID == nil { captions.trackID = last?.trackID ?? unsaved.withLock { $0[id]?.captions.trackID } }
+        if captions.trackID == nil { captions.trackID = last?.trackID ?? unsaved.withLock { $0[key]?.captions.trackID } }
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
                                                     attributes: [.posixPermissions: 0o700])
             let data = try JSONEncoder().encode(captions)
-            let url = url(for: id)
+            let url = url(for: key)
             do {
-                try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+                try data.write(to: url, options: [.atomic, Self.writingOptions(protection)])
             } catch {
                 // A volume without data protection (an external drive) keeps them as any other file.
                 try data.write(to: url, options: .atomic)
             }
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         } catch {
-            Self.log.error("Couldn’t save live captions for \(id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            // The error's domain and code only: its description names the file.
+            let code = error as NSError
+            Self.log.error("Couldn’t save live captions for \(key.meetingID.uuidString, privacy: .public) (\(code.domain, privacy: .public) \(code.code, privacy: .public)): \(error.localizedDescription, privacy: .private)")
             keepUnsaved(captions, replacing: replacing)
             throw error
         }
         let stamp = max(captions.updatedAt, last?.updatedAt ?? .distantPast)
-        written.withLock { $0[id] = Written(updatedAt: stamp, trackID: captions.trackID) }
+        // A copy only where a locked device can't read the file back.
+        let copy = protection == .completeUnlessOpen || protection == .complete ? captions : nil
+        written.withLock { $0[key] = Written(updatedAt: stamp, trackID: captions.trackID, copy: copy) }
         unsaved.withLock { table in
-            if let owed = table[id], replacing || owed.captions.updatedAt <= captions.updatedAt { table[id] = nil }
+            if let owed = table[key], replacing || owed.captions.updatedAt <= captions.updatedAt { table[key] = nil }
         }
     }
 
     /// Keeps captions whose write failed (the newest of them, or an edit), and tries them again after the next of
     /// `retryDelays`.
     private func keepUnsaved(_ captions: LiveCaptions, replacing: Bool) {
-        let id = captions.meetingID
+        let key = captions.key
         let delay = unsaved.withLock { table -> TimeInterval? in
-            var entry = table[id] ?? Unsaved(captions: captions)
+            var entry = table[key] ?? Unsaved(captions: captions)
             if replacing || entry.captions.updatedAt <= captions.updatedAt { entry.captions = captions }
             var delay: TimeInterval?
             if !entry.waiting, entry.retries < retryDelays.count {
                 delay = retryDelays[entry.retries]
                 entry.waiting = true
             }
-            table[id] = entry
+            table[key] = entry
             return delay
         }
         guard let delay else { return }
         queue.asyncAfter(deadline: .now() + delay) { [self] in
             let owed = unsaved.withLock { table -> LiveCaptions? in
-                table[id]?.waiting = false
-                table[id]?.retries += 1
-                return table[id]?.captions
+                table[key]?.waiting = false
+                table[key]?.retries += 1
+                return table[key]?.captions
             }
             // The newest the captions were meant to be: written over whatever is there.
             if let owed { try? write(owed, replacing: true) }
         }
     }
 
-    private func delete(_ meetingID: UUID) {
-        try? FileManager.default.removeItem(at: url(for: meetingID))
-        written.withLock { $0[meetingID] = nil }
-        unsaved.withLock { $0[meetingID] = nil }
+    private static func writingOptions(_ protection: FileProtectionType) -> Data.WritingOptions {
+        switch protection {
+        case .complete: return .completeFileProtection
+        case .completeUnlessOpen: return .completeFileProtectionUnlessOpen
+        case .completeUntilFirstUserAuthentication: return .completeFileProtectionUntilFirstUserAuthentication
+        default: return .noFileProtection
+        }
+    }
+
+    private func delete(_ key: LiveCaptionKey) {
+        try? FileManager.default.removeItem(at: url(for: key))
+        written.withLock { $0[key] = nil }
+        unsaved.withLock { $0[key] = nil }
     }
 }
 
 extension LiveCaptions {
     /// Whether any caption has words to read.
-    public var hasWords: Bool { segments.contains { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } }
+    public var hasWords: Bool { segments.contains(where: \.hasWords) }
 
     /// The caption heard at `position` seconds into the recording they were made from, if any.
     public func segment(at position: TimeInterval) -> UUID? {

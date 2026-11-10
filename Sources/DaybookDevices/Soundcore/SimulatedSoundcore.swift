@@ -64,6 +64,8 @@ public final class SimulatedSoundcore {
     public var advertises = true
     /// Ignores Start and Pause, so the app never sees the state change.
     public var ignoresRecordCommands = false
+    /// Answers Start at once but starts recording only this long after: a Start that confirms late.
+    public var startsLate: Duration?
     /// Firmware variant: the recording in progress appears among the listing's entries, growing,
     /// as well as after them as the active one.
     public var listsActiveRecording = false
@@ -206,6 +208,14 @@ public final class SimulatedSoundcore {
             streaming = nil
         case (0x18, 0x82):
             guard !ignoresRecordCommands, let action = payload.first else { reply(0x18, 0x82, Data(), status: 0); return }
+            if action == 1, let late = startsLate {
+                reply(0x18, 0x82, Data([isRecording ? 1 : 2]))
+                Task { [weak self] in
+                    try? await Task.sleep(for: late)
+                    self?.record(true)
+                }
+                return
+            }
             if action == 1 { record(true) } else if action == 2 { record(false) }
             reply(0x18, 0x82, Data([isRecording ? 1 : 2]))
         default:

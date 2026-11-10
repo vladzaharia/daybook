@@ -120,8 +120,8 @@ private struct ModelsOverview: View {
             Section {
                 qualityRow(snapshot)
                 if let download = snapshot.downloadSummary(detectSpeakers: state.detectSpeakers) {
-                    ModelDownloadRow(download, space: snapshot.space, download: { manager.downloadSelected() },
-                                     cancel: { manager.cancelSelected() })
+                    ModelDownloadRow(download, name: "Chosen models", space: snapshot.space,
+                                     download: { manager.downloadSelected() }, cancel: { manager.cancelSelected() })
                 }
             }
             Section {
@@ -189,12 +189,12 @@ private struct ModelRoleSetting: View {
     }
 }
 
-/// Settings › Models › Transcription: the model, the language and the model for other languages, live captions' models
-/// where this Mac has a choice of them, and the vocabulary every transcript and summary is given.
+/// Settings › Models › Transcription: the model, the library's language (the iPhone's row too) and this Mac's model for
+/// other languages, live captions' models where this Mac has a choice of them, and the vocabulary every transcript and
+/// summary is given.
 private struct TranscriptionModelsPage: View {
     let state: AppState
     let manager: ModelManager
-    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         let choices = manager.snapshot.roleChoices
@@ -202,7 +202,10 @@ private struct TranscriptionModelsPage: View {
             if let choice = choices.first(where: { $0.role == .transcription }) {
                 Section {
                     ModelRoleSetting(choice: choice, label: "Model", manager: manager)
-                    TranscriptionLanguageSettings(state: state, manager: manager)
+                    TranscriptionLanguageSettings(language: Binding(get: { state.transcriptionLanguage },
+                                                                    set: { state.transcriptionLanguage = $0 }),
+                                                  catalog: state.modelCatalog)
+                    OtherLanguagesSetting(state: state, manager: manager)
                 }
             }
             let live = choices.filter(\.role.isLiveOnly)
@@ -212,12 +215,7 @@ private struct TranscriptionModelsPage: View {
                 }
             }
             Section {
-                LabeledContent {
-                    Button("Edit…") { openWindow(id: WindowID.vocabulary) }
-                } label: {
-                    Text("Vocabulary")
-                    Text(SettingsWords.vocabulary(state.glossary))
-                }
+                VocabularySettingsRow(state: state)
             }
         }
         .formStyle(.grouped)
@@ -306,7 +304,6 @@ private struct SpeakerModelsPage: View {
 private struct SummaryModelsPage: View {
     let state: AppState
     let manager: ModelManager
-    @Environment(\.openWindow) private var openWindow
 
     /// Roles with pages of their own; any other, live captions' aside, is one of a summary's smaller jobs.
     private static let elsewhere: Set<ModelRole> = [.transcription, .diarization, .speakerEmbedding, .summarization]
@@ -326,12 +323,7 @@ private struct SummaryModelsPage: View {
                 }
             }
             Section {
-                LabeledContent {
-                    Button("Edit…") { openWindow(id: WindowID.templates) }
-                } label: {
-                    Text("Summary templates")
-                    Text(SettingsWords.templates(state.templates))
-                }
+                TemplatesSettingsRow(state: state)
             }
         }
         .formStyle(.grouped)
@@ -543,6 +535,9 @@ enum ModelSettingsDemo {
             await manager.refresh()
         }
         if let key = ModelDemo.value("downloading"), !key.isEmpty { state.downloadModels([key]) }
+        // "failed:<key>": its download stopped on its own; "wifi:<key>": it's owed and waits for Wi‑Fi.
+        if let key = ModelDemo.value("failed"), !key.isEmpty { state.demoDownloads([key], .failed) }
+        if let key = ModelDemo.value("wifi"), !key.isEmpty { state.demoDownloads([key], .waitingForWiFi) }
         if ModelDemo.value("updates") != nil { await manager.checkForUpdates() }
         try? await Task.sleep(for: .milliseconds(300))
         // "page:<transcription|speakers|summaries|library>" opens a page; "scroll:…" opens Model Library there.

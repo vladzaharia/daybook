@@ -1,5 +1,6 @@
 import DaybookCore
 @testable import DaybookKit
+import DaybookLink
 import Foundation
 import XCTest
 
@@ -54,8 +55,11 @@ final class AwaitedRecordingTests: XCTestCase {
         for state in [CompanionRecording.State.starting, .unavailable, .failed, .attached] {
             XCTAssertTrue(meeting([link(state: state)]).awaitedRecordings(now: now).isEmpty, "\(state)")
         }
-        XCTAssertTrue(meeting([link(ended: -3 * 86_400)]).awaitedRecordings(now: now).isEmpty, "Let go after two days")
-        XCTAssertEqual(ProcessingStatus(meeting([link(ended: -3 * 86_400)]), now: now), .done)
+        XCTAssertTrue(meeting([link(ended: -3 * 86_400)]).awaitedRecordings(now: now).isEmpty, "No longer waited for after two days")
+        XCTAssertEqual(ProcessingStatus(meeting([link(ended: -3 * 86_400)]), now: now),
+                       .missingRecordings([AwaitedRecording(deviceName: "Alex's iPhone", deviceKind: DaybookPhoneIntegration.id,
+                                                            since: now.addingTimeInterval(-3 * 86_400))]),
+                       "and said to be missing, never quietly done")
     }
 
     func testTheRecordingArrivingEndsTheWait() {
@@ -126,9 +130,88 @@ final class AwaitedRecordingTests: XCTestCase {
         XCTAssertTrue(waiting.hasAwaitedRecordingToAdd(now: now))
 
         // Links that weren't waited for are left alone.
-        var never = meeting([link(state: .failed), link(ended: -3 * 86_400)])
+        var never = meeting([link(state: .failed)])
         XCTAssertFalse(never.stopWaitingForRecordings(at: now))
         XCTAssertEqual(never.companions?.compactMap(\.stoppedWaitingAt), [])
+    }
+
+    /// Past its two days, a recording that never came is said ("Alex's iPhone audio didn't arrive"), not read as done:
+    /// Don't Wait lets it go, Wait Again waits two days more, and it's still added if it comes.
+    func testBehaviorAudioThatNeverArrivedIsSaidUntilThePersonChooses() {
+        let late = link(ended: -3 * 86_400)
+        let missing = [AwaitedRecording(deviceName: "Alex's iPhone", deviceKind: DaybookPhoneIntegration.id, since: now.addingTimeInterval(-3 * 86_400))]
+        XCTAssertEqual(ProcessingStatus(meeting([late]), now: now), .missingRecordings(missing))
+        XCTAssertEqual(ProcessingStatus.missingDetail(missing), "Alex's iPhone audio didn’t arrive")
+        XCTAssertEqual(ProcessingStatus.missingLine(missing), "iPhone audio didn’t arrive")
+        XCTAssertEqual(meeting([late]).missingLinks(now: now), [late.id])
+
+        var letGo = meeting([late])
+        XCTAssertTrue(letGo.stopWaitingForRecordings(at: now))
+        XCTAssertEqual(ProcessingStatus(letGo, now: now), .done, "Don't Wait: what's here is all there is")
+        XCTAssertTrue(letGo.waitAgain(for: [late.id]), "its Undo")
+        XCTAssertEqual(ProcessingStatus(letGo, now: now), .missingRecordings(missing))
+
+        var again = meeting([late])
+        XCTAssertTrue(again.waitAgainForMissingRecordings(at: now))
+        XCTAssertEqual(again.companions?.first?.waitedAgainAt, now)
+        guard case .awaitingRecordings(let awaited) = ProcessingStatus(again, now: now) else { return XCTFail("waits again") }
+        XCTAssertEqual(awaited.map(\.deviceName), ["Alex's iPhone"])
+        XCTAssertFalse(again.waitAgainForMissingRecordings(at: now), "nothing missing now")
+        XCTAssertEqual(ProcessingStatus(again, now: now.addingTimeInterval(2 * 86_400 + 60)), .missingRecordings(missing),
+                       "two days more, then said again")
+        again.tracks.append(RecordingTrack(source: .microphone, relativePath: "p.m4a", fileName: "p.m4a", sha256: "p",
+                                           device: DeviceRecordingIdentity(kind: DaybookPhoneIntegration.id, serial: "phone-1", recordingID: "rec-1")))
+        XCTAssertTrue(again.hasAwaitedRecordingToAdd(now: now.addingTimeInterval(86_400)), "it came after Wait Again: added")
+    }
+
+    /// Where an awaited recording is: the device's word over the link while it's connected or recent, else its presence.
+    func testBehaviorArrivalStatusFromTheLinkThenPresence() {
+        let report = LinkRecordingArrival(conversationID: UUID(), phase: .sending, fraction: 0.4)
+        XCTAssertEqual(ArrivalStatus.resolve(report: report, reportedAt: now.addingTimeInterval(-3600), connected: true, presence: nil, now: now),
+                       .sending(0.4))
+        XCTAssertEqual(ArrivalStatus.resolve(report: report, reportedAt: now.addingTimeInterval(-60), connected: false, presence: nil, now: now),
+                       .sending(0.4), "recent")
+        XCTAssertNil(ArrivalStatus.resolve(report: report, reportedAt: now.addingTimeInterval(-3600), connected: false, presence: nil, now: now),
+                     "stale, and nothing else known")
+        var filing = report; filing.phase = .filing
+        XCTAssertEqual(ArrivalStatus.resolve(report: filing, reportedAt: now, connected: true, presence: nil, now: now), .filing)
+        var sent = report; sent.phase = .sent
+        XCTAssertNil(ArrivalStatus.resolve(report: sent, reportedAt: now, connected: true, presence: nil, now: now), "on its way through sync")
+
+        func phone(seen: TimeInterval, pending: Int? = nil, problem: SyncPresenceProblem? = nil, waitingForKey: Bool = false) -> KnownSyncDevice {
+            var device = KnownSyncDevice(id: "phone", deviceClass: .phone, displayName: "Alex's iPhone", lastSeen: now.addingTimeInterval(seen))
+            device.pendingUploads = pending
+            device.problem = problem
+            if waitingForKey { device.keyState = SyncDeviceKeyState(state: .waiting, id: "k") }
+            return device
+        }
+        XCTAssertEqual(ArrivalStatus.resolve(report: nil, reportedAt: nil, connected: false, presence: phone(seen: -60, problem: .storageFull), now: now),
+                       .storageFull)
+        XCTAssertEqual(ArrivalStatus.resolve(report: nil, reportedAt: nil, connected: false, presence: phone(seen: -60, waitingForKey: true), now: now),
+                       .waitingForKey)
+        XCTAssertEqual(ArrivalStatus.resolve(report: nil, reportedAt: nil, connected: false, presence: phone(seen: -3 * 3600), now: now),
+                       .lastOnline(now.addingTimeInterval(-3 * 3600)))
+        XCTAssertEqual(ArrivalStatus.resolve(report: nil, reportedAt: nil, connected: false, presence: phone(seen: -60, pending: 2), now: now),
+                       .sending(nil))
+        XCTAssertNil(ArrivalStatus.resolve(report: nil, reportedAt: nil, connected: false, presence: phone(seen: -60, pending: 0), now: now))
+
+        // One clause after the wait.
+        let awaited = [AwaitedRecording(deviceName: "Alex's iPhone", deviceKind: DaybookPhoneIntegration.id, since: now)]
+        let key = awaited[0].arrivalKey
+        XCTAssertEqual(ProcessingStatus.awaitingDetail(awaited, arrivals: [key: .sending(0.4)], now: now),
+                       "Waiting for audio from Alex's iPhone · Sending 40%")
+        XCTAssertEqual(ProcessingStatus.awaitingDetail(awaited, arrivals: [key: .sending(nil)], now: now), "Waiting for audio from Alex's iPhone · Sending")
+        XCTAssertEqual(ProcessingStatus.awaitingDetail(awaited, arrivals: [key: .storageFull], now: now),
+                       "Waiting for audio from Alex's iPhone · Alex's iPhone is out of iCloud storage")
+        let tenTwo = Calendar.current.date(bySettingHour: 10, minute: 2, second: 0, of: now)!
+        XCTAssertEqual(ArrivalStatus.lastOnline(tenTwo).clause(device: "Alex's iPhone", now: tenTwo.addingTimeInterval(3600)),
+                       "Last online \(tenTwo.formatted(date: .omitted, time: .shortened))")
+        XCTAssertEqual(ProcessingStatus.awaitingDetail(awaited, now: now), "Waiting for audio from Alex's iPhone", "nothing known, nothing added")
+
+        // The iPhone's matching line for its own recording.
+        XCTAssertEqual(ProcessingStatus.unsentLine(.sending(nil), here: "this iPhone"), "Sending this iPhone’s audio to your Mac")
+        XCTAssertEqual(ProcessingStatus.unsentLine(.storageFull, here: "this iPhone"), "This iPhone’s audio can’t be sent · iCloud storage is full")
+        XCTAssertEqual(ProcessingStatus.unsentLine(.filing, here: "this iPhone"), "Saving this iPhone’s audio")
     }
 
     func testBehaviorDontWaitActsOnTheLinksItNamesAndIsTakenBackByThem() {

@@ -1,5 +1,6 @@
 import AVFoundation
 import DaybookCore
+import DaybookKit
 import XCTest
 @testable import DaybookPhone
 
@@ -9,6 +10,8 @@ import XCTest
 @MainActor
 final class CaptureRecoveryTests: XCTestCase {
     private let sampleRate = CaptureFiles.format.sampleRate
+    /// One AAC frame, in seconds: how close a part copied into a joined file lands to its place.
+    private var frame: TimeInterval { Double(RecordingAssembler.packetFrames) / sampleRate }
     private let started = Date(timeIntervalSince1970: 1_800_000_000)
 
     private func journal(_ title: String, segments: [CaptureSegment]) -> PhoneCaptureJournal {
@@ -37,7 +40,7 @@ final class CaptureRecoveryTests: XCTestCase {
     /// and files the recording.
     func testATornLastFragmentKeepsTheAudioBeforeTheTear() async throws {
         let scratch = try temporaryDirectory()
-        let bytes = try await CaptureFiles.inProgressSegment(seconds: 5, frequency: 440, in: scratch, test: self)
+        let bytes = try await CaptureFiles.inProgressSegment(seconds: 5, frequency: 440, in: scratch)
         let boxes = CaptureFiles.boxes(bytes)
         let lastIndex = try XCTUnwrap(boxes.last { $0.type == "moof" && $0.end <= bytes.count })
         let beforeLast = try CaptureFiles.readableFrames(bytes.prefix(lastIndex.offset), scratch: scratch)
@@ -85,7 +88,7 @@ final class CaptureRecoveryTests: XCTestCase {
         let folder = try newFolder("orphan")
         let first = try CaptureFiles.writeClosedSegment(to: folder.appendingPathComponent("segment-000.m4a"), seconds: 3, frequency: 440)
         XCTAssertEqual(first, 144_000)
-        let orphan = try await CaptureFiles.inProgressSegment(seconds: 4, frequency: 660, in: scratch, test: self)
+        let orphan = try await CaptureFiles.inProgressSegment(seconds: 4, frequency: 660, in: scratch)
         try orphan.write(to: folder.appendingPathComponent("segment-001.m4a"))
         let orphanFrames = try CaptureFiles.readableFrames(orphan, scratch: scratch)
         XCTAssertGreaterThanOrEqual(orphanFrames, 48_000)
@@ -103,14 +106,16 @@ final class CaptureRecoveryTests: XCTestCase {
         XCTAssertEqual(adopted.startOffset, 3, accuracy: 1e-9, "straight after the previous part")
         XCTAssertFalse(adopted.closed)
         XCTAssertEqual(adopted.notes, ["Placed after the previous part; its exact start wasn’t saved."])
-        XCTAssertEqual(after.finalFile?.frameCount, first + orphanFrames, "both parts, with no gap between them")
+        // Their packets are copied: the adopted part lands within one AAC frame of straight after the first.
+        XCTAssertEqual(Double(after.finalFile?.frameCount ?? 0), Double(first + orphanFrames), accuracy: Double(RecordingAssembler.packetFrames),
+                       "both parts, with no gap between them")
         XCTAssertEqual(after.finalFile?.joined, true)
         XCTAssertTrue(recording.capture.notes?.contains("Placed after the previous part; its exact start wasn’t saved.") == true)
         XCTAssertTrue(recording.warnings.contains("Part of the recording couldn’t be read and was left out (segment-002.m4a)."),
                       "\(recording.warnings)")
 
         let audio = try DecodedAudio(url: recording.audioURL)
-        XCTAssertEqual(audio.duration, 3 + Double(orphanFrames) / sampleRate, accuracy: 0.001)
+        XCTAssertEqual(audio.duration, 3 + Double(orphanFrames) / sampleRate, accuracy: frame)
         XCTAssertEqual(audio.frequency(0.3..<2.7), 440, accuracy: 3)
         XCTAssertEqual(audio.frequency(3.3..<(audio.duration - 0.2)), 660, accuracy: 3, "the adopted part follows the first")
         XCTAssertEqual(audio.rms(3.3..<(audio.duration - 0.2)), toneRMS, accuracy: 0.02)
@@ -122,7 +127,7 @@ final class CaptureRecoveryTests: XCTestCase {
         let scratch = try temporaryDirectory()
         let folder = try newFolder("interrupted")
         let first = try CaptureFiles.writeClosedSegment(to: folder.appendingPathComponent("segment-000.m4a"), seconds: 3, frequency: 440)
-        let second = try await CaptureFiles.inProgressSegment(seconds: 4, frequency: 660, in: scratch, test: self)
+        let second = try await CaptureFiles.inProgressSegment(seconds: 4, frequency: 660, in: scratch)
         try second.write(to: folder.appendingPathComponent("segment-001.m4a"))
         let secondFrames = try CaptureFiles.readableFrames(second, scratch: scratch)
         XCTAssertGreaterThanOrEqual(secondFrames, 48_000)
@@ -138,18 +143,98 @@ final class CaptureRecoveryTests: XCTestCase {
         let after = try PhoneCaptureJournal.load(from: folder)
         XCTAssertEqual(after.state, .stopped)
         XCTAssertEqual(after.finalFile?.joined, true)
-        XCTAssertEqual(after.finalFile?.frameCount, 5 * 48_000 + secondFrames, "3 s, a 2 s silent gap, then what reached the disk")
+        XCTAssertEqual(Double(after.finalFile?.frameCount ?? 0), Double(5 * 48_000 + secondFrames), accuracy: Double(RecordingAssembler.packetFrames),
+                       "3 s, a 2 s silent gap, then what reached the disk, within one AAC frame")
         XCTAssertEqual(recording.highlights.map(\.time), [2, 5.5])
         XCTAssertTrue(recording.capture.notes?.contains("Paused 0:03–0:05 (Phone call); the gap is silent.") == true,
                       "\(recording.capture.notes ?? [])")
         XCTAssertTrue(recording.warnings.contains { $0.contains("Daybook quit while recording") })
 
         let audio = try DecodedAudio(url: recording.audioURL)
-        XCTAssertEqual(audio.duration, 5 + Double(secondFrames) / sampleRate, accuracy: 0.001)
+        XCTAssertEqual(audio.duration, 5 + Double(secondFrames) / sampleRate, accuracy: frame)
         XCTAssertEqual(audio.frequency(0.3..<2.7), 440, accuracy: 3)
         XCTAssertEqual(audio.rms(0.3..<2.7), toneRMS, accuracy: 0.02)
         XCTAssertLessThan(audio.rms(3.2..<4.8), 0.003, "the interruption is silence")
         XCTAssertEqual(audio.frequency(5.3..<(audio.duration - 0.2)), 660, accuracy: 3)
         XCTAssertEqual(audio.rms(5.3..<(audio.duration - 0.2)), toneRMS, accuracy: 0.02)
+    }
+
+    /// Stop had ended the capture (every part closed, the journal saying `stopping`) and iOS ended Daybook while it was
+    /// saving: the next launch saves it whole, and says it was interrupted while saving, never that it quit while
+    /// recording. It ends when Stop ended it.
+    func testARecordingInterruptedWhileSavingIsSavedWholeAndSaysSo() async throws {
+        let folder = try newFolder("stopping")
+        let first = try CaptureFiles.writeClosedSegment(to: folder.appendingPathComponent("segment-000.m4a"), seconds: 3, frequency: 440)
+        let second = try CaptureFiles.writeClosedSegment(to: folder.appendingPathComponent("segment-001.m4a"), seconds: 2, frequency: 660)
+        var journal = journal("Stopped from the Lock Screen", segments: [segment(0, at: 0, frames: first, closed: true),
+                                                                         segment(1, at: 5, frames: second, closed: true)])
+        journal.interruptions = [CaptureInterruption(began: 3, ended: 5, reason: "Phone call", resumed: true)]
+        journal.highlights = [Highlight(time: 6)]
+        journal.state = .stopping
+        let ended = started.addingTimeInterval(7.2)
+        journal.endedAt = ended
+        try journal.write(to: folder)
+
+        let recording = try await PhoneRecorder.recover(in: folder)
+        XCTAssertEqual(recording.recovery, .interruptedWhileSaving)
+        XCTAssertTrue(recording.recovered)
+        XCTAssertTrue(recording.warnings.contains(RecordingWords.savedAfterInterruptedSave), "\(recording.warnings)")
+        XCTAssertFalse(recording.warnings.contains { $0.contains("quit while recording") })
+        XCTAssertEqual(recording.endedAt, ended, "when Stop ended it")
+        XCTAssertEqual(recording.duration, 7, accuracy: frame)
+        XCTAssertEqual(recording.highlights.map(\.time), [6])
+        let after = try PhoneCaptureJournal.load(from: folder)
+        XCTAssertEqual(after.state, .stopped)
+        XCTAssertEqual(after.finalFile?.joined, true)
+        XCTAssertEqual(PhoneAppModel.recovered(.interruptedWhileSaving), "Saved a recording Daybook was interrupted while saving.")
+        XCTAssertEqual(PhoneAppModel.recovered(.quitWhileRecording), "Recovered a recording Daybook was making when it quit.")
+
+        // Recovering again (filing failed the first time) reuses the file and says it once.
+        let again = try await PhoneRecorder.recover(in: folder)
+        XCTAssertNil(again.recovery, "already saved: nothing more to say")
+        XCTAssertEqual(again.warnings.filter { $0 == RecordingWords.savedAfterInterruptedSave }.count, 1)
+    }
+
+    /// What a locked iPhone can't open (its journal, a part, a lone part already moved into place) is never a recording
+    /// with nothing in it: recovery says it's locked, so the folder is kept for the unlock. Files made unreadable
+    /// stand in for a locked iPhone, which the simulator doesn't have.
+    func testWhatCantBeOpenedIsLockedNeverNothingRecorded() async throws {
+        func unreadable(_ url: URL) throws { try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: url.path) }
+        func readable(_ url: URL) throws { try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path) }
+        func expectLocked(_ folder: URL, _ what: String) async {
+            do {
+                _ = try await PhoneRecorder.recover(in: folder)
+                XCTFail("recovered \(what)")
+            } catch {
+                XCTAssertEqual(error as? PhoneRecorderError, .locked, what)
+            }
+        }
+
+        // The journal.
+        let folder = try newFolder("journal")
+        let frames = try CaptureFiles.writeClosedSegment(to: folder.appendingPathComponent("segment-000.m4a"), seconds: 1, frequency: 440)
+        var stopped = journal("Locked journal", segments: [segment(0, at: 0, frames: frames, closed: true)])
+        stopped.state = .stopping
+        try stopped.write(to: folder)
+        try unreadable(PhoneCaptureJournal.url(in: folder))
+        await expectLocked(folder, "an unreadable journal")
+        try readable(PhoneCaptureJournal.url(in: folder))
+
+        // A part.
+        try unreadable(folder.appendingPathComponent("segment-000.m4a"))
+        await expectLocked(folder, "an unreadable part")
+        XCTAssertNil(try PhoneCaptureJournal.load(from: folder).finalFile, "nothing joined")
+        try readable(folder.appendingPathComponent("segment-000.m4a"))
+
+        // A lone part moved into place before Daybook was ended, the journal not yet saying so.
+        let moved = try newFolder("moved")
+        let output = moved.appendingPathComponent(PhoneCaptureJournal.finalFileName)
+        let movedFrames = try CaptureFiles.writeClosedSegment(to: output, seconds: 1, frequency: 440)
+        try journal("Moved", segments: [segment(0, at: 0, frames: movedFrames, closed: true)]).write(to: moved)
+        try unreadable(output)
+        await expectLocked(moved, "an unreadable joined file")
+        try readable(output)
+        let recovered = try await PhoneRecorder.recover(in: moved)
+        XCTAssertEqual(recovered.duration, 1, accuracy: frame, "once it can be read, it's all there")
     }
 }

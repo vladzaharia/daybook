@@ -46,6 +46,25 @@ final class FloatingNotesStatusTests: XCTestCase {
         XCTAssertEqual(silent?.detailIsWarning, true)
     }
 
+    /// Recording, the band's phase is the input menu: the input reads "MacBook Pro Microphone ▾", and a silent
+    /// microphone keeps the menu, since choosing another input is the fix (its words stay the warning's own).
+    func testBehaviorTheRecordingPhaseIsTheInputMenu() {
+        let menu = FloatingStatus.phase(recording { $0.recording.choosesInput = true })
+        XCTAssertEqual(menu, RecorderPhase(phase: .recording, title: "Recording", detail: "MacBook Pro Microphone ▾", choosesInput: true,
+                                           input: "MacBook Pro Microphone"))
+        let silent = FloatingStatus.phase(recording { $0.recording.choosesInput = true; $0.recording.microphoneSilent = true })
+        XCTAssertEqual(silent?.detail, "Microphone silent")
+        XCTAssertEqual(silent?.detailIsWarning, true)
+        XCTAssertEqual(silent?.choosesInput, true)
+        XCTAssertEqual(silent?.input, "MacBook Pro Microphone")
+        var saved = FloatingStatusInputs()
+        saved.phase = .saved
+        saved.recording.choosesInput = true
+        saved.recording.duration = 60
+        XCTAssertEqual(FloatingStatus.phase(saved)?.choosesInput, false, "only while recording")
+        XCTAssertEqual(RecordingStatusWords.inputChoice("iPhone Microphone"), "iPhone Microphone ▾")
+    }
+
     func testPhaseAfterStopAndWhenIdle() {
         var inputs = FloatingStatusInputs()
         XCTAssertNil(FloatingStatus.phase(inputs), "Nothing recording: the band stays quiet")
@@ -79,6 +98,33 @@ final class FloatingNotesStatusTests: XCTestCase {
         XCTAssertEqual(missing?.tone, .attention)
         XCTAssertEqual(missing?.label, "No call audio")
         XCTAssertTrue(missing?.detail.contains("Screen & System Audio Recording") == true, "A missing call says how to fix it")
+    }
+
+    /// The disk running out of room speaks only under half an hour, in warning ink after the call, and says when call
+    /// audio stopped for it; nothing after Stop.
+    func testBehaviorLowSpaceIsAChipWhileRecording() throws {
+        XCTAssertFalse(FloatingStatus.chips(recording { $0.recording.call = .detected }).contains { $0.target == .storage })
+        let low = FloatingStatus.chips(recording { $0.recording.call = .detected; $0.recording.spaceLeft = 25 * 60 + 20 })
+        XCTAssertEqual(low.map(\.target), [.call, .storage])
+        let chip = try XCTUnwrap(low.last)
+        XCTAssertEqual(chip.label, "Low on space")
+        XCTAssertEqual(chip.shortLabel, "Space")
+        XCTAssertEqual(chip.tone, .attention)
+        XCTAssertTrue(chip.isProminent, "it keeps its words longest")
+        XCTAssertEqual(chip.detail, "Room for about 25 more minutes. Free up space to keep recording.")
+        XCTAssertEqual(RecordingStatusWords.storageDetail(spaceLeft: 40, callStopped: true),
+                       "The disk is almost full, so call audio stopped. Room for less than a minute more. Free up space to keep recording.")
+        XCTAssertEqual(RecordingStatusWords.storageDetail(spaceLeft: 90, callStopped: false),
+                       "Room for about 1 more minute. Free up space to keep recording.")
+        var saved = recording { $0.recording.spaceLeft = 60 }
+        saved.phase = .saved
+        XCTAssertFalse(FloatingStatus.chips(saved).contains { $0.target == .storage })
+    }
+
+    /// Put to sleep, the devices recording along kept going; the box after Stop names them.
+    func testTheDevicesThatKeptRecordingAreNamed() {
+        XCTAssertNil(RecordingStatusWords.keptRecording([]))
+        XCTAssertEqual(RecordingStatusWords.keptRecording(["Soundcore Work", "Alex’s iPhone"]), "Soundcore Work and Alex’s iPhone kept recording.")
     }
 
     func testCallChipOnlyWhileRecording() {
@@ -161,6 +207,20 @@ final class FloatingNotesStatusTests: XCTestCase {
         XCTAssertEqual(paused?.detail, "Alex’s iPhone paused. This Mac keeps recording.")
     }
 
+    /// The phone this Mac records for, out of reach and not connected, still has its chip: it says so, while this Mac
+    /// keeps recording (`LeaderWatch`).
+    func testPhoneThisMacFollowsOutOfReach() {
+        var lead = phone(connected: false)
+        lead.along = .alreadyRecording
+        lead.outOfReach = true
+        let chip = RecordingStatusWords.peerChip(lead, recording: true)
+        XCTAssertEqual(chip?.tone, .attention)
+        XCTAssertEqual(chip?.label, "Out of reach")
+        XCTAssertEqual(chip?.detail, "Alex’s iPhone is out of reach. This Mac keeps recording.")
+        XCTAssertEqual(RecordingStatusWords.peerChip(lead, recording: true, here: "this iPhone")?.detail,
+                       "Alex’s iPhone is out of reach. This iPhone keeps recording.")
+    }
+
     /// Regression: at the default width a paused iPhone's chip kept "Alex’s iPhone paused" and squeezed
     /// the Soundcore's to "● 80%", which didn't say whose it was.
     func testChipsShortenThePausedIPhoneFirstAndKeepNames() throws {
@@ -204,14 +264,50 @@ final class FloatingNotesStatusTests: XCTestCase {
                        "Transcribing on Studio Mac · 40%", "Another device is named: which one works is the status")
         XCTAssertEqual(FloatingStatus.workChip(.summarizing)?.label, "Summarizing…")
         XCTAssertEqual(FloatingStatus.workChip(.waiting)?.label, "Waiting to transcribe")
-        XCTAssertEqual(FloatingStatus.workChip(.models)?.label, "Waiting for models")
+        XCTAssertEqual(FloatingStatus.workChip(.models(nil))?.label, "Waiting for models")
         XCTAssertEqual(FloatingStatus.workChip(.requested(device: "Alex’s iPhone"))?.label, "Requested from Alex’s iPhone",
                        "the iPhone asked; it isn't what the conversation waits for")
         XCTAssertEqual(FloatingStatus.workChip(.ready(summary: true))?.label, "Summary ready")
+        // Transcript first (uxf-01): the transcript is ready, and the menu's first line says what the summary waits for.
+        let transcript = FloatingStatus.workChip(.transcriptReady(waiting: "Waiting to summarize after the download · 38%"))
+        XCTAssertEqual(transcript?.label, "Transcript ready")
+        XCTAssertEqual(transcript?.shortLabel, "Ready")
+        XCTAssertEqual(transcript?.tone, .linked)
+        XCTAssertNil(transcript?.progress, "A finished state, not a bar")
+        XCTAssertEqual(transcript?.detail, "Transcript ready · Waiting to summarize after the download · 38%")
         let failed = FailureWords(kind: .modelsMissing, reason: "", hadTranscripts: false, device: "this Mac")
         let chip = FloatingStatus.workChip(.failed(failed))
         XCTAssertEqual(chip?.tone, .attention)
         XCTAssertEqual(chip?.detail, failed.message, "Its menu says it in the words both apps use")
+    }
+
+    /// Waiting for models is a wait, not a problem (uxf-06): calm while nothing downloads, the one phrase over the whole
+    /// set with its bar while the download runs, and only a download that stopped in the warning tone. The home's line
+    /// for this Mac says the same.
+    func testBehaviorTheModelsChipIsCalmAndSaysTheDownloadInTheSharedWords() throws {
+        let waiting = try XCTUnwrap(FloatingStatus.workChip(.models(nil)))
+        XCTAssertEqual(waiting.tone, .calm)
+        XCTAssertEqual(waiting.shortLabel, "Models")
+        let arriving = try XCTUnwrap(FloatingStatus.workChip(.models(.downloading(done: 3_800_000_000, total: 7_600_000_000))))
+        XCTAssertEqual(arriving.label, "Downloading models · 50%")
+        XCTAssertEqual(arriving.shortLabel, "50%")
+        XCTAssertEqual(arriving.progress, 0.5)
+        XCTAssertEqual(arriving.tone, .working)
+        XCTAssertEqual(arriving.detail, "Downloading models · 50% · 3.8 of 7.6 GB", "its menu's first line has the total")
+        let wifi = try XCTUnwrap(FloatingStatus.workChip(.models(.waitingForWiFi(bytes: 852_000_000))))
+        XCTAssertEqual(wifi.label, "Downloading models · Waiting for Wi‑Fi")
+        XCTAssertEqual(wifi.tone, .calm)
+        let failed = try XCTUnwrap(FloatingStatus.workChip(.models(.failed(model: "Gemma 4 12B 4-bit", bytes: 7_600_000_000))))
+        XCTAssertEqual(failed.label, "Couldn’t download Gemma 4 12B 4-bit")
+        XCTAssertEqual(failed.tone, .attention)
+
+        var queue = FloatingStatusInputs.Queue(awaitingModels: 1)
+        XCTAssertEqual(FloatingStatus.queueWords(queue)?.text, "Waiting for models")
+        XCTAssertEqual(FloatingStatus.queueWords(queue)?.tone, .calm)
+        queue.models = .downloading(done: 1, total: 4)
+        XCTAssertEqual(FloatingStatus.queueWords(queue)?.text, "Downloading models · 25%")
+        XCTAssertEqual(FloatingStatus.queueChip(queue)?.progress, 0.25)
+        XCTAssertNotNil(FloatingStatus.queueWords(.init(models: .downloading(done: 1, total: 4))), "a download alone is work to say")
     }
 
     /// Where a summary runs (docs/multipoint.md, "Where summaries run"): its countdown in the chip and the home's
