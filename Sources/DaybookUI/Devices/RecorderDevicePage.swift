@@ -164,7 +164,7 @@ public struct RecorderHeader: View {
                 ? AnyLayout(VStackLayout(alignment: .leading, spacing: DaybookSpacing.s3))
                 : AnyLayout(HStackLayout(alignment: .center, spacing: 14))
             layout {
-                DaybookTile(symbol: session.kind.systemImage, tone: session.isLinked ? .active : .neutral, size: .header)
+                DeviceGlyph(session: session, size: .header)
                 VStack(alignment: .leading, spacing: 4) {
                     title
                     bylineRow(byline)

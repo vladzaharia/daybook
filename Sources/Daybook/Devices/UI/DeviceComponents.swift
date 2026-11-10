@@ -57,20 +57,6 @@ struct DevicePageTitle<Glyph: View>: View {
     }
 }
 
-/// A device kind's symbol: teal while the recorder is linked, secondary otherwise, as on the iPhone.
-struct DeviceGlyph: View {
-    let symbol: String
-    var size: CGFloat = 28
-    var linked = false
-
-    var body: some View {
-        Image(systemName: symbol)
-            .font(.system(size: size, weight: .regular))
-            .foregroundStyle(linked ? DaybookStyle.accent : Ink.secondary)
-            .accessibilityHidden(true)
-    }
-}
-
 /// The 7 pt dot before a status line: teal when connected (pulsing while connecting), warning
 /// when unavailable, meta otherwise.
 struct DeviceStatusDot: View {

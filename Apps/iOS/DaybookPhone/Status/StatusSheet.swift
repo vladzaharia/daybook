@@ -570,7 +570,7 @@ private struct StatusRecorderCard: View {
         open(.device(session.id))
       } label: {
         StatusRow {
-          DeviceGlyph(session: session, size: glyph.value)
+          DeviceGlyph(session: session).frame(width: glyph.value)
         } content: {
           HStack(spacing: PhoneStyle.Space.s2) {
             StatusRowTitle(title: session.device.name) {
