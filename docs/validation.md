@@ -263,8 +263,9 @@ not Daybook's.
   that can't be opened is `PhoneRecorderError.locked`, never "No audio was recorded"; recovery skips the recording in
   progress and any stop still finishing, waits while locked, and deletes a folder only when it read every file in it.
   The whole DaybookPhoneTests bundle on a simulator clone (490, 0 failures), with the new StagingProtectionTests
-  (a pretend lock, unreadable files, and the folder's class set through the file system, since the simulator applies
-  no data protection and reads every file as class C) and additions to PhoneRecorderTests, CaptureRecoveryTests, and
+  (a pretend lock, unreadable files, and the folder's class set through the file system; the class assertions run
+  only where the file system keeps classes, which a FileVault Mac and its simulators do and CI's runners don't:
+  `FileProtectionClasses.areKept`, DaybookTestSupport) and additions to PhoneRecorderTests, CaptureRecoveryTests, and
   RecordingSurfacesTests; LiveCaptionStoreTests on macOS. Still needs a passcode-locked device: the file classes of
   staging files and filed copies; a Lock Screen Stop then unlock (time to "Saved", with Daybook running and after
   iOS suspended it); the Live Activity after that unlock; a self-stop, a crash, and captions while locked; and a
