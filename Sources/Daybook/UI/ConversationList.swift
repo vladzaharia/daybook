@@ -68,7 +68,7 @@ struct ConversationList: View {
                                                 isSelected: selected.contains(meeting.id))
                         }
                         .tag(meeting.id)
-                        .modifier(RowDrag(meeting: meeting))
+                        .modifier(RowDrag(meeting: meeting, hidden: state.personalLock.hides(meeting)))
                         .listRowSeparator(.hidden)
                     }
                 }
@@ -81,7 +81,7 @@ struct ConversationList: View {
         .onGeometryChange(for: Bool.self) { $0.size.width >= ConversationRowView.twoLineGistWidth } action: { isWide = $0 }
         .environment(\.conversationListIsWide, isWide)
         // ⌘C copies the selection: inside Daybook the conversations, elsewhere their Markdown or their words.
-        .copyable(state.meetings.filter { selection.wrappedValue.contains($0.id) }.map(ConversationTransfer.init))
+        .copyable(state.meetings.filter { selection.wrappedValue.contains($0.id) && !state.personalLock.hides($0) }.map(ConversationTransfer.init))
         .motion(state.isReady ? Motion.state : .linear(duration: 0), value: meetings.map(\.id))
         .contextMenu(forSelectionType: UUID.self) { ids in
             RowMenu(state: state, ids: Array(ids), undoManager: undoManager) { tagging = ConversationIDs(ids: $0) }
@@ -194,9 +194,11 @@ private struct ListSubtitle: ViewModifier {
 /// dropped on files the whole selection when the row is part of it (`ConversationDrop`).
 private struct RowDrag: ViewModifier {
     let meeting: Meeting
+    /// The Personal lock hides it: it stays where it is until it's unlocked, since a drag carries its words out.
+    let hidden: Bool
 
     func body(content: Content) -> some View {
-        content.draggable(ConversationTransfer(meeting))
+        if hidden { content } else { content.draggable(ConversationTransfer(meeting)) }
     }
 }
 
@@ -242,7 +244,7 @@ private struct SearchResults: View {
                     SearchResultRowView(meeting: meeting, hit: hit).tag(hit.meetingID).listRowSeparator(.hidden)
                 }
             }
-            ForEach(captionHits) { hit in
+            ForEach(captionHits.filter { state.personalLock.lists($0.meeting) }) { hit in
                 CaptionHitRowView(meeting: hit.meeting, segment: hit.segment, query: state.search)
                     .tag(hit.meeting.id)
                     .listRowSeparator(.hidden)
@@ -401,7 +403,10 @@ private struct RowMenu: View {
 
     var body: some View {
         let meetings = state.meetings.filter { ids.contains($0.id) }
-        if let only = meetings.first, meetings.count == 1 {
+        if let only = meetings.first, meetings.count == 1, state.personalLock.hides(only) {
+            // Locked: nothing that shows or shares it until the person unlocks.
+            Button(PersonalLockWords.unlock) { state.selectedID = only.id }
+        } else if let only = meetings.first, meetings.count == 1 {
             ShareLink(item: ConversationShareItem(only), preview: SharePreview(ConversationRowView.title(only))) {
                 Label("Share…", systemImage: "square.and.arrow.up")
             }

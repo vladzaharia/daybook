@@ -25,6 +25,8 @@ struct LibraryPage: View {
   @Environment(\.creaseEdge) private var creaseEdge
   @Environment(\.undoManager) private var undoManager
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  /// What the Personal lock hides and what a Focus leaves out (`PersonalLock`).
+  @Environment(PersonalLock.self) private var personalLock: PersonalLock?
   @State private var showingSettings = false
   @State private var importing = false
   @State private var naming: FolderNaming?
@@ -132,7 +134,9 @@ struct LibraryPage: View {
   }
 
   private var place: LibraryPlace { session.place.libraryPlace }
-  private var meetings: [Meeting] { place.meetings(in: library.meetings) }
+  private var meetings: [Meeting] {
+    place.meetings(in: library.meetings, showingPersonal: personalLock?.focus.showsPersonal ?? true)
+  }
 
   private var list: some View {
     let meetings = meetings
@@ -184,10 +188,12 @@ struct LibraryPage: View {
   /// A row's swipes, from its actions: Move to Trash and Move to Folder to the trailing edge, Work or Personal to
   /// the leading.
   @ViewBuilder private func swipes(_ meeting: Meeting, edge: HorizontalEdge) -> some View {
-    // Only what can be done now, as the row's menu.
+    // Only what can be done now, as the row's menu. A row the Personal lock hides has none: they'd name it.
     let groups = ConversationActionMenuItems.shown(
       PhoneActions.groups(for: [meeting.id], library: library), on: .iPhone)
-    if edge == .trailing {
+    if personalLock?.hides(meeting) == true {
+      EmptyView()
+    } else if edge == .trailing {
       if let trash = ConversationActionMenuItems.action(.moveToTrash, in: groups) {
         Button(role: .destructive) {
           session.confirmingTrash = [meeting.id]
@@ -237,7 +243,8 @@ struct LibraryPage: View {
   private var results: some View {
     @Bindable var session = session
     let hits = LibrarySearch.hits(
-      in: library.meetings, text: session.searchText, tokens: session.searchTokens,
+      in: personalLock?.listed(library.meetings) ?? library.meetings, text: session.searchText,
+      tokens: session.searchTokens,
       scope: session.searchScope)
     return List {
       // The scopes, on one page and on two, as on the Mac.
@@ -285,7 +292,8 @@ struct LibraryPage: View {
         revision: library.revision)
     ) {
       let candidates = Self.captionCandidates(
-        in: library.meetings, tokens: session.searchTokens, scope: session.searchScope)
+        in: personalLock?.listed(library.meetings) ?? library.meetings, tokens: session.searchTokens,
+        scope: session.searchScope)
       let found = await LibraryCaptionSearch.hits(
         in: candidates, query: session.searchText,
         excluding: Set(hits.map(\.meetingID)), libraryRoot: library.rootURL)
@@ -628,19 +636,21 @@ private struct PlacesTitle: View {
   }
 }
 
-/// The title's menu: places, folders, and the Trash.
+/// The title's menu: places, folders, and the Trash. Personal shows the lock while it's locked, and goes while a
+/// Focus leaves it out (`PersonalLock`).
 private struct PlacesMenu: View {
   let library: LibraryController
   let newFolder: () -> Void
   let renameFolder: (UUID) -> Void
   let deleteFolder: (UUID) -> Void
   @Environment(ReadingSession.self) private var session
+  @Environment(PersonalLock.self) private var personalLock: PersonalLock?
 
   var body: some View {
     @Bindable var session = session
     Picker("Place", selection: $session.place) {
-      ForEach(LibrarySection.allCases) { section in
-        Label(section.rawValue, systemImage: section.systemImage).tag(
+      ForEach(personalLock?.sections ?? LibrarySection.allCases) { section in
+        Label(section.rawValue, systemImage: personalLock?.symbol(section) ?? section.systemImage).tag(
           ReadingPlace.library(.section(section)))
       }
     }
@@ -683,10 +693,18 @@ struct RowMenu: View {
   @Environment(ReadingSession.self) private var session
   @Environment(\.summaryPlacement) private var placement
   @Environment(\.undoManager) private var undoManager
+  @Environment(PersonalLock.self) private var personalLock: PersonalLock?
 
   var body: some View {
     let meetings = library.meetings.filter { ids.contains($0.id) }
-    if let only = meetings.first, meetings.count == 1 {
+    if let only = meetings.first, meetings.count == 1, personalLock?.hides(only) == true {
+      // Locked: nothing that shows or shares it until the person unlocks.
+      Button {
+        session.open(only.id)
+      } label: {
+        Label(PersonalLockWords.unlock, systemImage: PersonalLockWords.symbol)
+      }
+    } else if let only = meetings.first, meetings.count == 1 {
       Button {
         session.open(only.id)
       } label: {

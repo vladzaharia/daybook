@@ -366,8 +366,10 @@ extension AppState {
 
     /// Asks whether to record a meeting with other people that's starting with no call to announce it (Use Calendar).
     /// Record records it under its title, as the person's own recording, and asks again once it's over whether to stop.
+    /// In a Focus whose Daybook filter turns Ask to Record Meetings off, it's let go unasked, as a call is (`CallPolicy`).
     func askToRecord(_ meeting: MeetingEvent) {
         askedMeetings.insert(meeting.id)
+        guard personalLock.focus.asksToRecord else { return }
         CallPromptWindow.shared.ask(.meetingStarts(meeting)) { [weak self] answer in
             guard let self, answer == .record, self.recordingID == nil, !self.isStartingRecording else { return }
             Task {

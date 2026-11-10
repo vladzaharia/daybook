@@ -60,7 +60,8 @@ enum SettingsPane: String, CaseIterable, Identifiable {
                           "Apps", "Calendar", "Live Captions", "Language", "Floating Notes", "Permissions", "Screen", "Notifications"]
         case .devices: ["iPhone", "Recorder", "Soundcore", "Add Device", "Pair", "Unpair", "Bluetooth", "Wi-Fi", "Wi‑Fi"]
         case .library: ["Folder", "Location", "Storage", "iCloud", "Sync", "Import", "Privacy", "Encryption", "Recovery Key",
-                        "Summary Templates", "Vocabulary", "Glossary", "Speaker Profiles", "Voiceprint", "Version"]
+                        "Summary Templates", "Vocabulary", "Glossary", "Speaker Profiles", "Voiceprint", "Version", "Personal", "Lock",
+                        "Touch ID", "Password"]
         case .models: ["Transcription", "Speakers", "Summaries", "Language", "Download", "Quality", "Voice", "Voiceprint", "Vocabulary",
                        "Glossary", "Summary Templates", "Speaker Profiles", "Accuracy", "Synced Recordings", "Live Transcription",
                        "Model Library", "Updates", "Parakeet", "Whisper", "Gemma", "Nemotron", "Community-1"]
@@ -128,8 +129,18 @@ struct SettingsView: View {
                     }
                 }
                 .navigationTitle(pane.title)
+                .defaultScrollAnchor(Self.snapshotAnchor)
             }
         }
+    }
+
+    /// `--scroll-end` (debug builds, with `--open-settings`, as on the iPhone): the page opens at its foot, for snapshots.
+    private static var snapshotAnchor: UnitPoint? {
+        #if DEBUG
+        CommandLine.arguments.contains("--scroll-end") ? .bottom : nil
+        #else
+        nil
+        #endif
     }
 }
 
@@ -564,6 +575,8 @@ private struct LibrarySettings: View {
                     .controlSize(.regular)
             }
 
+            PersonalLockSection(lock: state.personalLock)
+
             Section {
                 PrivacyStatement()
             } header: {
@@ -584,6 +597,23 @@ private struct LibrarySettings: View {
         #if DEBUG
         .task { LibraryMoveDemo.apply(to: state) }
         #endif
+    }
+}
+
+/// "Require Touch ID for Personal" (or the password, on a Mac without Touch ID) and its one line. Off by default;
+/// turning it off asks first, as unlocking does (`PersonalLock.setRequired`).
+private struct PersonalLockSection: View {
+    let lock: PersonalLock
+
+    var body: some View {
+        Section {
+            Toggle(PersonalLockWords.requirement(lock.method), isOn: Binding(get: { lock.isRequired }, set: { on in
+                Task { await lock.setRequired(on) }
+            }))
+            .controlSize(.regular)
+        } footer: {
+            SettingsFooter(PersonalLockWords.footer)
+        }
     }
 }
 

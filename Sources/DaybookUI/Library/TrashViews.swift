@@ -4,12 +4,14 @@ import SwiftUI
 
 /// A conversation in the Trash, on both apps: its title, when it was and how long, and Restore in sight. Its row
 /// menu (and, on the iPhone, a swipe) offers Restore too; each app lists these from
-/// `LibraryController.trashedMeetings()` and restores through `restoreFromTrash`.
+/// `LibraryController.trashedMeetings()` and restores through `restoreFromTrash`. While the Personal lock hides it,
+/// it's "Personal conversation", as a list's row is.
 public struct TrashRowView: View {
     private let meeting: Meeting
     private let restore: () -> Void
     private let show: (() -> Void)?
     @Environment(\.daybookDensity) private var density
+    @Environment(PersonalLock.self) private var personalLock: PersonalLock?
 
     /// `show`: a tap on its words shows it read only beside the list, where the list's selection doesn't (the
     /// iPhone's two pages); the Mac's Trash selects the row instead.
@@ -20,6 +22,8 @@ public struct TrashRowView: View {
     }
 
     private var onPaper: Bool { density != .window }
+    private var hidden: Bool { personalLock?.hides(meeting) == true }
+    private var title: String { hidden ? PersonalLockWords.hiddenTitle : ConversationRowView.title(meeting) }
 
     public var body: some View {
         HStack(alignment: .center, spacing: DaybookSpacing.s3) {
@@ -31,7 +35,7 @@ public struct TrashRowView: View {
             Button(TrashWords.restore, action: restore)
                 .buttonStyle(.daybookTinted)
                 .controlSize(.small)
-                .accessibilityLabel("\(TrashWords.restore) \(ConversationRowView.title(meeting))")
+                .accessibilityLabel("\(TrashWords.restore) \(title)")
         }
         .padding(.vertical, density == .touch ? 4 : 6)
         .accessibilityAction(named: TrashWords.restore, restore)
@@ -40,9 +44,10 @@ public struct TrashRowView: View {
     /// Its title and when, up to Restore.
     private var words: some View {
         VStack(alignment: .leading, spacing: density == .touch ? 3 : 2) {
-            Text(ConversationRowView.title(meeting))
+            Text(title)
                 .font(DaybookFont.rowTitle.font(density))
-                .foregroundStyle(onPaper ? AnyShapeStyle(DaybookPalette.Ink.title) : AnyShapeStyle(.primary))
+                .foregroundStyle(hidden ? onPaper ? AnyShapeStyle(DaybookPalette.Ink.secondary) : AnyShapeStyle(.secondary)
+                                 : onPaper ? AnyShapeStyle(DaybookPalette.Ink.title) : AnyShapeStyle(.primary))
                 .lineLimit(1)
             Text(Self.detail(meeting))
                 .font(DaybookFont.rowDetail.font(density))
@@ -72,11 +77,13 @@ public enum TrashWords {
 
 /// A conversation in the Trash, read only, with Restore: the Mac's page beside the Trash's list. Its title and byline,
 /// "In the Trash" with Restore under them where every page's status sits, then what it was about (the gist, the next
-/// steps, your notes), so it can be told apart before it's put back.
+/// steps, your notes), so it can be told apart before it's put back. A Personal one the lock hides stays shut, with
+/// Unlock (`LockedConversationPage`).
 public struct TrashedConversationPage: View {
     private let meeting: Meeting
     private let restore: () -> Void
     @Environment(\.daybookDensity) private var density
+    @Environment(PersonalLock.self) private var personalLock: PersonalLock?
 
     public init(meeting: Meeting, restore: @escaping () -> Void) {
         self.meeting = meeting
@@ -84,6 +91,14 @@ public struct TrashedConversationPage: View {
     }
 
     public var body: some View {
+        if let personalLock, personalLock.hides(meeting) {
+            LockedConversationPage { Task { await personalLock.unlock() } }
+        } else {
+            page
+        }
+    }
+
+    private var page: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: DaybookSpacing.s4) {
                 VStack(alignment: .leading, spacing: 0) {

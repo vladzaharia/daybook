@@ -6,10 +6,12 @@ import SwiftUI
 
 /// A library search result, on both apps: the conversation, the matched words in context (a summary's Markdown as
 /// plain words, `SearchHit.displaySnippet`), and where they were found. A match in the title is marked in the title.
+/// While the Personal lock hides it, it's "Personal conversation" and its date, as a list's row is.
 public struct SearchResultRowView: View {
     private let meeting: Meeting
     private let hit: SearchHit
     @Environment(\.daybookDensity) private var density
+    @Environment(PersonalLock.self) private var personalLock: PersonalLock?
 
     public init(meeting: Meeting, hit: SearchHit) {
         self.meeting = meeting
@@ -17,9 +19,17 @@ public struct SearchResultRowView: View {
     }
 
     public var body: some View {
+        if personalLock?.hides(meeting) == true {
+            SearchResultLayout.hidden(date: meeting.date)
+        } else {
+            found
+        }
+    }
+
+    private var found: some View {
         let title = ConversationRowView.title(meeting)
         let snippet = hit.displaySnippet
-        SearchResultLayout(title: SearchMarks.marked(title, match: hit.titleMatch(in: title), density: density, role: .rowTitle),
+        return SearchResultLayout(title: SearchMarks.marked(title, match: hit.titleMatch(in: title), density: density, role: .rowTitle),
                            date: meeting.date,
                            snippet: hit.showsSnippet ? SearchMarks.marked(snippet.text, match: snippet.match, density: density, role: .rowDetail) : nil,
                            location: hit.location, symbol: hit.locationSymbol)
@@ -27,10 +37,11 @@ public struct SearchResultRowView: View {
 }
 
 /// Where a search looks, as the results' first row on both apps, in every layout: All, Work, Personal, and the folder
-/// being viewed.
+/// being viewed. Personal isn't offered while a Focus leaves it out (`PersonalLock.focus`).
 public struct SearchScopePicker: View {
     @Binding private var scope: SearchScope
     private let folder: LibraryFolder?
+    @Environment(PersonalLock.self) private var personalLock: PersonalLock?
 
     public init(scope: Binding<SearchScope>, folder: LibraryFolder?) {
         _scope = scope
@@ -41,7 +52,9 @@ public struct SearchScopePicker: View {
         Picker("Search in", selection: $scope) {
             Text("All").tag(SearchScope.all)
             Text("Work").tag(SearchScope.work)
-            Text("Personal").tag(SearchScope.personal)
+            if personalLock?.focus.showsPersonal != false {
+                Text("Personal").tag(SearchScope.personal)
+            }
             if let folder {
                 Text(folder.name).tag(SearchScope.folder(folder.id))
             }
@@ -51,12 +64,14 @@ public struct SearchScopePicker: View {
     }
 }
 
-/// A match in a conversation's saved live captions, labelled so it never passes for the transcript.
+/// A match in a conversation's saved live captions, labelled so it never passes for the transcript. Hidden by the
+/// Personal lock, as a text result is.
 public struct CaptionHitRowView: View {
     private let meeting: Meeting
     private let segment: LiveCaptionSegment
     private let query: String
     @Environment(\.daybookDensity) private var density
+    @Environment(PersonalLock.self) private var personalLock: PersonalLock?
 
     public init(meeting: Meeting, segment: LiveCaptionSegment, query: String) {
         self.meeting = meeting
@@ -65,9 +80,17 @@ public struct CaptionHitRowView: View {
     }
 
     public var body: some View {
+        if personalLock?.hides(meeting) == true {
+            SearchResultLayout.hidden(date: meeting.date)
+        } else {
+            caption
+        }
+    }
+
+    private var caption: some View {
         let found = segment.text.range(of: query.trimmingCharacters(in: .whitespacesAndNewlines), options: [.caseInsensitive, .diacriticInsensitive])
         let excerpt = found.map { LibrarySearch.excerpt(segment.text, around: $0) }
-        SearchResultLayout(title: AttributedString(ConversationRowView.title(meeting)), date: meeting.date,
+        return SearchResultLayout(title: AttributedString(ConversationRowView.title(meeting)), date: meeting.date,
                            snippet: SearchMarks.marked(excerpt?.0 ?? segment.text, match: excerpt?.1, density: density, role: .rowDetail),
                            location: LibraryWords.captionLocation(start: segment.start), symbol: "captions.bubble")
     }
@@ -80,7 +103,16 @@ struct SearchResultLayout: View {
     let snippet: AttributedString?
     let location: String
     let symbol: String
+    /// The Personal lock hides the conversation: its title is "Personal conversation", in secondary ink, with nothing
+    /// of what was found.
+    var hidden = false
     @Environment(\.daybookDensity) private var density
+
+    /// A result the Personal lock hides: "Personal conversation" and its date.
+    static func hidden(date: Date) -> SearchResultLayout {
+        SearchResultLayout(title: AttributedString(PersonalLockWords.hiddenTitle), date: date, snippet: nil, location: "", symbol: "",
+                           hidden: true)
+    }
 
     private var onPaper: Bool { density != .window }
     private var secondary: AnyShapeStyle { onPaper ? AnyShapeStyle(DaybookPalette.Ink.secondary) : AnyShapeStyle(.secondary) }
@@ -90,7 +122,7 @@ struct SearchResultLayout: View {
             HStack(alignment: .firstTextBaseline) {
                 Text(title)
                     .font(DaybookFont.rowTitle.font(density))
-                    .foregroundStyle(onPaper ? AnyShapeStyle(DaybookPalette.Ink.title) : AnyShapeStyle(.primary))
+                    .foregroundStyle(hidden ? secondary : onPaper ? AnyShapeStyle(DaybookPalette.Ink.title) : AnyShapeStyle(.primary))
                     .lineLimit(1)
                 Spacer(minLength: 6)
                 Text(date.formatted(.dateTime.day().month(.abbreviated)))
@@ -103,13 +135,16 @@ struct SearchResultLayout: View {
                     .foregroundStyle(secondary)
                     .lineLimit(SearchMarks.snippetLines)
             }
-            Label { Text(location) } icon: { Image(systemName: symbol) }
-                .labelStyle(CompactLabelStyle())
-                .font(density == .touch ? .footnote : .system(size: 11))
-                .foregroundStyle(secondary)
+            if !hidden {
+                Label { Text(location) } icon: { Image(systemName: symbol) }
+                    .labelStyle(CompactLabelStyle())
+                    .font(density == .touch ? .footnote : .system(size: 11))
+                    .foregroundStyle(secondary)
+            }
         }
         .padding(.vertical, density == .touch ? 4 : 6)
         .accessibilityElement(children: .combine)
+        .accessibilityValue(hidden ? PersonalLockWords.locked : "")
     }
 }
 

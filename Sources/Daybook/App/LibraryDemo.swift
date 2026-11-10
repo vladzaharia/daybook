@@ -78,6 +78,11 @@ enum LibraryDemo {
                 state.multiSelection = Set(state.meetings.filter { titles.contains($0.title) }.map(\.id))
             }
             if let notice = LaunchOptions.value(after: "--notice") { state.notice = notice }
+            // `--lock-demo` (PersonalLockDemo): the place shows what it would after choosing it, so with Personal
+            // locked its page waits for Unlock rather than showing the demo's Work conversation beside it.
+            if PersonalLockDemo.state() != nil, let id = state.selectedID, !state.visibleMeetings.contains(where: { $0.id == id }) {
+                state.selectQuietly(state.visibleMeetings.first?.id)
+            }
         }
     }
 
