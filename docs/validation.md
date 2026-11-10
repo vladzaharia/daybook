@@ -41,6 +41,20 @@ one); it passes alone and on the quiet machine.
   across the Kit and the selected Mac suites, 91 across six iPhone suites. Mac snapshots before and after of the home,
   recording with four sources, and a countdown after Stop at 360×560, 340×228, and 280×196, light and dark, the same
   layout; the 18 Pro's status sheet unchanged at medium and large.
+- **F7, one token vocabulary (code-quality P5, CQ-11).** Both apps and the widgets write DaybookDesign's names
+  (`DaybookPalette`, `DaybookSpacing`, `DaybookMotion`, `DaybookFont`, `ReadingGeometry`); the Mac's
+  DaybookStyle/TypeStyle/Space/Motion/Ink aliases, the iPhone's `PhoneStyle`, and 23 typealias shims are gone (files
+  that used a shim import the library). The iPhone's notebook placeholder draws its mark corner to corner (`.mark`),
+  as the Mac does; the iPhone's serif title at a text style is `DaybookType.title(_:)`; DaybookUI's 29 single-modifier
+  `#if os` shims are four DaybookDesign helpers (`touchInlineTitle`, `touchKeyboard`, `macHelp`, `macControlSize`).
+  `TokenVocabularyTests` reads both apps' sources and fails on an alias or a second name for a shared type (it caught a
+  leftover `TimeLabel` typealias mid-way); `DaybookDesignTokenTests` is deleted, its two non-alias cases moved to
+  DesignTokenTests. `swift build` with no first-party warning; `swift test` (2,599 tests; one paced Soundcore timing
+  test failed under load and passes alone); `scripts/build-ios.sh --test` (492, 0 failures); before and after snapshots
+  of the Mac's library window, Floating Notes while recording, and Settings › Recording at 1440×900 in light and dark,
+  and of the 18 Pro's library, page, and recorder, matching apart from clock times, live meters, and Liquid Glass's
+  blur; the open Duo's empty notebook shows the mark corner to corner. The widgets have no snapshot path and were
+  checked by build.
 - **F6, `AppState` split along its seams (code-quality P8, CQ-21).** Four commits: the library window's navigation
   is `LibraryWindowModel` (`AppState.window`, named as the iPhone's `ReadingSession`: `openID`, `place`, `pageMode`,
   `searchText`, `selection`, `sheet`, `confirmation`, `confirmingTrash`; the spread helpers and `turnPage(to:)` with it;
