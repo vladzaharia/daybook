@@ -136,16 +136,13 @@ final class LiveCaptionStoreTests: XCTestCase {
         let captions = LiveCaptions(meetingID: UUID(), captureID: UUID(), localeIdentifier: "en_US", segments: [line("Filed", 0)])
         try await store.save(captions)
         let url = store.url(for: captions.key)
-        func protection() throws -> FileProtectionType? {
-            try FileManager.default.attributesOfItem(atPath: url.path)[.protectionKey] as? FileProtectionType
-        }
-        XCTAssertEqual(try protection(), .completeUnlessOpen, "saved as it records")
+        XCTAssertProtectionClass(url, .completeUnlessOpen, "saved as it records")
         let track = UUID()
         try await store.update(captions.key) { $0.trackID = track; return true }
-        XCTAssertEqual(try protection(), .complete, "filed with its recording")
+        XCTAssertProtectionClass(url, .complete, "filed with its recording")
         try await store.save(LiveCaptions(meetingID: captions.meetingID, captureID: captions.key.captureID, localeIdentifier: "en_US",
                                           segments: [line("Filed", 0), line("Later", 2)]))
-        XCTAssertEqual(try protection(), .completeUnlessOpen)
+        XCTAssertProtectionClass(url, .completeUnlessOpen)
         XCTAssertEqual(LiveCaptionStore(libraryRoot: root).filedProtection, .completeUntilFirstUserAuthentication, "the Mac's")
     }
 
