@@ -100,7 +100,7 @@ func generate(into out: URL) async throws {
     var micTrack = RecordingTrack(id: microphone, source: .microphone, relativePath: "Originals/microphone.caf", fileName: "microphone.caf",
                                   createdAt: started, duration: 61.25, offset: 0.25, sha256: String(repeating: "b1", count: 32),
                                   startedAt: at(1_792_600_000.25))
-    micTrack.capture = TrackCaptureDetails(method: "microphone", clockRate: 48_000.5, outputRoute: "speakers",
+    micTrack.capture = TrackCaptureDetails(method: "microphone", clockRate: 1.000_015_258_789_062_5, outputRoute: "speakers",
                                            notes: ["Switched to MacBook Pro Microphone at 12.5 s."],
                                            peerClocks: [CapturePeerClock(deviceID: phone.id, name: phone.name, deviceClass: "phone", offset: 0.375,
                                                                          uncertainty: 0.0125, sampleCount: 5, measuredAt: at(1_792_600_001),
@@ -108,7 +108,7 @@ func generate(into out: URL) async throws {
     var callTrack = RecordingTrack(id: systemAudio, source: .systemAudio, relativePath: "Originals/systemAudio.caf", fileName: "systemAudio.caf",
                                    createdAt: started, duration: 60.5, offset: 0.5, sha256: String(repeating: "b2", count: 32),
                                    startedAt: at(1_792_600_000.5))
-    callTrack.capture = TrackCaptureDetails(method: "process-tap", capturedApps: ["us.zoom.xos"], clockRate: 48_000)
+    callTrack.capture = TrackCaptureDetails(method: "process-tap", capturedApps: ["us.zoom.xos"], clockRate: 0.999_984_741_210_937_5)
     var derivedTrack = RecordingTrack(id: echoCancelled, source: .microphone, relativePath: "Originals/microphone.echo-cancelled.caf",
                                       fileName: "microphone.echo-cancelled.caf", createdAt: at(1_792_600_062), duration: 61.25, offset: 0.25,
                                       sha256: String(repeating: "b4", count: 32), derivedFrom: microphone, processing: "echo-cancelled",

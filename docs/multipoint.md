@@ -32,31 +32,37 @@ A conversation's timeline never moves once anything is timed on it. Notes and bo
 this Mac records are timed by its capture clock, so a conversation recorded on this Mac keeps this
 Mac's recording as its origin, even when a recorder's file arrives first. A conversation that began
 as a recorder's recording keeps that recording as its origin when this Mac later records into it.
+A conversation has one origin: when two Macs both filed theirs as the origin (an iPhone asked both to
+record along), the one that started first keeps it, and the other's recording becomes a source to
+place, with the iPhone's measurements of both Macs' clocks as its prior ([one
+origin](alignment.md#one-origin)).
 
-Each recording's place is `timeline = offset + rate × recordingTime`. This Mac's own recordings keep
-their capture offset, as before. Every other source added to a conversation gets a
-`SourceAlignment`:
+Each recording's place is `timeline = offset + rate × recordingTime`, and `Meeting.clock(of:)` is the
+one place it's read from ([one clock per recording](alignment.md#one-clock-per-recording)). This Mac's own recordings keep
+their capture offset, at the rate their capture measured. Every other source added to a conversation
+gets a `SourceAlignment`:
 
 | Method | Found by | Confidence |
 | --- | --- | --- |
-| `audio` | `AudioAligner` against the conversation's best placed recording (this Mac's original microphone, then computer audio, then recorders, longest first), composed onto that recording's own placement | the aligner's |
-| `transcript` | phrases both transcripts share (`TranscriptFusion`'s anchors) | from the number of anchors and their residual |
+| `audio` | `AudioAligner` against the conversation's best surely placed recording (this Mac's original microphone, then computer audio, then recorders, longest first; never one placed only by phrases or clocks), composed onto that recording's own clock | the aligner's |
+| `transcript` | phrases both transcripts share (`TranscriptFusion`'s anchors): an offset, and a rate only over a long span | from the number of anchors, their residual, and their span |
 | `clock` | the recorders' clocks only; used only when the start is trustworthy (a recorder's own clock, a multipoint link) | 0.2 |
 | `manual` | Adjust Timing | — |
 | `pending` | not placed yet | — |
 | `unaligned` | nothing placed it; its transcript stays separate, as before | — |
 
-The order is always sound, then transcript, then clock. A recording placed only by the clocks (for
-example a recorder file imported before this Mac's own recording was stored) is compared by sound
-again once there is a placed recording to compare with. Recordings made on one clock (one Mac
-recording's microphone and computer audio) share a `clockID` and move together when only one of
-them can be lined up. A derived recording (the microphone with the call's echo removed) follows its
-original's placement.
+The order is always sound, then transcript, then clock. A recording placed only by the clocks or by
+shared phrases (for example a recorder file imported before this Mac's own recording was stored) is
+compared by sound again once there is a surely placed recording to compare with; a recording lined up
+against it moves when it does. Recordings made on one clock (one Mac recording's microphone and
+computer audio) share a `clockID` and move together when only one of them can be lined up, each at its
+own capture rate. A derived recording (the microphone with the call's echo removed) takes its
+original's offset, never its rate.
 
-Drift: `TranscriptFusion` places a recording with a given offset at rate 1, so `SourceFusion`
-scales a copy of that recording's segment times by the placement's rate first, leaving each
-segment's provenance in the recording's own time. Corrections, which match by provenance, and
-bookmarks on a recording (`alignedTime`) stay correct; the fused reports carry the rate.
+Drift: `SourceFusion` passes each placement to `TranscriptFusion` with its rate (`TrackPlacement`), and
+each segment's provenance stays in the recording's own time. Corrections, which match by provenance,
+and bookmarks on a recording (`alignedTime`, through the recording's clock) stay correct; the fused
+reports carry the rate.
 
 ## Multipoint recording
 
@@ -135,11 +141,12 @@ long comparison never delays storing this Mac's own recording or another import.
    - two or more → its own conversation with a `severalConversations` suggestion;
    - one → compare the sound.
 3. **The sound** against that conversation's best recording, with the clocks' offset as the prior
-   (±120 s for a recorder's clock; ±15 min or the recording's length for a file's date):
+   (±120 s for a recorder's clock; ±15 min or the recording's length for a file's date). When the
+   search around the prior finds nothing sure, the whole overlap is searched, and a match found that
+   way counts only at confidence 0.6:
    - confidence ≥ 0.6, agreeing with trustworthy clocks → it joins, already placed (`audio`);
    - ≥ 0.25 → its own conversation with a `lowConfidence` suggestion;
-   - otherwise, or no verdict (today's `AudioAligner` stub) → its own conversation with a
-     `checkingTranscript` suggestion.
+   - otherwise, or no verdict → its own conversation with a `checkingTranscript` suggestion.
 4. **The transcript**, once both are transcribed: if the phrases line it up (`transcript`
    confidence ≥ 0.55), it moves into that conversation with its transcript and speakers, so nothing
    is transcribed twice, and its own conversation isn't summarized. Otherwise the suggestion stays
@@ -166,7 +173,8 @@ Add Recording › From a File…, a device page's Add to Conversation, a confirm
    clocks' estimate, or the placement the sound already found.
 2. Version History gets "Added Soundcore Work recording" (`source:<track>`).
 3. The conversation is queued. Processing, in order and cancellable at each step:
-   `placePendingSources` (the sound) → transcribe only recordings without a transcript → fuse with
+   `placePendingSources` (one origin per conversation, then the sound, also for recordings placed
+   only by phrases or clocks) → transcribe only recordings without a transcript → fuse with
    placements, settling the rest by transcript, then clock → the transcript check for suggestions →
    summarize from the fused transcript of all sources. `setSummary` keeps the earlier summary in
    Version History.
@@ -759,8 +767,9 @@ that step; a later, better model may offer again.
 
 ## Limits and what needs a recorder
 
-- `AudioAligner` returns nil until the alignment work lands, so today later arrivals settle by
-  transcript and multipoint recordings by transcript, then clock.
+- Two Macs recording one conversation: the second's recording is placed on the first's timeline, but
+  notes and bookmarks taken on the second Mac keep the times its own capture gave them. Each Mac also
+  processes the conversation and writes its summary; there is no single processor per conversation yet.
 - Whether Soundcore Work's Pause ends the file (the simulator assumes it does), how quickly a
   finished recording appears in its list, and how far its clock is from this Mac's need a real
   recorder.
@@ -779,8 +788,8 @@ that step; a later, better model may offer again.
 - A phone recording that moves into this Mac's conversation brings its bookmarks, not the notes
   typed on the phone; its own conversation keeps them and stays.
 - When either device makes the other's conversation before it has synced, both copies carry the
-  same title and date, but they meet without a common ancestor: until sync treats that case, a
-  differing status is kept in Version History.
+  same title and date, and they meet without a common ancestor: sync merges them against a neutral
+  skeleton (`MeetingMerge`), where a value only one side set wins without a conflict.
 - When the phone led and this Mac joined later, this Mac's recording sets the timeline and the phone's
   is placed before its zero. Notes the phone took before this Mac started keep their time in the
   phone's recording, so they read before the timeline's zero (−0:42), as its passages do. Daybook

@@ -157,6 +157,54 @@ final class AudioAlignerTests: XCTestCase {
         XCTAssertNil(try analyze(recorder, call, expected: -200, radius: 30).alignment)
     }
 
+    /// A half-hour recording that sits 20 minutes into a 12-hour one, with the clocks' prior (±120 s). The windows
+    /// compared are drawn from the stretch that can overlap under the prior; spread over the whole 12 hours, none
+    /// landed there and nothing was found.
+    func testAShortOverlapInALongRecordingIsFoundAroundItsPrior() throws {
+        var state: UInt64 = 7
+        func next() -> UInt64 { state ^= state << 13; state ^= state >> 7; state ^= state << 17; return state }
+        func speech(_ frames: Int) -> (onset: [Float], level: [Float]) {
+            var onset = [Float](repeating: 0, count: frames), level = [Float](repeating: -60, count: frames)
+            var index = 0
+            while index < frames {
+                let burst = 20 + Int(next() % 40), gap = 5 + Int(next() % 30)
+                for frame in index..<min(frames, index + burst) { level[frame] = -20; onset[frame] = Float(next() % 1_000) / 1_000 }
+                index += burst + gap
+            }
+            return (onset, level)
+        }
+        let fps = Int(AudioFeatures.frameRate)
+        var long = speech(12 * 3_600 * fps)
+        state = 99
+        let short = speech(30 * 60 * fps)
+        let start = 20 * 60 * fps
+        for frame in short.onset.indices {
+            long.onset[start + frame] = short.onset[frame] + Float(next() % 300) / 1_000
+            long.level[start + frame] = short.level[frame]
+        }
+        let other = AudioFeatures(sourceSampleRate: 8_000, duration: Double(long.onset.count) / Double(fps), onset: long.onset, level: long.level)
+        let reference = AudioFeatures(sourceSampleRate: 8_000, duration: Double(short.onset.count) / Double(fps), onset: short.onset, level: short.level)
+        let report = AudioAligner.analyze(other: other, reference: reference, expectedOffset: -1_150, searchRadius: 120)
+        let alignment = try XCTUnwrap(report.alignment, report.explanation)
+        XCTAssertEqual(alignment.offset, -1_200, accuracy: 0.02)
+        XCTAssertEqual(alignment.rate, 1, accuracy: 10e-6)
+    }
+
+    /// Reading a long recording takes seconds: cancelled work stops between chunks rather than finishing the file.
+    func testReadingARecordingStopsWhenTheWorkIsCancelled() async throws {
+        let event = SyntheticEvent.conversation(seed: 9, duration: 30)
+        let file = try callCapture(event, start: 0, duration: 29)
+        let reading = Task.detached { () async throws -> AudioFeatures in
+            while !Task.isCancelled { await Task.yield() }
+            return try AudioFeatures.extract(from: file)
+        }
+        reading.cancel()
+        do {
+            _ = try await reading.value
+            XCTFail("Cancelled reading finished the file")
+        } catch is CancellationError {}
+    }
+
     // MARK: Pipeline
 
     /// A measurement stored as Daybook 0.2.2 stored them (`Meeting.audioAlignments`) still places a recording: the

@@ -85,6 +85,8 @@ public struct AudioFeatures: Equatable, Sendable {
 
         if sampleRate == FeatureAccumulator.analysisRate {
             while readMono(), let data = monoChunk.floatChannelData {
+                // A long recording takes seconds to read: the work stops between chunks when it's cancelled.
+                try Task.checkCancellation()
                 accumulator.append(UnsafeBufferPointer(start: data[0], count: Int(monoChunk.frameLength)))
             }
         } else {
@@ -94,6 +96,7 @@ public struct AudioFeatures: Equatable, Sendable {
             }
             converter.sampleRateConverterQuality = AVAudioQuality.high.rawValue
             while true {
+                try Task.checkCancellation()
                 var conversionError: NSError?
                 output.frameLength = 0
                 let status = converter.convert(to: output, error: &conversionError) { _, inputStatus in

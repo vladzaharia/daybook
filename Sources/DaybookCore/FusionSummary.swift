@@ -85,7 +85,15 @@ public struct FusionSpeakerMapping: Codable, Equatable, Sendable {
 /// What multi-source fusion did, for the interface and the processing pipeline. Deterministic for
 /// the same inputs, so two Macs fusing the same recordings store the same value.
 public struct FusionSummary: Codable, Equatable, Sendable {
-    public static let currentVersion = 1
+    /// The fusion that made a unified transcript (docs/alignment.md, "Fusion versions"). 1: words aligned in
+    /// 240-item regions. 2: one time-banded alignment with a guard against doubled runs, confidences compared within
+    /// each recognizer, names kept only where they stood, and phrase fits held to a clock's drift.
+    public static let currentVersion = 2
+    /// The versions this build can still fuse with: upkeep re-fuses a conversation with the version it has, so its
+    /// wording changes only when it's fused for a new reason.
+    public static let supportedVersions = 1...currentVersion
+    public static func supported(_ version: Int) -> Int { min(max(version, supportedVersions.lowerBound), supportedVersions.upperBound) }
+    /// The fusion version that made `version`.
     public var version: Int
     public var sources: [FusionSourceReport]
     public var words: Int
@@ -109,8 +117,12 @@ public struct FusionOptions: Equatable, Sendable {
     /// Speaker ID and default name used for the person recording.
     public var ownerSpeakerID: String
     public var ownerName: String
-    public init(minimumAudioConfidence: Double = 0.3, ownerSpeakerID: String = "owner", ownerName: String = "Me") {
+    /// Which fusion to run (`FusionSummary.currentVersion` unless upkeep keeps a conversation's own).
+    public var version: Int
+    public init(minimumAudioConfidence: Double = 0.3, ownerSpeakerID: String = "owner", ownerName: String = "Me",
+                version: Int = FusionSummary.currentVersion) {
         self.minimumAudioConfidence = minimumAudioConfidence; self.ownerSpeakerID = ownerSpeakerID; self.ownerName = ownerName
+        self.version = FusionSummary.supported(version)
     }
 }
 
