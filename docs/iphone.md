@@ -67,7 +67,7 @@ Everything below is in v1:
 
 ## Processing on the Mac
 
-A conversation's processing state comes from its data and is shown the same way on both platforms (`ProcessingStatus` in DaybookKit), in the words and boxes the Mac's page uses (DaybookKit's `ConversationStatusPresentation`, drawn by DaybookUI's `StatusBlock` on both apps):
+A conversation's processing state comes from its data and is shown the same way on both platforms (`ProcessingStatus` in DaybookKit), in the words and boxes the Mac's page uses (DaybookKit's `ConversationStatusPresentation`, drawn by DaybookUI's `StatusBlock` on both apps), from what this iPhone knows (`ConversationStatusPresentation.phone`, tested in `PhonePageStatusTests`):
 
 | State | Meaning | Phone shows |
 |---|---|---|

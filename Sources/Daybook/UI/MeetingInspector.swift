@@ -11,6 +11,7 @@ struct MeetingInspector: View {
     let state: AppState
     let meetingID: UUID
     @Environment(\.undoManager) private var undoManager
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         if state.meetings.contains(where: { $0.id == meetingID }) {
@@ -90,16 +91,9 @@ struct MeetingInspector: View {
             state.enqueue(id, mode: .summaryOnly)
         case .versionHistory:
             state.activeSheet = .versionHistory
-        case .status(.placement(let choice)):
-            state.chooseSummaryPlacement(choice, for: id)
-        case .status(.stopSummary):
-            state.pauseProcessing(id)
-        case .status(.dontWait):
-            state.library.stopWaitingForRecordings(in: id, undoManager: undoManager)
-        case .status(.waitAgain):
-            state.library.waitAgainForMissingRecordings(in: id, undoManager: undoManager)
-        case .status:
-            break
+        case .status(let action):
+            MacStatusActions(state: state, undoManager: undoManager) { $0.open(with: openWindow, activating: false) }
+                .perform(action, on: id)
         case .searchTag(let tag):
             state.searchTokens = [.tag(tag)]
         }

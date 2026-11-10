@@ -753,6 +753,18 @@ enum PhoneActions {
         canTakePhoto: CameraPicker.isAvailable))
   }
 
+  /// How this iPhone processes a conversation in a mode, from its menus, its status, and Info alike: a summary goes where
+  /// its placement puts it; the rest is a request a Mac takes up.
+  static func process(
+    _ id: UUID, _ mode: ProcessingRequest.Mode, library: LibraryController, placement: PhoneSummaryPlacement?
+  ) {
+    if mode == .summaryOnly {
+      library.summarize(id, placement: placement)
+    } else {
+      library.requestProcessing(id, mode: mode)
+    }
+  }
+
   /// Carries out `id` on the conversations `ids`.
   static func perform(
     _ id: ConversationAction.ID, on ids: [UUID], library: LibraryController,
@@ -761,14 +773,7 @@ enum PhoneActions {
   ) {
     let performer = ConversationActionPerformer(
       library: library, undoManager: undoManager,
-      process: { conversation, mode in
-        // A summary goes where this iPhone's placement puts it; the rest is a request a Mac takes up.
-        if mode == .summaryOnly {
-          library.summarize(conversation, placement: placement)
-        } else {
-          library.requestProcessing(conversation, mode: mode)
-        }
-      },
+      process: { process($0, $1, library: library, placement: placement) },
       show: { request in
         switch request {
         case .tags(let ids): session.sheet = .tags(ids)
@@ -796,6 +801,49 @@ enum PhoneActions {
       case .copySummary, .process, .versionHistory, .moveToFolder, .tags, .moveTo, .moveToTrash:
         break  // The library's (`ConversationActionPerformer`).
       }
+    }
+  }
+}
+
+/// What this iPhone does for what a conversation's status offers, from the page and Info's Now row alike: the library's
+/// half through DaybookKit's `ConversationStatusActionHandler`, as the Mac does it, with its work processed as its menus
+/// process it (`PhoneActions.process`), and this iPhone's own here: Details, its downloads, Settings, where its summaries
+/// run, and upgrades. A Mac's queue isn't this iPhone's to pause, resume, or cancel.
+@MainActor
+struct PhoneStatusActions: ConversationStatusActionHandler {
+  let library: LibraryController
+  let undoManager: UndoManager?
+  let session: ReadingSession
+  /// Its downloads; nil where none is offered (Info's Now row offers where the summary runs, Stop, and the waits).
+  var model: PhoneAppModel? = nil
+  let placement: PhoneSummaryPlacement?
+  var upgrades: PhoneUpgrades? = nil
+  /// Opens a Settings screen over the page (Models, Cloud).
+  var openSettings: (@MainActor (SettingsRoute) -> Void)? = nil
+
+  func process(_ id: UUID, _ mode: ProcessingRequest.Mode) {
+    PhoneActions.process(id, mode, library: library, placement: placement)
+  }
+
+  func performHere(_ action: ConversationStatusPresentation.Action, on id: UUID) {
+    switch action {
+    case .details(let words): session.sheet = .details(words)
+    case .pause, .resume, .cancel: break  // A Mac's queue.
+    case .cancelDownload: model?.models.cancelProcessingDownloads()
+    case .downloadModels: model?.models.downloadProcessingSet()
+    case .downloadSummaryModel:
+      guard let models = model?.models, let summary = models.summaryModel else { return }
+      models.downloadIfItFits(summary)
+    case .chooseModels: openSettings?(.models)
+    case .cloudSettings: openSettings?(.cloud)
+    case .summarizeHere: placement?.placements.beginHere(id)
+    case .useYourMac: library.requestProcessing(id, mode: .summaryOnly)
+    case .placement(let choice): placement?.perform(choice, for: id)
+    case .stopSummary: placement?.stop(id)
+    case .upgrade(let offer): Task { await upgrades?.accept(offer, for: id) }
+    case .dismissUpgrade(let offer): upgrades?.dismiss(offer, for: id)
+    case .transcribe, .summarize, .tryAgain, .cancelRequest, .dontWait, .waitAgain, .dismiss:
+      break  // The library's (`ConversationStatusActionHandler.perform`).
     }
   }
 }

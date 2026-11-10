@@ -126,7 +126,8 @@ private struct PageColophon: View {
         let deviceClass = origin.deviceID.flatMap { id in state.syncDevices.first { $0.id == id }?.deviceClass }
         Colophon(SummaryColophon(summary, thisDeviceID: state.library.thisDevice.id, words: state.statusWords,
                                  catalog: state.modelCatalog, deviceClass: deviceClass),
-                 arrived: summary.createdAt, template: templateTitle, summarizeAgain: summarizeAgain) {
+                 arrived: summary.createdAt, template: TemplateWords.title(for: meeting, resolved: state.resolvedTemplate(for: meeting)),
+                 summarizeAgain: summarizeAgain) {
             TemplateMenuItems(state: state, meetingID: meeting.id)
         }
     }
@@ -136,12 +137,5 @@ private struct PageColophon: View {
         guard !meeting.unifiedTranscript.isEmpty, !state.processingStatus(for: meeting).isPending,
               state.recordingID != meeting.id else { return nil }
         return { [state, id = meeting.id] in state.enqueue(id, mode: .summaryOnly) }
-    }
-
-    private var templateTitle: String {
-        if let template = state.resolvedTemplate(for: meeting) { return template.name }
-        // The inspector's words for the same choice.
-        if let kind = meeting.summary?.kind, kind != .auto { return "Automatic (\(kind.title))" }
-        return "Automatic"
     }
 }

@@ -133,7 +133,7 @@ private struct DetailsRows: View {
         } label: { InfoRowLabel("Shows in", symbol: "rectangle.stack") }
             .infoControl()
         Picker(selection: Binding(get: { library.templateSelection(for: meeting.id) }, set: chooseTemplate)) {
-            Text(meeting.automaticTemplateTitle).tag("auto")
+            Text(TemplateWords.automatic(for: meeting)).tag("auto")
             Divider()
             ForEach(library.templates.filter(\.isBuiltIn)) { template in Text(template.name).tag(template.id) }
             let custom = library.templates.filter { !$0.isBuiltIn }
