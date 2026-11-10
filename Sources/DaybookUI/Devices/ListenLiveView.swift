@@ -125,7 +125,7 @@ private struct ListeningRow: View {
                 .frame(width: ListenLiveCaptions.glyphColumn)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Listening").daybookFont(.statusLead).foregroundStyle(DaybookPalette.Ink.body)
+                Text(connection.live.isCatchingUp ? "Catching up…" : "Listening").daybookFont(.statusLead).foregroundStyle(DaybookPalette.Ink.body)
                 Text("\(TimeLabel.short(connection.live.receivedSeconds)) saved")
                     .daybookFont(.status).foregroundStyle(DaybookPalette.Ink.secondary).monospacedDigit()
             }

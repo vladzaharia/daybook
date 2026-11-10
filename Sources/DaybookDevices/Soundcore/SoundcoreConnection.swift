@@ -87,6 +87,9 @@ public final class SoundcoreConnection: DiscoveringConnection, RecordingStateCon
     /// The recorder's own button started (true) or stopped (false) a recording: a pushed state that
     /// changes what this device knew, while no Start or Pause of its own is waiting for an answer.
     @ObservationIgnored public var onButton: ((Bool) -> Void)?
+    /// Recordings this device already expects (a handoff's, a shared recording's): the held link coming back to one of
+    /// these just started isn't the button (`catchUpMissedButton`).
+    @ObservationIgnored public var expectsRecording: ((String) -> Bool)?
     /// Holds the link while the recorder is in range, so its button is heard (a shared recording
     /// starts from it): never let go when idle, and after a drop or a failed attempt a pending
     /// connection with no deadline, rather than the cooldown automatic import waits. The iPhone sets
@@ -210,8 +213,22 @@ public final class SoundcoreConnection: DiscoveringConnection, RecordingStateCon
     /// Quiet tries again after a listing that failed, while the link stays up.
     private var relistAttempt = 0
     @ObservationIgnored private var relistTimer: Task<Void, Never>?
-    /// The recording this device asked the recorder to start.
-    private var startedHereID: UInt32?
+    /// The recording this device asked the recorder to start, kept with the remembered recorder so a relaunch still
+    /// knows it (the iPhone's recorder Live Activity).
+    private var startedHereID: UInt32? {
+        didSet {
+            guard startedHereID != oldValue, var snapshot = remembered, snapshot.startedHereID != startedHereID else { return }
+            snapshot.startedHereID = startedHereID
+            remembered = snapshot
+            persist()
+        }
+    }
+    /// The Start or Pause under way (`recordCommand`).
+    @ObservationIgnored private var command: PendingCommand?
+    /// The last transfer's decoded length differed from its packets by more than 0.5% (Device Details).
+    public private(set) var lastLengthMismatch: (seconds: TimeInterval, expected: TimeInterval)?
+    /// Live audio the stream lost, kept as silence, the last time it did (Device Details).
+    public private(set) var lastLiveGap: TimeInterval?
     /// Redraws a remembered recording as unknown once it's too old to show.
     @ObservationIgnored private var expiry: Task<Void, Never>?
     /// When the automatic-import wait ends, on the wall clock: a suspended iPhone app runs no timers,
@@ -374,6 +391,8 @@ public final class SoundcoreConnection: DiscoveringConnection, RecordingStateCon
         if let remembered {
             listing = remembered.recordings
             inventoryUpdatedAt = remembered.recordingsUpdatedAt
+            // A recording this device started is still its own after a relaunch (the iPhone's Live Activity).
+            startedHereID = remembered.startedHereID
             rebuildRecordings()
         }
         scheduleRecordingExpiry()
@@ -558,12 +577,21 @@ public final class SoundcoreConnection: DiscoveringConnection, RecordingStateCon
                 progress(.preparing, 0)
             }
             guard let session = try await bluetoothSessionAfterWiFi() else { throw SoundcoreError.disconnected }
+            var yields = 0
             while true {
                 do {
-                    _ = try await session.download(native, to: url) { phase, bytes in progress(phase, bytes) }
+                    let download = try await session.download(native, to: url) { phase, bytes in progress(phase, bytes) }
+                    noteLength(of: download)
                     break
                 } catch SoundcoreError.yielded {
-                    // Another app took the recorder for a transfer of its own: this one starts again once it's done.
+                    // Another app took the recorder for a transfer of its own: this one starts again once it's done, a
+                    // few times (`otherAppYields`).
+                    yields += 1
+                    guard yields <= timing.otherAppYields else { throw SoundcoreError.yieldedTooOften }
+                    progress(.preparing, 0)
+                } catch SoundcoreError.preempted {
+                    // A Start or Pause went first: this one starts again from its beginning, right after it, still at
+                    // the front of the queue and not counted as an attempt.
                     progress(.preparing, 0)
                 }
             }
@@ -578,6 +606,22 @@ public final class SoundcoreConnection: DiscoveringConnection, RecordingStateCon
         }
     }
 
+    /// A transfer whose decoded length differs from its packets by more than 0.5% is still kept (the recorder has
+    /// the original), but it's said in Device Details and logged: time vanished in decoding without an error.
+    func noteLength(of download: SoundcoreSession.Download) {
+        guard download.lengthDiffers else { return }
+        lastLengthMismatch = (download.seconds, download.expectedSeconds)
+        lastTechnicalProblem = "Decoded \(Self.duration(download.seconds)) from packets worth \(Self.duration(download.expectedSeconds))."
+    }
+
+    /// "9 min 52 sec", "41 sec", "0.02 sec": to the second (to the hundredth under one), where `DurationLabel` rounds
+    /// to the minute.
+    static func duration(_ seconds: TimeInterval) -> String {
+        if seconds < 1 { return String(format: "%.2f sec", seconds) }
+        let whole = Int(seconds.rounded())
+        return whole >= 60 ? "\(whole / 60) min \(whole % 60) sec" : "\(whole) sec"
+    }
+
     /// Listed since this connection was confirmed, and not being listed again.
     public var isInventoryCurrent: Bool {
         guard case .connected = phase else { return false }
@@ -588,11 +632,28 @@ public final class SoundcoreConnection: DiscoveringConnection, RecordingStateCon
         // The device that manages the recorder imports; its recordings arrive here through sync.
         // Only from a listing made on this connection: the remembered one may still show a recording
         // in progress as finished, and importing it early under its final ID would block the rest.
-        guard case .connected = phase, importsAutomatically, managedElsewhere == nil, isInventoryCurrent else { return [] }
+        guard case .connected = phase, isInventoryCurrent else { return [] }
+        let held = setupListing(since: since)
+        guard importsAutomatically, managedElsewhere == nil else { return [] }
         return recordings.filter { recording in
             !recording.isInProgress && links.imported[recording.id] == nil && !excluding.contains(recording.id)
-                && (recording.startedAt ?? .distantPast) >= since
+                && UInt32(recording.id).map { !held.contains($0) } ?? false
         }
+    }
+
+    /// The recordings the recorder held when it was set up here: automatic import takes any other, whatever its clock
+    /// says (a recorder whose clock is behind would date its new recordings before setup). Made at the first listing
+    /// after setup, of what started before `since` by the recorder's corrected dates (all of it, then, for a recorder
+    /// just set up), and kept with the remembered recorder.
+    private func setupListing(since: Date) -> Set<UInt32> {
+        if let held = remembered?.setupListing { return Set(held) }
+        let held = listing.filter { $0.start(correction: clockCorrection).map { $0 < since } ?? true }.map(\.id)
+        if var snapshot = remembered {
+            snapshot.setupListing = held
+            remembered = snapshot
+            persist()
+        }
+        return Set(held)
     }
 
     // MARK: Discovery (setup)
@@ -637,39 +698,107 @@ public final class SoundcoreConnection: DiscoveringConnection, RecordingStateCon
 
     // MARK: Record control
 
-    public func startRecording() { sendRecording(true) }
-    public func pauseRecording() { sendRecording(false) }
+    /// The person's Record and Pause: sent as soon as the link allows (ahead of any import), with no deadline. Pending
+    /// at once, never optimistic: only the recorder's report changes the state.
+    public func startRecording() { _ = begin(.start) }
+    public func pauseRecording() { _ = begin(.pause) }
 
-    private func sendRecording(_ on: Bool) {
-        guard case .connected = phase, let session, !recordCommandPending else { return }
-        origin = .person
-        recordCommandPending = true
-        publish()
-        let before = activeRecordingID
-        Task {
-            var confirmed = false
-            await perform {
-                let sentAt = Date()
-                _ = try await session.setRecording(on)
-                let deadline = ContinuousClock.now.advanced(by: self.timing.recordConfirm)
-                while !confirmed, ContinuousClock.now < deadline {
-                    let status = try await session.readStatus()
-                    self.applyStatus(status)
-                    if status.isRecording == on { confirmed = true } else { try await Task.sleep(for: .milliseconds(500)) }
-                }
-                if confirmed {
-                    self.applyListing(try await session.listRecordings())
-                    if on, let started = self.activeRecordingID {
-                        self.startedHereID = started
-                        // A new recording (not one resumed on firmware that keeps it open) dates the clock.
-                        if started != before { self.measureClock(recordingID: started, sentAt: sentAt) }
-                    }
+    /// A Start or Pause under way: queued until its write goes out, then waiting for the recorder to confirm. Whoever
+    /// asked may give up first (its deadline, or its task cancelled): still queued, it's dropped; sent, a Start that
+    /// confirms late is paused again.
+    @MainActor
+    private final class PendingCommand {
+        let command: RecordCommand
+        /// When its write went out: the moment the recorder's clock is measured against.
+        var sentAt: Date?
+        /// Whoever asked has given up.
+        var abandoned = false
+        var outcome: RecordCommandOutcome?
+        var waiter: CheckedContinuation<RecordCommandOutcome, Never>?
+        var deadline: Task<Void, Never>?
+        var work: Task<Void, Never>?
+
+        init(_ command: RecordCommand) { self.command = command }
+
+        func answer(_ outcome: RecordCommandOutcome) {
+            guard self.outcome == nil else { return }
+            self.outcome = outcome
+            deadline?.cancel()
+            waiter?.resume(returning: outcome)
+            waiter = nil
+        }
+    }
+
+    /// Start or Pause, ahead of imports (docs/devices.md, "Record commands come first"): a transfer under way stops and
+    /// starts again after it (`SoundcoreSession.record`). Answers within `deadline`: confirmed, or not (a command still
+    /// queued is dropped; one sent that confirms late is undone if it's a Start). A nil deadline waits as long as it takes.
+    public func recordCommand(_ command: RecordCommand, deadline: Duration?) async -> RecordCommandOutcome {
+        guard let pending = begin(command) else { return .unavailable }
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<RecordCommandOutcome, Never>) in
+                if let outcome = pending.outcome { continuation.resume(returning: outcome); return }
+                pending.waiter = continuation
+                guard let deadline else { return }
+                pending.deadline = Task { [weak self] in
+                    guard (try? await Task.sleep(for: deadline)) != nil else { return }
+                    self?.giveUp(pending)
                 }
             }
-            if !confirmed, self.session === session { self.problem = SoundcoreIssue.didNotConfirm.problem }
-            self.recordCommandPending = false
-            self.publish()
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.giveUp(pending) }
         }
+    }
+
+    /// Sets a Start or Pause under way: pending from now, sent once the link is free (`run`). Nil when it can't be: not
+    /// connected, or another is under way.
+    private func begin(_ command: RecordCommand) -> PendingCommand? {
+        guard case .connected = phase, let session, self.command == nil else { return nil }
+        let pending = PendingCommand(command)
+        self.command = pending
+        origin = .person
+        recordCommandPending = true
+        if problem?.id == SoundcoreIssue.didNotConfirm.rawValue { problem = nil }
+        publish()
+        let before = activeRecordingID
+        pending.work = Task { await self.run(pending, on: session, before: before) }
+        return pending
+    }
+
+    /// Whoever asked stopped waiting. A command not yet sent is dropped: nothing reaches the recorder.
+    private func giveUp(_ pending: PendingCommand) {
+        guard pending.outcome == nil else { return }
+        pending.abandoned = true
+        if pending.sentAt == nil { pending.work?.cancel() }
+        pending.answer(.notConfirmed)
+    }
+
+    private func run(_ pending: PendingCommand, on session: SoundcoreSession, before: UInt32?) async {
+        let on = pending.command.records
+        var result: SoundcoreSession.RecordResult?
+        await perform {
+            result = try await session.record(on, confirmWithin: self.timing.recordConfirm,
+                                              sent: { pending.sentAt = $0 },
+                                              status: { self.applyStatus($0) },
+                                              reverseIfUnwanted: { pending.abandoned })
+        }
+        let confirmed = result?.confirmed == true && result?.reversed != true
+        if let listing = result?.listing { applyListing(listing) }
+        if confirmed, on, let started = activeRecordingID {
+            startedHereID = started
+            // A new recording (not one resumed on firmware that keeps it open) dates the clock, against the moment
+            // the command went out.
+            if started != before, let sentAt = pending.sentAt { measureClock(recordingID: started, sentAt: sentAt) }
+        }
+        if result?.reversed == true { Self.log.notice("A Start nobody waited for any more confirmed late; paused again") }
+        // The person's own Record or Pause that the recorder didn't confirm: its page says so. Whoever gave up has
+        // its own words.
+        if result?.confirmed != true, pending.sentAt != nil, !pending.abandoned, self.session === session {
+            problem = SoundcoreIssue.didNotConfirm.problem
+        }
+        if command === pending { command = nil }
+        recordCommandPending = false
+        publish()
+        pending.answer(confirmed ? .confirmed : pending.sentAt == nil && result == nil ? .unavailable : .notConfirmed)
     }
 
     // MARK: Listen Live
@@ -708,7 +837,12 @@ public final class SoundcoreConnection: DiscoveringConnection, RecordingStateCon
                     onPCM: { self.receiveLivePCM($0) },
                     progress: { _, bytes in self.liveProgress(bytes) })
                 let id = String(result.recordingID)
-                self.live.saved = .init(seconds: result.download.seconds, recordingID: id)
+                self.live.saved = .init(seconds: result.download.seconds, recordingID: id, filledSeconds: result.download.filledSeconds)
+                self.noteLength(of: result.download)
+                if result.download.filledSeconds > 0 {
+                    self.lastLiveGap = result.download.filledSeconds
+                    Self.log.notice("Live audio kept with \(result.download.filledSeconds, privacy: .public) s the stream lost filled with silence")
+                }
                 // Whoever saves it removes the staged audio; with nobody to, it goes now.
                 if let onLiveSaved = self.onLiveSaved { onLiveSaved(result.download.url, id, result.download.seconds, self.liveConversation) }
                 else { try? FileManager.default.removeItem(at: result.download.url) }
@@ -791,6 +925,8 @@ public final class SoundcoreConnection: DiscoveringConnection, RecordingStateCon
         guard live.isListening, buffer.frameLength > 0 else { return }
         let time = AVAudioTime(sampleTime: liveFrames, atRate: buffer.format.sampleRate)
         liveFrames += AVAudioFramePosition(buffer.frameLength)
+        // Where the stream starts on this device's clock, and whether it's still catching up with the recording.
+        live.streamed(to: Double(liveFrames) / buffer.format.sampleRate)
         // Its level, for the meters of a recording it records along with.
         if let level = AudioBufferLevel.measure(buffer) { live.heard(rms: level.rms) }
         captioner?.append(buffer, at: time)
@@ -859,6 +995,16 @@ public final class SoundcoreConnection: DiscoveringConnection, RecordingStateCon
         }
         if let clock {
             rows.append(DeviceDetail(label: "Recorder clock", value: clock.summary))
+        }
+        if let mismatch = lastLengthMismatch {
+            rows.append(DeviceDetail(label: "Last transfer’s length",
+                                     value: "\(Self.duration(mismatch.seconds)) decoded of \(Self.duration(mismatch.expected))"))
+        }
+        if let gap = lastLiveGap {
+            rows.append(DeviceDetail(label: "Live audio lost", value: "\(Self.duration(gap)), kept as silence"))
+        }
+        if let session, session.preemptedTransfers > 0 {
+            rows.append(DeviceDetail(label: "Transfers stopped for Start or Pause", value: session.preemptedTransfers.formatted()))
         }
         if let fastTransfer = fastTransferSummary {
             rows.append(DeviceDetail(label: "Fast Transfer", value: fastTransfer))
@@ -1148,12 +1294,15 @@ public final class SoundcoreConnection: DiscoveringConnection, RecordingStateCon
     /// The recorder's button pressed just before the link came back (iOS relaunching Daybook in the
     /// background for it, the push arriving before the link was ready): when the link is held for the
     /// button, a recording it started within `buttonCatchUp` that this device didn't know of counts as
-    /// the press. One running longer was started by the person some time ago and isn't a press now.
+    /// the press. One running longer was started by the person some time ago and isn't a press now, and neither is one
+    /// this device already expects (`expectsRecording`: a handoff brought it, or a shared recording is waiting for it),
+    /// which another device started.
     private func catchUpMissedButton() {
         guard let before = recordingBeforeLink else { return }
         recordingBeforeLink = nil
-        guard staysConnected, !before, info?.isRecording == true, !recordCommandPending,
-              let start = startDate(of: activeRecordingID), abs(Date().timeIntervalSince(start)) <= Self.seconds(timing.buttonCatchUp) else { return }
+        guard staysConnected, !before, info?.isRecording == true, !recordCommandPending, let active = activeRecordingID,
+              expectsRecording?(String(active)) != true,
+              let start = startDate(of: active), abs(Date().timeIntervalSince(start)) <= Self.seconds(timing.buttonCatchUp) else { return }
         onButton?(true)
     }
 
@@ -1197,6 +1346,7 @@ public final class SoundcoreConnection: DiscoveringConnection, RecordingStateCon
     }
 
     private func applyStatus(_ status: SoundcoreDeviceInfo) {
+        let status = onItsScale(status)
         info = status
         statusUpdatedAt = Date()
         if var snapshot = remembered {
@@ -1205,6 +1355,17 @@ public final class SoundcoreConnection: DiscoveringConnection, RecordingStateCon
             persist()
         }
         rebuildRecordings()
+    }
+
+    /// The battery read on this recorder's own scale: buckets (0–9 as 10% steps) until it reports a byte above 9, then
+    /// percentages for good (`SoundcoreSnapshot.batteryInPercent`).
+    private func onItsScale(_ status: SoundcoreDeviceInfo) -> SoundcoreDeviceInfo {
+        if status.reportsPercent, var snapshot = remembered, snapshot.batteryInPercent != true {
+            snapshot.batteryInPercent = true
+            remembered = snapshot
+            persist()
+        }
+        return status.reading(inPercent: remembered?.batteryInPercent == true || status.reportsPercent)
     }
 
     private func applyListing(_ result: SoundcoreSession.Listing) {
@@ -1233,8 +1394,8 @@ public final class SoundcoreConnection: DiscoveringConnection, RecordingStateCon
         guard var current = info else { return }
         switch push {
         case .battery(let recorder, let caseLevel):
-            current.microphoneBattery = recorder ?? current.microphoneBattery
-            current.caseBattery = caseLevel ?? current.caseBattery
+            current.microphoneBatteryWire = recorder
+            current.caseBatteryWire = caseLevel
         case .charging(let recorder, let caseCharging):
             current.microphoneCharging = recorder
             current.caseCharging = caseCharging

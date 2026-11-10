@@ -171,6 +171,7 @@ private final class FakeRecorder: LiveListeningConnection, RecordingStateConnect
     func pauseRecording() {}
     func recordingState(at now: Date) -> RecorderRecordingState? { nil }
     @ObservationIgnored var onButton: ((Bool) -> Void)?
+    @ObservationIgnored var expectsRecording: ((String) -> Bool)?
     var staysConnected = false
 
     // One owner

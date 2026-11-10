@@ -5,8 +5,9 @@ import Observation
 
 /// The files method, shared by every device kind: a watched folder of exported recordings.
 ///
-/// It watches only a folder the person chose. A file must be unchanged across two scans before it
-/// counts, so AirDrop and network copies aren't read half-written. Files are only read: Daybook
+/// It watches only a folder the person chose. A file counts once it's finished (`Stability`): unchanged
+/// across two scans, last written at least 30 seconds ago, and its container readable, so AirDrop,
+/// network copies, and slow writers aren't read half-written. Files are only read: Daybook
 /// copies them into the library and never moves, renames, or deletes them. A file's ID is its
 /// content digest, so different exports cannot collide merely by sharing a name and size.
 @MainActor
@@ -64,9 +65,28 @@ public final class ImportFolderWatcher: DeviceConnection {
         public static let lastImport = "lastImport"
     }
 
-    public init(storage: DeviceStorage, interval: Duration = .seconds(5)) {
+    /// When a file counts as finished, beyond being unchanged across two scans: last written at least `quiet` ago (a
+    /// slow writer pausing between scans isn't done), and its container readable (an M4A or MP4 still being written has
+    /// no index yet). One that can't be read once it has been unchanged for `unreadable` is listed anyway, so its
+    /// import says why rather than it never appearing.
+    public struct Stability: Equatable, Sendable {
+        public var quiet: TimeInterval
+        public var unreadable: TimeInterval
+
+        public init(quiet: TimeInterval = 30, unreadable: TimeInterval = 300) {
+            self.quiet = quiet
+            self.unreadable = unreadable
+        }
+    }
+
+    private let stability: Stability
+    /// Whether each file's container could be read, as of its fingerprint.
+    @ObservationIgnored private var readability: [String: (fingerprint: FileFingerprint, value: Bool)] = [:]
+
+    public init(storage: DeviceStorage, interval: Duration = .seconds(5), stability: Stability = Stability()) {
         self.storage = storage
         self.interval = interval
+        self.stability = stability
     }
 
     /// "Watching iCloud Drive › Daybook Import · Last import 2 hours ago", as the page's line and Settings say it.
@@ -260,8 +280,20 @@ public final class ImportFolderWatcher: DeviceConnection {
         for file in survey.files {
             let path = file.fingerprint.path
             seen[path] = file.fingerprint
-            // Unchanged since the last scan: finished copying.
+            // Unchanged since the last scan, and last written a while ago: finished copying.
             guard observations[path] == file.fingerprint else { continue }
+            let age = Date().timeIntervalSince1970 - file.fingerprint.modified
+            guard age >= stability.quiet else { continue }
+            // Its container can be read (once unchanged a long while, it counts anyway, and its import says why).
+            let readable: Bool
+            if let cached = readability[path], cached.fingerprint == file.fingerprint {
+                readable = cached.value
+            } else {
+                readable = await Task.detached(priority: .utility) { Self.isReadableAudio(file.url) }.value
+                guard generation == scanGeneration, !Task.isCancelled else { return }
+                readability[path] = (file.fingerprint, readable)
+            }
+            guard readable || age >= stability.unreadable else { continue }
             let digest: String
             if let cached = digests[path], cached.fingerprint == file.fingerprint {
                 digest = cached.value
@@ -287,6 +319,7 @@ public final class ImportFolderWatcher: DeviceConnection {
         }
         observations = seen
         digests = digests.filter { seen[$0.key] != nil }
+        readability = readability.filter { seen[$0.key] != nil }
         if migratedCompletion { storage.set(Array(completed).sorted(), Keys.completed) }
         urls = found
         stable.sort { ($0.addedAt ?? .distantPast) > ($1.addedAt ?? .distantPast) }
@@ -336,6 +369,13 @@ public final class ImportFolderWatcher: DeviceConnection {
             survey.files.append(FolderSurvey.File(url: url, name: name, fingerprint: fingerprint, addedAt: values.creationDate ?? modified))
         }
         return .success(survey)
+    }
+
+    /// Whether the system can open the file as audio with something in it: a container still being written (an M4A
+    /// whose index comes last) can't be. Off the main actor.
+    nonisolated static func isReadableAudio(_ url: URL) -> Bool {
+        guard let file = try? AVAudioFile(forReading: url) else { return false }
+        return file.length > 0
     }
 
     /// The file's SHA-256, if it's still as `fingerprint` says once hashed (not mid-copy). Off the main actor.

@@ -62,6 +62,40 @@ final class RecorderStatusWordsTests: XCTestCase {
         XCTAssertEqual(chip?.detail, "Soundcore Work · Listening live")
     }
 
+    /// Live audio behind the recording, arriving faster than real time, says so rather than reading as live.
+    func testBehaviorLiveAudioCatchingUpSaysSo() {
+        var facts = soundcore()
+        facts.isRecording = true
+        facts.isListeningLive = true
+        facts.isCatchingUp = true
+        let line = RecorderStatusWords.line(facts, here: "this Mac", now: now)
+        XCTAssertEqual(line.text, "Catching up…")
+        XCTAssertEqual(line.tone, .recording)
+        XCTAssertEqual(RecorderStatusWords.byline(facts, now: now), "Connected · Catching up…")
+        XCTAssertEqual(RecorderStatusWords.chip(facts, recording: true, here: "this Mac", now: now)?.detail, "Soundcore Work · Catching up…")
+        facts.isCatchingUp = false
+        XCTAssertEqual(text(facts), "Listening live")
+    }
+
+    /// A claim whose device hasn't been heard from in 14 days (nothing it imported has arrived, nothing over the link)
+    /// asks for attention, with when it was last heard from: it may be gone or wiped, while the recorder overwrites its
+    /// oldest recordings when full. Use on This Mac takes it over.
+    func testBehaviorAClaimWhoseDeviceHasGoneQuietAsksForAttention() {
+        var facts = soundcore(.notConnected, linked: false)
+        facts.managedBy = "Alex’s iPhone"
+        facts.managerQuietSince = now.addingTimeInterval(-20 * 86_400)
+        let day = now.addingTimeInterval(-20 * 86_400).formatted(.dateTime.day().month(.abbreviated))
+        let line = RecorderStatusWords.line(facts, here: "this Mac", now: now)
+        XCTAssertEqual(line.text, "Managed by Alex’s iPhone · Not heard from since \(day)")
+        XCTAssertEqual(line.tone, .attention)
+        XCTAssertEqual(line.shortText, "Managed by Alex’s iPhone")
+        XCTAssertEqual(RecorderStatusWords.byline(facts, now: now), "Managed by Alex’s iPhone · Not heard from since \(day)")
+        XCTAssertEqual(RecorderStatusWords.chip(facts, recording: false, here: "this Mac", now: now)?.tone, .attention)
+        XCTAssertEqual(RecorderStatusWords.managerQuietLimit, 14 * 86_400)
+        facts.managerQuietSince = nil
+        XCTAssertEqual(RecorderStatusWords.line(facts, here: "this Mac", now: now).tone, .calm, "a claim heard from recently is calm")
+    }
+
     func testBehaviorLookingForItReadsTheSameEverywhere() {
         let facts = soundcore(.searching, linked: false)
         XCTAssertEqual(text(facts), "Looking for it…")

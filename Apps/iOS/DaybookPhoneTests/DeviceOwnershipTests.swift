@@ -199,6 +199,69 @@ final class DeviceOwnershipTests: XCTestCase {
         _ = model
     }
 
+    /// A remembered recorder, as an earlier run left it in `defaults`, with the transport tests reach it through.
+    private func rememberedRecorder(_ recorder: Recorder, defaults: UserDefaults) throws -> SimulatedSoundcoreTransport {
+        var configured = ConfiguredDevice(id: "soundcore", kind: SoundcoreWorkIntegration().kind)
+        configured.importsAutomatically = true
+        let transport = SimulatedSoundcoreTransport(device: recorder.device)
+        recorder.transports.append(transport)
+        let environment = DeviceEnvironment(defaults: defaults, stagingDirectory: try temporaryDirectory("staging"))
+        var snapshot = SoundcoreSnapshot(deviceID: transport.peripheralID, name: recorder.device.name, serial: recorder.device.serial)
+        snapshot.lastConnectedAt = Date()
+        environment.storage(for: configured, method: .direct).encode(snapshot, "recorder")
+        defaults.set(try JSONEncoder().encode([configured]), forKey: DeviceHub.storageKey)
+        return transport
+    }
+
+    /// A library that hasn't loaded: what a background relaunch (Bluetooth restoration) starts with.
+    private func unloadedLibrary(_ defaults: UserDefaults) throws -> PhoneLibrary {
+        let root = try temporaryDirectory("unloaded")
+        return PhoneLibrary(rootURL: root, sync: LibrarySyncController(localRoot: root, defaults: defaults), installation: UUID().uuidString)
+    }
+
+    /// Relaunched for a recorder before the library has loaded, the iPhone keeps to who managed it as it last knew, from
+    /// before anything connects: a recorder a Mac manages is never reached for, and the last-known records stand until the
+    /// library's own are read.
+    func testBehaviorARelaunchBeforeTheLibraryLoadsKeepsToTheOwnershipItLastKnew() async throws {
+        let recorder = Recorder()
+        let defaults = makeTestDefaults("DeviceOwnershipTests-relaunch")
+        let transport = try rememberedRecorder(recorder, defaults: defaults)
+        let lastRun = DeviceHub(environment: DeviceEnvironment(defaults: defaults, stagingDirectory: try temporaryDirectory("last-run")))
+        lastRun.recorderOwnersChanged([RecorderOwnership(kind: SoundcoreWorkIntegration.id, serial: recorder.device.serial, ownerID: "studio-mac",
+                                                         ownerName: "Studio Mac", ownerClass: .mac)], thisDevice: "this-iphone")
+        lastRun.shutDown()
+
+        let library = try unloadedLibrary(defaults)
+        let settings = PhoneSettings(defaults: makeTestDefaults("DeviceOwnershipTests-relaunch-settings"))
+        let devices = PhoneDevices(library: library, settings: settings, mode: .inert, defaults: defaults, timing: Self.timing) { transport }
+        devices.holdsInTests = true
+        addTeardownBlock { devices.shutDown() }
+        devices.start()
+        XCTAssertFalse(library.controller.isLoaded)
+        let session = try XCTUnwrap(devices.sessions.first)
+        XCTAssertEqual(session.managedElsewhere?.ownerName, "Studio Mac", "applied before the devices started")
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(transport.connectAttempts, 0, "never reached for")
+        XCTAssertFalse(recorder.device.isOccupied)
+    }
+
+    /// Relaunched for a recorder it manages, the iPhone loads the library once the recorder connects (the scene's launch,
+    /// which loads it, doesn't run in the background), under background time, so what the recorder brings in imports.
+    func testBehaviorARecorderConnectingBeforeTheLibraryLoadsLoadsIt() async throws {
+        let recorder = Recorder()
+        let defaults = makeTestDefaults("DeviceOwnershipTests-background")
+        let transport = try rememberedRecorder(recorder, defaults: defaults)
+        let library = try unloadedLibrary(defaults)
+        let settings = PhoneSettings(defaults: makeTestDefaults("DeviceOwnershipTests-background-settings"))
+        let devices = PhoneDevices(library: library, settings: settings, mode: .inert, defaults: defaults, timing: Self.timing) { transport }
+        devices.holdsInTests = true
+        addTeardownBlock { devices.shutDown() }
+        devices.start()
+        let session = try XCTUnwrap(devices.sessions.first)
+        try await waitUntil("the recorder connects") { session.isLinked }
+        try await waitUntil("the library loads for it") { library.controller.isLoaded }
+    }
+
     /// The device page's Details copies what the owner can send: the app's version, the recorder's
     /// technical facts, and every recording on it with why it is or isn't new. A list that doesn't
     /// come says so in the iPhone's words.

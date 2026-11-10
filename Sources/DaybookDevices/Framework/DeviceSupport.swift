@@ -25,6 +25,15 @@ public final class SleepAssertion {
     }
 }
 
+/// Time to finish work the person no longer sees once the app leaves the screen: an import, from the moment its
+/// audio has arrived until it's in the library. `ProcessInfo` activities don't keep an iOS app running, so the iPhone
+/// app sets `hold` to a background task (`UIApplication.beginBackgroundTask`); elsewhere it holds nothing (the Mac
+/// keeps `SleepAssertion`). Returns what ends it.
+@MainActor
+public enum DeviceBackgroundTime {
+    public static var hold: (_ name: String) -> (@MainActor () -> Void) = { _ in {} }
+}
+
 /// Where opening a device notification takes the person, carried in the notification's `userInfo` for the
 /// app's notification delegate: the conversation the recordings went into, when they all went into one, else
 /// the recorder's page.

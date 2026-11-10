@@ -544,8 +544,9 @@ final class CompanionRecorders {
             return
         }
         status = "Starting \(name)…"
-        control.startRecording()
-        let confirmed = await wait(timing.confirm) { control.status?.isRecording == true && !control.recordCommandPending }
+        // Now or not at all: ahead of any import the recorder is making, and a Start that confirms only after this has
+        // given up is paused again, so "didn't start" stays true.
+        let confirmed = await session.recordCommand(.start, deadline: timing.confirm) == .confirmed
         if confirmed {
             update(meetingID, link.id) {
                 $0.state = .recording
@@ -590,8 +591,7 @@ final class CompanionRecorders {
         control.refresh()
         let current = await wait(timing.inventory) { Self.hasCurrentListing(control, since: asked) }
         if control.status?.isRecording == true, Self.isRecording(link, control, listingIsCurrent: current) {
-            control.pauseRecording()
-            guard await wait(timing.confirm, until: { control.status?.isRecording == false && !control.recordCommandPending }) else {
+            guard await session.recordCommand(.pause, deadline: timing.confirm) == .confirmed else {
                 update(meetingID, link.id) { $0.state = .stopFailed }
                 status = "\(name) didn’t confirm it stopped. Stop it on the recorder."
                 return

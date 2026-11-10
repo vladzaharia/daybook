@@ -38,13 +38,13 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
     }
 
     private func rig(_ device: SimulatedSoundcore, holds: Bool = false, known: Bool = true, captioner: (any LiveCaptioning)? = nil,
-                     configure: ((inout SoundcoreTiming) -> Void)? = nil) -> Rig {
+                     captioners: (() -> (any LiveCaptioning)?)? = nil, configure: ((inout SoundcoreTiming) -> Void)? = nil) -> Rig {
         let transport = SimulatedSoundcoreTransport(device: device)
         transport.isKnown = known
         var environment = DeviceEnvironment(defaults: defaults, stagingDirectory: staging)
         environment.soundcoreTransport = { transport }
         let hooks = LiveCaptionHooks()
-        hooks.makeCaptioner = { captioner }
+        hooks.makeCaptioner = captioners ?? { captioner }
         environment.liveCaptions = hooks
         var timing = SoundcoreTiming()
         timing.request = .seconds(3)
@@ -55,8 +55,10 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
         timing.reconnect = .milliseconds(300)
         timing.recordConfirm = .milliseconds(1_500)
         timing.backoff = [.milliseconds(40), .milliseconds(80)]
-        timing.automaticIdleRelease = .milliseconds(200)
-        timing.idleRelease = .milliseconds(200)
+        // The link stays up between a test's steps: a short idle release could let it go first on a busy machine, and a
+        // press or a Start would then reach nobody. The test of holding the link shortens it.
+        timing.automaticIdleRelease = .seconds(600)
+        timing.idleRelease = .seconds(600)
         timing.automaticCooldown = .seconds(60)
         timing.holdRetry = .milliseconds(150)
         timing.liveTail = .milliseconds(400)
@@ -118,7 +120,10 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
 
     func testHoldingTheLinkConnectsKeepsItAndComesBackWithoutACooldown() async throws {
         let device = SimulatedSoundcore(recordings: [])
-        let rig = rig(device, holds: true)
+        let rig = rig(device, holds: true, configure: { timing in
+            timing.automaticIdleRelease = .milliseconds(200)
+            timing.idleRelease = .milliseconds(200)
+        })
         try await waitUntil("it connects on its own, holding the link") { rig.connection.state == .connected }
         try await Task.sleep(for: .milliseconds(500))
         XCTAssertEqual(rig.connection.state, .connected, "never let go when idle (automatic and personal releases are 200 ms here)")
@@ -174,7 +179,98 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
         XCTAssertEqual(presses, [true], "a recording it didn't see start just now isn't a press")
     }
 
+    /// A recording this device already expects (a handoff brought it, started by another device moments before the
+    /// link came back) isn't taken for the button: the iPhone doesn't start a recording of its own for it.
+    func testARecordingAHandoffBroughtFoundJustStartedIsntAPress() async throws {
+        let device = SimulatedSoundcore(recordings: [])
+        let rig = rig(device, holds: true)
+        var presses: [Bool] = []
+        rig.session.onRecorderButton = { _, on in presses.append(on) }
+        try await waitUntil("held") { rig.connection.isInventoryCurrent }
+
+        device.advertises = false
+        rig.transport.dropLink()
+        try await waitUntil("away") { rig.connection.state != .connected }
+        // Another device starts it for its conversation, then hands the recorder over with that recording.
+        device.pressButton()
+        let id = String(try XCTUnwrap(device.activeRecording).id)
+        rig.session.adoptHandedOffImports([DeviceHandedOffImport(recordingID: id, attachTo: UUID(), isAutomatic: true)], alreadyImported: [])
+        rig.transport.comeIntoRange()
+        try await waitUntil("back") { rig.connection.isInventoryCurrent }
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(presses, [], "a recording this device expects isn't its button")
+    }
+
     // MARK: Live audio into the shared recording
+
+    /// A packet the live stream loses doesn't cost what arrived: the gap becomes silence sized by the sequence numbers
+    /// (20 ms a packet), so what follows keeps its time, and the live portion is saved into the conversation.
+    func testLiveAudioThatLosesAPacketKeepsWhatArrivedWithTheGapAsSilence() async throws {
+        let device = SimulatedSoundcore(recordings: [])
+        let rig = rig(device)
+        try await connected(rig)
+        rig.connection.startRecording()
+        try await waitUntil("it records") { rig.connection.status?.isRecording == true && !rig.connection.recordCommandPending }
+        device.fault = .skipSlice(at: 30)
+        let conversation = UUID()
+        XCTAssertTrue(rig.session.captureLive(into: conversation))
+        try await waitUntil("past the gap") { device.notificationsSent > 40 }
+        let ended = await rig.session.endLiveCapture()
+        let saved = try XCTUnwrap(ended)
+        XCTAssertNil(saved.failure)
+        XCTAssertEqual(saved.meetingID, conversation, "kept, in the shared recording")
+        XCTAssertGreaterThan(saved.seconds, 0.6)
+        let live = try XCTUnwrap(rig.connection.live.saved)
+        XCTAssertEqual(live.filledSeconds, 0.02, accuracy: 0.001, "one packet lost, kept as 20 ms of silence")
+        XCTAssertEqual(rig.connection.technicalDetails.first { $0.label == "Live audio lost" }?.value, "0.02 sec, kept as silence")
+        XCTAssertEqual(rig.library.imports.first?.attachTo, conversation)
+    }
+
+    /// The link going away mid-capture saves what arrived; once the recorder is back and listed, the capture starts
+    /// again by itself (the recorder streams the recording from its start, so it catches up), and its captions reach the
+    /// shared recording again.
+    func testALiveCaptureTheLinkTookAwayStartsAgainWithItsCaptions() async throws {
+        let device = SimulatedSoundcore(recordings: [])
+        device.recordsInRealTime = true
+        device.pace = .milliseconds(15)
+        var captioners: [FeedRecordingCaptioner] = []
+        let rig = rig(device, captioners: {
+            let captioner = FeedRecordingCaptioner()
+            captioners.append(captioner)
+            return captioner
+        })
+        try await connected(rig)
+        let conversation = UUID()
+        final class Heard { var updates: [LiveCaptureCaptions.Update] = [] }
+        let heard = Heard()
+        let follower = LiveCaptureCaptions()
+        follower.follow({ [rig.session] }, conversation: { conversation }) { heard.updates.append($0) }
+
+        rig.connection.startRecording()
+        try await waitUntil("it records") { rig.connection.status?.isRecording == true && !rig.connection.recordCommandPending }
+        XCTAssertTrue(rig.session.captureLive(into: conversation))
+        try await waitUntil("its audio is captioned") { captioners.first?.fed.isEmpty == false }
+
+        rig.transport.dropLink()
+        try await waitUntil("what arrived is saved") { rig.session.lastLiveSave != nil }
+        XCTAssertEqual(rig.session.lastLiveSave?.meetingID, conversation)
+        try await waitUntil("captured again once it's back", timeout: 10) { rig.session.liveCaptureConversation == conversation }
+        try await waitUntil("captioned again") { captioners.count == 2 && captioners[1].fed.isEmpty == false }
+        let started = try XCTUnwrap(rig.session.liveStreamStartedAt)
+        XCTAssertLessThanOrEqual(started, Date(), "where the stream starts, on this device's clock")
+        captioners[1].post([LiveCaptionSegment(start: 0.2, end: 1.0, text: "After the gap", isTentative: false)])
+        try await waitUntil("the shared recording hears it") { heard.updates.last?.segments.map(\.text) == ["After the gap"] }
+        XCTAssertNotNil(heard.updates.last?.startedAt)
+
+        let saved = await rig.session.endLiveCapture()
+        XCTAssertEqual(saved?.meetingID, conversation)
+        XCTAssertEqual(rig.library.imports.filter { $0.attachTo == conversation }.count, 2, "both live portions, in the conversation")
+        // Captured again only while the shared recording wants it: once ended, a drop and return start nothing.
+        rig.transport.dropLink()
+        try await waitUntil("back") { rig.connection.isInventoryCurrent }
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertNil(rig.session.liveCaptureConversation)
+    }
 
     func testLiveAudioIsSavedIntoTheSharedRecordingAndTheRecordersFileBecomesTheSameTrack() async throws {
         let device = SimulatedSoundcore(recordings: [])

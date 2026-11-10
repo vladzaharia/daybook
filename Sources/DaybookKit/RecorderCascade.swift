@@ -188,8 +188,8 @@ public final class RecorderCascade {
             member.role = forced ?? .alreadyRecording
             member.state = .recording
         } else {
-            control.startRecording()
-            guard await wait(timing.confirm, until: { control.status?.isRecording == true && !control.recordCommandPending }) else {
+            // Now or not at all: ahead of any import, and a Start that confirms after this gives up is paused again.
+            guard await session.recordCommand(.start, deadline: timing.confirm) == .confirmed else {
                 member.state = .unavailable("\(name) didn’t start recording.")
                 put(member)
                 say("\(name) didn’t start recording.")
@@ -304,8 +304,7 @@ public final class RecorderCascade {
             // Pause only the recording it made for this conversation: the person may have started another.
             let same = member.recordingID == nil || (listed ? inProgress == member.recordingID : true)
             if control.status?.isRecording == true, same {
-                control.pauseRecording()
-                if !(await wait(timing.confirm, until: { control.status?.isRecording == false && !control.recordCommandPending })) {
+                if await session.recordCommand(.pause, deadline: timing.confirm) != .confirmed {
                     member.state = .stopFailed("\(member.name) didn’t confirm it stopped. Stop it on the recorder.")
                     put(member, in: id)
                     say("\(member.name) didn’t confirm it stopped. Stop it on the recorder.")

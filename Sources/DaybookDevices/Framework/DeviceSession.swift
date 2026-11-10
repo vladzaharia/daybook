@@ -76,6 +76,16 @@ public final class DeviceSession: Identifiable {
     /// Recordings another device imported that haven't reached this library through sync yet, and
     /// when we heard: never offered or imported automatically here meanwhile, so nothing is imported twice.
     public private(set) var arrivingThroughSync: [String: Date] = [:]
+    /// What waits to import, as last stored (`savePending`).
+    @ObservationIgnored private var storedPending: PendingImports?
+    @ObservationIgnored private var pendingSaveScheduled = false
+    /// Quitting: what waits stays stored as it was, rather than as the stopped queue.
+    @ObservationIgnored private var isShuttingDown = false
+    /// The shared recording the recorder's live audio is saved into, kept while the link is away so the capture
+    /// starts again once it's back (`captureLive`, `endLiveCapture`).
+    @ObservationIgnored private var liveCaptureTarget: UUID?
+    /// The link went away during a live capture: it starts again once the recorder is back and listed.
+    @ObservationIgnored private var rearmsLiveCapture = false
 
     public init(device: ConfiguredDevice, kind: DeviceKind, connections: [any DeviceConnection], defaults: UserDefaults,
          retryPolicy: DeviceRetryPolicy = DeviceRetryPolicy()) {
@@ -99,19 +109,76 @@ public final class DeviceSession: Identifiable {
                 guard let self else { return }
                 self.onRecorderButton?(self, on)
             }
+            // A recording a handoff brought, or a shared recording's, is expected here: it isn't the button.
+            recorder.expectsRecording = { [weak self] id in self?.adoptedImports.contains { $0.recordingID == id } == true }
         }
         if let fast = direct as? any FastTransferConnection {
             fast.hasMoreQueued = { [weak self] in self?.queue.waiting.contains { $0.method == .direct } == true }
             // The person said no to joining its network: the recorder's Fast Transfer switch shows it off.
             fast.onFastTransferDeclined = { [weak self] in self?.update { $0.fastTransferForLongRecordings = false } }
         }
+        restorePending()
     }
 
     public func activate() { connections.forEach { $0.activate() } }
 
     public func shutDown() {
+        isShuttingDown = true
         stopAll()
         connections.forEach { $0.shutDown() }
+    }
+
+    /// The device was removed: what waited to import here goes with it.
+    public func removeStoredState() {
+        pendingStorage.set(nil, Self.pendingKey)
+        storedPending = nil
+    }
+
+    // MARK: What waits, across relaunches
+
+    /// What waits to import from the recorder, stored so a relaunch has it (`DeviceStorage`): the imports a handoff
+    /// brought, a shared recording's file (`importWhenFinished`), and what the queue had waiting from the recorder,
+    /// the person's included, with what's arriving through sync. A relaunch takes them all as adopted imports: each
+    /// imports once the recorder lists it, and one it no longer lists after a fresh listing is dropped.
+    private struct PendingImports: Codable, Equatable {
+        var imports: [DeviceHandedOffImport]
+        var adoptedAt: Date?
+        var arrivingThroughSync: [String: Date]
+    }
+
+    private static let pendingKey = "pending"
+    private var pendingStorage: DeviceStorage { DeviceStorage(defaults: defaults, prefix: "device.\(id).session.") }
+
+    private func restorePending() {
+        guard let stored = pendingStorage.decode(PendingImports.self, Self.pendingKey) else { return }
+        storedPending = stored
+        adoptedImports = stored.imports
+        adoptedAt = stored.adoptedAt ?? (stored.imports.isEmpty ? nil : Date())
+        arrivingThroughSync = stored.arrivingThroughSync
+    }
+
+    /// What waits changed: stored once the change has settled.
+    private func pendingChanged() {
+        guard !pendingSaveScheduled else { return }
+        pendingSaveScheduled = true
+        Task { [weak self] in
+            await Task.yield()
+            self?.pendingSaveScheduled = false
+            self?.savePending()
+        }
+    }
+
+    private func savePending() {
+        guard !isShuttingDown else { return }
+        var imports = adoptedImports
+        let queued = ([queue.current].compactMap { $0 } + queue.waiting).filter { $0.method == .direct }
+        for item in queued where !imports.contains(where: { $0.recordingID == item.id }) {
+            imports.append(DeviceHandedOffImport(recordingID: item.id, attachTo: item.attachTo, isAutomatic: item.isAutomatic))
+        }
+        let pending = PendingImports(imports: imports, adoptedAt: adoptedAt, arrivingThroughSync: arrivingThroughSync)
+        guard pending != (storedPending ?? PendingImports(imports: [], adoptedAt: nil, arrivingThroughSync: [:])) else { return }
+        storedPending = pending
+        pendingStorage.encode(imports.isEmpty && arrivingThroughSync.isEmpty ? nil : pending, Self.pendingKey)
     }
 
     // MARK: Connections
@@ -262,13 +329,32 @@ public final class DeviceSession: Identifiable {
         if method == .direct { reapplyOwnership() }
         let connected = connection.state.isConnected
         let becameConnected = connected && wasConnected[method] != true
+        let wentAway = !connected && wasConnected[method] == true
         wasConnected[method] = connected
         if becameConnected, queue.isSuspended, connection.problem == nil {
             queue.resume()
             if transferProblem?.id == "disconnectedDuringImport" { transferProblem = nil }
         }
+        if method == .direct {
+            // A live capture the link took away starts again once the recorder is back and listed.
+            if wentAway, liveCaptureTarget != nil { rearmsLiveCapture = true }
+            rearmLiveCapture()
+        }
         checkLowStorage()
         scheduleEvaluation()
+    }
+
+    /// The link came back during a shared recording whose live capture it had ended: capture again (the recorder
+    /// streams the recording from its start, so it catches up), once its list has been read on this connection.
+    private func rearmLiveCapture() {
+        guard rearmsLiveCapture, let target = liveCaptureTarget, let direct, direct.state.isConnected, direct.isInventoryCurrent,
+              let recorder = direct as? any LiveListeningConnection else { return }
+        rearmsLiveCapture = false
+        guard !recorder.live.isListening, managedElsewhere == nil else { return }
+        // Only the recording it was capturing: one the person started since isn't this conversation's.
+        let inProgress = direct.recordings.first(where: \.isInProgress)?.id
+        if let previous = recorder.live.saved?.recordingID, inProgress != previous { return }
+        recorder.startListening(into: target, captions: true)
     }
 
     // MARK: Library
@@ -331,7 +417,9 @@ public final class DeviceSession: Identifiable {
     public func forget(_ method: ConnectionMethodKind) {
         if queue.current?.method == method { stopCurrent() }
         queue.remove(method: method)
+        if method == .direct { adoptedImports = [] }
         connection(method)?.forget()
+        pendingChanged()
     }
 
     /// Disconnect: stops this method's imports first, so a deliberate disconnect isn't reported as a problem.
@@ -341,12 +429,22 @@ public final class DeviceSession: Identifiable {
         queue.remove(method: method)
         if !queue.isActive { batchEnded() }
         connection(method)?.disconnect()
+        pendingChanged()
     }
 
     public func connect() {
         transferProblem = nil
         primary?.dismissProblem()
         primary?.connect()
+    }
+
+    /// Start or Pause on the recorder, acting now or not at all (docs/devices.md, "Record commands come first"): it goes
+    /// ahead of the recorder's imports (one under way stops and starts again after it) and answers within `deadline`.
+    /// Still waiting to be sent by then, it's dropped; sent and confirmed late, a Start is paused again. Unavailable for
+    /// a device without record control.
+    public func recordCommand(_ command: RecordCommand, deadline: Duration?) async -> RecordCommandOutcome {
+        guard let control = direct as? any RecordControlConnection else { return .unavailable }
+        return await control.recordCommand(command, deadline: deadline)
     }
 
     /// After a handoff: connects to the recorder as soon as the device that had it lets go.
@@ -379,6 +477,7 @@ public final class DeviceSession: Identifiable {
             connection.connect()
         }
         pump()
+        pendingChanged()
     }
 
     /// Stops the recording that's transferring now. What arrived is discarded; the recorder keeps it.
@@ -388,6 +487,7 @@ public final class DeviceSession: Identifiable {
         cancelRunner()
         queue.stopCurrent()
         if queue.isActive { pump() } else { batchEnded(imported: imported) }
+        pendingChanged()
     }
 
     /// Stops importing altogether.
@@ -396,11 +496,13 @@ public final class DeviceSession: Identifiable {
         cancelRunner()
         queue.stopAll()
         batchEnded(imported: imported)
+        pendingChanged()
     }
 
     public func removeFromQueue(_ id: String) {
         queue.remove(id)
         if !queue.isActive { batchEnded() }
+        pendingChanged()
     }
 
     /// Recently imported › Try Again.
@@ -479,7 +581,13 @@ public final class DeviceSession: Identifiable {
             let audio = try await connection.transfer(item.recording) { [weak self] phase, bytes in
                 self?.progress(phase, bytes, token: token)
             }
-            defer { if audio.isStaged { try? FileManager.default.removeItem(at: audio.url) } }
+            // From the moment its audio is here until it's in the library, the import holds background time (the
+            // iPhone: suspended in between, the whole transfer would run again).
+            let backgroundTime = DeviceBackgroundTime.hold("Importing from \(device.name)")
+            defer {
+                if audio.isStaged { try? FileManager.default.removeItem(at: audio.url) }
+                backgroundTime()
+            }
             guard runnerToken == token else { return }
             phase = .finishing
             do {
@@ -538,6 +646,7 @@ public final class DeviceSession: Identifiable {
         } else {
             batchEnded(imported: queue.imported)
         }
+        pendingChanged()
     }
 
     private func batchEnded(imported: Int = 0) {
@@ -590,6 +699,9 @@ public final class DeviceSession: Identifiable {
     /// A Listen Live portion becomes a conversation now (or joins the shared recording it was captured
     /// for); the full recording joins it later.
     private func saveLive(url: URL, recordingID: String, seconds: TimeInterval, into conversation: UUID?) {
+        // Ended with the link still up (stopped, gone quiet, or its recording ended): it isn't captured again. Ended
+        // because the link went: it is, once the recorder is back (`rearmLiveCapture`).
+        if let conversation, conversation == liveCaptureTarget, direct?.state.isConnected == true { liveCaptureTarget = nil }
         // With nowhere to put it, the staged audio goes now (the recorder still has the recording).
         guard let importer else { try? FileManager.default.removeItem(at: url); return }
         let identity = DeviceRecordingIdentity(kind: kind.id, serial: recorderSerial, recordingID: DeviceLibraryLinks.partialID(recordingID))
@@ -624,12 +736,27 @@ public final class DeviceSession: Identifiable {
     /// so a shared recording has it the moment it stops, and captions it as Listen Live does
     /// (`liveCaptions`), for the recording's captions (`LiveCaptureCaptions`). False when it can't
     /// start now (not connected, not recording, already listening).
+    /// If the link goes away meanwhile, what arrived is saved and the capture starts again once the recorder is back
+    /// and listed (until `endLiveCapture`).
     @discardableResult
     public func captureLive(into conversation: UUID) -> Bool {
         guard let recorder = direct as? any LiveListeningConnection, managedElsewhere == nil else { return false }
-        if recorder.live.isListening { return recorder.liveConversation == conversation }
-        return recorder.startListening(into: conversation, captions: true)
+        if recorder.live.isListening {
+            if recorder.liveConversation == conversation { liveCaptureTarget = conversation; return true }
+            return false
+        }
+        let started = recorder.startListening(into: conversation, captions: true)
+        if started { liveCaptureTarget = conversation; rearmsLiveCapture = false }
+        return started
     }
+
+    /// The recorder's live audio is behind the recording and arriving faster than real time to catch up: "Catching up…",
+    /// and no meter level meanwhile (`LiveCapture.isCatchingUp`).
+    public var isLiveCatchingUp: Bool { listening?.live.isCatchingUp == true }
+
+    /// Where the recorder's live stream starts on this device's clock (`LiveCapture.streamStartedAt`): what its
+    /// captions are placed from.
+    public var liveStreamStartedAt: Date? { listening?.live.isListening == true ? listening?.live.streamStartedAt : nil }
 
     /// The conversation the recorder's live audio is being saved into, while it is.
     public var liveCaptureConversation: UUID? {
@@ -649,6 +776,8 @@ public final class DeviceSession: Identifiable {
     /// latest live portion saved (or that couldn't be), which the caller checks against its conversation.
     @discardableResult
     public func endLiveCapture(within limit: Duration = .seconds(15)) async -> LiveSave? {
+        liveCaptureTarget = nil
+        rearmsLiveCapture = false
         guard let recorder = direct as? any LiveListeningConnection else { return nil }
         if recorder.live.isListening { recorder.stopListening() }
         // Listening ends once what arrived is handed on to be saved (`saveLive`), then the save itself.
@@ -675,6 +804,7 @@ public final class DeviceSession: Identifiable {
         #if DEBUG
         if demoFrozen { return }
         #endif
+        defer { pendingChanged() }
         if queue.isSuspended, let next = queue.waiting.first, connection(next.method)?.state.isConnected == true { queue.resume() }
         guard libraryReady, !isHandingOff else { return }
         importAdopted()
@@ -720,6 +850,7 @@ public final class DeviceSession: Identifiable {
         guard !waiting.isEmpty else { return [] }
         queue.remove(method: .direct)
         if !queue.isActive { batchEnded() }
+        pendingChanged()
         return waiting.map { DeviceHandedOffImport(recordingID: $0.recording.id, attachTo: $0.attachTo, isAutomatic: $0.isAutomatic) }
     }
 
@@ -880,7 +1011,7 @@ private final class FinishRace {
 
 /// A recording that was waiting to import when a recorder moved between devices: the device taking
 /// over imports it (docs/devices.md, "Handing a recorder over").
-public struct DeviceHandedOffImport: Equatable, Sendable {
+public struct DeviceHandedOffImport: Equatable, Sendable, Codable {
     /// The recorder's stable recording ID.
     public var recordingID: String
     /// The conversation it was going into, when one was chosen.

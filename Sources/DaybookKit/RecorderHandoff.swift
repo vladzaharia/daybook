@@ -71,6 +71,12 @@ public final class RecorderHandoff {
         public var replyTimeout: Duration = .seconds(5)
         /// Waiting through sync longer than this, the page says the owner hasn't answered.
         public var patience: TimeInterval = 120
+        /// An owner finishing over the link updates every `progressInterval`: this long without a word, it has gone (it
+        /// quit, crashed, or the link went).
+        public var ownerQuiet: TimeInterval = 120
+        /// An owner finishing through sync says nothing more until it lets go: after this long, the requester stops
+        /// assuming it's still at it (an hour-long recording takes 12 to 24 minutes over Bluetooth).
+        public var releasePatience: TimeInterval = 30 * 60
         /// How long "Now on this iPhone" stays.
         public var doneDisplay: Duration = .seconds(5)
         /// How long the new owner waits for the recorder before it stops saying "Connecting".
@@ -188,6 +194,13 @@ public final class RecorderHandoff {
     @ObservationIgnored private var followCheckScheduled = false
     /// Follow checks that looked at every followed recording (tests: two since a change mean one began after it).
     @ObservationIgnored private(set) var followChecks = 0
+    /// When the owner last said anything about a release it's finishing for this device, by recorder ID: its update
+    /// over the link every five seconds, or its record turning `releasing`.
+    @ObservationIgnored private var ownerHeard: [String: (request: UUID, at: Date, overLink: Bool)] = [:]
+    @ObservationIgnored private var quietWatches: [String: Task<Void, Never>] = [:]
+    /// Requests whose owner went quiet while finishing: they wait through sync now, overdue, with Take Over Anyway, and
+    /// the owner's `releasing` record doesn't make them "finishing" again.
+    private var wentQuiet: Set<UUID> = []
 
     public init(library: LibraryController, devices: DeviceHub, deviceClass: SyncDeviceClass, defaults: UserDefaults = .standard,
                 link: Link = .none, timing: Timing = Timing(), deviceName: String? = nil) {
@@ -204,6 +217,8 @@ public final class RecorderHandoff {
         scheduleMetadataCheck()
         // A conversation whose recording a recorder here follows may arrive, with that recording ended.
         libraryWatches.append(ObservationWatch({ _ = library.meetings }) { [weak self] in self?.scheduleFollowCheck() })
+        // A recorder's serial arrives once its device has started: a release left unfinished by a relaunch carries on then.
+        libraryWatches.append(ObservationWatch({ _ = devices.sessions.map(\.recorderSerial) }) { [weak self] in self?.scheduleMetadataCheck() })
         loadFollowed()
     }
 
@@ -453,6 +468,7 @@ public final class RecorderHandoff {
             // The other device lets go and sends its release; this one then takes over.
             states[id] = .ownerFinishing(owner: request.requester.name, finishing: nil)
             acceptedOffers[id] = request
+            heardFromOwner(id, request: request.id, overLink: false)
         default:
             beginRelease(session, to: request.requester, requestID: request.id, linkID: linkID)
         }
@@ -501,6 +517,7 @@ public final class RecorderHandoff {
             switch states[id] {
             case .asking?, .ownerFinishing?, .waitingForSync?:
                 states[id] = .ownerFinishing(owner: reply.from?.name ?? sent.counterpart, finishing: Self.finishing(ack))
+                heardFromOwner(id, request: request.id, overLink: true)
             default: break
             }
         case (_, .refused(let refusal)):
@@ -733,6 +750,14 @@ public final class RecorderHandoff {
                         session.endHandoffHold()
                         states[id] = nil
                     }
+                case .releasing:
+                    // A release this device began and didn't finish (it quit or crashed meanwhile): it carries on.
+                    guard releasing[id] == nil, answered[record.id] == nil, !calledOff.contains(record.id),
+                          let session = session(kind: record.kind, serial: record.serial) else { continue }
+                    let requester = LinkHandoffDevice(syncID: record.requesterID, name: record.requesterName,
+                                                      deviceClass: Self.linkClass(record.requesterClass))
+                    answered[record.id] = LinkRecorderHandoffReply(requestID: record.id, outcome: .accepted(ack(for: session)), from: self.me)
+                    beginRelease(session, to: requester, requestID: record.id, linkID: peer(syncID: record.requesterID)?.linkID)
                 default:
                     break
                 }
@@ -744,8 +769,11 @@ public final class RecorderHandoff {
                         states[id] = .waitingForSync(owner: record.ownerName, since: record.requestedAt)
                     }
                 case .releasing:
+                    guard !wentQuiet.contains(record.id) else { break }
                     switch states[id] {
-                    case .asking?, .waitingForSync?, nil: states[id] = .ownerFinishing(owner: record.ownerName, finishing: nil)
+                    case .asking?, .waitingForSync?, nil:
+                        states[id] = .ownerFinishing(owner: record.ownerName, finishing: nil)
+                        heardFromOwner(id, request: record.id, overLink: false)
                     default: break
                     }
                 case .released:
@@ -767,6 +795,48 @@ public final class RecorderHandoff {
             }
         }
     }
+
+    /// The owner said something about the release it's finishing for this device. If it then goes quiet for longer than
+    /// `ownerQuiet` over the link (it updates every five seconds) or `releasePatience` through sync, it's taken to be gone
+    /// (`ownerWentQuiet`).
+    private func heardFromOwner(_ id: String, request: UUID, overLink: Bool, at now: Date = Date()) {
+        ownerHeard[id] = (request, now, overLink)
+        wentQuiet.remove(request)
+        quietWatches[id]?.cancel()
+        let limit = overLink ? timing.ownerQuiet : timing.releasePatience
+        quietWatches[id] = Task { [weak self] in
+            guard (try? await Task.sleep(for: .seconds(limit))) != nil else { return }
+            self?.ownerWentQuiet(id)
+        }
+    }
+
+    /// The owner finishing a release went quiet (it quit, crashed, or the link went): the request waits through sync,
+    /// where the owner takes it up again after a relaunch, and it's overdue at once, so the page offers Take Over Anyway
+    /// with when the owner was last heard from.
+    func ownerWentQuiet(_ id: String) {
+        guard case .ownerFinishing(let owner, _)? = states[id], let heard = ownerHeard[id] else { return }
+        wentQuiet.insert(heard.request)
+        quietWatches[id] = nil
+        // A request that travelled over the link has no record yet: one with the same ID lets the owner, back after a
+        // relaunch, finish what it began. A record of it already there (through sync) stays as it is.
+        if library.recorderHandoff(kind: Self.kind(of: id), serial: Self.serial(of: id))?.id != heard.request {
+            if let sent = outgoing[heard.request]?.request {
+                library.saveRecorderHandoff(RecorderHandoffRecord(
+                    id: sent.id, kind: sent.kind, serial: sent.serial, ownerID: sent.addressedTo, ownerName: owner,
+                    requesterID: thisDevice.id, requesterName: thisDevice.name, requesterClass: deviceClass, phase: .requested,
+                    requestedAt: sent.sentAt))
+            } else if let offer = acceptedOffers[id], offer.id == heard.request {
+                library.saveRecorderHandoff(RecorderHandoffRecord(
+                    id: offer.id, kind: offer.kind, serial: offer.serial, ownerID: offer.requester.syncID, ownerName: owner,
+                    requesterID: thisDevice.id, requesterName: thisDevice.name, requesterClass: deviceClass, phase: .requested,
+                    requestedAt: offer.sentAt))
+            }
+        }
+        states[id] = .waitingForSync(owner: owner, since: heard.at)
+    }
+
+    private static func kind(of id: String) -> String { String(id.split(separator: "|", maxSplits: 1).first ?? "") }
+    private static func serial(of id: String) -> String { String(id.split(separator: "|", maxSplits: 1).dropFirst().first ?? "") }
 
     private func waitThroughSync(_ request: LinkRecorderHandoffRequest, ownerName: String) {
         let id = RecorderOwnership.id(kind: request.kind, serial: request.serial)

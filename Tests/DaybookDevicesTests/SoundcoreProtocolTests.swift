@@ -209,7 +209,22 @@ final class SoundcoreProtocolTests: XCTestCase {
             _ = try? SoundcoreCrypto().completeHandshake(Data(bytes))
         }
         XCTAssertLessThanOrEqual(buffer.rejectedFrames, 2_000 * 400)
-        XCTAssertTrue(buffer.append(Data(repeating: 0, count: 1_048_577)).isEmpty, "Oversized notifications are dropped")
+        var garbage = SoundcorePacketBuffer()
+        XCTAssertTrue(garbage.append(Data(repeating: 0, count: 1_048_577)).isEmpty, "A megabyte of garbage is skipped")
+    }
+
+    /// However much arrives at once (a Wi‑Fi message can carry megabytes of frames), it's reassembled 64 KB at a time:
+    /// nothing is dropped for its size, frames across a piece's edge come out whole, and the link's own message limit is
+    /// the only one.
+    func testBehaviorALargeDeliveryIsReassembledInPiecesWithNothingDropped() {
+        var buffer = SoundcorePacketBuffer()
+        let frame = SoundcorePacket.frame(type: 0x1a, command: 0x08, payload: Data(repeating: 3, count: 498))
+        let delivery = Data((0..<4_000).flatMap { _ in frame })
+        XCTAssertGreaterThan(delivery.count, 2_000_000)
+        let packets = buffer.append(delivery)
+        XCTAssertEqual(packets.count, 4_000)
+        XCTAssertEqual(buffer.rejectedFrames, 0)
+        XCTAssertTrue(packets.allSatisfy { $0.payload.count == 498 })
     }
 
     func testAESCTRMatchesNISTVector() throws {
