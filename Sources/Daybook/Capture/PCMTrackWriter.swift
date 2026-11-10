@@ -71,6 +71,10 @@ final class PCMTrackWriter: @unchecked Sendable {
     private var isFinished = false
     private var lastMetadataWrite: TimeInterval = -.infinity
     private var lastAnchor: ClockAnchor?
+    /// Which anchors the sidecar keeps; `lastAnchor`, for judging gaps, is always the latest.
+    private var anchorSchedule = ClockAnchorSchedule()
+    /// The sidecar is written here, off the audio queue, in order; `finish` writes the last one after the rest.
+    private let sidecarQueue = DispatchQueue(label: "app.daybook.audio-writer.sidecar", qos: .utility)
     private var pendingResync = false
     private let converter = PCMFormatConverter()
     private var notes: [String] = []
@@ -174,7 +178,7 @@ final class PCMTrackWriter: @unchecked Sendable {
         }
         if lastAnchor == nil || pendingResync || hostTimeSeconds - lastAnchor!.hostTime >= Self.anchorInterval {
             let anchor = ClockAnchor(frame: current.frameCount, hostTime: hostTimeSeconds, resync: pendingResync && lastAnchor != nil ? true : nil)
-            current.clockAnchors = (current.clockAnchors ?? []) + [anchor]
+            if anchorSchedule.keeps(anchor) { current.clockAnchors = (current.clockAnchors ?? []) + [anchor] }
             lastAnchor = anchor
             pendingResync = false
         }
@@ -182,8 +186,23 @@ final class PCMTrackWriter: @unchecked Sendable {
         current.frameCount += Int64(buffer.frameLength)
         current.notes = notes.isEmpty ? nil : notes
         if hostTimeSeconds - lastMetadataWrite >= 10 {
-            try persistTrack(current)
+            persistTrackSoon(current)
             lastMetadataWrite = hostTimeSeconds
+        }
+    }
+
+    /// Writes the sidecar off the audio queue, so a slow disk never holds up the audio. A write that fails stops the
+    /// track as it always has: the next buffers find `errorMessage` set.
+    private func persistTrackSoon(_ snapshot: CapturedAudioTrack) {
+        sidecarQueue.async { [self] in
+            do { try persistTrack(snapshot) }
+            catch {
+                queue.async { [self] in
+                    guard !isFinished, errorMessage == nil else { return }
+                    recordFailure(error)
+                    failure(error)
+                }
+            }
         }
     }
 
@@ -248,7 +267,8 @@ final class PCMTrackWriter: @unchecked Sendable {
                 if var track {
                     track.notes = notes.isEmpty ? nil : notes
                     self.track = track
-                    do { try persistTrack(track) }
+                    // After every sidecar write already asked for, so an earlier one never lands last.
+                    do { try sidecarQueue.sync { try persistTrack(track) } }
                     catch { errorMessage = errorMessage ?? "The \(role.spokenName) recording is saved, but its details couldn’t be." }
                 }
                 continuation.resume(returning: Outcome(track: track, error: errorMessage))

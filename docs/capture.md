@@ -118,7 +118,7 @@ The caller supplies a fresh directory for each recording. Files are owner-only: 
 |---|---|
 | `capture-session.json` | Session ID, wall-clock and host-clock anchor, and the target call app. Saved before recording starts. |
 | `microphone.caf`, `systemAudio.caf` | The originals: independent native PCM tracks, never modified after capture. |
-| `microphone.json`, `systemAudio.json` | Track timing, format, frame count, capture method, notes, and **clock anchors**. Saved after the first buffer, every ten seconds, and at the end. |
+| `microphone.json`, `systemAudio.json` | Track timing, format, frame count, capture method, notes, and **clock anchors**. Saved after the first buffer, every ten seconds, and at the end, as compact JSON on a queue of its own, so a slow disk never holds up the audio; the last save is the finished track's. Earlier, pretty-printed sidecars read the same. |
 | `capture-result.json` | Final result: warnings, call-capture path, output-route events, and later the echo-removal report and derived tracks. |
 | `microphone.echo-cancelled.caf` | The microphone with the call's echo removed: 16 kHz mono Float32, written after Stop. |
 
@@ -132,8 +132,11 @@ recording still gets drift correction and echo removal.
 Every buffer arrives with the host time of its first frame. `CapturedAudioTrack.offsetSeconds`
 places a track's first sample relative to the session anchor.
 
-- **Anchors.** About once a second, `PCMTrackWriter` records `(frame, hostTime)` as a
-  `ClockAnchor`.
+- **Anchors.** About once a second, `PCMTrackWriter` takes `(frame, hostTime)` as a
+  `ClockAnchor`. The sidecar keeps every one for the first minute of each clock run (the start,
+  and after each resync), then one every ten seconds (`ClockAnchorSchedule`): a 4-hour track keeps
+  about 1,500 rather than 14,400, and the fit below measures the same drift from them. The
+  iPhone's journal keeps its anchors the same way.
 - **Gaps.** Each buffer is compared with the time predicted from the latest anchor, which is at
   most about a second old. Slow drift therefore never looks like a gap.
   - A real gap of more than 80 ms and up to 5 s is padded with silence, and the next anchor is

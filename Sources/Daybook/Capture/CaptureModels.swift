@@ -181,9 +181,10 @@ enum RecordingError: LocalizedError {
 }
 
 enum CaptureJSON {
+    /// Compact: a track's sidecar is rewritten every ten seconds while it records. Earlier, pretty-printed files read the same.
     static func encoder() -> JSONEncoder {
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.outputFormatting = [.sortedKeys]
         encoder.dateEncodingStrategy = .millisecondsSince1970
         return encoder
     }

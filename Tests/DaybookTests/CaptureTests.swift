@@ -356,11 +356,29 @@ final class PCMTrackWriterTests: XCTestCase {
             XCTAssertNil(outcome.error)
             XCTAssertEqual(track.frameCount, Int64(buffers * 800))
             let anchors = try XCTUnwrap(track.clockAnchors)
-            // About one anchor per second of host time.
-            XCTAssertTrue((115...132).contains(anchors.count), "\(anchors.count) anchors")
+            // About one anchor a second for the first minute, then one every ten seconds (`ClockAnchorSchedule`): with
+            // 0.1 s buffers a fast clock's anchors come every 11 buffers (1.1 s), a slow clock's every 10.
+            XCTAssertTrue((56...72).contains(anchors.count), "\(anchors.count) anchors")
             XCTAssertFalse(anchors.contains { $0.resync == true })
             XCTAssertEqual(track.clock.driftPPM, drift * 1e6, accuracy: 5)
         }
+    }
+
+    /// The sidecar is written off the audio queue every ten seconds, compact; the finished track's is written last.
+    func testTheSidecarIsCompactAndTheFinishedTracksIsTheLastWritten() async throws {
+        let directory = try temporaryDirectory()
+        let manifest = CaptureSessionManifest(id: UUID(), startedAt: Date(), hostTimeSeconds: 10, includeSystemAudio: false)
+        let writer = PCMTrackWriter(role: .microphone, directory: directory, manifest: manifest) { XCTFail($0.localizedDescription) }
+        for index in 0..<250 { writer.append(audio(frames: 800, rate: 8_000), hostTimeSeconds: 10 + Double(index) * 0.1) }
+        let outcome = await writer.finish()
+        let track = try XCTUnwrap(outcome.track)
+        XCTAssertNil(outcome.error)
+        let bytes = try Data(contentsOf: directory.appendingPathComponent("microphone.json"))
+        XCTAssertFalse(bytes.contains(UInt8(ascii: "\n")), "compact")
+        let saved = try CaptureJSON.decoder().decode(CapturedAudioTrack.self, from: bytes)
+        XCTAssertEqual(saved.frameCount, 200_000)
+        XCTAssertEqual(saved.clockAnchors, track.clockAnchors)
+        XCTAssertEqual(saved.clockAnchors?.count, 25)
     }
 
     func testAudioBufferCopyOwnsItsSamples() {
