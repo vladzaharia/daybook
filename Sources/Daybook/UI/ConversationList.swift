@@ -278,16 +278,16 @@ enum MacSearch {
         state.multiSelection = []
         state.selectedID = id
         if let caption = captionHits.first(where: { $0.meeting.id == id }) {
-            state.pageMode = .transcript
+            state.turnPage(to: .transcript)
             state.pageScrollTarget = caption.segment.id
             return
         }
         guard let id, let hit = hits.first(where: { $0.meetingID == id }) else { return }
         if hit.field == .transcript, let segment = hit.segmentID {
-            state.pageMode = .transcript
+            state.turnPage(to: .transcript)
             state.pageScrollTarget = segment
         } else {
-            state.pageMode = .summary
+            state.turnPage(to: .summary)
             state.pageScrollTarget = nil
             if hit.field == .notes { SummaryJump.window.show(SummaryJump.notes, in: id) }
         }
