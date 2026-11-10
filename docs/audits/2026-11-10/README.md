@@ -39,7 +39,7 @@ The previous audit left eight decisions to the owner; the owner delegated them t
 | xdev-settings-08 | Transcription language is a synced library setting shown on both apps under Settings › Models › Transcription; speaker settings and the Other languages model stay per device, on the Mac. |
 | MSCQ-09 | The unreachable SNR weighting and the stored-alignment writer were deleted; stored alignments from v0.2.2 are still read and fused. Per-source quality weighting, if it returns, comes from data that already syncs, behind a fusion version. |
 | MSCQ-25 | Closed. The iCloud account token is compared as bytes or a digest and never decoded, so secure coding on archiving is moot. |
-| hig-ios-14 | Add the Time Sensitive capability to `local.daybook` (owner action); the app already marks "Recording stopped" and the new "Recording paused" time sensitive and they are delivered as ordinary notices until the capability exists. |
+| hig-ios-14 | Add the Time Sensitive capability to `local.daybook` (owner action; the entitlement is in the branch); the app already marks "Recording stopped" and the new "Recording paused" time sensitive and they are delivered as ordinary notices until the capability exists. |
 
 ## Needs the owner
 
@@ -47,7 +47,7 @@ The previous audit left eight decisions to the owner; the owner delegated them t
 |---|---|
 | Hardware acceptance | Every capture, device, link, and multipoint change was verified against fakes, the Soundcore simulator, loopback links, and the iPhone simulators. The lane pages and docs/validation.md list the checks that need real AirPods, a Soundcore Work, two Macs and an iPhone, a lid close, an external disk, and a real iCloud account. |
 | `sharingType = .none` on screen shares | Floating Notes and the call prompt stay out of screen shares only if ScreenCaptureKit honours the window's sharing type; public reports say macOS 15+ ignores it. Check a full-screen share in Zoom, Meet, and Teams on 27.2 before relying on it (security F-06, platform AP-18). |
-| Time Sensitive notifications | Enable the capability on the App ID and add `com.apple.developer.usernotifications.time-sensitive` to the iPhone's entitlements. |
+| Time Sensitive notifications | Tick **Time Sensitive Notifications** on the `local.daybook` App ID (developer.apple.com › Identifiers; the App Store Connect API doesn't accept that capability type) and let Xcode regenerate the profiles. The iPhone's entitlements already claim `com.apple.developer.usernotifications.time-sensitive`, so a signed build fails until the capability is on. |
 | The App Sandbox for the Developer ID build | Still the planned release N+1 switch (docs/sandbox.md); the security review ranks it as the fix for any process on the Mac reading the whole library without a prompt. |
 | A link courier for the iPhone's audio | The network review's largest proposal sends a recording to the Mac over the encrypted local link at Stop, giving a second copy in seconds and one summary. It reverses docs/link.md's "audio never travels over the link", so it waits for the owner's sign-off. |
 | Compact originals, whole-conversation playback, a second recorder brand | The audio review's larger proposals (ALAC/Opus originals instead of 2.3 GB/h of Float32, mixed level-matched playback from one per-track analysis, a device abstraction a second brand can use) change storage commitments and are left as the roadmap. |
