@@ -18,6 +18,9 @@ struct NextStepsEntry: TimelineEntry {
     let date: Date
     /// Nil until a loaded library has been published.
     let snapshot: SharedNextSteps?
+    /// The snapshot is there but can't be read until the iPhone is unlocked ("Protect while iPhone is locked"): the
+    /// widget shows its heading and nothing else.
+    var locked = false
 
     static var preview: Self {
         let now = Date(), first = UUID(), second = UUID()
@@ -29,17 +32,28 @@ struct NextStepsEntry: TimelineEntry {
     }
 }
 
+extension NextStepsEntry {
+    init(date: Date, read: SharedWidgetCache.Read<SharedNextSteps>) {
+        switch read {
+        case .value(let snapshot): self.init(date: date, snapshot: snapshot)
+        case .missing: self.init(date: date, snapshot: nil)
+        case .locked: self.init(date: date, snapshot: nil, locked: true)
+        }
+    }
+}
+
 struct NextStepsTimeline: TimelineProvider {
     func placeholder(in context: Context) -> NextStepsEntry { .preview }
 
     func getSnapshot(in context: Context, completion: @escaping (NextStepsEntry) -> Void) {
-        completion(context.isPreview ? .preview : NextStepsEntry(date: .now, snapshot: SharedNextSteps.load()))
+        completion(context.isPreview ? .preview : NextStepsEntry(date: .now, read: SharedNextSteps.read()))
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<NextStepsEntry>) -> Void) {
-        let entry = NextStepsEntry(date: .now, snapshot: SharedNextSteps.load())
-        // The app reloads when the bounded projection changes, not when unrelated library content changes.
-        completion(Timeline(entries: [entry], policy: .never))
+        let entry = NextStepsEntry(date: .now, read: SharedNextSteps.read())
+        // The app reloads when the bounded projection changes, not when unrelated library content changes; one read
+        // while the iPhone was locked reads again in a while.
+        completion(Timeline(entries: [entry], policy: entry.locked ? .after(.now.addingTimeInterval(SharedWidgetCache.lockedRetry)) : .never))
     }
 }
 
@@ -77,7 +91,7 @@ private struct NextStepsWidgetView: View {
                     .foregroundStyle(PhoneStyle.Ink.secondary)
                     .lineLimit(2)
                     .privacySensitive()
-            } else {
+            } else if !entry.locked {
                 Text(emptyTitle).font(.headline).foregroundStyle(PhoneStyle.Ink.title)
                 Text(emptyMessage).font(.caption).foregroundStyle(PhoneStyle.Ink.secondary).lineLimit(3)
             }
@@ -95,7 +109,9 @@ private struct NextStepsWidgetView: View {
                 .foregroundStyle(PhoneStyle.Ink.title)
                 .lineLimit(1)
                 .padding(.bottom, 4)
-            if items.isEmpty {
+            if entry.locked {
+                Spacer(minLength: 0)
+            } else if items.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(emptyTitle).font(.subheadline.weight(.semibold))
                     Text(emptyMessage).font(.caption).foregroundStyle(PhoneStyle.Ink.secondary)

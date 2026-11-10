@@ -154,6 +154,14 @@ public enum SettingsWords {
         justNow || (isOn && access == .denied)
     }
 
+    // MARK: Protection while locked
+
+    /// The iPhone's Settings › Storage switch: the library's files can't be read while the iPhone is locked
+    /// (docs/iphone.md, "File protection").
+    public static let protectWhileLocked = "Protect while iPhone is locked"
+    /// Its one footer line: what it costs, and nothing of how.
+    public static let protectWhileLockedFooter = "Syncs and transcribes while unlocked."
+
     // MARK: Casing
 
     /// A sentence-case label as a title-case one, as the iPhone's Settings shows labels ("Use the cloud" → "Use the

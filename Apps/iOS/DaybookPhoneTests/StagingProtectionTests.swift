@@ -320,14 +320,19 @@ final class StagingProtectionTests: XCTestCase {
 final class PretendLock {
     private(set) var locked: Bool
     private var handlers: [@MainActor () -> Void] = []
+    private var lockHandlers: [@MainActor () -> Void] = []
 
     init(locked: Bool) { self.locked = locked }
 
     var protectedData: ProtectedData {
-        ProtectedData(isAvailable: { [unowned self] in !self.locked }, whenAvailable: { [unowned self] in self.handlers.append($0) })
+        ProtectedData(isAvailable: { [unowned self] in !self.locked }, whenAvailable: { [unowned self] in self.handlers.append($0) },
+                      whenUnavailable: { [unowned self] in self.lockHandlers.append($0) })
     }
 
-    func lock() { locked = true }
+    func lock() {
+        locked = true
+        for handler in lockHandlers { handler() }
+    }
 
     func unlock() {
         locked = false

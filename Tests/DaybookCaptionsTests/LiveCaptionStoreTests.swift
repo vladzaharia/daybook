@@ -126,6 +126,29 @@ final class LiveCaptionStoreTests: XCTestCase {
         XCTAssertEqual(LiveCaptionStore(libraryRoot: root).protection, .completeUntilFirstUserAuthentication, "the Mac's")
     }
 
+    /// Kept closer once filed (the iPhone's "Protect while iPhone is locked"): a recording's saves as it goes keep the
+    /// store's class, so a locked iPhone still writes them, and filing them, or an edit afterwards, writes the closer
+    /// one. The Mac's store files them with its own class.
+    func testBehaviorFiledCaptionsTakeTheFiledClassAndSavesAsItGoesKeepTheirs() async throws {
+        let store = LiveCaptionStore(libraryRoot: root, protection: .completeUnlessOpen)
+        XCTAssertEqual(store.filedProtection, .completeUnlessOpen, "the store's own until told")
+        store.filedProtection = .complete
+        let captions = LiveCaptions(meetingID: UUID(), captureID: UUID(), localeIdentifier: "en_US", segments: [line("Filed", 0)])
+        try await store.save(captions)
+        let url = store.url(for: captions.key)
+        func protection() throws -> FileProtectionType? {
+            try FileManager.default.attributesOfItem(atPath: url.path)[.protectionKey] as? FileProtectionType
+        }
+        XCTAssertEqual(try protection(), .completeUnlessOpen, "saved as it records")
+        let track = UUID()
+        try await store.update(captions.key) { $0.trackID = track; return true }
+        XCTAssertEqual(try protection(), .complete, "filed with its recording")
+        try await store.save(LiveCaptions(meetingID: captions.meetingID, captureID: captions.key.captureID, localeIdentifier: "en_US",
+                                          segments: [line("Filed", 0), line("Later", 2)]))
+        XCTAssertEqual(try protection(), .completeUnlessOpen)
+        XCTAssertEqual(LiveCaptionStore(libraryRoot: root).filedProtection, .completeUntilFirstUserAuthentication, "the Mac's")
+    }
+
     func testBehaviorASaveStillOnItsWayNeverPutsBackWhatALaterOneReplaced() async throws {
         let store = LiveCaptionStore(libraryRoot: root)
         let id = UUID(), began = Date().addingTimeInterval(-60)

@@ -12,7 +12,8 @@ import Synchronization
 /// Their data protection (`protection`): the iPhone writes them while it records, often locked, so they're kept as
 /// its recording in progress is, until unlock (`completeUnlessOpen`): a locked iPhone can write them, a new file each
 /// time, but can't read one back, so reading falls back to the copy this store wrote last, and filing them with their
-/// recording (`update`) works while it's locked. The Mac's are protected until its first unlock.
+/// recording (`update`) works while it's locked. The Mac's are protected until its first unlock. Once filed, they may
+/// be kept closer (`filedProtection`): the iPhone's "Protect while iPhone is locked" makes them `complete`.
 ///
 /// Writes run on one serial queue, off the caller's actor: a recording's saves never hold up the main
 /// thread, they land in the order they were made, and a snapshot older than one already written is left
@@ -27,6 +28,14 @@ public final class LiveCaptionStore: Sendable {
     public let retryDelays: [TimeInterval]
     /// The files' data protection class.
     public let protection: FileProtectionType
+    /// The class of captions once they're filed with their recording or edited afterwards (`update`): `protection`
+    /// unless the device keeps what it has filed closer. A recording's saves as it goes (`save`) always use
+    /// `protection`, since a locked iPhone writes them.
+    public var filedProtection: FileProtectionType {
+        get { filed.withLock { $0 } }
+        set { filed.withLock { $0 = newValue } }
+    }
+    private let filed: Mutex<FileProtectionType>
     private let queue = DispatchQueue(label: "local.daybook.live-captions", qos: .utility)
     /// What this store last wrote for each recording.
     private let written = Mutex<[LiveCaptionKey: Written]>([:])
@@ -45,6 +54,8 @@ public final class LiveCaptionStore: Sendable {
 
     private struct Unsaved {
         var captions: LiveCaptions
+        /// The class they were to be written with.
+        var protection: FileProtectionType
         /// Tries made since, and whether one is waiting.
         var retries = 0
         var waiting = false
@@ -54,6 +65,7 @@ public final class LiveCaptionStore: Sendable {
         directory = libraryRoot.appendingPathComponent("LiveCaptions", isDirectory: true)
         self.retryDelays = retryDelays
         self.protection = protection
+        filed = Mutex(protection)
     }
 
     /// Until unlock on the iPhone, which writes them while it records, locked; until the first unlock on the Mac.
@@ -219,8 +231,9 @@ public final class LiveCaptionStore: Sendable {
     }
 
     /// `replacing`: an edit of what's saved (filing, speakers labelled afterwards), which wins whatever
-    /// its time.
-    private func write(_ captions: LiveCaptions, replacing: Bool = false) throws {
+    /// its time, written with `filedProtection` unless `protection` says otherwise (a retry keeps its own).
+    private func write(_ captions: LiveCaptions, replacing: Bool = false, protection: FileProtectionType? = nil) throws {
+        let protection = protection ?? (replacing ? filedProtection : self.protection)
         var captions = captions
         captions.parts = nil
         let key = captions.key
@@ -234,6 +247,10 @@ public final class LiveCaptionStore: Sendable {
             let url = url(for: key)
             do {
                 try data.write(to: url, options: [.atomic, Self.writingOptions(protection)])
+            } catch where protection != self.protection {
+                // Kept closer once filed, but a locked device can't make such a file: as a recording's, until it's made
+                // closer again.
+                try data.write(to: url, options: [.atomic, Self.writingOptions(self.protection)])
             } catch {
                 // A volume without data protection (an external drive) keeps them as any other file.
                 try data.write(to: url, options: .atomic)
@@ -243,7 +260,7 @@ public final class LiveCaptionStore: Sendable {
             // The error's domain and code only: its description names the file.
             let code = error as NSError
             Self.log.error("Couldn’t save live captions for \(key.meetingID.uuidString, privacy: .public) (\(code.domain, privacy: .public) \(code.code, privacy: .public)): \(error.localizedDescription, privacy: .private)")
-            keepUnsaved(captions, replacing: replacing)
+            keepUnsaved(captions, replacing: replacing, protection: protection)
             throw error
         }
         let stamp = max(captions.updatedAt, last?.updatedAt ?? .distantPast)
@@ -256,12 +273,15 @@ public final class LiveCaptionStore: Sendable {
     }
 
     /// Keeps captions whose write failed (the newest of them, or an edit), and tries them again after the next of
-    /// `retryDelays`.
-    private func keepUnsaved(_ captions: LiveCaptions, replacing: Bool) {
+    /// `retryDelays`, with the class they were to have.
+    private func keepUnsaved(_ captions: LiveCaptions, replacing: Bool, protection: FileProtectionType) {
         let key = captions.key
         let delay = unsaved.withLock { table -> TimeInterval? in
-            var entry = table[key] ?? Unsaved(captions: captions)
-            if replacing || entry.captions.updatedAt <= captions.updatedAt { entry.captions = captions }
+            var entry = table[key] ?? Unsaved(captions: captions, protection: protection)
+            if replacing || entry.captions.updatedAt <= captions.updatedAt {
+                entry.captions = captions
+                entry.protection = protection
+            }
             var delay: TimeInterval?
             if !entry.waiting, entry.retries < retryDelays.count {
                 delay = retryDelays[entry.retries]
@@ -272,13 +292,13 @@ public final class LiveCaptionStore: Sendable {
         }
         guard let delay else { return }
         queue.asyncAfter(deadline: .now() + delay) { [self] in
-            let owed = unsaved.withLock { table -> LiveCaptions? in
+            let owed = unsaved.withLock { table -> Unsaved? in
                 table[key]?.waiting = false
                 table[key]?.retries += 1
-                return table[key]?.captions
+                return table[key]
             }
             // The newest the captions were meant to be: written over whatever is there.
-            if let owed { try? write(owed, replacing: true) }
+            if let owed { try? write(owed.captions, replacing: true, protection: owed.protection) }
         }
     }
 

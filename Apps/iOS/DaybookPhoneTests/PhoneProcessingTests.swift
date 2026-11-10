@@ -424,6 +424,66 @@ final class PhoneProcessingTests: XCTestCase {
         XCTAssertNil(rig.processor.pause)
     }
 
+    // MARK: Locked
+
+    /// Nothing starts while a pretend iPhone is locked (its recording is kept until unlock), and nothing fails: the work
+    /// waits, keeping its claim, and runs once it's unlocked.
+    func testBehaviorNothingStartsWhileLockedAndItRunsOnTheUnlock() async throws {
+        let rig = try await rig()
+        let meeting = try await record(into: rig.library)
+        rig.processor.conditions.protectedDataAvailable = false
+        rig.processor.pickUp()
+        XCTAssertNil(rig.processor.running)
+        XCTAssertEqual(rig.processor.pause, .locked)
+        XCTAssertEqual(rig.engine.transcribed, [])
+        XCTAssertNil(request(rig, meeting.id)?.outcome, "not failed")
+        XCTAssertTrue(request(rig, meeting.id)?.isClaimed(by: rig.library.controller.thisDevice, at: Date()) == true)
+
+        rig.processor.conditions.protectedDataAvailable = true
+        try await waitUntil("the job to finish") { outcome(rig, meeting.id) == .completed }
+        XCTAssertNil(rig.processor.pause)
+    }
+
+    /// Work under way when the iPhone locks goes on (its recording is already open), but if it fails while locked (a file
+    /// it couldn't open), it waits for the unlock instead of failing. With "Protect while iPhone is locked" it stops at
+    /// the lock, since what it writes can't be saved, and goes on once unlocked.
+    func testBehaviorWorkThatFailsOrStopsWhileLockedGoesOnOnceUnlocked() async throws {
+        let rig = try await rig()
+        let meeting = try await record(into: rig.library)
+        var unlocked = true
+        rig.processor.services.protectedDataAvailable = { unlocked }
+        rig.engine.hold(true)
+        rig.processor.pickUp()
+        try await waitUntil("transcribing") { rig.engine.isWaiting }
+        unlocked = false
+        rig.processor.conditions.protectedDataAvailable = false
+        XCTAssertNotNil(rig.processor.running, "it goes on while locked")
+        rig.engine.fail(with: CocoaError(.fileReadNoPermission))
+        rig.engine.hold(false)
+        try await waitUntil("paused for the unlock") { outcome(rig, meeting.id) == .paused(.locked) }
+        XCTAssertNil(request(rig, meeting.id)?.outcome, "never failed for the lock")
+        XCTAssertEqual(rig.processor.pause, .locked)
+
+        rig.engine.fail(with: nil)
+        unlocked = true
+        rig.processor.conditions.protectedDataAvailable = true
+        try await waitUntil("the job to finish") { outcome(rig, meeting.id) == .completed }
+
+        // Kept locked: a job under way stops at the lock.
+        let second = try await record(into: rig.library, title: "Hiring sync")
+        rig.processor.conditions.keepsLibraryLocked = true
+        rig.engine.hold(true)
+        rig.processor.pickUp()
+        try await waitUntil("transcribing") { rig.engine.isWaiting }
+        unlocked = false
+        rig.processor.conditions.protectedDataAvailable = false
+        try await waitUntil("stopped at the lock") { outcome(rig, second.id) == .paused(.locked) }
+        rig.engine.hold(false)
+        unlocked = true
+        rig.processor.conditions.protectedDataAvailable = true
+        try await waitUntil("the job to finish") { outcome(rig, second.id) == .completed }
+    }
+
     // MARK: In the background
 
     func testBehaviorTheContinuedTaskShowsProgressCarriesTheWorkAndPausesItWhenItExpires() async throws {
