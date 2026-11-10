@@ -88,90 +88,20 @@ struct ConversationToolbar: ToolbarContent {
 }
 
 /// The conversation's More menu: what DaybookKit's `ConversationActions` lists, in its order (share, add, reprocess,
-/// history, filing, the Trash), as the Mac's More menu lists it. What doesn't apply now is left out.
+/// history, filing, the Trash), as the Mac's More menu lists it, each carried out as from a row (`PhoneActions`).
+/// What doesn't apply now is left out.
 struct ConversationMoreMenu: View {
     let library: LibraryController
     let meeting: Meeting
     @Environment(ReadingSession.self) private var session
     @Environment(\.audioProvider) private var provider
     @Environment(\.summaryPlacement) private var placement
+    @Environment(\.undoManager) private var undoManager
 
     var body: some View {
-        ConversationActionMenuItems(ConversationMoreActions.groups(meeting), platform: .iPhone) { id in
-            ConversationMoreActions.perform(id, meeting: meeting, library: library, session: session, provider: provider,
-                                            placement: placement)
-        }
-    }
-}
-
-/// What this iPhone does for each of a conversation's actions (`ConversationActions`).
-@MainActor
-enum ConversationMoreActions {
-    /// The conversation's actions on this iPhone: Take Photo where there's a camera, Reprocess unless it's waiting.
-    static func groups(_ meeting: Meeting) -> [ConversationActionGroup] {
-        ConversationActions.actions(for: meeting, context: .init(platform: .iPhone, status: ProcessingStatus.phone(meeting),
-                                                                 canTakePhoto: CameraPicker.isAvailable))
-    }
-
-    static func perform(_ id: ConversationAction.ID, meeting: Meeting, library: LibraryController, session: ReadingSession,
-                        provider: any AudioProviding, placement: PhoneSummaryPlacement?) {
-        switch id {
-        case .copySummary:
-            LocalPasteboard.copy(MeetingExport.summaryMarkdown(meeting))
-            session.confirmation = .copied
-        case .shareMarkdown, .shareJSON, .shareAudio:
-            ConversationShare.share(id, meeting: meeting, session: session, provider: provider)
-        case .takePhoto: session.cameraFor = meeting.id
-        case .addPhotos: session.sheet = .importPhotos(meeting.id)
-        case .addRecordingFromFile: session.addRecording(to: meeting.id)
-        case .process(let mode):
-            if mode == .summaryOnly { library.summarize(meeting.id, placement: placement) }
-            else { library.requestProcessing(meeting.id, mode: mode) }
-        case .versionHistory: session.sheet = .history(meeting.id)
-        case .moveToFolder: session.sheet = .move([meeting.id])
-        case .tags: session.sheet = .tags([meeting.id])
-        case .moveTo(let placement): library.setPlacement([meeting.id], placement)
-        case .moveToTrash: session.confirmingTrash = [meeting.id]
-        case .share, .export, .exportMarkdown, .exportJSON, .addRecording, .reprocess:
-            break // Menus, or the Mac's own.
-        case .showFloatingNotes, .rename, .showInFinder:
-            break // The Mac's.
-        case .play, .adjustTiming, .showOriginalTranscript, .moveToNewConversation, .removeRecording:
-            break // A recording's, in Info › Audio.
-        }
-    }
-}
-
-/// Reprocess ▸, as the More menu has it, for Info and a row's menu: what can be asked for now, nothing while a request
-/// waits. Each item writes a request; the page then says it's waiting.
-struct ReprocessMenu: View {
-    let library: LibraryController
-    let meeting: Meeting
-    @Environment(\.summaryPlacement) private var placement
-    @Environment(ReadingSession.self) private var session
-    @Environment(\.audioProvider) private var provider
-
-    var body: some View {
-        let groups = ConversationMoreActions.groups(meeting).filter { $0.id == .reprocess }
-        ConversationActionMenuItems(groups, platform: .iPhone) { id in
-            ConversationMoreActions.perform(id, meeting: meeting, library: library, session: session, provider: provider, placement: placement)
-        }
-    }
-}
-
-/// Share ▸, as the More menu has it, for a row's menu: the conversation as Markdown, its full data, or its audio,
-/// through the share sheet.
-struct ExportMenu: View {
-    let meeting: Meeting
-    @Environment(ReadingSession.self) private var session
-    @Environment(\.audioProvider) private var provider
-
-    var body: some View {
-        let share = ConversationActionMenuItems.action(.share, in: ConversationMoreActions.groups(meeting)).map {
-            ConversationActionGroup(id: .share, actions: [$0])
-        }
-        ConversationActionMenuItems(share.map { [$0] } ?? [], platform: .iPhone) { id in
-            ConversationShare.share(id, meeting: meeting, session: session, provider: provider)
+        ConversationActionMenuItems(PhoneActions.groups(for: meeting), platform: .iPhone) { id in
+            PhoneActions.perform(id, on: [meeting.id], library: library, session: session, provider: provider,
+                                 placement: placement, undoManager: undoManager)
         }
     }
 }

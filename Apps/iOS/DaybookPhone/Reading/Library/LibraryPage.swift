@@ -681,6 +681,7 @@ struct RowMenu: View {
   let library: LibraryController
   let ids: [UUID]
   @Environment(ReadingSession.self) private var session
+  @Environment(\.audioProvider) private var provider
   @Environment(\.summaryPlacement) private var placement
   @Environment(\.undoManager) private var undoManager
 
@@ -702,19 +703,18 @@ struct RowMenu: View {
       Divider()
     }
     if !meetings.isEmpty {
-      ConversationActionMenuItems(
-        PhoneActions.groups(for: ids, library: library), platform: .iPhone,
-        perform: {
-          PhoneActions.perform(
-            $0, on: ids, library: library, session: session,
-            placement: placement, undoManager: undoManager)
-        },
-        custom: { PhoneActions.custom($0, ids: ids, library: library) })
+      ConversationActionMenuItems(PhoneActions.groups(for: ids, library: library), platform: .iPhone) {
+        PhoneActions.perform(
+          $0, on: ids, library: library, session: session, provider: provider,
+          placement: placement, undoManager: undoManager)
+      }
     }
   }
 }
 
-/// What this iPhone does for each of `ConversationActions`.
+/// What this iPhone does for each of `ConversationActions`, from a row's menu, the selection bar, and the
+/// conversation's More alike: the library's actions through DaybookUI's `ConversationActionPerformer`, as the Mac
+/// does them, and this iPhone's own here.
 @MainActor
 enum PhoneActions {
   /// The actions for one conversation, or a selection's.
@@ -723,61 +723,61 @@ enum PhoneActions {
     guard let only = selected.first, selected.count == 1 else {
       return ConversationActions.batch(ids, in: library.meetings, context: .init(platform: .iPhone))
     }
-    return ConversationActions.actions(
-      for: only,
+    return groups(for: only)
+  }
+
+  /// One conversation's actions on this iPhone: Take Photo where there's a camera, Reprocess unless it's waiting.
+  static func groups(for meeting: Meeting) -> [ConversationActionGroup] {
+    ConversationActions.actions(
+      for: meeting,
       context: .init(
-        platform: .iPhone, status: ProcessingStatus.phone(only),
+        platform: .iPhone, status: ProcessingStatus.phone(meeting),
         canTakePhoto: CameraPicker.isAvailable))
   }
 
+  /// Carries out `id` on the conversations `ids`.
   static func perform(
     _ id: ConversationAction.ID, on ids: [UUID], library: LibraryController,
-    session: ReadingSession,
+    session: ReadingSession, provider: any AudioProviding,
     placement: PhoneSummaryPlacement?, undoManager: UndoManager?
   ) {
-    let meetings = library.meetings.filter { ids.contains($0.id) }
-    guard let first = meetings.first else { return }
-    switch id {
-    case .copySummary: LocalPasteboard.copy(MeetingExport.summaryMarkdown(first))
-    case .takePhoto: session.cameraFor = first.id
-    case .addPhotos: session.sheet = .importPhotos(first.id)
-    case .process(let mode):
-      for meeting in meetings where mode != .summaryOnly || !meeting.unifiedTranscript.isEmpty {
+    let performer = ConversationActionPerformer(
+      library: library, undoManager: undoManager,
+      process: { conversation, mode in
+        // A summary goes where this iPhone's placement puts it; the rest is a request a Mac takes up.
         if mode == .summaryOnly {
-          library.summarize(meeting.id, placement: placement)
+          library.summarize(conversation, placement: placement)
         } else {
-          library.requestProcessing(meeting.id, mode: mode)
+          library.requestProcessing(conversation, mode: mode)
         }
+      },
+      show: { request in
+        switch request {
+        case .tags(let ids): session.sheet = .tags(ids)
+        case .versionHistory(let id): session.sheet = .history(id)
+        case .moveToFolder(let ids): session.sheet = .move(ids)
+        case .moveToTrash(let ids): session.confirmingTrash = ids
+        }
+      },
+      copy: { LocalPasteboard.copy($0) },
+      confirm: { session.confirmation = $0 })
+    performer.perform(id, on: ids) { meetings in
+      guard let first = meetings.first else { return }
+      switch id {
+      case .shareMarkdown, .shareJSON, .shareAudio:
+        ConversationShare.share(id, meeting: first, session: session, provider: provider)
+      case .takePhoto: session.cameraFor = first.id
+      case .addPhotos: session.sheet = .importPhotos(first.id)
+      case .addRecordingFromFile: session.addRecording(to: first.id)
+      case .share, .reprocess:
+        break  // Menus.
+      case .export, .exportMarkdown, .exportJSON, .addRecording, .showFloatingNotes, .rename, .showInFinder:
+        break  // The Mac's.
+      case .play, .adjustTiming, .showOriginalTranscript, .moveToNewConversation, .removeRecording:
+        break  // A recording's, in Info.
+      case .copySummary, .process, .versionHistory, .moveToFolder, .tags, .moveTo, .moveToTrash:
+        break  // The library's (`ConversationActionPerformer`).
       }
-    case .versionHistory: session.sheet = .history(first.id)
-    case .moveToFolder: session.sheet = .move(meetings.map(\.id))
-    case .tags: session.sheet = .tags(meetings.map(\.id))
-    case .moveTo(let placement):
-      library.setPlacement(meetings.map(\.id), placement, undoManager: undoManager)
-    case .moveToTrash: session.confirmingTrash = meetings.map(\.id)
-    case .share, .shareMarkdown, .shareJSON, .shareAudio, .reprocess, .addRecording,
-      .addRecordingFromFile:
-      break  // Menus this iPhone draws itself (`custom`).
-    case .export, .exportMarkdown, .exportJSON:
-      break  // The Mac's.
-    case .showFloatingNotes, .rename, .showInFinder:
-      break  // The Mac's.
-    case .play, .adjustTiming, .showOriginalTranscript, .moveToNewConversation, .removeRecording:
-      break  // A recording's, in Info.
-    }
-  }
-
-  /// Share and Reprocess, through the share sheet and the requests this iPhone writes; Add Recording isn't offered
-  /// from a row.
-  static func custom(_ action: ConversationAction, ids: [UUID], library: LibraryController)
-    -> AnyView?
-  {
-    guard ids.count == 1, let meeting = library.meeting(ids[0]) else { return nil }
-    switch action.id {
-    case .share: return AnyView(ExportMenu(meeting: meeting))
-    case .reprocess: return AnyView(ReprocessMenu(library: library, meeting: meeting))
-    case .addRecording: return AnyView(EmptyView())
-    default: return nil
     }
   }
 }
@@ -788,6 +788,7 @@ private struct SelectionBar: View {
   let library: LibraryController
   let ids: [UUID]
   @Environment(ReadingSession.self) private var session
+  @Environment(\.audioProvider) private var provider
   @Environment(\.summaryPlacement) private var placement
   @Environment(\.undoManager) private var undoManager
 
@@ -806,8 +807,8 @@ private struct SelectionBar: View {
             role: action.role == .destructive ? .destructive : nil
           ) {
             PhoneActions.perform(
-              action.id, on: ids, library: library, session: session, placement: placement,
-              undoManager: undoManager)
+              action.id, on: ids, library: library, session: session, provider: provider,
+              placement: placement, undoManager: undoManager)
             // Done the moment it's chosen (a sheet, or the Trash's question, ends Select itself).
             if Self.endsSelection(action.id) {
               session.isSelecting = false
