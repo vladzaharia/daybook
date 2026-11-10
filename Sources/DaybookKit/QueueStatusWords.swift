@@ -84,7 +84,6 @@ public enum QueueStatusWords {
         if queue.cloudModel != nil { return ProcessingWords.verb(.summarizing) + waiting }
         if let stage = queue.running { return ProcessingWords.verb(stage) + waiting }
         if let models = queue.models, case .downloading = models { return ProcessingWords.modelDownloadLine(models) + waiting }
-        if let download = queue.download { return "Downloading \(download.name) · \(ProcessingWords.percentText(download.fraction))" }
         return nil
     }
 }

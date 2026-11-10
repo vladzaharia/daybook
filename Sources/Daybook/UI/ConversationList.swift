@@ -168,9 +168,6 @@ enum MacListSubtitle {
             }
         }
         queue.models = state.modelDownloadState
-        if queue.models == nil, let id = state.downloadingID {
-            queue.download = .init(name: state.modelCatalog.name(for: id), fraction: state.downloadProgress.fraction)
-        }
         return queue
     }
 }

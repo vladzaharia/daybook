@@ -90,7 +90,9 @@ final class QueueStatusWordsTests: XCTestCase {
         XCTAssertEqual(subtitle(Queue(running: .summarizing, countdown: now.addingTimeInterval(7))),
                        ConversationRowStatus(kind: .waiting, text: nil, countdownUntil: now.addingTimeInterval(7)).text(at: now),
                        "the row's words for the same moment")
-        XCTAssertEqual(subtitle(Queue(waiting: 1, download: .init(name: "Parakeet Ultra", fraction: 0.4))), "Downloading Parakeet Ultra · 40%")
+        XCTAssertEqual(subtitle(Queue(waiting: 1, models: .downloading(done: 400, total: 1_000))), "Downloading models · 40% · 1 waiting",
+                       "one phrase over the whole set, as every surface says it")
+        XCTAssertNil(subtitle(Queue(models: .waitingForWiFi(bytes: 1_000))), "waiting for Wi‑Fi isn't work happening")
         XCTAssertNil(subtitle(Queue(waiting: 3)), "nothing works: nothing to say")
         XCTAssertNil(subtitle(Queue(awaitingModels: 1)))
         XCTAssertNil(subtitle(Queue()))
