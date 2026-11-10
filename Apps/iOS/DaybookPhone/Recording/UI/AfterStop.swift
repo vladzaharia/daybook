@@ -198,8 +198,9 @@ struct PhoneAfterStop: View {
   guard let meeting else { return [] }
   let context = PhoneRowStatus.context(
    model: model, library: model.library.controller, player: reading.player)
-  let row = PhoneRowStatus.make(meeting, context: context, now: Date())
-  return RecordingStatusWords.processingChip(row).map { [$0] } ?? []
+  let now = Date()
+  let row = PhoneRowStatus.make(meeting, context: context, now: now)
+  return RecordingStatusWords.processingChip(row, now: now).map { [$0] } ?? []
  }
 
  private func actions(_ outcome: AfterStop.Outcome, more: RecordMore) -> RecorderAfterStopActions {

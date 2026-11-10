@@ -150,7 +150,7 @@ struct PassageRow: View {
                     .frame(width: 8)
                     .accessibilityHidden(true)
                     #if os(macOS)
-                    .help(bookmarks.map { $0.text.isEmpty ? "Bookmark" : $0.text }.joined(separator: "\n"))
+                    .help(bookmarks.map { $0.text.isEmpty ? BookmarkLabel.untitled : $0.text }.joined(separator: "\n"))
                     #endif
             }
             // A turn's first passage has its time above it; a bookmark there shows the glyph alone. Others show their

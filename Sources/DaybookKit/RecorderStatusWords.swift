@@ -49,8 +49,7 @@ public struct StatusLineWords: Equatable, Identifiable, Sendable {
     /// The words at a moment: a countdown's seconds move with them ("Summarizing in 11 s · 1 waiting").
     public func text(at now: Date) -> String {
         guard let until = countdownUntil else { return text }
-        let seconds = max(1, Int(until.timeIntervalSince(now).rounded(.up)))
-        return text.replacingOccurrences(of: #"in \d+ s"#, with: "in \(seconds) s", options: .regularExpression)
+        return SummaryPlacementWords.ticking(text, until: until, at: now)
     }
 }
 

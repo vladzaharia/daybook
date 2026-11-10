@@ -56,14 +56,18 @@ final class MenuBarStatusTests: XCTestCase {
         let work = MenuBarStatus.Work(id: id, title: "Roadmap", stage: .summarizing, fraction: nil, countdown: now.addingTimeInterval(12),
                                       choices: [.useCloud, .startNow])
         let line = MenuBarStatus.workLine(work, now: now)
-        XCTAssertEqual(line.title, "Summarizing “Roadmap” in 12 s")
-        XCTAssertEqual(line.choices.map(\.title), ["Use the Cloud", "Start Now"])
+        XCTAssertEqual(line.title, SummaryPlacementWords.countdown(of: "“Roadmap”", seconds: 12))
+        XCTAssertEqual(line.choices.map(\.title), [SummaryPlacementWords.title(.useCloud), SummaryPlacementWords.title(.startNow)])
         XCTAssertEqual(line.choices.first?.action, .placement(.useCloud, id))
         var cloud = work
         cloud.countdown = nil
         cloud.choices = []
         cloud.cloudModel = "Claude Sonnet 5.5"
-        XCTAssertEqual(MenuBarStatus.workLine(cloud, now: now).title, "Summarizing “Roadmap” with Claude Sonnet 5.5")
+        XCTAssertEqual(MenuBarStatus.workLine(cloud, now: now).title, SummaryPlacementWords.inCloud("Claude Sonnet 5.5", of: "“Roadmap”"))
+        var personal = work
+        personal.title = nil
+        XCTAssertEqual(MenuBarStatus.workLine(personal, now: now).title, SummaryPlacementWords.countdown(of: "a personal conversation", seconds: 12),
+                       "A personal conversation is never named")
     }
 
     func testBehaviorARecorderSaysWhatsWorthSayingInItsOwnWords() {

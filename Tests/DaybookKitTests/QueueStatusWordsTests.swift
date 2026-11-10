@@ -32,10 +32,13 @@ final class QueueStatusWordsTests: XCTestCase {
 
     func testBehaviorASummarysCountdownAndTheCloud() {
         let countdown = line(Queue(running: .summarizing, countdown: now.addingTimeInterval(12), waiting: 2))
-        XCTAssertEqual(countdown?.text, "Summarizing in 12 s · 2 waiting")
-        XCTAssertEqual(countdown?.text(at: now.addingTimeInterval(3)), "Summarizing in 9 s · 2 waiting")
+        XCTAssertEqual(countdown?.text, SummaryPlacementWords.countdown(seconds: 12) + " · 2 waiting")
+        XCTAssertEqual(countdown?.shortText, SummaryPlacementWords.countdown(seconds: 12))
+        XCTAssertEqual(countdown?.text(at: now.addingTimeInterval(3)), SummaryPlacementWords.countdown(seconds: 9) + " · 2 waiting")
         XCTAssertEqual(countdown?.tone, .calm)
-        XCTAssertEqual(line(Queue(running: .summarizing, cloudModel: "Claude Sonnet 5.5"))?.text, "Summarizing with Claude Sonnet 5.5")
+        let cloud = line(Queue(running: .summarizing, cloudModel: "Claude Sonnet 5.5"))
+        XCTAssertEqual(cloud?.text, SummaryPlacementWords.inCloud("Claude Sonnet 5.5"))
+        XCTAssertEqual(cloud?.shortText, "Summarizing…")
     }
 
     func testBehaviorAPausedQueueSaysWhenItGoesOn() {
@@ -85,8 +88,8 @@ final class QueueStatusWordsTests: XCTestCase {
         XCTAssertEqual(subtitle(Queue(running: .identifyingSpeakers, fraction: 0.63)), "Identifying speakers")
         XCTAssertEqual(subtitle(Queue(running: .summarizing, cloudModel: "Claude Sonnet 5.5", waiting: 2)), "Summarizing · 2 waiting")
         let countdown = Queue(running: .summarizing, countdown: now.addingTimeInterval(12), waiting: 1)
-        XCTAssertEqual(subtitle(countdown), "Summarizing in 12 s · 1 waiting")
-        XCTAssertEqual(subtitle(countdown, at: 3.5), "Summarizing in 9 s · 1 waiting", "rounded up, as the row says it")
+        XCTAssertEqual(subtitle(countdown), SummaryPlacementWords.countdown(seconds: 12) + " · 1 waiting")
+        XCTAssertEqual(subtitle(countdown, at: 3.5), SummaryPlacementWords.countdown(seconds: 9) + " · 1 waiting", "rounded up, as the row says it")
         XCTAssertEqual(subtitle(Queue(running: .summarizing, countdown: now.addingTimeInterval(7))),
                        ConversationRowStatus(kind: .waiting, text: nil, countdownUntil: now.addingTimeInterval(7)).text(at: now),
                        "the row's words for the same moment")

@@ -43,10 +43,12 @@ public enum QueueStatusWords {
         }
         let waiting = queue.waiting > 0 ? " · \(queue.waiting) waiting" : ""
         if let until = queue.countdown {
-            let seconds = max(1, Int(until.timeIntervalSince(now).rounded(.up)))
-            return line("Summarizing in \(seconds) s\(waiting)", .calm, short: "Summarizing in \(seconds) s", countdown: until)
+            let countdown = SummaryPlacementWords.countdown(until: until, at: now)
+            return line(countdown + waiting, .calm, short: countdown, countdown: until)
         }
-        if let model = queue.cloudModel { return line("Summarizing with \(model)\(waiting)", .working, short: "Summarizing…") }
+        if let model = queue.cloudModel {
+            return line(SummaryPlacementWords.inCloud(model) + waiting, .working, short: ProcessingWords.progressLine(.summarizing, fraction: nil))
+        }
         if let stage = queue.running {
             let progress = ProcessingWords.progressLine(stage, fraction: queue.fraction)
             return line(progress + waiting, .working, progress: queue.fraction, short: waiting.isEmpty ? nil : progress)
@@ -78,9 +80,7 @@ public enum QueueStatusWords {
     /// downloads: a subtitle speaks only while work is happening.
     public static func subtitle(_ queue: Queue, now: Date = Date()) -> String? {
         let waiting = queue.waiting > 0 ? " · \(queue.waiting) waiting" : ""
-        if let until = queue.countdown {
-            return "Summarizing in \(max(1, Int(until.timeIntervalSince(now).rounded(.up)))) s" + waiting
-        }
+        if let until = queue.countdown { return SummaryPlacementWords.countdown(until: until, at: now) + waiting }
         if queue.cloudModel != nil { return ProcessingWords.verb(.summarizing) + waiting }
         if let stage = queue.running { return ProcessingWords.verb(stage) + waiting }
         if let models = queue.models, case .downloading = models { return ProcessingWords.modelDownloadLine(models) + waiting }
