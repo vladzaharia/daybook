@@ -30,7 +30,7 @@ not Daybook's.
 
 - **W1-A, Personal stays on this device.** Under Always, a Personal conversation counts down as Offer First does
   (`SummaryPlacementPlanner.isPersonal`, asked for each conversation through `SummaryPlacements.isPersonal`), and it
-  gets no cloud Upgrade. The iPhone's Recorder widget names only conversations `ConversationIndex.isShown` allows and
+  gets no cloud Upgrade. The iPhone's Recorder widget names only conversations `SpotlightPlan.isShown` allows and
   drops one when it's made Personal. The Live Activity carries no caption while protected data is unavailable and
   titles a Personal conversation "Recording" with no name line. Ink Copy Text is local-only; the Cloud footer names
   the vocabulary. Verified with SummaryPlacementTests (38), UpgradeTests (20), SummaryPlacementProcessingTests (24),
@@ -231,6 +231,24 @@ not Daybook's.
   a Mac sighting. PhoneWelcomeTests, PhoneModelsTests, ReadingTests, SettingsWordsTests,
   ConversationStatusPresentationTests, WelcomeWordsTests, and 18 Pro screenshots of Welcome and the needs-Mac page (a
   capable phone simulated with `--demo-iphone-memory 12`).
+- **W3-P4, the last features drawn twice.** Lifted into the libraries: DaybookCore's `AudioLevelMeter` and
+  `HearingCheck` (300 ms smoothing, a 1 s peak hold, the rolling not-hearing rule, now the iPhone's too) and
+  `PlainSentenceError`; DaybookKit's `ProblemWords(title:fallback:error:)`, `SpotlightPlan` (what to index, remove, and
+  when to start over; each app keeps its `ConversationEntity`), `VersionHistoryList` and `VersionHistoryWords`, and
+  the Use Calendar words; DaybookUI's `VersionHistoryScreen` (a split view on the Mac, a push list on the iPhone; the
+  iPhone's restore confirmation is now the Mac's alert, Restore dims rather than hides while locked, and the Mac says
+  "Restored"), `CalendarSettingsRow` (the "Daybook can't read your calendars." problem line on both apps), and
+  `DeviceGlyph` (the tile, teal while linked). Deleted the Mac's `StatusBox`, `MarginRow`, `FriendlyError`, and
+  `MarginTime`. The Mac's New Note phrase matches the iPhone's ("Start a note in Daybook"), and `ShortcutPhrasesTests`
+  fails on a shared action phrased differently. `SharedNameTests` now fails on a new type both apps declare (24 listed,
+  mostly App Intents types each app must declare; docs/architecture.md and docs/interface.md say what each keeps).
+  AudioLevelMeter, CaptureResilience, FloatingNotesMeters, VersionHistoryList, VersionHistoryRestore, SharedName,
+  SettingsWords, CalendarCall, DeviceGlyph, SpotlightPlan, ShortcutPhrases, SystemEntryPoints, SharedProblemWords,
+  ProblemWords, SyncWarningWords, ICloudSyncShown, ConversationPageRules, and Pairing tests; the iPhone's
+  PhoneRecorder, RecordingSurfaces, CascadingRecording, RecordingInterruptions, Reading, AppDestination,
+  PhoneCalendar, SettingsWords, StatusSheetModel, DeviceOwnership, Shell, and PlainWords suites (236 across the
+  items); Mac snapshots of Version History and the conversation page before and after (identical), Settings ›
+  Recording, Device Details, and the iPhone's Version History. Not checked against a real Spotlight index.
 - **W3-S, the transcription language is a library setting (xdev-settings-08).** The language is a synced library
   choice (`LibraryMetadata.choices`, merged like folders, Automatic stored as a choice with nothing selected, unknown
   shapes kept and written back), shown as Settings › Models › Transcription › Language on both apps (DaybookUI's
