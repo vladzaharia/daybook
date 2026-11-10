@@ -71,7 +71,7 @@ public struct RecorderProblem {
 
 /// What the recorder shows after Stop.
 public struct RecorderAfterStopState {
-    /// "✓ SAVED · 18 min", drawn in the surface; nil when the host draws it.
+    /// "✓ Saved · 18 min", drawn in the surface; nil when the host draws it.
     public var phase: RecorderPhase?
     public var title: String
     public var rename: ((String) -> Void)?
@@ -244,7 +244,7 @@ public struct RecorderAfterStop: View {
             .disabled(!state.canOpen)
             // ⌘O is the panel's own, whatever it shows; here it's only said.
             .help(state.keyboardShortcuts ? "Open in Daybook (⌘O)" : "")
-            .accessibilityShowsLargeContentViewer { Label(state.openTitle, systemImage: "arrow.up.forward") }
+            .accessibilityShowsLargeContentViewer { Label(state.openTitle, systemImage: OpenControlLabel.symbol) }
         } trailing: {
             Button(action: actions.record) {
                 Group {
@@ -274,10 +274,14 @@ public struct RecorderAfterStop: View {
     }
 }
 
-/// Open: the link teal and the arrow out of the recorder. Under touch the words wrap rather than cut.
+/// Open: the link teal and a forward chevron. It goes to the conversation in Daybook, so not the arrow out of the
+/// app (`arrow.up.forward`), which says another app or the web. Under touch the words wrap rather than cut.
 public struct OpenControlLabel: View {
     private let title: String
     private let size: CGFloat?
+
+    /// The glyph after the words: navigation within the app.
+    public static let symbol = "chevron.forward"
 
     public init(title: String, size: CGFloat? = nil) {
         self.title = title
@@ -291,7 +295,7 @@ public struct OpenControlLabel: View {
             } else {
                 Text(title).lineLimit(1)
             }
-            Image(systemName: "arrow.up.forward").font(size.map { .system(size: $0 * 0.75, weight: .semibold) } ?? .subheadline.weight(.semibold))
+            Image(systemName: Self.symbol).font(size.map { .system(size: $0 * 0.75, weight: .semibold) } ?? .subheadline.weight(.semibold))
         }
         .font(size.map { .system(size: $0, weight: .semibold) } ?? .headline)
         .foregroundStyle(DaybookPalette.Ink.link)

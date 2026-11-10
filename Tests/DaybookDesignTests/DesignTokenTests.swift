@@ -344,6 +344,22 @@ final class DesignTokenTests: XCTestCase {
         XCTAssertEqual(RollingLevelMeter.Metrics.for(.touch), .phone)
     }
 
+    /// The recorder's labels are sentence case, semibold, on both apps: the words are drawn as they're written, never
+    /// turned into tracked capitals, so "Recording" sets narrower than "RECORDING" would.
+    @MainActor
+    func testRecorderLabelsKeepTheCaseOfTheirWords() {
+        func width(_ view: some View) -> CGFloat { NSHostingView(rootView: view.fixedSize()).fittingSize.width }
+        for metrics in [RecordingPhaseLabel.Metrics.panel, .phone] {
+            XCTAssertLessThan(width(RecordingPhaseLabel(.recording, title: "Recording", metrics: metrics)),
+                              width(RecordingPhaseLabel(.recording, title: "RECORDING", metrics: metrics)) - 4)
+            XCTAssertLessThan(width(RecordingPhaseLabel(.saved, title: "Saved", detail: "18 min", metrics: metrics)),
+                              width(RecordingPhaseLabel(.saved, title: "SAVED", detail: "18 min", metrics: metrics)) - 2)
+        }
+        let captions = LiveCaptionStrip(lines: [], status: nil, style: .panel)
+        let capitals = LiveCaptionStrip(lines: [], status: nil, style: .panel, label: "LIVE CAPTIONS · TENTATIVE")
+        XCTAssertLessThan(width(captions), width(capitals) - 10, "\"Live captions · tentative\", as written")
+    }
+
     // MARK: Progress, boxes
 
     func testProgressStepsFromADotToTheTrack() {

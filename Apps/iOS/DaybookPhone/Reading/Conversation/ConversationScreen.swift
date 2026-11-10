@@ -98,9 +98,19 @@ struct ConversationMoreMenu: View {
 
     var body: some View {
         ConversationActionMenuItems(ConversationMoreActions.groups(meeting), platform: .iPhone) { id in
-            ConversationMoreActions.perform(id, meeting: meeting, library: library, session: session, provider: provider,
-                                            placement: placement)
+            perform(id)
+        } custom: { action in
+            // Write by Hand under Take Photo, on a conversation being read; never on the open Duo's preview of one.
+            guard action.id == .addPhotos, session.reading else { return nil }
+            return AnyView(Group {
+                Button { session.writeByHand(meeting.id) } label: { Label(InkWords.writeByHand, systemImage: InkWords.writeByHandSymbol) }
+                Button { perform(action.id) } label: { Label(action.title, systemImage: action.symbol) }
+            })
         }
+    }
+
+    private func perform(_ id: ConversationAction.ID) {
+        ConversationMoreActions.perform(id, meeting: meeting, library: library, session: session, provider: provider, placement: placement)
     }
 }
 

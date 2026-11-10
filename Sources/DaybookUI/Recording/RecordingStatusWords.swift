@@ -3,7 +3,7 @@ import DaybookKit
 import Foundation
 
 // What a recorder says about the recording and everything recording along with it, the same on both apps
-// (docs/interface.md, "Floating Notes"): the phase ("● RECORDING · MacBook Pro Microphone", "✓ SAVED · 18 min"),
+// (docs/interface.md, "Floating Notes"): the phase ("● Recording · MacBook Pro Microphone", "✓ Saved · 18 min"),
 // a chip for each recorder and each other Daybook ("Soundcore · 80%" with the red dot, "Not recording" in
 // warning ink), and a meter for each source. Plain values from plain inputs, so tests read exactly what each
 // state says and the views only draw it. Floating Notes builds the inputs from AppState, the iPhone's recorder

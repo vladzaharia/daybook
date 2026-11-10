@@ -20,7 +20,7 @@ struct PhoneNotes: View {
                             set: { library.editNotes(meeting.id, text: $0) })
         YourNotes(meeting: meeting, library: library, canPlay: !meeting.presentTracks.isEmpty, play: play, passages: passages,
                   bookmarksID: SummaryBlockID.bookmarks) {
-            WritableNotes(session: inkSession, keepsRoomForTools: true) {
+            WritableNotes(session: inkSession) {
                 MarginNotesEditor(
                     text: notes,
                     times: times,
@@ -34,6 +34,12 @@ struct PhoneNotes: View {
                     ink: .conversation(meeting.id, library: library, session: inkSession))
             }
             .padding(.top, PhoneStyle.Space.s2)
+        }
+        // Write by Hand from the More menu: a finger writes on these notes.
+        .onChange(of: session.writeByHandFor, initial: true) { _, id in
+            guard id == meeting.id else { return }
+            session.writeByHandFor = nil
+            inkSession.isWriting = true
         }
     }
 }

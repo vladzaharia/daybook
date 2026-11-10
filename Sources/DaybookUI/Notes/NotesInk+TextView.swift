@@ -136,8 +136,9 @@ extension MarginTextView: UIScribbleInteractionDelegate, UIPencilInteractionDele
         wasShowingInkTools = session.showsTools
         session.refreshUndo()
         for view in Array(inkViews.values) + [tailView].compactMap({ $0 }) {
-            view.apply(tool: session.tool.pencilTool, fingerDraws: session.isWriting, interactive: isEditable)
+            view.apply(tool: session.tool.pencilTool, fingerDraws: session.isWriting, interactive: isEditable, live: session.showsTools)
         }
+        updateInkKeyboardBar()
         setNeedsLayout()
     }
 
@@ -280,7 +281,9 @@ extension MarginTextView: UIScribbleInteractionDelegate, UIPencilInteractionDele
         view.changed = { [weak self] view in self?.blockChanged(view) }
         view.addInteraction(UIContextMenuInteraction(delegate: self))
         addSubview(view)
-        if let session = ink?.session { view.apply(tool: session.tool.pencilTool, fingerDraws: session.isWriting, interactive: isEditable) }
+        if let session = ink?.session {
+            view.apply(tool: session.tool.pencilTool, fingerDraws: session.isWriting, interactive: isEditable, live: session.showsTools)
+        }
         return view
     }
 

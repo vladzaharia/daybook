@@ -9,9 +9,11 @@ import UIKit
 /// after Stop. It's the recorder Floating Notes shows on the Mac (DaybookUI's `RecorderSurface`), filled from the
 /// app model, with what only the iPhone has around it: the camera, the live timeline, and table mode's dimming.
 ///
-/// - **Pocket** (closed, and every other iPhone held upright): your notes on top, and under them the recorder in one
-///   sheet of four sizes (mini, collapsed, expanded, full), with Bookmark and Stop at the thumb at every size.
-/// - **Notebook** (open): notes on the left page; the recorder on the right. Split at the crease, never across it.
+/// - **Pocket** (closed, and every other iPhone held upright): the title and byline, your notes, and the newest
+///   caption on top, and under them the recorder in one sheet of four sizes (mini, collapsed, expanded, full), with
+///   Bookmark and Stop at the thumb at every size and the camera and Write by Hand from collapsed up.
+/// - **Notebook** (open): the title and notes on the left page; the whole recorder on the right. Split at the crease,
+///   never across it.
 /// - **Table** (partly open, standing): glanceable from across a table, and dimmed between touches.
 ///
 /// Folding mid-recording only rearranges the same pieces: nothing about the recording restarts.
@@ -29,6 +31,8 @@ struct RecorderScreen: View {
     /// How far the person has expanded the recorder's sheet; nil rests it at the posture's size. Lives here, so
     /// it survives folding and turning (`style` changes), and a new recording starts at rest.
     @State private var sheetExpansion: RecorderSheetSize?
+    /// How the notes are being written: shared by the notes and Write by Hand in the sheet, and kept through folding.
+    @State private var inkSession = InkSession()
 
     var body: some View {
         Group {
@@ -108,16 +112,26 @@ struct RecorderScreen: View {
     }
 
     private func slots(writing: Binding<Bool>) -> RecorderSlots {
+        let session = inkSession
+        // Write by Hand between Bookmark and Stop: a finger writes on the notes, and the tools dock under them.
+        let write: (RecorderControlMetrics) -> AnyView = { AnyView(WriteByHandControl(session: session, metrics: $0)) }
+        // `--write-notes`: the notes take the caret, so the keyboard and its bar are up.
+        let focus = model.options.writeNotes
         switch style {
         case .pocket:
             // In the hand the notes come first: the captions' strip stops growing at the largest standard size, and
-            // at the accessibility sizes keeps only its newest line.
-            return RecorderSlots(notes: AnyView(RecordingNotes().padding(.horizontal, DaybookSpacing.s4)),
+            // at the accessibility sizes keeps only its newest line. Under the whole recorder, the newest line alone
+            // sits on the sheet, inset like the title over the notes.
+            return RecorderSlots(notes: AnyView(RecordingNotes(session: session, focusOnAppear: focus).padding(.horizontal, DaybookSpacing.s4)),
                                  captions: AnyView(PhoneCaptions(style: typeSize.isAccessibilitySize ? .stripNewest : .strip)
                                     .padding(.horizontal, DaybookSpacing.s2)
                                     .dynamicTypeSize(...DynamicTypeSize.xxxLarge)),
-                                 accessory: AnyView(CameraControl()), details: AnyView(LiveTimelineBar()), notice: AnyView(RecordingNotice()),
-                                 log: AnyView(ScrollView { BookmarkLog() }.scrollBounceBehavior(.basedOnSize)),
+                                 captionLine: AnyView(PhoneCaptionLine()
+                                    .padding(.horizontal, DaybookSpacing.s5 + DaybookSpacing.s2)
+                                    .padding(.vertical, DaybookSpacing.s2)
+                                    .dynamicTypeSize(...DynamicTypeSize.xxxLarge)),
+                                 accessory: AnyView(CameraControl.phaseRow), details: AnyView(LiveTimelineBar()), notice: AnyView(RecordingNotice()),
+                                 log: AnyView(ScrollView { BookmarkLog() }.scrollBounceBehavior(.basedOnSize)), write: write,
                                  menu: { AnyView(PhoneChipMenu(chip: $0)) })
         case .notebook:
             // Captions take the space when they're on: they're the live sign that the audio is being heard, while
@@ -127,11 +141,12 @@ struct RecorderScreen: View {
                 ? AnyView(PhoneCaptions(style: typeSize.isAccessibilitySize ? .stripNewest : .page)
                     .dynamicTypeSize(...DynamicTypeSize.xxxLarge))
                 : AnyView(ScrollView { BookmarkLog().padding(.top, DaybookSpacing.s1) }.scrollBounceBehavior(.basedOnSize))
-            return RecorderSlots(notes: AnyView(RecordingNotes()), captions: captions, accessory: AnyView(CameraControl()),
-                                 details: AnyView(LiveTimelineBar()), notice: AnyView(RecordingNotice()),
-                                 menu: { AnyView(PhoneChipMenu(chip: $0)) })
+            return RecorderSlots(notes: AnyView(RecordingNotes(session: session, focusOnAppear: focus)), captions: captions,
+                                 accessory: AnyView(CameraControl.phaseRow), details: AnyView(LiveTimelineBar()), notice: AnyView(RecordingNotice()),
+                                 write: write, menu: { AnyView(PhoneChipMenu(chip: $0)) })
         case .table:
-            return RecorderSlots(notes: AnyView(RecordingNotes(focusOnAppear: writing.wrappedValue)), captions: AnyView(PhoneCaptions(style: .stage)),
+            return RecorderSlots(notes: AnyView(RecordingNotes(session: session, focusOnAppear: writing.wrappedValue)),
+                                 captions: AnyView(PhoneCaptions(style: .stage)),
                                  tools: AnyView(TableTools(writing: writing)), menu: { AnyView(PhoneChipMenu(chip: $0)) })
         }
     }
