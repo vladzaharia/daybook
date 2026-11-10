@@ -714,10 +714,11 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         revisions.append(MeetingRevision(kind: .bookmark(bookmark.id), oldValue: MeetingRevision.bookmarkRemoved, newValue: revision.oldValue))
         updatedAt = Date()
     }
+    /// A bookmark's time on the timeline: one made on a recording follows that recording's clock (`clock(of:)`); nil
+    /// while the recording isn't placed.
     public func alignedTime(for highlight: Highlight) -> TimeInterval? {
         guard let trackID = highlight.trackID else { return highlight.time }
-        guard let alignment = alignmentReports.first(where: { $0.trackID == trackID }), alignment.method != .unaligned else { return nil }
-        return highlight.time * alignment.rate + alignment.offset
+        return clock(of: trackID)?.timeline(highlight.time)
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {

@@ -186,17 +186,9 @@ public struct SourceSuggestion: Codable, Equatable, Identifiable, Sendable {
 }
 
 extension Meeting {
-    /// Where a recording sits on the timeline now: its stored placement, else the latest fused
-    /// report, else its captured offset, else zero for the conversation's first recording.
+    /// Where a recording sits on the timeline now (`clock(of:)`).
     public func timelinePlacement(of trackID: UUID) -> (offset: TimeInterval, rate: Double)? {
-        guard let track = tracks.first(where: { $0.id == trackID }) else { return nil }
-        if let alignment = track.alignment, alignment.isPlaced, let offset = alignment.offset { return (offset, alignment.rate) }
-        if let original = track.derivedFrom, track.alignment == nil, let placed = timelinePlacement(of: original) { return placed }
-        if let report = alignmentReports.first(where: { $0.trackID == trackID }), report.method != .unaligned,
-           report.offset.isFinite, report.rate.isFinite, report.rate > 0 { return (report.offset, report.rate) }
-        if track.alignment?.method == .pending || track.alignment?.method == .unaligned { return nil }
-        if let offset = track.offset, offset.isFinite { return (offset, 1) }
-        return tracks.first?.id == trackID ? (0, 1) : nil
+        clock(of: trackID).map { ($0.offset, $0.rate) }
     }
 
     /// When the timeline's zero happened by the wall clock, from a placed recording whose start is
@@ -216,9 +208,10 @@ extension Meeting {
         knownTimelineStart(startOf: start) ?? date
     }
 
-    /// The recording a new source is lined up against: placed, and the one most likely to share
-    /// sound with another recorder (this Mac's original microphone, then computer audio, then
-    /// recorders and files), longest first.
+    /// The recording a new source is lined up against: placed surely (`TimelineClock.isStrong`: never one placed only by
+    /// shared phrases or the clocks, so a guess isn't composed on a guess), not on the same clock as anything
+    /// `excluding` names, and the one most likely to share sound with another recorder (this Mac's original
+    /// microphone, then computer audio, then recorders and files), longest first.
     public func alignmentReference(excluding: Set<UUID> = []) -> RecordingTrack? {
         func rank(_ track: RecordingTrack) -> Int {
             switch track.source {
@@ -228,10 +221,27 @@ extension Meeting {
             case .imported: return 4
             }
         }
-        return tracks.filter { !excluding.contains($0.id) && timelinePlacement(of: $0.id) != nil }
-            .min { lhs, rhs in
-                rank(lhs) != rank(rhs) ? rank(lhs) < rank(rhs) : (lhs.duration ?? 0) > (rhs.duration ?? 0)
+        let excludedClocks = Set(tracks.filter { excluding.contains($0.id) }.compactMap { $0.alignment?.clockID })
+        let excludedFamilies = Set(tracks.filter { excluding.contains($0.id) }.flatMap { [$0.id] + ($0.derivedFrom.map { [$0] } ?? []) })
+        // Nor one placed against an excluded recording (directly or in turn): comparing with it would compare a
+        // recording with its own place.
+        func restsOnExcluded(_ id: UUID) -> Bool {
+            var current = clock(of: id)?.dependsOn, seen: Set<UUID> = [id]
+            while let next = current, seen.insert(next).inserted {
+                if excludedFamilies.contains(next) { return true }
+                current = clock(of: next)?.dependsOn
             }
+            return false
+        }
+        return tracks.filter { track in
+            !excluding.contains(track.id) && !track.isRemoved && clock(of: track.id)?.isStrong == true
+                && !(track.alignment?.clockID.map(excludedClocks.contains) ?? false)
+                && !excludedFamilies.contains(track.derivedFrom ?? track.id) && !excludedFamilies.contains(track.id)
+                && !restsOnExcluded(track.id)
+        }
+        .min { lhs, rhs in
+            rank(lhs) != rank(rhs) ? rank(lhs) < rank(rhs) : (lhs.duration ?? 0) > (rhs.duration ?? 0)
+        }
     }
 
     /// The span the conversation's recordings cover by the wall clock, when a start is known.
@@ -252,10 +262,15 @@ extension Meeting {
     /// recording move onto the timeline once it's placed, keeping their times in that recording: one
     /// taken before the timeline's zero (the iPhone led, and the Mac that sets the timeline joined
     /// later) is placed before it, at a negative time, as that recording's passages are.
+    ///
+    /// A recording that moves takes the recordings lined up against it along (`SourceAlignment.referenceTrackID`,
+    /// placed by the sound or by following it on one clock), so nothing stays composed on a place it no longer has.
     public mutating func applyPlacements(_ placements: [UUID: SourceAlignment]) {
         var changed = false
+        var moved: [(trackID: UUID, before: TimelineClock)] = []
         for (trackID, alignment) in placements.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
             guard let index = tracks.firstIndex(where: { $0.id == trackID }) else { continue }
+            let before = clock(of: trackID)
             var alignment = alignment
             let held = alignment.heldNoteIDs ?? tracks[index].alignment?.heldNoteIDs
             if alignment.isPlaced, let held, !held.isEmpty, let offset = alignment.offset {
@@ -275,8 +290,36 @@ extension Meeting {
             tracks[index].alignment = alignment
             if alignment.isPlaced { tracks[index].offset = alignment.offset }
             changed = true
+            if let before, before.isStrong || before.method == .transcript || before.method == .clock { moved.append((trackID, before)) }
         }
+        movingDependents(of: moved, except: Set(placements.keys))
         if changed { updatedAt = Date() }
+    }
+
+    /// Recordings placed against one that moved keep their place relative to it. The move is a map of the timeline
+    /// (`timeline′ = α + β × timeline`, from the old and new clocks); each dependent's placement goes through the same
+    /// map, and so do the recordings placed against it in turn.
+    private mutating func movingDependents(of moved: [(trackID: UUID, before: TimelineClock)], except fixed: Set<UUID>) {
+        var queue = moved, done = fixed
+        while !queue.isEmpty {
+            let (trackID, before) = queue.removeFirst()
+            guard let after = clock(of: trackID), after != before, before.rate > 0 else { continue }
+            let scale = after.rate / before.rate, shift = after.offset - scale * before.offset
+            // Its derived copies (the echo-cancelled microphone) follow it, so what rests on them moves too.
+            let copies = Set(tracks.filter { $0.derivedFrom == trackID && $0.alignment == nil }.map(\.id))
+            for index in tracks.indices where !done.contains(tracks[index].id) {
+                guard var alignment = tracks[index].alignment, alignment.isPlaced,
+                      let reference = alignment.referenceTrackID, reference == trackID || copies.contains(reference),
+                      [.audio, .transcript, .clock, .manual].contains(alignment.method), let offset = alignment.offset,
+                      let previous = clock(of: tracks[index].id) else { continue }
+                alignment.offset = shift + scale * offset
+                alignment.rate = alignment.rate * scale
+                tracks[index].alignment = alignment
+                tracks[index].offset = alignment.offset
+                done.insert(tracks[index].id)
+                queue.append((tracks[index].id, previous))
+            }
+        }
     }
 
     /// What a recording made on another device (Daybook on iPhone) brings to its conversation: its
@@ -310,6 +353,106 @@ extension Meeting {
         alignment.heldNoteIDs = (alignment.heldNoteIDs ?? []) + held
         if alignment.captureOffset == nil { alignment.captureOffset = shift }
         applyPlacements([trackID: alignment])
+    }
+
+    /// One origin per conversation. Two Macs that recorded one conversation (an iPhone asked both to record along)
+    /// each filed theirs as the timeline's origin, at their own capture offsets, so after sync both sit at zero and
+    /// nothing places them. The recording that started first keeps the timeline; each other one becomes a source to
+    /// place, all its tracks on one clock (`clockID`), with the clock prior where its start puts it: on the first's
+    /// clock by the iPhone's measurements of both Macs while it recorded (`capture.peerClocks`), or else by the Macs'
+    /// own clocks. Returns the placements to store (nothing when there's only one).
+    public func separatingCaptureGroups(now: Date = Date()) -> [UUID: SourceAlignment] {
+        let groups = captureGroups()
+        guard groups.count > 1, let origin = groups.first, let originOffset = origin.lead.offset, originOffset.isFinite else { return [:] }
+        let zero = origin.start.addingTimeInterval(-originOffset)
+        var result: [UUID: SourceAlignment] = [:], moved: [UUID: TimeInterval] = [:]
+        for group in groups.dropFirst() {
+            let shift = clockShift(from: group, to: origin) ?? 0
+            for track in group.tracks {
+                let start = track.startedAt ?? group.start.addingTimeInterval((track.offset ?? 0) - (group.lead.offset ?? 0))
+                let prior = start.addingTimeInterval(shift).timeIntervalSince(zero)
+                result[track.id] = SourceAlignment(method: .pending, clockOffset: prior.isFinite ? prior : nil, clockID: group.id, date: now)
+                if prior.isFinite, let offset = track.offset { moved[track.id] = prior - offset }
+            }
+        }
+        // A recording lined up against one of these (an iPhone's, by sound, on that Mac) was placed on that Mac's
+        // timeline. It waits to be placed again too, its prior moved as far as what it rests on.
+        var found = true
+        while found {
+            found = false
+            for track in tracks.sorted(by: { $0.id.uuidString < $1.id.uuidString }) where result[track.id] == nil {
+                guard let alignment = track.alignment, alignment.isPlaced, let offset = alignment.offset,
+                      let reference = alignment.referenceTrackID, let delta = moved[reference] else { continue }
+                var waiting = alignment
+                waiting.method = .pending; waiting.offset = nil; waiting.rate = 1; waiting.audioChecked = nil
+                waiting.clockOffset = offset + delta; waiting.date = now
+                result[track.id] = waiting
+                moved[track.id] = delta
+                found = true
+            }
+        }
+        return result
+    }
+
+    /// Recordings this Mac or another made and filed as the timeline's own (no placement, a capture offset): one group
+    /// per capture, the first-started first. A capture's tracks share `TrackCaptureDetails.captureID`; for ones filed
+    /// before it was kept, each original microphone is its own capture, computer audio joins the microphone that
+    /// started nearest it (its first sample can come late, when nothing plays), and a derived copy joins its original.
+    struct CaptureGroup {
+        var id: UUID
+        var tracks: [RecordingTrack]
+        var lead: RecordingTrack
+        /// When its first sample arrived, by its own device's clock.
+        var start: Date { lead.startedAt ?? lead.createdAt }
+        var deviceID: String? { lead.capture?.deviceID }
+    }
+
+    func captureGroups() -> [CaptureGroup] {
+        let captured = tracks.filter { track in
+            track.alignment == nil && track.deviceKind == nil && !track.isRemoved && track.capture != nil
+                && (track.source == .microphone || track.source == .systemAudio) && track.offset?.isFinite == true
+        }
+        guard captured.count > 1 else { return [] }
+        func start(_ track: RecordingTrack) -> Date { track.startedAt ?? track.createdAt }
+        var key: [UUID: String] = [:]
+        let microphones = captured.filter { $0.derivedFrom == nil && $0.source == .microphone && $0.capture?.captureID == nil }
+        for track in captured where track.derivedFrom == nil {
+            if let id = track.capture?.captureID { key[track.id] = id.uuidString; continue }
+            if track.source == .microphone { key[track.id] = "track:\(track.id.uuidString)"; continue }
+            let nearest = microphones.min { abs(start($0).timeIntervalSince(start(track))) < abs(start($1).timeIntervalSince(start(track))) }
+            key[track.id] = nearest.flatMap { key[$0.id] } ?? "track:\(track.id.uuidString)"
+        }
+        for track in captured where track.derivedFrom != nil {
+            key[track.id] = track.derivedFrom.flatMap { key[$0] } ?? track.capture?.captureID?.uuidString ?? "track:\(track.id.uuidString)"
+        }
+        var groups: [CaptureGroup] = []
+        for (name, members) in Dictionary(grouping: captured, by: { key[$0.id]! }) {
+            let lead = members.filter { $0.derivedFrom == nil && $0.source == .microphone }.min { $0.id.uuidString < $1.id.uuidString }
+                ?? members.filter { $0.derivedFrom == nil }.min { $0.id.uuidString < $1.id.uuidString } ?? members[0]
+            let id = lead.capture?.captureID ?? UUID(uuidString: name) ?? SyncEncoding.uuid("capture:\(lead.id.uuidString)")
+            groups.append(CaptureGroup(id: id, tracks: members.sorted { $0.id.uuidString < $1.id.uuidString }, lead: lead))
+        }
+        return groups.sorted { ($0.start, $0.lead.id.uuidString) < ($1.start, $1.lead.id.uuidString) }
+    }
+
+    /// Seconds to add to a time on `group`'s device clock to read it on `origin`'s: from an iPhone's measurements of
+    /// both while it recorded (its offsets are the peer's clock minus its own). Nil when no recording measured both.
+    private func clockShift(from group: CaptureGroup, to origin: CaptureGroup) -> TimeInterval? {
+        func entry(_ target: CaptureGroup, in peers: [CapturePeerClock]) -> CapturePeerClock? {
+            if let device = target.deviceID { return peers.first { $0.deviceID == device } }
+            // Filed before the device was kept: the measured Mac whose recording started nearest this one, by its own clock.
+            let start = target.start
+            let nearest = peers.filter { $0.peerRecordingStartedAt != nil }
+                .min { abs($0.peerRecordingStartedAt!.timeIntervalSince(start)) < abs($1.peerRecordingStartedAt!.timeIntervalSince(start)) }
+            guard let nearest, abs(nearest.peerRecordingStartedAt!.timeIntervalSince(start)) <= 3 else { return nil }
+            return nearest
+        }
+        for track in tracks.sorted(by: { $0.id.uuidString < $1.id.uuidString }) {
+            guard let peers = track.capture?.peerClocks, !peers.isEmpty,
+                  let theirs = entry(group, in: peers), let ours = entry(origin, in: peers), theirs != ours else { continue }
+            return ours.offset - theirs.offset
+        }
+        return nil
     }
 
     /// A recording filed as a source still to be placed (another device's, joining) that turns out to
@@ -354,9 +497,11 @@ public enum SourcePlacement {
         return (clockOffset - reference.offset) / reference.rate
     }
 
-    /// Confidence for a transcript-anchor alignment, from how many phrases agreed and how closely.
+    /// Confidence for a transcript-anchor alignment: what the fit reported (it grows with how many phrases agreed,
+    /// how closely, and how long a stretch they cover), or, for a fit made before it said, from the phrases alone.
     public static func anchorConfidence(_ report: TrackAlignment) -> Double {
         guard report.method == .anchors else { return 0 }
+        if let confidence = report.confidence, confidence.isFinite { return confidence }
         let count = min(1, Double(report.matchedAnchors) / 12)
         let closeness = report.residual.map { max(0, 1 - $0 / 1.5) } ?? 0.5
         return (0.45 + 0.4 * count + 0.15 * closeness).rounded(toPlaces: 2)

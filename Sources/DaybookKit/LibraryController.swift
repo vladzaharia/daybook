@@ -459,11 +459,15 @@ public final class LibraryController {
     }
 
     /// Fuses a conversation's transcripts again, and carries saved corrections over, off the main
-    /// actor. Skipped if its recordings or transcripts changed meanwhile.
-    public func realign(_ id: UUID) async {
+    /// actor. Skipped if its recordings or transcripts changed meanwhile. `keepingVersion` is for upkeep the
+    /// person didn't ask for (background audio heard later, stranded words): it fuses with the version the
+    /// conversation was last fused with (`FusionSummary.version`), so its wording changes with a new Daybook
+    /// only when it's fused for a new reason (docs/alignment.md, "Fusion versions").
+    public func realign(_ id: UUID, keepingVersion: Bool = false) async {
         guard let snapshot = meeting(id) else { return }
+        let version = keepingVersion ? snapshot.fusionSummary?.version ?? 1 : FusionSummary.currentVersion
         let (prepared, settled) = await detachedWork(priority: .userInitiated) {
-            let fusion = SourceFusion.fuse(snapshot)
+            let fusion = SourceFusion.fuse(snapshot, version: version)
             return (snapshot.preparingFusion(fusion.fusion), fusion.settled)
         }
         // Applied even when the caller was cancelled meanwhile: it matches the transcripts kept.
@@ -478,7 +482,7 @@ public final class LibraryController {
     public func relabelStrandedWords() async {
         for id in meetings.filter({ $0.unifiedTranscript.hasStrandedWords }).map(\.id) {
             guard !Task.isCancelled else { return }
-            await realign(id)
+            await realign(id, keepingVersion: true)
         }
     }
 
@@ -494,7 +498,7 @@ public final class LibraryController {
             meeting.tracks[index].backgroundAudio = analysis
         }
         guard let after = meeting(id), after.backgroundSegmentKinds() != before.backgroundSegmentKinds() else { return true }
-        await realign(id)
+        await realign(id, keepingVersion: true)
         return true
     }
 
