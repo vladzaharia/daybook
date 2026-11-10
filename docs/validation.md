@@ -3,7 +3,11 @@
 ## Design pass follow-ups (2026-11-10)
 
 The items the design pass deferred (docs/audits/2026-11-10/README.md, "Still to do"), each on its own worktree from
-`design-pass-2026-11-followups` (stacked on PR #62), merged here with the touched suites rerun after every merge.
+`design-pass-2026-11-followups` (stacked on PR #62), merged here with the touched suites rerun after every merge and
+the whole package and the whole iPhone bundle after each wave. One more load-sensitive test showed up in these runs:
+`RecorderHandoffTests.testARecordingBothDevicesImportBeforeSyncEndsUpInOneConversation` paces a transfer at 15 ms a
+step against a sync, and under a build running alongside the transfer finished first (two conversations instead of
+one); it passes alone and on the quiet machine.
 
 - **F1, the countdown words once, and the wordless bookmark (CQ-19).** The summary countdown's words ("Summarizing in
   12 s" and its siblings, the one rounding rule, the tick, a summary under way here, on a Mac, or in the cloud,
