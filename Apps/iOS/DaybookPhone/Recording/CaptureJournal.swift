@@ -185,14 +185,21 @@ struct PhoneCaptureJournal: Codable, Equatable, Sendable {
 
     static func url(in directory: URL) -> URL { directory.appendingPathComponent(fileName) }
 
+    /// Throws `PhoneRecorderError.locked` when the journal is there but can't be read now (the iPhone is locked).
     static func load(from directory: URL) throws -> PhoneCaptureJournal {
-        try JournalCoding.decoder().decode(PhoneCaptureJournal.self, from: Data(contentsOf: url(in: directory)))
+        let url = url(in: directory)
+        let data: Data
+        do { data = try Data(contentsOf: url) } catch {
+            throw StagingProtection.isUnreadable(error) || StagingProtection.cannotOpen(url) ? PhoneRecorderError.locked : error
+        }
+        return try JournalCoding.decoder().decode(PhoneCaptureJournal.self, from: data)
     }
 
-    /// Owner-only, atomic.
+    /// Owner-only, atomic, and kept until unlock (`StagingProtection`): a locked iPhone can write it, a new file each
+    /// time, but not read it back.
     func write(to directory: URL) throws {
         let url = Self.url(in: directory)
-        try JournalCoding.encoder().encode(self).write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        try JournalCoding.encoder().encode(self).write(to: url, options: [.atomic, StagingProtection.writing])
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 }
@@ -268,6 +275,8 @@ enum PhoneRecorderError: LocalizedError, Equatable {
     case encoderUnavailable(String)
     case diskBacklog
     case nothingRecorded
+    /// The recording's files are there but can't be read until the iPhone is unlocked: never "No audio was recorded".
+    case locked
 
     var errorDescription: String? {
         switch self {
@@ -279,6 +288,7 @@ enum PhoneRecorderError: LocalizedError, Equatable {
         case .encoderUnavailable: return "Recording couldn’t continue. Everything up to then is saved."
         case .diskBacklog: return "Storage couldn’t keep up with the recording. Everything up to then is saved."
         case .nothingRecorded: return "No audio was recorded."
+        case .locked: return "The recording’s files can’t be opened until iPhone is unlocked."
         }
     }
 

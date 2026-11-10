@@ -194,4 +194,47 @@ final class CaptureRecoveryTests: XCTestCase {
         XCTAssertNil(again.recovery, "already saved: nothing more to say")
         XCTAssertEqual(again.warnings.filter { $0 == RecordingWords.savedAfterInterruptedSave }.count, 1)
     }
+
+    /// What a locked iPhone can't open (its journal, a part, a lone part already moved into place) is never a recording
+    /// with nothing in it: recovery says it's locked, so the folder is kept for the unlock. Files made unreadable
+    /// stand in for a locked iPhone, which the simulator doesn't have.
+    func testWhatCantBeOpenedIsLockedNeverNothingRecorded() async throws {
+        func unreadable(_ url: URL) throws { try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: url.path) }
+        func readable(_ url: URL) throws { try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path) }
+        func expectLocked(_ folder: URL, _ what: String) async {
+            do {
+                _ = try await PhoneRecorder.recover(in: folder)
+                XCTFail("recovered \(what)")
+            } catch {
+                XCTAssertEqual(error as? PhoneRecorderError, .locked, what)
+            }
+        }
+
+        // The journal.
+        let folder = try newFolder("journal")
+        let frames = try CaptureFiles.writeClosedSegment(to: folder.appendingPathComponent("segment-000.m4a"), seconds: 1, frequency: 440)
+        var stopped = journal("Locked journal", segments: [segment(0, at: 0, frames: frames, closed: true)])
+        stopped.state = .stopping
+        try stopped.write(to: folder)
+        try unreadable(PhoneCaptureJournal.url(in: folder))
+        await expectLocked(folder, "an unreadable journal")
+        try readable(PhoneCaptureJournal.url(in: folder))
+
+        // A part.
+        try unreadable(folder.appendingPathComponent("segment-000.m4a"))
+        await expectLocked(folder, "an unreadable part")
+        XCTAssertNil(try PhoneCaptureJournal.load(from: folder).finalFile, "nothing joined")
+        try readable(folder.appendingPathComponent("segment-000.m4a"))
+
+        // A lone part moved into place before Daybook was ended, the journal not yet saying so.
+        let moved = try newFolder("moved")
+        let output = moved.appendingPathComponent(PhoneCaptureJournal.finalFileName)
+        let movedFrames = try CaptureFiles.writeClosedSegment(to: output, seconds: 1, frequency: 440)
+        try journal("Moved", segments: [segment(0, at: 0, frames: movedFrames, closed: true)]).write(to: moved)
+        try unreadable(output)
+        await expectLocked(moved, "an unreadable joined file")
+        try readable(output)
+        let recovered = try await PhoneRecorder.recover(in: moved)
+        XCTAssertEqual(recovered.duration, 1, accuracy: frame, "once it can be read, it's all there")
+    }
 }

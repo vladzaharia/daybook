@@ -139,6 +139,23 @@ final class PhoneAppModel: RecordingCommandHandling {
     @ObservationIgnored private var inBackground = false
     /// Background time for a recording that's stopping by itself, from the moment it starts to until it's filed.
     @ObservationIgnored private var stoppingByItself: BackgroundAssertion?
+    /// Recordings stopped while the iPhone was locked, by staging folder, until they're filed: each is saved and waits
+    /// for an unlock, then is joined and filed (`finishAfterUnlock`, PhoneAppModel+Filing.swift).
+    var afterUnlock: [URL: AfterUnlock] = [:]
+    /// Staging folders a stop is finishing (Stop's, a recording that stopped by itself, one after an unlock): recovery
+    /// leaves them be (`recoverLeftovers`).
+    @ObservationIgnored var finishingFolders: Set<URL> = []
+    /// What waits for files kept until unlock to be readable (`waitUntilUnlocked`), and the check that looks again
+    /// while it waits.
+    @ObservationIgnored var unlockWaiters: [CheckedContinuation<Void, Never>] = []
+    @ObservationIgnored var unlockCheck: Task<Void, Never>?
+    /// Recovery left a folder it couldn't read while the iPhone was locked: it runs again once it's unlocked.
+    @ObservationIgnored var recoveryWaitsForUnlock = false
+    /// Recovery is running: one pass at a time.
+    @ObservationIgnored var recoveringLeftovers = false
+    /// Stops noted so far (`noteStopped`): a recording finished after an unlock says where it went only if no stop
+    /// came after its own.
+    @ObservationIgnored private(set) var stopsNoted = 0
     /// What Spotlight lists of the library.
     @ObservationIgnored private(set) var conversationIndex: ConversationIndex?
 
@@ -264,6 +281,9 @@ final class PhoneAppModel: RecordingCommandHandling {
                 Task { @MainActor in self?.updateActivity() }
             })
         }
+        // Stop on a locked iPhone saves the recording and joins it once it's unlocked (`finishAfterUnlock`).
+        recorder.protectedDataAvailable = environment.protectedData.isAvailable
+        environment.protectedData.whenAvailable { [weak self] in self?.protectedDataMayBeAvailable() }
         recorder.onChange = { [weak self] in self?.recorderChanged() }
         recorder.onLevel = { [weak self] level in self?.levelChanged(level) }
         recorder.onStoppingByItself = { [weak self] in self?.holdTimeToStopByItself() }
@@ -486,6 +506,8 @@ final class PhoneAppModel: RecordingCommandHandling {
             // A recording that paused out of sight ("Recording paused") goes on: the person came back to it. One that
             // paused in front waits for Resume, wherever the person went meanwhile.
             if pausedNoticeShown, recorder.isPaused, recorder.canResume { Task { try? await self.resumeRecording() } }
+            // A recording stopped while the iPhone was locked finishes now, if iOS suspended Daybook through the unlock.
+            protectedDataMayBeAvailable()
             recordMeetingWhenInFront()
             remindMeetings()
             labelCaptionSpeakers()
@@ -738,9 +760,23 @@ final class PhoneAppModel: RecordingCommandHandling {
         let session = multipoints.session
         let clocks = link.peerClocks { mac in session?.macs.first(where: { $0.id == mac.id })?.startedAt ?? mac.recording?.startedAt }
         // The Macs this iPhone started stop as its capture ends, not once it's filed. Its recorders and a Mac that leads stop
-        // after filing (`endCascade`), so their recordings join a conversation that's already in the library.
+        // after filing (`endCascade`), so their recordings join a conversation that's already in the library; at once when
+        // filing waits for the iPhone to be unlocked.
         let stopMacs = RunOnce { [weak self] in self?.multipoints.stopMacsStartedHere(session) }
+        let ended = RunOnce { [weak self] in
+            guard let self else { return }
+            stopMacs()
+            self.multipoints.endCascade(stopping, session: session, cascadesUp: cascadesUp)
+            self.multipoints.session = nil
+            self.sync.controller?.publishActivity(recording: nil)
+            self.multipoints.recordingEnded()
+            self.sharing.sendRecordingState(force: true)
+            if !self.isForeground { Task { await self.link.setActivity(.background) } }
+        }
         let job = recorder.recordingID ?? UUID()
+        // Recovery leaves the folder be until it's filed.
+        let staged = recorder.stagingDirectory?.standardizedFileURL
+        let registered = staged.map { finishingFolders.insert($0).inserted } ?? false
         // Finishing and filing must complete even if the caller is cancelled (an intent that timed
         // out, a view that went away): an unstructured task doesn't inherit cancellation.
         let filing = Task { @MainActor [final] () -> StopOutcome in
@@ -751,6 +787,10 @@ final class PhoneAppModel: RecordingCommandHandling {
                 longJoin: { self.savingInBackground.begin(job: job, title: Self.savingTitle, subtitle: "") },
                 joinProgress: { fraction in self.savingInBackground.report(fraction: fraction) }))
             defer { self.savingInBackground.end(success: stopped != nil) }
+            // Locked: it's saved, and joined and filed once the iPhone is unlocked.
+            if stopped == nil, let waiting = self.recorder.waitingCapture {
+                return await self.leaveForUnlock(waiting, final: final, session: session, clocks: clocks, ended: ended)
+            }
             // Saved only once there's a recording to save.
             self.activities.end(Self.endedActivity(final, recorded: stopped != nil, failure: self.recorder.lastFailure,
                                                    kept: self.recorder.unfinishedFolder != nil))
@@ -770,13 +810,9 @@ final class PhoneAppModel: RecordingCommandHandling {
         }
         await beginStop(of: recorder.recordingID) {
             self.noteStopped(await self.whileFiling(stopping, filing))
-            stopMacs()
-            self.multipoints.endCascade(stopping, session: session, cascadesUp: cascadesUp)
-            self.multipoints.session = nil
-            self.sync.controller?.publishActivity(recording: nil)
-            self.multipoints.recordingEnded()
-            self.sharing.sendRecordingState(force: true)
-            if !self.isForeground { Task { await self.link.setActivity(.background) } }
+            ended()
+            // A recording finished after an unlock keeps it until then.
+            if registered, let staged, self.afterUnlock[staged] == nil { self.finishingFolders.remove(staged) }
         }.value
     }
 
@@ -813,6 +849,7 @@ final class PhoneAppModel: RecordingCommandHandling {
     /// A stop (by the person, a Mac, or the recording itself) came to `outcome`: where it went, and what
     /// Siri says.
     func noteStopped(_ outcome: StopOutcome) {
+        stopsNoted += 1
         if let filing = outcome.filing { lastFiling = filing }
         lastStopResult = outcome.result
     }

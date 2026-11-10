@@ -5,9 +5,14 @@ import Synchronization
 /// Where a device keeps the live captions it made: one file per recording,
 /// `<library>/LiveCaptions/<conversation id>.<recording id>.json` (`<conversation id>.json` for captions saved
 /// before recordings were kept apart), outside `Meetings/`, so sync and other devices never see them. The same
-/// on the Mac and the iPhone: each file readable only by this user (0600, in a 0700 folder) and protected until
-/// the device is first unlocked, with one rule for when a transcript replaces them (`LiveCaptionCoverage`).
-/// A second recording into a conversation keeps its own captions beside the first's.
+/// on the Mac and the iPhone: each file readable only by this user (0600, in a 0700 folder), with one rule for when
+/// a transcript replaces them (`LiveCaptionCoverage`). A second recording into a conversation keeps its own captions
+/// beside the first's.
+///
+/// Their data protection (`protection`): the iPhone writes them while it records, often locked, so they're kept as
+/// its recording in progress is, until unlock (`completeUnlessOpen`): a locked iPhone can write them, a new file each
+/// time, but can't read one back, so reading falls back to the copy this store wrote last, and filing them with their
+/// recording (`update`) works while it's locked. The Mac's are protected until its first unlock.
 ///
 /// Writes run on one serial queue, off the caller's actor: a recording's saves never hold up the main
 /// thread, they land in the order they were made, and a snapshot older than one already written is left
@@ -20,6 +25,8 @@ public final class LiveCaptionStore: Sendable {
     /// How long after a write that failed it's tried again, each time, until one lands or a later write of the
     /// same captions does.
     public let retryDelays: [TimeInterval]
+    /// The files' data protection class.
+    public let protection: FileProtectionType
     private let queue = DispatchQueue(label: "local.daybook.live-captions", qos: .utility)
     /// What this store last wrote for each recording.
     private let written = Mutex<[LiveCaptionKey: Written]>([:])
@@ -31,6 +38,9 @@ public final class LiveCaptionStore: Sendable {
         var updatedAt: Date
         /// The recording they were filed with, kept by later saves that don't know it yet.
         var trackID: UUID?
+        /// What was written, until the file is read back: what reading falls back to while the file is there but
+        /// can't be opened (a locked iPhone).
+        var copy: LiveCaptions?
     }
 
     private struct Unsaved {
@@ -40,9 +50,19 @@ public final class LiveCaptionStore: Sendable {
         var waiting = false
     }
 
-    public init(libraryRoot: URL, retryDelays: [TimeInterval] = [2, 10, 30, 120]) {
+    public init(libraryRoot: URL, retryDelays: [TimeInterval] = [2, 10, 30, 120], protection: FileProtectionType = LiveCaptionStore.defaultProtection) {
         directory = libraryRoot.appendingPathComponent("LiveCaptions", isDirectory: true)
         self.retryDelays = retryDelays
+        self.protection = protection
+    }
+
+    /// Until unlock on the iPhone, which writes them while it records, locked; until the first unlock on the Mac.
+    public static var defaultProtection: FileProtectionType {
+        #if os(iOS)
+        .completeUnlessOpen
+        #else
+        .completeUntilFirstUserAuthentication
+        #endif
     }
 
     /// One recording's file.
@@ -69,10 +89,26 @@ public final class LiveCaptionStore: Sendable {
     // MARK: Reading
 
     /// One recording's saved captions: one small file, read now, or what a write that failed would have left there.
+    /// A file that's there but can't be read now (a locked iPhone) reads as the copy this store wrote last.
     public func captions(for key: LiveCaptionKey) -> LiveCaptions? {
         if let owed = unsaved.withLock({ $0[key]?.captions }) { return owed }
-        guard let data = try? Data(contentsOf: url(for: key)) else { return nil }
-        return try? JSONDecoder().decode(LiveCaptions.self, from: data)
+        let data: Data
+        do { data = try Data(contentsOf: url(for: key)) } catch {
+            guard !Self.isMissing(error) else { return nil }
+            return written.withLock { $0[key]?.copy }
+        }
+        guard let captions = try? JSONDecoder().decode(LiveCaptions.self, from: data) else { return nil }
+        // Read back: the file stands for itself from now on.
+        written.withLock { table in
+            if let copy = table[key]?.copy, copy.updatedAt <= captions.updatedAt { table[key]?.copy = nil }
+        }
+        return captions
+    }
+
+    private static func isMissing(_ error: Error) -> Bool {
+        let error = error as NSError
+        return (error.domain == NSCocoaErrorDomain && error.code == NSFileReadNoSuchFileError)
+            || (error.domain == NSPOSIXErrorDomain && error.code == Int(ENOENT))
     }
 
     /// Each recording's saved captions of a conversation, the oldest recording's first.
@@ -197,7 +233,7 @@ public final class LiveCaptionStore: Sendable {
             let data = try JSONEncoder().encode(captions)
             let url = url(for: key)
             do {
-                try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+                try data.write(to: url, options: [.atomic, Self.writingOptions(protection)])
             } catch {
                 // A volume without data protection (an external drive) keeps them as any other file.
                 try data.write(to: url, options: .atomic)
@@ -211,7 +247,9 @@ public final class LiveCaptionStore: Sendable {
             throw error
         }
         let stamp = max(captions.updatedAt, last?.updatedAt ?? .distantPast)
-        written.withLock { $0[key] = Written(updatedAt: stamp, trackID: captions.trackID) }
+        // A copy only where a locked device can't read the file back.
+        let copy = protection == .completeUnlessOpen || protection == .complete ? captions : nil
+        written.withLock { $0[key] = Written(updatedAt: stamp, trackID: captions.trackID, copy: copy) }
         unsaved.withLock { table in
             if let owed = table[key], replacing || owed.captions.updatedAt <= captions.updatedAt { table[key] = nil }
         }
@@ -241,6 +279,15 @@ public final class LiveCaptionStore: Sendable {
             }
             // The newest the captions were meant to be: written over whatever is there.
             if let owed { try? write(owed, replacing: true) }
+        }
+    }
+
+    private static func writingOptions(_ protection: FileProtectionType) -> Data.WritingOptions {
+        switch protection {
+        case .complete: return .completeFileProtection
+        case .completeUnlessOpen: return .completeFileProtectionUnlessOpen
+        case .completeUntilFirstUserAuthentication: return .completeFileProtectionUntilFirstUserAuthentication
+        default: return .noFileProtection
         }
     }
 

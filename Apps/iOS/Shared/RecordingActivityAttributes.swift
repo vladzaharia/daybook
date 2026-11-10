@@ -43,6 +43,10 @@ struct RecordingActivityAttributes: ActivityAttributes {
         /// Paused, whether recording can continue now: false during the call, when only Stop is
         /// offered. Nil from an earlier build, which offered Resume.
         var canResume: Bool? = nil
+        /// Saved, what the Lock Screen says in place of "Saved to Daybook": a recording stopped while the iPhone was
+        /// locked finishes once it's unlocked (the app's words). Optional, so activities started by an earlier build
+        /// still decode.
+        var savedLine: String? = nil
     }
 
     var conversationID: UUID
@@ -123,7 +127,7 @@ extension RecordingActivityAttributes.ContentState {
     /// to the frozen time is.
     var endLine: String? {
         switch phase {
-        case .saved: return "Saved to Daybook"
+        case .saved: return savedLine ?? "Saved to Daybook"
         case .stopped: return (frozenElapsed ?? 0) > 0 ? "Everything up to then is saved" : "No audio was recorded"
         case .recording, .paused, .saving: return nil
         }

@@ -103,6 +103,29 @@ final class LiveCaptionStoreTests: XCTestCase {
         XCTAssertEqual(store.conversations(), [id])
     }
 
+    /// The iPhone keeps them as its recording in progress, until unlock: a locked iPhone writes them but can't read one
+    /// back, so reading falls back to the copy last written, and filing them with their recording still works. A file
+    /// made unreadable stands in for a locked iPhone; one that's gone reads as gone.
+    func testBehaviorCaptionsKeptUntilUnlockReadAsTheLastCopyWhileTheyCantBeRead() async throws {
+        let store = LiveCaptionStore(libraryRoot: root, protection: .completeUnlessOpen)
+        let captions = LiveCaptions(meetingID: UUID(), captureID: UUID(), localeIdentifier: "en_US", segments: [line("Locked", 0)])
+        try await store.save(captions)
+        let url = store.url(for: captions.key)
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: url.path)[.protectionKey] as? FileProtectionType, .completeUnlessOpen)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: url.path)
+        XCTAssertNil(try? Data(contentsOf: url))
+
+        XCTAssertEqual(store.captions(for: captions.key)?.segments.map(\.text), ["Locked"])
+        let track = UUID()
+        let filed = try await store.update(captions.key) { $0.trackID = track; $0.updatedAt = Date(); return true }
+        XCTAssertEqual(filed?.trackID, track)
+        XCTAssertEqual(try JSONDecoder().decode(LiveCaptions.self, from: Data(contentsOf: url)).trackID, track, "written as a new file")
+
+        await store.remove(captions.meetingID)
+        XCTAssertNil(store.captions(for: captions.key))
+        XCTAssertEqual(LiveCaptionStore(libraryRoot: root).protection, .completeUntilFirstUserAuthentication, "the Mac's")
+    }
+
     func testBehaviorASaveStillOnItsWayNeverPutsBackWhatALaterOneReplaced() async throws {
         let store = LiveCaptionStore(libraryRoot: root)
         let id = UUID(), began = Date().addingTimeInterval(-60)

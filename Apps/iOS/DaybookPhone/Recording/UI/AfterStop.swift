@@ -102,7 +102,8 @@ struct PhoneAfterStop: View {
 
  private var outcome: AfterStop.Outcome {
   AfterStop.outcome(
-   isActive: model.recorder.isActive, isFiling: model.isFiling, filing: model.lastFiling,
+   isActive: model.recorder.isActive,
+   isFiling: model.isFiling || model.waitsForUnlock(afterStop.conversationID) != nil, filing: model.lastFiling,
    since: afterStop.before)
  }
 
@@ -167,6 +168,8 @@ struct PhoneAfterStop: View {
   let meeting = meeting(outcome)
   var inputs = RecordingStatusInputs()
   inputs.phase = outcome == .saving ? .saving : .saved
+  // Stopped while the iPhone was locked: Saved, and it finishes once it's unlocked.
+  inputs.waitsForUnlock = model.waitsForUnlock(afterStop.conversationID) == true
   inputs.duration = meeting?.duration
   let library = model.library.controller
   var problem: RecorderProblem?

@@ -40,9 +40,11 @@ enum RecordingAssembler {
     /// time is sure to cover.
     static let longJoin: TimeInterval = 600
 
+    /// Throws `PhoneRecorderError.locked` when a segment is there but can't be read until the iPhone is unlocked
+    /// (`StagingProtection`), or it locked as they were joined: never `nothingRecorded` for audio it couldn't open.
     static func assemble(_ pieces: [Piece], into output: URL, format: RecordingFormat,
                          progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> Result {
-        let (readable, warnings) = readablePieces(pieces)
+        let (readable, warnings) = try readablePieces(pieces)
         guard !readable.isEmpty else { throw PhoneRecorderError.nothingRecorded }
 
         if readable.count == 1, let only = readable.first, only.piece.cleanlyClosed,
@@ -54,29 +56,41 @@ enum RecordingAssembler {
             return Result(frames: frames, joined: false, warnings: warnings)
         }
 
-        if copiesPackets(readable.map(\.file), format: format),
-           let frames = try? await passthrough(readable.map(\.piece), into: output, format: format) {
-            return Result(frames: frames, joined: true, warnings: warnings)
+        // Locked partway, a join stops rather than encode again what it couldn't copy.
+        let folder = output.deletingLastPathComponent()
+        if copiesPackets(readable.map(\.file), format: format) {
+            do {
+                let frames = try await passthrough(readable.map(\.piece), into: output, format: format)
+                return Result(frames: frames, joined: true, warnings: warnings)
+            } catch {
+                if !StagingProtection.canReadAll(in: folder) { throw PhoneRecorderError.locked }
+            }
         }
-        let frames = try reencode(readable, into: output, format: format, progress: progress)
-        return Result(frames: frames, joined: true, reencoded: true, warnings: warnings)
+        do {
+            let frames = try reencode(readable, into: output, format: format, progress: progress)
+            return Result(frames: frames, joined: true, reencoded: true, warnings: warnings)
+        } catch {
+            throw StagingProtection.canReadAll(in: folder) ? error : PhoneRecorderError.locked
+        }
     }
 
     /// Whether joining `pieces` will decode and encode them again (their formats differ) with more than
     /// `longJoin` of audio: Stop then asks iOS for time to finish it in the background.
     static func expectsLongJoin(_ pieces: [Piece], format: RecordingFormat, longerThan long: TimeInterval = longJoin) -> Bool {
-        let (readable, _) = readablePieces(pieces)
-        guard readable.count > 1 || readable.first?.piece.cleanlyClosed == false, !copiesPackets(readable.map(\.file), format: format),
+        guard let (readable, _) = try? readablePieces(pieces),
+              readable.count > 1 || readable.first?.piece.cleanlyClosed == false, !copiesPackets(readable.map(\.file), format: format),
               let last = readable.last else { return false }
         return last.piece.startOffset + Double(last.file.length) / format.sampleRate > long
     }
 
-    /// The segments with readable audio, in order. A crash before the first fragment leaves nothing.
-    private static func readablePieces(_ pieces: [Piece]) -> ([(piece: Piece, file: AVAudioFile)], [String]) {
+    /// The segments with readable audio, in order. A crash before the first fragment leaves nothing. Throws
+    /// `PhoneRecorderError.locked` when one is there but can't be opened now: none is left out for that.
+    private static func readablePieces(_ pieces: [Piece]) throws -> ([(piece: Piece, file: AVAudioFile)], [String]) {
         var readable: [(piece: Piece, file: AVAudioFile)] = []
         var warnings: [String] = []
         for piece in pieces.sorted(by: { $0.startOffset < $1.startOffset }) {
             guard FileManager.default.fileExists(atPath: piece.url.path) else { continue }
+            if StagingProtection.cannotOpen(piece.url) { throw PhoneRecorderError.locked }
             do {
                 let file = try AVAudioFile(forReading: piece.url, commonFormat: .pcmFormatFloat32, interleaved: false)
                 if file.length > 0 { readable.append((piece, file)) }
@@ -444,6 +458,8 @@ enum PhoneCaptureFinisher {
         if journal.finalFile == nil {
             let pieces = pieces(journal, in: directory)
             let segmentsOnDisk = pieces.contains { FileManager.default.fileExists(atPath: $0.url.path) }
+            // Assembled before (a lone part moved into place), and unreadable until the iPhone is unlocked.
+            if !segmentsOnDisk, StagingProtection.cannotOpen(output) { throw PhoneRecorderError.locked }
             if !segmentsOnDisk, let existing = try? AVAudioFile(forReading: output), existing.length > 0 {
                 // Assembled before, but the journal didn't record it before Daybook quit.
                 journal.finalFile = .init(fileName: output.lastPathComponent, frameCount: existing.length, joined: journal.segments.count > 1)

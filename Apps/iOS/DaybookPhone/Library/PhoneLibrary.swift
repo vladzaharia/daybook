@@ -177,6 +177,8 @@ final class PhoneLibrary {
                                               timing: PhotoTimingInput(capturedAt: photo.capturedAt, trackID: track, time: photo.time),
                                               origin: .thisIPhone(installation: installation), fileName: "Photo.\(url.pathExtension)")
             } catch PhotoStoreError.unsupportedImage {
+                // One that can't be read until the iPhone is unlocked is kept with the recording, not left out.
+                if StagingProtection.cannotOpen(url) { throw PhoneRecorderError.locked }
                 continue
             }
         }
