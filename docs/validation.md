@@ -117,6 +117,12 @@ one); it passes alone and on the quiet machine.
   and iPhone page captures before and after are unchanged. Row and Info inputs (`MeetingInspector.inputs`,
   `MacRowStatus.make`, the iPhone's `ConversationRow`) stay in place; P7 covers the page.
 
+**Final runs (7 packages merged, `design-pass-2026-11-followups`).** `swift build --build-tests` with no first-party
+warning; the whole package's `swift test`: all ten bundles passed, 1,916 tests, 0 failures; the whole DaybookPhoneTests
+bundle on the iPhone 18 Pro simulator with no first-party warning: 492 tests, 0 failures. Captures of the merged app
+for the record: the iPhone recorder alone, with a Mac along, with a recorder and a Mac, and at an accessibility size,
+and the open Duo's recorder alone and with a Mac (`(scratch)/final/f5`).
+
 ## Design pass (2026-11-10)
 
 A whole-app design pass with the owner's authority to redesign (docs/audits/2026-11-10/README.md): eight reviews, 219
