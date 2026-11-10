@@ -84,7 +84,7 @@ public struct SummaryBody<Photos: View>: View {
                 let steps = summary.actionItems.map { item in
                     (item: item, segment: segment(evidence.segment(for: item.text, owner: item.owner)))
                 }
-                // On a narrow page the steps keep a lane only when one of them has a time for it.
+                // On a window's narrow page the steps keep a lane only when one of them has a time for it.
                 let timed = steps.contains { $0.segment != nil }
                 VStack(alignment: .leading, spacing: 0) {
                     SummaryHeading(text: "Next steps", query: query)
@@ -152,29 +152,27 @@ public struct SummaryHeading: View {
 // MARK: - Next steps
 
 /// A next step: its checkbox (a Mac's checkbox, the iPhone's circle with a tap's haptic), the step, its owner in their
-/// speaker's ink (the chip goes once it's done; the name stays, at full ink), and the time it was said in the margin with
-/// the notes' times (a lane on a narrow page; beside the owner at the accessibility text sizes), which leads to the
-/// passage. Ticking it can be undone.
+/// speaker's ink (the chip goes once it's done; the name stays, at full ink), and the time it was said, which leads to
+/// the passage. In a window the time is in the margin with the notes' times (a lane on a narrow page) and the owner
+/// beside a short step or under a long one. Under touch every step is laid out alike: the step on the full measure, and
+/// under it one line with its owner and its time ("Daniel · 0:27"). Ticking it can be undone.
 struct NextStepRow: View {
     let item: ActionItem
     let meeting: Meeting
     let library: LibraryController
     let query: String
     let segment: TranscriptSegment?
-    /// A step on this page has a time: on a narrow page every step keeps the lane, so their checkboxes line up.
+    /// A step on this page has a time: on a window's narrow page every step keeps the lane, so their checkboxes line up.
     let timed: Bool
     let passages: PassageLinks
     @Environment(\.undoManager) private var undoManager
     @Environment(\.daybookDensity) private var density
-    @Environment(\.dynamicTypeSize) private var typeSize
 
-    private var foldsTime: Bool {
-        SummaryMarkdownMetrics.foldsTime(density: density, accessibilitySize: typeSize.isAccessibilitySize)
-    }
+    private var metaLine: Bool { SummaryMarkdownMetrics.stepMetaLine(density: density) }
 
     var body: some View {
         Group {
-            if timed && !foldsTime {
+            if timed && !metaLine {
                 MarginRow { said } content: { step }
             } else {
                 MarginRow { step }
@@ -188,23 +186,45 @@ struct NextStepRow: View {
             Toggle(isOn: Binding(get: { item.completed }, set: set)) { Text(String(ModelText.inlineMarkdown(item.text).characters)) }
                 .toggleStyle(NextStepToggleStyle())
             EvidenceLink(text: item.text, segment: segment, passages: passages) {
-                // The owner sits beside a short step, and under a long one.
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .firstTextBaseline, spacing: DaybookSpacing.s2) {
-                        stepText.fixedSize()
-                        owner
-                        if foldsTime { said }
-                        Spacer(minLength: 0)
-                    }
-                    VStack(alignment: .leading, spacing: 5) {
-                        stepText.fixedSize(horizontal: false, vertical: true)
-                        under
+                Group {
+                    if metaLine {
+                        VStack(alignment: .leading, spacing: DaybookSpacing.s1) {
+                            stepText.fixedSize(horizontal: false, vertical: true)
+                            meta
+                        }
+                    } else {
+                        // The owner sits beside a short step, and under a long one.
+                        ViewThatFits(in: .horizontal) {
+                            HStack(alignment: .firstTextBaseline, spacing: DaybookSpacing.s2) {
+                                stepText.fixedSize()
+                                owner
+                                Spacer(minLength: 0)
+                            }
+                            VStack(alignment: .leading, spacing: 5) {
+                                stepText.fixedSize(horizontal: false, vertical: true)
+                                owner
+                            }
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .daybookMotion(DaybookMotion.fade, value: item.completed)
+    }
+
+    /// Under touch, the line under the step: its owner and when it was said, a dot between them when there are both.
+    @ViewBuilder private var meta: some View {
+        let hasOwner = item.owner.map { !$0.isEmpty } ?? false
+        if hasOwner || segment != nil {
+            HStack(alignment: .firstTextBaseline, spacing: DaybookSpacing.s1) {
+                owner
+                if hasOwner && segment != nil {
+                    Text("·").daybookFont(.marginTime).foregroundStyle(DaybookPalette.Ink.meta).accessibilityHidden(true)
+                }
+                said
+            }
+        }
     }
 
     /// When it was said, read after the step.
@@ -220,19 +240,6 @@ struct NextStepRow: View {
             .daybookFont(.body)
             .strikethrough(item.completed, color: DaybookPalette.Ink.meta)
             .foregroundStyle(item.completed ? DaybookPalette.Ink.secondary : DaybookPalette.Ink.body)
-    }
-
-    /// What sits under a long step: its owner, and its time when it's folded beside them.
-    @ViewBuilder private var under: some View {
-        let hasOwner = item.owner.map { !$0.isEmpty } ?? false
-        if foldsTime && segment != nil {
-            HStack(alignment: .firstTextBaseline, spacing: DaybookSpacing.s2) {
-                owner
-                said
-            }
-        } else if hasOwner {
-            owner
-        }
     }
 
     @ViewBuilder private var owner: some View {
@@ -437,11 +444,10 @@ public enum SummaryMarkdownMetrics {
     /// Whether a hanging mark shows beside a block's time: a bullet's time stands in for its dot; a number stays.
     public static func showsMark(marker: String, timed: Bool) -> Bool { marker != "•" || !timed }
 
-    /// Whether a next step's time joins its owner instead of keeping a lane: under touch at the accessibility text
-    /// sizes, where the lane would leave a step a word or two a line.
-    public static func foldsTime(density: DaybookDensity, accessibilitySize: Bool) -> Bool {
-        density == .touch && accessibilitySize
-    }
+    /// Whether a next step's owner and time sit on one line under it, the step taking the full measure, rather than its
+    /// time in the margin and its owner beside it: under touch, at every width and text size, so one list never mixes
+    /// both and a narrow page keeps its measure for the words.
+    public static func stepMetaLine(density: DaybookDensity) -> Bool { density == .touch }
 }
 
 // MARK: - Evidence

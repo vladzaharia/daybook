@@ -120,8 +120,8 @@ private struct ModelsOverview: View {
             Section {
                 qualityRow(snapshot)
                 if let download = snapshot.downloadSummary(detectSpeakers: state.detectSpeakers) {
-                    ModelDownloadRow(download, space: snapshot.space, download: { manager.downloadSelected() },
-                                     cancel: { manager.cancelSelected() })
+                    ModelDownloadRow(download, name: "Chosen models", space: snapshot.space,
+                                     download: { manager.downloadSelected() }, cancel: { manager.cancelSelected() })
                 }
             }
             Section {

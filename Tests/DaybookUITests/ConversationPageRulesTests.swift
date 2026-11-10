@@ -114,9 +114,14 @@ final class ConversationPageRulesTests: XCTestCase {
         XCTAssertFalse(SummaryMarkdownMetrics.showsMark(marker: "•", timed: true), "A bullet's time stands in for its dot")
         XCTAssertTrue(SummaryMarkdownMetrics.showsMark(marker: "•", timed: false))
         XCTAssertTrue(SummaryMarkdownMetrics.showsMark(marker: "2.", timed: true), "A number stays beside its time")
-        XCTAssertTrue(SummaryMarkdownMetrics.foldsTime(density: .touch, accessibilitySize: true),
-                      "At the accessibility sizes a step's time joins its owner, so the step keeps its width")
-        XCTAssertFalse(SummaryMarkdownMetrics.foldsTime(density: .touch, accessibilitySize: false))
-        XCTAssertFalse(SummaryMarkdownMetrics.foldsTime(density: .window, accessibilitySize: true))
+    }
+
+    /// VI-14, P6: under touch every next step is laid out alike, its owner and time on one line under it; a window keeps
+    /// the time in the margin's lane.
+    func testBehaviorANextStepsOwnerAndTimeShareOneLineUnderItOnlyUnderTouch() {
+        XCTAssertTrue(SummaryMarkdownMetrics.stepMetaLine(density: .touch),
+                      "\"Daniel · 0:27\" under every step, at every width and text size, the step on the full measure")
+        XCTAssertFalse(SummaryMarkdownMetrics.stepMetaLine(density: .window), "The Mac's page keeps the lane of times")
+        XCTAssertFalse(SummaryMarkdownMetrics.stepMetaLine(density: .panel))
     }
 }

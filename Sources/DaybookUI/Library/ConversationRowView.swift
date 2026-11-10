@@ -208,20 +208,50 @@ public struct RowGlyph: View {
     private let fraction: Double
     @Environment(\.daybookDensity) private var density
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    // Under touch the symbol, its slot, and the line grow with the row's words (Dynamic Type), from the footnote's size.
+    @ScaledMetric(relativeTo: .footnote) private var scaledGlyph = RowGlyph.touchGlyph
+    @ScaledMetric(relativeTo: .footnote) private var scaledSlot = RowGlyph.slot
+    @ScaledMetric(relativeTo: .footnote) private var scaledLine = RowGlyph.lineWidth
 
     public init(kind: ConversationRowStatus.Kind?, fraction: Double = 0) {
         self.kind = kind
         self.fraction = fraction
     }
 
-    /// The processing line's length.
+    /// The processing line's length; under touch, at the default text size.
     public static let lineWidth: CGFloat = 44
-    /// The width every symbol is centred in.
+    /// The width every symbol is centred in; under touch, at the default text size.
     public static let slot: CGFloat = 16
+    /// A symbol's size under touch at the default text size, the footnote's.
+    public static let touchGlyph: CGFloat = 13
+    /// A symbol's size in a window and a panel, which don't scale.
+    public static let fixedGlyph: CGFloat = 11
+
+    /// A glyph's symbol size, slot, and line length.
+    public struct Metrics: Equatable, Sendable {
+        public var glyph: CGFloat
+        public var slot: CGFloat
+        public var line: CGFloat
+
+        public init(glyph: CGFloat, slot: CGFloat, line: CGFloat) {
+            self.glyph = glyph
+            self.slot = slot
+            self.line = line
+        }
+    }
+
+    /// The sizes at a density: the Dynamic Type-scaled ones under touch, and the fixed ones in a window and a panel.
+    public static func metrics(_ density: DaybookDensity, scaled: Metrics) -> Metrics {
+        density == .touch ? scaled : Metrics(glyph: fixedGlyph, slot: slot, line: lineWidth)
+    }
+
+    private var sizes: Metrics {
+        Self.metrics(density, scaled: Metrics(glyph: scaledGlyph, slot: scaledSlot, line: scaledLine))
+    }
 
     public var body: some View {
         glyph
-            .font(density == .touch ? .footnote.weight(.semibold) : .system(size: 11, weight: .semibold))
+            .font(.system(size: sizes.glyph, weight: .semibold))
             .accessibilityHidden(true)
     }
 
@@ -229,11 +259,11 @@ public struct RowGlyph: View {
         switch kind {
         case .processing?:
             // One moving neon line says "working" in the densest surface, without words.
-            WorkProgress(fraction: fraction, style: .line, width: Self.lineWidth)
+            WorkProgress(fraction: fraction, style: .line, width: sizes.line)
                 .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
         case let kind?:
             symbol(kind)
-                .frame(minWidth: Self.slot)
+                .frame(minWidth: sizes.slot)
         case nil:
             EmptyView()
         }
