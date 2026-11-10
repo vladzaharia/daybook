@@ -83,6 +83,24 @@ final class ReadingGeometryTests: XCTestCase {
         XCTAssertEqual(PageSpreadLayout.minimumWidth, 1120)
     }
 
+    func testEachPageOfAMacSpreadKeepsItsMarginBesideAMeasureOfAtMost560() {
+        // A 1920 window without the inspector: the column is just wide enough for two pages.
+        XCTAssertEqual(PageSpreadLayout.split(width: 1120, crease: nil), 560)
+        // The trailing page, less the hairline, is under 600 pt but keeps its margin hanging, as a page alone wouldn't.
+        let narrowest = ReadingGeometry.frame(width: 559, density: .window, spreadPage: true)
+        XCTAssertTrue(narrowest.hangsMargin)
+        XCTAssertEqual(narrowest.leading, 24)
+        XCTAssertEqual(narrowest.margin, 56)
+        XCTAssertEqual(narrowest.measure, 447, "559 less the 24 and 32 pt gutters and the margin")
+        XCTAssertEqual(ReadingWidth(width: 559, spreadPage: true), .regular)
+        XCTAssertEqual(ReadingWidth(width: 559), .narrow, "the same width alone is a narrow page")
+        XCTAssertFalse(ReadingGeometry.frame(width: 559, density: .window).hangsMargin)
+        // A 2560 window: each half keeps the 560 pt measure, centred in it.
+        let wide = ReadingGeometry.frame(width: 1029, density: .window, spreadPage: true)
+        XCTAssertEqual(wide.measure, 560)
+        XCTAssertEqual(wide.textLeading + wide.measure / 2, 514.5, "The text's middle is the half's")
+    }
+
     func testFloatingNotesTakesItsLayoutFromItsSize() {
         XCTAssertEqual(SurfaceLayout.floatingNotes(size: CGSize(width: 360, height: 560)), .column)
         XCTAssertEqual(SurfaceLayout.floatingNotes(size: CGSize(width: 340, height: 228)), .compact)

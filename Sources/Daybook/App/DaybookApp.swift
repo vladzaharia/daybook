@@ -389,7 +389,13 @@ private struct DebugLaunchActions: ViewModifier {
                 }
             }
             if let title = LaunchOptions.value(after: "--select") { state.selectedID = state.meetings.first { $0.title == title }?.id }
-            if LaunchOptions.value(after: "--page") == "transcript" { state.pageMode = .transcript }
+            // `--page transcript`; `summary-only` and `transcript-only` collapse a wide window's two pages to one.
+            switch LaunchOptions.value(after: "--page") {
+            case "transcript"?: state.pageMode = .transcript
+            case "summary-only"?: state.pageSpreadChosen = false
+            case "transcript-only"?: state.pageMode = .transcript; state.pageSpreadChosen = false
+            default: break
+            }
             if CommandLine.arguments.contains("--inspector") { LaunchOptions.defaults.set(true, forKey: AppState.Preference.isInspectorPresented) }
             if let pane = LaunchOptions.value(after: "--open-settings").flatMap(SettingsPane.init(rawValue:)) {
                 pane.open(with: openWindow, activating: false)

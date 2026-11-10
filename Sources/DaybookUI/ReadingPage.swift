@@ -3,8 +3,9 @@ import SwiftUI
 
 // One page geometry for both apps (docs/interface.md, "Geometry"): a text measure of at most 560 pt in a window
 // (640 under touch), centred. From 600 pt wide, times hang in a 56 pt margin left of the measure (the Mac's detail
-// column, the open Duo shown as one page); narrower, timed blocks keep a lane of times inside the
-// column and the rest runs edge to edge (every iPhone, each page of the Duo, a narrow Mac window).
+// column, the open Duo shown as one page), and so do they on each page of a Mac window's spread, at every width it
+// gives them; narrower, timed blocks keep a lane of times inside the column and the rest runs edge to edge (every
+// iPhone, each page of the Duo, a narrow Mac window).
 
 /// Whether a page is wide enough for its margin to hang.
 public enum ReadingWidth: Hashable, Sendable {
@@ -13,8 +14,9 @@ public enum ReadingWidth: Hashable, Sendable {
     /// Narrower: a lane of times inside the column.
     case narrow
 
-    public init(width: CGFloat) {
-        self = width >= ReadingGeometry.narrowBelow ? .regular : .narrow
+    /// - Parameter spreadPage: A page of a window's spread (`spreadPage`), which keeps its margin at every width.
+    public init(width: CGFloat, spreadPage: Bool = false) {
+        self = spreadPage || width >= ReadingGeometry.narrowBelow ? .regular : .narrow
     }
 }
 
@@ -24,6 +26,9 @@ extension EnvironmentValues {
     /// The side of this page that meets the iPhone Duo's crease, if any. Reading columns and controls
     /// keep their respective clearances from it (`ReadingGeometry`).
     @Entry public var creaseEdge: Edge? = nil
+    /// Whether this page is one of a window's two side by side (`PageSpread` without a crease): its margin hangs at
+    /// every width the spread gives it, from just under 560 pt, rather than from 600.
+    @Entry public var spreadPage = false
 }
 
 /// The page's measurements, and where its column sits in a container.
@@ -77,10 +82,12 @@ public enum ReadingGeometry {
     }
 
     /// The page's column in a container `width` wide. Control-oriented pages can keep the larger
-    /// control clearance instead of the default reading clearance.
+    /// control clearance instead of the default reading clearance. A page of a window's spread
+    /// (`spreadPage`) hangs its margin at every width.
     public static func frame(width: CGFloat, density: DaybookDensity, creaseEdge: Edge? = nil,
-                             creaseClearance: CGFloat = ReadingGeometry.readingCreaseClearance) -> Frame {
-        let hangs = width >= narrowBelow
+                             creaseClearance: CGFloat = ReadingGeometry.readingCreaseClearance,
+                             spreadPage: Bool = false) -> Frame {
+        let hangs = ReadingWidth(width: width, spreadPage: spreadPage) == .regular
         var (leading, trailing) = gutters(density: density, hangs: hangs)
         // `creaseClearance` is the entire inset at the crease, not extra to the page gutter.
         if creaseEdge == .leading { leading = creaseClearance }
@@ -105,6 +112,7 @@ public struct ReadingPage<Content: View>: View {
     @State private var width: CGFloat = 1000
     @Environment(\.daybookDensity) private var density
     @Environment(\.creaseEdge) private var creaseEdge
+    @Environment(\.spreadPage) private var spreadPage
 
     /// - Parameters:
     ///   - lazy: Rows made as they scroll in (a long transcript).
@@ -116,7 +124,7 @@ public struct ReadingPage<Content: View>: View {
     }
 
     public var body: some View {
-        let frame = ReadingGeometry.frame(width: width, density: density, creaseEdge: creaseEdge)
+        let frame = ReadingGeometry.frame(width: width, density: density, creaseEdge: creaseEdge, spreadPage: spreadPage)
         ScrollView {
             Group {
                 if lazy { LazyVStack(alignment: .leading, spacing: 0) { content } }
@@ -128,7 +136,7 @@ public struct ReadingPage<Content: View>: View {
             .padding(.bottom, DaybookSpacing.s8 + bottomInset)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .environment(\.readingWidth, ReadingWidth(width: width))
+        .environment(\.readingWidth, ReadingWidth(width: width, spreadPage: spreadPage))
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
 }
@@ -196,20 +204,25 @@ extension MarginRow where Margin == EmptyView {
 
 /// Summary and transcript side by side when there's room for two pages, else the single page with its
 /// Summary | Transcript switch. On the open Duo the split is the crease (`crease`, from the leading
-/// edge), each page keeping clear of it; on the Mac it's the middle of a column at least two pages wide.
+/// edge), each page keeping clear of it; on the Mac it's the middle of a column at least two pages wide,
+/// with a hairline between pages that each keep their hanging margin (`spreadPage`).
 public struct PageSpread<Leading: View, Trailing: View, Single: View>: View {
     private let crease: CGFloat?
     private let leading: Leading
     private let trailing: Trailing
     private let single: Single
-    @State private var width: CGFloat = 0
+    @State private var width: CGFloat
 
-    public init(crease: CGFloat? = nil, @ViewBuilder leading: () -> Leading, @ViewBuilder trailing: () -> Trailing,
-                @ViewBuilder single: () -> Single) {
+    /// - Parameter twoPagesFit: Whether the container had room for two pages when last measured (the Mac's detail
+    ///   column, from the conversation before), so the first pass lays out the pages it will keep rather than making
+    ///   the single page and then the spread. The spread's own width decides from then on.
+    public init(crease: CGFloat? = nil, twoPagesFit: Bool = false, @ViewBuilder leading: () -> Leading,
+                @ViewBuilder trailing: () -> Trailing, @ViewBuilder single: () -> Single) {
         self.crease = crease
         self.leading = leading()
         self.trailing = trailing()
         self.single = single()
+        _width = State(initialValue: twoPagesFit && crease == nil ? PageSpreadLayout.minimumWidth : 0)
     }
 
     public var body: some View {
@@ -219,10 +232,12 @@ public struct PageSpread<Leading: View, Trailing: View, Single: View>: View {
                     leading
                         .frame(width: split)
                         .environment(\.creaseEdge, crease == nil ? nil : .trailing)
+                        .environment(\.spreadPage, crease == nil)
                     if crease == nil { Divider() }
                     trailing
                         .frame(maxWidth: .infinity)
                         .environment(\.creaseEdge, crease == nil ? nil : .leading)
+                        .environment(\.spreadPage, crease == nil)
                 }
             } else {
                 single
@@ -234,7 +249,7 @@ public struct PageSpread<Leading: View, Trailing: View, Single: View>: View {
 
 /// Where a spread splits, as plain values.
 public enum PageSpreadLayout {
-    /// The narrowest a page of a spread gets.
+    /// The narrowest a page of a spread gets (the trailing one less the hairline, on the Mac).
     public static let minimumPage: CGFloat = 560
     /// The narrowest container that shows two pages without a crease.
     public static let minimumWidth: CGFloat = minimumPage * 2

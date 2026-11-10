@@ -25,10 +25,11 @@ struct PageScroll<Content: View>: View {
     var bottomInset: CGFloat = 0
     @ViewBuilder var content: Content
     @State private var width: CGFloat = 1000
+    @Environment(\.spreadPage) private var spreadPage
 
     var body: some View {
         ReadingPage(lazy: lazy, bottomInset: bottomInset) { content }
-            .environment(\.pageIsNarrow, ReadingWidth(width: width) == .narrow)
+            .environment(\.pageIsNarrow, ReadingWidth(width: width, spreadPage: spreadPage) == .narrow)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
 }
@@ -123,12 +124,6 @@ extension AppState {
         let model = String(decoding: bytes.prefix { $0 != 0 }, as: UTF8.self)
         return model.isEmpty ? nil : model
     }
-
-    /// Shows a passage in the transcript: the page turns to it and scrolls there.
-    func showPassage(_ segmentID: UUID) {
-        pageScrollTarget = segmentID
-        pageMode = .transcript
-    }
 }
 
 /// Where the page's shared views go on this Mac: the inspector for Info, the transcript for a passage.
@@ -142,7 +137,7 @@ private struct MacReadingContext: ViewModifier {
             navigator: ReadingNavigator(open: { state.selectedID = $0 },
                                         showInfo: { _ in state.showInspector() },
                                         search: { state.search = $0 },
-                                        showTranscript: { _, _ in state.pageMode = .transcript })))
+                                        showTranscript: { _, _ in state.turnPage(to: .transcript) })))
     }
 }
 

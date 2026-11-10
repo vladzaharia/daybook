@@ -41,7 +41,15 @@ final class AppState {
     var templates: [SummaryTemplate] { library.templates }
     var allTags: [String] { library.allTags }
 
+    /// The side of the page that shows alone: in a column too narrow for two pages, or once the person collapses the
+    /// spread to it.
     var pageMode: PageMode = .summary
+    /// Whether the page shows Summary and Transcript side by side where the detail column has room for two pages
+    /// (`pageSpreadFits`); the toolbar's switch collapses it to one page, and the window keeps the choice
+    /// (`LibraryRestoration`).
+    var pageSpreadChosen = true
+    /// The detail column has room for two pages now (`PageSpreadLayout`): the page says so as it lays out.
+    var pageSpreadFits = false
     /// A transcript passage the page should scroll to, from search or a bookmark.
     var pageScrollTarget: UUID?
     /// Set to ask the window to confirm moving conversations to the Trash.
@@ -1407,6 +1415,68 @@ final class AppState {
         guard let last = order.lastIndex(where: removed.contains) else { return nil }
         if let next = order[(last + 1)...].first(where: { !removed.contains($0) }) { return next }
         return order[..<last].last { !removed.contains($0) }
+    }
+}
+
+// MARK: - The page's sides
+
+extension AppState {
+    /// Whether `meeting`'s page shows Summary and Transcript side by side now: the detail column has room for two
+    /// pages, there's a transcript's page, and the person hasn't collapsed it to one.
+    func showsPageSpread(_ meeting: Meeting) -> Bool {
+        pageSpreadFits && pageSpreadChosen && hasTranscriptPage(meeting)
+    }
+
+    /// Where `meeting`'s Summary | Transcript is a pair of toggles rather than a switch: the column has room for two
+    /// pages, and there's a transcript's page to put beside the summary.
+    func pairsPages(_ meeting: Meeting) -> Bool {
+        pageSpreadFits && hasTranscriptPage(meeting)
+    }
+
+    /// Which sides of `meeting`'s page show, as the toolbar's switch and the View menu light them.
+    func pageSides(_ meeting: Meeting) -> PageSides {
+        PageSides(spread: showsPageSpread(meeting), mode: hasTranscriptPage(meeting) ? pageMode : .summary)
+    }
+
+    /// The toolbar's Summary or Transcript, or View › Summary (⌘1) or Transcript (⌘2), for `meeting` (`PageSides`).
+    func choosePage(_ side: PageMode, for meeting: Meeting) {
+        let next = PageSides(spread: pageSpreadChosen, mode: pageMode).choosing(side, pairs: pairsPages(meeting))
+        if next.spread != pageSpreadChosen { pageSpreadChosen = next.spread }
+        if next.mode != pageMode { pageMode = next.mode }
+    }
+
+    /// Brings a side of the page into view for something asked elsewhere (a passage, Your notes, Find): in a spread
+    /// it's already beside the other, so the page doesn't turn.
+    func turnPage(to side: PageMode) {
+        guard !(pageSpreadFits && pageSpreadChosen) else { return }
+        pageMode = side
+    }
+
+    /// Shows a passage in the transcript: it scrolls there and flashes it, the page turning to it first unless the
+    /// transcript is beside the summary.
+    func showPassage(_ segmentID: UUID) {
+        pageScrollTarget = segmentID
+        turnPage(to: .transcript)
+    }
+}
+
+/// The page's sides as the toolbar's Summary | Transcript chooses them where the window has room for two pages: a pair
+/// of toggles, both lit while both pages show. Choosing a lit one keeps that page alone; choosing the other puts it back
+/// beside it; one page always shows. Where there's room for one page it's a switch, and the spread waits for the room.
+struct PageSides: Equatable {
+    /// Both pages, side by side.
+    var spread: Bool
+    /// The page that shows alone.
+    var mode: PageMode
+
+    /// Whether `side` shows (is lit).
+    func shows(_ side: PageMode) -> Bool { spread || mode == side }
+
+    /// After `side` is chosen. `pairs`: the window has room for two pages (else it's a switch).
+    func choosing(_ side: PageMode, pairs: Bool) -> PageSides {
+        guard pairs else { return PageSides(spread: spread, mode: side) }
+        if spread { return PageSides(spread: false, mode: side) }
+        return side == mode ? self : PageSides(spread: true, mode: side)
     }
 }
 

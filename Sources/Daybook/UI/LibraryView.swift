@@ -39,10 +39,11 @@ struct LibraryView: View {
     /// The window's: Edit › Undo takes a Move to Trash back.
     @Environment(\.undoManager) private var undoManager
     // Where the person was, for the window to reopen there (`LibraryRestoration`): the place, the conversation, its
-    // page, and which columns they chose to show.
+    // page (and whether they collapsed the two pages to it), and which columns they chose to show.
     @SceneStorage("library.place") private var storedPlace = ""
     @SceneStorage("library.selection") private var storedSelection = ""
     @SceneStorage("library.page") private var storedPage = ""
+    @SceneStorage("library.spread") private var storedSpread = true
     @SceneStorage("library.columns") private var storedColumns = ColumnFit.all.rawValue
     @SceneStorage("library.toolbar") private var toolbarShown = true
     @State private var restored = false
@@ -134,6 +135,7 @@ struct LibraryView: View {
         .onChange(of: state.place) { _, place in if restored { storedPlace = LibraryRestoration.encode(place) } }
         .onChange(of: state.selectedID) { _, id in if restored { storedSelection = id?.uuidString ?? "" } }
         .onChange(of: state.pageMode) { _, mode in if restored { storedPage = mode.rawValue } }
+        .onChange(of: state.pageSpreadChosen) { _, chosen in if restored { storedSpread = chosen } }
         .sheet(item: $state.activeSheet) { sheet in ConversationSheet(state: state, sheet: sheet) }
         .sheet(item: $state.addDeviceRequest) { request in AddDeviceSheet(state: state, request: request) }
         .sheet(item: $state.libraryMoveOffer) { offer in LibraryMoveSheet(state: state, offer: offer) }
@@ -316,6 +318,7 @@ struct LibraryView: View {
             storedPlace = LibraryRestoration.encode(state.place)
             storedSelection = state.selectedID?.uuidString ?? ""
             storedPage = state.pageMode.rawValue
+            storedSpread = state.pageSpreadChosen
         }
         // The columns the person chose, as far as the window has room for them: one change, straight there.
         adaptColumns()
@@ -328,6 +331,7 @@ struct LibraryView: View {
             state.selectedID = id
         }
         if let page = PageMode(rawValue: storedPage) { state.pageMode = page }
+        state.pageSpreadChosen = storedSpread
     }
 
     /// Share and Tags… from More: what needs the window.
