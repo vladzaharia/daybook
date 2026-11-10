@@ -56,7 +56,6 @@ final class LibraryProtectionTests: XCTestCase {
         return protector
     }
 
-    private func classOf(_ tree: Tree, _ suffix: String) -> FileProtectionType? { ProtectionClass.of(tree.url(tree.path(ending: suffix))) }
 
     /// On, text is class A and audio and photos class B; the files that say how things stand stay class C, and a
     /// recording in progress, with its captions, is left as it is. Off, it's as before: text class C, saved captions
@@ -78,38 +77,38 @@ final class LibraryProtectionTests: XCTestCase {
         XCTAssertNil(protector.progress, "no bar once it's through")
         for text in ["/meeting.json", "meeting.recovery.json", "highlights-ab.json", "library.json", "glossary.json", "local-work.json",
                      "Sync/lib-dev.json", "lib-dev/\(tree.meeting.uuidString).json", "LiveCaptions/\(tree.meeting.uuidString).json"] {
-            XCTAssertEqual(classOf(tree, text), .complete, text)
+            XCTAssertProtectionClass(tree.url(tree.path(ending: text)), .complete, text)
         }
-        XCTAssertEqual(ProtectionClass.of(tree.url(tree.paths.last!)), .complete, "a conversation in the Trash")
+        XCTAssertProtectionClass(tree.url(tree.paths.last!), .complete, "a conversation in the Trash")
         for media in ["here.m4a", "recorder.wav", "photo.jpg", "Blobs/abcdef"] {
-            XCTAssertEqual(classOf(tree, media), .completeUnlessOpen, media)
+            XCTAssertProtectionClass(tree.url(tree.path(ending: media)), .completeUnlessOpen, media)
         }
         for state in ["owed-stops.json", "sealing.json", "outbox.json"] {
-            XCTAssertEqual(classOf(tree, state), .completeUntilFirstUserAuthentication, "\(state): read and written while locked")
+            XCTAssertProtectionClass(tree.url(tree.path(ending: state)), .completeUntilFirstUserAuthentication, "\(state): read and written while locked")
         }
         for file in [PhoneLibrary.broughtInFile, PhoneAppModel.owedStopsFile] {
             XCTAssertTrue(LibraryProtection.stateFiles.contains(file), "\(file): read as Daybook starts, perhaps locked")
         }
-        XCTAssertEqual(ProtectionClass.of(inProgress), .completeUnlessOpen, "a recording in progress's captions: written while locked")
-        XCTAssertEqual(ProtectionClass.of(staged), .completeUnlessOpen, "staging is the recording's own")
+        XCTAssertProtectionClass(inProgress, .completeUnlessOpen, "a recording in progress's captions: written while locked")
+        XCTAssertProtectionClass(staged, .completeUnlessOpen, "staging is the recording's own")
         // Folders take their files' class, so what's made in them later does too.
-        XCTAssertEqual(ProtectionClass.of(tree.root), .complete)
-        XCTAssertEqual(ProtectionClass.of(tree.url("Meetings/\(tree.meeting.uuidString)")), .complete)
-        XCTAssertEqual(ProtectionClass.of(tree.url("Meetings/\(tree.meeting.uuidString)/Originals")), .completeUnlessOpen)
-        XCTAssertEqual(ProtectionClass.of(tree.url("Staging")), .completeUnlessOpen, "never the library's class A")
-        XCTAssertEqual(ProtectionClass.of(tree.url("Sync/Courier")), .completeUntilFirstUserAuthentication)
+        XCTAssertProtectionClass(tree.root, .complete)
+        XCTAssertProtectionClass(tree.url("Meetings/\(tree.meeting.uuidString)"), .complete)
+        XCTAssertProtectionClass(tree.url("Meetings/\(tree.meeting.uuidString)/Originals"), .completeUnlessOpen)
+        XCTAssertProtectionClass(tree.url("Staging"), .completeUnlessOpen, "never the library's class A")
+        XCTAssertProtectionClass(tree.url("Sync/Courier"), .completeUntilFirstUserAuthentication)
 
         protector.protect(false)
         await protector.settle()
         XCTAssertTrue(protector.isSettled(protects: false))
         for text in ["/meeting.json", "library.json", "Sync/lib-dev.json", "highlights-ab.json"] {
-            XCTAssertEqual(classOf(tree, text), .completeUntilFirstUserAuthentication, text)
+            XCTAssertProtectionClass(tree.url(tree.path(ending: text)), .completeUntilFirstUserAuthentication, text)
         }
-        XCTAssertEqual(classOf(tree, "LiveCaptions/\(tree.meeting.uuidString).json"), .completeUnlessOpen, "saved captions, as before")
-        XCTAssertEqual(classOf(tree, "here.m4a"), .completeUnlessOpen, "recorded here: as it was filed")
-        XCTAssertEqual(classOf(tree, "recorder.wav"), .completeUntilFirstUserAuthentication)
-        XCTAssertEqual(ProtectionClass.of(tree.root), .completeUntilFirstUserAuthentication)
-        XCTAssertEqual(ProtectionClass.of(staged), .completeUnlessOpen)
+        XCTAssertProtectionClass(tree.url(tree.path(ending: "LiveCaptions/\(tree.meeting.uuidString).json")), .completeUnlessOpen, "saved captions, as before")
+        XCTAssertProtectionClass(tree.url(tree.path(ending: "here.m4a")), .completeUnlessOpen, "recorded here: as it was filed")
+        XCTAssertProtectionClass(tree.url(tree.path(ending: "recorder.wav")), .completeUntilFirstUserAuthentication)
+        XCTAssertProtectionClass(tree.root, .completeUntilFirstUserAuthentication)
+        XCTAssertProtectionClass(staged, .completeUnlessOpen)
     }
 
     /// What a save makes after the switch takes the class of its folder (text class A, audio class B), and a file a save
@@ -126,10 +125,10 @@ final class LibraryProtectionTests: XCTestCase {
         let folder = tree.url("Meetings/\(tree.meeting.uuidString)")
         let note = folder.appendingPathComponent("new.json")
         try Data("{}".utf8).write(to: note)
-        XCTAssertEqual(ProtectionClass.of(note), .complete, "made in a class A folder")
+        XCTAssertProtectionClass(note, .complete, "made in a class A folder")
         let audio = folder.appendingPathComponent("Originals/new.m4a")
         try Data("audio".utf8).write(to: audio)
-        XCTAssertEqual(ProtectionClass.of(audio), .completeUnlessOpen, "made among the audio")
+        XCTAssertProtectionClass(audio, .completeUnlessOpen, "made among the audio")
 
         // A save that came out class C (a temporary file made elsewhere, renamed into place).
         let saved = tree.url(tree.path(ending: "/meeting.json"))
@@ -137,11 +136,11 @@ final class LibraryProtectionTests: XCTestCase {
         locked = true
         protector.keep(now: true)
         await protector.settle()
-        XCTAssertEqual(ProtectionClass.of(saved), .completeUntilFirstUserAuthentication, "nothing changes while locked")
+        XCTAssertProtectionClass(saved, .completeUntilFirstUserAuthentication, "nothing changes while locked")
         locked = false
         protector.keep()
         await protector.settle()
-        XCTAssertEqual(ProtectionClass.of(saved), .complete, "given the library's class")
+        XCTAssertProtectionClass(saved, .complete, "given the library's class")
     }
 
     /// Switching notes each part of the library as it's through: a run stopped partway (Daybook killed) goes on where it
@@ -188,9 +187,9 @@ final class LibraryProtectionTests: XCTestCase {
         await second.settle()
         XCTAssertEqual(resumed, Array(units.dropFirst(3)), "only what's left, from the part cut short")
         XCTAssertTrue(second.isSettled(protects: true))
-        XCTAssertEqual(classOf(tree, "/meeting.json"), .complete)
+        XCTAssertProtectionClass(tree.url(tree.path(ending: "/meeting.json")), .complete)
         for unit in units where unit.hasPrefix("Meetings/") {
-            XCTAssertEqual(ProtectionClass.of(root.appendingPathComponent("\(unit)/meeting.json")), .complete, unit)
+            XCTAssertProtectionClass(root.appendingPathComponent("\(unit)/meeting.json"), .complete, unit)
         }
     }
 
@@ -202,7 +201,7 @@ final class LibraryProtectionTests: XCTestCase {
         let protector = protector(tree.root, defaults: makeTestDefaults("LibraryProtectionTests"), exemptions: tree.exemptions)
         protector.protect(true)
         await protector.settle()
-        XCTAssertEqual(ProtectionClass.of(tree.url("library.json")), .complete)
+        XCTAssertProtectionClass(tree.url("library.json"), .complete)
         XCTAssertTrue(BackupExclusion.isExcluded(tree.url("Meetings")), "a folder keeps its exclusion")
         XCTAssertTrue(BackupExclusion.isExcluded(tree.url("library.json")), "a file keeps its exclusion")
 
@@ -360,8 +359,8 @@ final class LibraryProtectionTests: XCTestCase {
         let snapshot = SharedRecentConversations([.init(id: UUID(), title: "Pricing review", date: Date())])
         XCTAssertTrue(snapshot.save(to: container, protects: true))
         let file = SharedRecentConversations.cache.snapshotFile(in: container)
-        XCTAssertEqual(ProtectionClass.of(file), .complete)
-        XCTAssertEqual(ProtectionClass.of(SharedRecentConversations.cache.cacheDirectory(in: container)), .complete)
+        XCTAssertProtectionClass(file, .complete)
+        XCTAssertProtectionClass(SharedRecentConversations.cache.cacheDirectory(in: container), .complete)
         guard case .value(let read) = SharedRecentConversations.read(from: container) else { return XCTFail("readable while unlocked") }
         XCTAssertEqual(read, snapshot)
 
