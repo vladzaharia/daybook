@@ -299,7 +299,7 @@ public actor CloudKitCourier: SyncCourier {
     /// A file's record: an encrypted library's (`<library>.Sealed.…`) in its own zone.
     private func recordID(_ name: String) -> CKRecord.ID { CKRecord.ID(recordName: name, zoneID: Self.isSealed(name) ? sealedZoneID : zoneID) }
 
-    static func isSealed(_ recordName: String) -> Bool { recordName.split(separator: ".").dropFirst().first == "Sealed" }
+    public static func isSealed(_ recordName: String) -> Bool { recordName.split(separator: ".").dropFirst().first == "Sealed" }
 
     /// Puts every file that's due back in the engine's pending changes, and waits for the next one that isn't.
     private func requeueDue() {

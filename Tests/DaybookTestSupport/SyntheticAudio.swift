@@ -8,7 +8,8 @@ import Foundation
 public enum SyntheticAudio {
     public static let rate = 16_000.0
 
-    /// Speech from `say` at 16 kHz; nil when the voice isn't available here (tests skip).
+    #if os(macOS)
+    /// Speech from `say` at 16 kHz; nil when the voice isn't available here (tests skip). The Mac's tests only.
     public static func speech(_ text: String, voice: String, in folder: URL) throws -> [Float]? {
         let url = folder.appendingPathComponent("\(voice.replacingOccurrences(of: " ", with: "-"))-\(abs(text.hashValue)).wav")
         let process = Process()
@@ -20,6 +21,7 @@ public enum SyntheticAudio {
         guard process.terminationStatus == 0, let samples = try? read(url), !samples.isEmpty else { return nil }
         return samples
     }
+    #endif
 
     public static func read(_ url: URL) throws -> [Float] {
         let file = try AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false)

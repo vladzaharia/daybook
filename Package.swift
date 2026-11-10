@@ -118,9 +118,10 @@ let package = Package(
             "DaybookDesign",
             "DaybookUI"
         ]),
-        // What every test bundle shares (Tests/DaybookTestSupport): waiting for something to happen, UserDefaults
-        // suites and folders that are removed when a test ends, and one seeded random generator.
-        .target(name: "DaybookTestSupport", path: "Tests/DaybookTestSupport"),
+        // What every test bundle shares (Tests/DaybookTestSupport), the iPhone's too: waiting for something to happen,
+        // UserDefaults suites and folders that are removed when a test ends, one seeded random generator, and the
+        // doubles that stand in for iCloud (`InMemoryCourier`), iCloud Keychain (`MemoryLibraryKeyStore`), and audio files.
+        .target(name: "DaybookTestSupport", dependencies: ["DaybookCore", "DaybookKit"], path: "Tests/DaybookTestSupport"),
         .testTarget(name: "DaybookCoreTests", dependencies: ["DaybookCore", "DaybookTestSupport"]),
         // Device tests decode transferred audio with DaybookIntelligence's reader (macOS).
         .testTarget(name: "DaybookDevicesTests", dependencies: ["DaybookDevices", "DaybookCore", "DaybookIntelligence", "DaybookCaptions",

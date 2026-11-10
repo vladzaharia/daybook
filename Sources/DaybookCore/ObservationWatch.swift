@@ -79,6 +79,8 @@ public final class ObservationWatch {
     }
 
     private func start(_ read: @escaping @MainActor () -> Void, delay: Duration?, tell: @escaping @MainActor () -> Void) {
+        // Called only on the main actor (`onMain`), so it may ride through the change callback, which is `@Sendable`.
+        nonisolated(unsafe) let tell = tell
         follow = { [weak self] in
             withObservationTracking {
                 read()
@@ -105,6 +107,7 @@ public final class ObservationWatch {
     /// `withObservationTracking` calls back on the thread that changes the value, before it changes; every model here
     /// is main-actor, so that's the main thread. The work waits for the change to land: the next turn of the main queue.
     private nonisolated static func onMain(_ work: @escaping @MainActor () -> Void) {
+        nonisolated(unsafe) let work = work
         DispatchQueue.main.async { MainActor.assumeIsolated(work) }
     }
 

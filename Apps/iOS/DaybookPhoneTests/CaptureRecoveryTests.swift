@@ -37,7 +37,7 @@ final class CaptureRecoveryTests: XCTestCase {
     /// and files the recording.
     func testATornLastFragmentKeepsTheAudioBeforeTheTear() async throws {
         let scratch = try temporaryDirectory()
-        let bytes = try await CaptureFiles.inProgressSegment(seconds: 5, frequency: 440, in: scratch, test: self)
+        let bytes = try await CaptureFiles.inProgressSegment(seconds: 5, frequency: 440, in: scratch)
         let boxes = CaptureFiles.boxes(bytes)
         let lastIndex = try XCTUnwrap(boxes.last { $0.type == "moof" && $0.end <= bytes.count })
         let beforeLast = try CaptureFiles.readableFrames(bytes.prefix(lastIndex.offset), scratch: scratch)
@@ -85,7 +85,7 @@ final class CaptureRecoveryTests: XCTestCase {
         let folder = try newFolder("orphan")
         let first = try CaptureFiles.writeClosedSegment(to: folder.appendingPathComponent("segment-000.m4a"), seconds: 3, frequency: 440)
         XCTAssertEqual(first, 144_000)
-        let orphan = try await CaptureFiles.inProgressSegment(seconds: 4, frequency: 660, in: scratch, test: self)
+        let orphan = try await CaptureFiles.inProgressSegment(seconds: 4, frequency: 660, in: scratch)
         try orphan.write(to: folder.appendingPathComponent("segment-001.m4a"))
         let orphanFrames = try CaptureFiles.readableFrames(orphan, scratch: scratch)
         XCTAssertGreaterThanOrEqual(orphanFrames, 48_000)
@@ -122,7 +122,7 @@ final class CaptureRecoveryTests: XCTestCase {
         let scratch = try temporaryDirectory()
         let folder = try newFolder("interrupted")
         let first = try CaptureFiles.writeClosedSegment(to: folder.appendingPathComponent("segment-000.m4a"), seconds: 3, frequency: 440)
-        let second = try await CaptureFiles.inProgressSegment(seconds: 4, frequency: 660, in: scratch, test: self)
+        let second = try await CaptureFiles.inProgressSegment(seconds: 4, frequency: 660, in: scratch)
         try second.write(to: folder.appendingPathComponent("segment-001.m4a"))
         let secondFrames = try CaptureFiles.readableFrames(second, scratch: scratch)
         XCTAssertGreaterThanOrEqual(secondFrames, 48_000)

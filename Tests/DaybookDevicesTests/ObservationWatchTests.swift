@@ -1,4 +1,5 @@
 import DaybookCaptions
+import DaybookCore
 import DaybookTestSupport
 import Foundation
 import Observation
