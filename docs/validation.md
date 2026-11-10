@@ -5,6 +5,20 @@
 The items the design pass deferred (docs/audits/2026-11-10/README.md, "Still to do"), each on its own worktree from
 `design-pass-2026-11-followups` (stacked on PR #62), merged here with the touched suites rerun after every merge.
 
+- **F1, the countdown words once, and the wordless bookmark (CQ-19).** The summary countdown's words ("Summarizing in
+  12 s" and its siblings, the one rounding rule, the tick, a summary under way here, on a Mac, or in the cloud,
+  "Waiting for a Mac to summarize", and the choices) are written once in DaybookKit's `SummaryPlacementWords`; every
+  surface on both apps says them from there (the planner, the page, rows, a Mac's countdown over the link, the queue
+  words, the status block, the recorder chip, Floating Notes, the menu bar, the iPhone's `MacPresence` and status
+  sheet; the Live Activity and widgets say none). `DaybookDesign.StatusLineItem` keeps its own tick because
+  DaybookDesign can't import DaybookKit, and StatusLineTests proves it ticks the same. SummaryPlacementWordsTests
+  (every variant, 1 s against many, rounding, ticking, Personal under Always per ux-mac-10), and the 17 other suites
+  that asserted the literals now assert the shared words (237 tests). After Stop on the iPhone, a bookmark with
+  nothing written after it says "Bookmark" beside its mark in placeholder ink (`BookmarkLabel.untitled`,
+  `NoteParagraphs.isWordless`; the summary's placeholder and the Mac transcript's tooltip use the same word), in every
+  posture since the editor is shared; RecorderScreenTests at default and accessibility sizes, MarginNotesEditorTests,
+  and 18 Pro (pocket) and open Duo (notebook) captures. iPhone suites 122 + 24. Left: the Mac's AppKit notes editor
+  still draws a trailing wordless bookmark as a bare tick (the shared rule is ready for it).
 - **F2, the page's status out of the views (code-quality P7).** The page's status is gathered in one function per
   app (`ConversationStatusPresentation.mac` with `Inputs.mac`, `.phone` with `Inputs.phone`), and what it offers is
   carried out by DaybookKit's `ConversationStatusActionHandler`, which `MacStatusActions` and `PhoneStatusActions`
