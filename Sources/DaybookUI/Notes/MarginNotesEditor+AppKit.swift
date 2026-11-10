@@ -218,6 +218,9 @@ final class MarginTextView: NSTextView {
     var times: [TimeInterval?] = [] { didSet { if times != oldValue { updateGutter() } } }
     var marks: [NoteMark] = [] { didSet { if marks != oldValue { updateGutter() } } }
     var placeholder = "" { didSet { if placeholder != oldValue { needsDisplay = true } } }
+    /// Where "Bookmark" is drawn, in placeholder ink, beside a bookmark on the line after the last paragraph, which
+    /// nothing written says what it is (`NoteParagraphs.isWordless`); nil when there is none.
+    private var markWordsOrigin: CGPoint? { didSet { if markWordsOrigin != oldValue { needsDisplay = true } } }
     var margin: CGFloat = ReadingGeometry.margin { didSet { if margin != oldValue { updateContainer(); updateGutter() } } }
     var trailingInset: CGFloat = 0 { didSet { if trailingInset != oldValue { updateContainer(); updateGutter() } } }
     var timeFontSize: CGFloat? { didSet { if timeFontSize != oldValue { updateGutter() } } }
@@ -318,10 +321,16 @@ final class MarginTextView: NSTextView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        guard string.isEmpty, !placeholder.isEmpty else { return }
         let attributes: [NSAttributedString.Key: Any] = [.font: bodyFont, .foregroundColor: DaybookPalette.Shade.faint.nsColor,
                                                          .paragraphStyle: paragraphStyle]
-        (placeholder as NSString).draw(in: NSRect(x: margin, y: 0, width: textWidth(for: bounds.width), height: bounds.height), withAttributes: attributes)
+        if string.isEmpty {
+            guard !placeholder.isEmpty else { return }
+            (placeholder as NSString).draw(in: NSRect(x: margin, y: 0, width: textWidth(for: bounds.width), height: bounds.height), withAttributes: attributes)
+        } else if let origin = markWordsOrigin {
+            // VoiceOver hears the mark itself ("Bookmark at 4 minutes 10 seconds"), so its words aren't said twice.
+            (BookmarkLabel.untitled as NSString).draw(in: NSRect(x: origin.x, y: origin.y, width: textWidth(for: bounds.width), height: lineHeight),
+                                                      withAttributes: attributes)
+        }
     }
 
     /// Places each timed paragraph's time on its first line's baseline, right-aligned in the margin, and each
@@ -330,6 +339,7 @@ final class MarginTextView: NSTextView {
         gutter.frame = NSRect(x: 0, y: 0, width: margin, height: bounds.height)
         guard margin > 0, times.contains(where: { $0 != nil }) || !marks.isEmpty, let layoutManager, let textContainer else {
             gutter.update(labels: [], ticks: [])
+            markWordsOrigin = nil
             return
         }
         layoutManager.ensureLayout(for: textContainer)
@@ -355,14 +365,23 @@ final class MarginTextView: NSTextView {
             : layoutManager.extraLineFragmentRect.height > 0 ? layoutManager.extraLineFragmentRect
             : CGRect(x: 0, y: used.maxY + style.fontSize * 0.45, width: 0, height: lineHeight)
         var ticks: [MarginGutterView.Tick] = []
+        var wordless: CGPoint?
         for (mark, before) in NoteParagraphs.placement(of: marks, times: Array(times.prefix(ranges.count))) {
             let line = before < lines.count && !lines[before].isNull ? lines[before] : next
             let height = min(line.height, style.fontSize * 1.25)
             ticks.append(.init(mark: mark, rect: NSRect(x: margin - 6.5, y: line.minY + 1, width: 5, height: height - 2)))
+            // "Bookmark" beside a mark alone on the line after the last paragraph, where the notes' words start.
+            if NoteParagraphs.isWordless(mark, before: before, paragraphs: ranges.count) {
+                wordless = CGPoint(x: margin, y: next.minY)
+            }
         }
         gutter.font = font
         gutter.update(labels: labels, ticks: ticks)
+        markWordsOrigin = text.length == 0 ? nil : wordless
     }
+
+    /// Where "Bookmark" is drawn beside a wordless bookmark after the last paragraph, for tests; nil when there is none.
+    var markWordsOriginForTesting: CGPoint? { markWordsOrigin }
 
     /// The library search's matches, marked as the page marks them; the text itself never changes.
     private func updateFindMarks() {

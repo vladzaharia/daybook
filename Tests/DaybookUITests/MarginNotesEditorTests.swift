@@ -132,6 +132,19 @@ final class MarginNotesEditorTests: XCTestCase {
         return view
     }
 
+    /// A bookmark alone on the line after the last paragraph says "Bookmark" beside its mark, where the notes' words
+    /// start; one beside a paragraph, or in an empty note, says nothing (the placeholder keeps that line).
+    func testBehaviorTheMacEditorSaysBookmarkBesideAWordlessBookmark() {
+        let late = editor("First\n\nSecond", times: [2, 10], marks: [NoteMark(id: "late", kind: .bookmark, time: 12)])
+        let origin = late.markWordsOriginForTesting
+        XCTAssertNotNil(origin, "a bookmark after the last paragraph has no words of its own")
+        XCTAssertEqual(origin?.x, 52, "where the notes' words start, beside the mark in the lane")
+        let early = editor("First\n\nSecond", times: [2, 10], marks: [NoteMark(id: "early", kind: .bookmark, time: 4)])
+        XCTAssertNil(early.markWordsOriginForTesting, "the paragraph written after it is its words")
+        let empty = editor("", times: [], marks: [NoteMark(id: "alone", kind: .bookmark, time: 4)])
+        XCTAssertNil(empty.markWordsOriginForTesting, "the placeholder holds the first line")
+    }
+
     /// What VoiceOver finds beside the notes: the container's children after the notes themselves.
     private func items(_ view: MarginTextView) throws -> [NSAccessibilityElement] {
         let container = NotesContainerView(textView: view, content: view)

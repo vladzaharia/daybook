@@ -17,8 +17,10 @@ The items the design pass deferred (docs/audits/2026-11-10/README.md, "Still to 
   nothing written after it says "Bookmark" beside its mark in placeholder ink (`BookmarkLabel.untitled`,
   `NoteParagraphs.isWordless`; the summary's placeholder and the Mac transcript's tooltip use the same word), in every
   posture since the editor is shared; RecorderScreenTests at default and accessibility sizes, MarginNotesEditorTests,
-  and 18 Pro (pocket) and open Duo (notebook) captures. iPhone suites 122 + 24. Left: the Mac's AppKit notes editor
-  still draws a trailing wordless bookmark as a bare tick (the shared rule is ready for it).
+  and 18 Pro (pocket) and open Duo (notebook) captures. iPhone suites 122 + 24. The Mac's AppKit editor (Floating
+  Notes and the page's notes) draws the same word beside a trailing wordless bookmark, from the same rule
+  (MarginNotesEditorTests' Mac case: after the last paragraph, not beside one, not under the placeholder); no Mac
+  demo state has such a bookmark, so that one is checked by the test alone.
 - **F2, the page's status out of the views (code-quality P7).** The page's status is gathered in one function per
   app (`ConversationStatusPresentation.mac` with `Inputs.mac`, `.phone` with `Inputs.phone`), and what it offers is
   carried out by DaybookKit's `ConversationStatusActionHandler`, which `MacStatusActions` and `PhoneStatusActions`
