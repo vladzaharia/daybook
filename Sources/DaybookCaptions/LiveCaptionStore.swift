@@ -164,7 +164,9 @@ public final class LiveCaptionStore: Sendable {
             }
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         } catch {
-            Self.log.error("Couldn’t save live captions for \(id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            // The error's domain and code only: its description names the file.
+            let code = error as NSError
+            Self.log.error("Couldn’t save live captions for \(id.uuidString, privacy: .public) (\(code.domain, privacy: .public) \(code.code, privacy: .public)): \(error.localizedDescription, privacy: .private)")
             keepUnsaved(captions, replacing: replacing)
             throw error
         }

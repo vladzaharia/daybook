@@ -517,7 +517,7 @@ extension AppState {
         do { _ = try await importAudio([url], source: track.source, attachTo: target, device: track.device) }
         catch {
             if askedFor { report("Couldn’t Add the Recording", "Try again.", error) }
-            else { Self.log.notice("A recording couldn't join its conversation: \(error.localizedDescription, privacy: .public)") }
+            else { Self.log.notice("A recording couldn't join its conversation (\(error.logCode, privacy: .public)): \(error.localizedDescription, privacy: .private)") }
             return false
         }
         dismissSourceSuggestion(suggestion.id, in: sourceID)

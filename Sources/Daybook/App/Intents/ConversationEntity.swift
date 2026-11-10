@@ -118,7 +118,7 @@ struct SpotlightConversationIndex: ConversationIndexing {
             try await index.deleteAppEntities(ofType: ConversationEntity.self)
             if !entities.isEmpty { try await index.indexAppEntities(entities) }
         } catch {
-            Self.log.notice("Conversations couldn't be indexed: \(error.localizedDescription, privacy: .public)")
+            Self.log.notice("Conversations couldn't be indexed (\(error.logCode, privacy: .public)): \(error.localizedDescription, privacy: .private)")
         }
     }
 
@@ -128,7 +128,7 @@ struct SpotlightConversationIndex: ConversationIndexing {
             if !removed.isEmpty { try await index.deleteAppEntities(identifiedBy: removed, ofType: ConversationEntity.self) }
             if !entities.isEmpty { try await index.indexAppEntities(entities) }
         } catch {
-            Self.log.notice("Conversations couldn't be indexed: \(error.localizedDescription, privacy: .public)")
+            Self.log.notice("Conversations couldn't be indexed (\(error.logCode, privacy: .public)): \(error.localizedDescription, privacy: .private)")
         }
     }
 }

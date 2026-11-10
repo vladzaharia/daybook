@@ -303,7 +303,7 @@ extension LibrarySyncEngine {
             } catch is CancellationError {
             } catch {
                 report.lastError = error.localizedDescription
-                Self.log.error("Compaction couldn’t commit: \(error.localizedDescription, privacy: .public)")
+                Self.log.error("Compaction couldn’t commit (\(error.logCode, privacy: .public)): \(error.localizedDescription, privacy: .private)")
             }
         }
         tidyCompactionRecords(policy, now: now, report: &report)

@@ -1298,7 +1298,7 @@ final class AppState {
     func availableAudioURL(for track: RecordingTrack, in meetingID: UUID) async -> URL? {
         do { return try await audioURL(for: track, in: meetingID) }
         catch {
-            Self.log.notice("Audio for a recording isn't available: \(error.localizedDescription, privacy: .public)")
+            Self.log.notice("Audio for a recording isn't available (\(error.logCode, privacy: .public)): \(error.localizedDescription, privacy: .private)")
             return nil
         }
     }
@@ -1463,7 +1463,7 @@ extension AppState {
               meeting.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, meeting.visiblePhotos.isEmpty else { return }
         if selectedID == id { selectedID = previous.flatMap { previous in meetings.contains { $0.id == previous } ? previous : nil } }
         do { _ = try await library.moveToTrash(id) }
-        catch { Self.log.notice("An empty conversation couldn't be removed: \(error.localizedDescription, privacy: .public)") }
+        catch { Self.log.notice("An empty conversation couldn't be removed (\(error.logCode, privacy: .public)): \(error.localizedDescription, privacy: .private)") }
     }
 
     func stopRecording(manual: Bool = true) async {

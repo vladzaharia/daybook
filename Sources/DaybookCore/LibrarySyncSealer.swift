@@ -372,7 +372,7 @@ extension LibrarySyncEngine {
     /// Keeps why sealing failed, for diagnostics.
     private func noteSealerError(_ error: Error, progress: inout SealerProgress) {
         progress.lastError = error.localizedDescription
-        Self.log.error("Sealing failed: \(error.localizedDescription, privacy: .public)")
+        Self.log.error("Sealing failed (\(error.logCode, privacy: .public)): \(error.localizedDescription, privacy: .private)")
     }
 
     /// Seals one object from this device's verified local copy, or from the sync folder's copy (plaintext, or under an

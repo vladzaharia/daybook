@@ -644,7 +644,7 @@ final class PhoneLink {
         do {
             paired = try keyStore.pairedDevices()
         } catch {
-            Self.log.error("Couldn’t read the paired Macs: \(String(describing: error), privacy: .public)")
+            Self.log.error("Couldn’t read the paired Macs (\(error.logCode, privacy: .public)): \(String(describing: error), privacy: .private)")
             pairedReadFailed = true
             schedulePairedRetry()
             return

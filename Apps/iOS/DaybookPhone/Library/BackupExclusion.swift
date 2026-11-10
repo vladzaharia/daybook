@@ -100,7 +100,7 @@ enum BackupExclusion {
         var url = url
         do { try url.setResourceValues(values) } catch {
             // The rules are applied again at launch, on every change, and after each sync pass.
-            log.error("Couldn’t \(excluded ? "exclude" : "include") \(url.lastPathComponent) in backups: \(error.localizedDescription)")
+            log.error("Couldn’t \(excluded ? "exclude" : "include") \(url.lastPathComponent) in backups (\(error.logCode, privacy: .public)): \(error.localizedDescription, privacy: .private)")
         }
     }
 
