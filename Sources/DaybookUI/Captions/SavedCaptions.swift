@@ -5,29 +5,64 @@ import Foundation
 import SwiftUI
 
 extension LiveCaptionStore {
-    /// When each conversation's transcripts were made, by conversation: all `prune` needs, and cheap to
-    /// compare, so the library changing in any other way (notes typed) never prunes.
+    /// When each conversation's transcripts were made, by conversation: when pruning is worth a look, and
+    /// cheap to compare, so the library changing in any other way (notes typed) never prunes.
     public static func transcriptDates(_ meetings: [Meeting]) -> [UUID: [Date]] {
         Dictionary(meetings.map { ($0.id, $0.transcripts.map(\.createdAt)) }, uniquingKeysWith: { first, _ in first })
     }
 
-    /// Removes the captions a transcript has replaced, and those of conversations moved to the Trash
+    /// Each conversation's recordings and transcripts, as the replacement rule reads them (`LiveCaptionCoverage`).
+    public static func coverage(_ meetings: [Meeting]) -> [UUID: LiveCaptionCoverage] {
+        Dictionary(meetings.map { ($0.id, LiveCaptionCoverage($0)) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// Removes the captions transcripts have replaced, and those of conversations moved to the Trash
     /// (`prune(_:keeping:trashed:)`). `keeping`: the conversation being recorded.
     public func prune(meetings: [Meeting], keeping: UUID?, trashed: Set<UUID>? = nil) async {
-        await prune(Self.transcriptDates(meetings), keeping: keeping.map { [$0] } ?? [], trashed: trashed)
+        await prune(Self.coverage(meetings), keeping: keeping.map { [$0] } ?? [], trashed: trashed)
+    }
+}
+
+extension LiveCaptionCoverage {
+    /// A conversation's recordings as the replacement rule reads them: each recording (a recording made from
+    /// another, the microphone with the call's echo removed, counts as it), when it began and for how long, the
+    /// device it came from and its ID there, and when it was last transcribed.
+    public init(_ meeting: Meeting) {
+        var made: [UUID: Date] = [:]
+        for transcript in meeting.transcripts { made[transcript.trackID] = max(made[transcript.trackID] ?? .distantPast, transcript.createdAt) }
+        let known = Set(meeting.tracks.map(\.id))
+        var originals: [UUID: UUID] = [:]
+        for track in meeting.tracks { originals[track.id] = track.derivedFrom.flatMap { known.contains($0) ? $0 : nil } ?? track.id }
+        var transcribed: [UUID: Date] = [:]
+        for (track, date) in made { if let original = originals[track] { transcribed[original] = max(transcribed[original] ?? date, date) } }
+        let recordings = meeting.tracks.filter { $0.derivedFrom == nil && $0.removal == nil }.map { track in
+            Recording(trackID: track.id, source: track.source.rawValue, deviceKind: track.deviceKind, recordingID: track.deviceRecordingID,
+                      startedAt: track.startedAt, createdAt: track.createdAt, duration: track.duration, transcribedAt: transcribed[track.id])
+        }
+        self.init(recordings: recordings, otherTranscripts: made.filter { !known.contains($0.key) }.map(\.value).sorted())
     }
 }
 
 /// Saved live captions as reading shows them, the same on both apps, by one rule (`shown`): a
-/// conversation's own, with words to read, until a transcript made after they began replaces them. They
-/// read on the transcript's page, in the transcript's place while there's none (`standsIn`), else after
-/// it (an earlier recording's, which doesn't cover them); with times that play the recording they were
-/// heard from; and found by search. Never evidence, never summarized, never edited.
+/// conversation's own, each recording's, the lines no transcript replaces yet (`LiveCaptionCoverage`: once
+/// the recording that heard a line is transcribed, or, for the device's own lines, any transcript that
+/// covers their time), with words to read. They read on the transcript's page, in the transcript's place
+/// while there's none (`standsIn`), else after it; with times that play the recording they were heard from;
+/// and found by search. Never evidence, never summarized, never edited.
 public enum SavedCaptions {
     /// The captions to show for `meeting`, or nil when there are none to show: the one rule both apps
     /// read, for the page, its view switch, and search.
     public static func shown(_ captions: LiveCaptions?, for meeting: Meeting) -> LiveCaptions? {
-        LiveCaptionStore.shown(captions, conversation: meeting.id, transcriptsMadeAt: meeting.transcripts.map(\.createdAt))
+        shown(captions.map { [$0] } ?? [], for: meeting)
+    }
+
+    /// The same for each recording's captions of the conversation, read together, the oldest recording's first.
+    public static func shown(_ captures: [LiveCaptions], for meeting: Meeting) -> LiveCaptions? {
+        guard !captures.isEmpty else { return nil }
+        let coverage = LiveCaptionCoverage(meeting)
+        return LiveCaptions.together(captures.flatMap { $0.parts ?? [$0] }.compactMap {
+            LiveCaptionStore.shown($0, conversation: meeting.id, coverage: coverage)
+        })
     }
 
     /// Whether shown captions take the transcript's place: there's no transcript to read yet. Otherwise
@@ -48,39 +83,39 @@ public enum SavedCaptions {
         }
     }
 
-    /// Reads a conversation's saved captions off the caller's actor: those to show (`shown`), or nil.
+    /// Reads a conversation's saved captions, each recording's, off the caller's actor: those to show
+    /// (`shown`), or nil.
     public static func read(for meeting: Meeting, from store: LiveCaptionStore?) async -> LiveCaptions? {
         guard let store else { return nil }
         let id = meeting.id
-        let captions = await Task.detached(priority: .userInitiated) { store.captions(for: id) }.value
-        return shown(captions, for: meeting)
+        let captures = await Task.detached(priority: .userInitiated) { store.captures(of: id) }.value
+        return shown(captures, for: meeting)
     }
 
     /// The recording the captions were heard from: the one they were filed with, else the one that
     /// began as they did (an iPhone's recording before it was filed, a Mac's own). Nil when neither is there.
+    /// Several recordings' read together: the first's.
     public static func recording(of captions: LiveCaptions, in meeting: Meeting) -> RecordingTrack? {
+        let captions = captions.parts?.first ?? captions
         if let id = captions.trackID, let track = meeting.tracks.first(where: { $0.id == id }) { return track }
-        let began = meeting.tracks.filter { track in
-            abs((track.startedAt ?? track.createdAt).timeIntervalSince(captions.createdAt)) <= recordingMatch
-        }
-        return began.min { abs(($0.startedAt ?? $0.createdAt).timeIntervalSince(captions.createdAt))
-            < abs(($1.startedAt ?? $1.createdAt).timeIntervalSince(captions.createdAt)) }
+        func distance(_ track: RecordingTrack) -> TimeInterval { abs((track.startedAt ?? track.createdAt).timeIntervalSince(captions.origin)) }
+        return meeting.tracks.filter { distance($0) <= LiveCaptionCoverage.recordingMatch }.min { distance($0) < distance($1) }
     }
-
-    /// How far apart a recording's start and its captions' may be: captions begin as the recorder does.
-    static let recordingMatch: TimeInterval = 60
 
     /// Times are seconds into the recording they were heard from, so they play that recording; without
     /// it, the conversation from that time.
     public static func playback(_ segment: LiveCaptionSegment, captions: LiveCaptions, in meeting: Meeting) -> PlaybackTarget {
-        if let track = recording(of: captions, in: meeting) { return .source(track, segment.start) }
+        if let track = recording(of: captions.part(of: segment), in: meeting) { return .source(track, segment.start) }
         return .timeline(segment.start)
     }
 
     /// The caption under the playhead while their recording plays (`trackID`: the recording playing).
     public static func playing(at position: TimeInterval, trackID: UUID?, captions: LiveCaptions, in meeting: Meeting) -> UUID? {
-        guard let trackID, (recording(of: captions, in: meeting)?.id ?? meeting.tracks.first?.id) == trackID else { return nil }
-        return captions.segment(at: position)
+        guard let trackID else { return nil }
+        for part in captions.parts ?? [captions] where (recording(of: part, in: meeting)?.id ?? meeting.tracks.first?.id) == trackID {
+            if let id = part.segment(at: position) { return id }
+        }
+        return nil
     }
 
     /// Search of saved captions, in the conversations they show for: the first matching caption of
@@ -99,7 +134,7 @@ public enum SavedCaptions {
         guard let store, !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
         let saved = Set(store.conversations())
         var captions: [UUID: LiveCaptions] = [:]
-        for meeting in meetings where saved.contains(meeting.id) { captions[meeting.id] = store.captions(for: meeting.id) }
+        for meeting in meetings where saved.contains(meeting.id) { captions[meeting.id] = LiveCaptions.together(store.captures(of: meeting.id)) }
         return hits(in: meetings, query: query, captions: captions)
     }
 

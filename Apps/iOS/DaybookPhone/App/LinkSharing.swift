@@ -1,5 +1,6 @@
 import DaybookKit
 import DaybookLink
+import DaybookUI
 import Foundation
 
 /// What goes to the Macs over the local link while this iPhone records (docs/iphone.md, "Every
@@ -66,36 +67,40 @@ final class LinkSharing {
 
     /// While recording, this iPhone's captions (and its recorder's) go to the Macs recording the same
     /// conversation that show them, a second at a time, over the local link: the Mac's captions then
-    /// have every device's lines (`LinkCaptions`).
+    /// have every device's lines (`LinkCaptions`), and drop the ones this iPhone took back.
     func startSharingCaptions() {
         captionShares = [:]
         captionSharing?.cancel()
         captionSharing = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: Self.captionShareInterval)
-                guard !Task.isCancelled else { return }
-                self?.shareCaptions()
+                guard !Task.isCancelled, let self else { return }
+                await self.shareCaptions()
             }
         }
     }
 
+    /// The last of them go, then no more.
     func stopSharingCaptions() {
-        shareCaptions()
         captionSharing?.cancel()
-        captionSharing = nil
-        captionShares = [:]
+        captionSharing = Task { [weak self] in await self?.shareCaptions() }
     }
 
-    /// Sends each Mac the lines that changed since it last heard.
-    func shareCaptions() {
+    /// Sends each Mac the lines that changed since it last heard, and those taken back: every line this
+    /// iPhone and its recorders heard, which the Mac puts together with its own.
+    func shareCaptions() async {
         let captions = self.captions
-        guard let id = recorder.captureID, let start = recorder.startedAt, captions.activeMeetingID == id else { return }
+        guard let id = recorder.captureID, let start = recorder.startedAt, captions.activeMeetingID == id, !macsShowingCaptions(id).isEmpty
+        else { return }
+        let lines = await captions.forwardable()
+        guard recorder.captureID == id else { return }
         for mac in macsShowingCaptions(id) {
             var share = captionShares[mac] ?? CaptionShare()
-            let lines = share.changes(captions.segments, names: captions.sourceNames)
+            let changes = share.changes(lines, names: captions.sourceNames)
             captionShares[mac] = share
-            guard !lines.isEmpty else { continue }
-            link.sendShared([.captions(LinkCaptions(conversationID: id, startedAt: start, lines: lines))], to: [mac])
+            guard !changes.lines.isEmpty || !changes.removed.isEmpty else { continue }
+            link.sendShared([.captions(LinkCaptions(conversationID: id, startedAt: start, lines: changes.lines,
+                                                    removed: changes.removed.isEmpty ? nil : changes.removed))], to: [mac])
         }
     }
 

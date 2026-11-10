@@ -237,7 +237,7 @@ DNS-SD's `PolicyDenied` (−65570); the client reads that as `localNetworkDenied
 | `bookmark` | `LinkBookmark` | both | conversation, recording time, created-at, label: a bookmark made during a shared recording, by its ID |
 | `bookmark.change` | `LinkBookmarkChange` | both | a shared bookmark's label changed, or it was deleted; changed-at |
 | `note` | `LinkNote` | both | a paragraph written, edited, or deleted during a shared recording: its anchor ID, text, the time its writer files it at, made-at, changed-at |
-| `captions` | `LinkCaptions` | iPhone → Mac | the live captions an iPhone makes of a shared recording, the lines that changed since it last sent (each with its ID, times in its recording, text, tentative, the voice and person live speakers heard, and the recorder that heard it, if not the phone: a recorder's lines are placed from where its live stream starts on the phone's clock, not from its recording's start), and when its recording began on its clock; only to a Mac recording the same conversation that lists `liveCaptions` |
+| `captions` | `LinkCaptions` | both | the live captions a device makes of a shared recording, the lines that changed since it last sent (each with its ID, times in its recording, text, tentative, the voice and person live speakers heard, and the recorder that heard it, if not the sender: a recorder's lines are placed from where its live stream starts on the phone's clock, not from its recording's start), the IDs of lines it sent that its recognizer took back (`removed`, which the receiver drops; nil from an older build), and when its recording began on its clock; only to a device recording the same conversation that lists `liveCaptions`. An iPhone sends every line it and its recorders heard; a Mac sends only its Call lines |
 | `levels` | `LinkLevels` | iPhone → Mac | an iPhone's input level during a shared recording, for the Mac's meters: its meter's readings since it last sent (0…1, oldest first, `interval` apart, at most 30), about five times a second; only to a Mac recording the same conversation that lists `liveLevels`, and never queued behind other messages (one still on its way drops the next) |
 | `processing.progress` | `LinkProcessingProgress` | Mac → phone | meeting, phase, fraction, Mac name, detail; while a summary counts down, phase `summaryCountdown` with `countdown` (seconds left as sent, whether Use the Cloud is on offer); in the cloud, `cloudModel` (both optional) |
 | `processing.nudge` | `LinkProcessingNudge` | phone → Mac | "I just wrote request X": the request itself travels through sync |
@@ -353,8 +353,9 @@ start reads as a start the person chose, and `sharedConversationID` isn't read.
 - **Features.** `cascade` (`LinkCapabilities.cascadeFeature`): the device joins and stops shared
   recordings on its own, reads `cascade` and `sharedConversationID`, and accepts a stop from a device
   recording a conversation with it. `sharedNotes`: it takes `note`, `bookmark.change`, and `bookmark` in
-  both directions. Both apps list both. `liveCaptions` (the Mac lists it): it shows another device's
-  `captions` of a shared recording beside its own; an older Mac is never sent them. `liveLevels` (the
+  both directions. Both apps list both. `liveCaptions` (both apps list it; an iPhone since November
+  2026): it shows another device's `captions` of a shared recording beside its own; an older device is
+  never sent them. `liveLevels` (the
   Mac lists it): it draws another device's input level (`levels`) beside its own meters; an older Mac
   is never sent them, and a Mac shows an older iPhone, which sends none, with a flat meter.
 - **Cascading start.** `LinkRecordRequest.cascade` says what started the requester's recording
