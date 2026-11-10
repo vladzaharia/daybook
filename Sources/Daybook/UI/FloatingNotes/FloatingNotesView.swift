@@ -350,6 +350,10 @@ struct ChipMenuItems: View {
                 Button("Show \(session.device.name)") { context.showDevice(id) }
             }
         case .processing:
+            if let meeting = context.meeting, state.awaitingModels.contains(meeting.id) {
+                // Waiting for models: the download comes first.
+                ModelDownloadMenuItems(state: state)
+            }
             if let meeting = context.meeting {
                 if let planner = state.placements[meeting.id], !planner.actions.isEmpty {
                     // Where its summary runs: Use the Cloud, Start Now.
@@ -366,9 +370,12 @@ struct ChipMenuItems: View {
                 Button("Open in Daybook") { context.open() }
             }
             if let meeting = context.meeting, state.awaitingModels.contains(meeting.id) {
-                Button("Open Settings…") { openSettingsPane(.models) }
+                Button("Choose Models…") { openSettingsPane(.models) }
             }
         case .queue:
+            if state.processingID == nil, !state.awaitingModels.isEmpty || state.modelDownloadState != nil {
+                ModelDownloadMenuItems(state: state)
+            }
             if let id = state.processingID, let planner = state.placements[id], !planner.actions.isEmpty {
                 ForEach(planner.actions, id: \.self) { action in
                     Button(action.title) { state.chooseSummaryPlacement(action, for: id) }
@@ -379,7 +386,7 @@ struct ChipMenuItems: View {
                 Button("Open in Daybook") { context.openConversation(id) }
             }
             if !state.awaitingModels.isEmpty {
-                Button("Open Settings…") { openSettingsPane(.models) }
+                Button("Choose Models…") { openSettingsPane(.models) }
             }
         case .sync:
             Button("Open Sync Settings…") { openSettingsPane(.library) }
@@ -392,6 +399,27 @@ struct ChipMenuItems: View {
         LaunchOptions.defaults.set(pane.rawValue, forKey: SettingsPane.storageKey)
         openSettingsWindow.settings()
         NSApp.activate()
+    }
+}
+
+/// What a chip about models offers first (`AppState.modelDownloadState`): Cancel Download while they arrive, Try Again
+/// after one stopped, and otherwise what downloading them takes ("Download · 0.9 GB"), over whatever network this is.
+private struct ModelDownloadMenuItems: View {
+    let state: AppState
+
+    var body: some View {
+        switch state.modelDownloadState {
+        case .downloading?:
+            Button("Cancel Download") { state.cancelDownload() }
+        case .failed?:
+            Button("Try Again") { state.downloadModels(state.missingSelectedModels) }
+        case .waitingForWiFi(let bytes)?:
+            Button(ProcessingWords.download(bytes)) { state.downloadModels(state.missingSelectedModels) }
+        case nil:
+            if let bytes = state.missingSelectedBytes {
+                Button(ProcessingWords.download(bytes)) { state.downloadModels(state.missingSelectedModels) }
+            }
+        }
     }
 }
 

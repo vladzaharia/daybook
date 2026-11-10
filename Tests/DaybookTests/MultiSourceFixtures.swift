@@ -272,6 +272,9 @@ struct MultiSourceRig {
         defaults.set(false, forKey: "liveCaptions")
         let microphone = FakeCaptureSource(method: "microphone")
         let state = AppState(libraryURL: root, defaults: defaults, capture: Self.capture(microphone))
+        // Speakers with Community-1, which makes turns and voice profiles in one pass, so "the models" are three. A fresh
+        // Mac starts on its recommended preset, which may add Nemotron 3 (ModelPreferenceMigrationTests).
+        state.processingPreferences.speakerModelID = "community-1/offline"
         await state.initialize()
         XCTAssertTrue(state.isReady)
         let rig = MultiSourceRig(state: state, root: root, defaults: defaults, suite: suite, microphone: microphone)

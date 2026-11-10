@@ -108,6 +108,10 @@ struct ModelManagerSnapshot {
     var downloading: String?
     var downloadFraction: Double = 0
     var pending: [String] = []
+    /// Owed downloads waiting for Wi‑Fi, by variant key.
+    var waitingForWiFi: Set<String> = []
+    /// Variant keys whose download stopped on its own ("Couldn’t download", with Try Again).
+    var failed: Set<String> = []
     var updates: [ModelUpdate] = []
     /// Revisions nothing may remove: pinned, leased, or frozen by queued and running jobs.
     var protectedRevisions: Set<ModelInstallKey> = []
@@ -121,9 +125,9 @@ struct ModelManagerSnapshot {
     /// take. A download that wouldn't fit says so and waits.
     var space: ModelSpace { freeSpace.less(promisedBytes) }
 
-    /// What the download under way and those waiting will still take.
+    /// What the download under way and those waiting (their turn, or Wi‑Fi) will still take.
     var promisedBytes: Int64 {
-        Set(([downloading].compactMap { $0 } + pending).compactMap { catalog.model(ModelReference($0).id)?.key })
+        Set(([downloading].compactMap { $0 } + pending + waitingForWiFi).compactMap { catalog.model(ModelReference($0).id)?.key })
             .compactMap { catalog.model($0) }
             .reduce(0) { $0 + downloadBytes($1) }
     }
@@ -161,6 +165,9 @@ struct ModelManagerSnapshot {
             if update(for: model.key) != nil { return .updateAvailable }
             return selected ? .inUse : .downloaded
         }
+        if waitingForWiFi.contains(model.key) { return .waitingForWiFi }
+        // The row names the model; its button reads Try Again.
+        if failed.contains(model.key) { return .failed(ProcessingWords.downloadStopped) }
         if inventory.revisions(of: model.key).contains(where: { !$0.isReady }) { return .damaged }
         return .notDownloaded
     }
@@ -503,7 +510,8 @@ final class ModelManager {
                              inventory: inventory, diskUsage: diskUsage, selections: state.modelSelections,
                              speakerQuality: state.processingPreferences.speakerOptions.quality,
                              downloading: state.downloadingID, downloadFraction: state.downloadProgress.fraction,
-                             pending: state.pendingDownloads, updates: updates, protectedRevisions: protectedRevisions,
+                             pending: state.pendingDownloads, waitingForWiFi: state.downloadsWaitingForWiFi,
+                             failed: Set(state.queue.downloadFailures.keys), updates: updates, protectedRevisions: protectedRevisions,
                              resultCounts: resultCounts, freeSpace: freeSpace, fetchedWhenRead: fetchedWhenRead)
     }
 

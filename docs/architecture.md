@@ -92,6 +92,7 @@ Daybook/
   Models/<engine>/<family>/<variant>/<revision>/   verified model installs (docs/models.md)
   Models/UserModels.json                           models the person added
   local-queue.json                                 the work this Mac's queue still owes (never synced)
+  local-downloads.json                             the model downloads this Mac still owes (never synced; docs/models.md)
   library.json                                     folders, templates, recorders, vocabulary (synced settings)
   library.recovery.json
   glossary.json

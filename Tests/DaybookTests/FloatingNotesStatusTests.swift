@@ -204,7 +204,7 @@ final class FloatingNotesStatusTests: XCTestCase {
                        "Transcribing on Studio Mac · 40%", "Another device is named: which one works is the status")
         XCTAssertEqual(FloatingStatus.workChip(.summarizing)?.label, "Summarizing…")
         XCTAssertEqual(FloatingStatus.workChip(.waiting)?.label, "Waiting to transcribe")
-        XCTAssertEqual(FloatingStatus.workChip(.models)?.label, "Waiting for models")
+        XCTAssertEqual(FloatingStatus.workChip(.models(nil))?.label, "Waiting for models")
         XCTAssertEqual(FloatingStatus.workChip(.requested(device: "Alex’s iPhone"))?.label, "Requested from Alex’s iPhone",
                        "the iPhone asked; it isn't what the conversation waits for")
         XCTAssertEqual(FloatingStatus.workChip(.ready(summary: true))?.label, "Summary ready")
@@ -212,6 +212,35 @@ final class FloatingNotesStatusTests: XCTestCase {
         let chip = FloatingStatus.workChip(.failed(failed))
         XCTAssertEqual(chip?.tone, .attention)
         XCTAssertEqual(chip?.detail, failed.message, "Its menu says it in the words both apps use")
+    }
+
+    /// Waiting for models is a wait, not a problem (uxf-06): calm while nothing downloads, the one phrase over the whole
+    /// set with its bar while the download runs, and only a download that stopped in the warning tone. The home's line
+    /// for this Mac says the same.
+    func testBehaviorTheModelsChipIsCalmAndSaysTheDownloadInTheSharedWords() throws {
+        let waiting = try XCTUnwrap(FloatingStatus.workChip(.models(nil)))
+        XCTAssertEqual(waiting.tone, .calm)
+        XCTAssertEqual(waiting.shortLabel, "Models")
+        let arriving = try XCTUnwrap(FloatingStatus.workChip(.models(.downloading(done: 3_800_000_000, total: 7_600_000_000))))
+        XCTAssertEqual(arriving.label, "Downloading models · 50%")
+        XCTAssertEqual(arriving.shortLabel, "50%")
+        XCTAssertEqual(arriving.progress, 0.5)
+        XCTAssertEqual(arriving.tone, .working)
+        XCTAssertEqual(arriving.detail, "Downloading models · 50% · 3.8 of 7.6 GB", "its menu's first line has the total")
+        let wifi = try XCTUnwrap(FloatingStatus.workChip(.models(.waitingForWiFi(bytes: 852_000_000))))
+        XCTAssertEqual(wifi.label, "Downloading models · Waiting for Wi‑Fi")
+        XCTAssertEqual(wifi.tone, .calm)
+        let failed = try XCTUnwrap(FloatingStatus.workChip(.models(.failed(model: "Gemma 4 12B 4-bit", bytes: 7_600_000_000))))
+        XCTAssertEqual(failed.label, "Couldn’t download Gemma 4 12B 4-bit")
+        XCTAssertEqual(failed.tone, .attention)
+
+        var queue = FloatingStatusInputs.Queue(awaitingModels: 1)
+        XCTAssertEqual(FloatingStatus.queueWords(queue)?.text, "Waiting for models")
+        XCTAssertEqual(FloatingStatus.queueWords(queue)?.tone, .calm)
+        queue.models = .downloading(done: 1, total: 4)
+        XCTAssertEqual(FloatingStatus.queueWords(queue)?.text, "Downloading models · 25%")
+        XCTAssertEqual(FloatingStatus.queueChip(queue)?.progress, 0.25)
+        XCTAssertNotNil(FloatingStatus.queueWords(.init(models: .downloading(done: 1, total: 4))), "a download alone is work to say")
     }
 
     /// Where a summary runs (docs/multipoint.md, "Where summaries run"): its countdown in the chip and the home's

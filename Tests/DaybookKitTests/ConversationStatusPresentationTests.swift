@@ -136,11 +136,35 @@ final class ConversationStatusPresentationTests: XCTestCase {
         var downloading = mac
         downloading.local.download = .init(name: "Parakeet Ultra", fraction: 0.42)
         XCTAssertEqual(page(.requested(.models), nil, downloading),
-                       Presentation(kind: .line, symbol: "arrow.down.circle", title: "Downloading Parakeet Ultra · 42%", progress: 0.42,
-                                    actions: [.cancelDownload]))
+                       Presentation(kind: .line, symbol: "arrow.down.circle", title: "Downloading models · 42%", progress: 0.42,
+                                    actions: [.cancelDownload]), "one phrase, never a model at a time")
         XCTAssertEqual(page(.requested(.models), nil, phone), Presentation(kind: .line, symbol: "arrow.down.circle", title: "Waiting for models"))
         XCTAssertEqual(row(.requested(.models), nil, mac), ConversationRowStatus(kind: .waitingForModels, text: "Waiting for models"))
         XCTAssertEqual(ConversationRowStatus.Kind.waitingForModels.symbol, "arrow.down.circle")
+    }
+
+    /// A Mac's downloads in the one phrase every surface uses (uxf-06, uxf-07, uxf-12): the whole set arriving with the
+    /// total, waiting for Wi‑Fi with Download to go on now, and a download that stopped as a problem with Try Again.
+    func testBehaviorAMacsDownloadsReadAsOneSetAndAFailureOffersTryAgain() {
+        var inputs = mac
+        inputs.local = .mac(missingModelBytes: 7_600_000_000, models: .downloading(done: 3_800_000_000, total: 7_600_000_000))
+        XCTAssertEqual(page(.requested(.models), nil, inputs),
+                       Presentation(kind: .line, symbol: "arrow.down.circle", title: "Downloading models · 50%", detail: "3.8 of 7.6 GB",
+                                    progress: 0.5, actions: [.cancelDownload]))
+
+        inputs.local.models = .waitingForWiFi(bytes: 7_600_000_000)
+        let waiting = page(.requested(.models), nil, inputs)
+        XCTAssertEqual(waiting, Presentation(kind: .line, symbol: "wifi", title: "Downloading models · Waiting for Wi‑Fi", detail: "7.6 GB",
+                                             actions: [.downloadModels(bytes: 7_600_000_000)]))
+        XCTAssertEqual(waiting?.actions.map(\.title), ["Download"])
+
+        inputs.local.models = .failed(model: "Gemma 4 12B 4-bit", bytes: 7_600_000_000)
+        let failed = page(.requested(.models), nil, inputs)
+        XCTAssertEqual(failed, Presentation(kind: .box(.problem), symbol: "exclamationmark.triangle.fill", title: "Couldn’t download Gemma 4 12B 4-bit",
+                                            actions: [.downloadModels(bytes: 7_600_000_000, again: true)]))
+        XCTAssertEqual(failed?.actions.map(\.title), ["Try Again"])
+        XCTAssertEqual(failed?.actions.first?.isPrimary, true)
+        XCTAssertEqual(row(.requested(.models), nil, inputs), ConversationRowStatus(kind: .waitingForModels, text: "Waiting for models"))
     }
 
     func testBehaviorPausedLooksTheSameAndSaysWhyOrResumes() {

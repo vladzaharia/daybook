@@ -23,7 +23,8 @@ struct FloatingStatusInputs: Equatable {
         case waiting
         /// Asked for on `device`, waiting for a Mac to take it.
         case requested(device: String)
-        case models
+        /// Waiting for models, and how this Mac's downloads stand (nil: none is under way, owed, or stopped).
+        case models(ModelDownloadState?)
         case paused
         /// Couldn't finish, in the words both apps use for the failure.
         case failed(FailureWords)
@@ -47,7 +48,9 @@ struct FloatingStatusInputs: Equatable {
         var cloudModel: String?
         var waiting = 0
         var awaitingModels = 0
-        var isEmpty: Bool { running == nil && waiting == 0 && awaitingModels == 0 }
+        /// How this Mac's model downloads stand.
+        var models: ModelDownloadState?
+        var isEmpty: Bool { running == nil && waiting == 0 && awaitingModels == 0 && models == nil }
     }
 
     /// The recording, its recorders, and the iPhones: what both recorders say.
@@ -119,7 +122,18 @@ enum FloatingStatus {
         case .waiting: return chip("clock", ProcessingWords.waitingHereShort(), short: "Waiting", .calm)
         // Asked for on another device (an iPhone), and waiting for a Mac to take it.
         case .requested(let device): return chip("clock", "Requested from \(device)", short: "Waiting", .calm)
-        case .models: return chip("arrow.down.circle", "Waiting for models", short: "Models", .attention)
+        // A wait, not a problem: the download it waits for in the one phrase every surface uses ("Downloading models ·
+        // 40%", over the whole set). Only a download that stopped needs the person.
+        case .models(nil): return chip("arrow.down.circle", "Waiting for models", short: "Models", .calm)
+        case .models(let models?):
+            let text = ProcessingWords.modelDownloadLine(models), short = ProcessingWords.modelDownloadShort(models)
+            switch models {
+            case .downloading:
+                let detail = ProcessingWords.modelDownloadDetail(models).map { "\(text) · \($0)" }
+                return chip("arrow.down.circle", text, short: short, .working, progress: models.fraction, detail: detail)
+            case .waitingForWiFi: return chip("wifi", text, short: short, .calm)
+            case .failed: return chip("exclamationmark.triangle.fill", text, short: short, .attention)
+            }
         case .paused: return chip("pause.circle", "Transcription paused", short: "Paused", .calm)
         case .failed(let words): return chip("exclamationmark.triangle.fill", "Couldn’t finish", .attention, detail: words.message)
         case .ready(let summary): return chip("checkmark.circle.fill", summary ? "Summary ready" : "Transcript ready", short: "Ready", .linked)
@@ -162,7 +176,8 @@ enum FloatingStatus {
     static func queueWords(_ queue: FloatingStatusInputs.Queue, now: Date = Date()) -> StatusLineWords? {
         guard !queue.isEmpty else { return nil }
         let words = QueueStatusWords.Queue(running: queue.running, fraction: queue.running == nil ? nil : queue.fraction, countdown: queue.countdown,
-                                           cloudModel: queue.cloudModel, waiting: queue.waiting, awaitingModels: queue.awaitingModels)
+                                           cloudModel: queue.cloudModel, waiting: queue.waiting, awaitingModels: queue.awaitingModels,
+                                           models: queue.models)
         return QueueStatusWords.line(words, words: .mac(), now: now)
     }
 

@@ -122,7 +122,7 @@ final class ConversationStatusChoicesTests: XCTestCase {
 
         // Downloading: its figure, and Cancel.
         inputs.local = .iPhone(processesHere: true, missingModelBytes: 852_900_000, download: .init(name: "Parakeet", fraction: 0.4))
-        XCTAssertEqual(page(.requested(.device(request)), nil, inputs)?.title, "Downloading Parakeet · 40%")
+        XCTAssertEqual(page(.requested(.device(request)), nil, inputs)?.title, "Downloading models · 40%")
         XCTAssertEqual(page(.requested(.device(request)), nil, inputs)?.actions, [.cancelDownload])
 
         // A Mac that's around does it anyway; a recording that isn't this iPhone's is the Mac's; processing here off waits.

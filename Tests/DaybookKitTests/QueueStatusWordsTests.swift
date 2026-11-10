@@ -51,9 +51,26 @@ final class QueueStatusWordsTests: XCTestCase {
         XCTAssertEqual(line(Queue(waiting: 3))?.text, "3 waiting to transcribe")
         XCTAssertEqual(line(Queue(waiting: 3))?.shortText, "3 waiting")
         XCTAssertEqual(line(Queue(awaitingModels: 1))?.text, "Waiting for models")
-        XCTAssertEqual(line(Queue(awaitingModels: 1))?.tone, .attention)
-        let download = line(Queue(awaitingModels: 1, download: .init(name: "Parakeet Ultra", fraction: 0.4)))
-        XCTAssertEqual(download?.text, "Downloading Parakeet Ultra · 40%")
-        XCTAssertEqual(download?.progress, 0.4)
+        XCTAssertEqual(line(Queue(awaitingModels: 1))?.tone, .calm, "a wait, not a problem (uxf-06)")
+    }
+
+    /// The downloads a queue waits for, in the one phrase over the whole set; only one that stopped needs the person.
+    func testBehaviorModelDownloadsInTheQueuesLine() {
+        let download = line(Queue(awaitingModels: 1, models: .downloading(done: 3_800_000_000, total: 7_600_000_000)))
+        XCTAssertEqual(download?.text, "Downloading models · 50%")
+        XCTAssertEqual(download?.progress, 0.5)
+        XCTAssertEqual(download?.tone, .working)
+        XCTAssertEqual(line(Queue(waiting: 2, models: .downloading(done: 1, total: 2)))?.text, "Downloading models · 50% · 2 waiting")
+        XCTAssertEqual(line(Queue(models: .downloading(done: 1, total: 4)))?.text, "Downloading models · 25%",
+                       "a download with nothing waiting for it still says so")
+
+        let wifi = line(Queue(awaitingModels: 1, models: .waitingForWiFi(bytes: 852_000_000)))
+        XCTAssertEqual(wifi?.text, "Downloading models · Waiting for Wi‑Fi")
+        XCTAssertEqual(wifi?.tone, .calm)
+        XCTAssertNil(wifi?.progress)
+
+        let failed = line(Queue(awaitingModels: 1, models: .failed(model: "Gemma 4 12B 4-bit", bytes: 7_600_000_000)))
+        XCTAssertEqual(failed?.text, "Couldn’t download Gemma 4 12B 4-bit")
+        XCTAssertEqual(failed?.tone, .attention)
     }
 }

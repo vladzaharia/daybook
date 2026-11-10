@@ -101,7 +101,7 @@ extension FloatingStatusInputs {
             case .summarizing: return .summarizing
             }
         case .requested(.queued): return .waiting
-        case .requested(.models): return .models
+        case .requested(.models): return .models(state.modelDownloadState)
         case .requested(.paused): return .paused
         case .requested(.device(let request)): return .requested(device: request.requestedBy.name)
         case .failed(let failure): return .failed(FailureWords(failure, words: .mac(id: state.library.thisDevice.id)))
@@ -129,6 +129,7 @@ extension FloatingStatusInputs {
         }
         queue.waiting = state.processingQueue.count
         queue.awaitingModels = state.awaitingModels.count
+        queue.models = state.modelDownloadState
         return queue
     }
 

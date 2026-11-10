@@ -74,15 +74,55 @@ final class ModelPreferenceMigrationTests: XCTestCase {
                        "Roles nothing was stored for start with the initial selection")
     }
 
-    func testAFreshInstallStartsWithTheCatalogsInitialSelection() throws {
-        let state = AppState(libraryURL: try library(), defaults: defaults())
+    /// ux-mac-14: a fresh Mac starts on its recommended preset, never "Custom", whether or not Welcome's quality page was
+    /// seen; the next launch reads it as chosen.
+    func testAFreshMacStartsOnItsRecommendedPreset() throws {
+        let defaults = defaults()
+        let state = AppState(libraryURL: try library(), defaults: defaults)
+        let recommended = ModelPreset.recommended
+        XCTAssertEqual(ModelPreset.current(in: state), recommended, "Settings › Models shows the recommendation, not Custom")
         XCTAssertEqual(state.transcriptionModel, "parakeet/ultra")
-        XCTAssertEqual(state.processingPreferences.speakerModelID, "community-1/offline")
+        XCTAssertEqual(state.summaryModel, ModelRecommendations.summary(for: .current, quality: recommended.quality))
+        XCTAssertEqual(state.processingPreferences.speakerModelID, recommended.speakerModel)
+        XCTAssertEqual(state.modelSelections[.diarization], recommended.speakerModel)
+        XCTAssertEqual(state.processingPreferences.speakerOptions.quality, recommended.speakerQuality)
         XCTAssertEqual(state.modelSelections[.speakerEmbedding], "community-1/offline")
-        let expected: [DeviceTier: String] = [.compact: "gemma-4/e2b-4bit", .standard: "gemma-4/12b-4bit",
-                                              .large: "gemma-4/26b-a4b-qat-4bit", .workstation: "gemma-4/26b-a4b-qat-4bit"]
-        XCTAssertEqual(state.summaryModel, expected[DeviceTier.current])
         XCTAssertEqual(state.modelSelections[.smallTasks], "apple-foundation-models/system")
+        XCTAssertNotNil(state.modelSelections[.liveTranscription], "live captions' roles come with it")
+
+        let relaunched = AppState(libraryURL: try library(), defaults: defaults)
+        XCTAssertEqual(ModelPreset.current(in: relaunched), recommended, "stored as chosen")
+        XCTAssertEqual(relaunched.processingPreferences.speakerOptions.quality, recommended.speakerQuality)
+    }
+
+    /// Every tier's first launch is its recommended preset exactly: Quick on a compact Mac (Community-1, fast speakers),
+    /// Balanced elsewhere (Nemotron 3). The catalog's lean initial selection stays the iPhone's and migrations' start.
+    func testEveryTiersFirstLaunchIsItsRecommendedPreset() {
+        for tier in [DeviceTier.compact, .standard, .large, .workstation] {
+            let fresh = ModelPreset.firstLaunch(tier: tier)
+            let preset = ModelPreset.recommended(tier: tier)
+            let models = ModelRecommendations.preset(preset.quality, tier: tier)
+            for role in models.choices.keys {
+                XCTAssertEqual(fresh.selections[role], models.model(for: role), "\(tier) \(role)")
+            }
+            XCTAssertEqual(fresh.speakerQuality, preset.speakerQuality(models), "\(tier)")
+        }
+        XCTAssertEqual(ModelPreset.recommended(tier: .compact), .quick)
+        XCTAssertEqual(ModelPreset.firstLaunch(tier: .compact).speakerQuality, .fast)
+        XCTAssertEqual(ModelPreset.firstLaunch(tier: .standard).selections[.diarization], "nemotron-3-diarization/offline")
+        XCTAssertEqual(ModelRecommendations.initialSelections(for: .standard)[.diarization], "community-1/offline",
+                       "the initial selection itself is unchanged")
+    }
+
+    /// Only a Mac with nothing stored is a first launch: stored selections, processing preferences, or the catalog IDs
+    /// from before the model system are a Mac that has chosen.
+    func testOnlyAMacWithNothingStoredIsAFirstLaunch() {
+        XCTAssertTrue(ModelPreset.isFirstLaunch(defaults()))
+        for key in ["modelSelections", "processingPreferences", "transcriptionModel", "summaryModel"] {
+            let stored = defaults()
+            stored.set(Data("{}".utf8), forKey: key)
+            XCTAssertFalse(ModelPreset.isFirstLaunch(stored), key)
+        }
     }
 
     func testPhotoJobsFreezeTheSelectedModelAndItsRevision() throws {
@@ -181,6 +221,8 @@ final class ModelPreferenceMigrationTests: XCTestCase {
 
     func testQueuedJobsFreezeTheRevisionsTheirModelsResolveTo() throws {
         let state = AppState(libraryURL: try library(), defaults: defaults())
+        // Community-1 for speakers: it makes its own voice profiles, so no voice-profile model is frozen.
+        state.processingPreferences.speakerModelID = "community-1/offline"
         state.installedRevisions = ["parakeet/ultra": "rev-p", "whisper/base": "rev-w", "community-1/offline": "rev-c",
                                     state.summaryModel: "rev-g", "qwen2.5/1.5b-4bit": "rev-q15", "whisper/small": "rev-s",
                                     "whisper/large-v3-turbo": "rev-t"]

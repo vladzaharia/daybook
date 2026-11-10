@@ -128,7 +128,8 @@ public struct ModelRoleRow: View {
             if status.isTransferring {
                 ModelActionButton("Cancel") { actions.cancel(key) }
             } else if status.canDownload {
-                ModelActionButton("Download") { actions.download(key) }
+                // After a download stopped, the same button tries again.
+                ModelActionButton(status.isFailed ? "Try Again" : "Download") { actions.download(key) }
                     .disabled(!choice.canDownload(space: space))
             }
         }
@@ -314,6 +315,7 @@ public struct ModelDownloadRow: View {
         stack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(summary.title)
+                    .foregroundStyle(summary.needsAttention ? DaybookPalette.Ink.warning : Color.primary)
                 Text(line.text)
                     .font(density == .touch ? .footnote : .subheadline)
                     .foregroundStyle(line.needsAttention ? DaybookPalette.Ink.warning : Color.secondary)
@@ -328,8 +330,9 @@ public struct ModelDownloadRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             switch summary {
-            case .missing:
-                ModelActionButton("Download", action: download)
+            case .missing, .failed:
+                // After a download stopped, the same button tries again.
+                ModelActionButton(summary.needsAttention ? "Try Again" : "Download", action: download)
                     .disabled(!summary.canDownload(space: space))
             case .waiting, .downloading:
                 ModelActionButton("Cancel", action: cancel)

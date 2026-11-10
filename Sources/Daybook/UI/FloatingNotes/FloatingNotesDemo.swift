@@ -14,6 +14,8 @@ import Foundation
 ///   to the conversation as multipoint writes them), and call audio is detected.
 /// - `paused`: the same, with the iPhone paused (its link state is what the phone would send).
 /// - `processing`: after Stop, the conversation transcribing on this Mac at 40%.
+/// - `models`, `models-failed`, `models-wifi`: after Stop, the conversation waiting for this Mac's models while they
+///   download (a download that reports 42% and waits, never the network), after one stopped, or waiting for Wi‑Fi.
 /// - `stopped`: after Stop, the recording itself failed. `failed`: transcription couldn't finish.
 /// - `home`: the panel opened from the menu bar, nothing recording, this Mac transcribing another.
 ///
@@ -26,7 +28,10 @@ import Foundation
 /// appearance. Nothing reaches the network beyond loopback, Bluetooth, or the microphone.
 @MainActor
 enum FloatingNotesDemo {
-    enum Scenario: String { case multipoint, paused, processing, stopped, failed, home }
+    enum Scenario: String {
+        case multipoint, paused, processing, stopped, failed, home
+        case models, modelsFailed = "models-failed", modelsWiFi = "models-wifi"
+    }
 
     static let scenario = LaunchOptions.value(after: "--notes-demo").flatMap(Scenario.init(rawValue:))
     static let size: NSSize? = LaunchOptions.value(after: "--notes-size").flatMap { value in
@@ -59,6 +64,13 @@ enum FloatingNotesDemo {
             state.processingProgress = IntelligenceProgress(0.4, "Transcribing")
             // `--placement-demo countdown|cloud`: its summary's countdown, or the cloud at work.
             PlacementDemo.apply(to: state, processing: id)
+            show(state, id, afterStop: true)
+        case .models, .modelsFailed, .modelsWiFi:
+            let id = conversation(state, title: "Design review", notes: notes)
+            state.update(id) { $0.date = Date().addingTimeInterval(-900) }
+            state.queue.awaitModels(id)
+            let demo: AppState.DownloadDemo = scenario == .models ? .downloading : scenario == .modelsFailed ? .failed : .waitingForWiFi
+            state.demoDownloads(state.missingSelectedModels, demo)
             show(state, id, afterStop: true)
         case .stopped:
             let id = conversation(state, title: "Design review", notes: notes)

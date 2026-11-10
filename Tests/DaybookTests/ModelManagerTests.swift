@@ -108,6 +108,20 @@ final class ModelManagerTests: XCTestCase {
         XCTAssertEqual(status("whisp/big").label, "Downloading · 40%")
         XCTAssertEqual(status("babel/one"), .waiting)
 
+        // Owed downloads waiting for Wi‑Fi, and one that stopped on its own (uxf-07): the row says so and tries again.
+        snapshot.downloading = nil
+        snapshot.pending = []
+        snapshot.waitingForWiFi = ["whisp/big"]
+        XCTAssertEqual(status("whisp/big"), .waitingForWiFi)
+        XCTAssertEqual(snapshot.promisedBytes, try XCTUnwrap(catalog.model("whisp/big")).approximateBytes, "its room is set aside")
+        snapshot.waitingForWiFi = []
+        snapshot.failed = ["whisp/big"]
+        XCTAssertEqual(status("whisp/big"), .failed("Couldn’t download"))
+        XCTAssertTrue(status("whisp/big").canDownload && status("whisp/big").isFailed)
+        snapshot.failed = []
+        snapshot.downloading = "whisp/big@b1"
+        snapshot.pending = ["babel/one"]
+
         // An update found for an installed model, until its revision is installed.
         let model = try XCTUnwrap(catalog.model("whisp/tiny"))
         let newer = Self.revision("t2", repository: "acme/whisp", bytes: 101_000_000, date: "2026-03-01")

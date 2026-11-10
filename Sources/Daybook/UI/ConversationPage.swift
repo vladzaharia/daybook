@@ -245,12 +245,8 @@ struct ConversationStatus: View {
     }
 
     private func inputs(for status: ProcessingStatus) -> ConversationStatusPresentation.Inputs {
-        let download = state.downloadingID.map {
-            ConversationStatusPresentation.LocalCapabilities.Download(name: state.modelCatalog.name(for: $0),
-                                                                      fraction: state.downloadProgress.fraction)
-        }
-        let missing = state.missingSelectedModels.compactMap { state.modelCatalog.model($0)?.approximateBytes }.reduce(0, +)
-        var inputs = ConversationStatusPresentation.Inputs(words: state.statusWords, local: .mac(missingModelBytes: missing, download: download))
+        // What the choices still need to download, and how this Mac's downloads stand ("Downloading models · 40%").
+        var inputs = ConversationStatusPresentation.Inputs(words: state.statusWords, local: state.localCapabilities)
         // The cloud at work on its job: "Summarizing with Claude Sonnet 5.5 · 35%", with Stop.
         inputs.placement = .queue(placements[meeting.id], running: state.processingID == meeting.id)
         inputs.runningTitle = state.processingID.flatMap { id in state.meetings.first { $0.id == id }?.title }
