@@ -164,6 +164,34 @@ public struct RecorderSurface: View {
     }
 }
 
+/// Where a recorder's input is chosen: given the phase that names it ("● RECORDING · iPhone Microphone ▾",
+/// `RecorderPhase.choosesInput`) and its label, the control around the label (the iPhone's input picker).
+public struct RecorderInputControl {
+    public let wrap: @MainActor (RecorderPhase, AnyView) -> AnyView
+
+    public init(wrap: @escaping @MainActor (RecorderPhase, AnyView) -> AnyView) { self.wrap = wrap }
+}
+
+extension EnvironmentValues {
+    /// The recorder's input control; nil draws the phase as it is.
+    @Entry public var recorderInputControl: RecorderInputControl? = nil
+}
+
+/// The recorder's phase, as the input's control when it names one.
+private struct RecorderPhaseLine: View {
+    let phase: RecorderPhase
+    @Environment(\.recorderInputControl) private var inputControl
+
+    var body: some View {
+        let label = RecordingPhaseLabel(phase.phase, title: phase.title, detail: phase.detail, detailIsWarning: phase.detailIsWarning)
+        if phase.choosesInput, let inputControl {
+            inputControl.wrap(phase, AnyView(label))
+        } else {
+            label
+        }
+    }
+}
+
 /// The pieces every layout arranges.
 struct RecorderPieces {
     let state: RecorderSurfaceState
@@ -175,7 +203,7 @@ struct RecorderPieces {
     @ViewBuilder
     func phase(alignment: HorizontalAlignment = .leading) -> some View {
         if let phase = state.phase {
-            RecordingPhaseLabel(phase.phase, title: phase.title, detail: phase.detail, detailIsWarning: phase.detailIsWarning)
+            RecorderPhaseLine(phase: phase)
                 .frame(maxWidth: .infinity, alignment: alignment == .center ? .center : .leading)
         }
     }

@@ -39,7 +39,10 @@ struct PhoneRecorderEnvironment {
 ///   offers to (`canResume`). Each run is a segment; Stop joins them into one file with silence in
 ///   the gaps.
 /// - Route changes (AirPods, a wired mic, the built-in mic) restart input on the new hardware
-///   format; the writer converts and pads, and the journal notes the change.
+///   format; the writer converts and pads, and the journal notes the change. A headset coming or
+///   going asks the session for the input the person's choice resolves to (`AudioInputPlan`), so
+///   AirPods connecting mid-meeting don't take over from the built-in microphone; an input chosen in
+///   the system's picker (`inputChosen`) is remembered for later recordings.
 /// - Media-services resets rebuild the session and input and continue in a new segment.
 /// - Crash safety: segments are written as fragmented M4A (readable up to the last fragment the
 ///   audio passed: 2–4 s behind at the default interval) and the
@@ -533,12 +536,36 @@ final class PhoneRecorder {
             inputRoute = route
             guard isCapturing else { return }
             journal?.routes.append(CaptureRouteEvent(time: elapsedTime, input: route, reason: reason))
+            // A headset came or went: record from what the choice resolves to now, so AirPods connecting mid-meeting
+            // don't take over from the built-in microphone, and a chosen headset coming back is used again.
+            if reason == "new-device" || reason == "device-removed" {
+                environment.session.applyInputChoice()
+                noteInputChange(reason: "choice")
+            }
             persistJournal()
             onChange?()
         case .mediaServicesReset:
             guard state == .recording || isPaused else { return }
             Task { await rebuildAfterMediaServicesReset() }
         }
+    }
+
+    /// The person chose an input in the system's input picker: it's remembered for the recordings after this one, and
+    /// recorded from now (with far-field capture when it's AirPods that can hear the room).
+    func inputChosen() {
+        guard isCapturing else { return }
+        environment.session.rememberCurrentInput()
+        noteInputChange(reason: "chosen")
+        persistJournal()
+        onChange?()
+    }
+
+    /// The session moved to another input on its own account: said where the route events are.
+    private func noteInputChange(reason: String) {
+        let now = environment.session.currentInput
+        guard now != inputRoute else { return }
+        inputRoute = now
+        journal?.routes.append(CaptureRouteEvent(time: elapsedTime, input: now, reason: reason))
     }
 
     private func pause(_ reason: PauseReason, message: String) async {

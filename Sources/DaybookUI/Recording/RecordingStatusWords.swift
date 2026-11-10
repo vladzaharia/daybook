@@ -61,6 +61,9 @@ public struct RecordingStatusInputs: Equatable {
     public var duration: TimeInterval?
     /// What it records from: "MacBook Pro Microphone".
     public var inputDevice: String?
+    /// The input can be changed where the phase is drawn (Floating Notes' input menu, the iPhone's input picker), so
+    /// the phase says so: "MacBook Pro Microphone ▾".
+    public var choosesInput = false
     public var microphoneSilent = false
     /// Computer audio is part of this recording (Settings › General), so it has a Call meter.
     public var includesCall = false
@@ -83,9 +86,15 @@ public struct RecorderPhase: Equatable, Sendable {
     public var title: String
     public var detail: String?
     public var detailIsWarning: Bool
+    /// The phase is where the input is chosen: the host draws it as the input menu or picker, which `input` names.
+    public var choosesInput: Bool
+    /// The input it records from, for the control that chooses it ("MacBook Pro Microphone").
+    public var input: String?
 
-    public init(phase: RecordingPhaseLabel.Phase, title: String, detail: String? = nil, detailIsWarning: Bool = false) {
+    public init(phase: RecordingPhaseLabel.Phase, title: String, detail: String? = nil, detailIsWarning: Bool = false,
+                choosesInput: Bool = false, input: String? = nil) {
         self.phase = phase; self.title = title; self.detail = detail; self.detailIsWarning = detailIsWarning
+        self.choosesInput = choosesInput; self.input = input
     }
 }
 
@@ -193,6 +202,11 @@ public struct RecorderMeter: Identifiable, Equatable, Sendable {
 public enum RecordingStatusWords {
     public static let microphoneSilentHelp = "Check that your microphone isn’t muted or unplugged."
     public static let callMissingHelp = "Call audio isn’t being recorded. Allow Daybook in Privacy & Security › Screen & System Audio Recording."
+    /// The input control's name, for VoiceOver and its tooltip.
+    public static let inputControlName = "Microphone"
+
+    /// An input that can be changed where it's named: "MacBook Pro Microphone ▾", "iPhone Microphone ▾".
+    public static func inputChoice(_ name: String) -> String { "\(name) ▾" }
 
     // MARK: Phase
 
@@ -201,8 +215,15 @@ public enum RecordingStatusWords {
         case .idle: return nil
         case .starting: return RecorderPhase(phase: .starting, title: "Starting")
         case .recording:
-            if inputs.microphoneSilent { return RecorderPhase(phase: .recording, title: "Recording", detail: "Microphone silent", detailIsWarning: true) }
-            return RecorderPhase(phase: .recording, title: "Recording", detail: inputs.inputDevice)
+            // Where the input can be changed, the phase is its control; silent, it still is, since another input is the fix.
+            let chooses = inputs.choosesInput
+            let input = chooses ? inputs.inputDevice : nil
+            if inputs.microphoneSilent {
+                return RecorderPhase(phase: .recording, title: "Recording", detail: "Microphone silent", detailIsWarning: true,
+                                     choosesInput: chooses, input: input)
+            }
+            return RecorderPhase(phase: .recording, title: "Recording", detail: input.map(inputChoice) ?? inputs.inputDevice,
+                                 choosesInput: chooses, input: input)
         case .paused: return RecorderPhase(phase: .paused, title: "Paused")
         case .saving: return RecorderPhase(phase: .saving, title: "Saving…")
         // How long it is, as the page and the list say it ("18 min"), never a time that reads like a clock.

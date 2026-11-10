@@ -1,3 +1,4 @@
+import AVKit
 import DaybookCaptions
 import DaybookCore
 import DaybookDesign
@@ -24,6 +25,8 @@ enum PhoneRecorderStatus {
         inputs.here = "this iPhone"
         inputs.phase = phase(recorder.state, isFiling: model.isFiling)
         inputs.inputDevice = recorder.isCapturing ? recorder.inputRoute?.name : nil
+        // The input's name is the button for the system's input picker (`PhoneInputButton`): "iPhone Microphone ▾".
+        inputs.choosesInput = recorder.isCapturing
         inputs.microphoneSilent = recorder.isCapturing && recorder.isMicrophoneSilent
         let conversation = recorder.captureID
         if recorder.isActive {
@@ -112,6 +115,75 @@ enum PhoneRecorderStatus {
         case (.recording, .paused): return pause.map { "Recording paused. \($0.title)." } ?? "Recording paused"
         case (.paused, .recording): return "Recording resumed"
         default: return nil
+        }
+    }
+}
+
+// MARK: - The input
+
+/// The recorder's phase while it names the input, "● RECORDING · iPhone Microphone ▾": a button that shows the system's
+/// input picker (`AVInputPickerInteraction`), where the person can pick AirPods, a USB microphone, or the iPhone's own.
+/// What they pick is recorded from at once and remembered for later recordings (`PhoneRecorder.inputChosen`); chosen
+/// AirPods that can hear the room capture it (`AudioInputPlan`).
+struct PhoneInputButton: View {
+    @Environment(PhoneAppModel.self) private var model
+    let phase: RecorderPhase
+    let label: AnyView
+    /// Each tap asks the picker to show once.
+    @State private var requests = 0
+
+    /// The control the shared recorder puts around its phase (`RecorderInputControl`).
+    static let control = RecorderInputControl { phase, label in AnyView(PhoneInputButton(phase: phase, label: label)) }
+
+    var body: some View {
+        let recorder = model.recorder
+        Button { requests += 1 } label: {
+            label.contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(InputPickerAnchor(requests: requests, chosen: { recorder.inputChosen() }).accessibilityHidden(true))
+        .accessibilityLabel(phase.title)
+        .accessibilityValue([phase.detailIsWarning ? phase.detail : nil, phase.input].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityHint("Chooses the microphone")
+    }
+}
+
+/// A view behind the input's name for the system's input picker to show from, and word when the person has picked.
+private struct InputPickerAnchor: UIViewRepresentable {
+    let requests: Int
+    let chosen: @MainActor () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.isUserInteractionEnabled = false
+        view.addInteraction(context.coordinator.interaction)
+        context.coordinator.shown = requests
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        let picker = context.coordinator
+        picker.chosen = chosen
+        guard requests != picker.shown else { return }
+        picker.shown = requests
+        picker.interaction.present()
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, AVInputPickerInteraction.Delegate {
+        let interaction = AVInputPickerInteraction()
+        var chosen: (@MainActor () -> Void)?
+        var shown = 0
+
+        override init() {
+            super.init()
+            interaction.delegate = self
+        }
+
+        nonisolated func inputPickerInteractionDidEndDismissing(_ inputPickerInteraction: AVInputPickerInteraction) {
+            Task { @MainActor in self.chosen?() }
         }
     }
 }

@@ -63,6 +63,21 @@ final class RecorderSurfaceTests: XCTestCase {
         XCTAssertEqual(RecordingStatusWords.chips(inputs).first?.tone, .attention)
     }
 
+    /// Where the input can be changed (the iPhone's picker, Floating Notes' menu), the phase is its control and says so;
+    /// elsewhere it names the input as it is.
+    func testBehaviorTheInputReadsAsAControlWhereItCanBeChosen() {
+        var inputs = RecordingStatusInputs()
+        inputs.phase = .recording
+        inputs.inputDevice = "iPhone Microphone"
+        XCTAssertEqual(RecordingStatusWords.phase(inputs), RecorderPhase(phase: .recording, title: "Recording", detail: "iPhone Microphone"))
+        inputs.choosesInput = true
+        XCTAssertEqual(RecordingStatusWords.phase(inputs), RecorderPhase(phase: .recording, title: "Recording", detail: "iPhone Microphone ▾",
+                                                                         choosesInput: true, input: "iPhone Microphone"))
+        inputs.inputDevice = nil
+        XCTAssertNil(RecordingStatusWords.phase(inputs)?.detail, "no route yet: nothing to name")
+        XCTAssertEqual(RecordingStatusWords.inputControlName, "Microphone")
+    }
+
     func testBehaviorAPausedRecordingRestsItsMetersAndSaysSo() {
         var inputs = RecordingStatusInputs()
         inputs.phase = .paused
