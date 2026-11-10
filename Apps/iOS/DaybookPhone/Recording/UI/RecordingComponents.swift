@@ -35,7 +35,10 @@ enum PhoneRecorderStatus {
                 RecorderFacts(session: session, handoff: model.devices.handoffState(session),
                               along: cascade.conversation?.id == conversation ? cascade.member(session.id).map { along($0.state, role: $0.role) } : nil)
             }
-            inputs.peers = peers(multipoint: model.multipoint, connected: model.link.connectedMacs, conversation: conversation)
+            // The Mac this recording follows, when it's out of reach: its chip says so while this iPhone keeps recording.
+            var leadAway: UUID?
+            if model.multipoints.leadOutOfReach != nil, case .macLed(let lead)? = model.multipoint?.role { leadAway = lead }
+            inputs.peers = peers(multipoint: model.multipoint, connected: model.link.connectedMacs, conversation: conversation, outOfReach: leadAway)
         }
         return inputs
     }
@@ -65,12 +68,14 @@ enum PhoneRecorderStatus {
 
     /// The Macs around this recording: each one asked or recording along, each one recording the same conversation
     /// on its own, then each connected one that could.
-    static func peers(multipoint: MultipointSession?, connected: [PhoneLink.Mac], conversation: UUID?) -> [RecordingStatusInputs.Peer] {
+    static func peers(multipoint: MultipointSession?, connected: [PhoneLink.Mac], conversation: UUID?,
+                      outOfReach: UUID? = nil) -> [RecordingStatusInputs.Peer] {
         let connectedIDs = Set(connected.map(\.id))
         var peers = (multipoint?.macs ?? []).map { mac in
             let along = Self.along(mac.state)
             return RecordingStatusInputs.Peer(id: mac.id.uuidString, name: mac.name, kind: .mac, isConnected: connectedIDs.contains(mac.id),
-                                              activity: along == .recording ? .recording : .idle, along: along, hasMeter: false)
+                                              activity: along == .recording ? .recording : .idle, along: along, hasMeter: false,
+                                              outOfReach: outOfReach == mac.id)
         }
         let involved = Set(multipoint?.macs.map(\.id) ?? [])
         for mac in connected where !involved.contains(mac.id) {
@@ -372,16 +377,22 @@ struct RecordingNotice: View {
     /// Whether it has anything to say now, for the recorder to make room for.
     static func isShowing(_ model: PhoneAppModel) -> Bool {
         model.notice != nil || (model.recorder.isCapturing && PhoneAppModel.recorderWarning(model.recorder.lastError) != nil)
+            || model.multipoints.leadOutOfReach != nil
     }
 
     var body: some View {
         let warning = model.recorder.isCapturing ? PhoneAppModel.recorderWarning(model.recorder.lastError) : nil
+        let outOfReach = model.multipoints.leadOutOfReach
         Group {
             // Nothing at all when there's nothing to say, so the stack around it keeps its spacing.
-            if warning != nil || model.notice != nil {
+            if warning != nil || model.notice != nil || outOfReach != nil {
                 VStack(alignment: .leading, spacing: DaybookSpacing.s2) {
                     if let warning {
                         NoticeRow(message: warning.message, details: warning.details, showDetails: show)
+                    }
+                    // The Mac this recording follows is out of reach: this iPhone keeps recording until it's stopped.
+                    if let outOfReach {
+                        NoticeRow(message: outOfReach, stop: { Task { try? await model.stopRecording() } }, showDetails: show)
                     }
                     if let notice = model.notice {
                         NoticeRow(message: notice, details: model.noticeDetails, fix: model.noticeFix,
@@ -393,6 +404,7 @@ struct RecordingNotice: View {
             }
         }
         .onChange(of: model.notice) { _, notice in if let notice { AccessibilityNotification.Announcement(notice).post() } }
+        .onChange(of: outOfReach) { _, words in if let words { AccessibilityNotification.Announcement(words).post() } }
         .onChange(of: warning?.message) { _, message in if let message { AccessibilityNotification.Announcement(message).post() } }
     }
 
@@ -409,6 +421,8 @@ private struct NoticeRow: View {
     let message: String
     var details: String?
     var fix: PhoneAppModel.NoticeFix?
+    /// Stop, for a notice about the recording itself (the Mac it follows is out of reach).
+    var stop: (() -> Void)?
     var dismiss: (() -> Void)?
     let showDetails: (String) -> Void
     @Environment(\.openURL) private var openURL
@@ -419,8 +433,11 @@ private struct NoticeRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(message).font(.footnote).foregroundStyle(DaybookPalette.Ink.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                if fix != nil || details != nil {
+                if fix != nil || details != nil || stop != nil {
                     HStack(spacing: DaybookSpacing.s4) {
+                        if let stop {
+                            Button("Stop", action: stop)
+                        }
                         if fix == .openSettings, let url = URL(string: UIApplication.openSettingsURLString) {
                             Button("Open Settings") { openURL(url) }
                         }

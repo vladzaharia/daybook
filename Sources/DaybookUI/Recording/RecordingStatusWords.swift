@@ -45,11 +45,14 @@ public struct RecordingStatusInputs: Equatable {
         public var lastConnected: Date?
         /// Its levels reach this device (an iPhone's, over the link to a Mac), so it gets a meter.
         public var hasMeter: Bool
+        /// It leads this recording and hasn't been heard from for a while; this device keeps recording (`LeaderWatch`).
+        public var outOfReach: Bool
 
         public init(id: String, name: String, kind: Kind, isConnected: Bool = false, activity: Activity = .idle,
-                    along: CompanionRecording.State? = nil, lastConnected: Date? = nil, hasMeter: Bool? = nil) {
+                    along: CompanionRecording.State? = nil, lastConnected: Date? = nil, hasMeter: Bool? = nil, outOfReach: Bool = false) {
             self.id = id; self.name = name; self.kind = kind; self.isConnected = isConnected; self.activity = activity
             self.along = along; self.lastConnected = lastConnected; self.hasMeter = hasMeter ?? (kind == .iPhone)
+            self.outOfReach = outOfReach
         }
 
         var symbol: String { kind == .iPhone ? "iphone" : "desktopcomputer" }
@@ -305,6 +308,10 @@ public enum RecordingStatusWords {
                          detail: detail, shortensFirst: shortensFirst)
         }
         let name = peer.name
+        // The device this recording follows can't be reached: this one keeps recording, and says so.
+        if recording, peer.outOfReach {
+            return chip(LeaderWatch.outOfReachLabel, short: nil, .attention, detail: LeaderWatch.outOfReach(name, here: here))
+        }
         if recording, let along = peer.along {
             switch along {
             case .recording, .alreadyRecording, .stopping:

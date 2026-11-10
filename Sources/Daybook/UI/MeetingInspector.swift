@@ -56,7 +56,8 @@ struct MeetingInspector: View {
     static func inputs(_ state: AppState, _ meeting: Meeting) -> ConversationStatusPresentation.Inputs {
         ConversationStatusPresentation.Inputs(words: .mac(id: state.library.thisDevice.id), local: .mac(),
                                               isRecording: state.recordingID == meeting.id,
-                                              placement: .init(planner: state.placements[meeting.id]))
+                                              placement: .init(planner: state.placements[meeting.id]),
+                                              arrivals: state.arrivals(for: meeting))
     }
 
     /// A conversation whose recordings changed is processed again here, as the library says it needs: its new
@@ -95,6 +96,8 @@ struct MeetingInspector: View {
             state.pauseProcessing(id)
         case .status(.dontWait):
             state.library.stopWaitingForRecordings(in: id, undoManager: undoManager)
+        case .status(.waitAgain):
+            state.library.waitAgainForMissingRecordings(in: id, undoManager: undoManager)
         case .status:
             break
         case .searchTag(let tag):

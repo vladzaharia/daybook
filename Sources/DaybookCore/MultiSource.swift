@@ -114,6 +114,9 @@ public struct CompanionRecording: Codable, Equatable, Identifiable, Sendable {
     /// When the person chose Don't Wait: the conversation stops waiting for this recording, and adds it if it
     /// still arrives. Nil while it's waited for.
     public var stoppedWaitingAt: Date?
+    /// When the person chose Wait Again for a recording that didn't arrive in time: it's waited for once more, as long
+    /// again from then. Nil until then.
+    public var waitedAgainAt: Date?
 
     public init(id: UUID = UUID(), deviceID: String, deviceKind: String, deviceSerial: String? = nil, deviceName: String,
                 macStartedAt: Date, state: State = .starting, startedByDaybook: Bool = false) {
@@ -124,6 +127,10 @@ public struct CompanionRecording: Codable, Equatable, Identifiable, Sendable {
 
     /// The recorder recorded, or may have, so its recording is expected.
     public var expectsRecording: Bool { [.recording, .alreadyRecording, .stopping, .stopped, .stopFailed].contains(state) }
+
+    /// When the wait for its recording runs from: the end of the Mac's recording (its start, before it ends), or the
+    /// person's Wait Again.
+    public var waitingSince: Date { max(macEndedAt ?? macStartedAt, waitedAgainAt ?? .distantPast) }
 
     /// When the recorder's recording started, on this Mac's clock: its own report, corrected by the
     /// measured clock offset when there is one.

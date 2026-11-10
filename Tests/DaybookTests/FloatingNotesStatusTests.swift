@@ -207,6 +207,20 @@ final class FloatingNotesStatusTests: XCTestCase {
         XCTAssertEqual(paused?.detail, "Alex’s iPhone paused. This Mac keeps recording.")
     }
 
+    /// The phone this Mac records for, out of reach and not connected, still has its chip: it says so, while this Mac
+    /// keeps recording (`LeaderWatch`).
+    func testPhoneThisMacFollowsOutOfReach() {
+        var lead = phone(connected: false)
+        lead.along = .alreadyRecording
+        lead.outOfReach = true
+        let chip = RecordingStatusWords.peerChip(lead, recording: true)
+        XCTAssertEqual(chip?.tone, .attention)
+        XCTAssertEqual(chip?.label, "Out of reach")
+        XCTAssertEqual(chip?.detail, "Alex’s iPhone is out of reach. This Mac keeps recording.")
+        XCTAssertEqual(RecordingStatusWords.peerChip(lead, recording: true, here: "this iPhone")?.detail,
+                       "Alex’s iPhone is out of reach. This iPhone keeps recording.")
+    }
+
     /// Regression: at the default width a paused iPhone's chip kept "Alex’s iPhone paused" and squeezed
     /// the Soundcore's to "● 80%", which didn't say whose it was.
     func testChipsShortenThePausedIPhoneFirstAndKeepNames() throws {

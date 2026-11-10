@@ -169,6 +169,8 @@ final class PhoneAppModel: RecordingCommandHandling {
             // The system's continued-processing task, never in tests.
             continued: ContinuedProcessing(scheduler: environment.continuedProcessing()))
         let sync = self.sync, link = self.link
+        // A network that comes back or changes sends what the courier holds now, rather than at its next retry.
+        environment.network.onChange { [weak sync] in Task { @MainActor in sync?.networkChanged() } }
         placement = PhoneSummaryPlacement(library: library.controller, link: link, presence: { sync.devices })
         upgrades = PhoneUpgrades(library: library.controller, placement: placement, link: link, presence: { sync.devices })
         captions = LiveCaptionsController(store: LiveCaptionStore(libraryRoot: library.rootURL),

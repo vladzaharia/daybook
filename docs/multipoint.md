@@ -53,9 +53,9 @@ recording's microphone and computer audio) share a `clockID` and move together w
 them can be lined up. A derived recording (the microphone with the call's echo removed) follows its
 original's placement.
 
-Drift: `TranscriptFusion` places a recording with a given offset at rate 1, so `SourceFusion`
-scales a copy of that recording's segment times by the placement's rate first, leaving each
-segment's provenance in the recording's own time. Corrections, which match by provenance, and
+Drift: `SourceFusion` hands each recording's placement (offset and rate) to fusion, which maps the
+recording's own times onto the timeline as it goes, leaving each segment's provenance in the
+recording's own time. Corrections, which match by provenance, and
 bookmarks on a recording (`alignedTime`) stay correct; the fused reports carry the rate.
 
 ## Multipoint recording
@@ -104,7 +104,7 @@ After wake, Floating Notes' "Recording stopped" box names them ("Soundcore Work 
 kept recording.") with Stop, which stops them as this Mac's stop would have, at that moment
 (`AppState.endKeptRecording`); recording again, into any conversation, stops them first. Their
 recordings join the conversation as they would have. One that stopped on its own meanwhile (an
-iPhone that couldn't reach this Mac for 30 minutes) closes its link at wake. After a crash,
+iPhone that followed this Mac's paused recording and stopped as `LeaderWatch` says) closes its link at wake. After a crash,
 once a recording is recovered at launch, its links are closed as its stop would have: recorders
 Daybook started are stopped (only the recording it started), a recorder still `starting` is stopped
 only if it is recording, live, since Daybook's command, and one that was already recording is left.
@@ -138,7 +138,7 @@ long comparison never delays storing this Mac's own recording or another import.
    (±120 s for a recorder's clock; ±15 min or the recording's length for a file's date):
    - confidence ≥ 0.6, agreeing with trustworthy clocks → it joins, already placed (`audio`);
    - ≥ 0.25 → its own conversation with a `lowConfidence` suggestion;
-   - otherwise, or no verdict (today's `AudioAligner` stub) → its own conversation with a
+   - otherwise, or no verdict (too little sound in common) → its own conversation with a
      `checkingTranscript` suggestion.
 4. **The transcript**, once both are transcribed: if the phrases line it up (`transcript`
    confidence ≥ 0.55), it moves into that conversation with its transcript and speakers, so nothing
@@ -206,8 +206,28 @@ shows processing shows it, on the Mac and the iPhone:
   being processed, the page's line ends "· Waiting for iPhone audio". The iPhone's list row and page say
   the same for a recorder's audio. Its own recording is already in its copy of the conversation, so it
   never waits for itself; it shows "Waiting for your Mac" for its request until a Mac adds it.
+- The page adds one clause on where the recording is, when this Mac knows (`ArrivalStatus`, DaybookKit):
+  "· Saving", "· Sending 40%", "· Alex's iPhone is out of iCloud storage", "· Alex's iPhone is waiting for this
+  library's key", from the phone's word over the link (`recording.arrival`, docs/link.md; trusted while it's
+  connected and for ten minutes after), else from its sync presence: a storage problem, a key it waits for, files
+  still to upload, or "· Last online 10:02" once it hasn't been heard from for 25 minutes. While a recording is
+  awaited this Mac lists the library's presence and asks the courier for what phones sent every three minutes
+  (`AppState.watchAwaitedRecordings`), and at once on a `processing.nudge`. The iPhone's page says the matching
+  line for its own recording until it's on its way ("Sending this iPhone's audio to your Mac", "This iPhone's
+  audio can't be sent · iCloud storage is full"; `MultipointCoordinator+Arrival.swift`).
 - When the recording arrives the wait ends: the conversation reads "Not transcribed yet" or "Waiting"
   until it's queued, "Adding iPhone recording…" while it's added, then nothing.
+- One that never arrives isn't read as done. Past `AwaitedRecording.lifetime` the conversation is
+  `ProcessingStatus.missingRecordings`: a problem box, "Alex's iPhone audio didn't arrive", with Don't Wait
+  (`stopWaitingForRecordings`, which lets it go) and Wait Again (`waitAgainForMissingRecordings`: waited for two
+  days more from then, `CompanionRecording.waitedAgainAt`); the row says "iPhone audio didn't arrive". Both
+  undo.
+- Sync passes run while this Mac processes (any job, not only one carrying another device's request), with the
+  conversation being processed protected from remote deletion and status. So the phone's recording, notes, and
+  request come in while this Mac transcribes its own audio, not after its summary. A recording the running job's
+  conversation waited for that lands before fusion joins that job (`AppState.process`, `foldsArrivalsInto`):
+  it's placed as it would have been and transcribed, then fused and summarized once with the rest. One that lands
+  after that point gets a job of its own, as before.
 - The wait and the arrival don't depend on **Transcribe synced recordings on this Mac**. A recording the
   conversation was waiting for (`Meeting.hasAwaitedRecordingToAdd`: its link recorded and isn't
   attached, the recording is here untranscribed, within `AwaitedRecording.lifetime`) is queued as soon
@@ -288,7 +308,8 @@ The device page's **Start Recording on iPhone** asks for a conversation of the p
 
 **The phone records, and asks this Mac.** This Mac records into the phone's conversation ID,
 creating the conversation here if it hasn't synced yet, with the title and date the phone sent (and
-keeping that date while it records), and links the phone as already recording, with the phone's
+keeping that date while it records), only once its own recording has started, so a start it refuses or
+can't make leaves no empty copy (`startRecording(making:)`), and links the phone as already recording, with the phone's
 start and the clock estimate, rather than asking it back. It refuses with a reason when it's
 recording another conversation (`recordingSomethingElse`, naming it), starting or stopping
 (`busy`), or isn't allowed the microphone (`permissionDenied`; an undecided permission is refused
@@ -305,9 +326,26 @@ Mac reconnects, kept for a day in `owed-stops.json` in its library's folder (nev
 relaunch still sends it. A start that comes back after the phone stopped is stopped too.
 
 **Who stops whom.** A device that records because the other asked follows it: when the one that
-asked says it isn't recording that conversation any more (as it does on every reconnection), or
-hasn't been reachable for 30 minutes, the follower stops too and says so ("Studio Mac stopped
-recording, so this iPhone stopped too."). The phone accepts a stop only from the Mac its recording is
+asked says it isn't recording that conversation any more (as it does on every reconnection), the
+follower stops too and says so ("Studio Mac stopped recording, so this iPhone stopped too."). Silence
+on the link isn't evidence about the room, so one it can't reach is followed on evidence
+(`LeaderWatch`, DaybookKit, the same rule on both apps; `AppState.checkPhoneLead`,
+`MultipointCoordinator.checkLead`):
+
+- Quiet for about two minutes, the follower says so and keeps recording: Floating Notes' chip for the
+  phone reads "Out of reach" ("Alex's iPhone is out of reach. This Mac keeps recording.", with Stop
+  Recording in its menu), the iPhone's recording screen says "Studio Mac is out of reach. This iPhone keeps
+  recording." with Stop, and a notification says the same while Daybook isn't in front. It goes when the
+  leader is heard from again.
+- Meanwhile it reads the leader's sync presence (its `SyncDeviceActivity`), at most once a minute: presence
+  that says the leader records the same conversation (and hasn't expired) keeps it recording; presence heard
+  here since the link went quiet (more than a minute after) that says it doesn't stops it, as the leader's
+  stop would have.
+- After 30 minutes with no word either way, it stops only if its own microphone has also heard nothing as
+  loud as speech (−50 dBFS) for 10 minutes ("Alex's iPhone couldn't be reached for 30 minutes and the room
+  was quiet, so this Mac stopped recording."). Otherwise it keeps recording with the notice up.
+
+The phone accepts a stop only from the Mac its recording is
 with: the one that started it, or one it asked to record along; the person can always stop it. This
 Mac accepts a stop from the phone that asked it to record, and from a phone recording its
 conversation along with it. Stopping anywhere stops the rest (below).
@@ -315,8 +353,9 @@ conversation along with it. Stopping anywhere stops the rest (below).
 **The clock prior.** The link measures the phone's clock against this Mac's (NTP-style, good to a
 few milliseconds on a quiet network); the phone also stores what it measured while recording on its
 track (`capture.peerClocks`). The phone's first sample (the track's own start), on this Mac's clock by
-the later of the two measurements, is the recording's `clockOffset`, which is `AudioAligner`'s
-expected offset when the sound is compared. A phone track's start is converted this way wherever
+the tighter of the two measurements there (each one's uncertainty, plus 50 ppm of drift for the time
+between when it was measured and that start; even, the later), is the recording's `clockOffset`,
+which is `AudioAligner`'s expected offset when the sound is compared. A phone track's start is converted this way wherever
 starts are compared.
 
 **Its recording arrives.** A recording made with a Mac (one that recorded, or may have: it never
@@ -518,7 +557,7 @@ never leave the device. Where each summary runs is decided by one planner both a
 
 **What a device offers.** Whether it can summarize itself (a Mac with its summary model; an iPhone whose
 processing models have a summary model that fits, its `LocalSummarizing`), the Macs that summarize and are
-reachable now (connected over the link, or seen through sync in the last 15 minutes, by their capabilities;
+reachable now (connected over the link, or heard from through sync in the last 25 minutes, by their capabilities;
 an earlier Daybook's Mac counts when it says it processes), and the cloud model Settings › Cloud resolves to
 among those the person's keys reach (none without a key, or with Never). The keys, the models, and the
 preferences (the policy, the countdown's length, the effort) are read from each app's one `CloudSetup`
@@ -640,8 +679,8 @@ beside a transcription (two models in memory) or stopping the next job when the 
 countdown travels only over the link; without it, the iPhone sees the Mac at work through sync and can't
 choose. Two devices that both start summarizing before either's claim reaches the other (no link, iCloud
 slow) can both finish; the later one keeps the earlier summary if it arrived first, and otherwise the
-merge keeps one and Version History the other. A Mac's presence counts as reachable for 15 minutes after
-it was seen, so a Mac that went to sleep a few minutes ago can be counted on until then; the request waits
+merge keeps one and Version History the other. A Mac's presence counts as reachable for 25 minutes after
+this device last heard from it, so a Mac that went to sleep a few minutes ago can be counted on until then; the request waits
 in the library for it. The iPhone summarizes itself only where a summary model fits its memory (docs/iphone.md),
 and only on the screen.
 
@@ -657,7 +696,7 @@ option, and goes everywhere once the work is done or the offer dismissed.
 | --- | --- | --- |
 | Ranks | Each local model's rank for each step it serves, and the cloud's `summaryQuality`, on one scale for summaries (docs/models.md, "Quality ranks"); `UpgradeRanks` reads them | [Families](../Sources/DaybookKit/Resources/ModelCatalog/Families), [CloudCatalog.json](../Sources/DaybookKit/Resources/CloudCatalog.json), [Upgrades.swift](../Sources/DaybookKit/Upgrades.swift) |
 | The comparison | `Upgrades.offer`: the steps (`UpgradeRole`: margins, modes, words), what a device reaches (`UpgradeCandidates`), the offer (`UpgradeOffer`), the model behind each step now (`Meeting.upgradeCurrent`). Pure | [Upgrades.swift](../Sources/DaybookKit/Upgrades.swift) |
-| Reachable Macs | `ProcessingMac.reachable`: connected, or seen through sync in the last 15 minutes, with the models they run | [ProcessingCapabilities+Devices.swift](../Sources/DaybookKit/ProcessingCapabilities+Devices.swift) |
+| Reachable Macs | `ProcessingMac.reachable`: connected, or heard from through sync in the last 25 minutes (`KnownSyncDevice.isPresent`), with the models they run | [ProcessingCapabilities+Devices.swift](../Sources/DaybookKit/ProcessingCapabilities+Devices.swift) |
 | Requests and dismissals | `ProcessingRequest.Upgrade` (the step, the model, its rank, the device), `requestUpgrade`, `UpgradeDismissal` and `dismissUpgrade`, merged with the conversation | [ProcessingRequest.swift](../Sources/DaybookCore/ProcessingRequest.swift), [UpgradeDismissal.swift](../Sources/DaybookCore/UpgradeDismissal.swift) |
 | The Mac | The page's line, accepting, which requests it takes, an upgrade's summary step | [AppState+Upgrade.swift](../Sources/Daybook/App/AppState+Upgrade.swift), [AppState+Requests.swift](../Sources/Daybook/App/AppState+Requests.swift), [AppState+SummaryPlacement.swift](../Sources/Daybook/App/AppState+SummaryPlacement.swift) |
 | The iPhone | The page's line, accepting, what its processor runs | [PhoneUpgrades.swift](../Apps/iOS/DaybookPhone/App/PhoneUpgrades.swift), [OnDeviceProcessing.swift](../Sources/DaybookKit/OnDeviceProcessing.swift) |
@@ -742,7 +781,7 @@ that step; a later, better model may offer again.
   own models (the offer then shows again), and one that saves the conversation drops the field from its copy (the merge
   keeps one). They keep dismissals as they came (unknown fields).
 - A Mac that doesn't take other devices' work (Transcribe synced recordings off) names no models, so other devices
-  never offer it. Macs see each other only through presence, so one asleep for over 15 minutes isn't offered.
+  never offer it. Macs see each other only through presence, so one not heard from for over 25 minutes isn’t offered.
 - Ranks that weren't measured are estimates (docs/models.md, "Quality ranks"); the margins keep them from offering
   what the evidence doesn't support.
 - The iPhone redoes only its own recordings; a Mac's recording is offered to a Mac.
@@ -759,8 +798,8 @@ that step; a later, better model may offer again.
 
 ## Limits and what needs a recorder
 
-- `AudioAligner` returns nil until the alignment work lands, so today later arrivals settle by
-  transcript and multipoint recordings by transcript, then clock.
+- `AudioAligner` compares sound within its search window around the clocks' prior; a recording
+  whose prior is far off, or with too little sound in common, settles by transcript, then clock.
 - Whether Soundcore Work's Pause ends the file (the simulator assumes it does), how quickly a
   finished recording appears in its list, and how far its clock is from this Mac's need a real
   recorder.
@@ -770,8 +809,8 @@ that step; a later, better model may offer again.
 - Links merge across Macs, so a second Mac with the models also queues an awaited recording that
   arrives, with **Transcribe synced recordings on this Mac** off too; the request's claim settles which
   one adds it, within a sync round, as for any request two Macs take at once.
-- A recording that never arrives stops being awaited two days after this Mac's recording ended; the
-  conversation then reads as done.
+- A recording that never arrives stops being awaited two days after this Mac's recording ended (or
+  after Wait Again); the conversation then says it didn't arrive, until Don't Wait or Wait Again.
 - Pause and Cancel take effect between steps: a sound comparison already running (synchronous in
   `AudioAligner`) finishes first.
 - A renamed title isn't counted as the person's work when deciding whether a moved recording's own
@@ -779,8 +818,8 @@ that step; a later, better model may offer again.
 - A phone recording that moves into this Mac's conversation brings its bookmarks, not the notes
   typed on the phone; its own conversation keeps them and stays.
 - When either device makes the other's conversation before it has synced, both copies carry the
-  same title and date, but they meet without a common ancestor: until sync treats that case, a
-  differing status is kept in Version History.
+  same title and date and meet without a common ancestor: `MeetingMerge` keeps the status further
+  along and takes a default title as unset, so nothing lands in Version History for it.
 - When the phone led and this Mac joined later, this Mac's recording sets the timeline and the phone's
   is placed before its zero. Notes the phone took before this Mac started keep their time in the
   phone's recording, so they read before the timeline's zero (−0:42), as its passages do. Daybook

@@ -64,6 +64,9 @@ final class PhoneLink {
     private(set) var recordPermissions: [UUID: Bool] = [:]
     @ObservationIgnored private var permissionSend: Task<Void, Never>?
     private(set) var lastConnected: [UUID: Date] = [:]
+    /// What phones last said about recordings this Mac waits for (`recording.arrival`), by conversation: kept after a
+    /// phone disconnects, and read as recent only for a while (`ArrivalStatus.resolve`).
+    private(set) var arrivals: [UUID: PhoneArrival] = [:]
     private(set) var isRunning = false
 
     @ObservationIgnored var environment: Environment
@@ -412,6 +415,9 @@ final class PhoneLink {
                 }
             }
             if case .recordPermission(let permission) = message { recordPermissions[from] = permission.allowed }
+            if case .recordingArrival(let arrival) = message {
+                arrivals[arrival.conversationID] = PhoneArrival(phoneID: from, report: arrival, receivedAt: Date())
+            }
             onMessage?(message, from)
         case .discovered, .discovery, .connectionState:
             break
@@ -429,6 +435,13 @@ final class PhoneLink {
         default: return "Pairing didn’t finish. Use the new code shown here."
         }
     }
+}
+
+/// A phone's word about a recording this Mac waits for, and when it came.
+struct PhoneArrival: Equatable {
+    var phoneID: UUID
+    var report: LinkRecordingArrival
+    var receivedAt: Date
 }
 
 extension CompanionClock {

@@ -46,6 +46,8 @@ final class PhoneLink {
         var processing: ProcessingCapabilities?
         /// It shows its summary countdowns here and takes this iPhone's choice (`summaryPlacementFeature`).
         var placesSummaries = false
+        /// It says where a recording of this iPhone's it waits for is (`recordingArrivalFeature`).
+        var hearsArrivals = false
         /// It can take a summary this iPhone sends it.
         var summarizes: Bool { processing?.summarizes ?? canProcess }
         /// The recorders it manages, as it last said, on this iPhone's clock; kept after it disconnects,
@@ -398,6 +400,16 @@ final class PhoneLink {
     }
 
     /// This iPhone's Can Start Recording for a connected Mac that takes it, in the order it changes.
+    /// Tells the connected Macs that hear it (`Mac.hearsArrivals`), or only `macID`, where a recording of this iPhone's they
+    /// wait for stands (`recording.arrival`), one after another, in order.
+    func sendArrival(_ arrival: LinkRecordingArrival, to macID: UUID? = nil) {
+        let targets = macs.filter { $0.isConnected && $0.hearsArrivals && (macID == nil || $0.id == macID) }.map(\.id)
+        guard !targets.isEmpty else { return }
+        enqueue(.arrivals) { client in
+            for mac in targets { try? await client.send(.recordingArrival(arrival), to: mac) }
+        }
+    }
+
     func sendRecordPermission(_ permission: LinkRecordPermission, to macID: UUID) {
         guard macs.contains(where: { $0.id == macID && $0.isConnected && $0.tellsRecordPermission }) else { return }
         enqueue(.permissions) { try? await $0.send(.recordPermission(permission), to: macID) }
@@ -428,6 +440,8 @@ final class PhoneLink {
         case choices
         /// Can Start Recording for each Mac: the last change is what it keeps.
         case permissions
+        /// Where this iPhone's recordings a Mac waits for stand: the last word is what it keeps.
+        case arrivals
     }
 
     @ObservationIgnored private var sends: [SendChannel: Task<Void, Never>] = [:]
@@ -559,6 +573,7 @@ final class PhoneLink {
                 mac.showsLevels = peer.capabilities.showsLevels
                 mac.processing = peer.capabilities.processing.map(ProcessingCapabilities.init)
                 mac.placesSummaries = peer.capabilities.placesSummaries
+                mac.hearsArrivals = peer.capabilities.hearsArrivals
                 mac.stopsForPages = peer.capabilities.stopsForPages
                 mac.tellsRecordPermission = peer.capabilities.tellsRecordPermission
                 // It says again on a new connection, if it says at all.
@@ -610,7 +625,7 @@ final class PhoneLink {
         case .captions(let captions):
             // A Mac's call, which this iPhone may not hear (headphones on the Mac).
             onCaptions?(captions, macID)
-        case .processingNudge, .levels, .summaryChoice:
+        case .processingNudge, .levels, .summaryChoice, .recordingArrival:
             // Levels and choices go the other way.
             break
         case .recorderHandoffRequest, .recorderHandoffReply, .recorderRelease:

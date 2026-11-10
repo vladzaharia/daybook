@@ -1,4 +1,6 @@
 import DaybookCore
+import DaybookDevices
+import DaybookLink
 import Foundation
 
 /// Where a conversation's processing stands, shown the same way on the Mac and the iPhone
@@ -24,6 +26,9 @@ public enum ProcessingStatus: Equatable, Sendable {
     /// device (Daybook on iPhone, a recorder) hasn't arrived yet. When it does, it's added and the
     /// transcript and summary are enhanced (docs/multipoint.md, "Mac first").
     case awaitingRecordings([AwaitedRecording])
+    /// A recording made alongside never arrived within `AwaitedRecording.lifetime`: what's here was transcribed and
+    /// summarized without it. Said rather than read as done, with Don't Wait and Wait Again.
+    case missingRecordings([AwaitedRecording])
     /// The last attempt couldn't finish.
     case failed(Failure)
 
@@ -163,7 +168,9 @@ public enum ProcessingStatus: Equatable, Sendable {
         if meeting.hasUntranscribedTranscribableAudio { self = .recorded; return }
         if meeting.summary == nil, !meeting.unifiedTranscript.isEmpty { self = .transcribed; return }
         let awaited = meeting.awaitedRecordings(now: now)
-        self = awaited.isEmpty ? .done : .awaitingRecordings(awaited)
+        if !awaited.isEmpty { self = .awaitingRecordings(awaited); return }
+        let missing = meeting.missingRecordings(now: now)
+        self = missing.isEmpty ? .done : .missingRecordings(missing)
     }
 
     /// Recorded audio that isn't transcribed yet.
@@ -174,6 +181,11 @@ public enum ProcessingStatus: Equatable, Sendable {
         case .requested, .processing: return true
         default: return false
         }
+    }
+    /// The last attempt couldn't finish.
+    public var isFailure: Bool {
+        if case .failed = self { return true }
+        return false
     }
 }
 
@@ -197,6 +209,67 @@ public struct AwaitedRecording: Equatable, Sendable {
 
     /// For a short line: "iPhone" for any Daybook on iPhone, otherwise the device's name ("Soundcore Work").
     public var shortName: String { deviceKind == DaybookPhoneIntegration.id ? "iPhone" : deviceName }
+
+    /// What a device's arrival status is kept under (`ConversationStatusPresentation.Inputs.arrivals`).
+    public var arrivalKey: String { Self.arrivalKey(deviceKind: deviceKind, deviceName: deviceName) }
+    public static func arrivalKey(deviceKind: String, deviceName: String) -> String { "\(deviceKind)|\(deviceName)" }
+}
+
+/// Where a recording a conversation waits for is, as far as this device can tell (docs/multipoint.md, "Mac first"): the
+/// device that made it says so over the local link, or its sync presence does. Nil, nothing to add: it's on its way
+/// through sync.
+public enum ArrivalStatus: Equatable, Sendable {
+    /// The device is saving it after Stop.
+    case filing
+    /// On its way from the device: a share of its bytes, when known.
+    case sending(Double?)
+    /// The device's iCloud storage is full, so it can't send it.
+    case storageFull
+    /// The device waits for the encrypted library's key, so nothing it records syncs yet.
+    case waitingForKey
+    /// The device hasn't been online since then (its presence).
+    case lastOnline(Date)
+
+    /// The device's word over the link counts for this long after it's heard (always, while it's connected).
+    public static let reportLifetime: TimeInterval = 10 * 60
+
+    /// From what this device knows: the other device's word over the link (`LinkRecordingArrival`, received at
+    /// `reportedAt`), while it's connected or recent, else its presence: iCloud storage full, the library's key not there
+    /// yet, not heard from for a while (`KnownSyncDevice.isPresent`, "Last online" at its own last write), or files still
+    /// to upload.
+    public static func resolve(report: LinkRecordingArrival?, reportedAt: Date?, connected: Bool, presence: KnownSyncDevice?,
+                               now: Date = Date()) -> ArrivalStatus? {
+        if let report, connected || reportedAt.map({ now.timeIntervalSince($0) < reportLifetime }) == true {
+            switch report.phase {
+            case .filing: return .filing
+            case .sending: return .sending(report.fraction)
+            case .storageFull: return .storageFull
+            case .waitingForKey: return .waitingForKey
+            default: return nil
+            }
+        }
+        guard let presence, let lastSeen = presence.lastSeen else { return nil }
+        if presence.problem == .storageFull { return .storageFull }
+        if presence.keyState?.state == .waiting { return .waitingForKey }
+        if !presence.isPresent(at: now) { return .lastOnline(lastSeen) }
+        if (presence.pendingUploads ?? 0) > 0 { return .sending(nil) }
+        return nil
+    }
+
+    /// The clause after the wait: "Sending 40%", "Last online 10:02", "Alex’s iPhone is out of iCloud storage".
+    public func clause(device: String, now: Date = Date(), calendar: Calendar = .current) -> String {
+        switch self {
+        case .filing: return "Saving"
+        case .sending(let fraction):
+            guard let fraction, fraction > 0, fraction < 1 else { return "Sending" }
+            return "Sending \(Int(fraction * 100))%"
+        case .storageFull: return "\(device) is out of iCloud storage"
+        case .waitingForKey: return "\(device) is waiting for this library’s key"
+        case .lastOnline(let date):
+            if calendar.isDate(date, inSameDayAs: now) { return "Last online \(date.formatted(date: .omitted, time: .shortened))" }
+            return "Last online \(DeviceDateFormat.lastSeen(date, now: now, calendar: calendar))"
+        }
+    }
 }
 
 extension ProcessingStatus {
@@ -207,11 +280,43 @@ extension ProcessingStatus {
         return "Waiting for \(names.formatted(.list(type: .and))) audio"
     }
 
-    /// For a page: "Waiting for audio from Alex's iPhone".
-    public static func awaitingDetail(_ recordings: [AwaitedRecording]) -> String {
+    /// For a page: "Waiting for audio from Alex's iPhone", and one clause on where it is when this device knows
+    /// ("Waiting for audio from Alex's iPhone · Sending 40%").
+    public static func awaitingDetail(_ recordings: [AwaitedRecording], arrivals: [String: ArrivalStatus] = [:], now: Date = Date()) -> String {
         var names: [String] = []
         for name in recordings.map(\.deviceName) where !names.contains(name) { names.append(name) }
-        return "Waiting for audio from \(names.formatted(.list(type: .and)))"
+        let line = "Waiting for audio from \(names.formatted(.list(type: .and)))"
+        guard let known = recordings.first(where: { arrivals[$0.arrivalKey] != nil }), let arrival = arrivals[known.arrivalKey] else { return line }
+        return "\(line) · \(arrival.clause(device: known.deviceName, now: now))"
+    }
+
+    /// This device's own recording a Mac waits for, while it isn't on its way: "Sending this iPhone’s audio to your Mac",
+    /// "This iPhone’s audio can’t be sent · iCloud storage is full". `here` is how this device calls itself ("this iPhone").
+    public static func unsentLine(_ status: ArrivalStatus, here: String) -> String {
+        let device = here.prefix(1).uppercased() + here.dropFirst()
+        switch status {
+        case .filing: return "Saving \(here)’s audio"
+        case .sending(let fraction):
+            guard let fraction, fraction > 0, fraction < 1 else { return "Sending \(here)’s audio to your Mac" }
+            return "Sending \(here)’s audio to your Mac · \(Int(fraction * 100))%"
+        case .storageFull: return "\(device)’s audio can’t be sent · iCloud storage is full"
+        case .waitingForKey: return "\(device)’s audio can’t be sent · waiting for this library’s key"
+        case .lastOnline: return "Sending \(here)’s audio to your Mac"
+        }
+    }
+
+    /// For a page, a recording that never arrived: "Alex's iPhone audio didn't arrive".
+    public static func missingDetail(_ recordings: [AwaitedRecording]) -> String {
+        var names: [String] = []
+        for name in recordings.map(\.deviceName) where !names.contains(name) { names.append(name) }
+        return "\(names.formatted(.list(type: .and))) audio didn’t arrive"
+    }
+
+    /// For a list row or a chip: "iPhone audio didn't arrive".
+    public static func missingLine(_ recordings: [AwaitedRecording]) -> String {
+        var names: [String] = []
+        for name in recordings.map(\.shortName) where !names.contains(name) { names.append(name) }
+        return "\(names.formatted(.list(type: .and))) audio didn’t arrive"
     }
 }
 
@@ -227,6 +332,21 @@ extension Meeting {
         }
     }
 
+    /// Recordings it waited for that never came: a link that recorded (or may have), past `AwaitedRecording.lifetime`
+    /// with no recording of its device's here, and no Don't Wait. Said ("Alex's iPhone audio didn't arrive") until the
+    /// person chooses Don't Wait or Wait Again, or it arrives after all.
+    public func missingRecordings(now: Date = Date()) -> [AwaitedRecording] {
+        (companions ?? []).compactMap { link in
+            guard isMissing(link, now: now) else { return nil }
+            return AwaitedRecording(deviceName: link.deviceName, deviceKind: link.deviceKind, since: link.macEndedAt ?? link.macStartedAt)
+        }
+    }
+
+    /// The links whose recordings never came: what Wait Again waits for again, and Don't Wait lets go.
+    public func missingLinks(now: Date = Date()) -> Set<UUID> {
+        Set((companions ?? []).filter { isMissing($0, now: now) }.map(\.id))
+    }
+
     /// The links whose recordings it waits for now: what Don't Wait stops waiting for.
     public func awaitedLinks(now: Date = Date()) -> Set<UUID> {
         Set((companions ?? []).filter { waits(for: $0, now: now) }.map(\.id))
@@ -240,21 +360,22 @@ extension Meeting {
     public func hasAwaitedRecordingToAdd(now: Date = Date()) -> Bool {
         (companions ?? []).contains { link in
             guard link.expectsRecording, link.trackID == nil else { return false }
-            guard now.timeIntervalSince(link.macEndedAt ?? link.macStartedAt) <= AwaitedRecording.lifetime else { return false }
+            guard now.timeIntervalSince(link.waitingSince) <= AwaitedRecording.lifetime else { return false }
             return tracks.contains { track in
                 Self.track(track, fulfills: link) && !transcripts.contains { $0.trackID == track.id }
             }
         }
     }
 
-    /// Don't Wait: stops waiting for every recording it waits for now (of `links` alone, when given), so its status
-    /// says what's here. A recording that still arrives is added (`hasAwaitedRecordingToAdd`). Returns whether anything
-    /// was waited for.
+    /// Don't Wait: stops waiting for every recording it waits for now, and lets go of one that never came (of `links`
+    /// alone, when given), so its status says what's here. A recording that still arrives is added
+    /// (`hasAwaitedRecordingToAdd`, within its lifetime). Returns whether anything was waited for.
     @discardableResult
     public mutating func stopWaitingForRecordings(at now: Date = Date(), links only: Set<UUID>? = nil) -> Bool {
         guard var links = companions else { return false }
         var stopped = false
-        for index in links.indices where (only?.contains(links[index].id) ?? true) && waits(for: links[index], now: now) {
+        for index in links.indices where (only?.contains(links[index].id) ?? true)
+            && (waits(for: links[index], now: now) || isMissing(links[index], now: now)) {
             links[index].stoppedWaitingAt = now
             stopped = true
         }
@@ -276,11 +397,32 @@ extension Meeting {
         return resumed
     }
 
+    /// Wait Again for a recording that never came (of `links` alone, when given): it's waited for once more, for
+    /// `AwaitedRecording.lifetime` from now. Returns whether any link changed.
+    @discardableResult
+    public mutating func waitAgainForMissingRecordings(at now: Date = Date(), links only: Set<UUID>? = nil) -> Bool {
+        guard var links = companions else { return false }
+        var resumed = false
+        for index in links.indices where (only?.contains(links[index].id) ?? true) && isMissing(links[index], now: now) {
+            links[index].waitedAgainAt = now
+            resumed = true
+        }
+        if resumed { companions = links }
+        return resumed
+    }
+
     /// It waits for the link's recording: the recorder recorded, or may have, and its recording isn't here, within
-    /// `AwaitedRecording.lifetime` of this Mac's recording, until Don't Wait.
+    /// `AwaitedRecording.lifetime` of this Mac's recording (or of Wait Again), until Don't Wait.
     private func waits(for link: CompanionRecording, now: Date) -> Bool {
         link.expectsRecording && link.trackID == nil && link.stoppedWaitingAt == nil
-            && now.timeIntervalSince(link.macEndedAt ?? link.macStartedAt) <= AwaitedRecording.lifetime
+            && now.timeIntervalSince(link.waitingSince) <= AwaitedRecording.lifetime
+            && !hasRecording(fulfilling: link)
+    }
+
+    /// The link's recording never came: it was waited for, past `AwaitedRecording.lifetime`, and nobody chose Don't Wait.
+    private func isMissing(_ link: CompanionRecording, now: Date) -> Bool {
+        link.expectsRecording && link.trackID == nil && link.stoppedWaitingAt == nil
+            && now.timeIntervalSince(link.waitingSince) > AwaitedRecording.lifetime
             && !hasRecording(fulfilling: link)
     }
 

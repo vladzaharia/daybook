@@ -640,7 +640,8 @@ extension LibrarySyncEngine {
     }
 
     /// A courier delivery of the object, sealed under a held key or plaintext, while the sync folder's copy isn't
-    /// downloaded. Asks iCloud for the sync folder's copy, so the delivery can be pruned once it's there.
+    /// downloaded. The sync folder's copy isn't asked for: once the library holds the delivery's verified bytes and
+    /// iCloud lists the object, the delivery is dropped (`installedFromDelivery`), so the recording isn't kept twice.
     func courierObject(_ sha256: String) -> (delivery: URL, object: RemoteObject)? {
         var candidates: [RemoteObject] = []
         if let sealing {
@@ -659,8 +660,7 @@ extension LibrarySyncEngine {
             guard let delivered = inboxCopy(path) else { continue }
             switch SyncFiles.itemState(object.url) {
             case .local: return nil
-            case .inCloud: try? cloud.requestDownload(object.url); return (delivered, object)
-            case .absent: return (delivered, object)
+            case .inCloud, .absent: return (delivered, object)
             }
         }
         return nil
@@ -757,14 +757,37 @@ extension LibrarySyncEngine {
         containerCopies[path] = sha256
     }
 
+    /// The library installed an object's verified bytes from a courier delivery. The delivery is dropped as soon as iCloud
+    /// lists the sync folder's object (its sender uploaded it), so the recording isn't kept twice here; until then it
+    /// stays, for promotion (`pruneCourierInbox`). A copy of the object iCloud brings down later is let go like any other
+    /// (`deliveredCopies`).
+    func installedFromDelivery(_ delivery: URL, object: RemoteObject, holding sha256: String) {
+        let path = String(object.url.standardizedFileURL.path.dropFirst(remoteRoot.path.count + 1))
+        if audioPolicy == .eager { deliveredCopies[path] = sha256 }
+        if SyncFiles.itemState(object.url) != .absent { discardDelivery(delivery) }
+    }
+
+    /// The plaintext SHA-256s of the audio and photos the library holds verified copies of.
+    func heldDigests() -> Set<String> {
+        let meetings = localRoot.appendingPathComponent("Meetings", isDirectory: true).standardizedFileURL.path + "/"
+        return Set(verifiedAssets.filter { $0.key.hasPrefix(meetings) }.map(\.value.digest))
+    }
+
     /// Lets iCloud drop its local copy of objects it has uploaded and the library holds verified, so a Mac doesn't keep
     /// every recording twice (an encrypted library's sealed copy is other bytes, never a clone of the library's). One
     /// it needs again comes back on its own: an edit publishes by reference to what iCloud holds, and the sealer seals
     /// from the library's copy.
     func evictUploadedContainerCopies() {
-        guard audioPolicy == .eager, !containerCopies.isEmpty else { return }
-        let meetings = localRoot.appendingPathComponent("Meetings", isDirectory: true).standardizedFileURL.path + "/"
-        let held = Set(verifiedAssets.filter { $0.key.hasPrefix(meetings) }.map(\.value.digest))
+        guard audioPolicy == .eager, !containerCopies.isEmpty || !deliveredCopies.isEmpty else { return }
+        let held = heldDigests()
+        // Installed from a courier delivery: iCloud may list the object, and bring its copy down, only later (a Mac that
+        // keeps everything local).
+        for (path, sha256) in deliveredCopies {
+            let url = remoteRoot.appendingPathComponent(path)
+            guard SyncFiles.itemState(url) == .local, held.contains(sha256), cloud.isUploaded(url) else { continue }
+            cloud.evictLocalCopy(url)
+            deliveredCopies[path] = nil
+        }
         for (path, sha256) in containerCopies {
             let url = remoteRoot.appendingPathComponent(path)
             switch SyncFiles.itemState(url) {

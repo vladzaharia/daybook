@@ -66,6 +66,8 @@ extension PhoneAppModel {
     @discardableResult
     func file(_ recording: PhoneRecording, session: MultipointSession? = nil) async -> Filing {
         let join = multipoints.join(for: recording, session: session)
+        // A Mac waits for it: the Macs hear where it stands until it's on its way.
+        if join != nil { multipoints.outgoingFiling(recording.id, recordingID: recording.recordingID.uuidString) }
         let filing: Filing
         // A Mac's conversation that hasn't synced here yet: one pass first, so this files into its copy.
         if join != nil, library.controller.meeting(recording.id) == nil, sync.isConnected { await sync.synchronize(.filed) }
@@ -73,6 +75,7 @@ extension PhoneAppModel {
             let filed = try await library.fileRecording(recording, join: join, requestTranscription: settings.requestsTranscription)
             noteFiled(filed.meeting.id)
             filing = .saved(filed.meeting.id, Date())
+            if join != nil { multipoints.outgoingFiled(recording.id, into: filed.meeting.id) }
             let identity = PhoneDevice.identity(recordingID: recording.recordingID, installation: library.installationID)
             if let track = filed.meeting.tracks.first(where: { $0.device == identity }) {
                 await captions.attach(trackID: track.id, meetingID: filed.meeting.id)
@@ -87,6 +90,7 @@ extension PhoneAppModel {
         } catch {
             say(Self.notFiled, details: error.localizedDescription)
             filing = .failed(Self.notFiled)
+            if join != nil { multipoints.outgoingFiled(recording.id, into: nil) }
         }
         publish()
         return filing

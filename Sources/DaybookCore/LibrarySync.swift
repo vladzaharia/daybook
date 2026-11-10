@@ -137,6 +137,10 @@ public actor LibrarySyncEngine {
     /// Objects in the sync folder an eager replica wrote, verified, or installed from, by path, with the plaintext SHA-256
     /// the library holds a verified copy of: once iCloud has one, its local copy is let go (`evictUploadedContainerCopies`).
     var containerCopies: [String: String] = [:]
+    /// Objects in the sync folder whose bytes the library installed from a courier delivery, by path, with the plaintext
+    /// SHA-256: kept while iCloud holds them only in the cloud, so a copy it brings down later is let go too
+    /// (`evictUploadedContainerCopies`).
+    var deliveredCopies: [String: String] = [:]
     /// When stale temporary files were last swept (`sweepStaleTemporaries`).
     var lastTemporarySweep: Date?
     /// Devices that wrote the journal entries seen by the last pass, including ones without presence.
@@ -144,6 +148,15 @@ public actor LibrarySyncEngine {
     /// Journal file names seen by the last pass that finished with nothing pending or deferred.
     var settledJournalListing: Set<String>?
     var presenceWritten: (record: SyncDeviceRecord, at: Date)?
+    /// Files the last pass left to upload, and whether iCloud refused them for lack of storage, for this device's presence
+    /// (`SyncDeviceRecord.pendingUploads`, `problem`).
+    var presenceUploads: Int?
+    var presenceStorageFull = false
+    /// What the app says stands in the way of this device's sync (`setPresenceProblem`): the courier's storage, say.
+    var presenceProblem: SyncPresenceProblem?
+    /// Other devices' presence as this device read it, by device ID: what each said it wrote, and when (by this device's
+    /// clock) this device saw it change to that (`KnownSyncDevice.heardAt`). Nil `heard`: read once, not seen to change.
+    var presenceHeard: [String: (lastSeen: Date, heard: Date?)] = [:]
     /// When this device ID first wrote its presence, from its own record (`SyncDeviceRecord.firstSeen`).
     var presenceFirstSeen: Date?
     nonisolated let installation: String?
@@ -662,6 +675,9 @@ public actor LibrarySyncEngine {
         let listing = Set((pass.listedEvents + pass.listedMetadata).map(\.path)).union(compactionRuntime.paths)
             .subtracting(sealingRuntime.replacedEntries).union(ownJournalWrites)
         settledJournalListing = pass.pendingDownloads == 0 && pass.budget.deferred == 0 ? listing : nil
+        // Presence says what's still to upload, and whether iCloud's storage is what holds it back.
+        presenceUploads = pass.pendingUploads
+        presenceStorageFull = uploads.storageFull
         // Presence is advisory: failing to refresh it never fails the pass.
         if !Task.isCancelled { try? writePresence(now: Date(), force: false) }
         let written = takeCourierWrites()
@@ -1615,6 +1631,9 @@ public actor LibrarySyncEngine {
         let directory = localRoot.appendingPathComponent("Meetings/\(meetingID.uuidString)", isDirectory: true)
         try requireNotTrashed(meetingID)
         try LocalFiles.directory(directory)
+        // Every object still to come is asked of iCloud in this pass, not only the first: the conversation applies once
+        // they're all here.
+        var pending = false
         for asset in assets {
             try Task.checkCancellation()
             let destination = try LocalFiles.relativeURL(asset.relativePath, in: directory)
@@ -1627,8 +1646,8 @@ public actor LibrarySyncEngine {
             // While the sync folder's copy isn't downloaded, a courier delivery of the same object will do.
             let delivered = courierObject(asset.sha256)
             if let delivered { object = delivered.object } else {
-                try SyncFiles.available(object.url, cloud: cloud)
-                guard fm.fileExists(atPath: object.url.path) else { throw SyncPendingDownload() }
+                do { try SyncFiles.available(object.url, cloud: cloud) } catch is SyncPendingDownload { pending = true; continue }
+                guard fm.fileExists(atPath: object.url.path) else { pending = true; continue }
             }
             try LocalFiles.directory(destination.deletingLastPathComponent())
             let temporary = destination.deletingLastPathComponent().appendingPathComponent(".download-\(UUID().uuidString)")
@@ -1645,8 +1664,10 @@ public actor LibrarySyncEngine {
             }
             try install(temporary, at: destination, in: directory, warnings: &warnings)
             verifiedAssets[destination.path] = try assetStamp(destination, digest: asset.sha256)
-            if delivered == nil { noteContainerCopy(String(object.url.standardizedFileURL.path.dropFirst(remoteRoot.path.count + 1)), holding: asset.sha256) }
+            if let delivered { installedFromDelivery(delivered.delivery, object: object, holding: asset.sha256) }
+            else { noteContainerCopy(String(object.url.standardizedFileURL.path.dropFirst(remoteRoot.path.count + 1)), holding: asset.sha256) }
         }
+        if pending { throw SyncPendingDownload() }
     }
     /// Moves verified bytes into the library. An existing different file is an original and is preserved.
     func install(_ temporary: URL, at destination: URL, in directory: URL, warnings: inout [String]) throws {

@@ -186,6 +186,8 @@ struct SummaryPage: View {
         }
         // A clearly better model within reach, when there's nothing else to say.
         if processing == .done { inputs.upgrade = upgrades?.offer(for: meeting, now: now) }
+        // Its own recording a Mac waits for, not on its way yet: the line the Mac's page matches.
+        inputs.unsent = model?.multipoints.unsent(meeting.id)
         return inputs
     }
 
@@ -235,6 +237,7 @@ struct SummaryPage: View {
             let device = library.thisDevice
             library.update(id) { $0.withdrawProcessingRequest(request, by: device, at: Date()) }
         case .dontWait: library.stopWaitingForRecordings(in: id, undoManager: undoManager)
+        case .waitAgain: library.waitAgainForMissingRecordings(in: id, undoManager: undoManager)
         case .cancelDownload:
             guard let models = model?.models else { return }
             for role in Self.processingRoles { if let choice = models.choice(for: role) { models.cancel(choice) } }

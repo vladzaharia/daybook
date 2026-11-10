@@ -130,6 +130,8 @@ struct ConversationInfo: View {
             placement?.stop(id)
         case .status(.dontWait):
             library.stopWaitingForRecordings(in: id, undoManager: undoManager)
+        case .status(.waitAgain):
+            library.waitAgainForMissingRecordings(in: id, undoManager: undoManager)
         case .status:
             break
         case .searchTag(let tag):

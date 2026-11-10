@@ -28,6 +28,9 @@ final class CaptureLevelMonitor {
     private(set) var isMicrophoneSilent = false
     /// True while call audio is part of the recording.
     private(set) var isCapturingCall = false
+    /// When the microphone last heard something as loud as speech (`AudioLevelMeter.audibleThreshold`): a follower
+    /// that can't reach its leader stops only in a quiet room (`LeaderWatch`). Changes with every word, so unobserved.
+    @ObservationIgnored private(set) var microphoneLastAudibleAt: Date?
 
     static let callHoldSeconds: TimeInterval = 4
     /// No non-zero sample for this long is not hearing.
@@ -60,11 +63,13 @@ final class CaptureLevelMonitor {
         if capturing != isCapturingCall { isCapturingCall = capturing }
         let silent = Self.isNotHearing(mic, now: hostTime, elapsed: elapsed)
         if silent != isMicrophoneSilent { isMicrophoneSilent = silent }
+        if let audible = mic?.lastAudibleHostTime { microphoneLastAudibleAt = Date().addingTimeInterval(-max(0, hostTime - audible)) }
     }
 
     func reset() {
         microphone = .silent; call = .silent
         isCallAudioDetected = false; isMicrophoneSilent = false; isCapturingCall = false
+        microphoneLastAudibleAt = nil
     }
 
     /// Publishes only visible changes (half a decibel), keeping redraws cheap.

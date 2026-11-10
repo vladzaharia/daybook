@@ -30,6 +30,8 @@ public actor LinkService: LinkSessionOwner {
     private var sessions: [ObjectIdentifier: LinkSession] = [:]
     private var peers: [UUID: LinkSession] = [:]
     var recordAnswers = LinkRecordAnswers()
+    /// Notes and bookmarks each phone's ended sessions left unacknowledged, sent first on its next.
+    private var reliable = LinkReliableKeep()
     private(set) var recordHandler: LinkRecordControlHandler?
 
     private struct PairingWindow {
@@ -64,6 +66,9 @@ public actor LinkService: LinkSessionOwner {
 
     /// A stream of everything that happens. Each call returns a new stream.
     public nonisolated func events() -> AsyncStream<LinkEvent> { hub.stream() }
+
+    /// Live levels and captions dropped because a stream's reader fell behind (diagnostics). Nothing else is dropped.
+    public nonisolated var droppedLiveEvents: Int { hub.droppedLiveEvents }
 
     // MARK: Lifecycle
 
@@ -152,6 +157,7 @@ public actor LinkService: LinkSessionOwner {
         if let session = peers[deviceID] { session.sendUnpairAndClose() }
         try keyStore.remove(deviceID: deviceID)
         recordAnswers.forget(deviceID)
+        reliable.forget(deviceID)
         hub.yield(.unpaired(deviceID: deviceID, byPeer: false))
         rebuildListener()
     }
@@ -185,6 +191,10 @@ public actor LinkService: LinkSessionOwner {
 
     func sendRawFrame(_ frame: Data, to deviceID: UUID) { peers[deviceID]?.sendRaw(frame) }
     func ignoredMessageCount(from deviceID: UUID) -> Int { peers[deviceID]?.ignoredMessages ?? 0 }
+    /// Notes and bookmarks sent to a phone and not acknowledged yet: in its session, and kept for its next.
+    func unacknowledgedCount(to deviceID: UUID) -> Int {
+        (peers[deviceID]?.reliableOutbox.unacknowledged.count ?? 0) + reliable.count(for: deviceID)
+    }
     var advertisedEntries: [String: String]? { advertisement?.entries }
 
     // MARK: Listener
@@ -336,7 +346,7 @@ public actor LinkService: LinkSessionOwner {
     }
 
     /// The first frame says what a connection is for: a session (hello) or pairing (pair.begin).
-    private func route(_ channel: LinkChannel, firstFrame: Data, receivedAt: Date) {
+    private func route(_ channel: LinkChannel, firstFrame: Data, receivedAt: LinkInstant) {
         guard unrouted.removeValue(forKey: ObjectIdentifier(channel)) != nil else { return }
         guard let message = try? LinkWire.decode(firstFrame).message else { channel.close(); return }
         switch message {
@@ -351,7 +361,7 @@ public actor LinkService: LinkSessionOwner {
 
     // MARK: Sessions
 
-    private func startSession(on channel: LinkChannel, firstFrame: Data, receivedAt: Date) {
+    private func startSession(on channel: LinkChannel, firstFrame: Data, receivedAt: LinkInstant) {
         var delegate = LinkSession.Delegate.forwarding(to: self)
         delegate.lookup = { [keyStore] deviceID in try? keyStore.record(for: deviceID) }
         let session = LinkSession(role: .server, channel: channel, identity: identity, record: nil, configuration: configuration,
@@ -367,6 +377,9 @@ public actor LinkService: LinkSessionOwner {
         }
         peers[peer.deviceID] = session
         if let answered = recordAnswers.replies(for: peer.deviceID) { session.adoptAnsweredReplies(answered) }
+        // What the phone's last session didn't acknowledge goes before anything new.
+        session.resend(reliable.take(for: peer.deviceID, now: configuration.clock.now()),
+                       peerAcknowledges: reliable.peerAcknowledges(peer.deviceID))
         hub.yield(.connected(peer))
     }
 
@@ -374,6 +387,7 @@ public actor LinkService: LinkSessionOwner {
         sessions.removeValue(forKey: ObjectIdentifier(session))
         guard let peer = session.peer else { return }
         recordAnswers.keep(session.answeredReplies, from: peer.deviceID)
+        reliable.sessionEnded(with: peer.deviceID, outbox: session.reliableOutbox, now: configuration.clock.now())
         if peers[peer.deviceID] === session { peers.removeValue(forKey: peer.deviceID) }
         hub.yield(.disconnected(deviceID: peer.deviceID, reason: reason))
     }
@@ -382,6 +396,7 @@ public actor LinkService: LinkSessionOwner {
         guard let deviceID = session.deviceID else { return }
         try? keyStore.remove(deviceID: deviceID)
         recordAnswers.forget(deviceID)
+        reliable.forget(deviceID)
         hub.yield(.unpaired(deviceID: deviceID, byPeer: true))
         rebuildListener()
     }
@@ -438,7 +453,7 @@ public actor LinkService: LinkSessionOwner {
             fail(.timedOut)
         }
         // The first frame is the begin.
-        channel.onFrame?(firstFrame, configuration.clock.now())
+        channel.onFrame?(firstFrame, LinkInstant(configuration.clock))
     }
 
     private func paired(_ outcome: PasskeyExchange.Outcome, attempt: ObjectIdentifier, channel: LinkChannel, replies: [Data]) {

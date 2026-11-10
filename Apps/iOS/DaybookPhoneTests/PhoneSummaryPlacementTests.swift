@@ -208,7 +208,8 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         let rig = try await rig(cloud: Cloud(models: [sonnet]))
         let id = transcribed(rig.library)
         await rig.placement.summaryIsDue(id)
-        rig.clock.now.addTimeInterval(20 * 60)
+        // Past the 25 minutes presence counts for (`KnownSyncDevice.presenceWindow`).
+        rig.clock.now.addTimeInterval(26 * 60)
         rig.placement.refresh()
         XCTAssertEqual(rig.placement.planners[id]?.phase, .waitingForMac, "Its presence is too old to count on")
     }

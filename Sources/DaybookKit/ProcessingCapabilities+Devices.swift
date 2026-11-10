@@ -51,12 +51,14 @@ public struct SummarizingMac: Equatable, Sendable {
         }
     }
 
-    /// A presence record seen this recently counts as a Mac that will see a request soon: Macs rewrite
-    /// theirs every 10 minutes while they run (`MacPresence.recentlySeen` on the iPhone is the same).
-    public static let presenceWindow: TimeInterval = 15 * 60
+    /// A Mac heard from this recently through its presence will see a request soon: Macs rewrite theirs every 10 minutes
+    /// while they run, and this is two and a half times that, judged from when this device saw it change
+    /// (`KnownSyncDevice.isPresent`), so a late rewrite or another clock never makes it come and go. `MacPresence` on the
+    /// iPhone is the same.
+    public static let presenceWindow: TimeInterval = KnownSyncDevice.presenceWindow
 
     /// The Macs that can summarize and are reachable now, connected ones first, each once: connected over the
-    /// link, or seen through sync within `presenceWindow`. A Mac summarizes when its capabilities say so, or,
+    /// link, or heard from through sync within `presenceWindow`. A Mac summarizes when its capabilities say so, or,
     /// from an earlier Daybook that doesn't say, when it processes (`canProcess` means it has every model).
     public static func reachable(connected: [Connected], presence: [KnownSyncDevice], now: Date = Date()) -> [SummarizingMac] {
         var result: [SummarizingMac] = []
@@ -67,11 +69,10 @@ public struct SummarizingMac: Equatable, Sendable {
             result.append(SummarizingMac(id: UUID(uuidString: key) ?? mac.id, name: mac.name))
         }
         let present = presence.filter { device in
-            guard !device.isCurrentDevice, device.deviceClass == .mac, device.supersededBy == nil, let seen = device.lastSeen,
-                  now.timeIntervalSince(seen) <= presenceWindow else { return false }
+            guard !device.isCurrentDevice, device.deviceClass == .mac, device.supersededBy == nil, device.isPresent(at: now) else { return false }
             return device.capabilities?.summarizes ?? (device.canProcess == true)
         }
-        .sorted { ($0.lastSeen ?? .distantPast) > ($1.lastSeen ?? .distantPast) }
+        .sorted { ($0.lastHeard ?? .distantPast) > ($1.lastHeard ?? .distantPast) }
         for device in present {
             guard let id = UUID(uuidString: device.id), seen.insert(device.id).inserted else { continue }
             result.append(SummarizingMac(id: id, name: device.displayName ?? "your Mac"))
@@ -88,7 +89,7 @@ extension SummaryOptions {
 
 /// A Mac reachable now, with what it would run for other devices: what an "Upgrade" offer compares a conversation's
 /// models with (docs/multipoint.md, "Upgrade"). Reachable as for summaries (`SummarizingMac.reachable`): connected over
-/// the link, or seen through sync within `SummarizingMac.presenceWindow`.
+/// the link, or heard from through sync within `SummarizingMac.presenceWindow`.
 public struct ProcessingMac: Equatable, Sendable {
     /// Its sync replica ID, as requests name devices.
     public var id: String
@@ -111,11 +112,10 @@ public struct ProcessingMac: Equatable, Sendable {
             result.append(ProcessingMac(id: key, name: mac.name, capabilities: capabilities))
         }
         let present = presence.filter { device in
-            guard !device.isCurrentDevice, device.deviceClass == .mac, device.supersededBy == nil, let seen = device.lastSeen,
-                  now.timeIntervalSince(seen) <= SummarizingMac.presenceWindow else { return false }
+            guard !device.isCurrentDevice, device.deviceClass == .mac, device.supersededBy == nil, device.isPresent(at: now) else { return false }
             return device.capabilities?.models != nil
         }
-        .sorted { ($0.lastSeen ?? .distantPast) > ($1.lastSeen ?? .distantPast) }
+        .sorted { ($0.lastHeard ?? .distantPast) > ($1.lastHeard ?? .distantPast) }
         for device in present {
             guard let capabilities = device.capabilities, seen.insert(device.id).inserted else { continue }
             result.append(ProcessingMac(id: device.id, name: device.displayName ?? "your Mac", capabilities: ProcessingCapabilities(capabilities)))

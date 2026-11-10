@@ -1,3 +1,4 @@
+import DaybookCore
 import DaybookKit
 import DaybookLink
 import DaybookUI
@@ -37,6 +38,9 @@ final class LinkServicesTests: XCTestCase {
         }
         var permissions: [LinkRecordPermission] {
             all.compactMap { if case .received(.recordPermission(let permission), _) = $0 { return permission } else { return nil } }
+        }
+        var arrivals: [LinkRecordingArrival] {
+            all.compactMap { if case .received(.recordingArrival(let arrival), _) = $0 { return arrival } else { return nil } }
         }
     }
 
@@ -89,10 +93,11 @@ final class LinkServicesTests: XCTestCase {
         return recorder
     }
 
-    func makeMac(name: String = "Studio Mac") async throws -> Mac {
+    func makeMac(name: String = "Studio Mac", features: [String] = []) async throws -> Mac {
         let id = UUID()
         let store = MemoryLinkKeyStore()
-        let service = LinkService(identity: LinkIdentity(deviceID: id, name: name, deviceClass: .mac, appVersion: "1.0", canProcess: true),
+        let service = LinkService(identity: LinkIdentity(deviceID: id, name: name, deviceClass: .mac, appVersion: "1.0", canProcess: true,
+                                                         features: features),
                                   keyStore: store, configuration: .loopback())
         try await service.start()
         addTeardownBlock { await service.stop() }
@@ -590,15 +595,72 @@ final class LinkServicesTests: XCTestCase {
         XCTAssertEqual(model.notice, "Studio Mac stopped recording, so this iPhone stopped too.")
         XCTAssertNotNil(model.library.controller.meeting(first))
 
-        // Gone for half an hour: this iPhone stops on its own.
-        _ = try await start()
+        // Out of reach while the room talks: after two minutes this iPhone says so and keeps recording, past half an hour
+        // too; once the room has been quiet for ten minutes, it stops.
+        var heard = Date()
+        model.multipoints.lastHeardSpeech = { heard }
+        model.multipoints.leaderPresence = { _ in nil }
+        let second = try await start()
         await link.client.disconnect(from: mac.id)
         try await waitUntil("disconnected") { link.macs.first?.isConnected == false }
-        model.checkLead(now: Date().addingTimeInterval(10 * 60))
-        XCTAssertTrue(model.recorder.isActive)
-        model.checkLead(now: Date().addingTimeInterval(31 * 60))
+        let silent = try XCTUnwrap(link.macs.first?.lastConnectedAt)
+        model.checkLead(now: silent.addingTimeInterval(60))
+        XCTAssertNil(model.multipoints.leadOutOfReach, "a minute's quiet isn't mentioned")
+        model.checkLead(now: silent.addingTimeInterval(3 * 60))
+        XCTAssertEqual(model.multipoints.leadOutOfReach, "Studio Mac is out of reach. This iPhone keeps recording.")
+        heard = silent.addingTimeInterval(30 * 60)
+        model.checkLead(now: silent.addingTimeInterval(31 * 60))
+        XCTAssertTrue(model.recorder.isActive, "the room is talking: it keeps recording")
+        XCTAssertEqual(model.recorder.captureID, second)
+        model.checkLead(now: silent.addingTimeInterval(41 * 60))
         try await waitUntil("stopped on its own") { !model.recorder.isActive && !model.isFiling }
-        XCTAssertEqual(model.notice, "Studio Mac couldn’t be reached for 30 minutes, so this iPhone stopped recording.")
+        XCTAssertEqual(model.notice, "Studio Mac couldn’t be reached for 30 minutes and the room was quiet, so this iPhone stopped recording.")
+        XCTAssertNil(model.multipoints.leadOutOfReach)
+
+        // Its presence, written since the link went quiet, says it stopped: this iPhone stops as its stop would have;
+        // presence that says it still records keeps this iPhone recording, quiet room or not.
+        try await link.client.connect(to: mac.id, via: mac.endpoint)
+        try await waitUntil("connected again") { link.macs.first?.isConnected == true }
+        let third = try await start()
+        await link.client.disconnect(from: mac.id)
+        try await waitUntil("disconnected again") { link.macs.first?.isConnected == false }
+        let quiet = try XCTUnwrap(link.macs.first?.lastConnectedAt)
+        heard = quiet.addingTimeInterval(-3600)
+        var recording: UUID? = third
+        model.multipoints.leaderPresence = { id in
+            KnownSyncDevice(id: id.uuidString, deviceClass: .mac, displayName: "Studio Mac", lastSeen: quiet.addingTimeInterval(40 * 60),
+                            activity: SyncDeviceActivity(recordingConversationID: recording, expiresAt: quiet.addingTimeInterval(65 * 60)))
+        }
+        model.checkLead(now: quiet.addingTimeInterval(45 * 60))
+        XCTAssertTrue(model.recorder.isActive, "its presence says it records this conversation")
+        recording = nil
+        model.checkLead(now: quiet.addingTimeInterval(46 * 60))
+        try await waitUntil("stopped as the Mac did") { !model.recorder.isActive && !model.isFiling }
+        XCTAssertEqual(model.notice, "Studio Mac stopped recording, so this iPhone stopped too.")
+    }
+
+    /// A recording a Mac waits for says where it stands to that Mac (`recording.arrival`): being saved, then on its way,
+    /// and the conversation's page here says the matching line.
+    func testARecordingAMacWaitsForSaysWhereItIs() async throws {
+        let mac = try await makeMac(features: [LinkCapabilities.recordingArrivalFeature])
+        let inbox = MacInbox(mac.service.events())
+        let link = makeLink()
+        let rig = RecorderRig()
+        let model = try makeModel(link: link, rig: rig)
+        try await pair(link, with: mac, allowingRecordingOn: model)
+        let phoneID = link.deviceID
+        let conversation = UUID()
+        let reply = try await mac.service.request(LinkRecordRequest(action: .start, conversationID: conversation,
+                                                                    timing: LinkTiming(startedAt: Date(), elapsed: 0)), from: phoneID)
+        guard case .accepted = reply.outcome else { return XCTFail("\(reply.outcome)") }
+        rig.pump(1)
+        let stop = try await mac.service.request(LinkRecordRequest(action: .stop, conversationID: conversation), from: phoneID)
+        guard case .accepted = stop.outcome else { return XCTFail("\(stop.outcome)") }
+        try await waitUntil("filed") { !model.recorder.isActive && !model.isFiling }
+        try await waitUntil("the Mac hears it's on its way") { inbox.arrivals.contains { $0.phase == .sending } }
+        XCTAssertEqual(inbox.arrivals.first?.phase, .filing, "saving first")
+        XCTAssertEqual(inbox.arrivals.last?.conversationID, conversation)
+        XCTAssertEqual(model.multipoints.unsent(conversation), .sending(nil), "the page here says it's on its way")
     }
 
     // MARK: Recovery
