@@ -218,6 +218,21 @@ final class ModelChoicesTests: XCTestCase {
         XCTAssertEqual(ModelLabels.recommendedHint, "Recommended for this Mac")
     }
 
+    func testBehaviorTheSystemsSpeechModelReadsAsBuiltInNeverNotDownloaded() throws {
+        let speech = try model("apple-speech/system")
+        XCTAssertEqual(ModelOption.detail(for: speech, status: .builtIn), "Included with macOS", "Its menu item, as Apple's other models read")
+        let chosen = try choice("apple-speech/system", status: .builtIn)
+        XCTAssertNil(chosen.line(), "Chosen, its row says nothing: it's ready")
+        XCTAssertNil(chosen.line(space: ModelSpace(free: 0)), "Nothing to fit, even on a full disk")
+        XCTAssertFalse(chosen.canDownload(), "Nothing to download")
+        XCTAssertEqual(chosen.downloadBytes, 0)
+        XCTAssertEqual(chosen.selectionName, "Apple Speech")
+        XCTAssertNil(ModelDownloadSummary(chosen: [ModelDownloadSummary.Item(name: speech.name, status: .builtIn, bytes: speech.approximateBytes)]),
+                     "It never asks for a download")
+        XCTAssertEqual(ModelOption.detail(for: speech, status: .unavailable("Needs macOS 26 or later")), "Needs macOS 26 or later")
+        XCTAssertEqual(ModelLabels.of(speech), [], "Built in: no license or origin label")
+    }
+
     func testBehaviorAMenuItemSaysItsStateAndItsLicense() throws {
         let parakeet = try model("parakeet/ultra")
         XCTAssertEqual(ModelOption.detail(for: parakeet, status: .inUse), "Downloaded")

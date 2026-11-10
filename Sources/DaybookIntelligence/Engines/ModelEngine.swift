@@ -149,6 +149,7 @@ public struct ModelEngineRegistry: Sendable {
             NemotronDiarizerEngine(),
             NemotronStreamingEngine(),
             AppleFoundationModelsEngine(),
+            AppleSpeechEngine(),
             AppleVisionEngine()
         ])
     }

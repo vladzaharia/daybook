@@ -73,6 +73,65 @@ final class TranscriptionRoutingTests: XCTestCase {
         XCTAssertEqual(TranscriptionLanguages.name("de", locale: Locale(identifier: "en_US")), "German")
     }
 
+    // MARK: The system's speech model while the chosen one downloads
+
+    private let appleSpeech = "apple-speech/system"
+
+    /// Parakeet, Whisper, and the system's speech model, which can be unavailable for a reason.
+    private func engines(appleSpeech reason: String? = nil) -> [ModelEngineDescriptor] {
+        [.init(id: .parakeet, name: "Parakeet", version: 1, runtime: "FluidAudio 0.18.0", roles: [.transcription], platforms: [.macOS, .iOS]),
+         .init(id: .whisperKit, name: "WhisperKit", version: 2, runtime: "argmax-oss-swift 1.1.1", roles: [.transcription], platforms: [.macOS]),
+         .init(id: .appleSpeech, name: "Apple Speech", version: 1, runtime: "Speech, macOS 27.2", roles: [.transcription],
+               platforms: [.macOS, .iOS], residency: .system, unavailableReason: reason)]
+    }
+
+    private func interim(_ route: TranscriptionRoute, device: String? = "en", engines: [ModelEngineDescriptor]? = nil,
+                         installed: Set<String>? = nil) -> TranscriptionRoute? {
+        TranscriptionRouting.interim(for: route, deviceLanguage: device, catalog: catalog, engines: engines ?? self.engines(),
+                                     installed: installed ?? [appleSpeech], appVersion: nil)
+    }
+
+    func testWhileTheChosenModelDownloadsTheSystemsSpeechModelTranscribes() {
+        let automatic = TranscriptionRouting.route(selected: parakeet, language: nil, otherLanguages: turbo, catalog: catalog)
+        XCTAssertEqual(interim(automatic), TranscriptionRoute(model: appleSpeech, fallback: turbo),
+                       "Automatic stays Automatic (in the device's language), and keeps its language check")
+        let german = TranscriptionRouting.route(selected: parakeet, language: "de-AT", otherLanguages: turbo, catalog: catalog)
+        XCTAssertEqual(interim(german, device: "nl"), TranscriptionRoute(model: appleSpeech, language: "de"), "A chosen language is the one it hears")
+        let japanese = TranscriptionRouting.route(selected: parakeet, language: "ja", otherLanguages: turbo, catalog: catalog)
+        XCTAssertEqual(japanese.model, turbo)
+        XCTAssertEqual(interim(japanese, installed: [parakeet, appleSpeech]), TranscriptionRoute(model: appleSpeech, language: "ja"),
+                       "The other-languages model it was routed to isn't here either")
+        XCTAssertEqual(interim(TranscriptionRoute(model: "whisper-base")), TranscriptionRoute(model: appleSpeech),
+                       "A legacy ID names its variant, which isn't here")
+    }
+
+    func testWithNothingToStandInTheJobWaitsForTheDownloadAsBefore() {
+        let automatic = TranscriptionRouting.route(selected: parakeet, language: nil, otherLanguages: turbo, catalog: catalog)
+        XCTAssertNil(interim(automatic, installed: [parakeet, appleSpeech]), "The chosen model is here")
+        XCTAssertNil(interim(TranscriptionRoute(model: parakeet, language: "nl")), "The system doesn't transcribe Dutch")
+        XCTAssertNil(interim(automatic, device: "nl"), "Nor a Dutch device's Automatic")
+        XCTAssertNil(interim(automatic, device: nil), "No language to transcribe in")
+        XCTAssertNil(interim(automatic, installed: []), "Not on this device (macOS 15, or no transcriber)")
+        XCTAssertNil(interim(automatic, engines: engines(appleSpeech: "Needs macOS 26 or later")), "Its engine can't run it now")
+        XCTAssertNil(interim(TranscriptionRoute(model: appleSpeech)), "Chosen itself, it's already here")
+    }
+
+    func testTheSystemsSpeechModelIsNeverAPresetsOrAnotherLanguagesChoice() {
+        for quality in ModelQuality.allCases {
+            for tier in DeviceTier.allCases {
+                let choices = ModelRecommendations.preset(quality, tier: tier, catalog: catalog).choices[.transcription] ?? []
+                XCTAssertFalse(choices.contains(appleSpeech), "\(quality) on \(tier): a removed model never falls back to it")
+            }
+        }
+        for tier in DeviceTier.allCases {
+            XCTAssertNotEqual(ModelRecommendations.initialSelections(for: tier, catalog: catalog)[.transcription], appleSpeech)
+        }
+        XCTAssertEqual(TranscriptionRouting.otherLanguagesModel(selected: parakeet, chosen: nil, catalog: catalog, engines: engines(),
+                                                                installed: [appleSpeech], appVersion: nil), turbo,
+                       "It covers some languages, not every one, so it's never picked for other languages on its own")
+        XCTAssertEqual(TranscriptionLanguages.normalize(TranscriptionLanguages.deviceLanguage), TranscriptionLanguages.deviceLanguage)
+    }
+
     // MARK: Checking Automatic transcripts
 
     private let english = "We agreed to ship the prototype on Friday and review the results next Monday."

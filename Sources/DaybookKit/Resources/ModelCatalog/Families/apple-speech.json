@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "minimumReaderVersion": 1,
+  "families": [
+    {
+      "id": "apple-speech",
+      "name": "Apple Speech",
+      "maker": "Apple",
+      "engine": "appleSpeech",
+      "roles": [
+        "transcription"
+      ],
+      "summary": "Transcribes with the system's own speech model.",
+      "homepage": "https://developer.apple.com/documentation/speech/speechtranscriber",
+      "license": {
+        "id": "Apple-Speech",
+        "name": "Part of macOS and iOS",
+        "url": "https://www.apple.com/legal/sla/",
+        "allowsCommercialUse": true
+      },
+      "variants": [
+        {
+          "id": "system",
+          "name": "Apple Speech",
+          "detail": "Built in. The languages the system transcribes.",
+          "quality": {
+            "transcription": 50
+          },
+          "capabilities": {
+            "wordTimestamps": true,
+            "wordConfidence": true,
+            "languages": [
+              "bn",
+              "de",
+              "en",
+              "es",
+              "fr",
+              "gu",
+              "hi",
+              "it",
+              "ja",
+              "kn",
+              "ko",
+              "ks",
+              "mai",
+              "ml",
+              "mr",
+              "ne",
+              "or",
+              "pa",
+              "pt",
+              "ta",
+              "te",
+              "ur",
+              "yue",
+              "zh"
+            ],
+            "vocabularyPrompt": true,
+            "streaming": false
+          },
+          "minimumEngineVersion": 1,
+          "systemProvided": true,
+          "revisions": []
+        }
+      ]
+    }
+  ]
+}

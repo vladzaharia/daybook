@@ -254,7 +254,7 @@ final class ModelSelectionTests: XCTestCase {
 
     func testAcknowledgementsAreGeneratedFromTheManifests() {
         let list = ModelAcknowledgements.list(from: catalog)
-        XCTAssertEqual(list.map(\.title), ["Apple Foundation Models", "Apple Vision", "Community-1", "Gemma 4", "Nemotron 3 Diarization",
+        XCTAssertEqual(list.map(\.title), ["Apple Foundation Models", "Apple Speech", "Apple Vision", "Community-1", "Gemma 4", "Nemotron 3 Diarization",
                                              "Nemotron 3.5 ASR Streaming", "Parakeet",
                                              "Qwen 2.5", "Qwen 2.5", "Qwen 3.5", "Qwen 3.6", "Sortformer 2.1", "Whisper"])
         XCTAssertEqual(list.first { $0.title == "Nemotron 3.5 ASR Streaming" }?.licenseName, "OpenMDW License 1.1")

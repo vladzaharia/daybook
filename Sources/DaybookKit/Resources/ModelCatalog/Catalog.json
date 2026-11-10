@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "minimumReaderVersion": 1,
-  "catalogVersion": "2026.11.03",
+  "catalogVersion": "2026.11.10",
   "presets": [
     {
       "id": "quick",
@@ -269,7 +269,8 @@
       "iOS": {
         "transcription": [
           "parakeet/ultra",
-          "parakeet/redux"
+          "parakeet/redux",
+          "apple-speech/system"
         ],
         "diarization": [
           "nemotron-3-diarization/offline",
