@@ -1,5 +1,194 @@
 # Validation record
 
+## Design pass (2026-11-10)
+
+A whole-app design pass with the owner's authority to redesign (docs/audits/2026-11-10/README.md): eight reviews, 219
+findings, 62 proposals, the eight open owner decisions decided, and the packages below, each on its own worktree with
+its own tests and captures, merged on `design-pass-2026-11` (stacked on PR #61). The machine ran ten to fourteen
+builds at once during the pass, so every package's full `swift test` saw the two `SpeakerProfileProcessingTests`
+idle-voicing tests time out; they fail the same way on the unchanged base under that load (their work runs at
+`.background` priority, which macOS starves at a load average of 500–900) and pass on a quiet machine. Two
+load-sensitive timing tests (`SoundcoreSharedRecordingTests`'s button press, `AudioAlignerTests`' thirty-minute
+budget) passed when rerun alone. The shared iPhone simulators were in use by several packages at once, so the iPhone
+suites were run on private clones. Integration: after every merge the package built with tests and the touched suites
+ran green (DaybookKit, DaybookUI, DaybookDesign, DaybookCore, DaybookDevices, DaybookLink, DaybookCaptions, and the
+Mac and iPhone suites named below); two merges needed a semantic fix (W1-B's call prompt used a glass helper W1-G had
+deleted as unused, restored; W1-D's list subtitle read a per-model download field W1-E replaced with the whole set's
+state, rewired to the shared words).
+
+**Capturing the screens.** 237 captures: the Mac through `--snapshot` at 760, 1000, 1280, 1440 (with the inspector),
+1920, and 2560 pt, light and dark, every Settings pane, the standalone windows, every Floating Notes state, and the
+call prompt; the iPhone 18 Pro and the Duo (closed, open, table mode) through `simctl`, at default and accessibility
+text sizes. Two traps, now in docs/interface.md: the `swift build` binary is tagged for SDK 15 (SwiftPM sets the SDK
+version to the deployment target), so `--snapshot` draws macOS 15 chrome with no Liquid Glass; the Mac visual review
+re-tagged a copy with `vtool -set-build-version macos 15.0 27.0` and captured through the window server to judge the
+real chrome. And under load the demo library needs 10–25 s to seed before a snapshot, or the capture shows the wrong
+conversation. The blank 280×168 "untitled" window `--snapshot` writes is the system's Siri AI notes affordance host,
+not Daybook's.
+
+**What each package changed and how it was checked.**
+
+- **W1-A, Personal stays on this device.** Under Always, a Personal conversation counts down as Offer First does
+  (`SummaryPlacementPlanner.isPersonal`, asked for each conversation through `SummaryPlacements.isPersonal`), and it
+  gets no cloud Upgrade. The iPhone's Recorder widget names only conversations `ConversationIndex.isShown` allows and
+  drops one when it's made Personal. The Live Activity carries no caption while protected data is unavailable and
+  titles a Personal conversation "Recording" with no name line. Ink Copy Text is local-only; the Cloud footer names
+  the vocabulary. Verified with SummaryPlacementTests (38), UpgradeTests (20), SummaryPlacementProcessingTests (24),
+  SettingsSecretsTests, ConversationStatusPresentationTests, build-ios --test (RecordingSurfacesTests,
+  PhoneSummaryPlacementTests, NotesInkEditorTests), and a Settings › Cloud snapshot. Needs a device: the caption
+  leaving a locked phone's Live Activity (the protected-data notification comes about 10 s after locking with a
+  passcode; `privacySensitive` covers the gap).
+- **W1-B, recording more and where a recording lands.** One rule for after Stop on both apps (DaybookUI
+  `RecordMore`: Keep Recording for 2 min into the same conversation, then Record; Record Again after an unexpected
+  stop, the "Recording stopped" notification included, which no longer splits the call). Recordings started anywhere
+  but the library window land in All Conversations and leave the selection as it was. The iPhone's after-Stop shows
+  its processing chip. Call prompt: red Stop glyph, `DaybookRadius.panel`, paper on glass, a Meta hairline.
+  RecorderSurfaceTests, FloatingNotesAfterStopTests, SystemEntryPointsTests, the iPhone's RecorderScreenTests;
+  snapshots of `--call-prompt-demo ended|record` and `--notes-demo processing|stopped`, light and dark, and the
+  simulator's after-Stop moment. The prompt's glass wasn't seen on screen (the panel is out of screen capture); the
+  earlier line here about Record Again starting a new conversation no longer holds.
+- **W1-C, the page typeset as a document.** In the window: 15/24 body, 19/26 lede, 17 semibold headings, 12 pt
+  times, a 560 pt measure (touch keeps 640 pt and Dynamic Type); list marks hang in the margin; next-step, decision,
+  and question times share the notes' margin (a lane on narrow pages, beside the owner at the iPhone's accessibility
+  sizes); status links and box actions follow their words, and a window's box stacks only when its title would wrap;
+  the Trash's status sits under the byline; the inspector's dates share one format; the Templates help line doesn't
+  truncate. DaybookDesignTests, DaybookUITests, build-ios; before/after snapshots at 760, 1280, 1440 (with the
+  inspector), and 2560, Summary Templates at its 640 × 492 minimum, and 18 Pro screenshots at Large and
+  accessibility XL.
+- **W1-D, the list column as a calm index.** Window rows are two lines with tags at the end of the date line or a
+  "+N" count; one glyph language (a secondary waveform replaces the teal dot); the subtitle comes from
+  `QueueStatusWords.subtitle` and is hidden in the Trash; the column goes to 440 pt with two lines of gist from 360 pt;
+  countdowns tick on the deadline's phase (`TimelineSchedule.countdown(to:)`); the empty library's column says "No
+  Conversations" and Record and Import are matching capsules. DaybookUI, DaybookKit, Daybook, and DaybookDesign
+  tests; build-ios with an 18 Pro library screenshot; Mac snapshots before and after at 1280 and 2560 (demo, countdown,
+  Trash, empty library), light and dark, and a 400 pt column.
+- **W1-E, model downloads, the first week, and Settings.** Downloads stay owed in `local-downloads.json` and go on at
+  launch and when the network comes back, waiting for Wi‑Fi on an expensive or constrained network; a failure stops
+  the chain and shows "Couldn't download …" with Try Again, and is an alert only for the person's own press; every
+  surface says "Downloading models · 40%" over the whole set. A fresh Mac starts on its recommended preset. Welcome's
+  Ready page offers Open Daybook at login. Settings › Library lists templates, vocabulary, and speaker profiles, and
+  search covers what each page holds; the Permissions rows are named as Welcome names them; the captions footer is
+  gone. ModelDownloadQueueTests, ModelPreferenceMigrationTests, the words suites, build-ios (SettingsWordsTests,
+  PhoneModelsTests, ReadingTests), and light and dark snapshots of Welcome, Settings, the Models download states,
+  Floating Notes, and the page.
+- **W1-G, code quality: moves, dead code, drift checks.** Edit › Find in Conversation / Find Next / Find Previous
+  added to the menu bar; the iPhone's dormant status model and the Mac, iPhone, and shared dead code deleted, their
+  tests moved onto the shipped `ConversationStatusPresentation`, `WordChanges`, and `RevisionMarks`; SNR weighting and
+  `MeetingAudioAlignment` deleted (stored v0.2.2 alignments still decode, fuse, and merge); `DaybookMotion.pageTurn`
+  and `.progress` added and `MotionAuditTests` fails on raw curves (allowlist: CallPrompt.swift,
+  ConversationList.swift); CI's package job fails on a warning in `Sources/` or `Apps/iOS/`
+  (`scripts/ci/own-warnings.sh`); DaybookCaptions and DaybookDesign build with StrictConcurrency; the iPhone tests
+  compile `Tests/DaybookTestSupport`, which now holds `InMemoryCourier`, `MemoryLibraryKeyStore`, and
+  `ArraySampleSource`/`Sink`; `ObservationWatch` is in DaybookCore. `swift build --build-tests` (no new warnings),
+  `swift test` (2228 passed), build-ios --test (436 tests), and `scripts/ci/tests/run-tests.sh` (482 passed).
+- **W1-H, small platform adoptions.** Privacy manifests on the Mac app, the iPhone app, and the widgets
+  (`plutil -lint` OK; each in its target's Resources phase after `--generate-only`). Shortcuts can read the Mac
+  conversation's title and date, and Spotlight gets titles and dates only on both apps (SystemEntryPointsTests,
+  AppDestinationTests). Writing Tools leaves handwriting attachments alone, and a rewrite during a recording gets no
+  recording times (MarginNotesEditorTests). On macOS 26 the tap names bundle IDs with process restore and is rewritten
+  only for a new bundle ID (CallCaptureTests). The Speech fallback is biased toward the approved vocabulary
+  (LiveCaptionEngineTests, LiveModelsTests). On 26.4 the small tasks' excerpt is sized by the model's own token count
+  (SmallTasksTests). On iOS 27 continued processing is submitted with `submitTaskRequest` and `begin` reports the
+  system's answer (PhoneProcessingTests). The Mac's Start and Stop are `AudioRecordingIntent`s. Live Activities have a
+  small family and a minutes-only compact clock on iOS 27 (build only). Still needs hardware: the Watch Smart Stack
+  and CarPlay layouts, the width-limited island, Writing Tools over handwriting, process restore during a real call.
+- **W1-J, data at rest.** An encrypted library's settings files stay out of iPhone backups; each save marks its new
+  file before the rename (SettingsBackupExclusionTests, BackupExclusionTests). Parakeet's mono copy lives in
+  `tmp/Daybook Processing/<pid>/` and is cleared at launch unless its run is still going (ProcessingScratchTests). Logs
+  show error domain and code in public and descriptions privately. Sidecars and journals keep every clock anchor for a
+  run's first minute, then one every 10 s, as compact JSON; the Mac writes its sidecar off the audio queue
+  (ClockAnchorScheduleTests, CaptureTests, InterruptedCaptureTests, ShippedFormatTests; the iPhone's
+  PhoneRecorderTests, CaptureRecoveryTests, ShippedCaptureJournalTests). Class B for staging was left out
+  (docs/iphone.md, "File protection"): a stop from the Lock Screen reads files while locked, which W2-B's two-step stop
+  now makes fixable. Still to check on a device: a backup restore with an encrypted library, and sidecar size on
+  4-hour recordings.
+- **W2-A, Mac capture resilience.** Writers buffer 30 s and record what a busy disk cost; the iPhone's gap rule on
+  the Mac, with 5 ms ramps and a `gaps` record; microphone restarts limited by rate, with retries and the built-in
+  microphone as fallback; a 3 s stall watch and a coreaudiod-restart rebuild; a rolling hearing check; a free-space
+  watch; an idle-sleep assertion, and a forced sleep that leaves the devices recording along. CaptureResilienceTests,
+  MicrophoneRestartTests, PCMTrackWriterTests, PhoneLinkTests, FloatingNotesStatusTests, SystemEntryPointsTests, the
+  iPhone build, and Floating Notes snapshots (`--notes-demo trouble|slept`). Hardware checks still needed: a lid close
+  mid-recording with an iPhone and a Soundcore recording along; clamshell with an external display; an external disk
+  stall; `sudo killall coreaudiod` mid-call; AirPods churn; an external display unplugged under ScreenCaptureKit; a
+  nearly full disk; idle sleep on battery (`pmset -g assertions` shows "Recording a conversation").
+- **W2-B, the iPhone finishes a recording safely.** Joins copy AAC packets (each part byte-equal, within 21 ms).
+  Stop runs in two steps, holds background time, stops Macs as capture ends, and recovers a `stopping` journal as
+  saved. The hearing check is rolling (5 s of zeros, or 20 s under −90 dBFS). "Recording paused" posts in the
+  background. The meter drops to 2 Hz out of sight. PhoneRecorderTests, CaptureRecoveryTests, RecordingSurfacesTests,
+  RecordingInterruptionsTests, CascadingRecordingTests, ShippedCaptureJournalTests, and the full iPhone suite (456 of
+  456) on a private simulator, plus simulator screenshots. Hardware checks: a 2-hour recording with a call in the
+  middle stopped from the Lock Screen (time to "Saved", no relabel on the next launch); pocket interruptions and
+  whether "Recording paused" arrives through Focus (Time Sensitive needs the capability); a muted or dead headset;
+  the battery cost of a locked hour at 2 Hz; whether a Mac this iPhone started stops while the iPhone is still saving.
+- **W2-C, Soundcore and devices.** Start and Pause go ahead of imports with a deadline (dropped if unsent, undone if a
+  Start confirms late); live audio keeps going past a lost packet, starts again after a dropped link, says "Catching
+  up…", and its captions are placed from the stream's own start; ownership, waiting imports, the recording started
+  here, and unfinished handoffs survive a relaunch; the watched folder waits for a finished, readable file; a claim
+  not heard from in 14 days asks for attention. Verified against `SimulatedSoundcore` (SoundcoreRecordCommandTests,
+  CascadeDuringImportTests, SoundcoreSharedRecordingTests, DeviceHubTests, RecorderHandoffTests,
+  RecorderStatusWordsTests, the iPhone's DeviceOwnershipTests, and all 442 iPhone tests on a private simulator); the
+  twelve hardware checks are in docs/direct-soundcore.md, "Not yet verified on hardware".
+- **W2-D, one timing model and fusion that can't drift, double, or mislabel.** (Pending merge; see the package's
+  entry once it lands.)
+- **W2-F, following the other device on evidence, and the sync and link fixes.** A device recording because another
+  asked follows it on evidence (`LeaderWatch`: a notice at 2 min, presence decides, a quiet room ends it after 30 min),
+  tested with a fake clock, presence, and levels on both apps. Awaited audio says where it is (`recording.arrival`,
+  presence) and says it didn't arrive at expiry, with Don't Wait and Wait Again. The Mac syncs while busy and folds an
+  awaited track that arrives before fusion into the running job, giving one summary (MacFirstMultipointTests). The
+  phone's conversation is made only after this Mac's start. The courier delivers before expiring, refetches unsettled
+  files, drops installed inbox blobs, and presence is judged from this device's first sighting (InMemoryCourier and
+  SimulatedICloud tests). The link keeps control events, acknowledges and resends notes, and fits clock drift within
+  10 ppm over a simulated hour (DaybookLinkTests). The iPhone suites pass on a private simulator. Still needs two real
+  devices: link silence on real Wi‑Fi, presence over cellular, real upload phases, CloudKit refetch by ID, real drift,
+  and resends after a quiet disconnect.
+- **W2-G, live captions v2.** Every source's captions are put together off the main actor by `LiveCaptionMixer`,
+  one line per utterance from the source that heard it best, with retractions over the link, the Mac's Call lines to
+  the iPhone, one saved file per recording, and line-by-line replacement by the recording that heard each line
+  (`LiveCaptionCoverage`). DaybookCaptionsTests, DaybookLinkTests, DaybookUITests, DaybookTests, build-ios --test
+  (LiveCaptionsTests, ReadingTests, LibraryListPhoneTests), a 4 h, three-feed bound of under 2 ms processor time per
+  update (the release benchmark measured about 0.07 ms per update, against 94–201 ms per rebuild before), and a
+  Floating Notes snapshot with demo captions. Still to check on two real devices: the update rate and level ranking
+  with real recognizers and meters, and how well the iPhone keeps up with the Mac's Call lines.
+- **W2-H2, Apple Speech.** `AppleSpeechEngine` (`apple-speech/system`, `SpeechAnalyzer`/`SpeechTranscriber`) and
+  `TranscriptionRouting.interim`. swift test passes (Intelligence 216, Kit 592, UI 129); build-ios --test passes
+  PhoneModelsTests and PhoneProcessingTests. The opt-in smoke test with `--transcription-model apple-speech/system`
+  on macOS 27.0 heard the synthetic fixture: 50 words, mean confidence 0.96, 0.76 s for 19.7 s, one miss ("Call
+  Daybook"). English assets were already installed; a first download in a new language and accuracy on the
+  validation set are unverified.
+- **W2-I, summary beside the transcript.** From a 1120 pt detail column the Mac shows Summary and Transcript as a
+  spread (each page keeping its 56 pt margin, measure ≤ 560 pt), with the toolbar switch as a pair of toggles and ⌘1/⌘2
+  following; search hits turn the page through the same rule. PageSpreadTests, ReadingGeometryTests, and snapshots at
+  1440, 1920, and 2560 (with the inspector, `--page transcript`, `--search release`, `--play-muted`), light and dark.
+  The toggles' Liquid Glass look, the menu checkmarks, and VoiceOver and Tab order weren't checked on SDK 27.
+- **W2-K, iPhone library chrome and status.** The library's foot is an iOS 26 toolbar (Record, the system's
+  minimized bottom-bar search, + New Note / Import Audio…) with a status strip that shows only what needs the person,
+  a recording elsewhere, or work in progress; the status sheet ("Devices") lists only devices that exist, iCloud only
+  when it's a problem. The open Duo's left page keeps its navigation bar and the same toolbar; all two-page sheets are
+  one right-page card (`PageCard`). iOS 27.1's `presentationPlacement(.trailing)` was tried on the Duo and rejected: a
+  roughly 650 pt trailing form sheet across the crease, dimming both pages. All 439 iPhone tests (LibraryChromeTests
+  hosts the notebook and fails when a bar-hiding nested stack is reintroduced) and screenshots on the 18 Pro (light,
+  dark, Trash, search, strip, status sheet, Info, selection, accessibility XXXL) and the Duo cover and inner display.
+- **W2-L2, the Duo's spine and the touch page.** The open Duo's spine is only a gutter; bookmark ticks moved to the
+  touch scrubber (`ScrubberBookmarks`). On touch, next steps put owner · time on one line under the step. Row glyphs
+  scale with Dynamic Type on touch. One column always shows the Summary | Transcript switch, dimmed without a
+  transcript. A small offline photo tile shows a glyph-only Try Again. Models download rows are named.
+  ScrubberBookmarksTests, ModelRowsTests, ConversationPageRulesTests, LibraryListTests; the iPhone's ReadingTests,
+  PhoneModelsTests, TranscriptPageTests; 18 Pro and open-Duo screenshots (light, dark, accessibility sizes); Mac
+  snapshots at 1440 and 760 unchanged from W1-C.
+- **W2-O, microphone choice.** Mac: `MicrophoneChoice` resolves the input (Automatic leaves an idle Bluetooth headset
+  for the built-in microphone, records one a call app already uses; a chosen input is used when it's there);
+  `MicrophoneSource` sets it on the engine before start and follows input changes, the input in use dying, and new
+  choices through the restart path; Floating Notes' phase is the input menu ("MacBook Pro Microphone ▾") and
+  Settings › Recording has a Microphone pop-up. iPhone: the session prefers the built-in microphone with AirPods in
+  unless they're picked; the recorder's input name opens `AVInputPickerInteraction`, and picked far-field AirPods
+  record with `.farFieldInput` (iOS 26.2). MicrophoneChoiceTests, MicrophoneRestartTests (device set before start,
+  fallback when the chosen input dies, retries read the inputs again, choosing mid-recording),
+  ProcessTapAggregateTests, PhoneRecorderTests, plus Floating Notes, Settings, and iPhone recorder snapshots. Hardware
+  checks: AirPods (H2 and older) with Zoom on the built-in mic and then on the AirPods (A2DP sample rate unchanged);
+  the call tap alone with AirPods as output, and `defaults write local.daybook DaybookTapOnlyAggregate -bool YES`;
+  a USB headset unplugged and replugged; the Floating Notes menu mid-recording; the iPhone's table recording with
+  AirPods in, then picked (`farFieldCapture.isEnabled`); a USB microphone; AirPods connecting mid-recording.
+
 ## Audit and fixes (2026-11-01)
 
 A whole-app audit of the Mac and iPhone apps found 340 issues (21 high, 105 medium, 214 low) across 17 review areas:
