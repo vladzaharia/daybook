@@ -95,8 +95,16 @@ presence, or the conversation arriving through sync; docs/devices.md, "Handing a
 Only links made by this recording are acted on; a link an interrupted session left behind never stops
 a recorder.
 
-Quitting waits up to 5 s for these stops to leave; going to sleep stops the recording (as before)
-and holds sleep back, through the power notification, for up to 5 s while they do. After a crash,
+Quitting waits up to 5 s for these stops to leave. Going to sleep is different: idle sleep is held
+off while recording, and a forced sleep (the lid, the Apple menu) stops only this Mac's tracks
+(saved within the 5 s the power notification holds sleep back). Nothing is sent to the devices
+recording along, so the recorders and iPhones keep recording, and phones hear this Mac's recording
+as paused (`LinkRecordingState.paused` for that conversation), so one following it doesn't stop.
+After wake, Floating Notes' "Recording stopped" box names them ("Soundcore Work and Alex's iPhone
+kept recording.") with Stop, which stops them as this Mac's stop would have, at that moment
+(`AppState.endKeptRecording`); recording again, into any conversation, stops them first. Their
+recordings join the conversation as they would have. One that stopped on its own meanwhile (an
+iPhone that couldn't reach this Mac for 30 minutes) closes its link at wake. After a crash,
 once a recording is recovered at launch, its links are closed as its stop would have: recorders
 Daybook started are stopped (only the recording it started), a recorder still `starting` is stopped
 only if it is recording, live, since Daybook's command, and one that was already recording is left.

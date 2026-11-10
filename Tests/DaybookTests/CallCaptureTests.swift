@@ -29,6 +29,10 @@ final class FakeCaptureSource: CaptureAudioSource, ProcessTapReporting, @uncheck
     func stop() async { stopped = true; onBuffer = nil }
     func emit(_ buffer: AVAudioPCMBuffer, at host: TimeInterval) { onBuffer?(buffer, host) }
     func send(_ event: CaptureSourceEvent) { onEvent?(event) }
+
+    /// Why the controller asked it to start again, in order.
+    @MainActor private(set) var restarts: [CaptureRestartReason] = []
+    @MainActor func restart(_ reason: CaptureRestartReason) async { restarts.append(reason) }
 }
 
 final class FakeSystemAudio: SystemAudioProviding {

@@ -12,6 +12,9 @@ enum CaptureSourceEvent {
     case failed(Error)
     /// The source continued on a different device or format; the next buffer starts a new clock segment.
     case deviceChanged(String)
+    /// The source started again on the same input (it had stalled, or the audio system restarted); the next buffer
+    /// starts a new clock segment.
+    case restarted(String)
 }
 typealias CaptureEventHandler = @Sendable (CaptureSourceEvent) -> Void
 
@@ -22,6 +25,30 @@ protocol CaptureAudioSource: AnyObject {
     func start(onBuffer: @escaping CaptureBufferHandler, onEvent: @escaping CaptureEventHandler) async throws
     /// Stops delivery; when it returns no further buffers arrive.
     func stop() async
+    /// Starts delivering again after it stalled (no buffer for a few seconds) or the audio system restarted: the
+    /// microphone restarts its engine, a tap rebuilds, ScreenCaptureKit restarts once on the main display. It
+    /// reports `.deviceChanged` once running again, or `.failed` when it can't.
+    @MainActor func restart(_ reason: CaptureRestartReason) async
+}
+
+extension CaptureAudioSource {
+    @MainActor func restart(_ reason: CaptureRestartReason) async {}
+}
+
+/// Why a running source is asked to start again.
+enum CaptureRestartReason: Equatable, Sendable {
+    /// Nothing arrived for a few seconds.
+    case stalled
+    /// The audio system (coreaudiod) restarted, so every device is new.
+    case audioSystemRestarted
+
+    /// The track's note: why there's a short gap.
+    func note(_ name: String) -> String {
+        switch self {
+        case .stalled: return "The \(name) stopped delivering audio, so it was restarted."
+        case .audioSystemRestarted: return "The Mac’s audio system restarted, so the \(name) was restarted."
+        }
+    }
 }
 
 /// Creates call-audio sources. The live implementation talks to Core Audio and ScreenCaptureKit;
@@ -89,31 +116,52 @@ struct LiveSystemAudioProvider: SystemAudioProviding {
     var screenCaptureAuthorized: Bool { CGPreflightScreenCaptureAccess() }
 
     func makeScreenCapture() async throws -> CaptureAudioSource {
+        ScreenCaptureAudioSource(filter: try await Self.mainDisplayFilter(), makeFilter: Self.mainDisplayFilter)
+    }
+
+    /// All audio, through a filter on the main display: the one that stays when an external display is unplugged
+    /// (ScreenCaptureKit's first display may be that external one).
+    static func mainDisplayFilter() async throws -> SCContentFilter {
         let content: SCShareableContent
         do { content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: false) }
         catch {
             throw RecordingError.interrupted("System audio is unavailable. Allow Daybook in System Settings › Privacy & Security › Screen & System Audio Recording.")
         }
-        guard let display = content.displays.first else { throw RecordingError.noDisplay }
-        return ScreenCaptureAudioSource(filter: SCContentFilter(display: display, excludingApplications: [], exceptingWindows: []))
+        let main = CGMainDisplayID()
+        guard let display = content.displays.first(where: { $0.displayID == main }) ?? content.displays.first else { throw RecordingError.noDisplay }
+        return SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
     }
 }
 
 /// System audio through ScreenCaptureKit. No video output is registered and no screen images are
 /// stored; the stream still needs a display filter and Screen & System Audio Recording permission.
+///
+/// A stream that stops on its own (`didStopWithError`: its display went away, say) or stalls restarts once, on the
+/// main display; a second stop is the call track's end.
 final class ScreenCaptureAudioSource: NSObject, CaptureAudioSource, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     let method = "screen-capture-kit"
     let queue = DispatchQueue(label: "app.daybook.system-audio", qos: .userInitiated)
-    private let filter: SCContentFilter
+    private var filter: SCContentFilter
+    private let makeFilter: (() async throws -> SCContentFilter)?
     private var stream: SCStream?
     private var onBuffer: CaptureBufferHandler?
     private var onEvent: CaptureEventHandler?
+    /// Restarted already: the next stop ends it.
+    private var restarted = false
+    private var stopped = false
 
-    init(filter: SCContentFilter) { self.filter = filter }
+    init(filter: SCContentFilter, makeFilter: (() async throws -> SCContentFilter)? = nil) {
+        self.filter = filter
+        self.makeFilter = makeFilter
+    }
 
     func start(onBuffer: @escaping CaptureBufferHandler, onEvent: @escaping CaptureEventHandler) async throws {
         self.onBuffer = onBuffer
         self.onEvent = onEvent
+        try await startStream()
+    }
+
+    private func startStream() async throws {
         let configuration = SCStreamConfiguration()
         configuration.width = 2
         configuration.height = 2
@@ -130,6 +178,7 @@ final class ScreenCaptureAudioSource: NSObject, CaptureAudioSource, SCStreamOutp
     }
 
     func stop() async {
+        stopped = true
         if let stream {
             do { try await stream.stopCapture() }
             catch { onEvent?(.failed(error)) }
@@ -138,6 +187,30 @@ final class ScreenCaptureAudioSource: NSObject, CaptureAudioSource, SCStreamOutp
         // Drain callbacks already queued before the writer closes.
         await withCheckedContinuation { continuation in queue.async { continuation.resume() } }
         onBuffer = nil
+    }
+
+    /// Once per recording: a new stream on the main display. A second stop or stall is reported as the end.
+    @MainActor func restart(_ reason: CaptureRestartReason) async {
+        await restart(reason, error: nil)
+    }
+
+    @MainActor private func restart(_ reason: CaptureRestartReason, error: Error?) async {
+        guard !stopped else { return }
+        guard !restarted else {
+            onEvent?(.failed(error ?? RecordingError.interrupted("Call audio stopped arriving.")))
+            return
+        }
+        restarted = true
+        if let old = stream { try? await old.stopCapture() }
+        stream = nil
+        do {
+            if let makeFilter { filter = try await makeFilter() }
+            guard !stopped else { return }
+            try await startStream()
+            onEvent?(.deviceChanged(reason.note("call capture") + " It records through the main display now."))
+        } catch {
+            onEvent?(.failed(error))
+        }
     }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
@@ -157,5 +230,7 @@ final class ScreenCaptureAudioSource: NSObject, CaptureAudioSource, SCStreamOutp
         onBuffer?(buffer, CMTimeGetSeconds(sampleBuffer.presentationTimeStamp))
     }
 
-    func stream(_ stream: SCStream, didStopWithError error: Error) { onEvent?(.failed(error)) }
+    func stream(_ stream: SCStream, didStopWithError error: Error) {
+        Task { @MainActor [weak self] in await self?.restart(.stalled, error: error) }
+    }
 }

@@ -6,6 +6,17 @@ import DaybookKit
 import DaybookLink
 import Foundation
 
+/// A recording this Mac stopped because it went to sleep while devices recorded along, which keep going until
+/// they're stopped here (`AppState.endKeptRecording`).
+struct SleptRecording: Equatable {
+    var meetingID: UUID
+    var startedAt: Date?
+    /// When this Mac's tracks stopped.
+    var endedAt: Date
+    /// The device whose word stopped this Mac's recording, if one did: not asked to stop in turn.
+    var cause: String?
+}
+
 /// Starts and stops this Mac's capture when another device asks (a phone, a recorder's button). Nil
 /// uses the real recorder; tests supply their own so nothing touches the microphone.
 struct PhoneCapture {
@@ -95,6 +106,7 @@ extension AppState {
     /// last read failed; a claim this Mac holds is renewed (it survives sleep unless another Mac took it over
     /// meanwhile), and a pass publishes it.
     func systemDidWake() async {
+        settleKeptRecording()
         await phoneLink.systemDidWake()
         renewRunningClaim(force: true)
         sync.requestSync()
@@ -147,6 +159,12 @@ extension AppState {
 
     /// This Mac's recorder, as phones see it.
     func macRecordingState(now: Date = Date()) -> LinkRecordingState {
+        // A recording this Mac stopped for sleep, while devices kept recording it, reads as paused: a phone following
+        // it keeps recording until it's stopped here.
+        if recordingID == nil, !isStartingRecording, !isStoppingRecording, let slept = phones.sleptRecording {
+            return LinkRecordingState(phase: .paused, conversationID: slept.meetingID, startedAt: slept.startedAt,
+                                      elapsed: slept.startedAt.map { max(0, slept.endedAt.timeIntervalSince($0)) } ?? 0, sentAt: now)
+        }
         let phase: LinkRecordingState.Phase = isStoppingRecording ? .stopping : recordingID != nil ? .recording : isStartingRecording ? .starting : .idle
         // A recorder recording along with this Mac's recording says which conversation.
         let links = recordingID.flatMap { id in meetings.first { $0.id == id }?.companions } ?? []
@@ -230,6 +248,8 @@ extension AppState {
     /// phone has stopped (or moved on to another conversation), this Mac stops too and says so: the
     /// phone's stop may never have arrived.
     func phoneReported(_ state: LinkRecordingState, from phone: UUID) {
+        // A phone that kept recording while this Mac slept, and has stopped since, may leave nothing to stop.
+        settleKeptRecording()
         guard let id = recordingID, let lead = phoneLeads[id], lead.sessionID == phone.uuidString else { return }
         // Its microphone, or only its recorders (an iPhone in the background), may be what records.
         guard !state.takesPart(in: id) else { return }
@@ -258,14 +278,65 @@ extension AppState {
         }
     }
 
-    /// As the Mac goes to sleep: once its recording has stopped (capture stops on its own), the
-    /// devices recording along are told before the network goes, waiting at most `limit` in all.
+    /// As the Mac goes to sleep: its recording stops (capture stops on its own) and is saved, waiting at most `limit`
+    /// in all. The devices recording along aren't stopped (`keepAlongThroughSleep`); a stop already under way for
+    /// one still leaves before the network goes.
     func prepareForSleep(within limit: Duration = .seconds(5)) async {
         let deadline = ContinuousClock.now.advanced(by: limit)
         while recordingID != nil || isStoppingRecording, ContinuousClock.now < deadline {
             try? await Task.sleep(for: .milliseconds(50))
         }
         await sources.recorders.settle(within: ContinuousClock.now.duration(to: deadline))
+    }
+
+    /// This Mac's recording stopped because the Mac went to sleep (the lid, the Apple menu; idle sleep is held off
+    /// while recording). The recorders and iPhones recording along keep going: nothing is sent to them, and phones
+    /// hear this Mac's recording as paused, so one following it doesn't stop. After wake, Floating Notes names them
+    /// with Stop (`endKeptRecording`); recording again stops them first. Their recordings join the conversation as
+    /// they would have.
+    func keepAlongThroughSleep(_ id: UUID, at end: Date, cause: String?) {
+        phones.sleptRecording = SleptRecording(meetingID: id, startedAt: recordingStartedAt, endedAt: end, cause: cause)
+        // Nothing records along: its links (a device still being asked, one that never answered) close as any stop's.
+        guard keptRecordingNames(id).isEmpty else { return }
+        phones.sleptRecording = nil
+        sources.recorders.macRecordingStopped(id, at: end, stoppedBy: cause)
+    }
+
+    /// The devices still recording along with a recording this Mac stopped for sleep, by name ("Soundcore Work",
+    /// "Alex’s iPhone"); none for another conversation. One that's connected and says it stopped (on its own, or
+    /// an iPhone that couldn't reach this Mac for 30 minutes) isn't; one not heard from yet is taken to be recording.
+    func keptRecordingNames(_ meetingID: UUID) -> [String] {
+        guard let slept = phones.sleptRecording, slept.meetingID == meetingID,
+              let meeting = meetings.first(where: { $0.id == meetingID }) else { return [] }
+        var names: [String] = []
+        for link in meeting.companions ?? [] where link.macEndedAt == nil && [.recording, .alreadyRecording].contains(link.state) {
+            let session = devices.session(link.deviceID)
+            if let session, session.kind.id == DaybookPhoneIntegration.id {
+                if let phone = UUID(uuidString: link.deviceID), session.isLinked, let state = phoneLink.recordingStates[phone],
+                   !state.takesPart(in: meetingID) { continue }
+            } else if let control = session?.direct as? any RecordControlConnection, control.state.isConnected,
+                      control.status?.isRecording == false {
+                continue
+            }
+            let name = session?.device.name ?? link.deviceName
+            if !names.contains(name) { names.append(name) }
+        }
+        return names
+    }
+
+    /// Stops the devices that kept recording while this Mac slept, as its stop would have (Floating Notes' Stop, or a
+    /// new recording about to start).
+    func endKeptRecording() {
+        guard let slept = phones.sleptRecording else { return }
+        phones.sleptRecording = nil
+        sources.recorders.macRecordingStopped(slept.meetingID, at: Date(), stoppedBy: slept.cause)
+        phoneLink.sendRecordingState()
+    }
+
+    /// After wake: a recording whose devices have all stopped meanwhile has nothing left to stop; its links close.
+    private func settleKeptRecording() {
+        guard let slept = phones.sleptRecording, keptRecordingNames(slept.meetingID).isEmpty else { return }
+        endKeptRecording()
     }
 
     // MARK: Live progress for phones

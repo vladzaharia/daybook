@@ -115,6 +115,7 @@ private final class ProbeRecorder: @unchecked Sendable {
         switch event {
         case .failed(let error): text = "failed: \(error.localizedDescription)"
         case .deviceChanged(let reason): text = "device changed: \(reason)"
+        case .restarted(let reason): text = "restarted: \(reason)"
         }
         lock.withLock { notes.append(text) }
     }

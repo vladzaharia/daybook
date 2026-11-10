@@ -1,6 +1,8 @@
 import AppKit
 import AVFoundation
 import CoreMedia
+import DaybookDevices
+import DaybookKit
 import Foundation
 import IOKit.pwr_mgt
 import Observation
@@ -16,6 +18,14 @@ struct CaptureEnvironment {
     /// Starts observing output-route changes; the returned object stops observing when released.
     var observeRoutes: (@escaping @Sendable (AudioOutputRoute) -> Void) -> AnyObject?
     var hostTime: () -> TimeInterval
+    /// Free bytes on the volume that holds a folder, for the space watch; nil when it can't be read.
+    var freeSpace: (URL) -> Int64? = { _ in nil }
+    /// Keeps the Mac from idle-sleeping while true.
+    var keepAwake: @MainActor (Bool) -> Void = { _ in }
+    /// Starts hearing the audio system (coreaudiod) restart; the returned object stops listening when released.
+    var observeAudioServiceRestarts: (@escaping @Sendable () -> Void) -> AnyObject? = { _ in nil }
+    /// How the track writers buffer, and when one is given up on.
+    var writing = CaptureWriting()
 
     static var live: CaptureEnvironment {
         CaptureEnvironment(
@@ -34,8 +44,35 @@ struct CaptureEnvironment {
                 monitor.start(onChange: handler)
                 return monitor
             },
-            hostTime: { CMTimeGetSeconds(CMClockGetTime(CMClockGetHostTimeClock())) })
+            hostTime: { CMTimeGetSeconds(CMClockGetTime(CMClockGetHostTimeClock())) },
+            freeSpace: { url in
+                (try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?.volumeAvailableCapacityForImportantUsage
+            },
+            keepAwake: { RecordingAwake.assertion.hold($0) },
+            observeAudioServiceRestarts: { AudioServiceRestartMonitor(onRestart: $0) })
     }
+}
+
+/// How track writers buffer while the disk is busy, and when one that stopped moving is given up on.
+struct CaptureWriting {
+    /// Seconds of audio a writer holds before it drops (and counts) what arrives.
+    var maximumBacklog: TimeInterval = PCMTrackWriter.defaultBacklog
+    /// A writer with audio waiting that hasn't finished any for this long stops its track: the microphone's stops
+    /// the recording, the call's only the call.
+    var stallLimit: TimeInterval = 60
+    /// Runs on a writer's queue before each buffer; tests stall the disk with it.
+    var beforeWrite: (@Sendable (CapturedTrackRole) -> Void)?
+}
+
+/// A call source that delivered nothing through `RecordingController.stalledRestartLimit` restarts.
+struct CallAudioStalled: LocalizedError {
+    var errorDescription: String? { "call audio stopped arriving, even after restarting" }
+}
+
+/// The idle-sleep assertion a recording holds.
+@MainActor
+enum RecordingAwake {
+    static let assertion = SleepAssertion(reason: "Recording a conversation")
 }
 
 /// Records the microphone and the call as separate native PCM tracks on one host-clock timeline.
@@ -45,6 +82,11 @@ struct CaptureEnvironment {
 /// call app is known, the microphone records alone (`computerAudioLeftOut`). Device
 /// and route changes are followed rather than ending the recording. After Stop, `CaptureFinalizer`
 /// removes the call's echo from the microphone; this controller only captures.
+///
+/// A recording ends only when someone stops it, the microphone fails for good, a writer stops moving for a
+/// minute, or the Mac is put to sleep. Its 15 Hz meter timer also watches: a source that delivers nothing for 3 s
+/// is restarted, the free space is measured against the byte rate every 30 s, and the microphone's rolling hearing
+/// check says when it hears nothing.
 @MainActor
 @Observable
 final class RecordingController {
@@ -60,6 +102,12 @@ final class RecordingController {
     /// Call audio was audible within the last few seconds. Changes rarely, so any view may read it;
     /// per-source meters are on `levels`.
     private(set) var isCallAudioDetected = false
+    /// Seconds of recording the disk has room for at the current rate, once that's under `spaceWarning`; nil above.
+    private(set) var spaceLeft: TimeInterval?
+    /// Call audio stopped to leave the disk's last minutes to the microphone.
+    private(set) var callStoppedForSpace = false
+    /// The last recording ended because the Mac went to sleep. The devices recording along aren't stopped for it.
+    @ObservationIgnored private(set) var stoppedForSleep = false
     /// Live "You" and "Call" meters; see `CaptureLevelMonitor`.
     let levels = CaptureLevelMonitor()
     var isRecording: Bool { state == .recording }
@@ -97,9 +145,27 @@ final class RecordingController {
     @ObservationIgnored nonisolated(unsafe) private var sleepWatch: Task<Void, Never>?
     /// This recording's caption tap, on its session timeline.
     @ObservationIgnored private var activeCaptionTap: CaptureCaptionTap?
+    /// Host time each source last started (or was restarted), for the stall watch.
+    @ObservationIgnored private var sourceStarted: [CapturedTrackRole: TimeInterval] = [:]
+    /// Restarts in a row with no audio arriving between them.
+    @ObservationIgnored private var stalledRestarts: [CapturedTrackRole: Int] = [:]
+    @ObservationIgnored private var restartsInFlight: Set<CapturedTrackRole> = []
+    @ObservationIgnored private var lastSpaceCheck: TimeInterval = -.infinity
+    @ObservationIgnored private var serviceObservation: AnyObject?
 
-    /// Runs as the Mac goes to sleep, once the recording has stopped: what must reach other devices
-    /// first (stopping the recorders that recorded along). Sleep waits for it, at most `sleepGrace`.
+    /// No buffer for this long while recording restarts a source.
+    static let stallSeconds: TimeInterval = 3
+    /// A call source restarted this many times without a buffer has failed.
+    static let stalledRestartLimit = 3
+    static let spaceCheckInterval: TimeInterval = 30
+    /// Under this much room the recording warns.
+    static let spaceWarning: TimeInterval = 30 * 60
+    /// Under this much room call audio stops, leaving the rest to the microphone.
+    static let spaceCallLimit: TimeInterval = 3 * 60
+
+    /// Runs as the Mac goes to sleep, once the recording has stopped: saving it, and anything already on
+    /// its way to other devices. Sleep waits for it, at most `sleepGrace`. (The devices recording along
+    /// aren't stopped for sleep; see `stoppedForSleep`.)
     @ObservationIgnored var beforeSleep: (@MainActor () async -> Void)?
     static let sleepGrace: Duration = .seconds(5)
     @ObservationIgnored private var sleepGate: SystemSleepGate?
@@ -121,9 +187,14 @@ final class RecordingController {
 
     deinit { sleepWatch?.cancel() }
 
+    /// The Mac is going to sleep anyway (the lid, the Apple menu): idle sleep is held off while recording. This
+    /// Mac's tracks stop; devices recording along keep going (`stoppedForSleep`).
     private func stopForSleep() {
-        captureFailed(RecordingError.interrupted("Recording stopped because the Mac went to sleep. Everything up to then is saved."))
+        if state == .recording { stoppedForSleep = true }
+        captureFailed(RecordingError.interrupted(Self.sleepSentence))
     }
+
+    static let sleepSentence = "Recording stopped because the Mac went to sleep. Everything up to then is saved."
 
     /// `callApp` is the meeting app to record on its own (from `MeetingMonitor` or the running
     /// apps); without it, call audio is all Mac playback.
@@ -134,6 +205,13 @@ final class RecordingController {
         lastResult = nil
         cancelStart = false
         callAudioLeftOut = false
+        stoppedForSleep = false
+        spaceLeft = nil
+        callStoppedForSpace = false
+        sourceStarted = [:]
+        stalledRestarts = [:]
+        restartsInFlight = []
+        lastSpaceCheck = -.infinity
         warnings = []
         technicalNotes = [:]
         routeEvents = []
@@ -169,6 +247,7 @@ final class RecordingController {
                         onBuffer: { buffer, time in writer.append(buffer, hostTimeSeconds: time); callCaptions?(buffer, time) },
                         onEvent: { [weak self] event in Task { @MainActor in self?.systemEvent(event) } })
                     system = source
+                    sourceStarted[.systemAudio] = environment.hostTime()
                     systemAudioCapture = info
                     writer.setMethod(info.method.rawValue)
                     if let reason = info.fallbackReason, callApp != nil {
@@ -189,8 +268,13 @@ final class RecordingController {
             let microphoneCaptions = captions?.microphone
             try await mic.start(onBuffer: { buffer, time in micWriter.append(buffer, hostTimeSeconds: time); microphoneCaptions?(buffer, time) },
                                 onEvent: { [weak self] event in Task { @MainActor in self?.microphoneEvent(event) } })
+            sourceStarted[.microphone] = environment.hostTime()
             try checkStartCancellation()
             state = .recording
+            environment.keepAwake(true)
+            serviceObservation = environment.observeAudioServiceRestarts { [weak self] in
+                Task { @MainActor in self?.audioServiceRestarted() }
+            }
             startMetering()
         } catch {
             let message = CapturedTrackRole.speaksPlainly(error) ? error.localizedDescription : "Recording couldn’t start."
@@ -215,7 +299,9 @@ final class RecordingController {
     }
 
     private func makeWriter(_ role: CapturedTrackRole, manifest: CaptureSessionManifest, directory: URL, method: String? = nil) -> PCMTrackWriter {
-        PCMTrackWriter(role: role, directory: directory, manifest: manifest, method: method) { [weak self] error in
+        let hook = environment.writing.beforeWrite
+        return PCMTrackWriter(role: role, directory: directory, manifest: manifest, method: method,
+                              maximumBacklog: environment.writing.maximumBacklog, beforeWrite: hook.map { hook in { @Sendable in hook(role) } }) { [weak self] error in
             Task { @MainActor in self?.writerFailed(role, error) }
         }
     }
@@ -234,13 +320,19 @@ final class RecordingController {
         case .deviceChanged(let note):
             microphoneWriter?.markDiscontinuity(note)
             warnings.append(Self.microphoneChanged)
+        case .restarted(let note):
+            microphoneWriter?.markDiscontinuity(note)
+            warnings.append(Self.microphoneRestarted)
         case .failed(let error):
             captureFailed(error)
         }
     }
 
     static let microphoneChanged = "The microphone changed partway through the recording."
+    static let microphoneRestarted = "The microphone stopped for a moment and was restarted, leaving a short gap."
     static let callAudioRestarted = "Call audio restarted partway through, leaving a short gap."
+    static let callStoppedForSpace = "The disk is almost full, so call audio stopped. The microphone kept recording."
+    static let callWriterStalled = "The disk couldn’t keep up with call audio, so it stopped. The microphone kept recording."
     /// Computer audio couldn't start for a recording without a call app, so the microphone recorded alone.
     static let computerAudioLeftOut = "Computer audio isn’t included. Allow Screen & System Audio Recording in Settings › Recording."
 
@@ -249,7 +341,7 @@ final class RecordingController {
     private func systemEvent(_ event: CaptureSourceEvent) {
         guard state == .recording || state == .starting else { return }
         switch event {
-        case .deviceChanged(let note):
+        case .deviceChanged(let note), .restarted(let note):
             systemWriter?.markDiscontinuity(note)
             warnings.append(Self.callAudioRestarted)
         case .failed(let error):
@@ -257,10 +349,11 @@ final class RecordingController {
         }
     }
 
+    /// A write that failed: the microphone's ends the recording; the call's only the call.
     private func writerFailed(_ role: CapturedTrackRole, _ error: Error) {
-        if role == .microphone || error is PCMTrackWriterError { captureFailed(error); return }
-        guard state == .recording else { return }
-        Task { await stopCallTrack(reason: "Call audio stopped. The microphone kept recording.", error: error) }
+        if role == .microphone { captureFailed(error); return }
+        guard state == .recording, system != nil else { return }
+        endCallTrack("Call audio stopped. The microphone kept recording.", error: error)
     }
 
     private func systemFailed(_ error: Error) async {
@@ -275,6 +368,11 @@ final class RecordingController {
             warnings.append("The call stayed silent. If its audio is missing, allow Daybook in System Settings › Privacy & Security › Screen & System Audio Recording.")
             return
         }
+        if error is CallAudioStalled, !environment.systemAudio.screenCaptureAuthorized {
+            // A tap that delivers nothing even rebuilt; switching would ask for a permission mid-call, so only the call stops.
+            await stopCallTrack(reason: "Call audio stopped. The microphone kept recording.", error: error)
+            return
+        }
         system = nil
         await current.stop()
         do {
@@ -285,6 +383,8 @@ final class RecordingController {
                                    onEvent: { [weak self] event in Task { @MainActor in self?.systemEvent(event) } })
             guard state == .recording else { await screen.stop(); return }
             system = screen
+            sourceStarted[.systemAudio] = environment.hostTime()
+            stalledRestarts[.systemAudio] = 0
             writer.setMethod(SystemAudioCaptureInfo.Method.screenCaptureKit.rawValue)
             let reason = "Recording only the call app stopped working, so all Mac audio is recorded from here on."
             systemAudioCapture = SystemAudioCaptureInfo(method: .screenCaptureKit, capturedApps: systemAudioCapture?.capturedApps,
@@ -300,6 +400,14 @@ final class RecordingController {
         let current = system
         system = nil
         await current?.stop()
+    }
+
+    /// The same, letting go of the call source at once (the meter timer may look again before the stop is done).
+    private func endCallTrack(_ reason: String, error: Error? = nil) {
+        warn(reason, error: error, track: .systemAudio)
+        let current = system
+        system = nil
+        Task { await current?.stop() }
     }
 
     /// One plain sentence for the person; when the error isn't one of Daybook's own, its words are
@@ -348,12 +456,94 @@ final class RecordingController {
         meterTimer = timer
     }
 
-    /// Called by the meter timer; internal so tests can sample without waiting on it.
+    /// Called by the meter timer; internal so tests can sample without waiting on it. Besides the levels and the
+    /// hearing check, it watches the sources, the writers, and the disk.
     func updateLevels() {
         guard state == .recording else { return }
+        let now = environment.hostTime()
         levels.update(microphone: microphoneWriter?.meter.read(), call: system == nil ? nil : systemWriter?.meter.read(),
-                      hostTime: environment.hostTime(), elapsed: elapsedTime)
+                      hostTime: now, elapsed: elapsedTime)
         if levels.isCallAudioDetected != isCallAudioDetected { isCallAudioDetected = levels.isCallAudioDetected }
+        watchWriters()
+        guard state == .recording else { return }
+        watchSources(at: now)
+        watchSpace(at: now)
+    }
+
+    // MARK: Watching
+
+    /// A writer with audio waiting that hasn't finished any for `stallLimit` (a disk that stopped answering): the
+    /// microphone's ends the recording, the call's stops only the call.
+    private func watchWriters() {
+        let limit = environment.writing.stallLimit
+        if let writer = microphoneWriter, writer.progress.stalledFor > limit {
+            captureFailed(PCMTrackWriterError.diskBacklog)
+        } else if system != nil, let writer = systemWriter, writer.progress.stalledFor > limit {
+            endCallTrack(Self.callWriterStalled)
+        }
+    }
+
+    /// A source that delivered nothing for `stallSeconds` is started again: the microphone's engine, the tap
+    /// rebuilt, ScreenCaptureKit once. A call source that stays silent through `stalledRestartLimit` restarts has
+    /// failed (a tap falls back to ScreenCaptureKit; ScreenCaptureKit's call track ends).
+    private func watchSources(at now: TimeInterval) {
+        for role in [CapturedTrackRole.microphone, .systemAudio] {
+            guard let source = role == .microphone ? microphone : system,
+                  let writer = role == .microphone ? microphoneWriter : systemWriter,
+                  !restartsInFlight.contains(role) else { continue }
+            let started = sourceStarted[role] ?? manifest?.hostTimeSeconds ?? now
+            let delivered = writer.progress.delivered ?? -.infinity
+            if delivered > started { stalledRestarts[role] = 0 }
+            guard now - max(delivered, started) > Self.stallSeconds else { continue }
+            if role == .systemAudio, stalledRestarts[role, default: 0] >= Self.stalledRestartLimit {
+                stalledRestarts[role] = 0
+                sourceStarted[role] = now
+                Task { await systemFailed(CallAudioStalled()) }
+                continue
+            }
+            stalledRestarts[role, default: 0] += 1
+            sourceStarted[role] = now
+            restartsInFlight.insert(role)
+            Task {
+                await source.restart(.stalled)
+                restartsInFlight.remove(role)
+            }
+        }
+    }
+
+    /// Every 30 s, the room left on the disk at the recording's byte rate: under 30 minutes it warns; under 3, call
+    /// audio stops so the microphone has what's left.
+    private func watchSpace(at now: TimeInterval) {
+        guard now - lastSpaceCheck >= Self.spaceCheckInterval, let directory else { return }
+        let writers = [microphoneWriter, system == nil ? nil : systemWriter].compactMap { $0 }
+        let rate = writers.map(\.bytesPerSecond).reduce(0, +)
+        guard rate > 0 else { return }
+        lastSpaceCheck = now
+        guard let free = environment.freeSpace(directory) else { return }
+        let left = Double(max(0, free)) / rate
+        let low = left <= Self.spaceWarning ? left : nil
+        if low != spaceLeft { spaceLeft = low }
+        if left <= Self.spaceCallLimit, system != nil {
+            callStoppedForSpace = true
+            endCallTrack(Self.callStoppedForSpace)
+            // Measured again at once, at the microphone's rate alone.
+            lastSpaceCheck = -.infinity
+        }
+    }
+
+    /// coreaudiod restarted: every device is new, so both sources start again.
+    private func audioServiceRestarted() {
+        guard state == .recording else { return }
+        let now = environment.hostTime()
+        for (role, source) in [(CapturedTrackRole.microphone, microphone), (.systemAudio, system)] {
+            guard let source else { continue }
+            sourceStarted[role] = now
+            restartsInFlight.insert(role)
+            Task {
+                await source.restart(.audioSystemRestarted)
+                restartsInFlight.remove(role)
+            }
+        }
     }
 
     // MARK: Finishing
@@ -361,6 +551,8 @@ final class RecordingController {
     private func finishCapture() async -> CaptureResult? {
         meterTimer?.invalidate()
         meterTimer = nil
+        serviceObservation = nil
+        environment.keepAwake(false)
         if let microphone { await microphone.stop() }
         microphone = nil
         if let system { await system.stop() }
@@ -369,7 +561,11 @@ final class RecordingController {
         var tracks: [CapturedAudioTrack] = []
         for writer in [microphoneWriter, systemWriter].compactMap({ $0 }) {
             let outcome = await writer.finish()
-            if let track = outcome.track { tracks.append(track) }
+            if let track = outcome.track {
+                tracks.append(track)
+                // What a busy disk cost, said for the conversation too.
+                if track.lostSeconds > 0 { warnings.append(RecordingWords.lostAudio(track.lostSeconds, of: track.role.audioName)) }
+            }
             if let error = outcome.error { warnings.append(error) }
         }
         // The system's words for what went wrong, with the track they're about.
@@ -400,6 +596,7 @@ final class RecordingController {
         self.directory = nil
         startedAt = nil
         isCallAudioDetected = false
+        spaceLeft = nil
         levels.reset()
         state = .idle
         return result

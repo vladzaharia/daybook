@@ -65,6 +65,10 @@ public struct RecordingStatusInputs: Equatable {
     /// Computer audio is part of this recording (Settings › General), so it has a Call meter.
     public var includesCall = false
     public var call: CallAudio = .off
+    /// Seconds of recording the disk still has room for, once that's under half an hour (the Mac); nil above.
+    public var spaceLeft: TimeInterval?
+    /// Call audio stopped to leave the disk's last minutes to the microphone (the Mac).
+    public var callStoppedForSpace = false
     public var recorders: [RecorderFacts] = []
     public var peers: [Peer] = []
     /// How this device calls itself in a sentence: "this Mac", "this iPhone".
@@ -88,8 +92,9 @@ public struct RecorderPhase: Equatable, Sendable {
 /// One item in a status bar: a glyph and a short label that open a menu with the whole sentence.
 public struct RecorderChip: Identifiable, Equatable, Sendable {
     public enum Target: Equatable, Hashable, Sendable {
-        /// `processing` is the shown conversation's work; `queue` is this device's, whichever conversation it's on.
-        case call, recorder(String), peer(String), processing, queue, sync
+        /// `processing` is the shown conversation's work; `queue` is this device's, whichever conversation it's on;
+        /// `storage` is the disk running out of room while recording.
+        case call, recorder(String), peer(String), processing, queue, sync, storage
     }
 
     public var target: Target
@@ -147,6 +152,7 @@ public struct RecorderChip: Identifiable, Equatable, Sendable {
         case .processing: return "processing"
         case .queue: return "queue"
         case .sync: return "sync"
+        case .storage: return "storage"
         }
     }
 }
@@ -212,6 +218,9 @@ public enum RecordingStatusWords {
         let recording = inputs.phase == .recording || inputs.phase == .paused
         var chips: [RecorderChip] = []
         if inputs.phase == .recording, includesCall, let call = callChip(inputs.call) { chips.append(call) }
+        if inputs.phase == .recording, let storage = storageChip(spaceLeft: inputs.spaceLeft, callStopped: inputs.callStoppedForSpace) {
+            chips.append(storage)
+        }
         chips += inputs.recorders.compactMap { recorderChip($0, recording: recording, here: inputs.here, now: now) }
         chips += inputs.peers.compactMap { peerChip($0, recording: recording, here: inputs.here) }
         return chips
@@ -229,6 +238,34 @@ public enum RecordingStatusWords {
             return RecorderChip(target: .call, symbol: "speaker.slash.fill", label: "No call audio", shortLabel: "Call", tone: .attention,
                                 detail: callMissingHelp)
         }
+    }
+
+    /// The disk running out of room while recording: "Low on space", and how long it lasts at this rate. Nothing until
+    /// there's under half an hour.
+    public static func storageChip(spaceLeft: TimeInterval?, callStopped: Bool) -> RecorderChip? {
+        guard spaceLeft != nil || callStopped else { return nil }
+        return RecorderChip(target: .storage, symbol: "externaldrive.badge.exclamationmark", label: "Low on space", shortLabel: "Space",
+                            tone: .attention, detail: storageDetail(spaceLeft: spaceLeft, callStopped: callStopped))
+    }
+
+    /// The whole sentence: "Room for about 25 more minutes. Free up space to keep recording." Once call audio has
+    /// stopped for it, that comes first.
+    public static func storageDetail(spaceLeft: TimeInterval?, callStopped: Bool) -> String {
+        var parts: [String] = []
+        if callStopped { parts.append("The disk is almost full, so call audio stopped.") }
+        if let spaceLeft {
+            let minutes = Int(spaceLeft / 60)
+            parts.append(minutes < 1 ? "Room for less than a minute more." : minutes == 1 ? "Room for about 1 more minute."
+                                                                            : "Room for about \(minutes) more minutes.")
+        }
+        parts.append("Free up space to keep recording.")
+        return parts.joined(separator: " ")
+    }
+
+    /// The devices that kept recording when this Mac went to sleep: "Soundcore Work and Alex’s iPhone kept recording."
+    public static func keptRecording(_ names: [String]) -> String? {
+        guard !names.isEmpty else { return nil }
+        return "\(names.formatted(.list(type: .and))) kept recording."
     }
 
     /// A recorder's chip, in the words its status line uses everywhere (`RecorderStatusWords`).

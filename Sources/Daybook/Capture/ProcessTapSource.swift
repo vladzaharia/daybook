@@ -297,6 +297,16 @@ final class ProcessTapSource: CaptureAudioSource, ProcessTapReporting, @unchecke
         }
     }
 
+    /// The tap stopped delivering (or the audio system restarted under it): it's built again on the current output.
+    @MainActor func restart(_ reason: CaptureRestartReason) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            control.async { [self] in
+                if !finished { rebuild(reason: reason.note("call capture")) }
+                continuation.resume()
+            }
+        }
+    }
+
     private func report(_ event: CaptureSourceEvent) {
         lock.lock(); let handler = onEvent; lock.unlock()
         handler?(event)

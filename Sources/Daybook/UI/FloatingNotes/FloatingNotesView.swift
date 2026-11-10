@@ -383,7 +383,7 @@ struct ChipMenuItems: View {
             }
         case .sync:
             Button("Open Sync Settings…") { openSettingsPane(.library) }
-        case .call:
+        case .call, .storage:
             EmptyView()
         }
     }

@@ -22,18 +22,32 @@ final class CaptureLevelMonitor {
     private(set) var call = Level.silent
     /// The call track carried audible sound within the last few seconds.
     private(set) var isCallAudioDetected = false
-    /// No non-zero microphone sample arrived for several seconds: the input is muted in hardware,
-    /// unplugged, or blocked by permission.
+    /// The microphone isn't hearing anything now (`isNotHearing`): muted in hardware, unplugged, blocked by
+    /// permission, or a MacBook's microphone with its lid closed. Rolling, so a microphone that goes quiet
+    /// partway through is said too.
     private(set) var isMicrophoneSilent = false
     /// True while call audio is part of the recording.
     private(set) var isCapturingCall = false
 
     static let callHoldSeconds: TimeInterval = 4
-    static let silentMicrophoneSeconds: TimeInterval = 3
+    /// No non-zero sample for this long is not hearing.
+    static let silentMicrophoneSeconds: TimeInterval = 5
+    /// Nothing above `AudioLevelMeter.hearingFloor` (−90 dBFS) for this long is not hearing either.
+    static let belowFloorSeconds: TimeInterval = 20
 
     static func callAudioDetected(lastAudible: TimeInterval?, now: TimeInterval) -> Bool {
         guard let lastAudible else { return false }
         return now - lastAudible <= callHoldSeconds
+    }
+
+    /// The rolling hearing check: no non-zero sample in the last 5 s, or nothing above −90 dBFS for 20 s. `elapsed` is
+    /// how long the recording has run; a check never says so before it could know.
+    static func isNotHearing(_ reading: AudioLevelMeter.Reading?, now: TimeInterval, elapsed: TimeInterval) -> Bool {
+        let started = now - elapsed
+        let signal = reading?.lastSignalHostTime ?? started
+        if now - signal > silentMicrophoneSeconds { return true }
+        let heard = reading?.lastHeardHostTime ?? started
+        return now - heard > belowFloorSeconds
     }
 
     func update(microphone mic: AudioLevelMeter.Reading?, call callReading: AudioLevelMeter.Reading?,
@@ -44,7 +58,7 @@ final class CaptureLevelMonitor {
         if detected != isCallAudioDetected { isCallAudioDetected = detected }
         let capturing = callReading != nil
         if capturing != isCapturingCall { isCapturingCall = capturing }
-        let silent = elapsed >= Self.silentMicrophoneSeconds && mic?.receivedSignal != true
+        let silent = Self.isNotHearing(mic, now: hostTime, elapsed: elapsed)
         if silent != isMicrophoneSilent { isMicrophoneSilent = silent }
     }
 

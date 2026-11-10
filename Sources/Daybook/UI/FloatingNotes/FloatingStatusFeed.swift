@@ -10,8 +10,8 @@ import Foundation
 import Observation
 
 // Where Floating Notes' status comes from: the device hub and every recorder session, the iPhone
-// link, recorder handoff, sync, and the few level facts that change rarely (call audio detected,
-// a silent microphone). The panel reads them through `FloatingStatusInputs.make`, and redraws for
+// link, recorder handoff, sync, and the few capture facts that change rarely (call audio detected,
+// a microphone that isn't hearing anything, the disk running out of room). The panel reads them through `FloatingStatusInputs.make`, and redraws for
 // what it read; the meters, which change 15 times a second, are sampled apart (`RecorderLevels`).
 
 extension FloatingStatusInputs {
@@ -33,8 +33,12 @@ extension FloatingStatusInputs {
         inputs.recording.duration = meeting?.duration
         inputs.recording.inputDevice = inputDevice
         inputs.recording.microphoneSilent = isRecording && levels.isMicrophoneSilent
-        inputs.recording.includesCall = isRecording && state.includeComputerAudio
-        if isRecording, state.includeComputerAudio {
+        // Call audio stopped for the disk's last minutes: the storage chip says so, not a missing call.
+        let callStoppedForSpace = isRecording && state.recorder.callStoppedForSpace
+        inputs.recording.spaceLeft = isRecording ? state.recorder.spaceLeft : nil
+        inputs.recording.callStoppedForSpace = callStoppedForSpace
+        inputs.recording.includesCall = isRecording && state.includeComputerAudio && !callStoppedForSpace
+        if isRecording, state.includeComputerAudio, !callStoppedForSpace {
             if levels.isCapturingCall {
                 inputs.recording.call = levels.isCallAudioDetected ? .detected : .quiet
             } else if state.recorder.isRecording, state.recorder.elapsedTime > 5 {
