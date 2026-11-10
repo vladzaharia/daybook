@@ -19,14 +19,6 @@ final class StagingProtectionTests: XCTestCase {
     private static let classes: [Int32: FileProtectionType] = [
         1: .complete, 2: .completeUnlessOpen, 3: .completeUntilFirstUserAuthentication, 4: FileProtectionType.none]
 
-    /// A file's or folder's data protection class, as the file system keeps it.
-    private func protection(_ url: URL) -> FileProtectionType? {
-        let descriptor = open(url.path, O_RDONLY)
-        guard descriptor >= 0 else { return nil }
-        defer { close(descriptor) }
-        return Self.classes[fcntl(descriptor, F_GETPROTECTIONCLASS)]
-    }
-
     /// Gives a folder a class through the file system, as the iPhone's Foundation does for
     /// `createDirectory(attributes: [.protectionKey: …])`.
     private func give(_ folder: URL, _ type: FileProtectionType) throws {
@@ -67,7 +59,7 @@ final class StagingProtectionTests: XCTestCase {
         try give(folder, StagingProtection.type)
         let library = PhoneLibrary(rootURL: try temporaryDirectory("library"), installation: "INSTALL-1")
         try await library.reload()
-        XCTAssertNotEqual(protection(library.rootURL), .completeUnlessOpen, "the library's other files aren't")
+        XCTAssertProtectionClassIsNot(library.rootURL, .completeUnlessOpen, "the library's other files aren't")
 
         try await rig.recorder.start(in: folder, title: "Kept until unlock")
         rig.pump(3)
@@ -80,21 +72,21 @@ final class StagingProtectionTests: XCTestCase {
         rig.pump(2)
         await rig.recorder.flush()
 
-        XCTAssertEqual(protection(folder), .completeUnlessOpen, "the staging folder")
-        XCTAssertEqual(protection(PhoneCaptureJournal.url(in: folder)), .completeUnlessOpen, "the journal, a new file each write")
+        XCTAssertProtectionClass(folder, .completeUnlessOpen, "the staging folder")
+        XCTAssertProtectionClass(PhoneCaptureJournal.url(in: folder), .completeUnlessOpen, "the journal, a new file each write")
         for index in 0...1 {
-            XCTAssertEqual(protection(folder.appendingPathComponent(CaptureSegment.fileName(index: index))), .completeUnlessOpen,
+            XCTAssertProtectionClass(folder.appendingPathComponent(CaptureSegment.fileName(index: index)), .completeUnlessOpen,
                            "part \(index), written by AVFoundation in the folder")
         }
-        XCTAssertEqual(protection(folder.appendingPathComponent(try XCTUnwrap(photo).fileName)), .completeUnlessOpen, "a photo")
+        XCTAssertProtectionClass(folder.appendingPathComponent(try XCTUnwrap(photo).fileName), .completeUnlessOpen, "a photo")
 
         let recording = try await rig.stop()
         XCTAssertEqual(try PhoneCaptureJournal.load(from: folder).finalFile?.joined, true)
-        XCTAssertEqual(protection(recording.audioURL), .completeUnlessOpen, "the joined recording")
+        XCTAssertProtectionClass(recording.audioURL, .completeUnlessOpen, "the joined recording")
         let meeting = try await library.file(recording)
         let filed = try await library.audioURL(for: try XCTUnwrap(meeting.tracks.first), in: meeting.id)
-        XCTAssertEqual(protection(filed), .completeUnlessOpen, "filed, it keeps its class")
-        XCTAssertNotEqual(protection(filed.deletingLastPathComponent()), .completeUnlessOpen, "in a folder that isn't")
+        XCTAssertProtectionClass(filed, .completeUnlessOpen, "filed, it keeps its class")
+        XCTAssertProtectionClassIsNot(filed.deletingLastPathComponent(), .completeUnlessOpen, "in a folder that isn't")
     }
 
     // MARK: Stop while locked

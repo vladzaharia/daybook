@@ -98,7 +98,7 @@ final class LiveCaptionStoreTests: XCTestCase {
         let file = try FileManager.default.attributesOfItem(atPath: store.url(for: id).path)
         XCTAssertEqual(folder[.posixPermissions] as? Int, 0o700)
         XCTAssertEqual(file[.posixPermissions] as? Int, 0o600)
-        XCTAssertEqual(file[.protectionKey] as? FileProtectionType, .completeUntilFirstUserAuthentication)
+        XCTAssertProtectionClass(store.url(for: id), .completeUntilFirstUserAuthentication)
         XCTAssertEqual(store.captions(for: id)?.segments.map(\.text), ["Private"])
         XCTAssertEqual(store.conversations(), [id])
     }
@@ -111,7 +111,7 @@ final class LiveCaptionStoreTests: XCTestCase {
         let captions = LiveCaptions(meetingID: UUID(), captureID: UUID(), localeIdentifier: "en_US", segments: [line("Locked", 0)])
         try await store.save(captions)
         let url = store.url(for: captions.key)
-        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: url.path)[.protectionKey] as? FileProtectionType, .completeUnlessOpen)
+        XCTAssertProtectionClass(url, .completeUnlessOpen)
         try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: url.path)
         XCTAssertNil(try? Data(contentsOf: url))
 
