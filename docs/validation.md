@@ -102,6 +102,14 @@ not Daybook's.
   (docs/iphone.md, "File protection"): a stop from the Lock Screen reads files while locked, which W2-B's two-step stop
   now makes fixable. Still to check on a device: a backup restore with an encrypted library, and sidecar size on
   4-hour recordings.
+- **W3-P2, one action dispatcher per app.** Each app carries a conversation's actions out in one place
+  (`MacActions.perform`, `PhoneActions.perform`, the More menus included), the library's half once in DaybookUI's
+  `ConversationActionPerformer`; Move to Work or Personal from More can now be undone on both apps, and a row's Copy
+  Summary says "Copied" on the iPhone. ConversationActionPerformerTests (every library action from every menu, on both
+  apps, alone and as a selection, either registers an undo that undo reverses or leaves the library as it was; "Move
+  to Personal" names the undo from one conversation and from a selection), the iPhone's
+  LibraryListPhoneTests, and the existing ConversationActionsTests, AppStateTests, SystemEntryPointsTests,
+  PlaybackControllerTests, and ReadingTests.
 - **W2-A, Mac capture resilience.** Writers buffer 30 s and record what a busy disk cost; the iPhone's gap rule on
   the Mac, with 5 ms ramps and a `gaps` record; microphone restarts limited by rate, with retries and the built-in
   microphone as fallback; a 3 s stall watch and a coreaudiod-restart rebuild; a rolling hearing check; a free-space
