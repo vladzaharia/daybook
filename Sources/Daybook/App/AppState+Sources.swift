@@ -264,8 +264,9 @@ extension AppState {
 
     /// A recorder's clock against this Mac's, for placing its recording: the one its multipoint link
     /// keeps, or the one Daybook on iPhone measured while recording and stored on its track
-    /// (`capture.peerClocks`), whichever was measured later. The track's entry for this Mac comes
-    /// first; another Mac's is only near this one's.
+    /// (`capture.peerClocks`), whichever is tighter where the recording starts: its uncertainty, plus what the
+    /// clocks may have drifted between when it was measured and the recording's start (50 ppm: tens in practice).
+    /// Even, the later. The track's entry for this Mac comes first; another Mac's is only near this one's.
     func recorderClock(for track: RecordingTrack, link: CompanionRecording?) -> CompanionClock? {
         let peers = track.capture?.peerClocks ?? []
         let entry = peers.first { $0.deviceID == phoneLink.identity.deviceID.uuidString }
@@ -275,6 +276,10 @@ extension AppState {
                                                   measuredAt: $0.measuredAt.addingTimeInterval($0.offset)) }
         guard let linked = link?.clock else { return measured }
         guard let measured else { return linked }
+        let start = track.startedAt ?? track.createdAt, drift = 50e-6
+        func bound(_ clock: CompanionClock) -> TimeInterval { clock.uncertainty + drift * abs(clock.measuredAt.timeIntervalSince(start)) }
+        let (a, b) = (bound(measured), bound(linked))
+        if a != b { return a < b ? measured : linked }
         return measured.measuredAt > linked.measuredAt ? measured : linked
     }
 

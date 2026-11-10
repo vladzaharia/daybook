@@ -65,11 +65,16 @@ struct Refusal: Codable, Equatable {
 struct Heartbeat: Codable, Equatable {
     var sequence: UInt64
     var interval: TimeInterval?
+    /// The highest sequence number of the notes and bookmarks the sender has received in this session (0 for none):
+    /// what the other side may stop keeping to resend (`LinkReliableOutbox`). An older build sends none, and never acks.
+    var acked: UInt64?
 }
 
 struct ClockRequest: Codable, Equatable {
     var sequence: UInt64
     var t1: Date
+    /// t1 on the asker's continuous clock (`LinkClock.monotonic()`); an older build sends none.
+    var m1: TimeInterval?
 }
 
 struct ClockReply: Codable, Equatable {
@@ -77,6 +82,10 @@ struct ClockReply: Codable, Equatable {
     var t1: Date
     var t2: Date
     var t3: Date
+    /// The asker's m1, and t2 and t3 on the answerer's continuous clock: only when the request carried m1.
+    var m1: TimeInterval?
+    var m2: TimeInterval?
+    var m3: TimeInterval?
 }
 
 struct Goodbye: Codable, Equatable {
@@ -161,6 +170,13 @@ enum LinkWire {
         var v: Int
         var type: String
         var body: Body
+        /// A note's or bookmark's place in its session's reliable lane (`LinkReliableOutbox`); absent on everything
+        /// else, and from an older build. Receivers that don't know it ignore it.
+        var seq: UInt64?
+    }
+
+    private struct SequenceHeader: Decodable {
+        var seq: UInt64?
     }
 
     static func encoder() -> JSONEncoder {
@@ -178,10 +194,11 @@ enum LinkWire {
         return decoder
     }
 
-    static func encode(_ message: WireMessage, version: Int) throws -> Data {
+    /// `sequence` numbers a note or bookmark in the session's reliable lane.
+    static func encode(_ message: WireMessage, version: Int, sequence: UInt64? = nil) throws -> Data {
         let encoder = encoder()
         func pack<B: Codable>(_ body: B) throws -> Data {
-            try encoder.encode(Envelope(v: version, type: message.type, body: body))
+            try encoder.encode(Envelope(v: version, type: message.type, body: body, seq: sequence))
         }
         switch message {
         case .hello(let body): return try pack(body)
@@ -216,9 +233,9 @@ enum LinkWire {
         }
     }
 
-    /// Decodes a frame. Unknown types come back as `.unknown`; a known type whose body can't be
-    /// read throws.
-    static func decode(_ data: Data) throws -> (version: Int, message: WireMessage) {
+    /// Decodes a frame, with its place in the reliable lane when it has one. Unknown types come back as `.unknown`; a
+    /// known type whose body can't be read throws.
+    static func decode(_ data: Data) throws -> (version: Int, message: WireMessage, sequence: UInt64?) {
         let decoder = decoder()
         guard let header = try? decoder.decode(Header.self, from: data) else { throw LinkWireError.malformed }
         func body<B: Codable>(_ type: B.Type) throws -> B {
@@ -261,12 +278,15 @@ enum LinkWire {
                 message = .unknown(header.type)
             }
         }
-        return (header.v, message)
+        // Only notes and bookmarks are numbered; a `seq` this build can't read is no number, never a bad frame.
+        var sequence: UInt64?
+        if case .app(let app) = message, app.isReliable { sequence = (try? decoder.decode(SequenceHeader.self, from: data))?.seq }
+        return (header.v, message, sequence)
     }
 
     // Used by PairingMessage.
     static func envelope<B: Codable>(type: String, version: Int, body: B, with encoder: JSONEncoder) throws -> Data {
-        try encoder.encode(Envelope(v: version, type: type, body: body))
+        try encoder.encode(Envelope(v: version, type: type, body: body, seq: nil))
     }
 
     static func body<B: Codable>(_ type: B.Type, from data: Data, with decoder: JSONDecoder) throws -> B {

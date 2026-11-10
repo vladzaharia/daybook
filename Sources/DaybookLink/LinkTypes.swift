@@ -95,6 +95,8 @@ public struct LinkConfiguration: Sendable {
     public var clockSamplesPerBurst = 6
     public var clockSampleSpacing: TimeInterval = 0.2
     public var clockResampleInterval: TimeInterval = 120
+    /// The shortest span of a session's samples the clocks' drift is fitted over.
+    public var clockDriftMinimumSpan: TimeInterval = 60
 
     public var clock: any LinkClock = SystemLinkClock()
 
@@ -284,29 +286,162 @@ public typealias LinkRecordControlHandler = @Sendable (LinkPeer, LinkRecordReque
 // MARK: Event fan-out
 
 /// Hands each event to every subscriber. Each `events()` call gets its own stream.
+///
+/// A subscriber that falls behind (its main actor stalled) never loses a control or app event: those queue without
+/// limit. Only the live feeds, another device's levels and captions, keep just the newest `liveCapacity` waiting,
+/// the oldest dropped and counted (`droppedLiveEvents`), so a stall can't fill memory with meter readings.
 final class LinkEventHub: Sendable {
-    private let continuations = Mutex<[UUID: AsyncStream<LinkEvent>.Continuation]>([:])
+    /// How many live events (levels, captions) a subscriber may have waiting.
+    static let liveCapacity = 64
+
+    private let subscribers = Mutex<[UUID: LinkEventBuffer]>([:])
+    private let dropped = Atomic<Int>(0)
+
+    /// Live events dropped because a subscriber fell behind, across subscribers, since the hub began.
+    var droppedLiveEvents: Int { dropped.load(ordering: .relaxed) }
+    /// Streams still listening (tests).
+    var subscriberCount: Int { subscribers.withLock { $0.count } }
 
     func stream() -> AsyncStream<LinkEvent> {
-        let (stream, continuation) = AsyncStream<LinkEvent>.makeStream(bufferingPolicy: .bufferingNewest(512))
-        let id = UUID()
-        continuations.withLock { $0[id] = continuation }
-        continuation.onTermination = { [weak self] _ in
-            self?.continuations.withLock { _ = $0.removeValue(forKey: id) }
+        let buffer = LinkEventBuffer(liveCapacity: Self.liveCapacity) { [weak self] count in
+            _ = self?.dropped.add(count, ordering: .relaxed)
         }
-        return stream
+        let id = UUID()
+        subscribers.withLock { $0[id] = buffer }
+        // The stream holds the subscription; when the stream is gone (dropped, or its task cancelled), so is the
+        // subscriber, and nothing more queues for it.
+        let subscription = LinkEventSubscription { [weak self] in
+            buffer.finish()
+            self?.subscribers.withLock { _ = $0.removeValue(forKey: id) }
+        }
+        return AsyncStream(unfolding: {
+            _ = subscription
+            return await buffer.next()
+        }, onCancel: { subscription.end() })
     }
 
     func yield(_ event: LinkEvent) {
-        let targets = continuations.withLock { Array($0.values) }
-        for continuation in targets { continuation.yield(event) }
+        let targets = subscribers.withLock { Array($0.values) }
+        for buffer in targets { buffer.push(event) }
     }
 
     func finish() {
-        let targets = continuations.withLock { continuations in
-            defer { continuations.removeAll() }
-            return Array(continuations.values)
+        let targets = subscribers.withLock { subscribers in
+            defer { subscribers.removeAll() }
+            return Array(subscribers.values)
         }
-        for continuation in targets { continuation.finish() }
+        for buffer in targets { buffer.finish() }
+    }
+}
+
+extension LinkEvent {
+    /// A live feed's reading: another device's input level or its live captions, which the next one supersedes or adds
+    /// to. Only these are dropped when a subscriber falls behind.
+    var isLive: Bool {
+        switch self {
+        case .received(.levels, _), .received(.captions, _): return true
+        default: return false
+        }
+    }
+}
+
+/// Ends a subscription once, when its stream is cancelled or released.
+final class LinkEventSubscription: Sendable {
+    private let onEnd: Mutex<(@Sendable () -> Void)?>
+
+    init(onEnd: @escaping @Sendable () -> Void) { self.onEnd = Mutex(onEnd) }
+
+    func end() {
+        let action = onEnd.withLock { action in
+            defer { action = nil }
+            return action
+        }
+        action?()
+    }
+
+    deinit { end() }
+}
+
+/// One subscriber's waiting events, in arrival order: every control and app event, and the newest `liveCapacity` live
+/// ones.
+final class LinkEventBuffer: Sendable {
+    private struct State {
+        var events: [LinkEvent] = []
+        var head = 0
+        var live = 0
+        var waiter: CheckedContinuation<LinkEvent?, Never>?
+        var finished = false
+    }
+
+    private let liveCapacity: Int
+    private let onDrop: @Sendable (Int) -> Void
+    private let state = Mutex(State())
+
+    init(liveCapacity: Int, onDrop: @escaping @Sendable (Int) -> Void = { _ in }) {
+        self.liveCapacity = max(1, liveCapacity)
+        self.onDrop = onDrop
+    }
+
+    /// Live events waiting now (tests).
+    var waitingLive: Int { state.withLock { $0.live } }
+    /// Events waiting now (tests).
+    var waiting: Int { state.withLock { $0.events.count - $0.head } }
+
+    func push(_ event: LinkEvent) {
+        let live = event.isLive
+        let (waiter, dropped): (CheckedContinuation<LinkEvent?, Never>?, Bool) = state.withLock { state in
+            guard !state.finished else { return (nil, false) }
+            if let waiter = state.waiter {
+                state.waiter = nil
+                return (waiter, false)
+            }
+            state.events.append(event)
+            guard live else { return (nil, false) }
+            state.live += 1
+            guard state.live > liveCapacity,
+                  let oldest = state.events[state.head...].firstIndex(where: \.isLive) else { return (nil, false) }
+            state.events.remove(at: oldest)
+            state.live -= 1
+            return (nil, true)
+        }
+        if dropped { onDrop(1) }
+        waiter?.resume(returning: event)
+    }
+
+    /// The next event, waiting for one; nil once the buffer is finished and nothing is left.
+    func next() async -> LinkEvent? {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<LinkEvent?, Never>) in
+                let ready: LinkEvent?? = state.withLock { state in
+                    if state.head < state.events.count {
+                        let event = state.events[state.head]
+                        state.head += 1
+                        if event.isLive { state.live -= 1 }
+                        // Reclaim what's been read once it's most of the array.
+                        if state.head >= 256, state.head * 2 >= state.events.count {
+                            state.events.removeFirst(state.head)
+                            state.head = 0
+                        }
+                        return .some(event)
+                    }
+                    if state.finished { return .some(nil) }
+                    state.waiter = continuation
+                    return .none
+                }
+                if let ready { continuation.resume(returning: ready) }
+            }
+        } onCancel: {
+            finish()
+        }
+    }
+
+    /// No more events: what's waiting is still read, then nil.
+    func finish() {
+        let waiter = state.withLock { state -> CheckedContinuation<LinkEvent?, Never>? in
+            state.finished = true
+            defer { state.waiter = nil }
+            return state.waiter
+        }
+        waiter?.resume(returning: nil)
     }
 }

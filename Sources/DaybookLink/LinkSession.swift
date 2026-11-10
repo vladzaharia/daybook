@@ -42,6 +42,10 @@ final class LinkSession: @unchecked Sendable {
     private(set) var version = LinkProtocol.baselineVersion
     /// Unknown message types received and ignored (diagnostics, tests).
     private(set) var ignoredMessages = 0
+    /// The notes and bookmarks this session sent that the peer hasn't acknowledged yet.
+    private(set) var reliableOutbox = LinkReliableOutbox()
+    /// The highest `seq` of the notes and bookmarks received in this session: what heartbeats acknowledge.
+    private var receivedReliable: UInt64 = 0
 
     private var localInterval: TimeInterval
     private var localTimeout: TimeInterval
@@ -51,7 +55,7 @@ final class LinkSession: @unchecked Sendable {
     private var clockTimer: DispatchSourceTimer?
     private var handshakeDeadline: DispatchWorkItem?
     private var sequence: UInt64 = 0
-    private var clockFilter = LinkClockFilter()
+    private var clockFilter: LinkClockFilter
     private var pending: [UUID: (completion: (Result<LinkRecordReply, LinkError>) -> Void, timeout: DispatchWorkItem)] = [:]
     private var answered: [UUID: LinkRecordReply] = [:]
     private var answeredOrder: [UUID] = []
@@ -66,6 +70,7 @@ final class LinkSession: @unchecked Sendable {
         self.record = record
         self.configuration = configuration
         self.delegate = delegate
+        clockFilter = LinkClockFilter(minimumDriftSpan: configuration.clockDriftMinimumSpan)
         localInterval = Self.validHeartbeatInterval(heartbeat.interval) ? heartbeat.interval : 5
         localTimeout = heartbeat.timeout.isFinite && heartbeat.timeout > 0 ? min(heartbeat.timeout, 900) : 15
         channel.onFrame = { [weak self] frame, receivedAt in self?.receive(frame, at: receivedAt) }
@@ -85,7 +90,7 @@ final class LinkSession: @unchecked Sendable {
     }
 
     /// Server: the channel is up and its first frame (a hello) has arrived.
-    func startServer(firstFrame: Data, receivedAt: Date) {
+    func startServer(firstFrame: Data, receivedAt: LinkInstant) {
         armHandshakeDeadline()
         receive(firstFrame, at: receivedAt)
     }
@@ -111,12 +116,13 @@ final class LinkSession: @unchecked Sendable {
 
     // MARK: Receive
 
-    private func receive(_ frame: Data, at receivedAt: Date) {
+    private func receive(_ frame: Data, at receivedAt: LinkInstant) {
         guard state != .closed else { return }
         lastHeard = .now()
         let message: WireMessage
+        let sequence: UInt64?
         do {
-            message = try LinkWire.decode(frame).message
+            (_, message, sequence) = try LinkWire.decode(frame)
         } catch {
             // A known type whose body this build can't read: ignore it once established, as for
             // unknown types; during the handshake it's fatal.
@@ -126,7 +132,7 @@ final class LinkSession: @unchecked Sendable {
         }
         switch state {
         case .handshaking: handshake(message)
-        case .established: established(message, receivedAt: receivedAt)
+        case .established: established(message, sequence: sequence, receivedAt: receivedAt)
         case .closed: break
         }
     }
@@ -213,17 +219,24 @@ final class LinkSession: @unchecked Sendable {
         delegate.established(self)
     }
 
-    private func established(_ message: WireMessage, receivedAt: Date) {
+    private func established(_ message: WireMessage, sequence: UInt64?, receivedAt: LinkInstant) {
         switch message {
         case .ping(let beat):
             guard adoptPeerInterval(beat.interval) else { return }
-            send(.pong(Heartbeat(sequence: beat.sequence, interval: localInterval)))
+            reliableOutbox.heard(acked: beat.acked)
+            send(.pong(Heartbeat(sequence: beat.sequence, interval: localInterval, acked: receivedReliable)))
         case .pong(let beat):
             _ = adoptPeerInterval(beat.interval)
+            reliableOutbox.heard(acked: beat.acked)
         case .clockRequest(let request):
-            send(.clockReply(ClockReply(sequence: request.sequence, t1: request.t1, t2: receivedAt, t3: configuration.clock.now())))
+            // With the continuous clock's stamps too when the asker sent its own (an older build sends none).
+            let now = LinkInstant(configuration.clock)
+            let stamped = request.m1 != nil
+            send(.clockReply(ClockReply(sequence: request.sequence, t1: request.t1, t2: receivedAt.date, t3: now.date,
+                                        m1: request.m1, m2: stamped ? receivedAt.monotonic : nil, m3: stamped ? now.monotonic : nil)))
         case .clockReply(let reply):
-            clockFilter.add(LinkClockSample(t1: reply.t1, t2: reply.t2, t3: reply.t3, t4: receivedAt))
+            clockFilter.add(LinkClockSample(t1: reply.t1, t2: reply.t2, t3: reply.t3, t4: receivedAt.date,
+                                            m1: reply.m1, m2: reply.m2, m3: reply.m3, m4: reply.m1 != nil ? receivedAt.monotonic : nil))
             if let estimate = clockFilter.estimate, peer?.clock != estimate {
                 peer?.clock = estimate
                 delegate.peerUpdated(self)
@@ -232,6 +245,7 @@ final class LinkSession: @unchecked Sendable {
             peer?.capabilities = capabilities
             delegate.peerUpdated(self)
         case .app(let message):
+            if let sequence, message.isReliable { receivedReliable = max(receivedReliable, sequence) }
             delegate.received(self, message)
         case .recordRequest(let request):
             answer(request)
@@ -299,7 +313,23 @@ final class LinkSession: @unchecked Sendable {
 
     func send(_ message: LinkMessage) {
         guard state == .established else { return }
-        send(.app(message))
+        guard message.isReliable else { send(.app(message)); return }
+        let sequence = reliableOutbox.number(LinkReliableMessage(message: message, firstSentAt: configuration.clock.now(), sends: 1))
+        send(.app(message), sequence: sequence)
+    }
+
+    /// Sends what the device's earlier sessions left unacknowledged, before anything new; `peerAcknowledges` is
+    /// what those sessions learned of the peer.
+    func resend(_ items: [LinkReliableMessage], peerAcknowledges: Bool?) {
+        guard state == .established else { return }
+        if reliableOutbox.peerAcknowledges == nil, reliableOutbox.lastSequence == 0 {
+            reliableOutbox = LinkReliableOutbox(peerAcknowledges: peerAcknowledges)
+        }
+        for var item in items {
+            item.sends += 1
+            let sequence = reliableOutbox.number(item)
+            send(.app(item.message), sequence: sequence)
+        }
     }
 
     func update(identity: LinkIdentity) {
@@ -308,8 +338,8 @@ final class LinkSession: @unchecked Sendable {
         if changed, state == .established { send(.capabilities(identity.capabilities)) }
     }
 
-    private func send(_ message: WireMessage) {
-        guard state != .closed, let frame = try? LinkWire.encode(message, version: version) else { return }
+    private func send(_ message: WireMessage, sequence: UInt64? = nil) {
+        guard state != .closed, let frame = try? LinkWire.encode(message, version: version, sequence: sequence) else { return }
         channel.send(frame)
     }
 
@@ -326,7 +356,7 @@ final class LinkSession: @unchecked Sendable {
         guard state == .established else { return }
         restartHeartbeat()
         sequence += 1
-        send(.ping(Heartbeat(sequence: sequence, interval: localInterval)))
+        send(.ping(Heartbeat(sequence: sequence, interval: localInterval, acked: receivedReliable)))
     }
 
     private var effectiveInterval: TimeInterval { max(localInterval, peerInterval ?? 0) }
@@ -366,7 +396,7 @@ final class LinkSession: @unchecked Sendable {
             return
         }
         sequence += 1
-        send(.ping(Heartbeat(sequence: sequence, interval: localInterval)))
+        send(.ping(Heartbeat(sequence: sequence, interval: localInterval, acked: receivedReliable)))
     }
 
     /// After a wake or a network change: ask for an answer now, and give up on the session if
@@ -375,7 +405,7 @@ final class LinkSession: @unchecked Sendable {
         guard state == .established else { return }
         let asked = DispatchTime.now()
         sequence += 1
-        send(.ping(Heartbeat(sequence: sequence, interval: localInterval)))
+        send(.ping(Heartbeat(sequence: sequence, interval: localInterval, acked: receivedReliable)))
         queue.asyncAfter(deadline: .now() + configuration.probeTimeout) { [weak self] in
             guard let self, self.state == .established, self.lastHeard < asked else { return }
             self.close(.heartbeatTimeout)
@@ -403,7 +433,8 @@ final class LinkSession: @unchecked Sendable {
     func sampleClock() {
         guard state == .established else { return }
         sequence += 1
-        send(.clockRequest(ClockRequest(sequence: sequence, t1: configuration.clock.now())))
+        let now = LinkInstant(configuration.clock)
+        send(.clockRequest(ClockRequest(sequence: sequence, t1: now.date, m1: now.monotonic)))
     }
 
     // MARK: Close
