@@ -238,7 +238,7 @@ struct PairingSheet: View {
                     ScrollViewReader { proxy in
                         ScrollView {
                             pairingView(pages: nil)
-                                .padding(PhoneStyle.Space.s5)
+                                .padding(DaybookSpacing.s5)
                                 .id(Self.column)
                                 .frame(maxWidth: 520, alignment: .leading)
                                 .frame(maxWidth: .infinity)
@@ -303,7 +303,7 @@ struct PairingSheet: View {
             if let problem = attempt.problem {
                 Label(problem, systemImage: "exclamationmark.triangle")
                     .font(.subheadline)
-                    .foregroundStyle(PhoneStyle.Ink.warning)
+                    .foregroundStyle(DaybookPalette.Ink.warning)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -312,9 +312,9 @@ struct PairingSheet: View {
     /// One of the two pages: a column clear of the crease.
     private func page(@ViewBuilder _ content: () -> some View) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: PhoneStyle.Space.s5, content: content)
-                .padding(.vertical, PhoneStyle.Space.s5)
-                .pageColumn(creaseClearance: PhoneStyle.Page.creaseClearance)
+            VStack(alignment: .leading, spacing: DaybookSpacing.s5, content: content)
+                .padding(.vertical, DaybookSpacing.s5)
+                .pageColumn(creaseClearance: ReadingGeometry.creaseClearance)
         }
     }
 
@@ -352,7 +352,7 @@ struct PairingSheet: View {
                             ProgressView().frame(width: tileColumn.value)
                             Text(PairingWords.lookingForMacs)
                                 .font(.subheadline)
-                                .foregroundStyle(PhoneStyle.Ink.secondary)
+                                .foregroundStyle(DaybookPalette.Ink.secondary)
                         }
                         .padding(14)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -368,7 +368,7 @@ struct PairingSheet: View {
                 if lookedAWhile, !candidates.contains(where: { !$0.usesAnotherLibrary }) {
                     Text(PairingWords.noMacFound)
                         .font(.footnote)
-                        .foregroundStyle(PhoneStyle.Ink.secondary)
+                        .foregroundStyle(DaybookPalette.Ink.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .daybookTransition(.opacity)
                 }
@@ -383,7 +383,7 @@ struct PairingSheet: View {
                 SettingsRow(title: mac.name, detail: mac.line, systemImage: "desktopcomputer")
                 Spacer(minLength: 0)
                 if selection == mac.id {
-                    Image(systemName: "checkmark").foregroundStyle(PhoneStyle.accent).fontWeight(.semibold)
+                    Image(systemName: "checkmark").foregroundStyle(DaybookPalette.accent).fontWeight(.semibold)
                         .accessibilityHidden(true)
                 }
             }
@@ -402,7 +402,7 @@ struct PairingSheet: View {
             PairingCodeEntry(code: $attempt.code, label: PairingWords.code(on: mac.name), focus: $codeFocused)
                 .onChange(of: attempt.code) { _, typed in attempt.codeChanged(to: typed) }
             if pairing {
-                HStack(spacing: 8) { ProgressView(); Text(PairingWords.pairing).foregroundStyle(PhoneStyle.Ink.secondary) }
+                HStack(spacing: 8) { ProgressView(); Text(PairingWords.pairing).foregroundStyle(DaybookPalette.Ink.secondary) }
             }
         }
     }
@@ -448,7 +448,7 @@ private struct PairingHeading: View {
     var body: some View {
         Text(SettingsWords.titleCased(text))
             .font(.footnote.weight(.semibold))
-            .foregroundStyle(PhoneStyle.Ink.secondary)
+            .foregroundStyle(DaybookPalette.Ink.secondary)
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityAddTraits(.isHeader)
     }

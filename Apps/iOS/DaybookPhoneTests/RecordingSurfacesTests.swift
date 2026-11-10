@@ -313,15 +313,15 @@ final class RecordingSurfacesTests: XCTestCase {
    return (max(x, y) + 0.05) / (min(x, y) + 0.05)
   }
   for (name, ink) in [
-   ("bookmark", PhoneStyle.ActivityButton.bookmark), ("resume", PhoneStyle.ActivityButton.resume),
-   ("stop", PhoneStyle.ActivityButton.stop),
+   ("bookmark", DaybookPalette.ActivityInk.bookmark), ("resume", DaybookPalette.ActivityInk.resume),
+   ("stop", DaybookPalette.ActivityInk.stop),
   ] {
    for variant in 0..<4 {
     XCTAssertGreaterThanOrEqual(
-     contrast(ink.fill[variant], ink.label[variant]), 4.5, "\(name), appearance \(variant)")
+     contrast(ink.fill.variants[variant], ink.label.variants[variant]), 4.5, "\(name), appearance \(variant)")
    }
   }
-  XCTAssertEqual(PhoneStyle.ActivityButton.all.count, 3)
+  XCTAssertEqual(DaybookPalette.ActivityInk.all.count, 3)
  }
 
  // MARK: Hearing and background cost

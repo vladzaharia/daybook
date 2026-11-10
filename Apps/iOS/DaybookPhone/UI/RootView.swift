@@ -78,7 +78,7 @@ struct RootView: View {
                     .accessibilityHidden(true)
             }
         }
-        .tint(PhoneStyle.accent)
+        .tint(DaybookPalette.accent)
         // A first launch: Welcome in the app's place until it's done.
         .phoneWelcome()
     }

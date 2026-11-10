@@ -25,19 +25,19 @@ struct PageColumn: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .frame(maxWidth: PhoneStyle.Page.measure, alignment: .leading)
+            .frame(maxWidth: ReadingGeometry.touchMeasure, alignment: .leading)
             .padding(.leading, Self.inset(for: .leading, creaseEdge: creaseEdge, creaseClearance: creaseClearance))
             .padding(.trailing, Self.inset(for: .trailing, creaseEdge: creaseEdge, creaseClearance: creaseClearance))
             .frame(maxWidth: .infinity)
     }
 
     static func inset(for edge: Edge, creaseEdge: Edge?, creaseClearance: CGFloat) -> CGFloat {
-        edge == creaseEdge ? creaseClearance : PhoneStyle.Page.gutter
+        edge == creaseEdge ? creaseClearance : ReadingGeometry.gutters(density: .touch, hangs: false).leading
     }
 }
 
 extension View {
-    func pageColumn(creaseClearance: CGFloat = PhoneStyle.Page.readingCreaseClearance) -> some View {
+    func pageColumn(creaseClearance: CGFloat = ReadingGeometry.readingCreaseClearance) -> some View {
         modifier(PageColumn(creaseClearance: creaseClearance))
     }
 }
@@ -48,16 +48,16 @@ struct TagChip: View {
     var body: some View {
         Text(tag)
             .font(.caption.weight(.medium))
-            .foregroundStyle(PhoneStyle.Ink.link)
+            .foregroundStyle(DaybookPalette.Ink.link)
             .padding(.horizontal, 8).padding(.vertical, 3)
-            .background(PhoneStyle.accent.opacity(0.14), in: Capsule())
+            .background(DaybookPalette.accent.opacity(0.14), in: Capsule())
     }
 }
 
 /// Paper behind a page, under the status column and home indicator too.
 struct PaperBackground: ViewModifier {
     func body(content: Content) -> some View {
-        content.background(PhoneStyle.paper.ignoresSafeArea())
+        content.background(DaybookPalette.paper.ignoresSafeArea())
     }
 }
 

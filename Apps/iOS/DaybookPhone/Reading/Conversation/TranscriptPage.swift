@@ -1,4 +1,5 @@
 import DaybookCaptions
+import DaybookDesign
 import DaybookDevices
 import DaybookKit
 import DaybookUI
@@ -37,7 +38,7 @@ struct PhoneTranscriptPage: View {
         TranscriptPage(meeting: meeting, host: host, findQuery: findQuery, find: find, scrollRequest: scrollRequest,
                        anchor: $session.transcriptAnchor, captions: shownCaptions) {
             if showsHeader {
-                PageHeader(library: library, meeting: meeting, play: play).padding(.bottom, PhoneStyle.Space.s2).id("header")
+                PageHeader(library: library, meeting: meeting, play: play).padding(.bottom, DaybookSpacing.s2).id("header")
             }
         } placeholder: {
             if shownCaptions == nil {
@@ -125,11 +126,11 @@ struct RecordIntoButton: View {
         Button {
             Task { try? await model.startRecording(into: meeting.id, title: meeting.title, multipoint: nil) }
         } label: {
-            HStack(spacing: PhoneStyle.Space.s2) {
-                Circle().fill(PhoneStyle.Ink.record).frame(width: 10, height: 10).accessibilityHidden(true)
+            HStack(spacing: DaybookSpacing.s2) {
+                Circle().fill(DaybookPalette.Ink.record).frame(width: 10, height: 10).accessibilityHidden(true)
                 Text("Record").font(.subheadline.weight(.semibold))
             }
-            .foregroundStyle(PhoneStyle.Ink.title)
+            .foregroundStyle(DaybookPalette.Ink.title)
             .padding(.horizontal, 6).padding(.vertical, 2)
         }
         .buttonStyle(.glass)

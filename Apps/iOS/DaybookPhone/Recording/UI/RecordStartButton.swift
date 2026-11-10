@@ -104,10 +104,10 @@ struct RecorderOnlyLine: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Circle().fill(PhoneStyle.Ink.record).frame(width: 8, height: 8)
+            Circle().fill(DaybookPalette.Ink.record).frame(width: 8, height: 8)
                 .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
                 .accessibilityHidden(true)
-            Text(Self.text(recorder)).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
+            Text(Self.text(recorder)).font(.footnote).foregroundStyle(DaybookPalette.Ink.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }

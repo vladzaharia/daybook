@@ -174,7 +174,7 @@ private struct DevicePageContent: View {
                     RecorderMenuItems(session: session).environment(\.recorderServices, services)
                 } label: {
                     // The bar's glyphs are in the title's ink: they're chrome, not a link.
-                    Image(systemName: "ellipsis").foregroundStyle(PhoneStyle.Ink.title)
+                    Image(systemName: "ellipsis").foregroundStyle(DaybookPalette.Ink.title)
                 }
                 .accessibilityLabel("More")
             }
@@ -233,19 +233,19 @@ struct DeviceDetailsScreen: View {
             Section("On \(session.kind.shortName)") {
                 let standings = session.standings
                 if standings.isEmpty {
-                    Text("None listed").foregroundStyle(PhoneStyle.Ink.secondary)
+                    Text("None listed").foregroundStyle(DaybookPalette.Ink.secondary)
                 }
                 ForEach(standings) { standing in
                     HStack(alignment: .firstTextBaseline) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(standing.recording.title).foregroundStyle(PhoneStyle.Ink.title)
-                            Text(standing.recording.detail).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
+                            Text(standing.recording.title).foregroundStyle(DaybookPalette.Ink.title)
+                            Text(standing.recording.detail).font(.footnote).foregroundStyle(DaybookPalette.Ink.secondary)
                         }
                         Spacer()
                         // A fact, not an action: new stands out by weight, not the accent.
                         Text(standing.reason.label)
                             .font(.footnote.weight(standing.reason == .new ? .semibold : .regular))
-                            .foregroundStyle(standing.reason == .new ? PhoneStyle.Ink.title : PhoneStyle.Ink.secondary)
+                            .foregroundStyle(standing.reason == .new ? DaybookPalette.Ink.title : DaybookPalette.Ink.secondary)
                     }
                     .accessibilityElement(children: .combine)
                 }
@@ -340,7 +340,7 @@ struct AddDeviceSheet: View {
                 // Until a kind is chosen the left page says what to do; this one shows only the mark.
                 Image(systemName: "recordingtape")
                     .font(.system(size: 40, weight: .light))
-                    .foregroundStyle(PhoneStyle.Ink.secondary)
+                    .foregroundStyle(DaybookPalette.Ink.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color(uiColor: .systemGroupedBackground))
                     .accessibilityHidden(true)
@@ -450,7 +450,7 @@ private struct RecorderKinds: View {
                             .padding(.vertical, 4)
                     }
                     .buttonStyle(.plain)
-                    .listRowBackground(isChosen ? PhoneStyle.accent.opacity(0.14) : Color(uiColor: .secondarySystemGroupedBackground))
+                    .listRowBackground(isChosen ? DaybookPalette.accent.opacity(0.14) : Color(uiColor: .secondarySystemGroupedBackground))
                     .accessibilityAddTraits(isChosen ? .isSelected : [])
                 }
             }
@@ -499,7 +499,7 @@ private struct SetupScreen: View {
             } else if let files = session.files, AddRecorderStep.methods(session.kind, on: .iPhone).contains(where: { $0.kind == .files }) {
                 Section {
                     Button { choosingFolder = true } label: { SettingsActionLabel(title: "Choose Folder…", systemImage: "folder") }
-                    if let folderError { Text(folderError).font(.footnote).foregroundStyle(PhoneStyle.Ink.warning) }
+                    if let folderError { Text(folderError).font(.footnote).foregroundStyle(DaybookPalette.Ink.warning) }
                 } footer: {
                     Text("Save or export recordings to a folder in Files, such as one in iCloud Drive.")
                 }
@@ -544,13 +544,13 @@ private struct SetupScreen: View {
                     Group {
                         if searching || connecting { ProgressView() } else {
                             Image(systemName: found ? "dot.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
-                                .foregroundStyle(PhoneStyle.Ink.secondary)
+                                .foregroundStyle(DaybookPalette.Ink.secondary)
                         }
                     }
                     .frame(width: tileColumn.value)
                     .accessibilityHidden(true)
                     Text(RecorderStatusWords.discoveryTitle(session.kind, searching: searching, connecting: connecting, found: found))
-                        .foregroundStyle(PhoneStyle.Ink.title)
+                        .foregroundStyle(DaybookPalette.Ink.title)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
                     if let action = RecorderStatusWords.discoveryAction(searching: searching, connecting: connecting, found: found) {

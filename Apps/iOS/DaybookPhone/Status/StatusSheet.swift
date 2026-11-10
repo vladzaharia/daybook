@@ -83,7 +83,7 @@ private struct StatusSheetPresenter: ViewModifier {
         .environment(session)
         .presentationDetents([.medium, .large], selection: $detent)
         .presentationDragIndicator(.visible)
-        .tint(PhoneStyle.accent)
+        .tint(DaybookPalette.accent)
       }
       .overlay {
         if onPage, let shown = request {
@@ -100,7 +100,7 @@ private struct StatusSheetPresenter: ViewModifier {
           .daybookTransition(.move(edge: .bottom).combined(with: .opacity))
         }
       }
-      .daybookMotion(PhoneStyle.Motion.state, value: onPage ? request?.id : nil)
+      .daybookMotion(DaybookMotion.state, value: onPage ? request?.id : nil)
       .onChange(of: request?.id) { _, id in shownOnPage = id == nil ? nil : self.onPage }
       // Folded or opened while it shows: the same request, shown the other way.
       .onChange(of: self.onPage) { _, now in if request != nil { shownOnPage = now } }
@@ -173,13 +173,13 @@ struct StatusStrip: View {
     Button {
       showStatus(StatusRequest(route))
     } label: {
-      HStack(spacing: PhoneStyle.Space.s2) {
+      HStack(spacing: DaybookSpacing.s2) {
         StatusLineView(line)
         // At the accessibility sizes the words take the chevron's room: the strip is a button either way.
         if !typeSize.isAccessibilitySize { StatusChevron() }
       }
-      .padding(.horizontal, typeSize.isAccessibilitySize ? PhoneStyle.Space.s3 : PhoneStyle.Space.s4)
-      .padding(.vertical, PhoneStyle.Space.s3)
+      .padding(.horizontal, typeSize.isAccessibilitySize ? DaybookSpacing.s3 : DaybookSpacing.s4)
+      .padding(.vertical, DaybookSpacing.s3)
       .contentShape(DaybookRadius.shape(DaybookRadius.panel))
     }
     .buttonStyle(.plain)
@@ -218,7 +218,7 @@ struct StatusSheetView: View {
       .navigationTitle(StatusSheetModel.title)
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
-        ToolbarItem(placement: .topBarTrailing) { Button(role: .close) { dismiss() }.tint(PhoneStyle.Ink.title) }
+        ToolbarItem(placement: .topBarTrailing) { Button(role: .close) { dismiss() }.tint(DaybookPalette.Ink.title) }
       }
       .navigationDestination(for: SettingsRoute.self) { route in SettingsDestination(route: route) }
     }
@@ -258,10 +258,10 @@ private struct StatusSections: View {
                 .transition(.opacity)
             }
           }
-          .padding(.horizontal, PhoneStyle.Space.s4)
-          .padding(.top, PhoneStyle.Space.s2)
-          .padding(.bottom, PhoneStyle.Space.s4)
-          .animation(reduceMotion ? nil : PhoneStyle.Motion.state, value: sections)
+          .padding(.horizontal, DaybookSpacing.s4)
+          .padding(.top, DaybookSpacing.s2)
+          .padding(.bottom, DaybookSpacing.s4)
+          .animation(reduceMotion ? nil : DaybookMotion.state, value: sections)
         }
       }
       .scrollBounceBehavior(.basedOnSize)
@@ -269,14 +269,14 @@ private struct StatusSections: View {
       .defaultScrollAnchor(model.options.statusScrollEnd ? .bottom : nil)
       .task { await reveal(in: proxy) }
     }
-    .animation(reduceMotion ? nil : PhoneStyle.Motion.state, value: detent)
+    .animation(reduceMotion ? nil : DaybookMotion.state, value: detent)
   }
 
   /// The group with a line's fix, scrolled to the top once the sheet has laid out.
   private func reveal(in proxy: ScrollViewProxy) async {
     guard let fix else { return }
     try? await Task.sleep(for: .milliseconds(350))
-    withAnimation(reduceMotion ? nil : PhoneStyle.Motion.state) { proxy.scrollTo(fix, anchor: .top) }
+    withAnimation(reduceMotion ? nil : DaybookMotion.state) { proxy.scrollTo(fix, anchor: .top) }
   }
 
   @ViewBuilder
@@ -490,7 +490,7 @@ struct StatusLinkGlyph: View {
   var body: some View {
     Image(systemName: systemImage)
       .font(.body.weight(.medium))
-      .foregroundStyle(PhoneStyle.Ink.link)
+      .foregroundStyle(DaybookPalette.Ink.link)
       .accessibilityHidden(true)
   }
 }
@@ -504,11 +504,11 @@ struct StatusRowTitle<Subtitle: View>: View {
     VStack(alignment: .leading, spacing: 2) {
       Text(title.wrappingAsName)
         .font(.subheadline.weight(.semibold))
-        .foregroundStyle(PhoneStyle.Ink.title)
+        .foregroundStyle(DaybookPalette.Ink.title)
         .fixedSize(horizontal: false, vertical: true)
       subtitle
         .font(.footnote)
-        .foregroundStyle(PhoneStyle.Ink.secondary)
+        .foregroundStyle(DaybookPalette.Ink.secondary)
         .fixedSize(horizontal: false, vertical: true)
     }
   }
@@ -542,7 +542,7 @@ private struct StatusRecorders: View {
 
   var body: some View {
     StatusGroup(title: "Recorders") {
-      VStack(spacing: PhoneStyle.Space.s3) {
+      VStack(spacing: DaybookSpacing.s3) {
         ForEach(model.devices.sessions) { session in
           StatusRecorderCard(session: session, detent: detent, open: open)
         }
@@ -573,7 +573,7 @@ private struct StatusRecorderCard: View {
         StatusRow {
           DeviceGlyph(session: session).frame(width: glyph.value)
         } content: {
-          HStack(spacing: PhoneStyle.Space.s2) {
+          HStack(spacing: DaybookSpacing.s2) {
             StatusRowTitle(title: session.device.name) {
               status(storage: manages ? recorder.storageHours : nil, low: recorder.storageIsLow)
             }
@@ -593,10 +593,10 @@ private struct StatusRecorderCard: View {
       }
       ForEach(waiting) { recording in
         StatusRow {
-          HStack(spacing: PhoneStyle.Space.s2) {
+          HStack(spacing: DaybookSpacing.s2) {
             VStack(alignment: .leading, spacing: 2) {
-              Text(recording.title).font(.subheadline).foregroundStyle(PhoneStyle.Ink.body)
-              Text(recording.detail).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
+              Text(recording.title).font(.subheadline).foregroundStyle(DaybookPalette.Ink.body)
+              Text(recording.detail).font(.footnote).foregroundStyle(DaybookPalette.Ink.secondary)
             }
             .accessibilityElement(children: .combine)
             Spacer(minLength: 0)
@@ -607,10 +607,10 @@ private struct StatusRecorderCard: View {
                 Text("Import")
                   .font(.footnote.weight(.semibold))
                   // On the accent wash, the ink that keeps 4.5:1 there.
-                  .foregroundStyle(PhoneStyle.Ink.onWash)
-                  .padding(.horizontal, PhoneStyle.Space.s3)
+                  .foregroundStyle(DaybookPalette.Ink.onWash)
+                  .padding(.horizontal, DaybookSpacing.s3)
                   .padding(.vertical, 5)
-                  .background(PhoneStyle.accent.opacity(0.12), in: Capsule())
+                  .background(DaybookPalette.accent.opacity(0.12), in: Capsule())
               }
               .buttonStyle(.plain)
               .accessibilityLabel("Import \(recording.title)")
@@ -625,7 +625,7 @@ private struct StatusRecorderCard: View {
           StatusRow {
             HStack {
               Text("All Recordings").font(.subheadline.weight(.medium)).foregroundStyle(
-                PhoneStyle.Ink.link)
+                DaybookPalette.Ink.link)
               Spacer(minLength: 0)
               StatusChevron()
             }
@@ -646,7 +646,7 @@ private struct StatusRecorderCard: View {
     .text.keepingSeparators
     if let hours {
       let storage = Text(StatusOverviewModel.storageLeft(hours: hours))
-        .foregroundStyle(low ? PhoneStyle.Ink.warning : PhoneStyle.Ink.secondary)
+        .foregroundStyle(low ? DaybookPalette.Ink.warning : DaybookPalette.Ink.secondary)
       ViewThatFits(in: .horizontal) {
         Text("\(line) · \(storage)").lineLimit(1)
         VStack(alignment: .leading, spacing: 2) {
@@ -670,8 +670,8 @@ struct StatusRecorderActions: View {
     let stacked = typeSize.isAccessibilitySize
     let layout =
       stacked
-      ? AnyLayout(VStackLayout(spacing: PhoneStyle.Space.s2))
-      : AnyLayout(HStackLayout(spacing: PhoneStyle.Space.s2))
+      ? AnyLayout(VStackLayout(spacing: DaybookSpacing.s2))
+      : AnyLayout(HStackLayout(spacing: DaybookSpacing.s2))
     layout {
       ForEach(actions, id: \.self) { action in
         button(action, stacked: stacked)
@@ -745,14 +745,14 @@ private struct ActionTile: View {
     Button(action: action) {
       Group {
         if stacked {
-          HStack(spacing: PhoneStyle.Space.s3) {
+          HStack(spacing: DaybookSpacing.s3) {
             symbol
             Text(title).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
           }
-          .padding(.horizontal, PhoneStyle.Space.s3)
+          .padding(.horizontal, DaybookSpacing.s3)
         } else {
-          VStack(spacing: PhoneStyle.Space.s1) {
+          VStack(spacing: DaybookSpacing.s1) {
             symbol
             ViewThatFits(in: .horizontal) {
               Text(title).lineLimit(1)
@@ -761,16 +761,16 @@ private struct ActionTile: View {
                 horizontal: false, vertical: true)
             }
           }
-          .padding(.horizontal, PhoneStyle.Space.s1)
+          .padding(.horizontal, DaybookSpacing.s1)
         }
       }
       .font(.footnote.weight(.semibold))
       // On the accent wash, the ink that keeps 4.5:1 there (link ink falls under it).
-      .foregroundStyle(PhoneStyle.Ink.onWash)
+      .foregroundStyle(DaybookPalette.Ink.onWash)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .padding(.vertical, PhoneStyle.Space.s2 + 2)
+      .padding(.vertical, DaybookSpacing.s2 + 2)
       .background(
-        PhoneStyle.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        DaybookPalette.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous)
       )
       .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
@@ -803,9 +803,9 @@ private struct StatusCaptions: View {
   var body: some View {
     let locale = model.settings.captionLocale
     ForEach(model.devices.sessions.filter(\.isListeningLive)) { session in
-      VStack(alignment: .leading, spacing: PhoneStyle.Space.s2) {
+      VStack(alignment: .leading, spacing: DaybookSpacing.s2) {
         HStack(spacing: 6) {
-          Circle().fill(PhoneStyle.Ink.record).frame(width: 7, height: 7).accessibilityHidden(true)
+          Circle().fill(DaybookPalette.Ink.record).frame(width: 7, height: 7).accessibilityHidden(true)
           StatusHeading(text: "Listening to \(session.device.name)")
         }
         let segments = session.liveCaptions
@@ -815,8 +815,8 @@ private struct StatusCaptions: View {
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(PhoneStyle.Space.s3)
-      .background(PhoneStyle.quietFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+      .padding(DaybookSpacing.s3)
+      .background(DaybookPalette.quietFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
   }
 }
@@ -854,7 +854,7 @@ private struct StatusMacs: View {
               StatusLinkGlyph(systemImage: "plus")
             } content: {
               Text("Pair with Your Mac…").font(.subheadline.weight(.medium)).foregroundStyle(
-                PhoneStyle.Ink.link)
+                DaybookPalette.Ink.link)
             }
           }
           .buttonStyle(StatusRowButtonStyle())
@@ -878,11 +878,11 @@ private struct StatusMacs: View {
         symbol: "desktopcomputer",
         tone: row.needsYou ? .attention : row.isConnected ? .active : .neutral, size: .card)
     } content: {
-      HStack(spacing: PhoneStyle.Space.s2) {
+      HStack(spacing: DaybookSpacing.s2) {
         StatusRowTitle(title: row.name) {
           VStack(alignment: .leading, spacing: 2) {
             Text(row.text.keepingSeparators).foregroundStyle(
-              row.needsYou ? PhoneStyle.Ink.warning : PhoneStyle.Ink.secondary)
+              row.needsYou ? DaybookPalette.Ink.warning : DaybookPalette.Ink.secondary)
             if let fix = row.fix { Text(fix) }
           }
         }
@@ -934,10 +934,10 @@ private struct StatusThisIPhone: View {
           StatusRow {
             DaybookTile(symbol: "iphone", size: .card)
           } content: {
-            HStack(spacing: PhoneStyle.Space.s2) {
+            HStack(spacing: DaybookSpacing.s2) {
               Text(StatusSheetModel.audioOnThisIPhone(bytes: model.audio.usage.bytes))
                 .font(.subheadline)
-                .foregroundStyle(PhoneStyle.Ink.title)
+                .foregroundStyle(DaybookPalette.Ink.title)
                 .fixedSize(horizontal: false, vertical: true)
               Spacer(minLength: 0)
               StatusChevron()

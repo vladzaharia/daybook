@@ -74,7 +74,7 @@ struct ConversationToolbar: ToolbarContent {
     var body: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
             Button { session.sheet = .info(meeting.id) } label: { Label("Info", systemImage: "info.circle") }
-                .tint(PhoneStyle.Ink.title)
+                .tint(DaybookPalette.Ink.title)
         }
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
@@ -82,7 +82,7 @@ struct ConversationToolbar: ToolbarContent {
             } label: {
                 Label("More", systemImage: "ellipsis")
             }
-            .tint(PhoneStyle.Ink.title)
+            .tint(DaybookPalette.Ink.title)
         }
     }
 }

@@ -1,3 +1,4 @@
+import DaybookDesign
 import DaybookKit
 import DaybookUI
 import PhotosUI
@@ -68,11 +69,11 @@ struct ImportPhotosSheet: View {
                     HStack(alignment: .firstTextBaseline) {
                         Label(failures.count == 1 ? "A photo wasn’t added." : "\(failures.count) photos weren’t added.",
                               systemImage: "exclamationmark.triangle")
-                            .foregroundStyle(PhoneStyle.Ink.warning)
+                            .foregroundStyle(DaybookPalette.Ink.warning)
                         Spacer()
                         Button("Details") { showingDetails = true }.buttonStyle(.daybookLink)
                     }
-                    .font(PhoneStyle.Typeface.status)
+                    .font(DaybookFont.status.font(.touch))
                 }
             }
             .sheet(isPresented: $showingDetails) { DetailsSheet(title: "Details", text: failures.joined(separator: "\n")) }

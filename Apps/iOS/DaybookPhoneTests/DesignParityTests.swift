@@ -6,9 +6,8 @@ import UIKit
 import XCTest
 @testable import DaybookPhone
 
-/// The iPhone draws with the Mac's palette: every shade resolves to its values through the traits in
-/// Light, Dark, and Increase Contrast (which the Mac's tests can't make), and PhoneStyle's names are
-/// the shared tokens rather than copies of them.
+/// The iPhone draws with the Mac's palette: every shade, and every colour DaybookPalette names, resolves to
+/// its values through the traits in Light, Dark, and Increase Contrast (which the Mac's tests can't make).
 @MainActor
 final class DesignParityTests: XCTestCase {
     private typealias Shade = DaybookPalette.Shade
@@ -42,22 +41,22 @@ final class DesignParityTests: XCTestCase {
         }
     }
 
-    func testPhoneStyleNamesTheSharedTokens() {
+    func testThePalettesColoursResolveThroughTheTraits() {
         let pairs: [(String, Color, DaybookShade)] = [
-            ("accent", PhoneStyle.accent, Shade.accent), ("prominentFill", PhoneStyle.prominentFill, Shade.prominentFill),
-            ("paper", PhoneStyle.paper, Shade.paper), ("bookmark", PhoneStyle.bookmark, Shade.bookmark),
-            ("neonMint", PhoneStyle.neonMint, Shade.neonMint), ("neonCyan", PhoneStyle.neonCyan, Shade.neonCyan),
-            ("neonViolet", PhoneStyle.neonViolet, Shade.neonViolet), ("neonMagenta", PhoneStyle.neonMagenta, Shade.neonMagenta),
-            ("playFill", PhoneStyle.playFill, Shade.playFill), ("onPlayFill", PhoneStyle.onPlayFill, Shade.onPlayFill),
-            ("title", PhoneStyle.Ink.title, Shade.title), ("body", PhoneStyle.Ink.body, Shade.body),
-            ("secondary", PhoneStyle.Ink.secondary, Shade.secondary), ("meta", PhoneStyle.Ink.meta, Shade.meta),
-            ("faint", PhoneStyle.Ink.faint, Shade.faint), ("link", PhoneStyle.Ink.link, Shade.link),
-            ("warning", PhoneStyle.Ink.warning, Shade.warning), ("error", PhoneStyle.Ink.error, Shade.error),
-            ("record", PhoneStyle.Ink.record, Shade.record), ("recordFill", PhoneStyle.Ink.recordFill, Shade.recordFill)
+            ("accent", DaybookPalette.accent, Shade.accent), ("prominentFill", DaybookPalette.prominentFill, Shade.prominentFill),
+            ("paper", DaybookPalette.paper, Shade.paper), ("bookmark", DaybookPalette.bookmark, Shade.bookmark),
+            ("neonMint", DaybookPalette.neonMint, Shade.neonMint), ("neonCyan", DaybookPalette.neonCyan, Shade.neonCyan),
+            ("neonViolet", DaybookPalette.neonViolet, Shade.neonViolet), ("neonMagenta", DaybookPalette.neonMagenta, Shade.neonMagenta),
+            ("playFill", DaybookPalette.playFill, Shade.playFill), ("onPlayFill", DaybookPalette.onPlayFill, Shade.onPlayFill),
+            ("title", DaybookPalette.Ink.title, Shade.title), ("body", DaybookPalette.Ink.body, Shade.body),
+            ("secondary", DaybookPalette.Ink.secondary, Shade.secondary), ("meta", DaybookPalette.Ink.meta, Shade.meta),
+            ("faint", DaybookPalette.Ink.faint, Shade.faint), ("link", DaybookPalette.Ink.link, Shade.link),
+            ("warning", DaybookPalette.Ink.warning, Shade.warning), ("error", DaybookPalette.Ink.error, Shade.error),
+            ("record", DaybookPalette.Ink.record, Shade.record), ("recordFill", DaybookPalette.Ink.recordFill, Shade.recordFill)
         ]
         XCTAssertEqual(pairs.count, Shade.all.count, "Every core token is checked")
-        var speakers = PhoneStyle.speakerInks.enumerated().map { ("speaker\($0.offset)", $0.element, Shade.speakers[$0.offset]) }
-        speakers.append(("no speaker", PhoneStyle.speakerInk(nil), Shade.secondary))
+        var speakers = DaybookPalette.speakerInks.enumerated().map { ("speaker\($0.offset)", $0.element, Shade.speakers[$0.offset]) }
+        speakers.append(("no speaker", DaybookPalette.speakerInk(nil), Shade.secondary))
         for appearance in appearances {
             let traits = traits(appearance.style, appearance.contrast)
             let dark = appearance.style == .dark, contrast = appearance.contrast == .high
@@ -65,13 +64,6 @@ final class DesignParityTests: XCTestCase {
                 XCTAssertEqual(hex(UIColor(color), traits), shade.hex(dark: dark, increasedContrast: contrast), "\(name), \(appearance.name)")
             }
         }
-    }
-
-    func testTheLiveActivitysButtonsComeFromThePalette() {
-        XCTAssertEqual(PhoneStyle.ActivityButton.bookmark.fill, DaybookPalette.ActivityInk.bookmark.fill.variants)
-        XCTAssertEqual(PhoneStyle.ActivityButton.resume.label, DaybookPalette.ActivityInk.resume.label.variants)
-        XCTAssertEqual(PhoneStyle.ActivityButton.stop.fill, DaybookPalette.ActivityInk.stop.fill.variants)
-        XCTAssertEqual(PhoneStyle.ActivityButton.all.count, DaybookPalette.ActivityInk.all.count)
     }
 
     /// The app's times are DaybookKit's (its own copy, which wrote "−0:00", is gone), and the widgets'
@@ -92,10 +84,7 @@ final class DesignParityTests: XCTestCase {
         XCTAssertEqual(PlatformMetrics.for(.platformDefault).status, .phone)
         XCTAssertEqual(DetailsButton.title, "Details", "The iPhone's Details buttons have no ellipsis")
         XCTAssertEqual(ReadingContext.platform.thisDevice, "this iPhone")
-        XCTAssertEqual(PhoneStyle.Typeface.body, DaybookFont.body.font(.touch))
-        XCTAssertEqual(PhoneStyle.Typeface.rowTitle, DaybookFont.sheetTitle.font(.touch), "The serif sheet title")
-        XCTAssertEqual(PhoneStyle.Page.gutter, 20)
-        XCTAssertEqual(PhoneStyle.Page.lane, ReadingGeometry.lane)
+        XCTAssertEqual(ReadingGeometry.gutters(density: .touch, hangs: false).leading, 20)
     }
 
     func testCopyingLocallyStaysOnThisIPhoneAndCanExpire() {

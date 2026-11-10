@@ -3,6 +3,9 @@ import SwiftUI
 /// Type: New York for titles only, SF for everything else, monospaced digits for every time.
 public enum DaybookType {
     public static func title(_ size: CGFloat) -> Font { .system(size: size, weight: .semibold, design: .serif) }
+    /// New York at a text style, so it follows Dynamic Type: the iPhone's titles that aren't a role of
+    /// `DaybookFont`, as the notebook's "Choose a Conversation" (`.title2`) and the widgets' (`.headline`).
+    public static func title(_ style: Font.TextStyle) -> Font { .system(style, design: .serif, weight: .semibold) }
     public static func clock(_ size: CGFloat, weight: Font.Weight = .medium) -> Font { .system(size: size, weight: weight).monospacedDigit() }
     /// Times in a margin lane on the Mac: a fixed size, so "1:02:03" always fits. Under touch, the
     /// margin time follows Dynamic Type (`DaybookFont.marginTime`).
