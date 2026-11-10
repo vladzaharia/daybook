@@ -1,8 +1,8 @@
 import DaybookDesign
 import SwiftUI
 
-// One page geometry for both apps (docs/interface.md, "Geometry"): a text measure of at most 640 pt,
-// centred. From 600 pt wide, times hang in a 56 pt margin left of the measure (the Mac's detail
+// One page geometry for both apps (docs/interface.md, "Geometry"): a text measure of at most 560 pt in a window
+// (640 under touch), centred. From 600 pt wide, times hang in a 56 pt margin left of the measure (the Mac's detail
 // column, the open Duo shown as one page); narrower, timed blocks keep a lane of times inside the
 // column and the rest runs edge to edge (every iPhone, each page of the Duo, a narrow Mac window).
 
@@ -28,8 +28,15 @@ extension EnvironmentValues {
 
 /// The page's measurements, and where its column sits in a container.
 public enum ReadingGeometry {
-    /// The text measure: about 72 characters at the body size.
-    public static let measure: CGFloat = 640
+    /// The text measure in a window: about 80 characters of the 15 pt body.
+    public static let measure: CGFloat = 560
+    /// The measure under touch: about 80 characters of Dynamic Type's 17 pt body.
+    public static let touchMeasure: CGFloat = 640
+
+    /// The measure at a density.
+    public static func measure(_ density: DaybookDensity) -> CGFloat {
+        density == .touch ? touchMeasure : measure
+    }
     /// Times hang in this margin to the left of the measure, ending `marginGap` before the text.
     public static let margin: CGFloat = 56
     public static let marginGap: CGFloat = 8
@@ -78,11 +85,12 @@ public enum ReadingGeometry {
         // `creaseClearance` is the entire inset at the crease, not extra to the page gutter.
         if creaseEdge == .leading { leading = creaseClearance }
         if creaseEdge == .trailing { trailing = creaseClearance }
+        let widest = Self.measure(density)
         guard hangs else {
-            let measure = min(Self.measure, max(0, width - leading - trailing))
+            let measure = min(widest, max(0, width - leading - trailing))
             return Frame(leading: leading, margin: 0, measure: measure, trailing: max(0, width - leading - measure))
         }
-        let measure = min(Self.measure, max(0, width - leading - trailing - margin))
+        let measure = min(widest, max(0, width - leading - trailing - margin))
         // Centred: the measure in the middle, the margin hanging into the space on its left.
         let start = max(leading, (width - measure) / 2 - margin)
         return Frame(leading: start, margin: margin, measure: measure, trailing: max(0, width - start - margin - measure))

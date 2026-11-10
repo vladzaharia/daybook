@@ -18,7 +18,7 @@ extension EnvironmentValues {
     }
 }
 
-/// A scrolling, centred page: DaybookUI's `ReadingPage` (a 56 pt time margin hanging left of a 640 pt text measure,
+/// A scrolling, centred page: DaybookUI's `ReadingPage` (a 56 pt time margin hanging left of a 560 pt text measure,
 /// `readingWidth` for the shared rows), which also says when it's narrow for the Mac's own rows (`pageIsNarrow`).
 struct PageScroll<Content: View>: View {
     var lazy = false

@@ -95,4 +95,20 @@ final class ConversationPageRulesTests: XCTestCase {
         XCTAssertEqual(SummaryMarkdownMetrics.bullet(density: .touch).dot, 6)
         XCTAssertEqual(SummaryMarkdownMetrics.bullet(density: .touch).column, 20)
     }
+
+    func testBehaviorMarksAndTimesHangInTheMarginWhereItHangs() {
+        XCTAssertTrue(SummaryMarkdownMetrics.marksHang(density: .window, width: .regular),
+                      "A window's lists share the page's left edge, their marks in the margin")
+        XCTAssertFalse(SummaryMarkdownMetrics.marksHang(density: .window, width: .narrow), "A narrow page keeps its marks' column")
+        XCTAssertFalse(SummaryMarkdownMetrics.marksHang(density: .touch, width: .regular), "Under touch they keep it at every size")
+        XCTAssertTrue(SummaryMarkdownMetrics.timesHang(width: .regular), "When it was said, in the margin with the notes' times")
+        XCTAssertFalse(SummaryMarkdownMetrics.timesHang(width: .narrow))
+        XCTAssertFalse(SummaryMarkdownMetrics.showsMark(marker: "•", timed: true), "A bullet's time stands in for its dot")
+        XCTAssertTrue(SummaryMarkdownMetrics.showsMark(marker: "•", timed: false))
+        XCTAssertTrue(SummaryMarkdownMetrics.showsMark(marker: "2.", timed: true), "A number stays beside its time")
+        XCTAssertTrue(SummaryMarkdownMetrics.foldsTime(density: .touch, accessibilitySize: true),
+                      "At the accessibility sizes a step's time joins its owner, so the step keeps its width")
+        XCTAssertFalse(SummaryMarkdownMetrics.foldsTime(density: .touch, accessibilitySize: false))
+        XCTAssertFalse(SummaryMarkdownMetrics.foldsTime(density: .window, accessibilitySize: true))
+    }
 }

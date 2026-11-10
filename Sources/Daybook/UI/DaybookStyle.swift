@@ -47,7 +47,7 @@ enum DaybookStyle {
 
     // MARK: Page geometry
 
-    /// The text measure: about 72 characters at the body size.
+    /// The text measure: about 80 characters of the 15 pt body.
     static let measure = ReadingGeometry.measure
     /// Times hang in this margin to the left of the measure.
     static let margin = ReadingGeometry.margin
@@ -79,7 +79,8 @@ typealias DaybookMark = DaybookDesign.DaybookMark
 
 /// View › Make Text Bigger's steps for the reading surface (`readingScale`, DaybookDesign).
 enum ReadingScale {
-    static let steps: [CGFloat] = [12, 13, 14, 16, 18, 20, 22].map { $0 / 14 }
+    /// The body's size at each step; Actual Size is the 15 pt body.
+    static let steps: [CGFloat] = [13, 14, 15, 17, 19, 21, 23].map { $0 / DaybookFont.body.size(.window) }
     static func bigger(_ value: Double) -> Double { Double(steps.first { $0 > CGFloat(value) + 0.001 } ?? steps.last!) }
     static func smaller(_ value: Double) -> Double { Double(steps.last { $0 < CGFloat(value) - 0.001 } ?? steps.first!) }
 }
@@ -99,7 +100,7 @@ enum TypeStyle {
     static let colophon = DaybookFont.colophon.font(.window)
     static let rowTitle = DaybookFont.rowTitle.font(.window)
     static let rowDetail = DaybookFont.rowDetail.font(.window)
-    /// Line spacing that brings 14 pt body text to a 22 pt line.
+    /// Line spacing that brings 15 pt body text to a 24 pt line.
     static func bodyLineSpacing(_ scale: CGFloat = 1) -> CGFloat { DaybookFont.bodyLineSpacing(.window, scale: scale) }
 }
 
