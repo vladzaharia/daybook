@@ -21,6 +21,22 @@ The items the design pass deferred (docs/audits/2026-11-10/README.md, "Still to 
   Notes and the page's notes) draws the same word beside a trailing wordless bookmark, from the same rule
   (MarginNotesEditorTests' Mac case: after the last paragraph, not beside one, not under the placeholder); no Mac
   demo state has such a bookmark, so that one is checked by the test alone.
+- **F3, one status overview on both apps (code-quality P6, CQ-20).** The iPhone's `StatusSheetModel` moved to
+  DaybookKit as `StatusOverviewModel` over one `StatusOverviewInputs` (the recording with its recorders and the other
+  Daybooks, the Macs as an iPhone knows them, this device's own work, iCloud; `MacPresence`, `LiveProgress`, and
+  `RecordingStatusInputs` moved with it), each app keeping only its gatherer (`StatusSheetInputs.make`, the Mac's
+  `StatusOverviewInputs.make`). Floating Notes' home draws DaybookUI's `StatusOverview` at `.lines` (`leads` keeps the
+  queue and iCloud lines words only), and the shown conversation's chip says what its list row says
+  (`ConversationStatusPresentation.row`: "Paused", "No speech", "Waiting to summarize", the iPhone-audio warning),
+  retiring `FloatingStatusInputs.Work` and `FloatingStatus.lines`; the countdowns tick in F1's
+  `SummaryPlacementWords`. The menu bar extra keeps `MenuBarStatus` (a `.menu` style renders items, not views, and it
+  lists folder recorders Floating Notes leaves out). `--placement-demo countdown` now counts down on any Mac.
+  StatusOverviewModelTests (22, now under `swift test`), the new StatusOverviewParityTests (ReadingDemo's library
+  through the Mac gatherer and the Kit calls the iPhone gatherer makes reads with the same lines in the same order),
+  FloatingNotesStatusTests (30), FloatingNotesMetersTests (5); after reconciling with F1, F2, and F4: 769 Mac tests
+  across the Kit and the selected Mac suites, 91 across six iPhone suites. Mac snapshots before and after of the home,
+  recording with four sources, and a countdown after Stop at 360×560, 340×228, and 280×196, light and dark, the same
+  layout; the 18 Pro's status sheet unchanged at medium and large.
 - **F4, Protect while iPhone is locked (security F-08, P4 step 2).** Settings › Storage › Protect While iPhone Is
   Locked (off by default; its footer, "Syncs and transcribes while unlocked.", from `SettingsWords`). On, the library's
   text is class A and its audio and photos class B, and Spotlight moves to a class A index of Daybook's own; off puts
