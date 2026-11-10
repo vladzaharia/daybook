@@ -39,6 +39,9 @@ final class PhoneLink {
         var showsCaptions = false
         /// It draws this iPhone's input level during a shared recording beside its own meters (`liveLevelsFeature`).
         var showsLevels = false
+        /// It sends its own input level during a shared recording to this iPhone (`sharesLevelsFeature`), so the recorder
+        /// gives it a meter. Kept after it disconnects: its meter rests then.
+        var sendsLevels = false
         /// The synced library it has open, from its capabilities.
         var libraryID: UUID?
         /// What it does for other devices with its models, from its capabilities; nil from an earlier Daybook,
@@ -184,6 +187,8 @@ final class PhoneLink {
     @ObservationIgnored var onSharedNotes: ((LinkMessage, UUID) -> Void)?
     /// A Mac recording a conversation with this iPhone sent its call's live captions (`liveCaptionsFeature`).
     @ObservationIgnored var onCaptions: ((LinkCaptions, UUID) -> Void)?
+    /// A Mac recording a conversation with this iPhone sent its input level (`liveLevelsFeature`).
+    @ObservationIgnored var onLevels: ((LinkLevels, UUID) -> Void)?
     /// A Mac's live progress on a conversation (its summary's countdown among them).
     @ObservationIgnored var onLiveProgress: ((LiveProgress) -> Void)?
     /// A Mac said whether this iPhone may start a recording there, and maybe asked this iPhone to keep an off it had.
@@ -215,7 +220,8 @@ final class PhoneLink {
                                        LinkCapabilities.recorderHandoffFeature, LinkCapabilities.recorderControlFeature,
                                        LinkCapabilities.cascadeFeature, LinkCapabilities.sharedNotesFeature,
                                        LinkCapabilities.pageStopFeature, LinkCapabilities.recordPermissionFeature,
-                                       LinkCapabilities.liveCaptionsFeature],
+                                       LinkCapabilities.liveCaptionsFeature, LinkCapabilities.liveLevelsFeature,
+                                       LinkCapabilities.sharesLevelsFeature],
                             syncDeviceID: syncDeviceID)
     }
 
@@ -571,6 +577,7 @@ final class PhoneLink {
                 mac.sharesNotes = peer.capabilities.sharesNotes
                 mac.showsCaptions = peer.capabilities.showsCaptions
                 mac.showsLevels = peer.capabilities.showsLevels
+                mac.sendsLevels = peer.capabilities.sharesLevels
                 mac.processing = peer.capabilities.processing.map(ProcessingCapabilities.init)
                 mac.placesSummaries = peer.capabilities.placesSummaries
                 mac.hearsArrivals = peer.capabilities.hearsArrivals
@@ -625,8 +632,11 @@ final class PhoneLink {
         case .captions(let captions):
             // A Mac's call, which this iPhone may not hear (headphones on the Mac).
             onCaptions?(captions, macID)
-        case .processingNudge, .levels, .summaryChoice, .recordingArrival:
-            // Levels and choices go the other way.
+        case .levels(let levels):
+            // A Mac's microphone and computer audio, for the recorder's meter of it.
+            onLevels?(levels, macID)
+        case .processingNudge, .summaryChoice, .recordingArrival:
+            // Nudges and choices go the other way.
             break
         case .recorderHandoffRequest, .recorderHandoffReply, .recorderRelease:
             onHandoffMessage?(message, macID)

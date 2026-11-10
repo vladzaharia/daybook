@@ -58,12 +58,30 @@ public struct MeterStack: Equatable, Sendable {
 
     /// A row's glyph: as large as `glyph`, smaller when the rows are too close for it.
     public func glyphSize(row: CGFloat, gap: CGFloat) -> CGFloat { max(7, min(glyph, row + gap - 2)) }
+
+    /// The stack at a larger text size (the iPhone's): `scale` is the person's text size against the default. Glyphs
+    /// grow with it, and rows keep room for them, the area growing as it does for more sources; one source keeps the
+    /// area as it is.
+    public func scaled(_ scale: CGFloat) -> MeterStack {
+        guard scale > 1 else { return self }
+        var stack = self
+        stack.glyph *= scale
+        stack.glyphColumn *= scale
+        stack.minimumRow *= scale
+        stack.maximumArea *= scale
+        stack.floorRow *= scale
+        return stack
+    }
 }
 
 /// One rolling meter per source the recording has now, each labelled with its chip's glyph, its name in the
 /// tooltip and for VoiceOver, so a muted microphone, a call that isn't being captured, or a device that hears
 /// nothing shows up during the call, not afterwards. The meters read the trails themselves, so only they redraw as
 /// levels arrive.
+///
+/// On touch (the iPhone) a lone meter is the microphone's, which the phase names: it takes the whole row, unlabelled.
+/// With more sources each row has its glyph, and the glyphs grow with the person's text size up to the first
+/// accessibility size, where the recorder's header stops growing (`MeterStack.scaled`).
 public struct RecorderMeters: View {
     private let meters: [RecorderMeter]
     private let levels: RecorderLevels
@@ -79,16 +97,37 @@ public struct RecorderMeters: View {
     }
 
     public var body: some View {
+        RecorderMeterRows(meters: meters, levels: levels, isLive: isLive, stack: stack)
+            .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+            .onChange(of: meters.map(\.source), initial: true) { _, sources in levels.follow(sources) }
+    }
+
+    /// Whether the rows show their glyphs: always in the panel; on touch, once there's more than one source.
+    public static func labels(_ count: Int, density: DaybookDensity) -> Bool { density != .touch || count > 1 }
+}
+
+/// The rows, at the person's text size (capped by `RecorderMeters`).
+private struct RecorderMeterRows: View {
+    let meters: [RecorderMeter]
+    let levels: RecorderLevels
+    let isLive: Bool
+    let stack: MeterStack
+    @Environment(\.daybookDensity) private var density
+    /// Body text at the person's size: 17 pt at the default (always, on the Mac).
+    @ScaledMetric(relativeTo: .body) private var body17: CGFloat = 17
+
+    var body: some View {
+        let stack = density == .touch ? self.stack.scaled(body17 / 17) : self.stack
         let row = stack.rowHeight(meters.count), gap = stack.gap(meters.count)
+        let labelled = RecorderMeters.labels(meters.count, density: density)
         VStack(spacing: gap) {
             ForEach(meters) { meter in
                 RecorderMeterRow(meter: meter, trail: levels.trail(meter.source),
                                  isLive: isLive && meter.isRecording && levels.heard.contains(meter.source),
-                                 height: row, glyph: stack.glyphSize(row: row, gap: gap), column: stack.glyphColumn)
+                                 height: row, glyph: labelled ? stack.glyphSize(row: row, gap: gap) : nil, column: stack.glyphColumn)
             }
         }
         .frame(maxWidth: .infinity)
-        .onChange(of: meters.map(\.source), initial: true) { _, sources in levels.follow(sources) }
     }
 }
 
@@ -98,17 +137,20 @@ struct RecorderMeterRow: View {
     let trail: LevelTrail
     let isLive: Bool
     let height: CGFloat
-    let glyph: CGFloat
+    /// Nil: the meter takes the row alone.
+    let glyph: CGFloat?
     let column: CGFloat
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: meter.symbol)
-                .font(.system(size: glyph, weight: .medium))
-                .foregroundStyle(meter.warning != nil ? DaybookPalette.Ink.warning : DaybookPalette.Ink.meta)
-                // The row's height, whatever the glyph's: rows share the area exactly.
-                .frame(width: column, height: height)
-                .accessibilityHidden(true)
+            if let glyph {
+                Image(systemName: meter.symbol)
+                    .font(.system(size: glyph, weight: .medium))
+                    .foregroundStyle(meter.warning != nil ? DaybookPalette.Ink.warning : DaybookPalette.Ink.meta)
+                    // The row's height, whatever the glyph's: rows share the area exactly.
+                    .frame(width: column, height: height)
+                    .accessibilityHidden(true)
+            }
             RollingLevelMeter(trail: trail, isLive: isLive, accessibilityLabel: "\(meter.name) level")
                 .frame(height: height)
                 .accessibilityHint(meter.warning ?? "")

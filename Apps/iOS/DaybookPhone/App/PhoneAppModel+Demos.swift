@@ -47,9 +47,23 @@ extension PhoneAppModel {
         let stopAfter = options.stopAfter
         let interruptAfter = options.interruptAfter
         if let mac = options.demoMultipointMac, let id = recorder.captureID {
+            // The paired Mac `applyLinkDemo` made, so its chip is the one Mac recording along.
+            let macID = link.macs.first { $0.name == mac }?.id ?? UUID()
             multipoints.session = MultipointSession(conversationID: id, role: .phoneLed,
-                                                    macs: [MultipointSession.Mac(id: UUID(), name: mac, state: .recording, startedAt: Date(), startedByPhone: true)])
+                                                    macs: [MultipointSession.Mac(id: macID, name: mac, state: .recording, startedAt: Date(), startedByPhone: true)])
             updateActivity()
+            if options.demoLevels { runLevelsDemo(from: macID, conversation: id) }
+        }
+        if options.demoLevels, options.deviceAutopilot, let id = recorder.captureID {
+            // With the simulated recorder: once the autopilot has it, it records along, metered from its live audio.
+            Task { [weak self] in
+                for _ in 0..<300 {
+                    if let session = self?.devices.sessions.first, session.isLinked, session.recorderSerial != nil { break }
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+                guard let self, self.recorder.captureID == id, let session = self.devices.sessions.first else { return }
+                _ = await self.devices.cascade.start(session, for: id)
+            }
         }
         demo = Task { [weak self] in
             if notes {
@@ -89,6 +103,34 @@ extension PhoneAppModel {
         }
     }
 
+    /// `--demo-levels`: the Mac recording along sends its level as the link would, a few readings about five times a
+    /// second, as a stand-in conversation: the room through its microphone, softer than this iPhone hears it, and the
+    /// call on its computer audio taking turns with it.
+    private func runLevelsDemo(from mac: UUID, conversation: UUID) {
+        Task { [weak self] in
+            var tick = 0
+            while let self, self.recorder.isActive, self.recorder.captureID == conversation {
+                let values = (0..<3).map { offset -> Double in
+                    let t = Double(tick + offset) / 15
+                    let room = Self.demoSpeech(t, phase: 0.4) * 0.7, call = Self.demoSpeech(t, phase: 7.4)
+                    return min(1, 0.04 + max(room, call))
+                }
+                tick += values.count
+                let message = LinkLevels(conversationID: conversation, values: values, interval: PhoneRecorder.levelInterval)
+                self.sharing.macLevelled(message, from: mac)
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+        }
+    }
+
+    /// Syllables in phrases, taking turns: a deterministic stand-in for speech, as Floating Notes' simulated meters draw it.
+    private static func demoSpeech(_ t: Double, phase: Double) -> Double {
+        let turn = sin((t + phase) * 0.45) > -0.2 ? 1.0 : 0.15
+        let phrase = sin((t + phase) * 1.3) > -0.55 ? 1.0 : 0.1
+        let syllable = abs(sin((t + phase) * 7.7)) * (0.6 + 0.4 * abs(sin((t + phase) * 2.9 + 0.7)))
+        return min(1, 0.06 + turn * phrase * (0.25 + 0.7 * syllable))
+    }
+
     /// `--demo-link`: paired Macs and a Mac to pair with, with nothing on the network.
     func applyLinkDemo() {
         var studio = PhoneLink.Mac(id: UUID(), name: options.demoMultipointMac ?? "Studio Mac", pairedAt: Date().addingTimeInterval(-86_400 * 12),
@@ -96,6 +138,8 @@ extension PhoneAppModel {
                                    clock: LinkClockEstimate(offset: 0.012, roundTrip: 0.008, sampleCount: 6, measuredAt: Date()),
                                    lastConnectedAt: Date())
         studio.handsOffRecorders = true
+        // `--demo-levels`: a Mac that sends its level, so the recorder gives it a meter.
+        studio.sendsLevels = options.demoLevels
         let laptop = PhoneLink.Mac(id: UUID(), name: "MacBook Air", pairedAt: Date().addingTimeInterval(-86_400 * 40),
                                    state: .idle, canProcess: false, lastConnectedAt: Date().addingTimeInterval(-3 * 86_400))
         let progress = library.conversations.first.map {

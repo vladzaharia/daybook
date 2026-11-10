@@ -370,6 +370,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         handoff.handsBackAutomatically = settings.handsRecorderBackToMac
         link.onHandoffMessage = { message, mac in handoff.receive(message, from: mac) }
         link.onCaptions = { [weak self] message, mac in self?.macCaptioned(message, from: mac) }
+        link.onLevels = { [weak self] message, mac in self?.sharing.macLevelled(message, from: mac) }
         link.onMacsChanged = { [weak self] in
             Task { @MainActor in
                 handoff.peersChanged()
@@ -1076,6 +1077,9 @@ final class PhoneAppModel: RecordingCommandHandling {
 
     /// This iPhone's level to the Macs recording along that draw it.
     func shareLevel(_ level: AudioLevel, at now: Date = Date()) { sharing.shareLevel(level, at: now) }
+
+    /// A Mac recording along's next level reading, for its meter on the recorder; nil when none arrive.
+    func macLevel(_ mac: UUID, at now: Date = Date()) -> Double? { sharing.macLevel(mac, at: now) }
 
     // MARK: Importing
 

@@ -479,13 +479,25 @@ final class RecorderScreenTests: XCTestCase {
    "a Mac that could record too, with the offer in its menu")
   XCTAssertEqual(
    RecordingStatusWords.meters(inputs).map(\.source), [.microphone],
-   "a Mac's levels never reach the iPhone")
+   "a Mac that doesn't send its level (an older one) has no meter")
+  inputs.peers = PhoneRecorderStatus.peers(
+   multipoint: session, connected: [asked, onItsOwn, free], conversation: conversation,
+   sendingLevels: [asked.id, free.id])
+  XCTAssertEqual(
+   RecordingStatusWords.meters(inputs).map(\.source), [.microphone, .peer(asked.id.uuidString)],
+   "a Mac recording along that sends its level gets a meter; one that isn't recording along has none")
+  XCTAssertEqual(RecordingStatusWords.meters(inputs).last?.symbol, "desktopcomputer", "with the Mac's glyph")
+  inputs.peers = PhoneRecorderStatus.peers(
+   multipoint: session, connected: [onItsOwn, free], conversation: conversation, sendingLevels: [asked.id])
+  XCTAssertEqual(
+   RecordingStatusWords.meters(inputs).map(\.source), [.microphone, .peer(asked.id.uuidString)],
+   "out of reach, its meter stays and rests")
 
   soundcore.along = PhoneRecorderStatus.along(.recording, role: .started)
   inputs.recorders = [soundcore]
   XCTAssertEqual(
-   RecordingStatusWords.meters(inputs).map(\.source), [.microphone, .recorder("sc")],
-   "a recorder along gets its meter")
+   RecordingStatusWords.meters(inputs).map(\.source), [.microphone, .recorder("sc"), .peer(asked.id.uuidString)],
+   "a recorder along gets its meter, before the Macs'")
   XCTAssertEqual(PhoneRecorderStatus.along(.recording, role: .alreadyRecording), .alreadyRecording)
   XCTAssertEqual(PhoneRecorderStatus.along(.asking), .starting)
   XCTAssertEqual(PhoneRecorderStatus.along(.noAnswer("No answer")), .unavailable)
@@ -720,7 +732,7 @@ final class RecorderScreenTests: XCTestCase {
  private func hosted(
   expansion: RecorderSheetSize?, paused: Bool = false, notice: Bool = false, size: CGSize,
   layout: SurfaceLayout = .column, notes measuring: AnyView, captionLine: AnyView? = nil,
-  chips: [RecorderChip] = [], typeSize: DynamicTypeSize = .accessibility5
+  chips: [RecorderChip] = [], meters: [RecorderMeter] = [], typeSize: DynamicTypeSize = .accessibility5
  ) -> (host: UIHostingController<AnyView>, window: UIWindow) {
   let pause =
    paused
@@ -729,7 +741,7 @@ final class RecorderScreenTests: XCTestCase {
     canResume: true) : nil
   let state = RecorderSurfaceState(
    phase: RecorderPhase(phase: paused ? .paused : .recording, title: paused ? "Paused" : "Recording"),
-   title: "Conversation at 4:07 AM", byline: "Today · 4:07 AM", chips: chips, clock: .since(Date()), isLive: !paused,
+   title: "Conversation at 4:07 AM", byline: "Today · 4:07 AM", chips: chips, meters: meters, clock: .since(Date()), isLive: !paused,
    bookmarkCount: 2, pause: pause, hasNotice: notice)
   let slots = RecorderSlots(
    notes: measuring,
@@ -781,6 +793,43 @@ final class RecorderScreenTests: XCTestCase {
     if expansion != .full {
      XCTAssertGreaterThanOrEqual(
       measured.height, line * 2, "two lines of notes (\(String(describing: expansion)), paused: \(paused))")
+    }
+   }
+  }
+ }
+
+ /// A Mac and a recorder recording along: the meter area becomes three rows, each with its glyph, grown with the text up
+ /// to the first accessibility size. At every level on the cover at the largest text size the sheet and two lines of
+ /// notes still fit, Stop on screen; on the open Duo's page nothing is pushed off.
+ func testBehaviorThreeSourcesRowsFitTheCoverAndThePageAtTheLargestTextSize() throws {
+  final class Measured { var height: CGFloat = 0 }
+  let meters = [
+   RecorderMeter(source: .microphone, symbol: "mic", name: "Microphone"),
+   RecorderMeter(source: .recorder("sc"), symbol: "recordingtape", name: "Soundcore Work"),
+   RecorderMeter(source: .peer(UUID().uuidString), symbol: "desktopcomputer", name: "Studio Mac"),
+  ]
+  let line = UIFont.preferredFont(
+   forTextStyle: .body,
+   compatibleWith: UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge)
+  ).lineHeight
+  for (size, layout) in [
+   (CGSize(width: 466, height: 636), SurfaceLayout.column), (CGSize(width: 867, height: 635), .spread(crease: 475.5)),  // the inner display inside its safe area
+  ] {
+   for expansion in [nil, RecorderSheetSize.mini, .collapsed, .expanded, .full] {
+    let measured = Measured()
+    let notes = GeometryReader { proxy in
+     Color.clear
+      .onAppear { measured.height = proxy.size.height }
+      .onChange(of: proxy.size.height) { _, height in measured.height = height }
+    }
+    let (host, window) = hosted(
+     expansion: expansion, size: size, layout: layout, notes: AnyView(notes), meters: meters)
+    defer { window.isHidden = true }
+    XCTAssertLessThanOrEqual(
+     host.sizeThatFits(in: size).height, size.height + 0.5,
+     "nothing pushed off the screen (\(layout), \(String(describing: expansion)))")
+    if expansion != .full, layout == .column {
+     XCTAssertGreaterThanOrEqual(measured.height, line * 2, "two lines of notes (\(String(describing: expansion)))")
     }
    }
   }

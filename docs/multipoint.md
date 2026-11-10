@@ -489,8 +489,8 @@ never asks for the microphone for it.
 
 The device that manages a recorder recording along with a shared recording saves the recorder's audio
 into the conversation as it records, from the stream Listen Live uses (`DeviceSession.captureLive`),
-and captions it, beside the device's own captions (docs/capture.md, "Every source"), and Floating Notes meters it from
-the same audio. When the recording stops, the
+and captions it, beside the device's own captions (docs/capture.md, "Every source"), and its recorder (Floating Notes on
+a Mac) meters it from the same audio. When the recording stops, the
 recorder's audio is already in the conversation (in the library within a fraction of a second of the
 stop, against minutes to transfer the file afterwards), so multipoint processing has every source at
 once. It's a live portion: its recording ID ends with `~live`, it joins the conversation as a source
@@ -515,6 +515,18 @@ recorder saying it stopped ends the stream after a moment (`SoundcoreTiming.live
 end on its own. While it streams, the recorder's list can't be read nor Pause sent, so a device
 stopping it saves the live audio first. What it costs the link is in docs/direct-soundcore.md,
 "Live audio for a shared recording".
+
+## Levels during a shared recording
+
+While a Mac and an iPhone record one conversation, each meters the other beside its own sources:
+Floating Notes has a row for each iPhone recording along, and the iPhone's recorder a row for each Mac
+that sends its level (docs/interface.md, "Meters"; docs/iphone.md, "The meters"). Each sends its level over the local link
+(`levels`; docs/link.md) only to a device recording the same conversation that lists `liveLevels`: an
+iPhone its microphone's readings, a Mac the louder of its microphone and computer audio each tick, a few
+at a time about five times a second (`LevelShare`), never queued behind notes or captions. The receiver
+plays them back a reading a tick, fading between messages, and rests the row once a device has been
+quiet for 1.5 s (`LevelPlayback`). A recorder is metered only by the device that manages it, from its
+live audio. Like live captions, levels are feedback: never stored or synced.
 
 ## Notes and bookmarks during a shared recording
 

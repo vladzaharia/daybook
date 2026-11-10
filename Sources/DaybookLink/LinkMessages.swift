@@ -360,8 +360,13 @@ extension LinkCapabilities {
     public static let sharedNotesFeature = "sharedNotes"
     /// Shows the other device's live captions of a shared recording beside its own (`captions`).
     public static let liveCaptionsFeature = "liveCaptions"
-    /// Draws the other device's input level during a shared recording beside its own meters (`levels`).
+    /// Draws the other device's input level during a shared recording beside its own meters (`levels`): a device
+    /// sends its level only to one that lists it.
     public static let liveLevelsFeature = "liveLevels"
+    /// Sends its own input level during a shared recording to a device recording with it that lists `liveLevels`
+    /// (`levels`). An iPhone draws a row for a Mac only when the Mac lists it (an older Mac draws iPhones' levels but
+    /// sends none); a Mac draws every iPhone, whose levels went before the feature was named.
+    public static let sharesLevelsFeature = "sharesLevels"
     /// Counts down before summarizing and says so (`processing.progress` with `summaryCountdown`), and takes
     /// the person's choice from the other device (`processing.choice`: Use the Cloud, Start Now).
     public static let summaryPlacementFeature = "summaryPlacement"
@@ -377,6 +382,7 @@ extension LinkCapabilities {
     public var sharesNotes: Bool { features.contains(Self.sharedNotesFeature) }
     public var showsCaptions: Bool { features.contains(Self.liveCaptionsFeature) }
     public var showsLevels: Bool { features.contains(Self.liveLevelsFeature) }
+    public var sharesLevels: Bool { features.contains(Self.sharesLevelsFeature) }
     public var placesSummaries: Bool { features.contains(Self.summaryPlacementFeature) }
     public var hearsArrivals: Bool { features.contains(Self.recordingArrivalFeature) }
     public var stopsForPages: Bool { features.contains(Self.pageStopFeature) }
@@ -858,8 +864,9 @@ public enum LinkMessage: Sendable, Equatable {
     /// Live captions of a shared recording, for a device that shows them (`liveCaptionsFeature`).
     /// Additive within version 1: an older build ignores them.
     case captions(LinkCaptions)
-    /// An iPhone's input level during a shared recording, for a Mac that draws it (`liveLevelsFeature`).
-    /// Additive within version 1: an older build ignores them.
+    /// A device's input level during a shared recording, for a device recording with it that draws it
+    /// (`liveLevelsFeature`): an iPhone's to a Mac, a Mac's to an iPhone. Additive within version 1: an older
+    /// build ignores them.
     case levels(LinkLevels)
     /// The person's choice on a phone for a summary a Mac counts down to (`summaryPlacementFeature`).
     /// Additive within version 1: an older build ignores it.
