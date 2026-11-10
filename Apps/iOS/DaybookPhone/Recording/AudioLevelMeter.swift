@@ -13,23 +13,49 @@ struct AudioLevel: Equatable, Sendable {
     static let silent = AudioLevel(rms: -160, peak: -160)
 }
 
+/// When the microphone last heard anything, on the host clock that stamps its buffers.
+struct HeardTimes: Equatable, Sendable {
+    /// The latest buffer with any non-zero sample; all-zero input is a muted, unplugged, or blocked microphone.
+    var signal: TimeInterval?
+    /// The latest buffer above `HearingCheck.floor`.
+    var aboveFloor: TimeInterval?
+}
+
+/// The rolling hearing check, the Mac's rule (docs/capture.md, "Hearing"): the microphone isn't hearing when no
+/// non-zero sample arrived in the last 5 s, or nothing above −90 dBFS for 20 s, counted from when it last started
+/// listening (a start, a resume). Rolling, so a microphone that goes to digital zeros partway (a mute switch, a
+/// dead headset) is said too, and it clears as soon as it hears again.
+enum HearingCheck {
+    static let silentSeconds: TimeInterval = 5
+    static let belowFloorSeconds: TimeInterval = 20
+    /// Below this a microphone hears nothing a person could have said (a quiet room is some 30 dB louder).
+    static let floor: Float = -90
+
+    static func isNotHearing(_ heard: HeardTimes, listeningSince: TimeInterval, now: TimeInterval) -> Bool {
+        if now - max(heard.signal ?? listeningSince, listeningSince) > silentSeconds { return true }
+        return now - max(heard.aboveFloor ?? listeningSince, listeningSince) > belowFloorSeconds
+    }
+}
+
 /// Thread-safe level meter fed by the audio callback and read by the interface (the Mac's design).
 final class AudioLevelMeter: @unchecked Sendable {
     private let lock = NSLock()
     private var level = AudioLevel.silent
     private var peakSinceRead: Float = -160
-    private var signal = false
+    private var times = HeardTimes()
 
-    /// True once any non-zero sample arrived; all-zero input usually means a muted or blocked microphone.
-    var receivedSignal: Bool { lock.withLock { signal } }
+    /// When it last heard anything, for the hearing check.
+    var heard: HeardTimes { lock.withLock { times } }
 
-    func record(_ buffer: AVAudioPCMBuffer) {
+    /// Measures a buffer whose first frame is at `hostTime`.
+    func record(_ buffer: AVAudioPCMBuffer, hostTime: TimeInterval) {
         guard let measured = AudioBufferLevel.measure(buffer) else { return }
         lock.withLock {
             level.rms = measured.rms
             peakSinceRead = max(peakSinceRead, measured.peak)
             level.peak = peakSinceRead
-            if measured.hasSignal { signal = true }
+            if measured.hasSignal { times.signal = hostTime }
+            if measured.rms >= HearingCheck.floor { times.aboveFloor = hostTime }
         }
     }
 
@@ -43,6 +69,6 @@ final class AudioLevelMeter: @unchecked Sendable {
     }
 
     func reset() {
-        lock.withLock { level = .silent; peakSinceRead = -160; signal = false }
+        lock.withLock { level = .silent; peakSinceRead = -160; times = HeardTimes() }
     }
 }

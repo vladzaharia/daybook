@@ -112,6 +112,12 @@ public enum RecordingWords {
         return "\(amount) of \(name) \(amount == "1 s" || amount == "1 min" ? "was" : "were") lost while \(because)."
     }
 
+    /// What a recording rebuilt at launch says, in its conversation on both apps, when Daybook ended while it recorded:
+    /// what was written is kept, and the last seconds may not have reached the disk.
+    public nonisolated static let recoveredAfterQuit = "Daybook quit while recording. The recording was recovered; the last seconds may be missing."
+    /// And when Stop had ended it and Daybook was ended while saving it: nothing is missing.
+    public nonisolated static let savedAfterInterruptedSave = "Saved after Daybook was interrupted while saving."
+
     /// A short stretch of audio in seconds as a sentence says it: "0.4 s", "2.4 s", "42 s", "3 min".
     public nonisolated static func seconds(_ value: TimeInterval) -> String {
         let value = max(0, value)

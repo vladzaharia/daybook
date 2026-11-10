@@ -108,13 +108,23 @@ struct CaptureMultipoint: Codable, Equatable, Sendable {
 /// rebuild the recording, with its notes and bookmarks, if Daybook is killed. The phone's
 /// counterpart of the Mac's capture-session.json and per-track sidecars.
 struct PhoneCaptureJournal: Codable, Equatable, Sendable {
-    enum State: String, Codable, Sendable { case recording, paused, stopped }
+    enum State: String, Codable, Sendable {
+        case recording, paused
+        /// Stop has ended the capture (every segment closed, `endedAt` set) and the recording is being joined and filed:
+        /// written before the audio session is given back, so a recording iOS ends Daybook during is recovered as
+        /// saved, not as cut short while recording (`PhoneRecording.Recovery`).
+        case stopping
+        case stopped
+    }
 
     struct FinalFile: Codable, Equatable, Sendable {
         var fileName: String
         var frameCount: Int64
-        /// True when segments were joined (decoded, padded, encoded once).
+        /// True when segments were joined: their packets copied into one file in order, with silence in the gaps.
         var joined: Bool
+        /// True when joining decoded and encoded them again, because their formats differed. Nil otherwise, and in
+        /// journals written before joining copied packets.
+        var reencoded: Bool? = nil
     }
 
     static let fileName = "phone-capture.json"
@@ -224,7 +234,9 @@ struct PhoneRecording: Sendable, Equatable {
     var warnings: [String]
     /// The staging folder; the library removes it once the recording is filed.
     var stagingDirectory: URL
-    var recovered: Bool
+    /// How the run that made it ended, for a recording rebuilt at launch from what that run left; nil for one Stop
+    /// finished.
+    var recovery: Recovery?
     /// Photos taken while recording; their files are in `stagingDirectory`.
     var photos: [CapturePhoto] = []
     /// Handwriting in the notes.
@@ -234,6 +246,17 @@ struct PhoneRecording: Sendable, Equatable {
     /// What a Mac recording along wrote over the link, as that Mac files it (`PhoneCaptureJournal.sharedNotes`).
     var sharedNotes: [TimedNote] = []
     var sharedBookmarks: [Highlight] = []
+
+    /// How a recording rebuilt at launch had ended (`PhoneCaptureJournal.state`).
+    enum Recovery: Equatable, Sendable {
+        /// Daybook ended while it recorded or was paused: the last seconds may be missing.
+        case quitWhileRecording
+        /// Stop had ended it, and Daybook was ended before it was saved: it's whole.
+        case interruptedWhileSaving
+    }
+
+    /// Rebuilt at launch from what an earlier run left.
+    var recovered: Bool { recovery != nil }
 }
 
 enum PhoneRecorderError: LocalizedError, Equatable {

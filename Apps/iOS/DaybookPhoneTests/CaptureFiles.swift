@@ -41,8 +41,8 @@ enum CaptureFiles {
 
     /// A tone, encoded and finished as a part an interruption closed. Returns its frames.
     @discardableResult
-    static func writeClosedSegment(to url: URL, seconds: Double, frequency: Float) throws -> Int64 {
-        let writer = try AACSegmentWriter(url: url, format: format, realTime: false)
+    static func writeClosedSegment(to url: URL, seconds: Double, frequency: Float, format: RecordingFormat? = nil) throws -> Int64 {
+        let writer = try AACSegmentWriter(url: url, format: format ?? Self.format, realTime: false)
         try append(tone: frequency, seconds: seconds, to: writer)
         return try writer.finish()
     }
@@ -74,6 +74,7 @@ enum CaptureFiles {
     }
 
     private static func append(tone frequency: Float, seconds: Double, to writer: AACSegmentWriter) throws {
+        let format = writer.format
         let chunk: AVAudioFrameCount = 4_800
         let total = Int((seconds * format.sampleRate).rounded())
         var written = 0
