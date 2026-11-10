@@ -298,8 +298,11 @@ extension Meeting {
             let (trackID, before) = queue.removeFirst()
             guard let after = clock(of: trackID), after != before, before.rate > 0 else { continue }
             let scale = after.rate / before.rate, shift = after.offset - scale * before.offset
+            // Its derived copies (the echo-cancelled microphone) follow it, so what rests on them moves too.
+            let copies = Set(tracks.filter { $0.derivedFrom == trackID && $0.alignment == nil }.map(\.id))
             for index in tracks.indices where !done.contains(tracks[index].id) {
-                guard var alignment = tracks[index].alignment, alignment.isPlaced, alignment.referenceTrackID == trackID,
+                guard var alignment = tracks[index].alignment, alignment.isPlaced,
+                      let reference = alignment.referenceTrackID, reference == trackID || copies.contains(reference),
                       [.audio, .transcript, .clock, .manual].contains(alignment.method), let offset = alignment.offset,
                       let previous = clock(of: tracks[index].id) else { continue }
                 alignment.offset = shift + scale * offset
@@ -355,13 +358,30 @@ extension Meeting {
         let groups = captureGroups()
         guard groups.count > 1, let origin = groups.first, let originOffset = origin.lead.offset, originOffset.isFinite else { return [:] }
         let zero = origin.start.addingTimeInterval(-originOffset)
-        var result: [UUID: SourceAlignment] = [:]
+        var result: [UUID: SourceAlignment] = [:], moved: [UUID: TimeInterval] = [:]
         for group in groups.dropFirst() {
             let shift = clockShift(from: group, to: origin) ?? 0
             for track in group.tracks {
                 let start = track.startedAt ?? group.start.addingTimeInterval((track.offset ?? 0) - (group.lead.offset ?? 0))
                 let prior = start.addingTimeInterval(shift).timeIntervalSince(zero)
                 result[track.id] = SourceAlignment(method: .pending, clockOffset: prior.isFinite ? prior : nil, clockID: group.id, date: now)
+                if prior.isFinite, let offset = track.offset { moved[track.id] = prior - offset }
+            }
+        }
+        // A recording lined up against one of these (an iPhone's, by sound, on that Mac) was placed on that Mac's
+        // timeline. It waits to be placed again too, its prior moved as far as what it rests on.
+        var found = true
+        while found {
+            found = false
+            for track in tracks.sorted(by: { $0.id.uuidString < $1.id.uuidString }) where result[track.id] == nil {
+                guard let alignment = track.alignment, alignment.isPlaced, let offset = alignment.offset,
+                      let reference = alignment.referenceTrackID, let delta = moved[reference] else { continue }
+                var waiting = alignment
+                waiting.method = .pending; waiting.offset = nil; waiting.rate = 1; waiting.audioChecked = nil
+                waiting.clockOffset = offset + delta; waiting.date = now
+                result[track.id] = waiting
+                moved[track.id] = delta
+                found = true
             }
         }
         return result
@@ -370,7 +390,7 @@ extension Meeting {
     /// Recordings this Mac or another made and filed as the timeline's own (no placement, a capture offset): one group
     /// per capture, the first-started first. A capture's tracks share `TrackCaptureDetails.captureID`; for ones filed
     /// before it was kept, each original microphone is its own capture, computer audio joins the microphone that
-    /// started nearest it, and a derived copy joins its original.
+    /// started nearest it (its first sample can come late, when nothing plays), and a derived copy joins its original.
     struct CaptureGroup {
         var id: UUID
         var tracks: [RecordingTrack]
@@ -393,7 +413,7 @@ extension Meeting {
             if let id = track.capture?.captureID { key[track.id] = id.uuidString; continue }
             if track.source == .microphone { key[track.id] = "track:\(track.id.uuidString)"; continue }
             let nearest = microphones.min { abs(start($0).timeIntervalSince(start(track))) < abs(start($1).timeIntervalSince(start(track))) }
-            key[track.id] = nearest.flatMap { abs(start($0).timeIntervalSince(start(track))) <= 5 ? key[$0.id] : nil } ?? "track:\(track.id.uuidString)"
+            key[track.id] = nearest.flatMap { key[$0.id] } ?? "track:\(track.id.uuidString)"
         }
         for track in captured where track.derivedFrom != nil {
             key[track.id] = track.derivedFrom.flatMap { key[$0] } ?? track.capture?.captureID?.uuidString ?? "track:\(track.id.uuidString)"

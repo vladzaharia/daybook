@@ -43,6 +43,15 @@ public struct TimelineClock: Equatable, Sendable {
     /// where its original does and is resampled onto the capture's own clock. It takes `placed`'s offset, never its rate:
     /// the session clock runs at `placed.rate / placedCaptureRate` on the timeline, and this recording at its own
     /// `captureRate` on the session clock.
+    /// A stored placement read at a rate a clock can run at. One outside `ClockRate.maximumDriftPPM` (an old phrase
+    /// fit) reads as rate 1, kept right at the recording's middle rather than its start, so neither end is off by
+    /// more than half what the impossible rate put there.
+    public static func physical(offset: TimeInterval, rate: Double, duration: TimeInterval?) -> (offset: TimeInterval, rate: Double) {
+        if let bounded = ClockRate.bounded(rate) { return (offset, bounded) }
+        guard rate.isFinite, rate > 0, let duration, duration.isFinite, duration > 0 else { return (offset, 1) }
+        return (offset + (rate - 1) * duration / 2, 1)
+    }
+
     public static func sharingCapture(with placed: TimelineClock, placedCaptureRate: Double, captureRate: Double, dependsOn: UUID?) -> TimelineClock {
         let session = placed.rate / (placedCaptureRate > 0 ? placedCaptureRate : 1)
         return TimelineClock(offset: placed.offset, rate: ClockRate.bounded(session * captureRate) ?? 1, method: placed.method,
@@ -125,7 +134,8 @@ extension Meeting {
         guard let track = tracks.first(where: { $0.id == trackID }) else { return fallingBack ? reportedClock(trackID) : nil }
         if let alignment = track.alignment {
             if alignment.isPlaced, let offset = alignment.offset {
-                return TimelineClock(offset: offset, rate: ClockRate.bounded(alignment.rate) ?? 1, method: .init(alignment.method),
+                let physical = TimelineClock.physical(offset: offset, rate: alignment.rate, duration: track.duration)
+                return TimelineClock(offset: physical.offset, rate: physical.rate, method: .init(alignment.method),
                                      confidence: alignment.confidence, dependsOn: alignment.referenceTrackID)
             }
             if alignment.isPending || alignment.method == .unaligned { return nil }

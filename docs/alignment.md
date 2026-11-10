@@ -44,13 +44,13 @@ A pipeline that decides placements itself can pass them in as `FusionInputs(plac
 5. what the latest fusion reported (a recording fusion placed by itself, as before multipoint), or nothing when fusion couldn't place it;
 6. zero, for the conversation's first recording.
 
-Rates stay within 1000 ppm everywhere (`ClockRate`): the aligner's own limit, a capture's measured rate (one outside it, such as a sample rate stored by mistake, reads as 1), and a fit from shared phrases.
+Rates stay within 1000 ppm everywhere (`ClockRate`): the aligner's own limit, a capture's measured rate (one outside it, such as a sample rate stored by mistake, reads as 1), and a fit from shared phrases. A placement stored with a rate outside it (an old phrase fit) reads at rate 1, kept right at the recording's middle.
 
 A recording lined up against another (`dependsOn`, the placement's `referenceTrackID`) moves when that one does: `Meeting.applyPlacements` maps each dependent through the same change of timeline. A sibling on one capture clock that follows a placed one (`followingClockSiblings`) records it as its reference, so it moves too, at its own capture rate. Only a sure placement anchors another (`TimelineClock.isStrong`: the origin, capture timing, the person's setting, or the sound), never one placed only by shared phrases or the clocks.
 
 ### One origin
 
-A conversation has one timeline origin. When an iPhone asks two Macs to record along, each Mac files its recording as the origin, so after sync both sit at zero. Each Mac recording's tracks carry `TrackCaptureDetails.captureID` and the Mac's link `deviceID`. `Meeting.separatingCaptureGroups` keeps the capture that started first (the leader's, when a Mac led), and makes every other capture `pending`, on one clock (`clockID`), with a clock prior. The prior is that capture's start on the first one's clock, from an iPhone's `capture.peerClocks` when one measured both Macs; otherwise it's from the Macs' own clocks. Processing then places it as any waiting recording: sound, transcript, then clocks. Captures filed before the ID was kept are told apart by their microphone tracks.
+A conversation has one timeline origin. When an iPhone asks two Macs to record along, each Mac files its recording as the origin, so after sync both sit at zero. Each Mac recording's tracks carry `TrackCaptureDetails.captureID` and the Mac's link `deviceID`. `Meeting.separatingCaptureGroups` keeps the capture that started first (the leader's, when a Mac led), and makes every other capture `pending`, on one clock (`clockID`), with a clock prior. The prior is that capture's start on the first one's clock, from an iPhone's `capture.peerClocks` when one measured both Macs; otherwise it's from the Macs' own clocks. Processing then places it as any waiting recording: sound, transcript, then clocks. A recording lined up against one of its tracks (an iPhone's, by sound, on that Mac) was placed on that Mac's timeline, so it waits too, its prior moved as far. Captures filed before the ID was kept are told apart by their microphone tracks.
 
 ## Audio alignment
 
@@ -201,7 +201,7 @@ Embedding matches made at transcription time still apply first.
 
 | Version | Fusion |
 |---|---|
-| 1 | Words aligned in 240-item regions; raw confidences; a named speaker anywhere in a merged passage's provenance labels it; phrase fits measure any rate from 0.97 to 1.03. |
+| 1 | Words aligned in 240-item regions; raw confidences; a named speaker anywhere in a merged passage's provenance labels it; phrase fits measure any rate from 0.97 to 1.03, and stored ones are used at their rate. |
 | 2 | One banded alignment and the four-word guard; confidences compared by rank across recognizers; names kept only where they stood; phrase fits held to 1000 ppm and measured only over a long span; a second Mac's recording made a source to place. |
 
 The clock rules (one clock per recording, a derived copy at its own rate, capture rates within 1000 ppm) apply at every version: they place recordings, and both apps must read a placement alike.

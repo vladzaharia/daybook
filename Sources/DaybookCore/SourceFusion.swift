@@ -31,6 +31,7 @@ public enum SourceFusion {
                 guard let alignment = meeting.tracks[index].alignment, alignment.method == .transcript, alignment.isPlaced,
                       !ClockRate.isPlausible(alignment.rate) else { continue }
                 var kept = alignment
+                kept.offset = TimelineClock.physical(offset: alignment.offset ?? 0, rate: alignment.rate, duration: meeting.tracks[index].duration).offset
                 kept.rate = 1; kept.date = now
                 repaired[meeting.tracks[index].id] = kept
                 var waiting = alignment
@@ -158,7 +159,11 @@ public enum SourceFusion {
         for index in tracks.indices {
             let track = tracks[index]
             if waiting(track) { tracks[index].offset = nil; unplaced.insert(track.id); continue }
-            guard let clock = meeting.storedClock(of: track.id) else { continue }
+            guard var clock = meeting.storedClock(of: track.id) else { continue }
+            // Version 1, kept for upkeep, read a stored placement's rate as it was, however implausible.
+            if version < 2, let stored = track.alignment, stored.isPlaced, let offset = stored.offset, stored.rate.isFinite, stored.rate > 0 {
+                clock.offset = offset; clock.rate = stored.rate
+            }
             tracks[index].offset = clock.offset
             let original = track.derivedFrom.flatMap { id in meeting.tracks.first { $0.id == id } }
             let decided = track.alignment.flatMap { $0.isPlaced ? $0 : nil }
@@ -203,14 +208,14 @@ public enum SourceFusion {
     }
 
     /// Reports say how each placed recording was lined up, with its drift.
+    /// Reports say how each placed recording was lined up; their rate is the one fusion was given.
     private static func annotate(_ result: FusionResult, _ meeting: Meeting) -> FusionResult {
         let placements = currentPlacements(meeting)
         var annotated = result
         for index in annotated.alignments.indices {
-            let trackID = annotated.alignments[index].trackID
-            guard let placement = placements[trackID], annotated.alignments[index].method != .unaligned else { continue }
-            annotated.alignments[index].rate = meeting.clock(of: trackID)?.rate ?? placement.rate
-            if let explanation = explanation(placement) { annotated.alignments[index].explanation = explanation }
+            guard let placement = placements[annotated.alignments[index].trackID], annotated.alignments[index].method != .unaligned,
+                  let explanation = explanation(placement) else { continue }
+            annotated.alignments[index].explanation = explanation
         }
         return annotated
     }

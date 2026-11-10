@@ -137,7 +137,9 @@ extension AppState {
                 let near = try align(other, base, expected, radius)
                 guard expected != nil, (near?.confidence ?? 0) < policy.placeConfidence else { return near }
                 try Task.checkCancellation()
-                if let wide = try align(other, base, nil, 0), wide.confidence.isFinite, wide.confidence >= policy.attachConfidence { return wide }
+                let wide: AudioAlignment?
+                do { wide = try align(other, base, nil, 0) } catch is CancellationError { throw CancellationError() } catch { wide = nil }
+                if let wide, wide.confidence.isFinite, wide.confidence >= policy.attachConfidence { return wide }
                 return near
             }
         }

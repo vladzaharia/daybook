@@ -143,6 +143,12 @@ final class TimelineClockTests: XCTestCase {
                               transcripts: [TrackTranscript(trackID: raw, segments: spoken(raw, from: 10)),
                                             TrackTranscript(trackID: recorder, segments: spoken(recorder, from: 2))])
         XCTAssertEqual(meeting.clock(of: recorder)?.rate, 1, "Read at a clock's rate meanwhile")
+        let upkeep = SourceFusion.fuse(meeting, version: 1)
+        XCTAssertTrue(upkeep.settled.isEmpty, "Upkeep at version 1 leaves stored fits alone")
+        XCTAssertEqual(upkeep.fusion.alignments.first { $0.trackID == recorder }?.rate, 0.98, "…and fuses with them as version 1 did")
+        var long = meeting
+        long.tracks[1].duration = 3_600
+        XCTAssertEqual(long.clock(of: recorder)?.offset ?? 0, 8 - 0.02 * 1_800, accuracy: 1e-9, "Kept right at its middle")
         let fused = SourceFusion.fuse(meeting)
         let refitted = try XCTUnwrap(fused.settled[recorder])
         XCTAssertEqual(refitted.method, .transcript)
@@ -150,7 +156,6 @@ final class TimelineClockTests: XCTestCase {
         XCTAssertEqual(refitted.offset ?? 0, 8, accuracy: 0.01)
         meeting.applyPlacements(fused.settled)
         XCTAssertTrue(SourceFusion.fuse(meeting).settled.isEmpty, "Once")
-        XCTAssertTrue(SourceFusion.fuse(meeting, version: 1).settled.isEmpty, "Upkeep at version 1 leaves stored fits alone")
     }
 
     // MARK: References and dependents
@@ -244,12 +249,20 @@ final class TimelineClockTests: XCTestCase {
             CapturePeerClock(deviceID: "studio-mac", offset: 1.5, uncertainty: 0.004, sampleCount: 8, measuredAt: start),
             CapturePeerClock(deviceID: "desk-mac", offset: 1.5 + skew, uncertainty: 0.006, sampleCount: 8, measuredAt: start)])
         deskCopy.tracks.append(iPhone)
+        // A recorder the desk Mac lined up by sound against its own microphone, 3 s into its timeline.
+        let lined = UUID()
+        deskCopy.tracks.append(RecordingTrack(id: lined, source: .soundcore, relativePath: "Originals/r.wav", fileName: "r.wav", sha256: "r",
+                                              alignment: SourceAlignment(method: .audio, offset: 3, confidence: 0.9, referenceTrackID: deskMic,
+                                                                         audioChecked: true)))
 
         var merged = MeetingMerge.merge(base: base, local: studioCopy, remote: deskCopy).meeting
-        XCTAssertEqual(Set(merged.tracks.map(\.id)), [studioMic, studioCall, deskMic, deskCall, phone])
+        XCTAssertEqual(Set(merged.tracks.map(\.id)), [studioMic, studioCall, deskMic, deskCall, phone, lined])
         let separated = merged.separatingCaptureGroups(now: start)
-        XCTAssertEqual(Set(separated.keys), [deskMic, deskCall], "The studio Mac, first to start, keeps the timeline")
-        XCTAssertTrue(separated.values.allSatisfy { $0.method == .pending && $0.clockID == desk })
+        XCTAssertEqual(Set(separated.keys), [deskMic, deskCall, lined], "The studio Mac, first to start, keeps the timeline")
+        XCTAssertTrue(separated.values.allSatisfy { $0.method == .pending })
+        XCTAssertEqual(separated[deskMic]?.clockID, desk)
+        XCTAssertEqual(separated[lined]?.clockOffset ?? 0, 3 + late, accuracy: 0.1, "What rests on the desk Mac waits too, moved as far")
+        XCTAssertNil(separated[lined]?.audioChecked, "…and is compared by sound again")
         XCTAssertEqual(separated[deskMic]?.clockOffset ?? 0, late + 0.1, accuracy: 0.1)
         XCTAssertEqual(separated[deskCall]?.clockOffset ?? 0, late + 0.3, accuracy: 0.1)
 

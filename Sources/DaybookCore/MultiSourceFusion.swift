@@ -459,8 +459,9 @@ final class MultiSourceFusion {
 
     /// The columns each row of the alignment table may visit: after `w` words, at least those whose time is well
     /// before every word already taken, and at most those not well after every word still to come ("well": more than
-    /// any word's and column's tolerances together). Both bounds only grow, and each row reaches the next, so a path
-    /// from the first cell to the last stays inside. `banded` false gives every row every column (version 1).
+    /// any word's and column's tolerances together). Where a source's word times aren't in order (overlapping
+    /// passages), the row widens to cover both. Both bounds only grow, and each row reaches the next, so a path from
+    /// the first cell to the last stays inside. `banded` false gives every row every column (version 1).
     private func band(words: [Word], tolerances: [Double], region: [Column], banded: Bool) -> (lower: [Int], upper: [Int]) {
         let n = words.count, m = region.count
         guard banded else { return ([Int](repeating: 0, count: n + 1), [Int](repeating: m, count: n + 1)) }
@@ -481,8 +482,9 @@ final class MultiSourceFusion {
         for w in stride(from: n - 1, through: 0, by: -1) { coming[w] = min(coming[w + 1], words[w].mid) }
         var lower = [Int](repeating: 0, count: n + 1), upper = [Int](repeating: m, count: n + 1)
         for w in 0...n {
-            lower[w] = taken[w] == -.infinity ? 0 : before(taken[w] - slack)
-            upper[w] = coming[w] == .infinity ? m : atMost(coming[w] + slack)
+            let earliest = min(taken[w], coming[w]), latest = max(taken[w], coming[w])
+            lower[w] = earliest == -.infinity ? 0 : before(earliest - slack)
+            upper[w] = latest == .infinity ? m : atMost(latest + slack)
             if w > 0 { lower[w] = max(lower[w - 1], min(lower[w], upper[w - 1])); upper[w] = max(upper[w], upper[w - 1]) }
             upper[w] = max(upper[w], lower[w])
         }
