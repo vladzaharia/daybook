@@ -21,6 +21,23 @@ The items the design pass deferred (docs/audits/2026-11-10/README.md, "Still to 
   Notes and the page's notes) draws the same word beside a trailing wordless bookmark, from the same rule
   (MarginNotesEditorTests' Mac case: after the last paragraph, not beside one, not under the placeholder); no Mac
   demo state has such a bookmark, so that one is checked by the test alone.
+- **F4, Protect while iPhone is locked (security F-08, P4 step 2).** Settings › Storage › Protect While iPhone Is
+  Locked (off by default; its footer, "Syncs and transcribes while unlocked.", from `SettingsWords`). On, the library's
+  text is class A and its audio and photos class B, and Spotlight moves to a class A index of Daybook's own; off puts
+  back the earlier classes. Recordings in progress and the few files read while locked (sealing, owed stops,
+  brought-in recordings, the courier's ledgers) are never touched (`LibraryProtection`). Switching re-protects the
+  library in the background a conversation at a time, recorded in preferences so a killed run resumes, and a sweep
+  gives later saves their class (`LibraryProtector`). While locked, loading the library, sync (sealing, the courier),
+  processing (`Pause.locked`), recovery, Spotlight, the widgets' snapshots (a locked snapshot shows the heading alone),
+  and the backup rules wait for the unlock through `PhoneAppEnvironment.protectedData`; a recording still starts and
+  stops without the library. Saved captions are filed class A (`LiveCaptionStore.filedProtection`). The whole
+  DaybookPhoneTests bundle on a private simulator (507, 0 failures), with the new LibraryProtectionTests (classes
+  given and read through `F_SETPROTECTIONCLASS`/`F_GETPROTECTIONCLASS`, a pretend lock, a killed run resumed, backup
+  exclusion kept), two PhoneProcessingTests cases, LiveCaptionStoreTests on macOS, and iPhone 18 Pro captures of
+  Settings › Storage off and on, light and dark. Still needs a passcode-locked device: the classes of a switched library
+  and of later saves, sync and processing waiting and resuming across a real lock, a pass running when the phone locks,
+  Spotlight from the named index, the widgets across a lock, a cold Lock Screen recording, and an encrypted library's
+  backups with the mode on.
 - **F2, the page's status out of the views (code-quality P7).** The page's status is gathered in one function per
   app (`ConversationStatusPresentation.mac` with `Inputs.mac`, `.phone` with `Inputs.phone`), and what it offers is
   carried out by DaybookKit's `ConversationStatusActionHandler`, which `MacStatusActions` and `PhoneStatusActions`
