@@ -313,6 +313,19 @@ final class PhoneLink {
         try await service.send(message, to: phoneID)
     }
 
+    /// Sends this Mac's input level to the phones that draw it. Levels go on their own, never queued behind captions or
+    /// notes: while one is still on its way, the next is dropped (the phone's meter holds), so a slow link never
+    /// delivers them late.
+    func sendLevels(_ levels: LinkLevels, to phoneIDs: [UUID]) {
+        guard let service, levelSend == nil, !phoneIDs.isEmpty else { return }
+        levelSend = Task { [weak self] in
+            for phone in phoneIDs { try? await service.send(.levels(levels), to: phone) }
+            self?.levelSend = nil
+        }
+    }
+
+    @ObservationIgnored private var levelSend: Task<Void, Never>?
+
     func request(_ request: LinkRecordRequest, from phoneID: UUID) async throws -> LinkRecordReply {
         guard let service else { throw LinkError.notConnected }
         return try await service.request(request, from: phoneID)

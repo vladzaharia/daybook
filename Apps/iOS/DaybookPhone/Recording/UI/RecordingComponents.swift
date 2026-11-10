@@ -38,7 +38,8 @@ enum PhoneRecorderStatus {
             // The Mac this recording follows, when it's out of reach: its chip says so while this iPhone keeps recording.
             var leadAway: UUID?
             if model.multipoints.leadOutOfReach != nil, case .macLed(let lead)? = model.multipoint?.role { leadAway = lead }
-            inputs.peers = peers(multipoint: model.multipoint, connected: model.link.connectedMacs, conversation: conversation, outOfReach: leadAway)
+            inputs.peers = peers(multipoint: model.multipoint, connected: model.link.connectedMacs, conversation: conversation, outOfReach: leadAway,
+                                 sendingLevels: Set(model.link.macs.filter(\.sendsLevels).map(\.id)))
         }
         return inputs
     }
@@ -67,22 +68,24 @@ enum PhoneRecorderStatus {
     }
 
     /// The Macs around this recording: each one asked or recording along, each one recording the same conversation
-    /// on its own, then each connected one that could.
+    /// on its own, then each connected one that could. A Mac recording along that sends its level (`sendingLevels`,
+    /// those listing `sharesLevels`) gets a meter, which rests while it's out of reach; an older Mac has none.
     static func peers(multipoint: MultipointSession?, connected: [PhoneLink.Mac], conversation: UUID?,
-                      outOfReach: UUID? = nil) -> [RecordingStatusInputs.Peer] {
+                      outOfReach: UUID? = nil, sendingLevels: Set<UUID> = []) -> [RecordingStatusInputs.Peer] {
         let connectedIDs = Set(connected.map(\.id))
         var peers = (multipoint?.macs ?? []).map { mac in
             let along = Self.along(mac.state)
             return RecordingStatusInputs.Peer(id: mac.id.uuidString, name: mac.name, kind: .mac, isConnected: connectedIDs.contains(mac.id),
-                                              activity: along == .recording ? .recording : .idle, along: along, hasMeter: false,
-                                              outOfReach: outOfReach == mac.id)
+                                              activity: along == .recording ? .recording : .idle, along: along,
+                                              hasMeter: sendingLevels.contains(mac.id), outOfReach: outOfReach == mac.id)
         }
         let involved = Set(multipoint?.macs.map(\.id) ?? [])
         for mac in connected where !involved.contains(mac.id) {
             let recordsThis = mac.isRecording && conversation != nil && mac.recording?.conversationID == conversation
             peers.append(RecordingStatusInputs.Peer(id: mac.id.uuidString, name: mac.name, kind: .mac, isConnected: true,
                                                     activity: mac.isRecording ? .recording : .idle,
-                                                    along: recordsThis ? .alreadyRecording : nil, lastConnected: mac.lastConnectedAt, hasMeter: false))
+                                                    along: recordsThis ? .alreadyRecording : nil, lastConnected: mac.lastConnectedAt,
+                                                    hasMeter: sendingLevels.contains(mac.id)))
         }
         return peers
     }

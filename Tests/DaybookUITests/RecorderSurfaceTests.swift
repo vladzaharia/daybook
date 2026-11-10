@@ -249,6 +249,32 @@ final class RecorderSurfaceTests: XCTestCase {
         }
     }
 
+    /// The iPhone's rows (docs/iphone.md, "While recording"): alone, the microphone's meter takes the row unlabelled;
+    /// with a Mac or a recorder along each row has its glyph (the Mac's on the Mac always). At larger text the glyphs
+    /// grow and the rows keep room for them, the area growing for two or more; one source keeps its area.
+    func testBehaviorTheIPhonesRowsLabelMoreThanOneSourceAndGrowWithTheText() {
+        XCTAssertFalse(RecorderMeters.labels(1, density: .touch), "the phone alone: one large unlabelled meter")
+        XCTAssertTrue(RecorderMeters.labels(2, density: .touch))
+        XCTAssertTrue(RecorderMeters.labels(1, density: .panel), "Floating Notes labels even one")
+        XCTAssertEqual(MeterStack.pocket.scaled(1), .pocket, "the default size is the stack as drawn")
+        XCTAssertEqual(MeterStack.pocket.scaled(0.8), .pocket, "smaller text never shrinks it")
+
+        let accessibility = 28.0 / 17  // the first accessibility size, where the header stops growing
+        for base in [MeterStack.compact, .pocket, .page, .stage] {
+            let stack = base.scaled(accessibility)
+            XCTAssertEqual(stack.rowHeight(1), base.area, "one source keeps the area")
+            XCTAssertEqual(stack.glyph, base.glyph * accessibility, accuracy: 0.001)
+            for count in 2...4 {
+                let row = stack.rowHeight(count), gap = stack.gap(count)
+                XCTAssertGreaterThanOrEqual(row, base.rowHeight(count), "\(count) rows never thinner than at the default")
+                XCTAssertGreaterThan(stack.glyphSize(row: row, gap: gap), base.glyphSize(row: base.rowHeight(count), gap: gap),
+                                     "\(count) rows: the glyphs grow with the text")
+                XCTAssertLessThanOrEqual(stack.glyphSize(row: row, gap: gap), row + gap, "\(count) rows: glyphs don't overlap")
+                XCTAssertLessThanOrEqual(stack.height(count), stack.maximumArea + 0.001)
+            }
+        }
+    }
+
     // MARK: Controls
 
     func testBehaviorTheControlsDropTheirWordsOnlyAtTheAccessibilitySizes() {

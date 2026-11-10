@@ -43,7 +43,7 @@ extension AppState {
                                                           LinkCapabilities.recorderHandoffFeature,
                                                           LinkCapabilities.cascadeFeature, LinkCapabilities.sharedNotesFeature,
                                                           LinkCapabilities.liveCaptionsFeature, LinkCapabilities.liveLevelsFeature,
-                                                          LinkCapabilities.summaryPlacementFeature, LinkCapabilities.pageStopFeature,
+                                                          LinkCapabilities.sharesLevelsFeature, LinkCapabilities.summaryPlacementFeature, LinkCapabilities.pageStopFeature,
                                                           LinkCapabilities.recordPermissionFeature, LinkCapabilities.recordingArrivalFeature],
                             syncDeviceID: sync.deviceID)
     }
@@ -54,6 +54,12 @@ extension AppState {
         phoneLink.onUnpaired = { [weak self] id in self?.phoneUnpaired(id) }
         phoneLink.onMessage = { [weak self] message, phone in self?.phoneSaid(message, from: phone) }
         phoneLink.onConnected = { [weak self] peer in self?.phoneConnected(peer) }
+        // This Mac's level goes to the phones recording along that draw it, as its meter reads it.
+        recorder.onLevelsRead = { [weak self] in
+            guard let self else { return }
+            let levels = self.recorder.levels
+            self.shareLevel(microphone: levels.microphone.meterValue, call: levels.isCapturingCall ? levels.call.meterValue : nil)
+        }
         phoneLink.recordHandler = { [weak self] peer, request in
             guard let self else { return .refused(LinkRecordRefusal(reason: .unsupported)) }
             return await self.answerPhone(request, from: peer)
