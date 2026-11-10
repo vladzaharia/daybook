@@ -181,6 +181,15 @@ not Daybook's.
   update (the release benchmark measured about 0.07 ms per update, against 94–201 ms per rebuild before), and a
   Floating Notes snapshot with demo captions. Still to check on two real devices: the update rate and level ranking
   with real recognizers and meters, and how well the iPhone keeps up with the Mac's Call lines.
+- **W2-H1, transcript first.** A Mac transcribes with the models that transcribe and owes the summary until the
+  summary model arrives or the cloud takes it (Always needs none); downloads no longer hold the queue; another
+  device's Transcribe leaves a Summarize open; the page says "Waiting to summarize after the download · 38%" with
+  Use the Cloud where there's a key; and the system's speech model stands in while the chosen transcription model
+  downloads, on the Mac and the iPhone (a stand-in job runs without speakers until the speaker models are here, and
+  the Upgrade offer redoes it). ProcessingQueueTests, ProcessingRequestQueueTests, SummaryPlacementProcessingTests,
+  SpeechRoutingTests, the DaybookKit status, word, and upgrade tests, the iPhone's PhoneProcessingTests, and snapshots
+  of `--notes-demo summary-waits --cloud-demo anthropic`. Not verified: a real download or a real Apple Speech run
+  through the queue.
 - **W2-H2, Apple Speech.** `AppleSpeechEngine` (`apple-speech/system`, `SpeechAnalyzer`/`SpeechTranscriber`) and
   `TranscriptionRouting.interim`. swift test passes (Intelligence 216, Kit 592, UI 129); build-ios --test passes
   PhoneModelsTests and PhoneProcessingTests. The opt-in smoke test with `--transcription-model apple-speech/system`
