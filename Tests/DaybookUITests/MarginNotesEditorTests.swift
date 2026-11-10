@@ -29,6 +29,21 @@ final class MarginNotesEditorTests: XCTestCase {
         XCTAssertEqual(NoteMark(id: "b", kind: .bookmark, time: 250).spoken, "Bookmark at \(SpokenTime.format(250))")
     }
 
+    /// A bookmark after the last paragraph has nothing written beside it, so it says "Bookmark" there, as its row in
+    /// the summary does; one beside a paragraph has that paragraph's words, and a photo shows itself.
+    func testBehaviorOnlyABookmarkAfterTheLastParagraphIsWordless() {
+        let times: [TimeInterval?] = [2, nil, 10]
+        let marks = [NoteMark(id: "late", kind: .bookmark, time: 12), NoteMark(id: "early", kind: .bookmark, time: 4),
+                     NoteMark(id: "photo", kind: .photo, time: 14)]
+        let wordless = NoteParagraphs.placement(of: marks, times: times)
+            .filter { NoteParagraphs.isWordless($0.mark, before: $0.before, paragraphs: times.count) }
+        XCTAssertEqual(wordless.map(\.mark.id), ["late"])
+        XCTAssertFalse(NoteParagraphs.isWordless(marks[0], before: 3, paragraphs: 4), "a paragraph written after it, untimed, is its words")
+        XCTAssertEqual(BookmarkLabel.untitled, "Bookmark")
+        XCTAssertEqual(BookmarkLabel.placeholder(for: Highlight(time: 4, text: ""), in: Meeting(title: "Call")), BookmarkLabel.untitled,
+                       "the summary's row says the same word")
+    }
+
     func testBehaviorPlayFromHerePlaysTheParagraphAtTheCaretOrTheOneBeforeIt() {
         let text = "Intro\nUntimed\nLater" as NSString
         let ranges = NoteParagraphs.ranges(in: text)

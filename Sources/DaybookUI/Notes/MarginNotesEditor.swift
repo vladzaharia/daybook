@@ -60,6 +60,13 @@ public enum NoteParagraphs {
         }
     }
 
+    /// A bookmark placed after the last of `paragraphs`, with nothing written after it: alone on an empty line, it says
+    /// "Bookmark" there in placeholder ink (`BookmarkLabel.untitled`), as its row in the summary does. A photo shows
+    /// itself, and a mark beside a paragraph has that paragraph's words.
+    public static func isWordless(_ mark: NoteMark, before: Int, paragraphs: Int) -> Bool {
+        mark.kind == .bookmark && before >= paragraphs
+    }
+
     /// The paragraph holding `location` (a caret), or the last one before it: where "Play from Here" plays from.
     public static func paragraph(at location: Int, in ranges: [NSRange]) -> Int? {
         ranges.lastIndex { $0.location <= location }
