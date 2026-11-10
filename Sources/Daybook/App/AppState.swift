@@ -191,10 +191,10 @@ final class AppState {
     @ObservationIgnored var calendarMeeting: (recording: UUID, event: MeetingEvent)?
     @ObservationIgnored var calendarWatch: Task<Void, Never>?
 
-    /// Looks at this Mac for calls, except under XCTest, whose AppStates must never read the real audio server or ask
-    /// about a call the developer is on (the monitor's own tests drive it with scripted looks).
+    /// Looks at this Mac for calls, only in the app (`MacEnvironment.watchesCalls`): a test's AppState must never read the
+    /// real audio server or ask about a call the developer is on (the monitor's own tests drive it with scripted looks).
     private func startCallMonitoring() {
-        guard !MacCaptioners.isRunningTests else { return }
+        guard environment.watchesCalls else { return }
         monitor.startMonitoring()
     }
     var includeComputerAudio: Bool { didSet { preferences.set(includeComputerAudio, forKey: Preference.includeComputerAudio) } }
@@ -224,6 +224,9 @@ final class AppState {
     let storageURL: URL
     /// This Mac's preferences (the app's, or a test's own suite).
     let preferences: UserDefaults
+    /// What it reaches in this Mac's system on its own: calls, the system's lock, the calendar, and live captioners
+    /// (`MacEnvironment`: `.live` in the app, `.inert` in tests).
+    @ObservationIgnored let environment: MacEnvironment
     /// Cloud summaries' keys, models, and this Mac's preferences (Settings › Cloud; docs/cloud.md): the one place the
     /// summary step reads them. Made when first used (Settings, or a summary step), so a launch that never needs it
     /// never reads the keychain. Demos and tests set their own (`CloudSetup.demo`).
@@ -346,8 +349,10 @@ final class AppState {
     @ObservationIgnored private var visibleMemo: (place: LibraryPlace, revision: Int, showsPersonal: Bool, meetings: [Meeting])?
     let searchMemo = LibrarySearchMemo()
 
-    /// `capture` is this Mac's microphone and call audio; tests pass fakes.
-    init(libraryURL: URL = AppState.libraryURL, defaults: UserDefaults = .standard, capture: CaptureEnvironment = .live) {
+    /// `capture` is this Mac's microphone and call audio, and `environment` what else it reaches in the system on its own;
+    /// tests pass fakes, and build with `.inert` unless they say otherwise. The app passes `.live` (`DaybookApp`).
+    init(libraryURL: URL = AppState.libraryURL, defaults: UserDefaults = .standard, capture: CaptureEnvironment = .live,
+         environment: MacEnvironment = .inert) {
         // Where the library is, before anything here writes preferences or sync resolves its identity (docs/sandbox.md).
         launchCheck = LibraryLaunchCheck(library: libraryURL, defaults: defaults)
         recorder = RecordingController(environment: capture)
@@ -380,6 +385,7 @@ final class AppState {
         library = LibraryController(rootURL: libraryURL, sync: sync)
         storageURL = libraryURL
         preferences = defaults
+        self.environment = environment
         #if DEBUG
         DeviceDemo.install()
         #endif
@@ -413,7 +419,8 @@ final class AppState {
         self.captionSettings = captionSettings
         liveModels = MacLiveModels(store: runtime.store)
         captions = LiveCaptionsController(store: LiveCaptionStore(libraryRoot: libraryURL),
-                                          makeCaptioner: MacCaptioners.recordingFactory(settings: captionSettings))
+                                          makeCaptioner: MacCaptioners.recordingFactory(settings: captionSettings,
+                                                                                        makesCaptioners: self.environment.makesCaptioners))
         processor.app = self
         processor.queue.activity.onChange = { [weak processor] _ in processor?.processingProgressChanged() }
         searchMemo.onUpdate = { [weak self] in self?.searchResultsArrived &+= 1 }
@@ -471,14 +478,15 @@ final class AppState {
     }
 
     /// The lock finds conversations in the library, and the page follows it. The app's own also locks with the screen,
-    /// sleep, and idleness, and starts from the Focus that's on (never under XCTest, whose tests drive it themselves).
+    /// sleep, and idleness, and starts from the Focus that's on (`MacEnvironment.watchesPersonalLock`; tests drive it
+    /// themselves).
     private func wirePersonalLock() {
         personalLock.lookup = { [weak self] id in self?.meetings.first { $0.id == id } }
         personalLock.observe { [weak self] event in self?.personalLockChanged(event) }
         #if DEBUG
         if let demo = PersonalLockDemo.state() { PersonalLockDemo.apply(demo, to: personalLock, platform: .mac); return }
         #endif
-        guard !MacCaptioners.isRunningTests else { return }
+        guard environment.watchesPersonalLock else { return }
         personalLock.watchSystem()
         Task { [personalLock] in await DaybookFocusFilter.catchUp(personalLock) }
     }

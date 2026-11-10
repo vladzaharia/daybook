@@ -517,11 +517,12 @@ final class LiveCaptionsTests: XCTestCase {
         // macOS 15 has no SpeechAnalyzer: the system makes no captioner, whatever the setting.
         XCTAssertNil(MacCaptioners.speechCaptioner(for: .microphone, allowsDownload: false, supported: false))
         XCTAssertNil(MacCaptioners.speechCaptioner(for: .call, allowsDownload: false, supported: false))
-        // Tests never reach the Speech framework, and captions turned off make none either.
-        XCTAssertNil(MacCaptioners.recordingFactory(settings: settings)(.microphone))
+        // Tests never reach the Speech framework (`MacEnvironment.inert`), and captions turned off make none either.
+        XCTAssertFalse(MacEnvironment.inert.makesCaptioners)
+        XCTAssertNil(MacCaptioners.recordingFactory(settings: settings, makesCaptioners: false)(.microphone))
         settings.isEnabled = false
         XCTAssertEqual(LiveCaptionSettings(defaults: defaults).isEnabled, false, "remembered on this Mac")
-        XCTAssertNil(MacCaptioners.recorderFactory(settings: settings)())
+        XCTAssertNil(MacCaptioners.recorderFactory(settings: settings, makesCaptioners: true)())
 
         let clock = FakeHostClock()
         let mic = FakeCaptureSource(method: "microphone")

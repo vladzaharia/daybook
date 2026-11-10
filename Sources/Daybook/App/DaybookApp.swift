@@ -103,7 +103,8 @@ struct DaybookApp: App {
     /// The app's state. The scenes only pass it on: every view, the menus, and the menu bar item read what they
     /// show, and redraw for that alone. Read here, each change would rebuild every scene and draw the library window
     /// twice, so the only thing the scenes read is whether a library move holds the library.
-    @State private var state = AppState(libraryURL: LaunchOptions.libraryURL ?? AppState.libraryURL, defaults: LaunchOptions.defaults)
+    @State private var state = AppState(libraryURL: LaunchOptions.libraryURL ?? AppState.libraryURL, defaults: LaunchOptions.defaults,
+                                        environment: .live)
     @AppStorage(AppState.Preference.showsMenuBarExtra, store: LaunchOptions.defaults) private var showsMenuBarExtra = true
     @AppStorage(AppState.Preference.onboardingCompleted, store: LaunchOptions.defaults) private var onboardingCompleted = false
 
