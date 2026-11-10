@@ -36,6 +36,17 @@ public enum SettingsWords {
         return result
     }
 
+    // MARK: Transcription language
+
+    /// Settings › Models › Transcription's language row on both apps: its label, its first choice, and what a choice
+    /// reads as ("Automatic", "German").
+    public static let languageLabel = "Language"
+    public static let automaticLanguage = "Automatic"
+
+    public static func languageName(_ code: String?, locale: Locale = .current) -> String {
+        code.map { TranscriptionLanguages.name($0, locale: locale) } ?? automaticLanguage
+    }
+
     // MARK: Cloud
 
     public static func provider(_ provider: CloudProvider) -> String { provider == .anthropic ? "Anthropic" : "OpenAI" }

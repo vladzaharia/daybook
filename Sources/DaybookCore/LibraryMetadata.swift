@@ -263,6 +263,39 @@ public struct RecorderHandoffRecord: Codable, Equatable, Sendable {
     }
 }
 
+/// A choice the whole library shares rather than each device (docs/icloud-sync.md, "Library settings"): one record per
+/// choice in `LibraryMetadata.choices`, keyed by its name and merged like a folder, the later change winning. Today the
+/// transcription language, which describes the person's conversations, so every device transcribes in it.
+public struct LibraryChoice: Codable, Equatable, Sendable {
+    /// The library's choices. Raw values are stored in the library and must not change.
+    public enum Name: String, CaseIterable, Sendable {
+        /// The language its conversations are transcribed in: a language code ("de"), or nil for Automatic.
+        case transcriptionLanguage
+    }
+
+    /// What was chosen; nil for the default (Automatic, for the transcription language).
+    public var selection: String?
+    /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
+    public var unknownFields = UnknownFields()
+
+    public init(selection: String?) { self.selection = selection?.isEmpty == true ? nil : selection }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case selection }
+    private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(selection: try values.decodeIfPresent(String.self, forKey: .selection))
+        unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encodeIfPresent(selection, forKey: .selection)
+        try unknownFields.encode(to: encoder)
+    }
+}
+
 public struct LibraryMetadata: Codable, Equatable, Sendable {
     public var schemaVersion = 1
     public var folders: [LibraryValue<LibraryFolder>] = []
@@ -279,6 +312,9 @@ public struct LibraryMetadata: Codable, Equatable, Sendable {
     /// Optional, like `recorders`, so earlier files decode and earlier versions keep them as they came.
     public var speakerProfiles: [LibraryValue<SpeakerProfile>]?
     public var voiceprints: [LibraryValue<Voiceprint>]?
+    /// Choices the whole library shares, one record each by `LibraryChoice.Name`: the transcription language. Optional,
+    /// like `recorders`, so earlier files decode, and earlier versions keep them and merge them item by item.
+    public var choices: [LibraryValue<LibraryChoice>]?
     /// Settings a newer Daybook keeps under keys this version doesn't know, written back as they came
     /// and merged by `merging` (a list of per-item records item by item).
     public var unknownFields = UnknownFields()
@@ -295,6 +331,7 @@ public struct LibraryMetadata: Codable, Equatable, Sendable {
             value.speakerProfiles = Self.merge(speakerProfiles ?? [], other.speakerProfiles ?? [])
         }
         if voiceprints != nil || other.voiceprints != nil { value.voiceprints = Self.merge(voiceprints ?? [], other.voiceprints ?? []) }
+        if choices != nil || other.choices != nil { value.choices = Self.merge(choices ?? [], other.choices ?? []) }
         var unknown: [String: SyncJSONValue] = [:]
         for key in Set(unknownFields.values.keys).union(other.unknownFields.values.keys) {
             switch (unknownFields[key], other.unknownFields[key]) {
@@ -307,7 +344,7 @@ public struct LibraryMetadata: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case schemaVersion, folders, templates, vocabulary, recorders, handoffs, speakerProfiles, voiceprints
+        case schemaVersion, folders, templates, vocabulary, recorders, handoffs, speakerProfiles, voiceprints, choices
     }
     private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
 
@@ -321,6 +358,7 @@ public struct LibraryMetadata: Codable, Equatable, Sendable {
         handoffs = try values.decodeIfPresent([LibraryValue<RecorderHandoffRecord>].self, forKey: .handoffs)
         speakerProfiles = try values.decodeIfPresent([LibraryValue<SpeakerProfile>].self, forKey: .speakerProfiles)
         voiceprints = try values.decodeIfPresent([LibraryValue<Voiceprint>].self, forKey: .voiceprints)
+        choices = try values.decodeIfPresent([LibraryValue<LibraryChoice>].self, forKey: .choices)
         unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
     }
 
@@ -334,6 +372,7 @@ public struct LibraryMetadata: Codable, Equatable, Sendable {
         try values.encodeIfPresent(handoffs, forKey: .handoffs)
         try values.encodeIfPresent(speakerProfiles, forKey: .speakerProfiles)
         try values.encodeIfPresent(voiceprints, forKey: .voiceprints)
+        try values.encodeIfPresent(choices, forKey: .choices)
         try unknownFields.encode(to: encoder)
     }
 
@@ -343,7 +382,17 @@ public struct LibraryMetadata: Codable, Equatable, Sendable {
             || vocabulary.contains { $0.unreadableValue != nil } || (recorders ?? []).contains { $0.unreadableValue != nil }
             || (handoffs ?? []).contains { $0.unreadableValue != nil }
             || (speakerProfiles ?? []).contains { $0.unreadableValue != nil } || (voiceprints ?? []).contains { $0.unreadableValue != nil }
+            || (choices ?? []).contains { $0.unreadableValue != nil }
     }
+
+    /// The record of a library choice; nil while no device has made it in this library.
+    public func choice(_ name: LibraryChoice.Name) -> LibraryValue<LibraryChoice>? {
+        choices?.first { $0.id == name.rawValue }
+    }
+
+    /// The language the library's conversations are transcribed in, as stored; nil for Automatic, including while no
+    /// device has chosen one and when one was written in a shape this version can't read.
+    public var transcriptionLanguage: String? { choice(.transcriptionLanguage)?.value?.selection }
 
     /// Handoffs under way or answered (cleared ones left out).
     public var recorderHandoffs: [RecorderHandoffRecord] { (handoffs ?? []).compactMap(\.value) }

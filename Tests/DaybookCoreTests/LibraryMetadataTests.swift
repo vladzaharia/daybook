@@ -154,4 +154,71 @@ final class LibraryMetadataTests: XCTestCase {
         XCTAssertEqual(combined.recorderOwners, [second])
         XCTAssertEqual(combined.folders.count, 1)
     }
+
+    // MARK: The library's choices
+
+    private func language(_ code: String?, at date: Date) -> LibraryMetadata {
+        var metadata = LibraryMetadata()
+        metadata.choices = [.init(id: LibraryChoice.Name.transcriptionLanguage.rawValue, value: LibraryChoice(selection: code), modifiedAt: date)]
+        return metadata
+    }
+
+    /// xdev-settings-08: the transcription language is the library's, merged like its other settings, the later change
+    /// winning whichever device merges first; Automatic chosen later wins over a language.
+    func testTheTranscriptionLanguageMergesLikeOtherSettingsTheLaterChangeWinning() throws {
+        let german = language("de", at: earlier), automatic = language(nil, at: later)
+        XCTAssertEqual(german.merging(automatic), automatic.merging(german))
+        XCTAssertNil(german.merging(automatic).transcriptionLanguage, "Automatic, chosen later")
+        XCTAssertNotNil(german.merging(automatic).choice(.transcriptionLanguage), "a choice, not a library without one")
+        XCTAssertEqual(language("fr", at: later).merging(german).transcriptionLanguage, "fr")
+
+        // Other settings are independent of it.
+        var folders = LibraryMetadata()
+        folders.folders = [.init(id: "f", value: LibraryFolder(name: "Work"), modifiedAt: later)]
+        let combined = german.merging(folders)
+        XCTAssertEqual(combined.transcriptionLanguage, "de")
+        XCTAssertEqual(combined.folders.count, 1)
+
+        // It round-trips, and Automatic is stored as a choice with nothing chosen.
+        let decoded = try JSONDecoder().decode(LibraryMetadata.self, from: JSONEncoder().encode(automatic))
+        XCTAssertEqual(decoded, automatic)
+        let json = String(decoding: try JSONEncoder().encode(language("de", at: earlier)), as: UTF8.self)
+        XCTAssertTrue(json.contains(#""id":"transcriptionLanguage""#), json)
+        XCTAssertTrue(json.contains(#""selection":"de""#), json)
+    }
+
+    func testSettingsWrittenBeforeTheLanguageDecodeWithoutOne() throws {
+        let json = #"{"schemaVersion":1,"folders":[],"templates":[],"vocabulary":[]}"#
+        let metadata = try JSONDecoder().decode(LibraryMetadata.self, from: Data(json.utf8))
+        XCTAssertNil(metadata.choices)
+        XCTAssertNil(metadata.choice(.transcriptionLanguage), "no device has chosen one")
+        XCTAssertNil(metadata.transcriptionLanguage)
+        XCTAssertNil(metadata.merging(LibraryMetadata()).choices, "merging two libraries without one adds none")
+        XCTAssertEqual(metadata.merging(language("de", at: earlier)).transcriptionLanguage, "de")
+    }
+
+    /// A Daybook from before the setting keeps it as a key it doesn't know and merges it item by item as well
+    /// (`SyncJSONValue.mergedLibrarySetting`), so a library edited on an older device still ends on the later choice.
+    func testAnEarlierVersionMergesTheLanguageItDoesntKnowTheSameWay() throws {
+        func unknown(_ metadata: LibraryMetadata) throws -> SyncJSONValue {
+            let object = try JSONDecoder().decode([String: SyncJSONValue].self, from: JSONEncoder().encode(metadata))
+            return try XCTUnwrap(object["choices"])
+        }
+        let german = try unknown(language("de", at: earlier)), french = try unknown(language("fr", at: later))
+        let merged = SyncJSONValue.mergedLibrarySetting(german, french)
+        XCTAssertEqual(merged, SyncJSONValue.mergedLibrarySetting(french, german))
+        XCTAssertEqual(merged, french)
+    }
+
+    /// A choice a newer Daybook wrote in a shape this version can't read is Automatic here, kept, and written back as it
+    /// came; the library still has a choice, so a carried-over language doesn't replace it.
+    func testALanguageInANewerShapeTravelsOnUnchanged() throws {
+        let json = #"{"schemaVersion":1,"folders":[],"templates":[],"vocabulary":[],"choices":[{"id":"transcriptionLanguage","modifiedAt":0,"value":{"selection":["de","en"]}}]}"#
+        let metadata = try JSONDecoder().decode(LibraryMetadata.self, from: Data(json.utf8))
+        XCTAssertNil(metadata.transcriptionLanguage)
+        XCTAssertNotNil(metadata.choice(.transcriptionLanguage))
+        XCTAssertTrue(metadata.hasUnreadableValues)
+        let again = try JSONDecoder().decode(LibraryMetadata.self, from: JSONEncoder().encode(metadata))
+        XCTAssertEqual(again, metadata, "written back as it came")
+    }
 }

@@ -4,69 +4,6 @@ import DaybookIntelligence
 import DaybookKit
 import Foundation
 
-/// New quality controls are persisted together and frozen into each request. The speaker model
-/// mirrors `AppState.modelSelections`' diarization choice, a variant key ("community-1/offline").
-struct ProcessingPreferences: Codable, Equatable, Sendable {
-    var speakerModelID: String
-    var speakerOptions: SpeakerAnalysisOptions
-    var matchSpeakersAcrossSources: Bool
-    var speakerMatchThreshold: Double
-    var speakerMatchMargin: Double
-    /// The transcription language, a BCP-47 code ("de"); nil for Automatic (`TranscriptionRouting`).
-    var transcriptionLanguage: String?
-    /// The model for languages the transcription model doesn't cover; nil picks one
-    /// (`TranscriptionRouting.otherLanguagesModel`).
-    var otherLanguagesModelID: String?
-
-    /// The first-launch speaker model, from the catalog's initial selection.
-    static var defaultSpeakerModelID: String { ModelRecommendations.initialSelections()[.diarization] ?? "community-1/offline" }
-
-    init(speakerModelID: String = ProcessingPreferences.defaultSpeakerModelID,
-         speakerOptions: SpeakerAnalysisOptions = .init(),
-         matchSpeakersAcrossSources: Bool = true,
-         speakerMatchThreshold: Double = 0.82, speakerMatchMargin: Double = 0.06,
-         transcriptionLanguage: String? = nil, otherLanguagesModelID: String? = nil) {
-        self.speakerModelID = speakerModelID
-        self.speakerOptions = speakerOptions.normalized
-        self.matchSpeakersAcrossSources = matchSpeakersAcrossSources
-        self.speakerMatchThreshold = Self.unitInterval(speakerMatchThreshold, fallback: 0.82)
-        self.speakerMatchMargin = Self.unitInterval(speakerMatchMargin, fallback: 0.06)
-        self.transcriptionLanguage = TranscriptionLanguages.normalize(transcriptionLanguage)
-        self.otherLanguagesModelID = otherLanguagesModelID?.isEmpty == true ? nil : otherLanguagesModelID
-    }
-
-    var normalized: Self {
-        Self(speakerModelID: speakerModelID, speakerOptions: speakerOptions,
-             matchSpeakersAcrossSources: matchSpeakersAcrossSources,
-             speakerMatchThreshold: speakerMatchThreshold, speakerMatchMargin: speakerMatchMargin,
-             transcriptionLanguage: transcriptionLanguage, otherLanguagesModelID: otherLanguagesModelID)
-    }
-
-    private static func unitInterval(_ value: Double, fallback: Double) -> Double {
-        value.isFinite ? min(1, max(0, value)) : fallback
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case speakerModelID, speakerOptions, matchSpeakersAcrossSources, speakerMatchThreshold, speakerMatchMargin
-        // Absent (Automatic, no choice) encodes nothing, so earlier preferences fingerprint as before.
-        case transcriptionLanguage, otherLanguagesModelID
-    }
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        // Speaker models stored before the model system ("speaker-community-1") map through the
-        // catalog's migration table to variant keys; unknown IDs are kept, never switched.
-        let stored = try values.decodeIfPresent(String.self, forKey: .speakerModelID)
-        self.init(speakerModelID: stored.map { ModelCatalog.builtIn.model($0)?.key ?? $0 } ?? Self.defaultSpeakerModelID,
-                  speakerOptions: try values.decodeIfPresent(SpeakerAnalysisOptions.self, forKey: .speakerOptions) ?? .init(),
-                  matchSpeakersAcrossSources: try values.decodeIfPresent(Bool.self, forKey: .matchSpeakersAcrossSources) ?? true,
-                  speakerMatchThreshold: try values.decodeIfPresent(Double.self, forKey: .speakerMatchThreshold) ?? 0.82,
-                  speakerMatchMargin: try values.decodeIfPresent(Double.self, forKey: .speakerMatchMargin) ?? 0.06,
-                  transcriptionLanguage: try values.decodeIfPresent(String.self, forKey: .transcriptionLanguage),
-                  otherLanguagesModelID: try values.decodeIfPresent(String.self, forKey: .otherLanguagesModelID))
-    }
-}
-
 extension ProcessingRequest.Mode {
     /// The Mac's menu titles, in the words the page and the iPhone use (docs/interface.md, "Words").
     var title: String {
@@ -80,7 +17,7 @@ extension ProcessingRequest.Mode {
 }
 
 /// One entry in this Mac's processing queue: a value snapshot, so preferences changed while it
-/// waits cannot alter it. (A synced `ProcessingRequest` is what another device asked for; the
+/// waits, the library's transcription language included, cannot alter it. (A synced `ProcessingRequest` is what another device asked for; the
 /// queue runs jobs, and a job that carries one out names it in `requestID`.)
 struct ProcessingJob: Codable, Equatable, Identifiable, Sendable {
     typealias Mode = ProcessingRequest.Mode

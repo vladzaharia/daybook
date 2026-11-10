@@ -60,6 +60,15 @@ public enum TranscriptionLanguages {
         return codes.sorted { name($0).localizedCaseInsensitiveCompare(name($1)) == .orderedAscending }
     }
 
+    /// The language row's list, the same on both apps because the language is the library's: every language a
+    /// transcription model in the catalog covers, whatever this device runs, by name, and `stored` where none does (one
+    /// a newer catalog offered on another device).
+    public static func libraryChoices(in catalog: ModelCatalog, keeping stored: String?) -> [String] {
+        var codes = choices(in: catalog)
+        if let stored = normalize(stored), !codes.contains(stored) { codes.append(stored) }
+        return codes
+    }
+
     /// The language's name in the reader's language ("German"), or the code when unknown.
     public static func name(_ code: String, locale: Locale = .current) -> String {
         locale.localizedString(forLanguageCode: code) ?? code
@@ -100,6 +109,18 @@ public enum TranscriptionRouting {
             return TranscriptionRoute(model: selected)
         }
         return TranscriptionRoute(model: selected, fallback: other.key)
+    }
+
+    /// The route a job queued now takes on this device, on both apps: `selected` in the library's `language`
+    /// (`LibraryController.transcriptionLanguage`, nil for Automatic), with this device's model for other languages
+    /// (`otherLanguagesModel` from its `chosen` one, among the models that run here; the iPhone has none today, so a
+    /// language its model doesn't cover goes to that model as a hint).
+    public static func route(selected: String, language: String?, otherLanguagesChoice chosen: String?, catalog: ModelCatalog,
+                             engines: [ModelEngineDescriptor], installed: Set<String>,
+                             appVersion: ModelVersion? = ModelVersion.app) -> TranscriptionRoute {
+        let other = otherLanguagesModel(selected: selected, chosen: chosen, catalog: catalog, engines: engines, installed: installed,
+                                        appVersion: appVersion)
+        return route(selected: selected, language: language, otherLanguages: other, catalog: catalog)
     }
 
     /// The model for languages `selected` doesn't cover: the person's choice when it still serves,
