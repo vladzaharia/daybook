@@ -128,8 +128,32 @@ not Daybook's.
   CascadeDuringImportTests, SoundcoreSharedRecordingTests, DeviceHubTests, RecorderHandoffTests,
   RecorderStatusWordsTests, the iPhone's DeviceOwnershipTests, and all 442 iPhone tests on a private simulator); the
   twelve hardware checks are in docs/direct-soundcore.md, "Not yet verified on hardware".
-- **W2-D, one timing model and fusion that can't drift, double, or mislabel.** (Pending merge; see the package's
-  entry once it lands.)
+- **W2-D, one clock per recording and fusion version 2.** `Meeting.clock(of:)` is the only placement. Rates are held
+  to 1000 ppm; a derived copy runs at its own rate; one origin per conversation; fusion v2 (a banded alignment, a
+  four-word duplicate guard, rank confidences across recognizers, names only where they stood); upkeep re-fuses at a
+  conversation's own version. TimelineClockTests and FusionProbeTests (3,000 shared words → 3,000; 4 × 40k → 40,000
+  in 4.3 s CPU, debug), AudioAligner additions (a 12 h vs 30 min overlap found around its prior; a cancelled read
+  stops), SoundComparison additions (a prior 10 minutes off found by the full search; phrase placements re-checked;
+  dependents move), and the regenerated v0.2.2 fixture. Release-build probes before and after: echo-cancelled error
+  0.72 s → 0; a three-anchor fit 285 s → 0.15 s off; the named probe → remote. `swift test` (whole package) and
+  build-ios --test for the iPhone's processing, library, rail, and reading suites pass. Needs real devices: the
+  echo-cancelled drift magnitudes; a Mac microphone against an iPhone microphone in one room; two Macs and one iPhone
+  end to end.
+- **W2-L1, the iPhone recorder's surfaces.** The pocket recorder's resting header and caption line, the Duo resting at
+  the whole recorder, Write by Hand in the keyboard bar, the More menu, and the control row, ink drawn as a picture at
+  rest, notes kept while saving, Open's chevron, and sentence-case recorder labels on both apps. DaybookUITests,
+  DaybookDesignTests, the iPhone's RecorderScreenTests, RecordingSurfacesTests, NotesInkEditorTests, and ReadingTests,
+  and simulator captures on the 18 Pro and the Duo (open, closed, folded and unfolded mid-recording with demo ink: 12
+  of 12 drawn; the blank ink wasn't reproduced on the baseline in 17 renders), plus a Floating Notes snapshot.
+- **W2-L3, the Personal lock and a Focus filter.** Require Touch ID (Mac) / Face ID (iPhone) for Personal, off by
+  default: locked lists say "Personal conversation", the Personal place shows a lock, opening asks, and the Mac relocks
+  on screen lock, sleep, or 10 minutes idle, the iPhone on backgrounding with a cover for the app switcher;
+  processing, sync, and the Live Activity never consult it. A Daybook Focus filter (Show Personal, Ask to Record
+  Meetings) on both apps. Checked with stand-in authenticators: PersonalLockTests, PersonalLockWordsTests,
+  PersonalLockViewsTests, PersonalLockAppTests (Mac), PersonalLockPhoneTests (iPhone), and `--lock-demo` snapshots
+  and screenshots. Still to check on a device: the Touch ID and Face ID prompts and their password or passcode
+  fallback, relocking on screen lock, sleep, and idleness, the app-switcher cover, and the Focus filter starting and
+  ending.
 - **W2-F, following the other device on evidence, and the sync and link fixes.** A device recording because another
   asked follows it on evidence (`LeaderWatch`: a notice at 2 min, presence decides, a quiet room ends it after 30 min),
   tested with a fake clock, presence, and levels on both apps. Awaited audio says where it is (`recording.arrival`,
