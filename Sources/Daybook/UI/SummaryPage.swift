@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookDesign
 import DaybookKit
 import DaybookUI
 import SwiftUI
@@ -99,9 +100,10 @@ private struct NotesSection: View {
                 text: Binding(get: { meeting.notes }, set: { state.editNotes(meeting.id, text: $0) }),
                 times: times,
                 placeholder: "Add a note…",
-                fontSize: 14 * scale, lineSpacing: 5 * scale,
+                fontSize: DaybookFont.body.size(.window) * scale, lineSpacing: TypeStyle.bodyLineSpacing(scale),
                 // Narrow, the times keep a lane as the bookmarks and Floating Notes do, rather than disappearing.
                 margin: narrow ? (times.contains { $0 != nil } ? FloatingLayout.textLeading : 0) : DaybookStyle.margin,
+                timeFontSize: DaybookFont.marginTime.size(.window) * scale,
                 focusOnAppear: isRecording && meeting.notes.isEmpty,
                 playTime: state.isRecording ? nil : { play(.timeline($0)) })
         }

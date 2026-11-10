@@ -21,7 +21,7 @@ extension PhoneStyle {
         /// The reading column and list cards' smaller crease clearance.
         static let readingCreaseClearance = ReadingGeometry.readingCreaseClearance
         /// The widest a column of text gets, as on the Mac.
-        static let measure = ReadingGeometry.measure
+        static let measure = ReadingGeometry.touchMeasure
         /// The lane of times beside timed notes and bookmarks, at the default text size.
         static let lane = ReadingGeometry.lane
     }

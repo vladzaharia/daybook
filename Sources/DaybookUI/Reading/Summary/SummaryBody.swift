@@ -72,7 +72,7 @@ public struct SummaryBody<Photos: View>: View {
                     Text(FindHighlight.mark(ModelText.inlineMarkdown(summary.overview), query: query))
                         .daybookFont(.lede)
                         .foregroundStyle(DaybookPalette.Ink.body)
-                        .lineSpacing(DaybookFont.bodyLineSpacing(density, scale: scale))
+                        .lineSpacing(DaybookFont.ledeLineSpacing(density, scale: scale))
                         .fixedSize(horizontal: false, vertical: true)
                         .selectableInWindow()
                 }
@@ -81,12 +81,17 @@ public struct SummaryBody<Photos: View>: View {
             .blockID(blockID(.lede))
             .summaryReveal(index: 0, revealing: revealing, shown: shown)
             if !summary.actionItems.isEmpty {
+                let steps = summary.actionItems.map { item in
+                    (item: item, segment: segment(evidence.segment(for: item.text, owner: item.owner)))
+                }
+                // On a narrow page the steps keep a lane only when one of them has a time for it.
+                let timed = steps.contains { $0.segment != nil }
                 VStack(alignment: .leading, spacing: 0) {
                     SummaryHeading(text: "Next steps", query: query)
                     VStack(alignment: .leading, spacing: density == .touch ? DaybookSpacing.s3 : DaybookSpacing.s2) {
-                        ForEach(summary.actionItems) { item in
-                            NextStepRow(item: item, meeting: meeting, library: library, query: query,
-                                        segment: segment(evidence.segment(for: item.text, owner: item.owner)), passages: passages)
+                        ForEach(steps, id: \.item.id) { step in
+                            NextStepRow(item: step.item, meeting: meeting, library: library, query: query, segment: step.segment,
+                                        timed: timed, passages: passages)
                         }
                     }
                     .padding(.top, density == .touch ? DaybookSpacing.s3 : DaybookSpacing.s2)
@@ -97,7 +102,7 @@ public struct SummaryBody<Photos: View>: View {
             ForEach(Array(sections.enumerated()), id: \.element.id) { index, section in
                 VStack(alignment: .leading, spacing: 0) {
                     SummaryHeading(text: section.heading, query: query)
-                    MarginRow { SectionMarkdown(source: section.body, query: query, meeting: meeting, evidence: evidence, passages: passages) }
+                    SectionMarkdown(source: section.body, query: query, meeting: meeting, evidence: evidence, passages: passages)
                         .padding(.top, DaybookSpacing.s2)
                     photos(section)
                 }
@@ -122,7 +127,8 @@ extension SummaryBody where Photos == EmptyView {
     }
 }
 
-/// A heading on the page: body ink at semibold, 32 pt below the block before it. Weight, not grey, makes a heading.
+/// A heading on the page: body ink at semibold, a size above the body, 32 pt below the block before it. Weight and
+/// size, not grey, make a heading.
 public struct SummaryHeading: View {
     private let text: String
     private let query: String
@@ -146,52 +152,66 @@ public struct SummaryHeading: View {
 // MARK: - Next steps
 
 /// A next step: its checkbox (a Mac's checkbox, the iPhone's circle with a tap's haptic), the step, its owner in their
-/// speaker's ink (the chip goes once it's done; the name stays, at full ink), and the time it was said, which leads to
-/// the passage. Ticking it can be undone.
+/// speaker's ink (the chip goes once it's done; the name stays, at full ink), and the time it was said in the margin with
+/// the notes' times (a lane on a narrow page; beside the owner at the accessibility text sizes), which leads to the
+/// passage. Ticking it can be undone.
 struct NextStepRow: View {
     let item: ActionItem
     let meeting: Meeting
     let library: LibraryController
     let query: String
     let segment: TranscriptSegment?
+    /// A step on this page has a time: on a narrow page every step keeps the lane, so their checkboxes line up.
+    let timed: Bool
     let passages: PassageLinks
     @Environment(\.undoManager) private var undoManager
     @Environment(\.daybookDensity) private var density
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    private var foldsTime: Bool {
+        SummaryMarkdownMetrics.foldsTime(density: density, accessibilitySize: typeSize.isAccessibilitySize)
+    }
 
     var body: some View {
-        MarginRow {
-            HStack(alignment: .firstTextBaseline, spacing: density == .touch ? 10 : DaybookSpacing.s2) {
-                Toggle(isOn: Binding(get: { item.completed }, set: set)) { Text(String(ModelText.inlineMarkdown(item.text).characters)) }
-                    .toggleStyle(NextStepToggleStyle())
-                EvidenceLink(text: item.text, segment: segment, passages: passages) {
-                    // The owner sits beside a short step, and under a long one.
-                    ViewThatFits(in: .horizontal) {
-                        HStack(alignment: .firstTextBaseline, spacing: DaybookSpacing.s2) {
-                            stepText.fixedSize()
-                            owner
-                            Spacer(minLength: 0)
-                        }
-                        VStack(alignment: .leading, spacing: 5) {
-                            stepText.fixedSize(horizontal: false, vertical: true)
-                            owner
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                if let segment {
-                    Button { passages.show(segment.id) } label: {
-                        QuietLink(rest: DaybookPalette.Ink.meta) {
-                            Text(TimeLabel.short(segment.start)).daybookFont(.time)
-                        }
-                        .daybookHitTarget()
-                    }
-                    .buttonStyle(.plain)
-                    .help("Show in Transcript")
-                    .accessibilityLabel("Said at \(SpokenTime.format(segment.start))")
-                    .accessibilityHint("Shows it in the transcript")
-                }
+        Group {
+            if timed && !foldsTime {
+                MarginRow { said } content: { step }
+            } else {
+                MarginRow { step }
             }
-            .daybookMotion(DaybookMotion.fade, value: item.completed)
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private var step: some View {
+        HStack(alignment: .firstTextBaseline, spacing: density == .touch ? 10 : DaybookSpacing.s2) {
+            Toggle(isOn: Binding(get: { item.completed }, set: set)) { Text(String(ModelText.inlineMarkdown(item.text).characters)) }
+                .toggleStyle(NextStepToggleStyle())
+            EvidenceLink(text: item.text, segment: segment, passages: passages) {
+                // The owner sits beside a short step, and under a long one.
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .firstTextBaseline, spacing: DaybookSpacing.s2) {
+                        stepText.fixedSize()
+                        owner
+                        if foldsTime { said }
+                        Spacer(minLength: 0)
+                    }
+                    VStack(alignment: .leading, spacing: 5) {
+                        stepText.fixedSize(horizontal: false, vertical: true)
+                        under
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .daybookMotion(DaybookMotion.fade, value: item.completed)
+    }
+
+    /// When it was said, read after the step.
+    @ViewBuilder private var said: some View {
+        if let segment {
+            SaidAt(segment: segment, passages: passages)
+                .accessibilitySortPriority(-1)
         }
     }
 
@@ -200,6 +220,19 @@ struct NextStepRow: View {
             .daybookFont(.body)
             .strikethrough(item.completed, color: DaybookPalette.Ink.meta)
             .foregroundStyle(item.completed ? DaybookPalette.Ink.secondary : DaybookPalette.Ink.body)
+    }
+
+    /// What sits under a long step: its owner, and its time when it's folded beside them.
+    @ViewBuilder private var under: some View {
+        let hasOwner = item.owner.map { !$0.isEmpty } ?? false
+        if foldsTime && segment != nil {
+            HStack(alignment: .firstTextBaseline, spacing: DaybookSpacing.s2) {
+                owner
+                said
+            }
+        } else if hasOwner {
+            owner
+        }
     }
 
     @ViewBuilder private var owner: some View {
@@ -213,6 +246,27 @@ struct NextStepRow: View {
 
     private func set(_ done: Bool) {
         library.setNextStep(item.id, done: done, in: meeting.id, undoManager: undoManager)
+    }
+}
+
+/// The time a block was said, in the page's margin (or lane) as the notes' times are: meta ink, link ink on hover, and
+/// a click (a tap under touch) shows the passage.
+struct SaidAt: View {
+    let segment: TranscriptSegment
+    let passages: PassageLinks
+
+    var body: some View {
+        Button { passages.show(segment.id) } label: {
+            QuietLink(rest: DaybookPalette.Ink.meta, touch: DaybookPalette.Ink.meta) {
+                Text(TimeLabel.short(segment.start)).daybookFont(.marginTime)
+            }
+            .lineLimit(1)
+            .daybookHitTarget()
+        }
+        .buttonStyle(.plain)
+        .help("Show in Transcript")
+        .accessibilityLabel("Said at \(SpokenTime.format(segment.start))")
+        .accessibilityHint("Shows it in the transcript")
     }
 }
 
@@ -273,6 +327,9 @@ private struct NextStepToggle: View {
 // MARK: - Sections
 
 /// A section's Markdown: paragraphs, bullets (teal dots), numbered items, and subheadings, each leading to its passage.
+/// Where the margin hangs, each block keeps the time it was said there, and in a window a list's marks hang there too,
+/// so the items' words share the page's left edge (a bullet's time stands in for its dot). On a narrow page the marks
+/// keep a column inside the measure and the passages stay in each block's menu.
 struct SectionMarkdown: View {
     let source: String
     let query: String
@@ -281,51 +338,109 @@ struct SectionMarkdown: View {
     let passages: PassageLinks
     @Environment(\.daybookDensity) private var density
     @Environment(\.readingScale) private var scale
+    @Environment(\.readingWidth) private var readingWidth
 
     var body: some View {
-        let bullet = SummaryMarkdownMetrics.bullet(density: density, scale: scale)
-        VStack(alignment: .leading, spacing: density == .touch ? DaybookSpacing.s2 : 6 * scale) {
-            ForEach(Array(SummaryMarkdown.blocks(source).enumerated()), id: \.offset) { _, block in
-                let segment = evidence.segment(for: block.text).flatMap { id in meeting.unifiedTranscript.first { $0.id == id } }
-                EvidenceLink(text: block.text, segment: segment, passages: passages) {
-                    switch block {
-                    case .paragraph(let text):
-                        Text(FindHighlight.mark(ModelText.inlineMarkdown(text), query: query))
-                            .lineSpacing(DaybookFont.bodyLineSpacing(density, scale: scale))
-                    case .heading(let text):
-                        Text(FindHighlight.mark(ModelText.inlineMarkdown(text), query: query)).daybookFont(.heading)
-                    case .item(let marker, let text):
-                        HStack(alignment: .firstTextBaseline, spacing: 0) {
-                            Group {
-                                if marker == "•" {
-                                    Circle().fill(DaybookPalette.accent.opacity(0.75)).frame(width: bullet.dot, height: bullet.dot)
-                                        .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + bullet.dot * 0.8 }
-                                } else {
-                                    Text(marker).monospacedDigit().foregroundStyle(DaybookPalette.Ink.secondary)
-                                }
+        let blocks = SummaryMarkdown.blocks(source).enumerated().map { offset, block in
+            let segment = evidence.segment(for: block.text).flatMap { id in meeting.unifiedTranscript.first { $0.id == id } }
+            // A subheading keeps its passage in its menu; only what was said gets a time.
+            let time: TranscriptSegment? = if case .heading = block { nil } else { segment }
+            return (offset: offset, block: block, segment: segment, time: time)
+        }
+        let spacing = density == .touch ? DaybookSpacing.s2 : 6 * scale
+        if SummaryMarkdownMetrics.timesHang(width: readingWidth) {
+            let marksHang = SummaryMarkdownMetrics.marksHang(density: density, width: readingWidth)
+            VStack(alignment: .leading, spacing: spacing) {
+                ForEach(blocks, id: \.offset) { entry in
+                    MarginRow {
+                        HStack(alignment: .firstTextBaseline, spacing: DaybookSpacing.s1) {
+                            if let segment = entry.time { SaidAt(segment: segment, passages: passages).accessibilitySortPriority(-1) }
+                            if marksHang, case .item(let marker, _) = entry.block,
+                               SummaryMarkdownMetrics.showsMark(marker: marker, timed: entry.time != nil) {
+                                mark(marker)
                             }
-                            .frame(width: bullet.column, alignment: .leading)
-                            .accessibilityHidden(true)
-                            Text(FindHighlight.mark(ModelText.inlineMarkdown(text), query: query))
-                                .lineSpacing(DaybookFont.bodyLineSpacing(density, scale: scale))
                         }
+                    } content: {
+                        text(entry.block, segment: entry.segment, markInline: !marksHang)
+                    }
+                    .accessibilityElement(children: .contain)
+                }
+            }
+        } else {
+            MarginRow {
+                VStack(alignment: .leading, spacing: spacing) {
+                    ForEach(blocks, id: \.offset) { entry in
+                        text(entry.block, segment: entry.segment, markInline: true)
                     }
                 }
-                .daybookFont(.body)
-                .foregroundStyle(DaybookPalette.Ink.body)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .selectableInWindow()
             }
         }
+    }
+
+    private func text(_ block: SummaryMarkdown.Block, segment: TranscriptSegment?, markInline: Bool) -> some View {
+        let bullet = SummaryMarkdownMetrics.bullet(density: density, scale: scale)
+        return EvidenceLink(text: block.text, segment: segment, passages: passages) {
+            switch block {
+            case .paragraph(let text):
+                Text(FindHighlight.mark(ModelText.inlineMarkdown(text), query: query))
+                    .lineSpacing(DaybookFont.bodyLineSpacing(density, scale: scale))
+            case .heading(let text):
+                Text(FindHighlight.mark(ModelText.inlineMarkdown(text), query: query)).daybookFont(.heading)
+            case .item(let marker, let text):
+                HStack(alignment: .firstTextBaseline, spacing: 0) {
+                    if markInline {
+                        mark(marker).frame(width: bullet.column, alignment: .leading)
+                    }
+                    Text(FindHighlight.mark(ModelText.inlineMarkdown(text), query: query))
+                        .lineSpacing(DaybookFont.bodyLineSpacing(density, scale: scale))
+                }
+            }
+        }
+        .daybookFont(.body)
+        .foregroundStyle(DaybookPalette.Ink.body)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .selectableInWindow()
+    }
+
+    /// A list item's mark: a teal dot on the words' x-height, or its number in secondary ink.
+    private func mark(_ marker: String) -> some View {
+        let bullet = SummaryMarkdownMetrics.bullet(density: density, scale: scale)
+        return Group {
+            if marker == "•" {
+                Circle().fill(DaybookPalette.accent.opacity(0.75)).frame(width: bullet.dot, height: bullet.dot)
+                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + bullet.dot * 0.8 }
+            } else {
+                Text(marker).daybookFont(.body).monospacedDigit().foregroundStyle(DaybookPalette.Ink.secondary)
+            }
+        }
+        .accessibilityHidden(true)
     }
 }
 
 /// A list's marks, one rule per density: a 5 pt dot in a 16 pt column in a window (growing with the reading scale),
-/// 6 in 20 under touch.
+/// 6 in 20 under touch. In a window whose margin hangs, the marks hang in it instead, ending where the times do.
 public enum SummaryMarkdownMetrics {
     public static func bullet(density: DaybookDensity, scale: CGFloat = 1) -> (dot: CGFloat, column: CGFloat) {
         density == .touch ? (6, 20) : (5 * scale, 16 * scale)
+    }
+
+    /// Whether a summary block's time sits in the margin: wherever the margin hangs.
+    public static func timesHang(width: ReadingWidth) -> Bool { width == .regular }
+
+    /// Whether a list's marks hang in the margin, so its words share the page's left edge: in a window whose margin
+    /// hangs. Under touch they keep their column at every text size.
+    public static func marksHang(density: DaybookDensity, width: ReadingWidth) -> Bool {
+        density != .touch && timesHang(width: width)
+    }
+
+    /// Whether a hanging mark shows beside a block's time: a bullet's time stands in for its dot; a number stays.
+    public static func showsMark(marker: String, timed: Bool) -> Bool { marker != "•" || !timed }
+
+    /// Whether a next step's time joins its owner instead of keeping a lane: under touch at the accessibility text
+    /// sizes, where the lane would leave a step a word or two a line.
+    public static func foldsTime(density: DaybookDensity, accessibilitySize: Bool) -> Bool {
+        density == .touch && accessibilitySize
     }
 }
 

@@ -18,7 +18,7 @@ extension EnvironmentValues {
     }
 }
 
-/// A scrolling, centred page: DaybookUI's `ReadingPage` (a 56 pt time margin hanging left of a 640 pt text measure,
+/// A scrolling, centred page: DaybookUI's `ReadingPage` (a 56 pt time margin hanging left of a 560 pt text measure,
 /// `readingWidth` for the shared rows), which also says when it's narrow for the Mac's own rows (`pageIsNarrow`).
 struct PageScroll<Content: View>: View {
     var lazy = false
@@ -300,17 +300,15 @@ struct ConversationStatus: View {
 /// What a status box is about: something went wrong, something to do, or something to know.
 enum StatusBoxKind { case problem, accent, info }
 
-/// A state that needs the person, on a device's page and in the transcript's notices: the same box as a
-/// conversation's status (`StatusBlock`), with one radius and padding from the tokens, its glyph on the title's
-/// first baseline, and its actions beside the words, or under them in a narrow measure.
+/// A state that needs the person, on a device's page: DaybookDesign's `AttentionBox`, the same box as a conversation's
+/// status (`StatusBlock`), with its glyph on the title's first baseline and its actions after the words, or under them
+/// when the title wouldn't fit beside them.
 struct StatusBox<Actions: View>: View {
     let kind: StatusBoxKind
     let symbol: String
     let title: String
     let message: String?
     let actions: Actions
-    @State private var width: CGFloat = DaybookStyle.measure
-    @Environment(\.colorSchemeContrast) private var contrast
 
     private var attention: AttentionKind {
         switch kind {
@@ -319,56 +317,9 @@ struct StatusBox<Actions: View>: View {
         case .info: return .info
         }
     }
-    private var stacked: Bool { StatusBlockLayout.stacksActions(width: width, density: .window) }
-    private var tint: Color {
-        switch kind {
-        case .problem: return Ink.warning
-        case .accent: return DaybookStyle.accent
-        case .info: return Ink.secondary
-        }
-    }
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: Space.s3) {
-            Image(systemName: symbol)
-                .font(.system(size: 14))
-                .symbolRenderingMode(kind == .problem ? .monochrome : .hierarchical)
-                .foregroundStyle(tint)
-                .frame(width: 18)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: Space.s2) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title).font(TypeStyle.statusLead).foregroundStyle(AttentionBoxLayout.title(for: attention).ink.color)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if let message {
-                        Text(message).font(TypeStyle.status).foregroundStyle(AttentionBoxLayout.message(for: attention).ink.color)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                if stacked { actionRow }
-            }
-            .layoutPriority(1)
-            if !stacked {
-                Spacer(minLength: Space.s3)
-                actionRow
-            }
-        }
-        .padding(Space.s3)
-        // Stacked or not, the box spans the measure, so boxes and lines share both edges.
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(AttentionBoxLayout.wash(for: attention).color, in: DaybookRadius.shape(DaybookRadius.box))
-        .overlay {
-            if contrast == .increased {
-                DaybookRadius.shape(DaybookRadius.box).strokeBorder(kind == .problem ? Ink.warning : Ink.meta, lineWidth: 1)
-            }
-        }
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
-    }
-
-    private var actionRow: some View {
-        HStack(spacing: Space.s3) { actions }
-            .controlSize(.small)
-            .fixedSize()
+        AttentionBox(kind: attention, title: title, symbol: symbol, message: message) { actions }
     }
 }
 

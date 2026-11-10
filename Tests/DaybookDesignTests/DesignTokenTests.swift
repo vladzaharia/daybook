@@ -283,11 +283,14 @@ final class DesignTokenTests: XCTestCase {
     // MARK: Type, radii, tiles
 
     func testEachTypeRoleHasOneFontPerDensity() {
-        XCTAssertEqual(DaybookFont.body.size(.window), 14)
-        XCTAssertEqual(DaybookFont.docTitle.size(.window), 28)
+        XCTAssertEqual(DaybookFont.body.size(.window), 15)
+        XCTAssertEqual(DaybookFont.docTitle.size(.window), 30)
         XCTAssertEqual(DaybookFont.docTitle.size(.panel), 17, "Floating Notes' title")
         XCTAssertEqual(DaybookFont.sheetTitle.size(.window), 22)
-        XCTAssertEqual(DaybookFont.marginTime.size(.window), 11, "So 1:02:03 fits the margin")
+        XCTAssertEqual(DaybookFont.marginTime.size(.window), 12, "So 1:02:03 fits the margin")
+        XCTAssertEqual(DaybookFont.time.size(.window), 12)
+        XCTAssertEqual(DaybookFont.marginTime.size(.panel), 11, "Floating Notes' lane keeps its size")
+        XCTAssertEqual(DaybookFont.body.size(.panel), 13)
         XCTAssertEqual(DaybookFont.body.textStyle, .body)
         XCTAssertEqual(DaybookFont.rowTitle.textStyle, .headline)
         XCTAssertEqual(DaybookFont.sheetTitle.design, .serif, "The sheet title is New York; a row's title is SF")
@@ -296,9 +299,27 @@ final class DesignTokenTests: XCTestCase {
         XCTAssertTrue(DaybookFont.body.isReading)
         XCTAssertFalse(DaybookFont.status.isReading, "Chrome text never scales")
         XCTAssertTrue(DaybookFont.allCases.allSatisfy { $0.design == .default || $0 == .docTitle || $0 == .sheetTitle }, "New York for titles only")
-        XCTAssertEqual(DaybookFont.bodyLineSpacing(.window, scale: 2), 10)
+        XCTAssertEqual(DaybookFont.bodyLineSpacing(.window), 6, "15 pt body on a 24 pt line")
+        XCTAssertEqual(DaybookFont.bodyLineSpacing(.window, scale: 2), 12)
+        XCTAssertEqual(DaybookFont.bodyLineSpacing(.panel), 5)
         XCTAssertEqual(DaybookFont.bodyLineSpacing(.touch), 4)
+        XCTAssertEqual(DaybookFont.ledeLineSpacing(.window), 4, "19 pt lede on a 26 pt line")
+        XCTAssertEqual(DaybookFont.ledeLineSpacing(.touch), DaybookFont.bodyLineSpacing(.touch))
         XCTAssertEqual(DaybookDensity.platformDefault, .window)
+    }
+
+    /// The window's page reads as a document: the title over a lede, then headings that outrank the paragraphs under
+    /// them, each a step above the next. Floating Notes keeps its smaller sizes; under touch Dynamic Type sets them.
+    func testThePagesHierarchyRunsTitleLedeHeadingBody() {
+        let window = [DaybookFont.docTitle, .lede, .heading, .body].map { $0.size(.window) }
+        XCTAssertEqual(window, [30, 19, 17, 15])
+        XCTAssertEqual(window, window.sorted(by: >), "Each role outranks the next")
+        XCTAssertEqual(DaybookFont.lede.size(.panel), 16)
+        XCTAssertEqual(DaybookFont.heading.size(.panel), 15)
+        XCTAssertEqual(DaybookFont.heading.weight, .semibold)
+        XCTAssertEqual(DaybookFont.lede.weight, .regular)
+        XCTAssertEqual(DaybookFont.lede.textStyle, .title3)
+        XCTAssertEqual(DaybookFont.heading.textStyle, .headline)
     }
 
     func testRadiiAndTilesHaveOneSizeEach() {
@@ -335,9 +356,16 @@ final class DesignTokenTests: XCTestCase {
 
     func testABoxStacksItsActionsWhenNarrowOrCompact() {
         XCTAssertFalse(AttentionBoxLayout.stacks(width: 640, compact: false, density: .window))
-        XCTAssertTrue(AttentionBoxLayout.stacks(width: 519, compact: false, density: .window))
+        XCTAssertFalse(AttentionBoxLayout.stacks(width: 400, compact: false, density: .window),
+                       "In a window the words decide, by whether the title fits beside the actions")
         XCTAssertTrue(AttentionBoxLayout.stacks(width: 640, compact: true, density: .window))
         XCTAssertTrue(AttentionBoxLayout.stacks(width: 640, compact: false, density: .panel), "Floating Notes is always narrow")
+        XCTAssertTrue(AttentionBoxLayout.stacks(width: 402, compact: false, density: .touch), "An iPhone: under the words")
+        XCTAssertFalse(AttentionBoxLayout.stacks(width: 600, compact: false, density: .touch), "The open Duo as one page: beside them")
+        XCTAssertTrue(AttentionBoxLayout.hugs(.window), "A window's box is as wide as what it says")
+        XCTAssertFalse(AttentionBoxLayout.hugs(.touch))
+        XCTAssertFalse(AttentionBoxLayout.hugs(.panel))
+        XCTAssertEqual(AttentionBoxLayout.actionGap(.window), 16, "The actions follow the words")
         XCTAssertEqual(AttentionBoxLayout.symbol(for: .problem), "exclamationmark.triangle.fill")
     }
 

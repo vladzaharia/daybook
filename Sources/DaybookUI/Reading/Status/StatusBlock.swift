@@ -7,13 +7,16 @@ import SwiftUI
 ///
 /// - A working or waiting state is a bare line: its glyph (or a spinner) in a fixed column, the words in secondary ink
 ///   with what's worth knowing under them, a progress bar under the words when the work reports a figure, and its
-///   actions as text links at the line's end, or under the words when they need the room.
+///   actions as text links 16 pt after the words (at the line's end under touch), or under the words when they need
+///   the room.
 /// - A state that needs the person is a quiet box (one radius and padding, from the tokens), its glyph on the title's
-///   first baseline, at most two actions beside the words from 520 pt wide and under them below that, in the order the
-///   presentation gives. The one that leads is prominent; Details shows the device's own words (a popover on the Mac,
-///   a sheet on the iPhone).
+///   first baseline, and at most two actions in the order the presentation gives. In a window the box hugs its words,
+///   the actions 16 pt after them while the title fits on one line beside them and under them when it wouldn't; under
+///   touch it spans its column, the actions beside the words from 520 pt wide and under them below that. The one that
+///   leads is prominent; Details shows the device's own words (a popover on the Mac, a sheet on the iPhone).
 ///
-/// A countdown's seconds roll (and fade under Reduce Motion); only its words redraw each second.
+/// A countdown's seconds roll (and fade under Reduce Motion); only its words redraw each second, in a width that holds
+/// still, so the actions after them never move.
 public struct StatusBlock: View {
     private let presentation: ConversationStatusPresentation
     private let perform: @MainActor (ConversationStatusPresentation.Action) -> Void
@@ -60,12 +63,12 @@ public struct StatusBlock: View {
                 if presentation.actions.isEmpty {
                     lineWords
                 } else {
-                    // The actions at the line's end, as Record sits beside "Notes only"; under the words when they
-                    // need the room, so neither breaks mid-word.
+                    // The actions follow the words (at the line's end under touch); under the words when they need
+                    // the room, so neither breaks mid-word.
                     ViewThatFits(in: .horizontal) {
-                        HStack(alignment: .firstTextBaseline, spacing: DaybookSpacing.s3) {
+                        HStack(alignment: .firstTextBaseline, spacing: touch ? DaybookSpacing.s3 : DaybookSpacing.s4) {
                             lineWords.fixedSize()
-                            Spacer(minLength: 0)
+                            if touch { Spacer(minLength: 0) }
                             actions(prominent: false, wraps: false).fixedSize()
                         }
                         VStack(alignment: .leading, spacing: 6) {
@@ -100,6 +103,34 @@ public struct StatusBlock: View {
     // MARK: Box
 
     private func box(_ kind: AttentionKind) -> some View {
+        Group {
+            if stacked || presentation.actions.isEmpty {
+                boxRow(kind, beside: false)
+            } else if density == .window {
+                // The actions after the words while the title fits on one line beside them; under them when it would wrap.
+                ViewThatFits(in: .horizontal) {
+                    boxRow(kind, beside: true)
+                    boxRow(kind, beside: false)
+                }
+            } else {
+                boxRow(kind, beside: true)
+            }
+        }
+        .padding(DaybookSpacing.s3)
+        // In a window the box is as wide as what it says, up to its column; under touch it spans the column.
+        .frame(maxWidth: AttentionBoxLayout.hugs(density) ? nil : .infinity, alignment: .leading)
+        .background(AttentionBoxLayout.wash(for: kind).color, in: DaybookRadius.shape(DaybookRadius.box))
+        .overlay {
+            if contrast == .increased {
+                DaybookRadius.shape(DaybookRadius.box)
+                    .strokeBorder(kind == .problem ? DaybookPalette.Ink.warning : DaybookPalette.Ink.meta, lineWidth: 1)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+    }
+
+    private func boxRow(_ kind: AttentionKind, beside: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: DaybookSpacing.s3) {
             Group {
                 if let symbol = presentation.symbol {
@@ -111,38 +142,41 @@ public struct StatusBlock: View {
             .font(touch ? DaybookFont.statusLead.font(.touch) : .system(size: 14))
             .frame(width: glyphColumn)
             .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: touch ? 10 : DaybookSpacing.s2) {
-                VStack(alignment: .leading, spacing: 3) {
-                    StatusTitle(presentation: presentation)
-                        .daybookFont(.statusLead)
-                        .foregroundStyle(AttentionBoxLayout.title(for: kind).ink.color)
-                    if let detail = presentation.detail {
-                        Text(detail)
-                            .daybookFont(.status)
-                            .foregroundStyle(AttentionBoxLayout.message(for: kind).ink.color)
-                    }
+            if beside {
+                HStack(alignment: .firstTextBaseline, spacing: AttentionBoxLayout.actionGap(density)) {
+                    boxWords(kind, oneLineTitle: !touch)
+                        .layoutPriority(1)
+                    if touch { Spacer(minLength: DaybookSpacing.s3) }
+                    actions(prominent: true, wraps: false).fixedSize()
                 }
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityElement(children: .combine)
-                if stacked && !presentation.actions.isEmpty { actions(prominent: true, wraps: true) }
-            }
-            .layoutPriority(1)
-            if !stacked && !presentation.actions.isEmpty {
-                Spacer(minLength: DaybookSpacing.s3)
-                actions(prominent: true, wraps: false).fixedSize()
+            } else {
+                VStack(alignment: .leading, spacing: touch ? 10 : DaybookSpacing.s2) {
+                    boxWords(kind, oneLineTitle: false)
+                    if !presentation.actions.isEmpty { actions(prominent: true, wraps: true) }
+                }
+                .layoutPriority(1)
             }
         }
-        .padding(DaybookSpacing.s3)
-        // Stacked or not, the box spans its column, so boxes and lines share both edges.
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(AttentionBoxLayout.wash(for: kind).color, in: DaybookRadius.shape(DaybookRadius.box))
-        .overlay {
-            if contrast == .increased {
-                DaybookRadius.shape(DaybookRadius.box)
-                    .strokeBorder(kind == .problem ? DaybookPalette.Ink.warning : DaybookPalette.Ink.meta, lineWidth: 1)
+    }
+
+    /// Beside the actions in a window the title keeps one line, and the detail wraps to what's left without asking for
+    /// more, so only the title decides whether the actions fit beside it.
+    private func boxWords(_ kind: AttentionKind, oneLineTitle: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            StatusTitle(presentation: presentation)
+                .daybookFont(.statusLead)
+                .foregroundStyle(AttentionBoxLayout.title(for: kind).ink.color)
+                .fixedSize(horizontal: oneLineTitle, vertical: true)
+            if let detail = presentation.detail {
+                NoIdealWidth(when: oneLineTitle) {
+                    Text(detail)
+                        .daybookFont(.status)
+                        .foregroundStyle(AttentionBoxLayout.message(for: kind).ink.color)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
-        .accessibilityElement(children: .contain)
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: Actions
@@ -185,20 +219,24 @@ public struct StatusBlock: View {
     }
 }
 
-/// The status's title: a countdown's seconds move once a second, rolling down (a fade under Reduce Motion).
+/// The status's title: a countdown's seconds move once a second, rolling down (a fade under Reduce Motion), in the
+/// width of its widest moment, so what follows the words holds still.
 private struct StatusTitle: View {
     let presentation: ConversationStatusPresentation
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         if let until = presentation.countdownUntil {
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                let title = presentation.title(at: context.date)
-                Text(title)
-                    .monospacedDigit()
-                    .contentTransition(reduceMotion ? .opacity : .numericText(countsDown: true))
-                    .animation(DaybookMotion.resolved(DaybookMotion.tick, reduceMotion: reduceMotion),
-                               value: StatusBlockLayout.secondsLeft(until, at: context.date))
+            ZStack(alignment: .leading) {
+                Text(StatusBlockLayout.countdownWidth(presentation.title)).monospacedDigit().hidden()
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    let title = presentation.title(at: context.date)
+                    Text(title)
+                        .monospacedDigit()
+                        .contentTransition(reduceMotion ? .opacity : .numericText(countsDown: true))
+                        .animation(DaybookMotion.resolved(DaybookMotion.tick, reduceMotion: reduceMotion),
+                                   value: StatusBlockLayout.secondsLeft(until, at: context.date))
+                }
             }
         } else {
             Text(presentation.title)
@@ -211,10 +249,16 @@ public enum StatusBlockLayout {
     /// A working line's bar reaches at most this far.
     public static let barWidth: CGFloat = 220
 
-    /// A box's actions move under its words in a narrow column (`AttentionBoxLayout.stackBelow`), and always in the
-    /// panel.
+    /// A box's actions go under its words always in the panel, and under touch in a narrow column
+    /// (`AttentionBoxLayout.stacks`); in a window its words decide.
     public static func stacksActions(width: CGFloat, density: DaybookDensity) -> Bool {
-        density == .panel || width < AttentionBoxLayout.stackBelow
+        AttentionBoxLayout.stacks(width: width, compact: false, density: density)
+    }
+
+    /// The words a countdown's width is kept for: its title with every digit a zero, which in monospaced digits is as
+    /// wide as any second it shows ("Summarizing in 12 s" keeps the width of "Summarizing in 00 s" as it reaches 9).
+    public static func countdownWidth(_ title: String) -> String {
+        String(title.map { $0.isASCII && $0.isNumber ? "0" : $0 })
     }
 
     /// Between two actions: 24 pt under touch, so neighbours aren't mis-tapped; 12 in a window.
