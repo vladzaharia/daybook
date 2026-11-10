@@ -7,8 +7,8 @@ import Foundation
 /// library's, `Sealed/…`), and one `CourierFile` record per journal file, named by its library and path so a resend
 /// replaces itself. Daybook 0.3.0 and earlier fetch only `Courier` and leave other zones alone. The engine schedules sends and fetches, subscribes to the
 /// database for pushes, and retries network failures and rate limits itself; this courier retries refusals for lack
-/// of storage with a growing delay, deletes what a Mac stored and anything older than seven days, and turns itself
-/// off quietly when CloudKit can't be used.
+/// of storage with a growing delay, deletes what a Mac stored (delivering a file older than seven days before deleting
+/// it, and fetching again one the Mac couldn't store yet), and turns itself off quietly when CloudKit can't be used.
 public actor CloudKitCourier: SyncCourier {
     /// A queue of its own: the outbox copies files up to 50 MB as it takes them, which Swift's cooperative threads must
     /// never wait on.
@@ -33,6 +33,10 @@ public actor CloudKitCourier: SyncCourier {
     private let sealedZoneID = CKRecordZone.ID(zoneName: CloudKitCourier.sealedZoneName, ownerName: CKCurrentUserDefaultName)
     private var zoneIDs: [CKRecordZone.ID] { [zoneID, sealedZoneID] }
     private var engine: CKSyncEngine?
+    /// The private database the engine runs on, for fetching files a receiver couldn't settle by name.
+    private var database: CKDatabase?
+    /// Files handed to the receiver during the fetch under way, so one isn't offered twice in it.
+    private var offeredThisFetch = Set<String>()
     private var role: CourierRole = []
     private var receiver: CourierReceiver?
     private var onStatus: (@Sendable (CourierStatus) -> Void)?
@@ -96,6 +100,7 @@ public actor CloudKitCourier: SyncCourier {
         accountObserver = nil
         if let engine { await engine.cancelOperations() }
         engine = nil
+        database = nil
         availability = .unavailable("Sync is off")
         publish()
     }
@@ -127,11 +132,51 @@ public actor CloudKitCourier: SyncCourier {
 
     public func fetch() async {
         guard let engine, availability == .available else { return }
+        // What the receiver couldn't settle at an earlier fetch: the engine's change token has moved past it, so it's
+        // fetched again by name.
+        let earlier = role.contains(.receive) ? outbox.unsettledIDs : []
+        offeredThisFetch = []
         var options = CKSyncEngine.FetchChangesOptions()
         if !role.contains(.receive) { options.scope = .allExcluding(zoneIDs) }
         options.operationGroup = Self.immediateGroup("Receive recordings")
         do { try await engine.fetchChanges(options) } catch { note(error) }
+        await redeliver(earlier.filter { !offeredThisFetch.contains($0) })
         publish()
+    }
+
+    public func redeliverUnsettled() async {
+        guard engine != nil, availability == .available, role.contains(.receive) else { return }
+        offeredThisFetch = []
+        await redeliver(outbox.unsettledIDs)
+        publish()
+    }
+
+    /// Fetches files the receiver couldn't settle before, by name, and offers them again. One gone from the server
+    /// (another Mac stored and deleted it) is forgotten.
+    private func redeliver(_ ids: [String]) async {
+        let now = Date()
+        let due = ids.filter { outbox.isUnsettled($0, now: now) }
+        guard let database, let engine, !due.isEmpty else { return }
+        let ids = due.map(recordID)
+        let results: [CKRecord.ID: Result<CKRecord, any Error>]
+        do {
+            results = try await database.configuredWith(group: Self.immediateGroup("Receive recordings")) { database in
+                try await database.records(for: ids, desiredKeys: nil)
+            }
+        } catch {
+            note(error)
+            return
+        }
+        var records: [CKRecord] = []
+        for (id, result) in results {
+            switch result {
+            case .success(let record): records.append(record)
+            case .failure(let error as CKError) where [.unknownItem, .zoneNotFound, .userDeletedZone].contains(error.code):
+                outbox.forget(id.recordName)
+            case .failure: break
+            }
+        }
+        await receive(records, engine: engine)
     }
 
     /// Sends and fetches someone is waiting for: a recording just made on the iPhone, a push on the Mac.
@@ -186,11 +231,12 @@ public actor CloudKitCourier: SyncCourier {
         case .offForNow(let reason): return turnOffForNow(reason)
         }
         offForNow = false; reconnectTask?.cancel(); reconnectTask = nil; reconnectDelay = Self.firstReconnect
-        var configuration = CKSyncEngine.Configuration(database: container.privateCloudDatabase,
-                                                       stateSerialization: loadState(), delegate: self)
+        let database = container.privateCloudDatabase
+        var configuration = CKSyncEngine.Configuration(database: database, stateSerialization: loadState(), delegate: self)
         configuration.automaticallySync = true
         let engine = CKSyncEngine(configuration)
         self.engine = engine
+        self.database = database
         availability = .available
         refusals = 0
         if role.contains(.send) { engine.state.add(pendingDatabaseChanges: zoneIDs.map { .saveZone(CKRecordZone(zoneID: $0)) }) }
@@ -275,6 +321,7 @@ public actor CloudKitCourier: SyncCourier {
     private func releaseEngine() async {
         guard let engine, availability != .available else { return }
         self.engine = nil
+        database = nil
         await engine.cancelOperations()
     }
 
@@ -414,29 +461,43 @@ public actor CloudKitCourier: SyncCourier {
 
     // MARK: Receiving
 
-    private func receive(_ changes: CKSyncEngine.Event.FetchedRecordZoneChanges, engine: CKSyncEngine) async {
+    /// Hands what other devices sent to the receiver, however old: an expired file is delivered before it's deleted,
+    /// since it can be the only copy (the iPhone was lost before iCloud Drive uploaded it). What the receiver settles is
+    /// deleted; what it can't is kept and offered again (`redeliver`), until `CourierPolicy.unsettledMemory`. Files
+    /// that aren't this receiver's to take are deleted once expired.
+    private func receive(_ records: [CKRecord], engine: CKSyncEngine) async {
         let now = Date()
         var incoming: [CourierIncomingFile] = []
         var delete: [String] = []
-        for modification in changes.modifications {
-            let record = modification.record
+        for record in records {
             guard zoneIDs.contains(record.recordID.zoneID), record.recordType == Self.recordType else { continue }
             guard let file = Self.file(from: record) else {
                 // Nobody can use a malformed file; the receiver clears it.
                 if role.contains(.receive) { delete.append(record.recordID.recordName) }
                 continue
             }
-            if now.timeIntervalSince(file.createdAt) >= policy.expiry { delete.append(file.id); continue }
             guard role.contains(.receive), receiver != nil, file.deviceID != deviceID,
-                  let url = (record[Field.asset] as? CKAsset)?.fileURL else { continue }
+                  let url = (record[Field.asset] as? CKAsset)?.fileURL else {
+                if now.timeIntervalSince(file.createdAt) >= policy.expiry { delete.append(file.id) }
+                continue
+            }
             outbox.noteKnown(file.id, createdAt: file.createdAt)
+            offeredThisFetch.insert(file.id)
             incoming.append(CourierIncomingFile(file: file, contents: url))
         }
-        for deletion in changes.deletions { outbox.forget(deletion.recordID.recordName) }
         if let receiver, !incoming.isEmpty {
             // Asset files are in CloudKit's staging area, which the system clears: the receiver copies them now.
             let settled = await receiver(incoming)
-            delete += incoming.map(\.file.id).filter(settled.contains)
+            for file in incoming.map(\.file) {
+                if settled.contains(file.id) {
+                    outbox.noteSettled(file.id)
+                    delete.append(file.id)
+                } else if now.timeIntervalSince(file.createdAt) >= policy.unsettledMemory {
+                    delete.append(file.id)
+                } else {
+                    outbox.noteUnsettled(file.id, createdAt: file.createdAt)
+                }
+            }
         }
         if !delete.isEmpty { engine.state.add(pendingRecordZoneChanges: delete.map { .deleteRecord(recordID($0)) }) }
         outbox.save(now: now)
@@ -505,7 +566,8 @@ extension CloudKitCourier: CKSyncEngineDelegate {
             }
             outbox.save()
         case .fetchedRecordZoneChanges(let changes):
-            await receive(changes, engine: syncEngine)
+            for deletion in changes.deletions { outbox.forget(deletion.recordID.recordName) }
+            await receive(changes.modifications.map(\.record), engine: syncEngine)
         case .sentDatabaseChanges(let sent):
             for failure in sent.failedZoneSaves where zoneIDs.contains(failure.zone.zoneID) { note(failure.error) }
         case .sentRecordZoneChanges(let sent):

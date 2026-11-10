@@ -252,6 +252,8 @@ public final class LibrarySyncController {
     @ObservationIgnored let courierBridge = SyncCourierBridge()
     /// The last acknowledged pass found iCloud refusing uploads for lack of storage.
     @ObservationIgnored var lastResultStorageFull = false
+    /// What this device's presence was last told stands in the way of its sync (`tellPresenceProblem`).
+    @ObservationIgnored var toldPresenceProblem: SyncPresenceProblem?
     /// Library keys this device asked paired devices for, still open (LibraryKeyExchange.swift).
     @ObservationIgnored var keyRequests: [LibraryKeyRequestRecord] = []
     @ObservationIgnored var activeTask: Task<SyncResult, Error>?
@@ -424,6 +426,7 @@ public final class LibrarySyncController {
                                             appInstallation: appInstallation) }
         catch { scopedURL?.stopAccessingSecurityScopedResource(); scopedURL = nil; throw error }
         folder = url; self.transport = transport; status = .preparing; configurationID = UUID()
+        toldPresenceProblem = nil
         encryption = replica.keyStore == nil ? .unavailable : .off
         isICloudLocation = (try? url.resourceValues(forKeys: [.isUbiquitousItemKey]).isUbiquitousItem) == true || root.path.contains("/Library/Mobile Documents/")
         // Other devices learn this one exists (and what it is) right away, not only after its first full
@@ -587,6 +590,7 @@ public final class LibrarySyncController {
         status = settledStatus(uploads: result.pendingUploads, downloads: result.pendingDownloads, at: completed)
         lastSync = completed; defaults.set(completed, forKey: Key.lastCompleted)
         isSyncing = false
+        tellPresenceProblem()
         takeNewIdentity()
         if encryptsAutomatically, encryption == .off, !isStorageFull { Task { await encryptOnceEveryDeviceCan() } }
     }
@@ -612,6 +616,19 @@ public final class LibrarySyncController {
         default:
             break
         }
+        tellPresenceProblem()
+    }
+
+    /// What this device's presence says stands in the way of its sync: iCloud storage is full while it is (the last pass
+    /// found iCloud refusing uploads for it, or the courier did), so another device can say why its work hasn't arrived.
+    var presenceProblem: SyncPresenceProblem? { isStorageFull ? .storageFull : nil }
+
+    /// Tells the engine when `presenceProblem` changes; it rewrites its presence at once.
+    func tellPresenceProblem() {
+        let problem = presenceProblem
+        guard problem != toldPresenceProblem, let engine else { return }
+        toldPresenceProblem = problem
+        Task { try? await engine.setPresenceProblem(problem) }
     }
 
     public func reportFailure(_ message: String) {

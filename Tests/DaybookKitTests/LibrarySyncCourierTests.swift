@@ -196,6 +196,11 @@ final class LibrarySyncCourierTests: XCTestCase {
         let phone = try await device("Phone", phone: true, role: .send, clock: clock)
         _ = try await recordAndSync(on: phone, bytes: audioBytes(3_000, seed: 3))
         try await waitUntil("storage full", state: syncState) { phone.sync.courierStatus.storageFull }
+        // Its presence says so, for a Mac waiting for this recording (`SyncPresenceProblem`).
+        let engine = try XCTUnwrap(phone.sync.engine)
+        try await waitUntilAsync("the presence to say so", state: syncState) {
+            await (try? engine.knownDevices())?.first { $0.isCurrentDevice }?.problem == .storageFull
+        }
         let attempts = service.saveCount
         service.failure = nil
         await phone.courier.flush()
@@ -204,6 +209,9 @@ final class LibrarySyncCourierTests: XCTestCase {
         await phone.courier.flush()
         XCTAssertGreaterThan(service.saveCount, attempts)
         try await waitUntil("the status", state: syncState) { phone.sync.courierStatus.waitingToSend == 0 && !phone.sync.courierStatus.storageFull }
+        try await waitUntilAsync("the presence to clear", state: syncState) {
+            await (try? engine.knownDevices())?.first { $0.isCurrentDevice }?.problem == nil
+        }
     }
 
     // MARK: Receiving
@@ -339,19 +347,94 @@ final class LibrarySyncCourierTests: XCTestCase {
         await phone.courier.removeExpired()
         XCTAssertTrue(service.fileIDs.isEmpty, "The sender deletes its own files after seven days")
 
-        // A Mac that sees a file older than that deletes it rather than delivering it.
-        let newer = try await recordAndSync(on: phone, bytes: audioBytes(2_500, seed: 8), title: "Later")
-        let ids = service.fileIDs
-        XCTAssertFalse(ids.isEmpty)
-        for id in ids { service.backdate(id, by: 8 * 86_400) }
-        let mac = try await device("Mac", phone: false, role: .receive, clock: phoneClock)
-        await mac.courier.fetch()
-        XCTAssertTrue(service.fileIDs.isEmpty)
-        let delivered = await mac.courier.delivered
-        XCTAssertTrue(delivered.isEmpty)
-        try await settle(mac)
-        // iCloud Drive carries it regardless.
+    }
+
+    /// A Mac that sees a file older than seven days delivers it before it deletes it: the iPhone may have been lost before
+    /// iCloud Drive uploaded it, so the courier's copy can be the only one. Stored, it's applied, and written into the
+    /// sync folder after a day for every other device.
+    func testBehaviorAnExpiredCourierFileIsDeliveredBeforeItsDeleted() async throws {
+        let clock = Clock()
+        let phone = try await device("Phone", phone: true, role: .send, clock: clock)
+        await pass(phone.library)
+        await phone.sync.finishCourierSends()
+        let known = await phone.sync.engine?.libraryID
+        let libraryID = try XCTUnwrap(known)
+        let before = containerFiles()
+        let bytes = audioBytes(2_500, seed: 8)
+        let lost = try await recordAndSync(on: phone, bytes: bytes, title: "Lost phone")
+        let written = containerFiles().subtracting(before)
+        let ids = written.map { id(of: $0, in: libraryID) }
+        XCTAssertEqual(Set(service.fileIDs).intersection(ids), Set(ids))
+        // iCloud Drive never got them, and the Mac was away for eight days.
+        try holdBack(written)
+        for id in service.fileIDs { service.backdate(id, by: 8 * 86_400) }
+        let mac = try await device("Mac", phone: false, role: .receive, clock: clock)
         await pass(mac.library)
-        XCTAssertNotNil(mac.library.meeting(newer.id))
+        await mac.courier.fetch()
+        let delivered = await mac.courier.delivered
+        XCTAssertTrue(Set(ids).isSubset(of: Set(delivered)), "Delivered, not deleted unread")
+        try await waitUntil("the conversation on the Mac", state: syncState) { mac.library.meeting(lost.id) != nil }
+        try await settle(mac)
+        XCTAssertTrue(service.fileIDs.isEmpty, "Deleted once stored")
+        let onMac = try XCTUnwrap(mac.library.meeting(lost.id))
+        let audio = try await mac.library.audioURL(for: onMac.tracks[0], in: onMac.id)
+        XCTAssertEqual(try Data(contentsOf: audio), bytes)
+        // A day on, still nothing from iCloud Drive: the Mac writes its verified copies into the sync folder.
+        _ = await mac.sync.engine?.pruneCourierInbox(now: Date().addingTimeInterval(LibrarySyncEngine.courierPromotionDelay + 60))
+        XCTAssertTrue(written.isSubset(of: containerFiles()))
+    }
+
+    /// A file the Mac couldn't settle when it fetched it (it hadn't read the library's manifest yet) is kept on the
+    /// courier, isn't expired while it waits, and is fetched again by name although the change token moved past it.
+    func testBehaviorACourierFileTheMacCouldntSettleIsFetchedAgain() async throws {
+        let phoneClock = Clock(), macClock = Clock()
+        let phone = try await device("Phone", phone: true, role: .send, clock: phoneClock)
+        await pass(phone.library)
+        await phone.sync.finishCourierSends()
+        let before = containerFiles()
+        let bytes = audioBytes(3_500, seed: 12)
+        let recorded = try await recordAndSync(on: phone, bytes: bytes, title: "Before the manifest")
+        let written = containerFiles().subtracting(before)
+        // The Mac's iCloud Drive has neither the library's manifest nor the recording yet.
+        try holdBack(written.union(["daybook-sync.json"]))
+        let mac = try await device("Mac", phone: false, role: .receive, clock: macClock)
+        await mac.courier.fetch()
+        let first = await mac.courier.delivered
+        XCTAssertFalse(first.isEmpty)
+        let kept = service.fileIDs
+        XCTAssertEqual(Set(kept), Set(first), "Not settled, so kept on the courier")
+        XCTAssertNil(mac.library.meeting(recorded.id))
+        // Eight days on it's still waiting for this Mac, not expired.
+        macClock.advance(8 * 86_400)
+        await mac.courier.removeExpired()
+        XCTAssertEqual(service.fileIDs, kept)
+
+        // The manifest arrives and a pass reads it; the next fetch offers the files again by name.
+        try release(["daybook-sync.json"])
+        await pass(mac.library)
+        await mac.courier.fetch()
+        try await waitUntil("the conversation on the Mac", state: syncState) { mac.library.meeting(recorded.id) != nil }
+        try await settle(mac)
+        try await waitUntil("the courier to be cleared", state: syncState) { self.service.fileIDs.isEmpty }
+        let again = await mac.courier.delivered
+        XCTAssertGreaterThan(again.count, first.count)
+        let onMac = try XCTUnwrap(mac.library.meeting(recorded.id))
+        let audio = try await mac.library.audioURL(for: onMac.tracks[0], in: onMac.id)
+        XCTAssertEqual(try Data(contentsOf: audio), bytes)
+    }
+
+    /// A Mac judged from its presence is reachable while this device keeps seeing its record change, whatever its own
+    /// clock says, for two and a half refresh intervals (`KnownSyncDevice.isPresent`).
+    func testBehaviorAMacIsReachableWhileThisDeviceKeepsHearingFromIt() {
+        let now = Date()
+        var mac = KnownSyncDevice(id: UUID().uuidString, deviceClass: .mac, displayName: "Studio Mac", canProcess: true,
+                                  lastSeen: now.addingTimeInterval(-40 * 60))
+        mac.capabilities = SyncDeviceCapabilities(transcribes: true, findsSpeakers: true, summarizes: true, models: [:])
+        XCTAssertTrue(SummarizingMac.reachable(connected: [], presence: [mac], now: now).isEmpty, "40 minutes ago, never heard since")
+        mac.heardAt = now.addingTimeInterval(-20 * 60)
+        XCTAssertEqual(SummarizingMac.reachable(connected: [], presence: [mac], now: now).map(\.name), ["Studio Mac"])
+        XCTAssertEqual(ProcessingMac.reachable(connected: [], presence: [mac], now: now).map(\.name), ["Studio Mac"])
+        XCTAssertTrue(SummarizingMac.reachable(connected: [], presence: [mac], now: now.addingTimeInterval(6 * 60)).isEmpty)
+        XCTAssertEqual(SummarizingMac.presenceWindow, 25 * 60)
     }
 }

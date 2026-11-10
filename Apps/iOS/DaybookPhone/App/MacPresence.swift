@@ -29,8 +29,9 @@ enum MacPresence: Equatable, Sendable {
     /// No Mac has synced this library yet.
     case noMac
 
-    /// A Mac seen within this long reads as present ("Waiting for Studio Mac") rather than "last seen".
-    static let recentlySeen: TimeInterval = 15 * 60
+    /// A Mac heard from within this long reads as present ("Waiting for Studio Mac") rather than "last seen": two and a
+    /// half times the interval at which a running Mac rewrites its presence (`KnownSyncDevice.presenceWindow`).
+    static let recentlySeen: TimeInterval = KnownSyncDevice.presenceWindow
 
     /// Combines the link (live) with sync presence (`KnownSyncDevice`s from `knownDevices()`).
     static func resolve(connectedMac: String?, devices: [KnownSyncDevice], syncAvailable: Bool,
@@ -39,16 +40,17 @@ enum MacPresence: Equatable, Sendable {
         if let reason = syncReason, !syncAvailable { return .unavailable(reason) }
         guard devicesListed else { return .checking }
         // A recording Mac keeps its presence fresh, so this is also the Mac seen last.
+        // When each was last heard from, on this iPhone's clock where it can be (`KnownSyncDevice.lastHeard`).
         if let mac = devices.recordingMac(at: now) {
-            return .recording(name: mac.displayName ?? "your Mac", lastSeen: mac.lastSeen ?? now)
+            return .recording(name: mac.displayName ?? "your Mac", lastSeen: mac.lastHeard ?? now)
         }
-        if let mac = devices.latestProcessor, let seen = mac.lastSeen {
+        if let mac = devices.latestProcessor, let seen = mac.lastHeard {
             return .seen(name: mac.displayName ?? "your Mac", lastSeen: seen)
         }
         // A Mac that checked in without processing is still this library's Mac; only with none at all
         // can a device seen only in the journal be an earlier Daybook.
         if let mac = devices.filter({ !$0.isCurrentDevice && $0.deviceClass == .mac && $0.lastSeen != nil })
-            .max(by: { ($0.lastSeen ?? .distantPast) < ($1.lastSeen ?? .distantPast) }), let seen = mac.lastSeen {
+            .max(by: { ($0.lastHeard ?? .distantPast) < ($1.lastHeard ?? .distantPast) }), let seen = mac.lastHeard {
             return .notProcessing(name: mac.displayName ?? "your Mac", lastSeen: seen)
         }
         return devices.hasPeersWithoutPresence ? .olderMac : .noMac
