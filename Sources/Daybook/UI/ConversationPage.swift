@@ -77,10 +77,10 @@ private struct MacReadingContext: ViewModifier {
         content.readingContext(ReadingContext(
             thisDevice: AppState.thisDeviceWords, macPlace: "This Mac", audio: { _ in .local }, player: nil,
             // The window widens for the inspector where it has no room, as for any other ask of it.
-            navigator: ReadingNavigator(open: { state.selectedID = $0 },
+            navigator: ReadingNavigator(open: { state.window.openID = $0 },
                                         showInfo: { _ in state.showInspector() },
-                                        search: { state.search = $0 },
-                                        showTranscript: { _, _ in state.turnPage(to: .transcript) })))
+                                        search: { state.window.searchText = $0 },
+                                        showTranscript: { _, _ in state.window.turnPage(to: .transcript) })))
     }
 }
 
@@ -103,8 +103,8 @@ struct PageHeader: View {
         MarginRow {
             ConversationHeader(meeting: meeting, library: state.library,
                                recording: state.recordingID == meeting.id ? "Recording" : nil,
-                               focusTitle: state.titleFocusRequest == meeting.id,
-                               titleFocused: { state.titleFocusRequest = nil }) {
+                               focusTitle: state.window.titleFocusRequest == meeting.id,
+                               titleFocused: { state.window.titleFocusRequest = nil }) {
                 if let duration = meeting.duration {
                     ConversationPlayPill(duration: duration, player: pillPlayer, unavailable: state.isRecording ? "Playback is off while recording" : nil)
                 }

@@ -151,7 +151,7 @@ enum FloatingNotesDemo {
     }
 
     private static func show(_ state: AppState, _ id: UUID, afterStop: Bool) {
-        state.selectedID = id
+        state.window.openID = id
         FloatingNotesWindow.shared.show(state: state, focus: id, afterStop: afterStop)
     }
 

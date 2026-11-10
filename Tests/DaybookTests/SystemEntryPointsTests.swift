@@ -238,9 +238,9 @@ final class SystemEntryPointsTests: XCTestCase {
         var opened = 0
         notifier.openLibrary = { opened += 1 }
         let id = state.newMeeting(title: "Design review")
-        state.selectedID = nil
+        state.window.openID = nil
         notifier.respond(.open(.stopped, id))
-        XCTAssertEqual(state.selectedID, id)
+        XCTAssertEqual(state.window.openID, id)
         XCTAssertEqual(opened, 1)
 
         let other = state.newMeeting(title: "Other")
@@ -248,7 +248,7 @@ final class SystemEntryPointsTests: XCTestCase {
         try await waitUntil("the recording") { state.recordingID != nil }
         XCTAssertEqual(state.recordingID, id, "into the conversation that stopped")
         XCTAssertEqual(state.meetings.count, 2, "no new conversation")
-        XCTAssertEqual(state.selectedID, other, "the window is left as it was")
+        XCTAssertEqual(state.window.openID, other, "the window is left as it was")
         XCTAssertTrue(microphone.started)
         await state.stopRecording()
         await state.flush()
@@ -308,12 +308,12 @@ final class SystemEntryPointsTests: XCTestCase {
         var opened = 0
         IntentState.register(state) { opened += 1 }
         let note = IntentActions.newNote(state)
-        XCTAssertEqual(state.selectedID, note)
+        XCTAssertEqual(state.window.openID, note)
         XCTAssertTrue(state.meetings.first { $0.id == note }?.title.hasPrefix("Note at") == true)
         let other = state.newMeeting(title: "Roadmap")
-        state.selectedID = note
+        state.window.openID = note
         try IntentActions.open(other, in: state)
-        XCTAssertEqual(state.selectedID, other)
+        XCTAssertEqual(state.window.openID, other)
         XCTAssertEqual(opened, 2)
         XCTAssertThrowsError(try IntentActions.open(UUID(), in: state)) { XCTAssertEqual($0 as? DaybookIntentError, .conversationGone) }
         await state.flush()

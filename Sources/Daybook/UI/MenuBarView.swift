@@ -48,7 +48,7 @@ struct MenuBarView: View {
     }
 
     private func open(_ place: LibraryPlace?) {
-        if let place { state.place = place }
+        if let place { state.window.place = place }
         openWindow(id: WindowID.library)
         NSApp.activate()
     }

@@ -36,18 +36,18 @@ final class PersonalLockAppTests: XCTestCase {
     func testBehaviorAPersonalConversationIsSelectedOnlyOnceThePersonUnlocksIt() async throws {
         let rig = try await rig(answers: false)
         let state = rig.state
-        state.selectedID = rig.work
-        XCTAssertEqual(state.selectedID, rig.work)
+        state.window.openID = rig.work
+        XCTAssertEqual(state.window.openID, rig.work)
 
-        state.selectedID = rig.personal
+        state.window.openID = rig.personal
         try await waitUntil("Touch ID to be asked") { rig.authenticator.asked == 1 }
         await Task.yield()
-        XCTAssertEqual(state.selectedID, rig.work, "cancelled: the selection stays where it was")
+        XCTAssertEqual(state.window.openID, rig.work, "cancelled: the selection stays where it was")
         XCTAssertNotEqual(state.selectedMeeting?.id, rig.personal, "so nothing shows it")
 
         rig.authenticator.answers(true)
-        state.selectedID = rig.personal
-        try await waitUntil("it to be selected") { state.selectedID == rig.personal }
+        state.window.openID = rig.personal
+        try await waitUntil("it to be selected") { state.window.openID == rig.personal }
         XCTAssertFalse(state.personalLock.isLocked)
         XCTAssertEqual(rig.authenticator.asked, 2)
     }
@@ -55,35 +55,35 @@ final class PersonalLockAppTests: XCTestCase {
     func testBehaviorLockingAgainLetsAPersonalPageGo() async throws {
         let rig = try await rig()
         let state = rig.state
-        state.selectedID = rig.personal
-        try await waitUntil("it to be selected") { state.selectedID == rig.personal }
+        state.window.openID = rig.personal
+        try await waitUntil("it to be selected") { state.window.openID == rig.personal }
 
-        state.multiSelection = [rig.personal, rig.work]
+        state.window.selection = [rig.personal, rig.work]
         state.personalLock.lock()
-        XCTAssertEqual(state.selectedID, rig.work, "the place's first that isn't hidden takes its place")
-        XCTAssertEqual(state.multiSelection, [], "a selection of several holding it lets go")
+        XCTAssertEqual(state.window.openID, rig.work, "the place's first that isn't hidden takes its place")
+        XCTAssertEqual(state.window.selection, [], "a selection of several holding it lets go")
     }
 
     func testBehaviorWhatTheAppSelectsByItselfNeverAsks() async throws {
         let rig = try await rig()
         let state = rig.state
         state.selectQuietly(rig.personal)
-        XCTAssertEqual(state.selectedID, rig.work, "the newest is Personal and locked: the first that isn't")
+        XCTAssertEqual(state.window.openID, rig.work, "the newest is Personal and locked: the first that isn't")
         XCTAssertEqual(rig.authenticator.asked, 0)
-        state.place = .section(.personal)
+        state.window.place = .section(.personal)
         state.selectQuietly(state.visibleMeetings.first?.id)
-        XCTAssertNil(state.selectedID, "everything here is hidden")
+        XCTAssertNil(state.window.openID, "everything here is hidden")
         XCTAssertEqual(rig.authenticator.asked, 0)
 
         await state.unlockPersonal()
-        XCTAssertEqual(state.selectedID, rig.personal, "choosing Personal, or Unlock on its page, opens its newest")
+        XCTAssertEqual(state.window.openID, rig.personal, "choosing Personal, or Unlock on its page, opens its newest")
         XCTAssertEqual(rig.authenticator.asked, 1)
     }
 
     func testBehaviorWithTheLockOffNothingAsks() async throws {
         let rig = try await rig(locked: false)
-        rig.state.selectedID = rig.personal
-        XCTAssertEqual(rig.state.selectedID, rig.personal)
+        rig.state.window.openID = rig.personal
+        XCTAssertEqual(rig.state.window.openID, rig.personal)
         XCTAssertEqual(rig.authenticator.asked, 0)
     }
 
@@ -107,14 +107,14 @@ final class PersonalLockAppTests: XCTestCase {
     func testBehaviorAFocusThatHidesPersonalLeavesItOutOfThePlacesAndSearch() async throws {
         let rig = try await rig(locked: false)
         let state = rig.state
-        state.place = .section(.personal)
+        state.window.place = .section(.personal)
         XCTAssertEqual(state.visibleMeetings.map(\.id), [rig.personal])
 
         state.personalLock.apply(PersonalFocus(showsPersonal: false))
-        XCTAssertEqual(state.place, .section(.all), "the Personal place gives way")
+        XCTAssertEqual(state.window.place, .section(.all), "the Personal place gives way")
         XCTAssertEqual(state.visibleMeetings.map(\.id), [rig.work], "All leaves Personal out")
         XCTAssertEqual(state.personalLock.sections, [.all, .work], "and so does the sidebar")
-        state.search = "Session"
+        state.window.searchText = "Session"
         try await waitUntil("search to settle") { state.searchHits.isEmpty }
 
         state.personalLock.apply(PersonalFocus())

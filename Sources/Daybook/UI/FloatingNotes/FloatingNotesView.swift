@@ -54,7 +54,7 @@ struct FloatingNotesRoot: View {
 
     var body: some View {
         FloatingNotesView(model: model, state: state, chrome: chrome, input: model.input)
-            .environment(\.readingScale, CGFloat(state.readingScale))
+            .environment(\.readingScale, CGFloat(state.window.readingScale))
             .modifier(FloatingNotesSurface())
             .modifier(DemoContrast())
     }
@@ -202,9 +202,9 @@ struct FloatingNotesView: View {
     private var shortcuts: some View {
         Group {
             Button("Open in Daybook") { context(compact: false, chips: []).open() }.keyboardShortcut("o")
-            Button("Make Text Bigger") { state.readingScale = ReadingScale.bigger(state.readingScale) }.keyboardShortcut("+")
-            Button("Make Text Smaller") { state.readingScale = ReadingScale.smaller(state.readingScale) }.keyboardShortcut("-")
-            Button("Actual Size") { state.readingScale = 1 }.keyboardShortcut("0")
+            Button("Make Text Bigger") { state.window.readingScale = ReadingScale.bigger(state.window.readingScale) }.keyboardShortcut("+")
+            Button("Make Text Smaller") { state.window.readingScale = ReadingScale.smaller(state.window.readingScale) }.keyboardShortcut("-")
+            Button("Actual Size") { state.window.readingScale = 1 }.keyboardShortcut("0")
             Button("Hide Floating Notes") { FloatingNotesWindow.shared.close() }.keyboardShortcut("w")
         }
         .frame(width: 0, height: 0)
@@ -235,8 +235,8 @@ struct PanelContext {
     @MainActor
     func openConversation(_ id: UUID?) {
         if let id {
-            state.place = .section(.all)
-            state.selectedID = id
+            state.window.place = .section(.all)
+            state.window.openID = id
         }
         Self.bringLibraryForward(showLibrary)
     }

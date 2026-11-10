@@ -27,8 +27,8 @@ extension PhotoServices {
             },
             canPlay: { !state.isRecording },
             showInTranscript: { photo, _ in
-                state.turnPage(to: .transcript)
-                state.pageScrollTarget = photo.id
+                state.window.turnPage(to: .transcript)
+                state.window.pageScrollTarget = photo.id
             })
     }
 }

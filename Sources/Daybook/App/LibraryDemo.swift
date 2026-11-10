@@ -58,7 +58,7 @@ enum LibraryDemo {
             await finishing?.value
             // The demo's captions were saved through a store of its own: the pages read them now.
             await state.captions.readSaved()
-            if finishing != nil, let id = state.meetings.first(where: { $0.title == ready })?.id { state.selectedID = id }
+            if finishing != nil, let id = state.meetings.first(where: { $0.title == ready })?.id { state.window.openID = id }
             if SpeakerProfileDemo.isRequested { await SpeakerProfileDemo.seed(state.library) }
             settle(state)
             if FloatingNotesDemo.scenario == nil {
@@ -67,20 +67,20 @@ enum LibraryDemo {
             UpgradeDemo.apply(to: state)
             // Seeding is asynchronous: the launch's own `--select` and `--place` ran before it.
             if let title = LaunchOptions.value(after: "--select"), let id = state.meetings.first(where: { $0.title == title })?.id {
-                state.selectedID = id
+                state.window.openID = id
             }
             if let place = LaunchOptions.value(after: "--place"), place.hasPrefix("folder:"),
                let folder = state.folders.first(where: { $0.name == place.dropFirst(7) }) {
-                state.place = .folder(folder.id)
+                state.window.place = .folder(folder.id)
             }
             // `--multi-select "<title>|<title>…"` selects several rows; `--notice "<text>"` shows a library notice.
             if let titles = LaunchOptions.value(after: "--multi-select")?.split(separator: "|").map(String.init) {
-                state.multiSelection = Set(state.meetings.filter { titles.contains($0.title) }.map(\.id))
+                state.window.selection = Set(state.meetings.filter { titles.contains($0.title) }.map(\.id))
             }
             if let notice = LaunchOptions.value(after: "--notice") { state.notice = notice }
             // `--lock-demo` (PersonalLockDemo): the place shows what it would after choosing it, so with Personal
             // locked its page waits for Unlock rather than showing the demo's Work conversation beside it.
-            if PersonalLockDemo.state() != nil, let id = state.selectedID, !state.visibleMeetings.contains(where: { $0.id == id }) {
+            if PersonalLockDemo.state() != nil, let id = state.window.openID, !state.visibleMeetings.contains(where: { $0.id == id }) {
                 state.selectQuietly(state.visibleMeetings.first?.id)
             }
         }

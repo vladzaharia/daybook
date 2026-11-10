@@ -99,7 +99,7 @@ enum IntentActions {
 
     /// A conversation that's only your notes, open in the library, as File › New Note does.
     @discardableResult static func newNote(_ state: AppState) -> UUID {
-        if state.place.isDevice { state.place = .section(.all) }
+        if state.window.place.isDevice { state.window.place = .section(.all) }
         let id = state.newNote()
         IntentState.openLibrary()
         return id

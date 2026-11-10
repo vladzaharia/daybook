@@ -99,12 +99,6 @@ final class ReadingSession {
     @ObservationIgnored var launch = ReadingLaunch()
     @ObservationIgnored private var nextToken = 0
 
-    struct ScrollRequest: Equatable {
-        var target: String
-        var token: Int
-        var flash: Bool
-    }
-
     /// Whether opening `id` waits for the person to unlock it first; if so, it opens (`then`) once they have.
     private func waitsToUnlock(_ id: UUID, then open: @escaping () -> Void) -> Bool {
         guard let personalLock, personalLock.hides(id) else { return false }
@@ -330,15 +324,4 @@ struct ReadingAlert: Equatable {
         let words = ProblemWords(title: title, fallback: fallback, error: error)
         self.init(title: words.title, message: words.message, details: words.details)
     }
-}
-
-/// Stable IDs for the summary page's blocks, for scroll positions and jumps.
-enum SummaryBlockID {
-    static let header = "header"
-    static let lede = "lede"
-    static let nextSteps = "next-steps"
-    static let notes = "notes"
-    static let bookmarks = "bookmarks"
-    static let colophon = "colophon"
-    static func section(_ id: UUID) -> String { "section:\(id.uuidString)" }
 }

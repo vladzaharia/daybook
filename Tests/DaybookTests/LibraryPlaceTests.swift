@@ -28,12 +28,12 @@ final class LibraryPlaceTests: XCTestCase {
     func testNewConversationTakesTheSelectedPlace() async throws {
         let (state, root, defaults) = try await makeState()
         defer { cleanUp(root, defaults) }
-        state.place = .section(.personal)
+        state.window.place = .section(.personal)
         let personal = state.newMeeting()
         XCTAssertEqual(state.meetings.first { $0.id == personal }?.placement, .personal)
         state.createFolder(named: "Hiring", moving: [])
         let folder = try XCTUnwrap(state.folders.first { $0.name == "Hiring" })
-        state.place = .folder(folder.id)
+        state.window.place = .folder(folder.id)
         let filed = state.newMeeting()
         XCTAssertEqual(state.meetings.first { $0.id == filed }?.folderID, folder.id)
         XCTAssertEqual(state.visibleMeetings.map(\.id), [filed])
@@ -42,7 +42,7 @@ final class LibraryPlaceTests: XCTestCase {
     func testNewNoteIsTitledAsOnTheIPhoneAndSelected() async throws {
         let (state, root, defaults) = try await makeState()
         defer { cleanUp(root, defaults) }
-        state.place = .section(.work)
+        state.window.place = .section(.work)
         let now = Date()
         let id = state.newNote(at: now)
         let note = try XCTUnwrap(state.meetings.first { $0.id == id })
@@ -50,7 +50,7 @@ final class LibraryPlaceTests: XCTestCase {
         XCTAssertEqual(note.title, LibraryWords.noteTitle(at: now), "the iPhone's New Note uses the same words")
         XCTAssertTrue(note.tracks.isEmpty, "only notes, until Record records into it")
         XCTAssertEqual(note.placement, .work)
-        XCTAssertEqual(state.selectedID, id)
+        XCTAssertEqual(state.window.openID, id)
     }
 
     func testImportedDeviceRecordingsAreRecognizedFromTheLibrary() async throws {
@@ -61,8 +61,8 @@ final class LibraryPlaceTests: XCTestCase {
         let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4_000)!
         buffer.frameLength = 4_000
         try AVAudioFile(forWriting: url, settings: format.settings).write(from: buffer)
-        state.selectedID = nil
-        state.place = .section(.personal)
+        state.window.openID = nil
+        state.window.place = .section(.personal)
         let identity = DeviceRecordingIdentity(kind: SoundcoreWorkIntegration.id, serial: "7F3A", recordingID: "1729000000")
         try await state.importFiles([url], source: .soundcore, attachTo: nil, device: identity)
         let meeting = try XCTUnwrap(state.meetings.first)
@@ -70,7 +70,7 @@ final class LibraryPlaceTests: XCTestCase {
         XCTAssertEqual(meeting.tracks.first?.source, .soundcore)
         XCTAssertEqual(meeting.tracks.first?.device, identity)
         XCTAssertEqual(meeting.date, Date(timeIntervalSince1970: 1_729_000_000), "Dated when it was recorded, not imported")
-        XCTAssertNil(state.selectedID, "A background import doesn't change the selection")
+        XCTAssertNil(state.window.openID, "A background import doesn't change the selection")
         XCTAssertNil(meeting.placement, "Nor take the place being viewed")
         XCTAssertTrue(meeting.title.hasPrefix("Soundcore Work at "))
         // The same bytes from the recorder again join that conversation instead of making another.
@@ -84,7 +84,7 @@ final class LibraryPlaceTests: XCTestCase {
         let kept = state.newMeeting(title: "Kept")
         let gone = state.newMeeting(title: "Old standup")
         _ = try await state.library.moveToTrash(gone)
-        state.place = .trash
+        state.window.place = .trash
         XCTAssertEqual(state.visibleMeetings, [], "the library's conversations aren't in the Trash")
         let trashed = await state.library.trashedMeetings()
         XCTAssertEqual(trashed.map(\.id), [gone])
@@ -109,22 +109,22 @@ final class LibraryPlaceTests: XCTestCase {
         let kept = state.newMeeting(title: "Kept")
         let gone = state.newMeeting(title: "Old standup")
         _ = try await state.library.moveToTrash(gone)
-        state.place = .trash
+        state.window.place = .trash
         let read = await state.library.trashedMeetings()
 
         // The person opened the Trash, then All, before its list came back.
-        state.place = .section(.all)
-        state.selectedID = kept
+        state.window.place = .section(.all)
+        state.window.openID = kept
         XCTAssertFalse(MacTrash.adopt(read, state: state))
-        XCTAssertEqual(state.selectedID, kept, "All keeps its selection, never a conversation in the Trash")
+        XCTAssertEqual(state.window.openID, kept, "All keeps its selection, never a conversation in the Trash")
 
-        state.place = .trash
-        state.search = "standup"
+        state.window.place = .trash
+        state.window.searchText = "standup"
         XCTAssertFalse(MacTrash.adopt(read, state: state), "searching: the results own the selection")
-        state.search = ""
+        state.window.searchText = ""
 
         XCTAssertTrue(MacTrash.adopt(read, state: state))
-        XCTAssertEqual(state.selectedID, gone, "still in the Trash: its first is selected")
+        XCTAssertEqual(state.window.openID, gone, "still in the Trash: its first is selected")
     }
 
     func testBehaviorARowSaysWhatThisMacIsDoingWithItInTheWordsTheIPhoneUses() async throws {
@@ -163,12 +163,12 @@ final class LibraryPlaceTests: XCTestCase {
         XCTAssertEqual(MacListSubtitle.text(state, results: 0), "Summarizing · 1 waiting", "the step that runs, not always Transcribing")
         XCTAssertNil(MacListSubtitle.countdown(state), "no countdown: it doesn't tick")
 
-        state.place = .trash
+        state.window.place = .trash
         XCTAssertEqual(MacListSubtitle.text(state, results: 0), "", "the Trash's rows don't work")
-        state.search = "roadmap"
+        state.window.searchText = "roadmap"
         XCTAssertEqual(MacListSubtitle.text(state, results: 1), "1 result", "a search counts its results anywhere")
-        state.search = ""
-        state.place = .section(.all)
+        state.window.searchText = ""
+        state.window.place = .section(.all)
         state.processingQueue = []
         state.processingID = nil
         XCTAssertEqual(MacListSubtitle.text(state, results: 0), "")
@@ -193,28 +193,28 @@ final class LibraryPlaceTests: XCTestCase {
         let captionHits = await LibraryCaptionSearch.hits(in: state.meetings, query: "checklist", excluding: [], libraryRoot: state.library.rootURL)
         XCTAssertEqual(captionHits.map(\.meeting.id), [joined])
 
-        state.pageMode = .transcript
+        state.window.pageMode = .transcript
         MacSearch.open(joined, hits: [], captionHits: captionHits, state: state)
-        XCTAssertEqual(state.selectedID, joined)
-        XCTAssertEqual(state.pageMode, .transcript, "saved captions read on the transcript's page")
-        XCTAssertEqual(state.pageScrollTarget, captions.segments.first?.id, "at the caption found")
+        XCTAssertEqual(state.window.openID, joined)
+        XCTAssertEqual(state.window.pageMode, .transcript, "saved captions read on the transcript's page")
+        XCTAssertEqual(state.window.pageScrollTarget, captions.segments.first?.id, "at the caption found")
 
         let passage = try XCTUnwrap(LibrarySearch.hits(in: state.meetings, text: "beta", tokens: [], scope: .all).first)
         MacSearch.open(joined, hits: [passage], captionHits: [], state: state)
-        XCTAssertEqual(state.pageMode, .transcript)
-        XCTAssertEqual(state.pageScrollTarget, state.meetings.first { $0.id == joined }?.unifiedTranscript.first?.id,
+        XCTAssertEqual(state.window.pageMode, .transcript)
+        XCTAssertEqual(state.window.pageScrollTarget, state.meetings.first { $0.id == joined }?.unifiedTranscript.first?.id,
                        "a passage opens the transcript there")
 
         let note = try XCTUnwrap(LibrarySearch.hits(in: state.meetings, text: "pricing", tokens: [], scope: .all).first)
         MacSearch.open(joined, hits: [note], captionHits: [], state: state)
-        XCTAssertEqual(state.pageMode, .summary)
-        XCTAssertNil(state.pageScrollTarget)
-        XCTAssertEqual(SummaryJump.window.take(for: joined), SummaryJump.notes, "the summary page moves to your notes")
+        XCTAssertEqual(state.window.pageMode, .summary)
+        XCTAssertNil(state.window.pageScrollTarget)
+        XCTAssertEqual(state.window.takeSummaryRequest(for: joined), SummaryBlockID.notes, "the summary page moves to your notes")
 
         let title = try XCTUnwrap(LibrarySearch.hits(in: state.meetings, text: "roadmap", tokens: [], scope: .all).first)
         MacSearch.open(joined, hits: [title], captionHits: [], state: state)
-        XCTAssertEqual(state.pageMode, .summary)
-        XCTAssertNil(state.pageScrollTarget, "a title opens the page's top, with no earlier result's place left over")
+        XCTAssertEqual(state.window.pageMode, .summary)
+        XCTAssertNil(state.window.pageScrollTarget, "a title opens the page's top, with no earlier result's place left over")
     }
 
     private func makeState() async throws -> (AppState, URL, UserDefaults) {

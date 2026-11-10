@@ -28,36 +28,12 @@ final class AppState {
     let library: LibraryController
     /// The library's conversations. Every change goes through `library` (`update`, `add`, …), which saves it.
     var meetings: [Meeting] { library.meetings }
-    /// The conversation the list selects, which the page, the inspector, Version History, Share, the menus, and
-    /// Floating Notes act on. A Personal one behind the lock (`personalLock`) is selected only once the person unlocks
-    /// it: setting it asks, and the selection stays where it was meanwhile, so nothing shows it locked.
-    var selectedID: UUID? {
-        get { selection }
-        set {
-            guard let id = newValue, personalLock.hides(id) else {
-                unlockingSelection = nil
-                selection = newValue
-                return
-            }
-            unlockingSelection = id
-            Task {
-                guard await personalLock.unlock(), unlockingSelection == id else { return }
-                unlockingSelection = nil
-                selection = id
-            }
-        }
-    }
-    private var selection: UUID?
-    /// The Personal conversation waiting for the person to unlock it: selected once they do, unless they chose another.
-    @ObservationIgnored private var unlockingSelection: UUID?
+    /// Where the person is in the library window: the place, the conversation on the page, its side, search, the
+    /// selection of several, and the window's sheet and requests (LibraryWindowModel.swift).
+    let window: LibraryWindowModel
     /// The lock for Personal conversations, and what a Focus asks (Settings › Library; docs/architecture.md, "The
     /// Personal lock").
     let personalLock: PersonalLock
-    var search = ""
-    var searchTokens: [SearchToken] = []
-    var searchScope: SearchScope = .all
-    /// The sidebar selection: a library section, a folder, or a device.
-    var place: LibraryPlace = .section(.all)
     /// Asks the main window to present Add Device (from menus, Welcome, Settings, or a device page).
     var addDeviceRequest: AddDeviceRequest?
     var libraryMetadata: LibraryMetadata { library.metadata }
@@ -65,33 +41,10 @@ final class AppState {
     var templates: [SummaryTemplate] { library.templates }
     var allTags: [String] { library.allTags }
 
-    /// The side of the page that shows alone: in a column too narrow for two pages, or once the person collapses the
-    /// spread to it.
-    var pageMode: PageMode = .summary
-    /// Whether the page shows Summary and Transcript side by side where the detail column has room for two pages
-    /// (`pageSpreadFits`); the toolbar's switch collapses it to one page, and the window keeps the choice
-    /// (`LibraryRestoration`).
-    var pageSpreadChosen = true
-    /// The detail column has room for two pages now (`PageSpreadLayout`): the page says so as it lays out.
-    var pageSpreadFits = false
-    /// A transcript passage the page should scroll to, from search or a bookmark.
-    var pageScrollTarget: UUID?
-    /// Set to ask the window to confirm moving conversations to the Trash.
-    var trashRequestIDs: [UUID] = []
-    var trashRequestID: UUID? {
-        get { trashRequestIDs.count == 1 ? trashRequestIDs[0] : nil }
-        set { trashRequestIDs = newValue.map { [$0] } ?? [] }
-    }
-    /// Several conversations selected in the list; empty when one or none is.
-    var multiSelection: Set<UUID> = []
     /// The folder being renamed in place in the sidebar.
     var renamingFolderID: UUID?
     /// The conversation the device page is showing for a selected, already-imported recording.
     var deviceConversationID: UUID?
-    /// Set to move keyboard focus to a conversation's title on its page.
-    var titleFocusRequest: UUID?
-    /// The one sheet the main window shows at a time.
-    var activeSheet: ActiveSheet?
     /// Set to ask the sidebar to create a folder, optionally moving conversations into it.
     var newFolderRequest: NewFolderRequest?
     /// Incremented to move keyboard focus to the library search field.
@@ -99,11 +52,6 @@ final class AppState {
     /// Incremented to ask the main window for the inspector (Tags…, the byline's people), which a window too narrow
     /// for it widens to show (`LibraryView`).
     var inspectorRequest = 0
-    /// A moment's word over the page after something that leaves nothing else to see: Copy Summary's "Copied", from
-    /// whichever menu it came (`ConfirmationBeat`).
-    var confirmation: ConfirmationBeat?
-    /// View › Make Text Bigger scales only the reading surface.
-    var readingScale: Double { didSet { preferences.set(readingScale, forKey: Preference.readingScale) } }
     /// App-owned so menu commands can drive it. Only what shows the playhead reads its position, which
     /// moves ten times a second; the Controls menu reads only whether it's playing.
     let playback = AudioPlaybackController()
@@ -525,6 +473,7 @@ final class AppState {
         recorderHandoff = RecorderHandoff(library: library, devices: devices, deviceClass: .mac, defaults: defaults)
         sources = MultiSourceCoordinator(defaults: defaults)
         personalLock = PersonalLock(defaults: defaults, platform: .mac, authenticator: SystemPersonalLockAuthenticator())
+        window = LibraryWindowModel(personalLock: personalLock, defaults: defaults)
         callPolicy = CallPolicy.stored(in: defaults)
         callAppChoices = CallPolicy.storedChoices(in: defaults)
         usesCalendar = defaults.bool(forKey: Preference.usesCalendar)
@@ -532,7 +481,6 @@ final class AppState {
         processSyncedAudio = defaults.object(forKey: Preference.processSyncedAudio) as? Bool ?? true
         detectSpeakers = defaults.object(forKey: Preference.detectSpeakers) as? Bool ?? true
         transcriptionStandsIn = defaults.object(forKey: Preference.transcriptionStandIn) as? Bool ?? true
-        readingScale = defaults.object(forKey: Preference.readingScale) as? Double ?? 1
         runtime = LocalIntelligenceRuntime(modelsDirectory: libraryURL.appendingPathComponent("Models"), fetcher: ModelDemo.fetcher)
         let captionSettings = LiveCaptionSettings(defaults: defaults)
         self.captionSettings = captionSettings
@@ -755,7 +703,7 @@ final class AppState {
         libraryMoveOffer = nil
     }
 
-    var selectedMeeting: Meeting? { meetings.first { $0.id == selectedID } }
+    var selectedMeeting: Meeting? { meetings.first { $0.id == window.openID } }
     var isRecording: Bool { recordingID != nil }
     /// This Mac transcribes now: the models that transcribe and find speakers are here. What picks up recordings and
     /// requests, and what presence says, goes by it; the summary model isn't one of them, since a summary waits for it
@@ -806,6 +754,7 @@ final class AppState {
     /// the place, the library, or the Focus changes.
     var visibleMeetings: [Meeting] {
         let showsPersonal = personalLock.focus.showsPersonal
+        let place = window.place
         if let memo = visibleMemo, memo.place == place, memo.revision == libraryRevision, memo.showsPersonal == showsPersonal {
             return memo.meetings
         }
@@ -818,17 +767,17 @@ final class AppState {
     /// by itself (at launch, after a sync, beside what went to the Trash) never asks for Touch ID.
     func selectQuietly(_ id: UUID?) {
         if let id, personalLock.hides(id) {
-            selectedID = personalLock.firstShown(in: visibleMeetings)?.id
+            window.openID = personalLock.firstShown(in: visibleMeetings)?.id
         } else {
-            selectedID = id
+            window.openID = id
         }
     }
 
     /// Unlocks Personal (Touch ID, or the password), and opens the place's newest when nothing is selected: choosing the
     /// Personal place, or Unlock on its page.
     func unlockPersonal() async {
-        guard await personalLock.unlock(), selectedID == nil, !place.isDevice, !place.isTrash else { return }
-        selectedID = visibleMeetings.first?.id
+        guard await personalLock.unlock(), window.openID == nil, !window.place.isDevice, !window.place.isTrash else { return }
+        window.openID = visibleMeetings.first?.id
     }
 
     /// The lock locked again: a Personal conversation on the page gives way to the place's first that isn't hidden, and
@@ -836,11 +785,9 @@ final class AppState {
     private func personalLockChanged(_ event: PersonalLock.Event) {
         switch event {
         case .locked:
-            unlockingSelection = nil
-            if let id = selection, personalLock.hides(id) { selection = personalLock.firstShown(in: visibleMeetings)?.id }
-            if multiSelection.contains(where: personalLock.hides) { multiSelection = [] }
+            window.lockReturned { personalLock.firstShown(in: visibleMeetings)?.id }
         case .focusChanged:
-            if !personalLock.focus.showsPersonal, place == .section(.personal) { place = .section(.all) }
+            if !personalLock.focus.showsPersonal, window.place == .section(.personal) { window.place = .section(.all) }
         }
     }
 
@@ -848,13 +795,13 @@ final class AppState {
     /// a large library is searched off the main actor (`LibrarySearchMemo`).
     var searchHits: [SearchHit] {
         _ = searchResultsArrived
-        let hits = searchMemo.hits(for: .init(text: search, tokens: searchTokens, scope: searchScope, revision: libraryRevision), in: meetings)
+        let hits = searchMemo.hits(for: .init(text: window.searchText, tokens: window.searchTokens, scope: window.searchScope, revision: libraryRevision),
+                                   in: meetings)
         // A Focus that leaves Personal out leaves it out of search too.
         guard !personalLock.focus.showsPersonal else { return hits }
         let left = Set(meetings.filter { !personalLock.lists($0) }.map(\.id))
         return hits.filter { !left.contains($0.meetingID) }
     }
-    var isSearching: Bool { !search.trimmingCharacters(in: .whitespaces).isEmpty || !searchTokens.isEmpty }
 
     /// Returns once the library is open and the app ready (`isReady`); at once when it is already.
     func whenReady() async {
@@ -917,14 +864,14 @@ final class AppState {
     /// elsewhere) takes neither the place being viewed nor the selection.
     @discardableResult func newMeeting(title: String = "Untitled Conversation", date: Date = Date(), selecting: Bool = true) -> UUID {
         var folder: UUID?, placement: LibraryPlacement?
-        switch place {
+        switch window.place {
         case .folder(let id) where selecting: folder = id
         case .section(.work) where selecting: placement = .work
         case .section(.personal) where selecting: placement = .personal
         default: break
         }
         let id = library.newMeeting(title: title, date: date, folderID: folder, placement: placement)
-        if selecting { selectedID = id }
+        if selecting { window.openID = id }
         return id
     }
 
@@ -936,7 +883,7 @@ final class AppState {
     func saveFolder(_ folder: LibraryFolder) { library.saveFolder(folder) }
     func removeFolder(_ id: UUID) {
         library.removeFolder(id)
-        if place == .folder(id) { place = .section(.all) }
+        if window.place == .folder(id) { window.place = .section(.all) }
     }
     func setTags(_ id: UUID, text: String) { library.setTags(id, text: text) }
 
@@ -990,7 +937,7 @@ final class AppState {
             var target = id
             if id == nil, let existing = try await library.existingMeeting(containingAudioAt: url) {
                 guard device != nil else {
-                    selectedID = existing.id
+                    window.openID = existing.id
                     notice = "This audio is already in \(existing.title)."
                     continue
                 }
@@ -1015,7 +962,7 @@ final class AppState {
                 sidecarURL: sidecar.url, duration: duration,
                 recorderClock: device.flatMap(DeviceRecordingStart.clock(of:)))).imported
             await sourceArrived(meetingID, before: meeting, imported: imported, url: url, device: device, plan: plan)
-            if device == nil { selectedID = meetingID }
+            if device == nil { window.openID = meetingID }
             meetingIDs.append(meetingID)
             enqueue(meetingID)
         }
@@ -1194,7 +1141,7 @@ final class AppState {
         guard recordingID == nil, !isStartingRecording, !isStoppingRecording else { sync.deferUntilIdle(); return }
         defer { runQueue() }
         guard let applied = await library.synchronize(protecting: processingID ?? recordingID) else { return }
-        if selectedID == nil || !meetings.contains(where: { $0.id == selectedID }) { selectQuietly(meetings.sorted { $0.date > $1.date }.first?.id) }
+        if window.openID == nil || !meetings.contains(where: { $0.id == window.openID }) { selectQuietly(meetings.sorted { $0.date > $1.date }.first?.id) }
         reconcileClaims()
         await syncedLibraryIdentity()
         await refreshSyncDevices()
@@ -1489,11 +1436,11 @@ final class AppState {
                 for id in ids {
                     guard library.isLoaded, try await library.moveToTrash(id, allowed: { !self.isBusy(id) }) else { continue }
                     trashed.append(id)
-                    if selectedID == id { selectQuietly(neighbour) }
+                    if window.openID == id { selectQuietly(neighbour) }
                 }
             } catch { report("Couldn’t Move to Trash", "Try again.", error) }
             guard !trashed.isEmpty else { return }
-            multiSelection.subtract(trashed)
+            window.selection.subtract(trashed)
             let title = trashed.count == 1 ? titles[ids.firstIndex(of: trashed[0]) ?? 0].trimmingCharacters(in: .whitespaces) : ""
             let message = trashed.count > 1 ? "Moved \(trashed.count) conversations to the Trash."
                 : title.isEmpty ? "Moved a conversation to the Trash." : "Moved “\(title)” to the Trash."
@@ -1528,8 +1475,8 @@ final class AppState {
             }
             record.ids = restored
             guard let first = restored.first else { return }
-            if !visibleMeetings.contains(where: { $0.id == first }) { place = .section(.all) }
-            selectedID = first
+            if !visibleMeetings.contains(where: { $0.id == first }) { window.place = .section(.all) }
+            window.openID = first
         }
     }
 
@@ -1544,75 +1491,13 @@ final class AppState {
     }
 
     /// The conversations the list shows now, in its order: the search's results while searching.
-    var listedMeetingIDs: [UUID] { isSearching ? searchHits.map(\.meetingID) : visibleMeetings.map(\.id) }
+    var listedMeetingIDs: [UUID] { window.isSearching ? searchHits.map(\.meetingID) : visibleMeetings.map(\.id) }
 
     /// The row to select when `removed` leave `order`: the first after them, else the last before them.
     nonisolated static func neighbour(of removed: Set<UUID>, in order: [UUID]) -> UUID? {
         guard let last = order.lastIndex(where: removed.contains) else { return nil }
         if let next = order[(last + 1)...].first(where: { !removed.contains($0) }) { return next }
         return order[..<last].last { !removed.contains($0) }
-    }
-}
-
-// MARK: - The page's sides
-
-extension AppState {
-    /// Whether `meeting`'s page shows Summary and Transcript side by side now: the detail column has room for two
-    /// pages, there's a transcript's page, and the person hasn't collapsed it to one.
-    func showsPageSpread(_ meeting: Meeting) -> Bool {
-        pageSpreadFits && pageSpreadChosen && hasTranscriptPage(meeting)
-    }
-
-    /// Where `meeting`'s Summary | Transcript is a pair of toggles rather than a switch: the column has room for two
-    /// pages, and there's a transcript's page to put beside the summary.
-    func pairsPages(_ meeting: Meeting) -> Bool {
-        pageSpreadFits && hasTranscriptPage(meeting)
-    }
-
-    /// Which sides of `meeting`'s page show, as the toolbar's switch and the View menu light them.
-    func pageSides(_ meeting: Meeting) -> PageSides {
-        PageSides(spread: showsPageSpread(meeting), mode: hasTranscriptPage(meeting) ? pageMode : .summary)
-    }
-
-    /// The toolbar's Summary or Transcript, or View › Summary (⌘1) or Transcript (⌘2), for `meeting` (`PageSides`).
-    func choosePage(_ side: PageMode, for meeting: Meeting) {
-        let next = PageSides(spread: pageSpreadChosen, mode: pageMode).choosing(side, pairs: pairsPages(meeting))
-        if next.spread != pageSpreadChosen { pageSpreadChosen = next.spread }
-        if next.mode != pageMode { pageMode = next.mode }
-    }
-
-    /// Brings a side of the page into view for something asked elsewhere (a passage, Your notes, Find): in a spread
-    /// it's already beside the other, so the page doesn't turn.
-    func turnPage(to side: PageMode) {
-        guard !(pageSpreadFits && pageSpreadChosen) else { return }
-        pageMode = side
-    }
-
-    /// Shows a passage in the transcript: it scrolls there and flashes it, the page turning to it first unless the
-    /// transcript is beside the summary.
-    func showPassage(_ segmentID: UUID) {
-        pageScrollTarget = segmentID
-        turnPage(to: .transcript)
-    }
-}
-
-/// The page's sides as the toolbar's Summary | Transcript chooses them where the window has room for two pages: a pair
-/// of toggles, both lit while both pages show. Choosing a lit one keeps that page alone; choosing the other puts it back
-/// beside it; one page always shows. Where there's room for one page it's a switch, and the spread waits for the room.
-struct PageSides: Equatable {
-    /// Both pages, side by side.
-    var spread: Bool
-    /// The page that shows alone.
-    var mode: PageMode
-
-    /// Whether `side` shows (is lit).
-    func shows(_ side: PageMode) -> Bool { spread || mode == side }
-
-    /// After `side` is chosen. `pairs`: the window has room for two pages (else it's a switch).
-    func choosing(_ side: PageMode, pairs: Bool) -> PageSides {
-        guard pairs else { return PageSides(spread: spread, mode: side) }
-        if spread { return PageSides(spread: false, mode: side) }
-        return side == mode ? self : PageSides(spread: true, mode: side)
     }
 }
 
@@ -1633,12 +1518,12 @@ extension AppState {
         guard !automatic || callPolicy != .off else { return }
         isStartingRecording = true
         defer { isStartingRecording = false }
-        let previousSelection = selectedID
+        let previousSelection = window.openID
         let into = existing.flatMap { id in canRecordInto(id) ? id : nil }
         let making = into == nil ? making.flatMap { new in meetings.contains { $0.id == new.id } ? nil : new } : nil
         let fromWindow = origin == .window
         let id = into ?? making?.id ?? newMeeting(title: Self.recordingTitle(title, at: Date()), selecting: fromWindow)
-        if fromWindow { selectedID = id }
+        if fromWindow { window.openID = id }
         prepareSourceCapture(id)
         let directory = storageURL.appendingPathComponent("Staging").appendingPathComponent(id.uuidString)
         captureDirectory = directory
@@ -1689,7 +1574,7 @@ extension AppState {
     private func discardUnrecorded(_ id: UUID, selecting previous: UUID?) async {
         guard let meeting = meetings.first(where: { $0.id == id }), meeting.tracks.isEmpty, meeting.highlights.isEmpty,
               meeting.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, meeting.visiblePhotos.isEmpty else { return }
-        if selectedID == id { selectQuietly(previous.flatMap { previous in meetings.contains { $0.id == previous } ? previous : nil }) }
+        if window.openID == id { selectQuietly(previous.flatMap { previous in meetings.contains { $0.id == previous } ? previous : nil }) }
         do { _ = try await library.moveToTrash(id) }
         catch { Self.log.notice("An empty conversation couldn't be removed (\(error.logCode, privacy: .public)): \(error.localizedDescription, privacy: .private)") }
     }

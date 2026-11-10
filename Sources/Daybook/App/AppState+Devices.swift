@@ -21,12 +21,12 @@ extension AppState {
     var hasDevices: Bool { devices.hasDevices }
 
     /// The device the sidebar has selected, if any.
-    var selectedDevice: DeviceSession? { place.deviceID.flatMap { devices.session($0) } }
+    var selectedDevice: DeviceSession? { window.place.deviceID.flatMap { devices.session($0) } }
 
     /// Opens a conversation in the library.
     func showConversation(_ id: UUID) {
-        place = .section(.all)
-        selectedID = id
+        window.place = .section(.all)
+        window.openID = id
     }
 
     /// Add Device…, or one kind's setup.
@@ -36,20 +36,20 @@ extension AppState {
 
     /// Opens a device's page.
     func showDevice(_ id: String) {
-        place = .device(id)
-        multiSelection = []
+        window.place = .device(id)
+        window.selection = []
     }
 
     /// Removes a device. Imported recordings stay; the sidebar leaves its page if it was showing.
     func removeDevice(_ id: String) {
         devices.remove(id)
-        if place == .device(id) { place = .section(.all) }
+        if window.place == .device(id) { window.place = .section(.all) }
     }
 
     /// Forgets one of a device's methods; the device goes when its last method does.
     func forgetDeviceMethod(_ method: ConnectionMethodKind, of id: String) {
         devices.forget(method, of: id)
-        if place == .device(id), devices.session(id) == nil { place = .section(.all) }
+        if window.place == .device(id), devices.session(id) == nil { window.place = .section(.all) }
     }
 
     /// Choose Folder… for a device's files method. Suggests iCloud Drive, where a phone's Save to

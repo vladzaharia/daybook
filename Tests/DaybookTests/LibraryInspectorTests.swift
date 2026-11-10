@@ -19,7 +19,7 @@ final class LibraryInspectorTests: XCTestCase {
         await state.initialize()
         defaults.set(true, forKey: "isInspectorPresented")
         let id = state.newMeeting(title: "Vendor walkthrough")
-        state.selectedID = id
+        state.window.openID = id
 
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1400, height: 860), styleMask: [.titled, .resizable],
                               backing: .buffered, defer: false)
@@ -35,7 +35,7 @@ final class LibraryInspectorTests: XCTestCase {
 
         // The page changes while the inspector collapses and expands again, as a device page opening at launch does.
         for place in [LibraryPlace.device("demo-phone"), .section(.all), .device("demo-phone"), .section(.all)] {
-            state.place = place
+            state.window.place = place
             try await Task.sleep(for: .milliseconds(30))
             XCTAssertEqual(split.splitViewItems.map(ObjectIdentifier.init), items, "Showing \(place) keeps the split view's items")
         }
@@ -154,11 +154,11 @@ final class LibraryInspectorTests: XCTestCase {
         defer { window.close() }
         try await settle()
 
-        state.place = .device("demo-phone")
+        state.window.place = .device("demo-phone")
         try await settle()
         state.showInspector()
         try await settle()
-        XCTAssertEqual(state.place, .device("demo-phone"), "nothing to open")
+        XCTAssertEqual(state.window.place, .device("demo-phone"), "nothing to open")
         XCTAssertFalse(defaults.bool(forKey: "isInspectorPresented"), "not stored for later")
 
         // The page shows an imported recording's conversation.
@@ -166,8 +166,8 @@ final class LibraryInspectorTests: XCTestCase {
         try await settle()
         state.showInspector()
         try await settle()
-        XCTAssertEqual(state.place, .section(.all))
-        XCTAssertEqual(state.selectedID, id)
+        XCTAssertEqual(state.window.place, .section(.all))
+        XCTAssertEqual(state.window.openID, id)
         XCTAssertTrue(defaults.bool(forKey: "isInspectorPresented"))
     }
 
@@ -179,7 +179,7 @@ final class LibraryInspectorTests: XCTestCase {
         let state = AppState(libraryURL: root, defaults: defaults)
         await state.initialize()
         defaults.set(true, forKey: "isInspectorPresented")
-        state.selectedID = state.newMeeting(title: "Weekly product sync with the design and research teams")
+        state.window.openID = state.newMeeting(title: "Weekly product sync with the design and research teams")
 
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 480), styleMask: [.titled, .resizable],
                               backing: .buffered, defer: false)

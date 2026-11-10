@@ -50,8 +50,8 @@ struct LibraryView: View {
 
     /// The conversation whose controls the toolbar shows; on the device page, an imported recording's conversation.
     private var toolbarMeeting: Meeting? {
-        guard state.multiSelection.count < 2 else { return nil }
-        if state.place.isDevice && !state.isSearching {
+        guard state.window.selection.count < 2 else { return nil }
+        if state.window.place.isDevice && !state.window.isSearching {
             return state.deviceConversationID.flatMap { id in state.meetings.first { $0.id == id } }
         }
         return state.selectedMeeting
@@ -59,7 +59,7 @@ struct LibraryView: View {
 
     /// Whether the page is a conversation chosen in the list, which the inspector is for. A device's page has none.
     private var showsConversation: Bool {
-        !(state.place.isDevice && !state.isSearching) && state.multiSelection.count < 2 && state.selectedMeeting != nil
+        !(state.window.place.isDevice && !state.window.isSearching) && state.window.selection.count < 2 && state.selectedMeeting != nil
     }
 
     var body: some View {
@@ -68,7 +68,7 @@ struct LibraryView: View {
                 .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 260)
         } content: {
             Group {
-                if state.place.isDevice && !state.isSearching { DeviceRecordingsList(state: state) }
+                if state.window.place.isDevice && !state.window.isSearching { DeviceRecordingsList(state: state) }
                 else { ConversationList(state: state) }
             }
             // A wide window gives the list room for two lines of gist (`ConversationRowView.twoLineGistWidth`).
@@ -81,7 +81,7 @@ struct LibraryView: View {
             // Teal is content's: the page's checkboxes, links, and fills. The toolbar, the inspector, the list, and the
             // sidebar follow the accent the person chose in System Settings (the AccentColor asset under Multicolor).
             ZStack { detail.tint(DaybookStyle.accent) }
-                .confirmationBeat($state.confirmation)
+                .confirmationBeat(Bindable(state.window).confirmation)
                 .overlay(alignment: .topTrailing) {
                     SharingAnchor(holder: shareAnchor).frame(width: 1, height: 1).padding(.trailing, 72).accessibilityHidden(true)
                 }
@@ -94,21 +94,22 @@ struct LibraryView: View {
                 // With no conversation for it (a device's page), there's nothing of the person's to keep.
                 .inspector(isPresented: Binding(get: { inspectorShown }, set: { if showsConversation { inspectorPresented = $0 } })) {
                     ZStack {
-                        if let id = state.selectedID { MeetingInspector(state: state, meetingID: id).equatable() }
+                        if let id = state.window.openID { MeetingInspector(state: state, meetingID: id).equatable() }
                     }
                     .inspectorColumnWidth(min: 260, ideal: 280, max: 340)
                 }
         }
-        .searchable(text: $state.search, tokens: $state.searchTokens, placement: .toolbar, prompt: LibraryWords.searchPrompt) { token in
+        .searchable(text: Bindable(state.window).searchText, tokens: Bindable(state.window).searchTokens, placement: .toolbar,
+                    prompt: LibraryWords.searchPrompt) { token in
             Label(token.text, systemImage: token.symbol)
         }
         .searchSuggestions { suggestions }
         .searchFocused($searchFocused)
         .onChange(of: state.searchFocusRequest) { _, _ in searchFocused = true }
-        .onChange(of: state.search) { _, text in promoteHashTag(text) }
-        .onChange(of: state.place) { _, _ in reconcileSelection() }
+        .onChange(of: state.window.searchText) { _, text in promoteHashTag(text) }
+        .onChange(of: state.window.place) { _, _ in reconcileSelection() }
         .onChange(of: state.visibleMeetings.map(\.id)) { _, _ in reconcileSelection() }
-        .environment(\.readingScale, CGFloat(state.readingScale))
+        .environment(\.readingScale, CGFloat(state.window.readingScale))
         .focusedSceneValue(\.shownConversation, toolbarMeeting?.id)
         .toolbarVisibility(toolbarShown ? .automatic : .hidden, for: .windowToolbar)
         .focusedSceneValue(\.libraryToolbarShown, $toolbarShown)
@@ -132,22 +133,22 @@ struct LibraryView: View {
         .onChange(of: showsConversation) { _, _ in adaptColumns() }
         .onChange(of: columns) { old, shown in columnsChanged(from: old, to: shown) }
         .onChange(of: state.isReady, initial: true) { _, ready in if ready { restore() } }
-        .onChange(of: state.place) { _, place in if restored { storedPlace = LibraryRestoration.encode(place) } }
-        .onChange(of: state.selectedID) { _, id in if restored { storedSelection = id?.uuidString ?? "" } }
-        .onChange(of: state.pageMode) { _, mode in if restored { storedPage = mode.rawValue } }
-        .onChange(of: state.pageSpreadChosen) { _, chosen in if restored { storedSpread = chosen } }
-        .sheet(item: $state.activeSheet) { sheet in ConversationSheet(state: state, sheet: sheet) }
+        .onChange(of: state.window.place) { _, place in if restored { storedPlace = LibraryRestoration.encode(place) } }
+        .onChange(of: state.window.openID) { _, id in if restored { storedSelection = id?.uuidString ?? "" } }
+        .onChange(of: state.window.pageMode) { _, mode in if restored { storedPage = mode.rawValue } }
+        .onChange(of: state.window.pageSpreadChosen) { _, chosen in if restored { storedSpread = chosen } }
+        .sheet(item: Bindable(state.window).sheet) { sheet in ConversationSheet(state: state, sheet: sheet) }
         .sheet(item: $state.addDeviceRequest) { request in AddDeviceSheet(state: state, request: request) }
         .sheet(item: $state.libraryMoveOffer) { offer in LibraryMoveSheet(state: state, offer: offer) }
-        .alert(trashTitle, isPresented: Binding(get: { !state.trashRequestIDs.isEmpty }, set: { if !$0 { state.trashRequestIDs = [] } })) {
+        .alert(trashTitle, isPresented: Binding(get: { !state.window.confirmingTrash.isEmpty }, set: { if !$0 { state.window.confirmingTrash = [] } })) {
             Button("Move to Trash", role: .destructive) {
-                state.trashMeetings(state.trashRequestIDs, undoManager: undoManager)
-                state.multiSelection = []
-                state.trashRequestIDs = []
+                state.trashMeetings(state.window.confirmingTrash, undoManager: undoManager)
+                state.window.selection = []
+                state.window.confirmingTrash = []
             }
-            Button("Cancel", role: .cancel) { state.trashRequestIDs = [] }
+            Button("Cancel", role: .cancel) { state.window.confirmingTrash = [] }
         } message: {
-            Text(state.trashRequestIDs.count > 1 ? "Their audio, notes, and summaries go with them."
+            Text(state.window.confirmingTrash.count > 1 ? "Their audio, notes, and summaries go with them."
                  : "Its audio, notes, and summary go with it.")
         }
         .alert(state.shownProblem?.title ?? "", isPresented: Binding(get: { state.shownProblem != nil }, set: { if !$0 { state.dismissProblem() } }),
@@ -166,23 +167,23 @@ struct LibraryView: View {
     @ViewBuilder private var detail: some View {
         if let problem = state.libraryProblem {
             LibraryProblemPage(state: state, problem: problem)
-        } else if state.place.isDevice && !state.isSearching {
+        } else if state.window.place.isDevice && !state.window.isSearching {
             DevicePage(state: state)
-        } else if state.place.isTrash && !state.isSearching {
+        } else if state.window.place.isTrash && !state.window.isSearching {
             TrashDetail(state: state)
-        } else if state.multiSelection.count > 1 {
-            BatchSelectionView(state: state, ids: Array(state.multiSelection))
+        } else if state.window.selection.count > 1 {
+            BatchSelectionView(state: state, ids: Array(state.window.selection))
         } else if let meeting = state.selectedMeeting {
             MeetingDetailView(state: state, meetingID: meeting.id)
                 .equatable()
                 .id(meeting.id)
                 .modifier(AddRecordingDrop(state: state, meeting: meeting))
-        } else if state.place == .section(.personal), state.personalLock.isLocked, !state.isSearching, !state.visibleMeetings.isEmpty {
+        } else if state.window.place == .section(.personal), state.personalLock.isLocked, !state.window.isSearching, !state.visibleMeetings.isEmpty {
             // Personal, locked: its page waits for the person to unlock it.
             LockedConversationPage { Task { await state.unlockPersonal() } }
         } else if state.isReady && state.meetings.isEmpty {
             EmptyLibraryView(state: state)
-        } else if !state.isSearching && state.visibleMeetings.isEmpty {
+        } else if !state.window.isSearching && state.visibleMeetings.isEmpty {
             // An empty place says so in its list; the page stays blank rather than asking for a choice.
             DaybookStyle.paper
         } else {
@@ -195,14 +196,14 @@ struct LibraryView: View {
     }
 
     private var trashTitle: String {
-        LibraryWords.trashTitle(state.meetings.filter { state.trashRequestIDs.contains($0.id) })
+        LibraryWords.trashTitle(state.meetings.filter { state.window.confirmingTrash.contains($0.id) })
     }
 
     /// The tags and people that start with what's typed, the iPhone's too (`LibrarySearchSuggestions`); only once
     /// something is typed, so the field's menu doesn't open by itself.
     @ViewBuilder private var suggestions: some View {
-        if !state.search.trimmingCharacters(in: .whitespaces).isEmpty {
-            ForEach(LibrarySearchSuggestions.tokens(for: state.search, tags: state.allTags, meetings: state.meetings, chosen: state.searchTokens)) { token in
+        if !state.window.searchText.trimmingCharacters(in: .whitespaces).isEmpty {
+            ForEach(LibrarySearchSuggestions.tokens(for: state.window.searchText, tags: state.allTags, meetings: state.meetings, chosen: state.window.searchTokens)) { token in
                 Label(token.text, systemImage: token.symbol).searchCompletion(token)
             }
         }
@@ -212,18 +213,18 @@ struct LibraryView: View {
     /// (moved to another folder, or the place changed), the first visible conversation is selected. The Trash
     /// selects what it lists itself.
     private func reconcileSelection() {
-        guard state.isReady, !state.isSearching, !state.place.isDevice, !state.place.isTrash else { return }
+        guard state.isReady, !state.window.isSearching, !state.window.place.isDevice, !state.window.place.isTrash else { return }
         let visible = state.visibleMeetings
-        if let selected = state.selectedID, visible.contains(where: { $0.id == selected }) { return }
-        state.multiSelection = []
+        if let selected = state.window.openID, visible.contains(where: { $0.id == selected }) { return }
+        state.window.selection = []
         state.selectQuietly(visible.first?.id)
     }
 
     /// Typing "#tag " turns the tag into a token.
     private func promoteHashTag(_ text: String) {
         guard let token = LibrarySearchSuggestions.promotedTag(in: text, tags: state.allTags) else { return }
-        state.searchTokens.append(token)
-        state.search = ""
+        state.window.searchTokens.append(token)
+        state.window.searchText = ""
     }
 
     /// The sidebar steps aside in narrow windows, and when the inspector would leave the page under 560 pt, and comes
@@ -318,23 +319,23 @@ struct LibraryView: View {
         guard !restored else { return }
         defer {
             restored = true
-            storedPlace = LibraryRestoration.encode(state.place)
-            storedSelection = state.selectedID?.uuidString ?? ""
-            storedPage = state.pageMode.rawValue
-            storedSpread = state.pageSpreadChosen
+            storedPlace = LibraryRestoration.encode(state.window.place)
+            storedSelection = state.window.openID?.uuidString ?? ""
+            storedPage = state.window.pageMode.rawValue
+            storedSpread = state.window.pageSpreadChosen
         }
         // The columns the person chose, as far as the window has room for them: one change, straight there.
         adaptColumns()
         guard !LibraryRestoration.launchChoosesPlace else { return }
         if let place = LibraryRestoration.decode(storedPlace, folders: state.folders.map(\.id), devices: state.devices.sessions.map(\.id)) {
-            state.place = place
+            state.window.place = place
         }
-        if let id = LibraryRestoration.selection(storedSelection, in: state.place.isDevice ? [] : state.visibleMeetings) {
-            state.multiSelection = []
+        if let id = LibraryRestoration.selection(storedSelection, in: state.window.place.isDevice ? [] : state.visibleMeetings) {
+            state.window.selection = []
             state.selectQuietly(id)
         }
-        if let page = PageMode(rawValue: storedPage) { state.pageMode = page }
-        state.pageSpreadChosen = storedSpread
+        if let page = PageMode(rawValue: storedPage) { state.window.pageMode = page }
+        state.window.pageSpreadChosen = storedSpread
     }
 
     /// Share and Tags… from More: what needs the window.

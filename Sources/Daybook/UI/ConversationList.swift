@@ -19,17 +19,17 @@ struct ConversationList: View {
 
     private var selection: Binding<Set<UUID>> {
         Binding(get: {
-            !state.multiSelection.isEmpty ? state.multiSelection : Set(state.selectedID.map { [$0] } ?? [])
+            !state.window.selection.isEmpty ? state.window.selection : Set(state.window.openID.map { [$0] } ?? [])
         }, set: { ids in
-            if ids.count > 1 { state.multiSelection = ids }
-            else { state.multiSelection = []; state.selectedID = ids.first }
+            if ids.count > 1 { state.window.selection = ids }
+            else { state.window.selection = []; state.window.openID = ids.first }
         })
     }
 
     var body: some View {
         Group {
-            if state.isSearching { SearchResults(state: state, captionHits: $captionHits) }
-            else if state.place.isTrash { MacTrashList(state: state) }
+            if state.window.isSearching { SearchResults(state: state, captionHits: $captionHits) }
+            else if state.window.place.isTrash { MacTrashList(state: state) }
             else { browsing }
         }
         .navigationTitle(title)
@@ -45,7 +45,7 @@ struct ConversationList: View {
         }
         .overlay { if isDropTargeted { DropOutline(label: "Import Audio") } }
         .dropDestination(for: URL.self) { urls, _ in importAudio(urls) } isTargeted: { isDropTargeted = $0 }
-        .onDeleteCommand { if !state.place.isTrash { state.trashRequestIDs = Array(selection.wrappedValue) } }
+        .onDeleteCommand { if !state.window.place.isTrash { state.window.confirmingTrash = Array(selection.wrappedValue) } }
         .sheet(item: $tagging) { request in
             ConversationTagsChooser(library: state.library, ids: request.ids) { tagging = nil }
         }
@@ -86,11 +86,11 @@ struct ConversationList: View {
         .contextMenu(forSelectionType: UUID.self) { ids in
             RowMenu(state: state, ids: Array(ids), undoManager: undoManager) { tagging = ConversationIDs(ids: $0) }
         } primaryAction: { ids in
-            if let id = ids.first { state.selectedID = id; state.focusTitle(id) }
+            if let id = ids.first { state.window.openID = id; state.focusTitle(id) }
         }
         .overlay {
             if meetings.isEmpty && state.isReady,
-               let words = LibraryWords.emptyPlace(state.place, libraryIsEmpty: state.meetings.isEmpty, platform: .mac) {
+               let words = LibraryWords.emptyPlace(state.window.place, libraryIsEmpty: state.meetings.isEmpty, platform: .mac) {
                 LibraryEmptyPlaceView(words)
             }
         }
@@ -99,7 +99,7 @@ struct ConversationList: View {
     // MARK: Title and status
 
     private var title: String {
-        switch state.place {
+        switch state.window.place {
         case .section(let section): return section.rawValue
         case .folder(let id): return state.folders.first { $0.id == id }?.name ?? "Folder"
         case .device(let id): return state.devices.session(id)?.device.name ?? "Device"
@@ -143,8 +143,8 @@ enum MacRowStatus {
 @MainActor
 enum MacListSubtitle {
     static func text(_ state: AppState, results: Int, at now: Date = Date()) -> String {
-        if state.isSearching { return results == 1 ? "1 result" : "\(results) results" }
-        if state.place.isTrash { return "" }
+        if state.window.isSearching { return results == 1 ? "1 result" : "\(results) results" }
+        if state.window.place.isTrash { return "" }
         if state.isStoppingRecording { return "Saving recording…" }
         if state.isRecording { return "Recording" }
         return QueueStatusWords.subtitle(queue(state), now: now) ?? ""
@@ -229,8 +229,8 @@ private struct SearchResults: View {
     var body: some View {
         let hits = state.searchHits
         let byID = Dictionary(state.meetings.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        List(selection: Binding(get: { state.selectedID }, set: { id in MacSearch.open(id, hits: hits, captionHits: captionHits, state: state) })) {
-            SearchScopePicker(scope: $state.searchScope, folder: viewedFolder)
+        List(selection: Binding(get: { state.window.openID }, set: { id in MacSearch.open(id, hits: hits, captionHits: captionHits, state: state) })) {
+            SearchScopePicker(scope: Bindable(state.window).searchScope, folder: viewedFolder)
             .controlSize(.small)
             .frame(maxWidth: .infinity)
             .padding(.bottom, Space.s3)
@@ -245,18 +245,18 @@ private struct SearchResults: View {
                 }
             }
             ForEach(captionHits.filter { state.personalLock.lists($0.meeting) }) { hit in
-                CaptionHitRowView(meeting: hit.meeting, segment: hit.segment, query: state.search)
+                CaptionHitRowView(meeting: hit.meeting, segment: hit.segment, query: state.window.searchText)
                     .tag(hit.meeting.id)
                     .listRowSeparator(.hidden)
             }
         }
         .listStyle(.inset)
         .softTopScrollEdge()
-        .overlay { if hits.isEmpty && captionHits.isEmpty { ContentUnavailableView.search(text: state.search) } }
-        .task(id: CaptionQuery(text: state.search, tokens: state.searchTokens, scope: state.searchScope, revision: state.libraryRevision)) {
+        .overlay { if hits.isEmpty && captionHits.isEmpty { ContentUnavailableView.search(text: state.window.searchText) } }
+        .task(id: CaptionQuery(text: state.window.searchText, tokens: state.window.searchTokens, scope: state.window.searchScope, revision: state.libraryRevision)) {
             // The conversations the search could list (its scope and tokens), less those the text search found.
-            let scoped = Set(LibrarySearch.hits(in: state.meetings, text: "", tokens: state.searchTokens, scope: state.searchScope).map(\.meetingID))
-            let found = await LibraryCaptionSearch.hits(in: state.meetings.filter { scoped.contains($0.id) }, query: state.search,
+            let scoped = Set(LibrarySearch.hits(in: state.meetings, text: "", tokens: state.window.searchTokens, scope: state.window.searchScope).map(\.meetingID))
+            let found = await LibraryCaptionSearch.hits(in: state.meetings.filter { scoped.contains($0.id) }, query: state.window.searchText,
                                                         excluding: Set(hits.map(\.meetingID)), libraryRoot: state.library.rootURL)
             guard !Task.isCancelled else { return }
             captionHits = found
@@ -265,7 +265,7 @@ private struct SearchResults: View {
 
     /// The folder being viewed, which the scopes offer too.
     private var viewedFolder: LibraryFolder? {
-        guard case .folder(let id) = state.place else { return nil }
+        guard case .folder(let id) = state.window.place else { return nil }
         return state.folders.first { $0.id == id }
     }
 }
@@ -275,23 +275,23 @@ private struct SearchResults: View {
 enum MacSearch {
     /// Opens a result at what it found: a transcript passage, or a saved live caption, on the transcript's page, where
     /// both read until a newer transcript replaces the captions (`SavedCaptions`, as on the iPhone); a note at Your
-    /// notes on the summary page (`SummaryJump`); the page's top for a title or a summary.
+    /// notes on the summary page (`LibraryWindowModel.showOnSummary`); the page's top for a title or a summary.
     static func open(_ id: UUID?, hits: [SearchHit], captionHits: [LibraryCaptionSearch.Hit], state: AppState) {
-        state.multiSelection = []
-        state.selectedID = id
+        state.window.selection = []
+        state.window.openID = id
         if let caption = captionHits.first(where: { $0.meeting.id == id }) {
-            state.turnPage(to: .transcript)
-            state.pageScrollTarget = caption.segment.id
+            state.window.turnPage(to: .transcript)
+            state.window.pageScrollTarget = caption.segment.id
             return
         }
         guard let id, let hit = hits.first(where: { $0.meetingID == id }) else { return }
         if hit.field == .transcript, let segment = hit.segmentID {
-            state.turnPage(to: .transcript)
-            state.pageScrollTarget = segment
+            state.window.turnPage(to: .transcript)
+            state.window.pageScrollTarget = segment
         } else {
-            state.turnPage(to: .summary)
-            state.pageScrollTarget = nil
-            if hit.field == .notes { SummaryJump.window.show(SummaryJump.notes, in: id) }
+            state.window.turnPage(to: .summary)
+            state.window.pageScrollTarget = nil
+            if hit.field == .notes { state.window.showOnSummary(SummaryBlockID.notes, in: id) }
         }
     }
 }
@@ -306,7 +306,7 @@ private struct MacTrashList: View {
     @State private var loaded = false
 
     var body: some View {
-        List(selection: $state.selectedID) {
+        List(selection: Bindable(state.window).openID) {
             ForEach(trashed) { meeting in
                 TrashRowView(meeting: meeting) { MacTrash.restore([meeting.id], state: state) }
                     .tag(meeting.id)
@@ -322,7 +322,7 @@ private struct MacTrashList: View {
         }
         // ⌘⌫ puts the selected one back, as Put Back does in Finder's Trash.
         .onKeyPress(.delete, phases: .down) { press in
-            guard press.modifiers.contains(.command), let id = state.selectedID, trashed.contains(where: { $0.id == id }) else { return .ignored }
+            guard press.modifiers.contains(.command), let id = state.window.openID, trashed.contains(where: { $0.id == id }) else { return .ignored }
             MacTrash.restore([id], state: state)
             return .handled
         }
@@ -354,8 +354,8 @@ struct TrashDetail: View {
                 DaybookStyle.paper
             }
         }
-        .task(id: [state.selectedID, state.libraryRevision] as [AnyHashable?]) {
-            guard let id = state.selectedID else { meeting = nil; return }
+        .task(id: [state.window.openID, state.libraryRevision] as [AnyHashable?]) {
+            guard let id = state.window.openID else { meeting = nil; return }
             meeting = await state.library.trashedMeeting(id)
         }
     }
@@ -367,8 +367,8 @@ enum MacTrash {
     /// left the Trash, or is searching, while it read: the selection belongs to what they're looking at now.
     /// Whether it took it.
     static func adopt(_ read: [Meeting], state: AppState) -> Bool {
-        guard state.place.isTrash, !state.isSearching else { return false }
-        if !read.contains(where: { $0.id == state.selectedID }) { state.selectedID = read.first?.id }
+        guard state.window.place.isTrash, !state.window.isSearching else { return false }
+        if !read.contains(where: { $0.id == state.window.openID }) { state.window.openID = read.first?.id }
         return true
     }
 
@@ -379,9 +379,9 @@ enum MacTrash {
                 do {
                     let meeting = try await state.library.restoreFromTrash(id)
                     state.post(LibraryWords.restored(meeting), action: LibraryNoticeAction(title: "Show") {
-                        state.place = .section(.all)
-                        state.multiSelection = []
-                        state.selectedID = meeting.id
+                        state.window.place = .section(.all)
+                        state.window.selection = []
+                        state.window.openID = meeting.id
                     })
                 } catch {
                     state.report("Couldn’t Restore", "Try again.", error)
@@ -405,7 +405,7 @@ private struct RowMenu: View {
         let meetings = state.meetings.filter { ids.contains($0.id) }
         if let only = meetings.first, meetings.count == 1, state.personalLock.hides(only) {
             // Locked: nothing that shows or shares it until the person unlocks.
-            Button(PersonalLockWords.unlock) { state.selectedID = only.id }
+            Button(PersonalLockWords.unlock) { state.window.openID = only.id }
         } else if let only = meetings.first, meetings.count == 1 {
             ShareLink(item: ConversationShareItem(only), preview: SharePreview(ConversationRowView.title(only))) {
                 Label("Share…", systemImage: "square.and.arrow.up")
@@ -505,14 +505,14 @@ enum MacActions {
                 switch request {
                 case .tags(let ids): window(.tags, ids)
                 case .versionHistory(let id):
-                    state.selectedID = id
-                    state.activeSheet = .versionHistory
+                    state.window.openID = id
+                    state.window.sheet = .versionHistory
                 case .moveToFolder: break // A menu of the folders (`custom`).
-                case .moveToTrash(let ids): state.trashRequestIDs = ids
+                case .moveToTrash(let ids): state.window.confirmingTrash = ids
                 }
             },
             copy: { LocalPasteboard.copy($0) },
-            confirm: { state.confirmation = $0 })
+            confirm: { state.window.confirmation = $0 })
         performer.perform(id, on: ids) { meetings in
             guard let first = meetings.first else { return }
             switch id {
@@ -522,7 +522,7 @@ enum MacActions {
             case .addPhotos: state.chooseAddPhoto(to: first.id)
             case .addRecordingFromFile: state.chooseImport(attachTo: first.id)
             case .rename:
-                state.selectedID = first.id
+                state.window.openID = first.id
                 state.focusTitle(first.id)
             case .showInFinder: state.showInFinder(first.id)
             case .shareMarkdown, .shareAudio: window(id, meetings.map(\.id))

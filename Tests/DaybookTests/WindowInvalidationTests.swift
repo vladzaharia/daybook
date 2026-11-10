@@ -44,7 +44,7 @@ final class WindowInvalidationTests: XCTestCase {
         // What the window around a progress line reads: the list, the selection, the place, the queue, and a row
         // that isn't being processed.
         let window = ObservationCount {
-            _ = state.visibleMeetings; _ = state.selectedID; _ = state.place; _ = state.processingQueue
+            _ = state.visibleMeetings; _ = state.window.openID; _ = state.window.place; _ = state.processingQueue
             _ = state.meetings.first { $0.id == other }.map { MacRowStatus.make(state, $0) }
         }
         let followed = ObservationCount { _ = state.processingProgress }
@@ -156,17 +156,50 @@ final class WindowInvalidationTests: XCTestCase {
         let state = AppState(libraryURL: root, defaults: defaults)
         await state.initialize()
         // What the list reads through AppState: the library, the place, and the selection.
-        let list = ObservationCount { _ = state.visibleMeetings; _ = state.selectedID; _ = state.place }
+        let list = ObservationCount { _ = state.visibleMeetings; _ = state.window.openID; _ = state.window.place }
         let sources = ObservationCount { _ = state.sources.matchesImportedFiles }
         defer { list.cancel(); sources.cancel() }
         // Multipoint sources, like sync, call detection, the recorder, and the iPhone link, redraw the views that
         // read them.
         state.sources.matchesImportedFiles.toggle()
-        state.search = "budget"
+        state.window.searchText = "budget"
         XCTAssertEqual(list.count, 0)
         XCTAssertEqual(sources.count, 1)
         state.newMeeting(title: "A change to the library", selecting: false)
         XCTAssertGreaterThan(list.count, 0, "The library is what nearly every view reads")
+        await state.flush()
+    }
+
+    func testWhereThePersonIsDoesntRedrawForTheQueue() async throws {
+        let root = makeTemporaryFolder("DaybookWindow")
+        let defaults = makeTestDefaults("local.daybook.tests.window")
+        let state = AppState(libraryURL: root, defaults: defaults)
+        await state.initialize()
+        let id = state.newMeeting(title: "Roadmap review")
+        let other = state.newMeeting(title: "Standup", selecting: false)
+        // Everything the library window, Floating Notes, and the menus read of where the person is.
+        let window = state.window
+        let navigation = ObservationCount {
+            _ = (window.place, window.openID, window.pageMode, window.pageSpreadChosen, window.pageSpreadFits, window.pageScrollTarget)
+            _ = (window.summaryRequest, window.searchText, window.searchTokens, window.searchScope, window.isSearching)
+            _ = (window.selection, window.sheet, window.confirmingTrash, window.titleFocusRequest, window.confirmation, window.readingScale)
+        }
+        defer { navigation.cancel() }
+        // A job runs and reports, others wait, pause, and wait for models, and a model downloads.
+        state.processingID = id
+        state.processingProgress = IntelligenceProgress(0.2, "Transcribing", stage: .transcribing)
+        state.processingProgress = IntelligenceProgress(0.6, "Making voice profiles", stage: .identifyingSpeakers)
+        state.processingQueue = [ProcessingJob(meetingID: other, transcriptionModelID: "whisper/base", summaryModelID: "qwen2.5/7b-4bit")]
+        state.pausedIDs.insert(other)
+        state.awaitingModels.insert(other)
+        state.downloadingID = "whisper/base"
+        state.downloadProgress = IntelligenceProgress(0.5, "Downloading")
+        XCTAssertEqual(navigation.count, 0, "Where the person is reads nothing of the queue, so its progress redraws none of it")
+        state.window.pageMode = .transcript
+        XCTAssertEqual(navigation.count, 1, "It redraws for where the person goes")
+        state.processingQueue = []
+        state.processingID = nil
+        state.downloadingID = nil
         await state.flush()
     }
 
@@ -193,7 +226,7 @@ final class WindowInvalidationTests: XCTestCase {
         let older = state.newMeeting(title: "Launch review", date: Date(timeIntervalSinceNow: -3_600))
         let newer = state.newMeeting(title: "Launch retro", date: Date())
         XCTAssertEqual(state.visibleMeetings.map(\.id), [newer, older])
-        state.search = "launch"
+        state.window.searchText = "launch"
         let searches = state.searchMemo.searches
         XCTAssertEqual(state.searchHits.map(\.meetingID), [newer, older], "Equal matches, newest first")
         _ = state.searchHits; _ = state.searchHits
@@ -201,7 +234,7 @@ final class WindowInvalidationTests: XCTestCase {
         state.library.rename(older, to: "Budget review")
         XCTAssertEqual(state.searchHits.map(\.meetingID), [newer], "A library change searches again")
         XCTAssertEqual(state.visibleMeetings.map(\.id), [newer, older])
-        state.place = .section(.work)
+        state.window.place = .section(.work)
         XCTAssertEqual(state.visibleMeetings, [], "A place change filters again")
         await state.flush()
     }

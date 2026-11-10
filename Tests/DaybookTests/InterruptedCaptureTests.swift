@@ -176,11 +176,11 @@ final class InterruptedCaptureTests: XCTestCase {
         XCTAssertEqual(state.awaitingModels, [manifest.id], "Queued, and waiting for this Mac's models")
         XCTAssertEqual(state.noticeLines, ["Recovered “\(recovered.title)”."])
         XCTAssertEqual(state.shownNoticeAction?.title, "Show")
-        state.place = .section(.work)
-        state.selectedID = nil
+        state.window.place = .section(.work)
+        state.window.openID = nil
         state.performNoticeAction()
-        XCTAssertEqual(state.selectedID, manifest.id)
-        XCTAssertEqual(state.place, .section(.all))
+        XCTAssertEqual(state.window.openID, manifest.id)
+        XCTAssertEqual(state.window.place, .section(.all))
     }
 
     /// The app imported the recording but died before removing the staged files: opening the library

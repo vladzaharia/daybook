@@ -11,7 +11,7 @@ import SwiftUI
 extension TranscriptPage where Header == MacTranscriptHeader, Placeholder == EmptyView {
     /// The transcript of a conversation on this Mac, with its saved live captions (`AppState.savedCaptions(for:)`, read
     /// off the main actor). A jump asked for elsewhere (a search hit, a saved caption search found, a photo's moment, a
-    /// summary line's evidence: `AppState.pageScrollTarget`) moves the page once and is then cleared.
+    /// summary line's evidence: `LibraryWindowModel.pageScrollTarget`) moves the page once and is then cleared.
     /// - Parameter titled: The title, byline, and status over the transcript; beside the summary (a spread) they're the
     ///   summary's, and the transcript starts with its first speaker.
     init(state: AppState, player: AudioPlaybackController, meeting: Meeting, titled: Bool = true,
@@ -19,14 +19,14 @@ extension TranscriptPage where Header == MacTranscriptHeader, Placeholder == Emp
         let captions = state.savedCaptions(for: meeting)
         self.init(meeting: meeting,
                   host: .mac(state: state, player: player, meetingID: meeting.id, play: play),
-                  findQuery: state.search,
+                  findQuery: state.window.searchText,
                   find: ConversationFind.window,
-                  scrollRequest: state.pageScrollTarget.map { target in
+                  scrollRequest: state.window.pageScrollTarget.map { target in
                       // A saved caption search found is one of the captions' rows.
                       let caption = captions?.segments.contains { $0.id == target } == true
                       return TranscriptScrollRequest(target: caption ? SavedCaptions.rowID(target) : target.uuidString, token: target.hashValue)
                   },
-                  scrolled: { state.pageScrollTarget = nil },
+                  scrolled: { state.window.pageScrollTarget = nil },
                   playerInset: 56,
                   captions: captions) {
             MacTranscriptHeader(state: state, player: player, meeting: meeting, titled: titled, play: play)
@@ -73,67 +73,43 @@ extension TranscriptHost {
             present: { sheet in
                 switch sheet {
                 case .correct: return false
-                case .reviewCorrections: state.activeSheet = .reviewCorrections
-                case .adjustTiming(let id): state.activeSheet = .adjustTiming(id)
-                case .originalTranscript(let id): state.activeSheet = .originalTranscript(id)
+                case .reviewCorrections: state.window.sheet = .reviewCorrections
+                case .adjustTiming(let id): state.window.sheet = .adjustTiming(id)
+                case .originalTranscript(let id): state.window.sheet = .originalTranscript(id)
                 }
                 return true
             },
             showNotes: {
-                SummaryJump.window.show(SummaryJump.notes, in: meetingID)
-                state.turnPage(to: .summary)
+                state.window.showOnSummary(SummaryBlockID.notes, in: meetingID)
+                state.window.turnPage(to: .summary)
             },
             photos: .mac(state: state, play: play))
     }
 }
 
-/// A block of the summary page to bring into view, asked for from elsewhere: Show in Your Notes on the transcript. The
-/// summary page moves to it once (`summaryJumps(in:)`), as the iPhone's does for `ReadingSession.showOnSummary`.
-@MainActor @Observable
-final class SummaryJump {
-    /// The library window's: one window, one conversation page.
-    static let window = SummaryJump()
-    /// The "Your notes" heading, under the summary.
-    static let notes = "notes"
-
-    /// Bumped by each request.
-    private(set) var token = 0
-    @ObservationIgnored private var pending: (target: String, meetingID: UUID)?
-
-    func show(_ target: String, in meetingID: UUID) {
-        pending = (target, meetingID)
-        token += 1
-    }
-
-    /// The block for this conversation's summary page, once. Taking clears the request, and a request made for another
-    /// conversation is dropped: the person has moved on from it.
-    func take(for meetingID: UUID) -> String? {
-        defer { pending = nil }
-        return pending?.meetingID == meetingID ? pending?.target : nil
-    }
-}
-
 extension View {
-    /// Around a conversation's summary page, its scroll view inside: moves to the block `SummaryJump` asks for, by the
-    /// `.id` it carries, once the page has laid out. The page has just opened, so it opens there.
-    func summaryJumps(in meetingID: UUID) -> some View {
-        modifier(SummaryJumps(meetingID: meetingID))
+    /// Around a conversation's summary page, its scroll view inside: moves to the block the window asks for
+    /// (`LibraryWindowModel.summaryRequest`, as the iPhone's `ReadingSession.summaryRequest`), by the `.id` it carries,
+    /// once the page has laid out. The page has just opened, so it opens there.
+    func summaryJumps(in meetingID: UUID, window: LibraryWindowModel) -> some View {
+        modifier(SummaryJumps(meetingID: meetingID, window: window))
     }
 }
 
 private struct SummaryJumps: ViewModifier {
     let meetingID: UUID
+    let window: LibraryWindowModel
 
     func body(content: Content) -> some View {
         ScrollViewReader { proxy in
             content
                 .onAppear { jump(proxy) }
-                .onChange(of: SummaryJump.window.token) { jump(proxy) }
+                .onChange(of: window.summaryRequest?.token) { jump(proxy) }
         }
     }
 
     private func jump(_ proxy: ScrollViewProxy) {
-        guard let target = SummaryJump.window.take(for: meetingID) else { return }
+        guard let target = window.takeSummaryRequest(for: meetingID) else { return }
         // The blocks are there on the next turn of the main queue, once the page has laid out.
         Task { @MainActor in proxy.scrollTo(target, anchor: .top) }
     }
@@ -159,7 +135,7 @@ struct ConversationFindCommands: Commands {
             Divider()
             Button("Find in Conversation…") {
                 guard let meeting else { return }
-                state.turnPage(to: .transcript)
+                state.window.turnPage(to: .transcript)
                 ConversationFind.window.show(in: meeting.id)
             }
             .keyboardShortcut("f")
@@ -176,8 +152,10 @@ struct ConversationFindCommands: Commands {
     /// Steps when Find shows over the transcript; otherwise opens it there, as Find in Conversation does.
     private func find(_ step: () -> Void) {
         guard let meeting else { return }
-        if ConversationFind.window.isShown, state.pageSides(meeting).shows(.transcript) { return step() }
-        state.turnPage(to: .transcript)
+        if ConversationFind.window.isShown, state.window.pageSides(hasTranscript: state.hasTranscriptPage(meeting)).shows(.transcript) {
+            return step()
+        }
+        state.window.turnPage(to: .transcript)
         ConversationFind.window.show(in: meeting.id)
     }
 }

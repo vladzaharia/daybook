@@ -49,7 +49,7 @@ enum PhoneDemo {
                                            addedAt: Date().addingTimeInterval(-9 * 86_400)))
         addRecordings(to: state)
         await state.startPhoneLinkIfPaired()
-        state.place = .device(phoneID.uuidString)
+        state.window.place = .device(phoneID.uuidString)
         guard scenario != .notConnected, let port = await state.phoneLink.port else { return }
         let phoneStore = MemoryLinkKeyStore([LinkPairingRecord(deviceID: macID, name: state.phoneLink.identity.name, deviceClass: .mac,
                                                                pairedAt: Date(), linkKey: key, pskIdentity: psk)])

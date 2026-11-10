@@ -90,12 +90,12 @@ struct MeetingInspector: View {
             state.cancelQueued(id)
             state.enqueue(id, mode: .summaryOnly)
         case .versionHistory:
-            state.activeSheet = .versionHistory
+            state.window.sheet = .versionHistory
         case .status(let action):
             MacStatusActions(state: state, undoManager: undoManager) { $0.open(with: openWindow, activating: false) }
                 .perform(action, on: id)
         case .searchTag(let tag):
-            state.searchTokens = [.tag(tag)]
+            state.window.searchTokens = [.tag(tag)]
         }
     }
 
@@ -109,9 +109,9 @@ struct MeetingInspector: View {
                 withAnimation(Motion.state) { state.playback.play(url: url, at: 0, trackID: track.id, meetingID: id) }
             }
         case .adjustTiming:
-            state.activeSheet = .adjustTiming(track.id)
+            state.window.sheet = .adjustTiming(track.id)
         case .showOriginalTranscript:
-            state.activeSheet = .originalTranscript(track.id)
+            state.window.sheet = .originalTranscript(track.id)
         case .showInFinder:
             state.showInFinder(id)
         case .removeRecording:
