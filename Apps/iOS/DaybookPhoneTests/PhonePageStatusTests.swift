@@ -95,10 +95,10 @@ final class PhonePageStatusTests: XCTestCase {
         model.placement.placements.begin(personal.id)
         model.placement.placements.begin(work.id)
         let waits = try page(ReadingDemo.Title.transcriptOnly, model)
-        XCTAssertEqual(waits?.title, "Waiting for a Mac to summarize")
+        XCTAssertEqual(waits?.title, SummaryPlacementWords.waitingForMac)
         XCTAssertEqual(waits?.actions, [.placement(.useCloud)])
         let sent = try page(ReadingDemo.Title.ready, model)
-        XCTAssertEqual(sent?.title, "Summarizing with Claude Sonnet 5.5")
+        XCTAssertEqual(sent?.title, SummaryPlacementWords.inCloud("Claude Sonnet 5.5"))
         XCTAssertEqual(sent?.actions, [.stopSummary])
     }
 

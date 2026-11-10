@@ -277,7 +277,7 @@ final class ReadingTests: XCTestCase {
 
         let silent = ProcessingStatus.Progress(stage: .summarizing, fraction: nil, device: studio)
         let line = pageStatus(.processing(silent), recorded())
-        XCTAssertEqual(line?.title, "Summarizing on Studio")
+        XCTAssertEqual(line?.title, SummaryPlacementWords.running(.mac(studio.id, studio.name), thisDevice: "iPhone"))
         XCTAssertNil(line?.progress, "no figure, no bar")
         XCTAssertEqual(line?.isWorking, true)
         // This iPhone's own work names it, with the same rounding as everywhere: down.

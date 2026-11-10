@@ -324,9 +324,12 @@ final class PretendLock {
 
     init(locked: Bool) { self.locked = locked }
 
+    /// Weak: the app model keeps these past a test's end (a deferred unlock handler, the recheck while a stop waits),
+    /// and a pretend lock that's gone reads as unlocked rather than as a freed object.
     var protectedData: ProtectedData {
-        ProtectedData(isAvailable: { [unowned self] in !self.locked }, whenAvailable: { [unowned self] in self.handlers.append($0) },
-                      whenUnavailable: { [unowned self] in self.lockHandlers.append($0) })
+        ProtectedData(isAvailable: { [weak self] in self.map { !$0.locked } ?? true },
+                      whenAvailable: { [weak self] in self?.handlers.append($0) },
+                      whenUnavailable: { [weak self] in self?.lockHandlers.append($0) })
     }
 
     func lock() {
