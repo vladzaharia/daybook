@@ -342,9 +342,14 @@ public struct BookmarkControl: View {
     @ViewBuilder private var label: some View {
         switch shape {
         case .tile(let metrics):
-            BookmarkControlLabel(count: count, size: metrics.size, landed: landed)
-                .frame(maxWidth: .infinity, minHeight: metrics.height)
-                .contentShape(Rectangle())
+            // Too narrow for its word (Write by Hand beside it, a large text size), the glyph and the count: never
+            // "Boo…".
+            ViewThatFits(in: .horizontal) {
+                BookmarkControlLabel(count: count, size: metrics.size, landed: landed)
+                BookmarkControlLabel(count: count, title: "", size: metrics.size, landed: landed)
+            }
+            .frame(maxWidth: .infinity, minHeight: metrics.height)
+            .contentShape(Rectangle())
         case .wide:
             HStack(spacing: 14) {
                 Image(systemName: "bookmark.fill")
@@ -505,7 +510,10 @@ struct RecorderPressFeedback: ViewModifier {
     }
 }
 
-/// Two large controls side by side at the foot, as one group of glass on the iPhone.
+/// Two large controls side by side at the foot, as one group of glass on the iPhone, with anything between them
+/// (Write by Hand) at its own width. The two share the row equally when each keeps its words that way; otherwise
+/// each gets its words and they share the rest, so Bookmark keeps its word beside a shorter Stop
+/// (`RecorderControlTiles.widths`).
 public struct RecorderControlRow<Leading: View, Trailing: View>: View {
     private let spacing: CGFloat
     private let leading: Leading
@@ -518,7 +526,7 @@ public struct RecorderControlRow<Leading: View, Trailing: View>: View {
     }
 
     public var body: some View {
-        let row = HStack(spacing: spacing) {
+        let row = RecorderControlTiles(spacing: spacing) {
             leading
             trailing
         }
@@ -529,6 +537,52 @@ public struct RecorderControlRow<Leading: View, Trailing: View>: View {
         #else
         row
         #endif
+    }
+}
+
+/// Lays out the control row: a control with a width of its own keeps it, and the tiles that fill take the rest.
+public struct RecorderControlTiles: Layout {
+    public var spacing: CGFloat
+
+    public init(spacing: CGFloat) { self.spacing = spacing }
+
+    /// Each control's width in a row this wide. `ideals` are what each needs for its words; `fills` says which take
+    /// what's left (the tiles) rather than keeping their own width (a glyph). The tiles share the rest equally when
+    /// each fits that way; else, when all fit, each gets what it needs and they share what's over; else equally (and
+    /// their words give way to glyphs).
+    public static func widths(available: CGFloat, ideals: [CGFloat], fills: [Bool], spacing: CGFloat) -> [CGFloat] {
+        let kept = zip(ideals, fills).filter { !$0.1 }.map(\.0).reduce(0, +)
+        let room = max(0, available - kept - spacing * CGFloat(max(0, ideals.count - 1)))
+        let tiles = zip(ideals, fills).filter { $0.1 }.map(\.0)
+        guard !tiles.isEmpty else { return ideals }
+        let share = room / CGFloat(tiles.count)
+        let over = room - tiles.reduce(0, +)
+        let byNeed = tiles.contains { $0 > share } && over >= 0
+        return zip(ideals, fills).map { ideal, fills in
+            guard fills else { return ideal }
+            return byNeed ? ideal + over / CGFloat(tiles.count) : share
+        }
+    }
+
+    public func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let widths = widths(proposal.width, subviews)
+        let height = zip(subviews, widths).map { $0.sizeThatFits(ProposedViewSize(width: $1, height: proposal.height)).height }.max() ?? 0
+        return CGSize(width: proposal.width ?? widths.reduce(0, +) + spacing * CGFloat(max(0, subviews.count - 1)), height: height)
+    }
+
+    public func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        for (subview, width) in zip(subviews, widths(bounds.width, subviews)) {
+            subview.place(at: CGPoint(x: x, y: bounds.midY), anchor: .leading, proposal: ProposedViewSize(width: width, height: bounds.height))
+            x += width + spacing
+        }
+    }
+
+    private func widths(_ available: CGFloat?, _ subviews: Subviews) -> [CGFloat] {
+        let ideals = subviews.map { $0.sizeThatFits(.unspecified).width }
+        guard let available else { return ideals }
+        let fills = subviews.map { $0.sizeThatFits(ProposedViewSize(width: .infinity, height: nil)).width > available }
+        return Self.widths(available: available, ideals: ideals, fills: fills, spacing: spacing)
     }
 }
 

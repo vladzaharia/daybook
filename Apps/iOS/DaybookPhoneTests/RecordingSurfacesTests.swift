@@ -609,7 +609,9 @@ final class RecorderScreenTests: XCTestCase {
     .lineLimit(1)
    let slots = RecorderSlots(
     notes: AnyView(notes), captions: AnyView(captions),
-    accessory: AnyView(Circle().frame(width: 44, height: 44)))
+    captionLine: AnyView(Text("It keeps recording with the screen locked").font(.subheadline).lineLimit(1)),
+    accessory: AnyView(Circle().frame(width: 34, height: 34).padding(.vertical, -DaybookSpacing.s2)),  // as `CameraControl.phaseRow`
+    write: { AnyView(Circle().frame(width: $0.height, height: $0.height)) })
    let surface = RecorderSurface(
     state: state, levels: RecorderLevels(), actions: RecorderSurfaceActions(bookmark: {}, stop: {}),
     slots: slots
@@ -650,7 +652,7 @@ final class RecorderScreenTests: XCTestCase {
   let captions = LiveCaptionStrip(lines: lines, status: nil, style: .page)
   let slots = RecorderSlots(
    notes: AnyView(Color.clear), captions: AnyView(captions),
-   accessory: AnyView(Circle().frame(width: 44, height: 44)),
+   accessory: AnyView(Circle().frame(width: 34, height: 34).padding(.vertical, -DaybookSpacing.s2)),  // as `CameraControl.phaseRow`
    details: AnyView(Capsule().frame(height: 24)))
   for expansion in [nil, RecorderSheetSize.collapsed, .expanded, .full] {
    let surface = RecorderSurface(
@@ -679,7 +681,8 @@ final class RecorderScreenTests: XCTestCase {
 
  private func hosted(
   expansion: RecorderSheetSize?, paused: Bool = false, notice: Bool = false, size: CGSize,
-  layout: SurfaceLayout = .column, notes measuring: AnyView
+  layout: SurfaceLayout = .column, notes measuring: AnyView, captionLine: AnyView? = nil,
+  chips: [RecorderChip] = [], typeSize: DynamicTypeSize = .accessibility5
  ) -> (host: UIHostingController<AnyView>, window: UIWindow) {
   let pause =
    paused
@@ -688,19 +691,21 @@ final class RecorderScreenTests: XCTestCase {
     canResume: true) : nil
   let state = RecorderSurfaceState(
    phase: RecorderPhase(phase: paused ? .paused : .recording, title: paused ? "Paused" : "Recording"),
-   title: "Conversation at 4:07 AM", clock: .since(Date()), isLive: !paused, bookmarkCount: 2,
-   pause: pause, hasNotice: notice)
+   title: "Conversation at 4:07 AM", byline: "Today · 4:07 AM", chips: chips, clock: .since(Date()), isLive: !paused,
+   bookmarkCount: 2, pause: pause, hasNotice: notice)
   let slots = RecorderSlots(
    notes: measuring,
    captions: AnyView(Text("Then everything waits for the Mac to finish").font(.system(size: 26)).lineLimit(1)),
-   accessory: AnyView(Circle().frame(width: 44, height: 44)),
-   notice: notice ? AnyView(Text("The Mac declined to record too.").font(.footnote)) : nil)
+   captionLine: captionLine ?? AnyView(Text("It keeps recording with the screen locked").font(.subheadline).lineLimit(1)),
+   accessory: AnyView(Circle().frame(width: 34, height: 34).padding(.vertical, -DaybookSpacing.s2)),  // as `CameraControl.phaseRow`
+   notice: notice ? AnyView(Text("The Mac declined to record too.").font(.footnote)) : nil,
+   write: { AnyView(Circle().frame(width: $0.height, height: $0.height)) })
   let surface = RecorderSurface(
    state: state, levels: RecorderLevels(), actions: RecorderSurfaceActions(bookmark: {}, stop: {}),
    slots: slots, sheetExpansion: .constant(expansion)
   )
   .daybookSurface(layout, density: .touch)
-  .dynamicTypeSize(.accessibility5)
+  .dynamicTypeSize(typeSize)
   let host = UIHostingController(rootView: AnyView(surface))
   host.safeAreaRegions = []
   let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
@@ -786,7 +791,42 @@ final class RecorderScreenTests: XCTestCase {
  func testBehaviorTheSheetRestsAtTheSizeItsPostureCallsFor() {
   XCTAssertEqual(RecorderSheetSize.resting(in: .column, isWide: false), .collapsed, "closed, upright")
   XCTAssertEqual(RecorderSheetSize.resting(in: .column, isWide: true), .mini, "closed, on its side")
-  XCTAssertEqual(RecorderSheetSize.resting(in: .spread(crease: 475.5), isWide: true), .mini, "open")
+  XCTAssertEqual(
+   RecorderSheetSize.resting(in: .spread(crease: 475.5), isWide: true), .expanded,
+   "open: the whole recorder on the right page")
+  XCTAssertEqual(
+   RecorderSheetSize.resting(in: .spread(crease: 475.5), isWide: true).rendered(keyboardUp: true, hasNotice: false), .mini,
+   "one row only while the keyboard is up")
+ }
+
+ /// Regression: at rest in the hand nothing said which conversation was recording, or that a Mac recorded along.
+ /// Over the notes the title and the byline say it, with the chips folded in, and the newest caption sits on the
+ /// sheet; from expanded up the sheet has the captions' strip instead.
+ func testBehaviorAtRestInTheHandTheNotesSayWhatsRecording() throws {
+  final class Seen {
+   var line: CGFloat = 0
+   var notesTop: CGFloat = 0
+  }
+  let seen = Seen()
+  let line = Text("It keeps recording with the screen locked").font(.subheadline).lineLimit(1)
+   .background { GeometryReader { proxy in Color.clear.onAppear { seen.line = proxy.size.height } } }
+  let notes = GeometryReader { proxy in Color.clear.onAppear { seen.notesTop = proxy.frame(in: .global).minY } }
+  let mac = RecorderChip(target: .peer("mac"), symbol: "desktopcomputer", label: "Studio Mac", tone: .calm, showsDot: true,
+                         detail: "Studio Mac is recording too")
+  let size = CGSize(width: 402, height: 790)  // the 18 Pro inside its safe area
+  let (host, window) = hosted(
+   expansion: nil, size: size, notes: AnyView(notes), captionLine: AnyView(line), chips: [mac], typeSize: .large)
+  defer { window.isHidden = true }
+  host.view.layoutIfNeeded()
+  XCTAssertGreaterThan(seen.notesTop, 50, "the title and its byline over the notes")
+  XCTAssertGreaterThan(seen.line, 10, "the newest caption on the sheet")
+ }
+
+ /// The caption's line under the notes is the first thing to go: it shows only where the notes keep their minimum.
+ func testBehaviorTheCaptionLineGivesWayBeforeTheNotes() {
+  XCTAssertTrue(RecorderSheetSize.captionLineFits(height: 24, in: 300, minimumNotes: 88))
+  XCTAssertFalse(RecorderSheetSize.captionLineFits(height: 24, in: 100, minimumNotes: 88), "the notes keep two lines")
+  XCTAssertFalse(RecorderSheetSize.captionLineFits(height: 0, in: 300, minimumNotes: 88), "captions off: nothing")
  }
 
  func testBehaviorAnExpansionSurvivesFoldingAndNilRestsAtEachPosturesSize() {
@@ -794,7 +834,7 @@ final class RecorderScreenTests: XCTestCase {
   let open = RecorderSheetSize.resting(in: .spread(crease: 475.5), isWide: false)
   let closed = RecorderSheetSize.resting(in: .column, isWide: false)
   let turned = RecorderSheetSize.resting(in: .column, isWide: true)
-  XCTAssertEqual(RecorderSheetSize.selected(expansion: nil, rest: open, hasNotice: false), .mini)
+  XCTAssertEqual(RecorderSheetSize.selected(expansion: nil, rest: open, hasNotice: false), .expanded)
   XCTAssertEqual(RecorderSheetSize.selected(expansion: nil, rest: closed, hasNotice: false), .collapsed)
   for expansion in [RecorderSheetSize.expanded, .full] {
    XCTAssertEqual(RecorderSheetSize.selected(expansion: expansion, rest: open, hasNotice: false), expansion, "unfolded")

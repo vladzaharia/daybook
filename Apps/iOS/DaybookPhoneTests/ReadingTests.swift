@@ -630,6 +630,17 @@ final class ReadingTests: XCTestCase {
 
     // MARK: The session across folds
 
+    /// Write by Hand from the More menu turns the summary to the notes, and they take a finger's writing.
+    func testBehaviorWriteByHandFromTheMenuGoesToTheNotes() {
+        let session = ReadingSession()
+        let id = UUID()
+        session.pageMode = .transcript
+        session.writeByHand(id)
+        XCTAssertEqual(session.writeByHandFor, id)
+        XCTAssertEqual(session.pageMode, .summary)
+        XCTAssertEqual(session.summaryRequest?.target, SummaryBlockID.notes)
+    }
+
     func testANewNoteIsAConversationWithoutAudioInThePlaceBeingViewed() async throws {
         let library = PhoneLibrary(rootURL: try temporaryDirectory(), installation: "TEST")
         try await library.reload()

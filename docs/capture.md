@@ -594,7 +594,7 @@ link, Settings' section), and `Capture/CaptureCaptionTap.swift`.
   only once it's filed, so the iPhone passes its Trash (`trashed`) and keeps captions of a recording
   stopped a moment ago or left by a crash for recovery.
 - **Where they show.** Every live caption on both apps is one renderer, `LiveCaptionStrip`
-  (DaybookDesign), in a style per surface: "LIVE CAPTIONS · TENTATIVE" on top, the newest line in
+  (DaybookDesign), in a style per surface: "Live captions · tentative" on top, the newest line in
   Body ink, earlier ones in Secondary, still-revised words in Meta, and "Listening…" before anything
   is heard. Floating Notes, while recording: a fixed-height strip above Bookmark and Stop (`.panel`)
   with the newest two lines, the newest larger and keeping its latest words; the source (You or

@@ -67,6 +67,8 @@ final class ReadingSession {
     var confirmation: ConfirmationBeat?
     /// A new note: its notes take the keyboard when the page appears.
     var focusNotesFor: UUID?
+    /// Write by Hand from the More menu: these notes take a finger's writing (`writeByHand(_:)`).
+    var writeByHandFor: UUID?
     /// Something couldn't be done (the audio isn't here to share): an alert naming it.
     var alert: ReadingAlert?
     /// Conversations waiting for the person to confirm moving them to the Trash.
@@ -177,6 +179,12 @@ final class ReadingSession {
         transcriptRequest = ScrollRequest(target: "caption:\(id.uuidString)", token: nextToken, flash: false)
         pageMode = .transcript
         if isNotebook { reading = true }
+    }
+
+    /// Write by Hand from the More menu: the summary turns to the notes, and a finger writes on them.
+    func writeByHand(_ id: UUID) {
+        writeByHandFor = id
+        showOnSummary(SummaryBlockID.notes)
     }
 
     func showOnSummary(_ block: String) {

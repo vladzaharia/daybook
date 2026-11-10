@@ -10,7 +10,8 @@ import UIKit
 // hand and of the open Duo's right page, at one of four sizes. It rests at the posture's size; the person can expand
 // it to a level, which stays through folding and turning; dismissing clears that level back to rest. The sheet takes
 // its height and the notes or the captions over it take what's left; nothing floats over them. Stop and Bookmark are
-// at every size.
+// at every size. In the hand the notes carry a header (the title, and the byline with what records along) and the
+// newest caption sits on the sheet, so the resting recorder says what it's recording.
 
 /// How much of its column or page the recorder's sheet takes.
 public enum RecorderSheetSize: String, CaseIterable, Sendable {
@@ -42,11 +43,12 @@ public enum RecorderSheetSize: String, CaseIterable, Sendable {
 
     // MARK: Rules
 
-    /// The size the sheet rests at for a posture: one row on the open Duo, and on a closed Duo or another iPhone
-    /// turned on its side (`isWide`); a little more in the hand upright, where the whole recorder fits one thumb.
+    /// The size the sheet rests at for a posture: the whole recorder on the open Duo's right page, which has the room
+    /// (the left page has the notes); one row on a closed Duo or another iPhone turned on its side (`isWide`); a little
+    /// more in the hand upright, where the whole recorder fits one thumb. The keyboard still takes it to one row.
     public static func resting(in layout: SurfaceLayout, isWide: Bool) -> RecorderSheetSize {
         switch layout {
-        case .spread: return .mini
+        case .spread: return .expanded
         case .column: return isWide ? .mini : .collapsed
         case .compact, .stage: return .collapsed
         }
@@ -121,6 +123,12 @@ public enum RecorderSheetSize: String, CaseIterable, Sendable {
 
     private static func rubberBand(_ distance: CGFloat) -> CGFloat { 36 * (1 - 1 / (distance / 90 + 1)) }
 
+    /// Whether the newest caption's line, this tall, shows under notes that keep their minimum in `available`: in the
+    /// hand it gives way before the notes do.
+    public static func captionLineFits(height: CGFloat, in available: CGFloat, minimumNotes: CGFloat) -> Bool {
+        height > 0 && available - height >= minimumNotes
+    }
+
     /// Whether a keyboard this tall takes the screen. A hardware keyboard's bar is shorter and leaves the sheet alone.
     public static func keyboardTakesTheScreen(height: CGFloat) -> Bool { height >= 120 }
 }
@@ -138,19 +146,27 @@ struct RecorderSheetLook {
     let wholeClock: CGFloat
     let meterStack: MeterStack
     let controls: RecorderControlMetrics
-    /// The title over the clock; on the open Duo it's on the notes' page.
-    let showsTitle: Bool
+    /// In the hand: the sheet reaches the screen's sides, and the title and what records along head the notes above
+    /// it, so the sheet shows them only at full, which covers the notes. On the open Duo the title heads the left page
+    /// and the chips are in the sheet.
+    let inHand: Bool
     /// The captions take what's left of the page and give way first, and only the whole-page size has them in the
-    /// sheet (over smaller sizes they're on the page above it). In the hand they're a line at the larger sizes.
+    /// sheet (over smaller sizes they're on the page above it). In the hand the strip is in the sheet from expanded
+    /// up, and under that the newest line sits on the sheet.
     let captionsFill: Bool
+    /// The live timeline from the whole recorder up, as on the page, which rests there; otherwise only at full.
+    let timelineWhole: Bool
 
-    static let hand = RecorderSheetLook(wholeClock: 64, meterStack: .pocket, controls: .pocket, showsTitle: true, captionsFill: false)
-    static let page = RecorderSheetLook(wholeClock: 76, meterStack: .page, controls: .page, showsTitle: false, captionsFill: true)
+    static let hand = RecorderSheetLook(wholeClock: 64, meterStack: .pocket, controls: .pocket, inHand: true, captionsFill: false,
+                                        timelineWhole: false)
+    static let page = RecorderSheetLook(wholeClock: 76, meterStack: .page, controls: .page, inHand: false, captionsFill: true,
+                                        timelineWhole: true)
 }
 
 // MARK: - The column
 
-/// Your notes on top in the hand, the sheet below.
+/// In the hand: what's recording (the title, and the byline with what records along), your notes, and the newest
+/// caption on top; the sheet below.
 struct RecorderSheetColumn: View {
     let parts: RecorderPieces
     let expansion: Binding<RecorderSheetSize?>
@@ -159,17 +175,55 @@ struct RecorderSheetColumn: View {
     @ScaledMetric(relativeTo: .body) private var notesLine: CGFloat = 22
     @State private var isWide = false
 
+    /// One column rests as one column does, a spread too narrow for its two pages too.
+    private var posture: SurfaceLayout {
+        if case .spread = layout { return .column }
+        return layout
+    }
+
     var body: some View {
-        RecorderSheetLayout(parts: parts, expansion: expansion, rest: RecorderSheetSize.resting(in: layout, isWide: isWide), look: .hand) {
-            parts.slots.notes
+        RecorderSheetLayout(parts: parts, expansion: expansion, rest: RecorderSheetSize.resting(in: posture, isWide: isWide), look: .hand) { drawn in
+            VStack(alignment: .leading, spacing: DaybookSpacing.s2) {
+                RecorderNotesHeader(parts: parts, inHand: true)
+                    .padding(.horizontal, RecorderInsets.touch + DaybookSpacing.s2)
                 // At least two lines of notes. Laid out last, as the most flexible piece, they take what the sheet
-                // leaves; a higher priority would squeeze a notice to its first line instead.
-                .frame(maxWidth: .infinity, minHeight: notesLine * 2, maxHeight: .infinity)
-                // With the recorder in the sheet, nothing else keeps the first line off the top of the screen.
-                .padding(.top, DaybookSpacing.s4)
+                // leaves; a higher priority would squeeze a notice to its first line instead. The caption's line
+                // gives way before they do.
+                NotesOverCaptionLine(minimumNotes: notesLine * 2) {
+                    parts.slots.notes.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // Under the whole recorder; from expanded up the sheet has the captions' strip.
+                    if drawn < .expanded, let line = parts.slots.captionLine {
+                        line.frame(minHeight: 0, maxHeight: .infinity, alignment: .top).clipped()
+                    }
+                }
+            }
+            // With the recorder in the sheet, nothing else keeps the title off the top of the screen.
+            .padding(.top, DaybookSpacing.s4)
         }
         .onGeometryChange(for: Bool.self) { $0.size.width > $0.size.height } action: { isWide = $0 }
     }
+}
+
+/// The notes over the newest caption's line: the line gives way first, so the notes always keep `minimumNotes`.
+struct NotesOverCaptionLine: Layout {
+    let minimumNotes: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? subviews.first?.sizeThatFits(proposal).width ?? 0
+        return CGSize(width: width, height: max(minimumNotes, proposal.height ?? minimumNotes))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let notes = subviews.first else { return }
+        let line = subviews.count > 1 ? subviews[1] : nil
+        let height = line?.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil)).height ?? 0
+        let showsLine = RecorderSheetSize.captionLineFits(height: height, in: bounds.height, minimumNotes: minimumNotes)
+        let notesHeight = showsLine ? bounds.height - height : bounds.height
+        notes.place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: notesHeight))
+        line?.place(at: CGPoint(x: bounds.minX, y: bounds.minY + notesHeight),
+                    proposal: ProposedViewSize(width: bounds.width, height: showsLine ? height : 0))
+    }
+
 }
 
 /// `above` over the sheet: the notes in the hand, the captions on the open Duo's right page. Out of the layout at the
@@ -180,7 +234,8 @@ struct RecorderSheetLayout<Above: View>: View {
     let expansion: Binding<RecorderSheetSize?>
     let rest: RecorderSheetSize
     let look: RecorderSheetLook
-    @ViewBuilder let above: () -> Above
+    /// What's over the sheet at the size drawn.
+    @ViewBuilder let above: (RecorderSheetSize) -> Above
     @Namespace private var space
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var keyboardUp = false
@@ -200,7 +255,7 @@ struct RecorderSheetLayout<Above: View>: View {
         let drawn = level.rendered(keyboardUp: keyboardUp, hasNotice: parts.state.hasNotice)
         VStack(spacing: 0) {
             if drawn != .full {
-                above().transition(fade)
+                above(drawn).transition(fade)
             }
             sheet(drawn, floor: floor)
         }
@@ -227,8 +282,8 @@ struct RecorderSheetLayout<Above: View>: View {
         .frame(maxWidth: .infinity, maxHeight: drawn == .full ? .infinity : nil, alignment: .top)
         .background { measuringCopies(of: drawn, floor: floor) }
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if dragHeight == nil { heights[drawn] = $0 } }
-        // Past the foot of the screen; in the hand (the look with the title) out to its sides too, on the page clear of the crease.
-        .background { surface.ignoresSafeArea(.container, edges: look.showsTitle ? [.bottom, .horizontal] : .bottom) }
+        // Past the foot of the screen; in the hand out to its sides too, on the page clear of the crease.
+        .background { surface.ignoresSafeArea(.container, edges: look.inHand ? [.bottom, .horizontal] : .bottom) }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Recorder")
         .accessibilityAction(.escape) { setExpansion(nil, animation: stateAnimation) }
@@ -336,6 +391,12 @@ private struct RecorderSheetContent: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var whole: Bool { size == .expanded || size == .full }
+    /// What records along: in the hand it's over the notes, so here only at full, which covers them; on the page from
+    /// the whole recorder up.
+    private var showsChips: Bool { look.inHand ? size == .full : whole }
+    /// The title: in the hand only at full, for the same reason; on the page it heads the left page.
+    private var showsTitle: Bool { look.inHand && size == .full }
+    private var showsTimeline: Bool { size == .full || (size == .expanded && look.timelineWhole) }
 
     /// In the hand at the accessibility sizes, a pause's box takes the captions' room: nothing is heard while it's
     /// paused, and the notes keep theirs. Over smaller sizes the page shows them above the sheet.
@@ -387,17 +448,17 @@ private struct RecorderSheetContent: View {
         RecorderControlRow(spacing: look.controls.spacing) {
             parts.bookmark(.tile(look.controls)).matched("bookmark", in: space)
         } trailing: {
+            // Write by Hand between them: the handwriting tools are the control layer's, never over the notes.
+            if let write = parts.slots.write { write(look.controls).transition(fade) }
             parts.stop(look.controls).matched("stop", in: space)
         }
     }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: size == .mini ? 0 : 10) {
-            if size != .mini { parts.phase().transition(fade) }
-            if whole {
-                parts.chips.transition(fade)
-                if look.showsTitle { RecorderTitle(parts.state.title, rename: parts.state.rename).transition(fade) }
-            }
+            if size != .mini { phaseRow.transition(fade) }
+            if showsChips { parts.chips.transition(fade) }
+            if showsTitle { RecorderTitle(parts.state.title, rename: parts.state.rename).transition(fade) }
             clockRow
             if size != .mini, let pause = parts.state.pause {
                 RecorderPauseBox(pause, metrics: look.controls, resume: parts.actions.resume)
@@ -405,8 +466,8 @@ private struct RecorderSheetContent: View {
             } else if whole {
                 parts.meters(look.meterStack).matched("meter", in: space)
             }
+            if showsTimeline { parts.slots.details.transition(fade) }
             if size == .full {
-                parts.slots.details.transition(fade)
                 if let log = parts.slots.log {
                     log.frame(maxHeight: .infinity, alignment: .top).transition(fade)
                 } else if !look.captionsFill {
@@ -436,13 +497,17 @@ private struct RecorderSheetContent: View {
             } else if size == .mini {
                 Spacer(minLength: 0)
             }
-            if whole {
-                Spacer(minLength: 8)
-                parts.slots.accessory.transition(fade)
-            }
             if size == .mini { miniButtons }
         }
         .frame(minHeight: size == .mini ? RecorderControlMetrics.glyph.height : nil)
+    }
+
+    /// The phase, and the camera at its end, so a photo never waits for the sheet to be expanded.
+    private var phaseRow: some View {
+        HStack(alignment: .center, spacing: DaybookSpacing.s3) {
+            parts.phase()
+            if let accessory = parts.slots.accessory { accessory }
+        }
     }
 
     @ViewBuilder private var miniButtons: some View {
