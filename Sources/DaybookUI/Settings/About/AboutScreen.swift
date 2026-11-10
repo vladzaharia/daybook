@@ -44,9 +44,7 @@ public struct AboutScreen<Route: Hashable>: View {
             }
         }
         .navigationTitle(AboutWords.title)
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
+        .touchInlineTitle()
     }
 }
 

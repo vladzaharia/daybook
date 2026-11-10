@@ -37,9 +37,7 @@ public struct ReviewCorrectionsSheet: View {
                 }
             }
             .navigationTitle("Review Earlier Corrections")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
+            .touchInlineTitle()
             .toolbar {
                 if issues.isEmpty {
                     ToolbarItem(placement: .confirmationAction) { Button("Done") { close() }.keyboardShortcut(.defaultAction) }
@@ -301,9 +299,7 @@ public struct AdjustTimingSheet: View {
                 }
             }
             .navigationTitle("Adjust Timing")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
+            .touchInlineTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { close() }.keyboardShortcut(.cancelAction) }
                 ToolbarItem(placement: .confirmationAction) {
@@ -408,9 +404,7 @@ public struct OriginalTranscriptSheet: View {
             }
             .background(DaybookPalette.paper.ignoresSafeArea())
             .navigationTitle("Original Transcript")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
+            .touchInlineTitle()
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { close() }.keyboardShortcut(.defaultAction) }
             }

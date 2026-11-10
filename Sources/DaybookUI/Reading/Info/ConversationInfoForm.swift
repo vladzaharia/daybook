@@ -390,11 +390,5 @@ private struct InfoLabeled: View {
 
 extension View {
     /// A picker or menu in Info: the Mac's small control (its values stay the row's size); unchanged under touch.
-    @ViewBuilder func infoControl() -> some View {
-        #if os(macOS)
-        controlSize(.small)
-        #else
-        self
-        #endif
-    }
+    func infoControl() -> some View { macControlSize(.small) }
 }

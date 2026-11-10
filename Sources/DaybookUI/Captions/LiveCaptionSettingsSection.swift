@@ -58,9 +58,7 @@ public struct LiveCaptionSettingsSection<Settings: LiveCaptionPreferences>: View
     public var body: some View {
         Section {
             Toggle(words("Show while recording"), isOn: $settings.captionsEnabled)
-                #if os(macOS)
-                .controlSize(.regular)
-                #endif
+                .macControlSize(.regular)
                 .disabled(!supported)
             if supported && settings.captionsEnabled {
                 Picker(words("Language"), selection: $settings.captionLanguage) {

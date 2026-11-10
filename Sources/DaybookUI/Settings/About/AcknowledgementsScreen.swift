@@ -66,9 +66,7 @@ public struct AcknowledgementsScreen: View {
         }
         .formStyle(.grouped)
         .navigationTitle(AboutWords.acknowledgements)
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
+        .touchInlineTitle()
     }
 
     @ViewBuilder private func license(_ entry: ModelAcknowledgement) -> some View {

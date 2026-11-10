@@ -46,16 +46,12 @@ public struct TermForm: View {
         Form {
             Section(VocabularyWords.term.asSettingsLabel) {
                 TextField(VocabularyWords.spelledAs, text: $term.term)
-                    #if os(iOS)
-                    .textInputAutocapitalization(.never)
-                    #endif
+                    .touchKeyboard(capitalization: .never)
             }
             Section {
                 // Short, so it fits a page of the open iPhone Duo; the footer says the rest.
                 TextField(VocabularyWords.otherSpellings, text: $aliases)
-                    #if os(iOS)
-                    .textInputAutocapitalization(.never)
-                    #endif
+                    .touchKeyboard(capitalization: .never)
             } header: {
                 Text(VocabularyWords.alsoHeardAs.asSettingsLabel)
             } footer: {
@@ -83,9 +79,7 @@ public struct TermForm: View {
             }
         }
         .navigationTitle(isNew ? VocabularyWords.addTerm : VocabularyWords.editTerm)
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
+        .touchInlineTitle()
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") { if hasChanges { confirmingDiscard = true } else { dismiss() } }

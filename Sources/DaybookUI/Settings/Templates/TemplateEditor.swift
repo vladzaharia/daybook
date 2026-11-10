@@ -45,9 +45,7 @@ public struct TemplateEditor<Route: Hashable>: View {
                 ContentUnavailableView(TemplateWords.removed, systemImage: "doc.text")
             }
         }
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
+        .touchInlineTitle()
         .onAppear { if draft == nil { draft = templates.draft(templateID) } }
         .savingAsYouType($draft, to: templates)
         .confirmingTemplateDeletion($deleting) { template in

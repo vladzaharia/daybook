@@ -57,9 +57,7 @@ public struct ConversationTagsChooser: View {
                         .frame(width: 28).accessibilityHidden(true)
                     TextField("New Tag", text: $newTag)
                         .onSubmit(addNew)
-                        #if os(iOS)
-                        .submitLabel(.done)
-                        #endif
+                        .touchKeyboard(submit: .done)
                     if !newTag.trimmingCharacters(in: .whitespaces).isEmpty {
                         Button("Add", action: addNew).buttonStyle(.daybookLink).fontWeight(.semibold)
                     }
