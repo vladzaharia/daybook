@@ -418,7 +418,7 @@ background relaunch that never reaches `launch`), so each says what it can still
   app writes it at least once a minute while recording (`SharedStatePublisher`). The timeline adds an
   entry where an unconfirmed recording turns into "Open Daybook to check", and the control is on only while
   it's confirmed. Paused, the clock is frozen ("Paused · 12:03"). The Recorder's Lock Screen sizes are unchanged.
-  At rest it names the newest conversation Spotlight may list (`ConversationIndex.isShown`), never a Personal
+  At rest it names the newest conversation Spotlight may list (`SpotlightPlan.isShown`, both apps' rule), never a Personal
   one, and follows the library: a conversation made Personal leaves it at once (`PhoneAppModel.lastRecording`).
 - **Recent Conversations** is a Home Screen widget: small opens the latest conversation, medium lists three,
   and large lists six, each linked to its own page. An empty widget opens the library; a conversation
@@ -446,6 +446,10 @@ background relaunch that never reaches `launch`), so each says what it can still
   system hides sensitive widget content. Recent Conversations and Next Steps have no Lock Screen sizes.
   New Note carries no library data. Spotlight lists every conversation but Personal ones by its title,
   with its date as the description (`ConversationEntity.attributeSet`), as the Mac does; never what was said.
+  What to list, take out, and when to start over is DaybookKit's `SpotlightPlan`, which both apps' indexers
+  carry out with their own `ConversationEntity` (App Intents reads an entity from the target that declares it).
+  An action both apps have (Start Recording, Stop Recording, Add Bookmark, New Note) has one set of Siri phrases
+  and one short title, written in each app's `DaybookShortcuts` and held together by `ShortcutPhrasesTests`.
 - **On the Watch and in CarPlay** (the small family, `supplementalActivityFamilies([.small])`) the
   recording shows what it's doing, the clock, and Bookmark and Stop as glyphs; Soundcore Work's shows
   its state, the clock, and Stop Listening. Neither names the conversation. On iOS 27, when the Dynamic

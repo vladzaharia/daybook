@@ -173,7 +173,8 @@ struct ShowFloatingNotesIntent: AppIntent {
     }
 }
 
-/// Siri phrases and Spotlight's actions. The recording phrases are the iPhone's (DaybookShortcuts there).
+/// Siri phrases and Spotlight's actions. An action the iPhone has too is said as it is there (DaybookShortcuts there;
+/// `ShortcutPhrasesTests` holds them together).
 struct DaybookShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(intent: StartRecordingIntent(),
@@ -192,7 +193,7 @@ struct DaybookShortcuts: AppShortcutsProvider {
                     shortTitle: "Add Bookmark", systemImageName: "bookmark")
         AppShortcut(intent: NewNoteIntent(),
                     phrases: ["New note in \(.applicationName)",
-                              "Start a \(.applicationName) note"],
+                              "Start a note in \(.applicationName)"],
                     shortTitle: "New Note", systemImageName: "square.and.pencil")
         AppShortcut(intent: ShowFloatingNotesIntent(),
                     phrases: ["Show floating notes in \(.applicationName)",

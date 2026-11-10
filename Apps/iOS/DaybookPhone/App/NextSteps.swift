@@ -8,7 +8,7 @@ extension SharedNextSteps {
     init(meetings: [Meeting]) {
         var items: [Item] = []
         items.reserveCapacity(Self.limit)
-        for meeting in meetings where ConversationIndex.isShown(meeting) {
+        for meeting in meetings where SpotlightPlan.isShown(meeting) {
             guard let actions = meeting.summary?.actionItems else { continue }
             let index = items.firstIndex { item in
                 meeting.date > item.date || (meeting.date == item.date && meeting.id.uuidString < item.meetingID.uuidString)
