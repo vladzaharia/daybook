@@ -53,6 +53,8 @@ import SwiftUI
 ///     --history-change <title>   Version History with that change open
 ///     --placement-demo countdown|waiting|cloud|mac-countdown|colophon   where a summary runs (`PhonePlacementDemo`)
 ///     --upgrade-demo mac|here|cloud|waiting   with --library-demo: an "Upgrade" offer on Weekly product sync (`PhoneUpgradeDemo`)
+///     --lock-demo locked|unlocked|focus   the Personal lock on and locked or unlocked, or a Focus hiding Personal; Unlock is
+///                                refused, so Face ID is never asked (DaybookKit's `PersonalLockDemo`, read in `DaybookPhoneApp`)
 ///
 /// Settings and the status sheet:
 ///

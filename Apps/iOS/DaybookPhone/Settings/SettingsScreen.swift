@@ -129,6 +129,7 @@ struct SettingsScreen: View {
             } header: {
                 Text("Library")
             }
+            PersonalLockSection()
             Section {
                 SettingsLink(route: .about) {
                     SettingsRow(title: "About Daybook", detail: nil, systemImage: "info.circle")
@@ -203,6 +204,25 @@ struct SettingsScreen: View {
             if screen.hasPrefix("speaker-profile:"),
                let profile = model.library.controller.speakerProfiles.first(where: { $0.name == screen.dropFirst("speaker-profile:".count) }) {
                 path = [.speakerProfiles, .speakerProfile(profile.id)]
+            }
+        }
+    }
+}
+
+/// Require Face ID for Personal (or the passcode, on an iPhone without Face ID), and its one line (`PersonalLock`).
+/// Off by default; turning it off asks first, as unlocking does.
+private struct PersonalLockSection: View {
+    @Environment(PersonalLock.self) private var personalLock: PersonalLock?
+
+    var body: some View {
+        if let personalLock {
+            Section {
+                Toggle(isOn: Binding(get: { personalLock.isRequired }, set: { on in Task { await personalLock.setRequired(on) } })) {
+                    SettingsRow(title: SettingsWords.titleCased(PersonalLockWords.requirement(personalLock.method)), detail: nil,
+                                systemImage: PersonalLockWords.symbol)
+                }
+            } footer: {
+                SettingsFooter(PersonalLockWords.footer)
             }
         }
     }
