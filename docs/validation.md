@@ -1,5 +1,22 @@
 # Validation record
 
+## Design pass follow-ups (2026-11-10)
+
+The items the design pass deferred (docs/audits/2026-11-10/README.md, "Still to do"), each on its own worktree from
+`design-pass-2026-11-followups` (stacked on PR #62), merged here with the touched suites rerun after every merge.
+
+- **F2, the page's status out of the views (code-quality P7).** The page's status is gathered in one function per
+  app (`ConversationStatusPresentation.mac` with `Inputs.mac`, `.phone` with `Inputs.phone`), and what it offers is
+  carried out by DaybookKit's `ConversationStatusActionHandler`, which `MacStatusActions` and `PhoneStatusActions`
+  implement through `MacActions.process` and `PhoneActions.process`, from the page and Info's Now row alike. A
+  conversation's template is named once, in `TemplateWords.title(for:resolved:)` and `automatic(for:)`, replacing five
+  copies. PageStatusTests and PhonePageStatusTests check the page over the demo library (a download running,
+  processing off, Personal under Always per ux-mac-10, waiting for another device's audio, failures); TemplateWordsTests
+  and ConversationStatusActionHandlerTests. `swift test` whole package (2,556, only the two load-sensitive
+  SpeakerProfileProcessingTests timing out at a load average of 150–800); the three touched iPhone suites (51). Mac
+  and iPhone page captures before and after are unchanged. Row and Info inputs (`MeetingInspector.inputs`,
+  `MacRowStatus.make`, the iPhone's `ConversationRow`) stay in place; P7 covers the page.
+
 ## Design pass (2026-11-10)
 
 A whole-app design pass with the owner's authority to redesign (docs/audits/2026-11-10/README.md): eight reviews, 219
