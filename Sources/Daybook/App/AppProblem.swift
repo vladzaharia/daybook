@@ -16,39 +16,28 @@ struct AppProblem: Equatable, Identifiable {
     var privacyPane: PrivacySettings.Pane?
     var id: String { [title, message, details ?? ""].joined(separator: "\u{1F}") }
 
+    init(_ words: ProblemWords) {
+        title = words.title
+        message = words.message
+        details = words.details
+    }
+
     init(title: String, message: String, details: String? = nil) {
-        self.title = title
-        self.message = message
-        self.details = details.flatMap { $0.isEmpty || $0 == message ? nil : $0 }
+        self.init(ProblemWords(title: title, message: message, details: details))
     }
 
-    /// Daybook's own errors already say what happened and what to do, so they're the message; the
-    /// system's aren't, so they get `fallback` and keep their words for Details.
+    /// Daybook's own errors (`PlainSentenceError`) already say what happened and what to do, so they're the message;
+    /// the system's aren't, so they get `fallback` and keep their words for Details: the words both apps use
+    /// (`ProblemWords`).
     init(title: String, fallback: String, error: Error?) {
-        guard let error else {
-            self.init(title: title, message: fallback)
-            return
-        }
-        if Self.speaksPlainly(error) {
-            self.init(title: title, message: error.localizedDescription)
-        } else if case DaybookError.saveFailed(let reason) = error {
-            self.init(title: title, message: fallback, details: reason)
-        } else {
-            self.init(title: title, message: fallback, details: error.localizedDescription)
-        }
-    }
-
-    /// Errors written for people: a sentence, often with its fix.
-    static func speaksPlainly(_ error: Error) -> Bool {
-        switch error {
-        case is RecordingError, is PCMTrackWriterError, is PhotoStoreError, is LibraryError: return true
-        case let error as LibrarySyncError: return error.isPlainSentence
-        case is SandboxMigration.MoveError: return true
-        case let error as DaybookError: if case .saveFailed = error { return false } else { return true }
-        default: return false
-        }
+        self.init(ProblemWords(title: title, fallback: fallback, error: error))
     }
 }
+
+// The Mac's own errors, written for people: a sentence, often with its fix.
+extension RecordingError: PlainSentenceError {}
+extension PCMTrackWriterError: PlainSentenceError {}
+extension SandboxMigration.MoveError: PlainSentenceError {}
 
 /// A full disk, in the words a person needs: how much to free.
 enum DiskSpace {

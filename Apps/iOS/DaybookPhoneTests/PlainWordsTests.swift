@@ -30,7 +30,7 @@ final class PlainWordsTests: XCTestCase {
     }
 
     func testRecordingProblemsKeepTheirInternalsForDetails() {
-        let stopped = PlainError.message(for: PhoneRecorderError.encoderUnavailable("join convert"), fallback: "Try again.")
+        let stopped = ProblemWords(fallback: "Try again.", error: PhoneRecorderError.encoderUnavailable("join convert"))
         XCTAssertEqual(stopped.message, "Recording couldn’t continue. Everything up to then is saved.")
         XCTAssertEqual(stopped.details, "The audio encoder stopped (join convert).")
         // A Shortcut, the control, or a Live Activity button gets a sentence of Daybook's own, never the system's words.
@@ -43,11 +43,11 @@ final class PlainWordsTests: XCTestCase {
         XCTAssertEqual(said(PhoneAppModel.commandFailure(PhoneRecorderError.microphoneDenied, starting: true)),
                        "Allow Daybook to use the microphone in Settings.")
         // Sync and audio errors of Daybook's own are shown as they are.
-        XCTAssertEqual(PlainError.message(for: LibrarySyncError.keyAvailable, fallback: "Try again.").message,
+        XCTAssertEqual(ProblemWords(fallback: "Try again.", error: LibrarySyncError.keyAvailable).message,
                        "One of your devices has this library’s key. Get the key from it instead.")
-        XCTAssertEqual(PlainError.message(for: AudioFetchError.keyUnavailable, fallback: "Try again.").message,
+        XCTAssertEqual(ProblemWords(fallback: "Try again.", error: AudioFetchError.keyUnavailable).message,
                        "This recording plays once this device has the library’s key.")
-        XCTAssertEqual(PlainError.message(for: AudioFetchError.downloadFailed("The network connection was lost."), fallback: "Try again.").message,
+        XCTAssertEqual(ProblemWords(fallback: "Try again.", error: AudioFetchError.downloadFailed("The network connection was lost.")).message,
                        "Try again.")
     }
 
@@ -99,11 +99,11 @@ final class PlainWordsTests: XCTestCase {
     }
 
     func testDaybooksOwnErrorsAreShownAndTheSystemsGoBehindDetails() {
-        let offline = PlainError.message(for: AudioProvidingError.offline, fallback: "Try again.")
+        let offline = ProblemWords(fallback: "Try again.", error: AudioProvidingError.offline)
         XCTAssertEqual(offline.message, "The audio isn’t on this iPhone yet. It downloads when you’re online.")
         XCTAssertNil(offline.details)
 
-        let system = PlainError.message(for: CocoaError(.fileWriteOutOfSpace), fallback: "The audio couldn’t be prepared. Try again.")
+        let system = ProblemWords(fallback: "The audio couldn’t be prepared. Try again.", error: CocoaError(.fileWriteOutOfSpace))
         XCTAssertEqual(system.message, "The audio couldn’t be prepared. Try again.")
         XCTAssertNotNil(system.details)
 

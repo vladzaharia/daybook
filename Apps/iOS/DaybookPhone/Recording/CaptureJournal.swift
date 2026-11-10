@@ -288,3 +288,7 @@ enum PhoneRecorderError: LocalizedError, Equatable {
         return nil
     }
 }
+
+extension PhoneRecorderError: PlainSentenceError {
+    var plainDetails: String? { details }
+}
