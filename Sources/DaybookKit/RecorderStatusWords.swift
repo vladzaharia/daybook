@@ -142,6 +142,9 @@ public struct RecorderFacts: Equatable {
     /// Connected, but it didn't list its recordings (it didn't answer, or refused): the new ones shown are from its
     /// remembered list.
     public var notListed = false
+    /// The room it has left, in hours of recording, and whether that's low: its card at the iPhone sheet's large size.
+    public var storageHours: Double?
+    public var storageIsLow = false
 
     public init(id: String, name: String, shortName: String, symbol: String, isDirect: Bool, state: ConnectionState, isLinked: Bool) {
         self.id = id; self.name = name; self.shortName = shortName; self.symbol = symbol

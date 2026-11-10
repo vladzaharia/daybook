@@ -507,8 +507,8 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         var askedMeeting = Meeting(id: asked, title: "Asked")
         askedMeeting.processingRequests = [request]
         let meetings = [Meeting(id: counting, title: "Counting"), Meeting(id: waiting, title: "Waiting"), askedMeeting]
-        let queue = StatusSheetModel.queue(meetings: meetings, liveProgress: [:], thisDevice: "me", planners: [counting: toMac, waiting: forMac],
-                                           cloudOffered: true, now: now)
+        let queue = StatusOverviewModel.queue(meetings: meetings, liveProgress: [:], words: .iPhone(id: "me"), planners: [counting: toMac, waiting: forMac],
+                                              cloudOffered: true, now: now)
         let byTitle = Dictionary(uniqueKeysWithValues: queue.map { ($0.title, $0) })
         XCTAssertEqual(byTitle["Counting"]?.line(under: nil, at: now.addingTimeInterval(3)), "Summarizing on Studio Mac in 12 s")
         XCTAssertEqual(byTitle["Counting"]?.line(under: "Studio Mac", at: now.addingTimeInterval(3)), "Summarizing in 12 s", "Under that Mac")
@@ -517,7 +517,7 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         XCTAssertEqual(byTitle["Waiting"]?.actions, [.useCloud])
         XCTAssertEqual(byTitle["Asked"]?.line, "Waiting for a Mac to summarize")
         XCTAssertEqual(byTitle["Asked"]?.actions, [.useCloud])
-        let withoutCloud = StatusSheetModel.queue(meetings: [askedMeeting], liveProgress: [:], thisDevice: "me", now: now)
+        let withoutCloud = StatusOverviewModel.queue(meetings: [askedMeeting], liveProgress: [:], words: .iPhone(id: "me"), now: now)
         XCTAssertEqual(withoutCloud.first?.line, "Waiting")
         XCTAssertEqual(withoutCloud.first?.actions, [])
     }

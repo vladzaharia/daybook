@@ -345,9 +345,10 @@ Measured in the iPhone Duo simulator (iOS 27.1, 24A94425; model iPhone19,4) with
 
 What the recorders, the Macs, this iPhone's own work, and iCloud are doing (`DaybookPhone/Status/`). It speaks only
 of what exists and, at rest, only when there's something to say (docs/interface.md, principle 2). The words come from
-`StatusSheetModel`, plain values from plain inputs, so tests read what each state says; a recorder's line is in the
-words both apps give a recorder (`RecorderStatusWords`), this iPhone's in the words a Mac's home gives its own queue
-(`QueueStatusWords`). The views are the status overview both apps share (DaybookUI's `StatusOverview`,
+the status overview both apps draw (DaybookKit's `StatusOverviewModel`, from the facts `StatusSheetInputs.make` gathers;
+Floating Notes' home says the same), plain values from plain inputs, so tests read what each state says; a recorder's
+line is in the words both apps give a recorder (`RecorderStatusWords`), this iPhone's in the words a Mac's home gives
+its own queue (`QueueStatusWords`). The views are the status overview both apps share (DaybookUI's `StatusOverview`,
 docs/interface.md).
 
 **Which lines exist.** As on Floating Notes' home: a line for each recorder added ("Connected · 80% · 2 new",
@@ -361,7 +362,7 @@ line, and up to date or syncing iCloud has none. The three lines the compact she
 Record wouldn't move under the thumb, are gone: Record is the toolbar's, and nothing here moves it.
 
 **The strip.** One line above the library's toolbar, on one page and two, only when one of the lines has something to
-say (`StatusSheetModel.strip`), in this order: what needs the person, in warning ink ("iCloud · Signed out"); what's
+say (`StatusOverviewModel.strip`), in this order: what needs the person, in warning ink ("iCloud · Signed out"); what's
 recording elsewhere, with the red dot ("Studio Mac · Recording"); what's working, with the gradient line ("Studio Mac ·
 Transcribing · 55%"), or counting down. Otherwise there's no strip: a connected recorder, an idle Mac, and a queue
 paused until it can continue say nothing at rest. It's the line's own words, ink, and progress line on glass, the

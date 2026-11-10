@@ -1,4 +1,5 @@
-import DaybookKit
+import DaybookCore
+import DaybookDevices
 import DaybookLink
 import Foundation
 
@@ -10,7 +11,7 @@ import Foundation
 /// For the reading UI: show `waitingLine()` under a conversation whose `ProcessingStatus` is
 /// `.requested(.device)`, a line like a row's; and `summary`, a complete sentence, in Settings. Both date
 /// a Mac's absence as every row does ("Last seen today, 3:25 AM", `RecorderStatusWords.lastSeen`).
-enum MacPresence: Equatable, Sendable {
+public enum MacPresence: Equatable, Sendable {
     /// Sync hasn't connected or listed the library's devices yet.
     case checking
     /// Sync can't run (no iCloud, signed out, unsigned build). The reason, in a sentence.
@@ -31,10 +32,10 @@ enum MacPresence: Equatable, Sendable {
 
     /// A Mac heard from within this long reads as present ("Waiting for Studio Mac") rather than "last seen": two and a
     /// half times the interval at which a running Mac rewrites its presence (`KnownSyncDevice.presenceWindow`).
-    static let recentlySeen: TimeInterval = KnownSyncDevice.presenceWindow
+    public static let recentlySeen: TimeInterval = KnownSyncDevice.presenceWindow
 
     /// Combines the link (live) with sync presence (`KnownSyncDevice`s from `knownDevices()`).
-    static func resolve(connectedMac: String?, devices: [KnownSyncDevice], syncAvailable: Bool,
+    public static func resolve(connectedMac: String?, devices: [KnownSyncDevice], syncAvailable: Bool,
                         syncReason: String?, devicesListed: Bool, now: Date = Date()) -> MacPresence {
         if let connectedMac { return .connected(name: connectedMac) }
         if let reason = syncReason, !syncAvailable { return .unavailable(reason) }
@@ -56,7 +57,7 @@ enum MacPresence: Equatable, Sendable {
         return devices.hasPeersWithoutPresence ? .olderMac : .noMac
     }
 
-    var macName: String? {
+    public var macName: String? {
         switch self {
         case .connected(let name), .seen(let name, _), .recording(let name, _), .notProcessing(let name, _): return name
         default: return nil
@@ -64,7 +65,7 @@ enum MacPresence: Equatable, Sendable {
     }
 
     /// Whether a request can expect a Mac soon.
-    var isMacAround: Bool {
+    public var isMacAround: Bool {
         switch self {
         case .connected, .recording: return true
         case .seen(_, let date): return Date().timeIntervalSince(date) < Self.recentlySeen
@@ -74,7 +75,7 @@ enum MacPresence: Equatable, Sendable {
 
     /// The line under a conversation that waits for a Mac: "Waiting for your Mac · Last seen today, 3:25 AM", dated
     /// as every device's absence is on both apps (`RecorderStatusWords.lastSeen`).
-    func waitingLine(now: Date = Date()) -> String {
+    public func waitingLine(now: Date = Date()) -> String {
         switch self {
         case .checking: return "Waiting for your Mac"
         case .unavailable: return "Waiting for iCloud"
@@ -90,7 +91,7 @@ enum MacPresence: Equatable, Sendable {
     }
 
     /// One sentence for Settings.
-    func summary(now: Date = Date()) -> String {
+    public func summary(now: Date = Date()) -> String {
         switch self {
         case .checking: return "Looking for your Mac…"
         case .unavailable(let reason): return reason
@@ -107,7 +108,7 @@ enum MacPresence: Equatable, Sendable {
     }
 
     /// "2 h ago", "3 min ago", "yesterday", "4 days ago".
-    static func age(_ seconds: TimeInterval) -> String {
+    public static func age(_ seconds: TimeInterval) -> String {
         let s = max(0, seconds)
         switch s {
         case ..<60: return "just now"
@@ -124,27 +125,27 @@ enum MacPresence: Equatable, Sendable {
 ///
 /// For the reading UI: `model.liveProgress[meeting.id]?.line` gives "Transcribing on Studio Mac · 40%".
 /// Entries go away when the Mac finishes (sync then brings the result) or after `staleAfter` without word.
-struct LiveProgress: Equatable, Sendable {
-    var meetingID: UUID
-    var phase: LinkProcessingProgress.Phase
+public struct LiveProgress: Equatable, Sendable {
+    public var meetingID: UUID
+    public var phase: LinkProcessingProgress.Phase
     /// 0...1 within the phase, when the Mac reports one.
-    var fraction: Double?
-    var macName: String
+    public var fraction: Double?
+    public var macName: String
     /// The Mac that sent it, for answering its countdown.
-    var macID: UUID?
+    public var macID: UUID?
     /// The Mac's own words (failures in particular).
-    var detail: String?
-    var receivedAt: Date
+    public var detail: String?
+    public var receivedAt: Date
     /// While the Mac counts down to summarizing it (`summaryCountdown`): when it starts, on this iPhone's clock,
     /// and whether Use the Cloud is on offer there.
-    var countdownUntil: Date?
-    var cloudOffered = false
+    public var countdownUntil: Date?
+    public var cloudOffered = false
     /// Summarizing in the cloud: the model's name.
-    var cloudModel: String?
+    public var cloudModel: String?
 
-    static let staleAfter: TimeInterval = 120
+    public static let staleAfter: TimeInterval = 120
 
-    init(_ progress: LinkProcessingProgress, from macID: UUID? = nil, receivedAt: Date = Date()) {
+    public init(_ progress: LinkProcessingProgress, from macID: UUID? = nil, receivedAt: Date = Date()) {
         meetingID = progress.meetingID
         phase = progress.phase
         fraction = progress.fraction.map { min(1, max(0, $0)) }
@@ -159,22 +160,22 @@ struct LiveProgress: Equatable, Sendable {
         cloudModel = progress.cloudModel
     }
 
-    var isFinished: Bool { phase == .finished || phase == .failed }
+    public var isFinished: Bool { phase == .finished || phase == .failed }
     /// The Mac counts down to summarizing it, and the person here may choose (docs/multipoint.md, "Where summaries run").
-    var isCountingDown: Bool { phase == .summaryCountdown && countdownUntil != nil }
+    public var isCountingDown: Bool { phase == .summaryCountdown && countdownUntil != nil }
     /// What the person may choose here for the Mac's countdown, in order.
-    var placementActions: [SummaryPlacementPlanner.Action] {
+    public var placementActions: [SummaryPlacementPlanner.Action] {
         guard isCountingDown, macID != nil else { return [] }
         return (cloudOffered ? [.useCloud] : []) + [.startNow]
     }
 
     /// Seconds left in the Mac's countdown, rounded up.
-    func secondsLeft(at now: Date) -> Int? {
+    public func secondsLeft(at now: Date) -> Int? {
         countdownUntil.map { max(1, Int($0.timeIntervalSince(now).rounded(.up))) }
     }
 
     /// The verb for the phase: "Transcribing", "Summarizing".
-    var activity: String {
+    public var activity: String {
         switch phase {
         case .queued: return "Waiting"
         case .aligning: return "Lining up recordings"
@@ -191,10 +192,10 @@ struct LiveProgress: Equatable, Sendable {
     }
 
     /// "Transcribing on Studio Mac · 40%".
-    var line: String { line(at: Date()) }
+    public var line: String { line(at: Date()) }
 
     /// The line at a moment: a countdown's seconds change with it ("Summarizing on Studio Mac in 12 s").
-    func line(at now: Date) -> String {
+    public func line(at now: Date) -> String {
         if let seconds = secondsLeft(at: now), isCountingDown { return "Summarizing on \(macName) in \(seconds) s" }
         if phase == .summarizing, let cloudModel { return "Summarizing with \(cloudModel)" }
         switch phase {
@@ -211,9 +212,9 @@ struct LiveProgress: Equatable, Sendable {
     }
 
     /// The line without the Mac's name, under that Mac in the status sheet: "Transcribing · 40%".
-    var brief: String { brief(at: Date()) }
+    public var brief: String { brief(at: Date()) }
 
-    func brief(at now: Date) -> String {
+    public func brief(at now: Date) -> String {
         if let seconds = secondsLeft(at: now), isCountingDown { return "Summarizing in \(seconds) s" }
         if phase == .summarizing, let cloudModel { return "Summarizing with \(cloudModel)" }
         switch phase {
