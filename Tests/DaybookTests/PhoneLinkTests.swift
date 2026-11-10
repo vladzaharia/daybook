@@ -1458,6 +1458,40 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertEqual(state.trackStart(track)?.timeIntervalSince(phoneStart.addingTimeInterval(-skew)) ?? 99, 0, accuracy: 0.01)
     }
 
+    /// Of the link's clock and the one the phone measured while recording, the tighter where the recording starts places
+    /// it: each one's uncertainty, plus 50 ppm of drift for every second between when it was measured and that start.
+    /// Even, the later.
+    func testThePhonesRecordingIsPlacedByTheTighterClockWhereItStarts() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        // Exact in binary, so the even case below is exactly even.
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        var track = RecordingTrack(source: .microphone, relativePath: "Audio/iphone.m4a", fileName: "iphone.m4a", createdAt: start,
+                                   device: DeviceRecordingIdentity(kind: DaybookPhoneIntegration.id, serial: UUID().uuidString,
+                                                                   recordingID: UUID().uuidString),
+                                   startedAt: start)
+        // The phone's measurement of this Mac: its offset is (Mac − phone), and when it was taken is on the phone's clock.
+        func measured(uncertainty: TimeInterval, at seconds: TimeInterval) -> [CapturePeerClock] {
+            [CapturePeerClock(deviceID: state.phoneLink.identity.deviceID.uuidString, offset: -0.25, uncertainty: uncertainty,
+                              sampleCount: 6, measuredAt: start.addingTimeInterval(seconds + 0.25))]
+        }
+        var link = CompanionRecording(deviceID: UUID().uuidString, deviceKind: DaybookPhoneIntegration.id, deviceName: "Alex’s iPhone",
+                                      macStartedAt: start, state: .recording)
+        // The link measured again at Stop, an hour on: 2 ms then is looser at the start than the phone's 6 ms (180 ms of drift).
+        link.clock = CompanionClock(offset: 0.5, uncertainty: 0.002, samples: 6, measuredAt: start.addingTimeInterval(3_600))
+        track.capture = TrackCaptureDetails(method: "iphone-microphone", peerClocks: measured(uncertainty: 0.006, at: 1))
+        XCTAssertEqual(state.recorderClock(for: track, link: link)?.offset, 0.25)
+        // Both near the start: the tighter, though measured earlier.
+        link.clock?.measuredAt = start.addingTimeInterval(-1)
+        XCTAssertEqual(state.recorderClock(for: track, link: link)?.offset, 0.5)
+        // Even: the later.
+        track.capture?.peerClocks = measured(uncertainty: 0.002, at: 1)
+        XCTAssertEqual(state.recorderClock(for: track, link: link)?.offset, 0.25)
+        link.clock?.measuredAt = start.addingTimeInterval(1)
+        track.capture?.peerClocks = measured(uncertainty: 0.002, at: -1)
+        XCTAssertEqual(state.recorderClock(for: track, link: link)?.offset, 0.5)
+    }
+
     func testAPhoneRecordingInAConversationAMacRecordedWithItStaysThere() async throws {
         let rig = try await rig()
         let state = rig.state

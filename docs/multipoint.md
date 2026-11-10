@@ -315,8 +315,9 @@ conversation along with it. Stopping anywhere stops the rest (below).
 **The clock prior.** The link measures the phone's clock against this Mac's (NTP-style, good to a
 few milliseconds on a quiet network); the phone also stores what it measured while recording on its
 track (`capture.peerClocks`). The phone's first sample (the track's own start), on this Mac's clock by
-the later of the two measurements, is the recording's `clockOffset`, which is `AudioAligner`'s
-expected offset when the sound is compared. A phone track's start is converted this way wherever
+the tighter of the two measurements there (each one's uncertainty, plus 50 ppm of drift for the time
+between when it was measured and that start; even, the later), is the recording's `clockOffset`,
+which is `AudioAligner`'s expected offset when the sound is compared. A phone track's start is converted this way wherever
 starts are compared.
 
 **Its recording arrives.** A recording made with a Mac (one that recorded, or may have: it never

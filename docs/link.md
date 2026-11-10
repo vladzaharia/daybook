@@ -29,7 +29,7 @@ the Mac's port, and sit in the middle of a connection (ARP or DNS-SD spoofing).
 **Worth protecting.**
 - Control: starting and stopping recordings, marking bookmarks.
 - Content of the traffic: conversation IDs, timings, Mac and phone names, processing progress.
-  Audio and transcripts never travel over the link.
+  Audio never travels over the link; the live captions and notes of a shared recording do.
 - The pairing key, which grants all of the above later on any network.
 
 **What the design ensures.**
@@ -248,8 +248,8 @@ DNS-SD's `PolicyDenied` (−65570); the client reads that as `localNetworkDenied
 | `recorder.release` | `LinkRecorderRelease` | both | the old owner let go: imports that were waiting, recordings it imported recently, the recording in progress and the conversation waiting for it (with whether it stops when that conversation's recording does; optional) |
 | `libraryKey.request` | `LinkLibraryKeyRequest` | both | an encrypted library's ID and the key IDs the sender waits for |
 | `libraryKey.grant` | `LinkLibraryKeyGrant` | both | library ID, key ID, the key's 32 bytes |
-| `ping` / `pong` | sequence, interval | both | presence |
-| `clock.request` / `clock.reply` | t1 / t1 t2 t3 | both | NTP-style samples |
+| `ping` / `pong` | sequence, interval, `acked` (optional) | both | presence; `acked` is the highest `seq` of the notes and bookmarks the sender has received in this session (below) |
+| `clock.request` / `clock.reply` | t1 / t1 t2 t3; `m1` / `m1` `m2` `m3` (optional) | both | NTP-style samples; `m` are the same moments on each side's continuous clock |
 | `unpair`, `goodbye` | | both | |
 | `pair.*` | begin, accept, refuse, commit, reveal, confirm, fail | pairing only | |
 
@@ -374,6 +374,15 @@ start reads as a start the person chose, and `sharedConversationID` isn't read.
 - **In order.** Each kind of message that must arrive in order goes out one after another: the Mac's
   recording state, its progress, and its notes; the iPhone's recording state, its bookmarks with its
   notes, its nudges, and its summary choices (`PhoneLink.SendChannel`).
+- **Until acknowledged.** A session can be dead for up to its timeout (15 s, a minute while an iPhone
+  records in the background) before either side knows, and a send into it doesn't fail. So each
+  session numbers the notes, bookmarks, and bookmark changes it sends (the frame's `seq`, beside
+  `body`), each side's heartbeats carry the highest number it has received (`acked`), and what a
+  session ends without hearing acknowledged is sent again, before anything new, when the same device
+  connects next (`LinkReliableOutbox`, `LinkReliableKeep`). Kept in memory, at most 256 per device, for
+  an hour, three sends at most. Both apps keep notes and bookmarks by ID, so one that arrives twice
+  changes nothing. An older build ignores `seq` and sends heartbeats without `acked`: nothing is kept
+  for it, and it gets a note again at most once (a session that ended before its first heartbeat).
 
 ## Recording state
 
@@ -399,6 +408,18 @@ The estimate is NTP's clock filter: of the last 8 samples (at most 15 minutes ol
 the shortest round trip. `LinkClockEstimate` holds the offset (peer − local), the round trip and
 `uncertainty` (half the round trip, the most a lopsided path can move it), and converts dates
 both ways. It appears on `LinkPeer.clock` and in `.peerUpdated`.
+
+Each sample also carries the same moments on each side's continuous clock (`m1`…`m4`,
+`mach_continuous_time`, the clock the iPhone's first-sample anchor is kept on), which no wall-clock
+step moves. Over the whole session the filter fits the two continuous clocks' drift by least squares,
+using the samples whose round trip is within twice the shortest (plus 2 ms), once they span a minute
+(`LinkConfiguration.clockDriftMinimumSpan`), and moves the chosen sample's offset on to the latest
+sample by it, so a shortest trip minutes old doesn't age. The estimate adds `drift` (peer seconds per
+second here, minus 1), the span it rests on, and the continuous-clock offset (`monotonicOffset` at
+`monotonicAt`). A wall clock stepped on either side (NTP, the person) shows as a jump of more than
+50 ms, beyond the two round trips, between a sample's wall and continuous offsets: the samples from
+before it leave the window, and the drift stays as it was. A peer that sends no continuous stamps (an
+older build) gets the estimate as before, with no drift.
 
 For multipoint, this replaces "the recorders' clocks only, ±120 s" (docs/multipoint.md) with a
 measured prior good to a few milliseconds on a quiet LAN. A phone recording can be placed by
@@ -428,6 +449,10 @@ clock before any sound is compared.
     with slow heartbeats and slow retries.
   - `.background`: say goodbye, close everything, stop browsing and path monitoring. iOS would
     suspend the app anyway; calling `.foreground` again reconnects.
+- **Events.** Each `events()` stream keeps every control and app event, however far its reader
+  falls behind; only another device's live feeds, `levels` and `captions`, keep just the newest 64
+  waiting, the older dropped and counted (`droppedLiveEvents`). A stream released or cancelled stops
+  listening.
 - **Mac sleep and wake.** Call `systemDidWake()` from `NSWorkspace.didWakeNotification`. It probes
   every phone and reopens the listener if it failed. The listener also reopens on its own after a
   failure, with backoff, falling back to any port, which Bonjour carries. The Mac app's `PhoneLink`
@@ -560,7 +585,7 @@ iCloud Keychain. There's no Mac-to-Mac path; two Macs rely on iCloud Keychain or
 
 ## Tests
 
-`swift test --filter DaybookLinkTests`: 93 tests, about 9 s. Everything runs on 127.0.0.1 inside
+`swift test --filter DaybookLinkTests`: 102 tests, about 13 s. Everything runs on 127.0.0.1 inside
 the test process, and nothing is advertised.
 - **Pairings that can't be read** (`LinkKeyStoreTests`, `LinkDiscoveryTests`): a damaged item is left out
   and listed apart, the others keep working, pairing again replaces it, unpairing removes it, a damaged
@@ -602,6 +627,9 @@ the test process, and nothing is advertised.
   - background, foreground and background recording;
   - clock offset of +2.5 s through a 40 ms + 40 ms relay is within 20 ms, and a lopsided
     60/10 ms path stays within the reported uncertainty;
+  - a phone whose continuous clock runs 1% fast is measured so over loopback;
+  - a note sent into a session that has silently died (a frozen relay) arrives on the next session,
+    and one already acknowledged isn't sent again (`LinkDeliveryTests`);
   - record control: acknowledged, refused with a reason, idempotent repeat, unsupported, and
     timeout; a repeat on a new connection while the first is still being answered reaches the app
     once and gets that answer;
@@ -635,6 +663,12 @@ the test process, and nothing is advertised.
 - **Units:** wire round trips (with the optional request fields and recorders), older requests and
   unreadable recorders decoding, frames, TXT tags, backoff, clock filter, key store (memory, and
   the keychain store's move to the data-protection keychain against a keychain in memory).
+- **Delivery** (`LinkDeliveryTests`): a reader that stalls gets every control and app event in order and
+  only the newest 64 live ones, the rest counted, and a stream released or cancelled stops listening;
+  notes numbered and acknowledged, an older build's heartbeat keeping nothing, and what's kept between
+  sessions bounded by sends and age; a 100 ppm drift found within 10 ppm over an hour of samples with
+  some trips queued, a wall step that leaves the drift alone while the offset follows it, and no drift
+  from a peer without continuous stamps.
 
 The relay in `LinkTestSupport.swift` is a loopback TCP proxy with per-direction delay that can
 freeze (hold connections open, pass nothing) or drop every connection.
@@ -661,4 +695,7 @@ freeze (hold connections open, pass nothing) or drop every connection.
 - **Keychain.** `KeychainLinkKeyStore` in the signed apps: access after first unlock on iPhone;
   on the Mac, that a pairing made by an earlier version moves out of the login keychain without a
   prompt and keeps connecting. Tests use memory storage.
-- **Clock accuracy on real Wi-Fi**, where delay is noisier and more lopsided than the relay's.
+- **Clock accuracy on real Wi-Fi**, where delay is noisier and more lopsided than the relay's, and the
+  real drift between an iPhone's and a Mac's continuous clocks over a long recording.
+- **A session that dies quietly** (Wi-Fi gone, the phone pocketed) and the resend of its notes and
+  bookmarks when it comes back.

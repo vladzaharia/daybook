@@ -34,6 +34,8 @@ public actor LinkClient: LinkSessionOwner {
 
     private var links: [UUID: MacLink] = [:]
     var recordAnswers = LinkRecordAnswers()
+    /// Notes and bookmarks each Mac's ended sessions left unacknowledged, sent first on its next.
+    private var reliable = LinkReliableKeep()
     private(set) var recordHandler: LinkRecordControlHandler?
     private var activity: LinkActivity = .foreground
     private var networkAvailable = true
@@ -72,6 +74,9 @@ public actor LinkClient: LinkSessionOwner {
 
     /// A stream of everything that happens. Each call returns a new stream.
     public nonisolated func events() -> AsyncStream<LinkEvent> { hub.stream() }
+
+    /// Live levels and captions dropped because a stream's reader fell behind (diagnostics). Nothing else is dropped.
+    public nonisolated var droppedLiveEvents: Int { hub.droppedLiveEvents }
 
     // MARK: Discovery
 
@@ -197,6 +202,7 @@ public actor LinkClient: LinkSessionOwner {
         }
         try keyStore.remove(deviceID: macID)
         recordAnswers.forget(macID)
+        reliable.forget(macID)
         hub.yield(.unpaired(deviceID: macID, byPeer: false))
         refreshDiscovered()
         updateBrowser()
@@ -302,6 +308,10 @@ public actor LinkClient: LinkSessionOwner {
 
     func sendRawFrame(_ frame: Data, to macID: UUID) { links[macID]?.session?.sendRaw(frame) }
     func ignoredMessageCount(from macID: UUID) -> Int { links[macID]?.session?.ignoredMessages ?? 0 }
+    /// Notes and bookmarks sent to a Mac and not acknowledged yet: in its session, and kept for its next.
+    func unacknowledgedCount(to macID: UUID) -> Int {
+        (links[macID]?.session?.reliableOutbox.unacknowledged.count ?? 0) + reliable.count(for: macID)
+    }
 
     // MARK: Connecting
 
@@ -355,6 +365,9 @@ public actor LinkClient: LinkSessionOwner {
         guard let link = link(of: session), let peer = session.peer else { return }
         link.attempt = 0
         set(link, .connected)
+        // What the Mac's last session didn't acknowledge goes before anything new.
+        session.resend(reliable.take(for: peer.deviceID, now: configuration.clock.now()),
+                       peerAcknowledges: reliable.peerAcknowledges(peer.deviceID))
         hub.yield(.connected(peer))
         updateBrowser()
     }
@@ -362,6 +375,7 @@ public actor LinkClient: LinkSessionOwner {
     func sessionEnded(_ session: LinkSession, reason: LinkDisconnectReason) {
         guard let macID = session.deviceID else { return }
         recordAnswers.keep(session.answeredReplies, from: macID)
+        if session.peer != nil { reliable.sessionEnded(with: macID, outbox: session.reliableOutbox, now: configuration.clock.now()) }
         let link = link(of: session)
         link?.session = nil
         if session.peer != nil { hub.yield(.disconnected(deviceID: macID, reason: reason)) }
@@ -402,6 +416,7 @@ public actor LinkClient: LinkSessionOwner {
         guard let macID = session.deviceID else { return }
         try? keyStore.remove(deviceID: macID)
         recordAnswers.forget(macID)
+        reliable.forget(macID)
         if let link = link(of: session) {
             links.removeValue(forKey: macID)
             link.retry?.cancel()
