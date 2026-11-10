@@ -9,7 +9,8 @@ import SwiftUI
 /// A photo open in the viewer.
 struct PhotoViewerRequest: Identifiable, Equatable { let id: UUID }
 
-/// A conversation: its page (Summary or Transcript), toolbar, and player.
+/// A conversation: its page (Summary or Transcript, or both side by side where the column has room for two pages),
+/// toolbar, and player.
 struct MeetingDetailView: View {
     @Bindable var state: AppState
     let meetingID: UUID
@@ -24,17 +25,34 @@ struct MeetingDetailView: View {
         if let meeting {
             // Saved live captions turn to the Transcript side until a transcript replaces them, as on the iPhone
             // (`AppState.hasTranscriptPage`, from the captions read off the main actor).
-            let mode: PageMode = state.hasTranscriptPage(meeting) ? state.pageMode : .summary
+            let hasTranscript = state.hasTranscriptPage(meeting)
+            let mode: PageMode = hasTranscript ? state.pageMode : .summary
+            // Two pages where the column has room for them (`PageSpread`, from 1120 pt): the summary under the title,
+            // and beside it, past a hairline, the transcript, scrolling and following the playhead on its own. The
+            // person can collapse it to one page from the toolbar.
+            let pairs = hasTranscript && state.pageSpreadChosen
             Group {
-                switch mode {
-                case .summary: SummaryPage(state: state, player: state.playback, meeting: meeting, play: play)
-                case .transcript: TranscriptPage(state: state, player: state.playback, meeting: meeting, play: play)
+                if pairs {
+                    PageSpread(twoPagesFit: state.pageSpreadFits) {
+                        SummaryPage(state: state, player: state.playback, meeting: meeting, besideTranscript: true, play: play)
+                            .pageOfSpread(PageMode.summary.title)
+                    } trailing: {
+                        TranscriptPage(state: state, player: state.playback, meeting: meeting, titled: false, play: play)
+                            .pageOfSpread(PageMode.transcript.title)
+                    } single: {
+                        page(mode, meeting)
+                    }
+                } else {
+                    page(mode, meeting)
                 }
             }
-            .transition(.opacity)
-            .animation(DaybookMotion.resolved(DaybookMotion.pageTurn, reduceMotion: reduceMotion), value: mode)
+            .animation(DaybookMotion.resolved(DaybookMotion.pageTurn, reduceMotion: reduceMotion), value: pairs)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(DaybookStyle.paper)
+            // The toolbar's switch and the View menu follow the room the column has (`PageSides`).
+            .onGeometryChange(for: Bool.self) { PageSpreadLayout.split(width: $0.size.width, crease: nil) != nil } action: {
+                if state.pageSpreadFits != $0 { state.pageSpreadFits = $0 }
+            }
             .bottomBar {
                 PlayerBar(player: state.playback, meeting: meeting, isRecording: state.isRecording) { trackID, seconds in
                     state.addPlaybackHighlight(meeting.id, trackID: trackID, seconds: seconds)
@@ -60,6 +78,18 @@ struct MeetingDetailView: View {
         }
     }
 
+    /// One page: the side chosen, turning with a fade.
+    private func page(_ mode: PageMode, _ meeting: Meeting) -> some View {
+        Group {
+            switch mode {
+            case .summary: SummaryPage(state: state, player: state.playback, meeting: meeting, play: play)
+            case .transcript: TranscriptPage(state: state, player: state.playback, meeting: meeting, play: play)
+            }
+        }
+        .transition(.opacity)
+        .animation(DaybookMotion.resolved(DaybookMotion.pageTurn, reduceMotion: reduceMotion), value: mode)
+    }
+
     /// What a passage, a time, or a recording plays: resolved as on the iPhone (`PlaybackTarget`).
     private func play(_ target: PlaybackTarget) {
         guard let meeting, !state.isRecording, let resolved = target.resolve(in: meeting) else { return }
@@ -74,6 +104,16 @@ struct MeetingDetailView: View {
                   state.selectedID == meetingID || state.place.isDevice else { return }
             withAnimation(animation) { state.playback.play(url: url, at: seconds, trackID: track.id, meetingID: meetingID) }
         }
+    }
+}
+
+private extension View {
+    /// A page of the spread: one container for VoiceOver, named for its side, and one region for keyboard focus, which
+    /// Tab leaves for the other page in reading order.
+    func pageOfSpread(_ name: String) -> some View {
+        accessibilityElement(children: .contain)
+            .accessibilityLabel(name)
+            .focusSection()
     }
 }
 
@@ -136,7 +176,9 @@ struct DetailToolbar: ToolbarContent {
     }
 }
 
-/// Summary | Transcript, or Bookmark while this conversation records, in a slot that keeps the switch's width.
+/// Summary | Transcript, or Bookmark while this conversation records, in a slot that keeps the switch's width. Where
+/// the column has room for two pages it's a pair of toggles, both lit while both pages show: a lit one keeps its page
+/// alone, the other puts its page back beside it (`PageSides`). Otherwise it's a switch between the two.
 private struct PageSwitch: View {
     @Bindable var state: AppState
     let meeting: Meeting?
@@ -145,17 +187,24 @@ private struct PageSwitch: View {
         let recording = meeting.map { state.recordingID == $0.id } ?? false
         // Saved live captions count, as the page reads them (`AppState.hasTranscriptPage`).
         let hasTranscript = meeting.map { state.hasTranscriptPage($0) } ?? false
-        // Laid out always, so the slot is the switch's width whatever shows in it; Bookmark covers it while recording.
+        let pairs = meeting.map { state.pairsPages($0) } ?? false
+        let help = help(hasTranscript: hasTranscript)
+        // Laid out always, so the slot is the switch's width whatever shows in it: the toggles where the column has room
+        // for two pages, and Bookmark while recording, cover it.
         Picker("View", selection: hasTranscript ? $state.pageMode : .constant(.summary)) {
             ForEach(PageMode.allCases) { mode in Text(mode.title).tag(mode) }
         }
         .pickerStyle(.segmented)
         .labelsHidden()
-        .disabled(!hasTranscript || recording)
-        .opacity(recording ? 0 : 1)
-        .accessibilityHidden(recording)
-        .help(hasTranscript ? "Show the summary (⌘1) or the transcript (⌘2)"
-              : meeting == nil ? "Choose a conversation" : "Not transcribed yet")
+        .disabled(!hasTranscript || recording || pairs)
+        .opacity(recording || pairs ? 0 : 1)
+        .accessibilityHidden(recording || pairs)
+        .help(help)
+        .overlay {
+            if let meeting, pairs, !recording {
+                PageToggles(sides: state.pageSides(meeting), help: help) { state.choosePage($0, for: meeting) }
+            }
+        }
         .overlay {
             if let meeting, recording {
                 Button { state.addHighlight(meeting.id) } label: {
@@ -173,6 +222,75 @@ private struct PageSwitch: View {
                 .buttonStyle(.borderless)
                 .help("Add Bookmark (⌘D)")
             }
+        }
+    }
+
+    private func help(hasTranscript: Bool) -> String {
+        guard let meeting else { return "Choose a conversation" }
+        guard hasTranscript else { return "Not transcribed yet" }
+        guard state.pairsPages(meeting) else { return "Show the summary (⌘1) or the transcript (⌘2)" }
+        if state.showsPageSpread(meeting) { return "Show only the summary (⌘1) or only the transcript (⌘2)" }
+        let other: PageMode = state.pageMode == .summary ? .transcript : .summary
+        return "Show the \(other.title.lowercased()) beside the \(state.pageMode.title.lowercased()) (⌘\(other == .summary ? 1 : 2))"
+    }
+}
+
+/// Summary | Transcript as a pair of toggles in the switch's own segmented control, so it stays the same capsule: an
+/// `NSSegmentedControl` that selects any, lit as `PageSides` says. A click asks for its side; the segments then show
+/// what the page shows, not what the click toggled.
+private struct PageToggles: NSViewRepresentable {
+    let sides: PageSides
+    let help: String
+    let choose: (PageMode) -> Void
+    @Environment(\.controlSize) private var controlSize
+
+    func makeNSView(context: Context) -> NSSegmentedControl {
+        let control = NSSegmentedControl(labels: PageMode.allCases.map(\.title), trackingMode: .selectAny,
+                                         target: context.coordinator, action: #selector(Coordinator.clicked(_:)))
+        control.setAccessibilityLabel("View")
+        // The switch's slot, its segments as wide as their words, as the switch's are.
+        control.segmentDistribution = .fillProportionally
+        control.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        return control
+    }
+
+    func updateNSView(_ control: NSSegmentedControl, context: Context) {
+        context.coordinator.choose = choose
+        context.coordinator.sides = sides
+        context.coordinator.light(control)
+        control.toolTip = help
+        control.controlSize = switch controlSize {
+        case .mini: .mini
+        case .small: .small
+        case .large: .large
+        default: .regular
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(sides: sides, choose: choose) }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        var sides: PageSides
+        var choose: (PageMode) -> Void
+
+        init(sides: PageSides, choose: @escaping (PageMode) -> Void) {
+            self.sides = sides
+            self.choose = choose
+        }
+
+        /// Each segment lit while its page shows.
+        func light(_ control: NSSegmentedControl) {
+            for (index, side) in PageMode.allCases.enumerated() where control.isSelected(forSegment: index) != sides.shows(side) {
+                control.setSelected(sides.shows(side), forSegment: index)
+            }
+        }
+
+        @objc func clicked(_ control: NSSegmentedControl) {
+            // The segment the click toggled is the one that no longer matches what shows.
+            let side = PageMode.allCases.enumerated().first { control.isSelected(forSegment: $0.offset) != sides.shows($0.element) }?.element
+            light(control)
+            if let side { choose(side) }
         }
     }
 }

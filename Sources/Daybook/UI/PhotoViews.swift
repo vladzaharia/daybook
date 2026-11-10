@@ -27,7 +27,7 @@ extension PhotoServices {
             },
             canPlay: { !state.isRecording },
             showInTranscript: { photo, _ in
-                state.pageMode = .transcript
+                state.turnPage(to: .transcript)
                 state.pageScrollTarget = photo.id
             })
     }

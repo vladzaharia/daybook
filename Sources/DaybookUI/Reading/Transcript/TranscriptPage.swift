@@ -49,7 +49,9 @@ public struct TranscriptPage<Header: View, Placeholder: View>: View {
     @Namespace private var rotorSpace
     /// The page's own width, which sets its rows' layout (`ReadingPage` tells the rows; the page reads it here).
     @State private var width: CGFloat = 1000
-    private var readingWidth: ReadingWidth { ReadingWidth(width: width) }
+    private var readingWidth: ReadingWidth { ReadingWidth(width: width, spreadPage: spreadPage) }
+    /// A page of a window's spread keeps its margin at every width (`ReadingPage`).
+    @Environment(\.spreadPage) private var spreadPage
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.undoManager) private var undoManager
 
@@ -342,8 +344,8 @@ extension TranscriptPage where Placeholder == EmptyView {
     }
 }
 
-/// The transcript's scrolling column: `ReadingPage`'s geometry (the measure, the hanging margin from 600 pt, the lane
-/// and the crease's clearance below it), with every row one lazy scroll target, so the app can keep the row at the
+/// The transcript's scrolling column: `ReadingPage`'s geometry (the measure, the hanging margin from 600 pt or on a page
+/// of a window's spread, the lane and the crease's clearance below it), with every row one lazy scroll target, so the app can keep the row at the
 /// top (`scrollPosition`) and a long transcript makes its rows only as they scroll in. The column is laid out at its
 /// real width from the first pass: a title field measured at a guessed width keeps that height.
 private struct TranscriptColumn<Content: View>: View {
@@ -351,11 +353,12 @@ private struct TranscriptColumn<Content: View>: View {
     @ViewBuilder var content: Content
     @Environment(\.daybookDensity) private var density
     @Environment(\.creaseEdge) private var creaseEdge
+    @Environment(\.spreadPage) private var spreadPage
 
     var body: some View {
         GeometryReader { proxy in
             let width = proxy.size.width
-            let frame = ReadingGeometry.frame(width: width, density: density, creaseEdge: creaseEdge)
+            let frame = ReadingGeometry.frame(width: width, density: density, creaseEdge: creaseEdge, spreadPage: spreadPage)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) { content }
                     .scrollTargetLayout()
@@ -365,7 +368,7 @@ private struct TranscriptColumn<Content: View>: View {
                     .padding(.bottom, DaybookSpacing.s8 + bottomInset)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .environment(\.readingWidth, ReadingWidth(width: width))
+            .environment(\.readingWidth, ReadingWidth(width: width, spreadPage: spreadPage))
         }
     }
 }

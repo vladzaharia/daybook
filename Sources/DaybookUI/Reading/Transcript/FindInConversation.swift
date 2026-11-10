@@ -1,3 +1,6 @@
+#if os(macOS)
+import AppKit
+#endif
 import DaybookDesign
 import DaybookKit
 import Observation
@@ -145,20 +148,48 @@ extension View {
         #endif
     }
 
-    /// ⌘F, ⌘G, and ⇧⌘G while the page shows: the window's own keys come before the menu's.
+    /// ⌘F, ⌘G, and ⇧⌘G while the page shows: the window's own keys come before the menu's. On the Mac, text with a find
+    /// bar of its own that has the keyboard (the notes on the summary beside the transcript) finds in itself, as it
+    /// does with the summary alone (`FocusedTextFinder`).
     func conversationFindKeys(_ find: ConversationFind?) -> some View {
         background {
             if let find {
                 Group {
-                    Button("Find in Conversation") { find.show() }.keyboardShortcut("f")
-                    Button("Find Next") { find.next() }.keyboardShortcut("g")
-                    Button("Find Previous") { find.previous() }.keyboardShortcut("g", modifiers: [.command, .shift])
+                    Button("Find in Conversation") { if !FocusedTextFinder.perform(.show) { find.show() } }.keyboardShortcut("f")
+                    Button("Find Next") { if !FocusedTextFinder.perform(.next) { find.next() } }.keyboardShortcut("g")
+                    Button("Find Previous") { if !FocusedTextFinder.perform(.previous) { find.previous() } }
+                        .keyboardShortcut("g", modifiers: [.command, .shift])
                 }
                 .opacity(0)
                 .frame(width: 0, height: 0)
                 .accessibilityHidden(true)
             }
         }
+    }
+}
+
+/// The text view with a find bar of its own that has the keyboard in the key window (on the Mac, the notes editor), which
+/// Find, Find Next, and Find Previous reach before the conversation's find. A field (the find bar's, a passage being
+/// corrected) has none.
+@MainActor
+enum FocusedTextFinder {
+    enum Step { case show, next, previous }
+
+    /// Asks the focused text to find; false when there's none, for the conversation's find to answer.
+    static func perform(_ step: Step) -> Bool {
+        #if os(macOS)
+        guard let text = NSApp.keyWindow?.firstResponder as? NSTextView, text.usesFindBar, !text.isFieldEditor else { return false }
+        let sender = NSMenuItem()
+        switch step {
+        case .show: sender.tag = NSTextFinder.Action.showFindInterface.rawValue
+        case .next: sender.tag = NSTextFinder.Action.nextMatch.rawValue
+        case .previous: sender.tag = NSTextFinder.Action.previousMatch.rawValue
+        }
+        text.performTextFinderAction(sender)
+        return true
+        #else
+        return false
+        #endif
     }
 }
 

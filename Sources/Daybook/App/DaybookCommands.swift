@@ -156,12 +156,14 @@ private struct ViewCommands: Commands {
             .disabled(toolbarShown == nil)
         }
         CommandGroup(before: .sidebar) {
-            Button("Summary") { state.pageMode = .summary }
-                .keyboardShortcut("1")
-                .disabled(meeting == nil)
-            Button("Transcript") { state.pageMode = .transcript }
-                .keyboardShortcut("2")
-                .disabled(meeting.map { state.hasTranscriptPage($0) } != true)
+            // The toolbar's Summary | Transcript, ticked as it's lit: where the window has room for two pages, both
+            // while both show, and choosing one keeps it alone or puts the other back beside it (`PageSides`).
+            ForEach(PageMode.allCases) { side in
+                Toggle(side.title, isOn: Binding(get: { meeting.map { state.pageSides($0).shows(side) } ?? false },
+                                                 set: { _ in if let meeting { state.choosePage(side, for: meeting) } }))
+                    .keyboardShortcut(side == .summary ? "1" : "2")
+                    .disabled(side == .summary ? meeting == nil : meeting.map { state.hasTranscriptPage($0) } != true)
+            }
             Divider()
             // The reading surface scales in every window that shows it, Floating Notes too.
             Button("Make Text Bigger") { state.readingScale = ReadingScale.bigger(state.readingScale) }
