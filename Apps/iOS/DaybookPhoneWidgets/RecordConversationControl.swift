@@ -1,4 +1,5 @@
 import AppIntents
+import DaybookDesign
 import SwiftUI
 import WidgetKit
 
@@ -12,7 +13,7 @@ struct RecordConversationControl: ControlWidget {
             } valueLabel: { on in
                 Label(on ? "Recording" : "Record", systemImage: on ? "stop.circle.fill" : "record.circle")
             }
-            .tint(PhoneStyle.Ink.record)
+            .tint(DaybookPalette.Ink.record)
         }
         .displayName("Record Conversation")
         .description("Start or stop a Daybook recording.")

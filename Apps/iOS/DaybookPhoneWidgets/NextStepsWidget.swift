@@ -1,3 +1,4 @@
+import DaybookDesign
 import SwiftUI
 import WidgetKit
 
@@ -6,7 +7,7 @@ struct NextStepsWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: SharedNextSteps.widgetKind, provider: NextStepsTimeline()) { entry in
             NextStepsWidgetView(entry: entry)
-                .containerBackground(for: .widget) { PhoneStyle.paper }
+                .containerBackground(for: .widget) { DaybookPalette.paper }
         }
         .configurationDisplayName("Next Steps")
         .description("Open unfinished action items from your conversations.")
@@ -78,22 +79,22 @@ private struct NextStepsWidgetView: View {
         return VStack(alignment: .leading, spacing: 6) {
             Label("Next Steps", systemImage: "checklist")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(PhoneStyle.Ink.secondary)
+                .foregroundStyle(DaybookPalette.Ink.secondary)
             Spacer(minLength: 4)
             if let item {
                 Text(item.text)
-                    .font(PhoneStyle.Typeface.title(.headline))
-                    .foregroundStyle(PhoneStyle.Ink.title)
+                    .font(DaybookType.title(.headline))
+                    .foregroundStyle(DaybookPalette.Ink.title)
                     .lineLimit(3)
                     .privacySensitive()
                 Text(item.title)
                     .font(.caption)
-                    .foregroundStyle(PhoneStyle.Ink.secondary)
+                    .foregroundStyle(DaybookPalette.Ink.secondary)
                     .lineLimit(2)
                     .privacySensitive()
             } else if !entry.locked {
-                Text(emptyTitle).font(.headline).foregroundStyle(PhoneStyle.Ink.title)
-                Text(emptyMessage).font(.caption).foregroundStyle(PhoneStyle.Ink.secondary).lineLimit(3)
+                Text(emptyTitle).font(.headline).foregroundStyle(DaybookPalette.Ink.title)
+                Text(emptyMessage).font(.caption).foregroundStyle(DaybookPalette.Ink.secondary).lineLimit(3)
             }
             Spacer(minLength: 0)
         }
@@ -105,8 +106,8 @@ private struct NextStepsWidgetView: View {
         let items = Array((entry.snapshot?.items ?? []).prefix(family == .systemMedium ? 3 : 6))
         return VStack(alignment: .leading, spacing: 0) {
             Label("Next Steps", systemImage: "checklist")
-                .font(PhoneStyle.Typeface.title(.headline))
-                .foregroundStyle(PhoneStyle.Ink.title)
+                .font(DaybookType.title(.headline))
+                .foregroundStyle(DaybookPalette.Ink.title)
                 .lineLimit(1)
                 .padding(.bottom, 4)
             if entry.locked {
@@ -114,7 +115,7 @@ private struct NextStepsWidgetView: View {
             } else if items.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(emptyTitle).font(.subheadline.weight(.semibold))
-                    Text(emptyMessage).font(.caption).foregroundStyle(PhoneStyle.Ink.secondary)
+                    Text(emptyMessage).font(.caption).foregroundStyle(DaybookPalette.Ink.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             } else {
@@ -127,7 +128,7 @@ private struct NextStepsWidgetView: View {
                             if showTitle {
                                 Text(item.title)
                                     .font(.caption2.weight(.semibold))
-                                    .foregroundStyle(PhoneStyle.Ink.secondary)
+                                    .foregroundStyle(DaybookPalette.Ink.secondary)
                                     .lineLimit(1)
                                     .privacySensitive()
                             }
@@ -135,7 +136,7 @@ private struct NextStepsWidgetView: View {
                                 Image(systemName: "circle").font(.caption2)
                                 Text(item.text)
                                     .font(.caption)
-                                    .foregroundStyle(PhoneStyle.Ink.title)
+                                    .foregroundStyle(DaybookPalette.Ink.title)
                                     .lineLimit(1)
                                     .privacySensitive()
                             }

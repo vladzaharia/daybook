@@ -1,5 +1,6 @@
 import ActivityKit
 import AppIntents
+import DaybookDesign
 import SwiftUI
 import WidgetKit
 
@@ -11,7 +12,7 @@ struct RecorderLiveActivity: Widget {
         ActivityConfiguration(for: RecorderActivityAttributes.self) { context in
             RecorderActivityContent(context: context)
                 .activityBackgroundTint(nil)
-                .activitySystemActionForegroundColor(PhoneStyle.Ink.record)
+                .activitySystemActionForegroundColor(DaybookPalette.Ink.record)
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
@@ -110,8 +111,8 @@ private struct NarrowableRecorderClock: View {
 private func recorderTint(_ context: ActivityViewContext<RecorderActivityAttributes>) -> Color {
     guard !context.isStale else { return .gray }
     switch context.state.phase {
-    case .recording: return PhoneStyle.Ink.record
-    case .listening: return PhoneStyle.neonCyan
+    case .recording: return DaybookPalette.Ink.record
+    case .listening: return DaybookPalette.neonCyan
     case .ended: return .gray
     }
 }
@@ -167,10 +168,10 @@ private struct StopListeningButton: View {
             Button(intent: StopListeningIntent()) {
                 Label("Stop Listening", systemImage: "stop.fill")
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(PhoneStyle.ActivityButton.resume.labelColor)
+                    .foregroundStyle(DaybookPalette.ActivityInk.resume.label.color)
                     .frame(maxWidth: .infinity)
             }
-            .tint(PhoneStyle.ActivityButton.resume.fillColor)
+            .tint(DaybookPalette.ActivityInk.resume.fill.color)
             .buttonStyle(.borderedProminent)
             .buttonBorderShape(.capsule)
         }

@@ -1,3 +1,4 @@
+import DaybookDesign
 import SwiftUI
 import WidgetKit
 
@@ -6,7 +7,7 @@ struct RecentConversationsWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: SharedRecentConversations.widgetKind, provider: RecentConversationsTimeline()) { entry in
             RecentConversationsWidgetView(entry: entry)
-                .containerBackground(for: .widget) { PhoneStyle.paper }
+                .containerBackground(for: .widget) { DaybookPalette.paper }
         }
         .configurationDisplayName("Recent Conversations")
         .description("Open a recent conversation from your library.")
@@ -82,24 +83,24 @@ private struct RecentConversationsWidgetView: View {
         return VStack(alignment: .leading, spacing: 6) {
             Label("Recent", systemImage: "text.book.closed")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(PhoneStyle.Ink.secondary)
+                .foregroundStyle(DaybookPalette.Ink.secondary)
             Spacer(minLength: 4)
             if let conversation {
                 Text(conversation.title)
-                    .font(PhoneStyle.Typeface.title(.headline))
-                    .foregroundStyle(PhoneStyle.Ink.title)
+                    .font(DaybookType.title(.headline))
+                    .foregroundStyle(DaybookPalette.Ink.title)
                     .lineLimit(3)
                     .privacySensitive()
                 Text(conversation.date, style: .date)
                     .font(.caption)
-                    .foregroundStyle(PhoneStyle.Ink.meta)
+                    .foregroundStyle(DaybookPalette.Ink.meta)
             } else if !entry.locked {
                 Text(emptyTitle)
                     .font(.headline)
-                    .foregroundStyle(PhoneStyle.Ink.title)
+                    .foregroundStyle(DaybookPalette.Ink.title)
                 Text(emptyMessage)
                     .font(.caption)
-                    .foregroundStyle(PhoneStyle.Ink.secondary)
+                    .foregroundStyle(DaybookPalette.Ink.secondary)
                     .lineLimit(3)
             }
             Spacer(minLength: 0)
@@ -112,8 +113,8 @@ private struct RecentConversationsWidgetView: View {
         let conversations = Array((entry.snapshot?.conversations ?? []).prefix(family == .systemMedium ? 3 : 6))
         return VStack(alignment: .leading, spacing: 0) {
             Label("Recent conversations", systemImage: "text.book.closed")
-                .font(PhoneStyle.Typeface.title(.headline))
-                .foregroundStyle(PhoneStyle.Ink.title)
+                .font(DaybookType.title(.headline))
+                .foregroundStyle(DaybookPalette.Ink.title)
                 .lineLimit(1)
                 .padding(.bottom, 4)
             if entry.locked {
@@ -121,7 +122,7 @@ private struct RecentConversationsWidgetView: View {
             } else if conversations.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(emptyTitle).font(.subheadline.weight(.semibold))
-                    Text(emptyMessage).font(.caption).foregroundStyle(PhoneStyle.Ink.secondary)
+                    Text(emptyMessage).font(.caption).foregroundStyle(DaybookPalette.Ink.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             } else {
@@ -130,13 +131,13 @@ private struct RecentConversationsWidgetView: View {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
                             Text(conversation.title)
                                 .font(.subheadline.weight(.medium))
-                                .foregroundStyle(PhoneStyle.Ink.title)
+                                .foregroundStyle(DaybookPalette.Ink.title)
                                 .lineLimit(1)
                                 .privacySensitive()
                             Spacer(minLength: 4)
                             Text(conversation.date, style: .date)
                                 .font(.caption)
-                                .foregroundStyle(PhoneStyle.Ink.meta)
+                                .foregroundStyle(DaybookPalette.Ink.meta)
                                 .lineLimit(1)
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)

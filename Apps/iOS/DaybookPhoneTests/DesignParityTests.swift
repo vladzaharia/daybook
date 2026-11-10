@@ -66,15 +66,14 @@ final class DesignParityTests: XCTestCase {
         }
     }
 
-    /// The app's times are DaybookKit's (its own copy, which wrote "−0:00", is gone), and the widgets'
-    /// DaybookTime reads the same.
+    /// The app's times are DaybookKit's (its own copy, which wrote "−0:00", is gone), and DaybookTime, which the
+    /// widgets and the files the app shares with them read, says the same.
     func testTheAppReadsTimesAsTheMacDoes() {
         XCTAssertEqual(TimeLabel.short(-0.4), "0:00", "Less than a second before the start")
         XCTAssertEqual(TimeLabel.short(-12.7), "−0:12")
         XCTAssertEqual(TimeLabel.short(3600), "1:00:00")
         for seconds in [-0.4, -1, -12.7, -15, 0, 59.9, 3600, .nan] {
             XCTAssertEqual(TimeLabel.short(seconds), DaybookTime.short(seconds), "\(seconds)")
-            XCTAssertEqual(TimeLabel.short(seconds), DaybookKit.TimeLabel.short(seconds), "\(seconds)")
         }
         XCTAssertEqual(SpokenTime.format(-0.4), SpokenTime.format(0), "What's heard matches what's seen")
     }

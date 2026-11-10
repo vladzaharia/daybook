@@ -1,12 +1,5 @@
-import DaybookDesign
-import DaybookKit
-import DaybookUI
 import SwiftUI
 import UIKit
-
-/// Times as the interface shows them: DaybookKit's, here for the app's files that don't import it (the
-/// widgets use DaybookDesign's `DaybookTime`, which tests hold equal to it).
-typealias TimeLabel = DaybookKit.TimeLabel
 
 /// Recording-only tokens, on top of DaybookDesign's (docs/interface.md). The recorder's sizes are the shared
 /// recorder's (DaybookUI's `RecorderSurface`); these are what only the iPhone has: table mode's dimming.
