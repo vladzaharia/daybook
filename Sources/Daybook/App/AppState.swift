@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import DaybookCaptions
 import DaybookCore
 import DaybookDevices
 import DaybookIntelligence

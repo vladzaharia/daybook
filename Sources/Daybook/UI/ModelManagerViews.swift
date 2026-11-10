@@ -1,4 +1,5 @@
 import AppKit
+import DaybookDesign
 import DaybookIntelligence
 import DaybookKit
 import DaybookUI
@@ -7,10 +8,6 @@ import SwiftUI
 // The Mac model manager's own parts: a library row's actions, an update, removal, and a model's details. The rows both
 // apps draw (a role's model, a model in the library, the download row, a quality preset) are DaybookUI's, and
 // everything reads `ModelManagerSnapshot`, so new engines, families, and roles render here as is.
-
-/// DaybookUI's, for Welcome, Cloud, and Acknowledgements.
-typealias ModelLabelChip = DaybookUI.ModelLabelChip
-typealias PresetRadio = DaybookUI.PresetRadio
 
 extension ModelManager {
     /// What a role's row does here: choose through the app's selections, download through its queue, cancel either.
@@ -33,7 +30,7 @@ struct ModelLibraryRow: View {
 
     var body: some View {
         ModelListRow(name: row.name, labels: row.labels, detail: row.subtitle, status: row.status, note: spaceNote) {
-            HStack(spacing: Space.s2) {
+            HStack(spacing: DaybookSpacing.s2) {
                 primaryAction
                 moreMenu
             }
@@ -185,7 +182,7 @@ struct ModelDetailsSheet: View {
                 .formStyle(.grouped)
                 footer(row)
             } else {
-                Text("This model is no longer listed.").foregroundStyle(.secondary).padding(Space.s6)
+                Text("This model is no longer listed.").foregroundStyle(.secondary).padding(DaybookSpacing.s6)
                 footer(nil)
             }
         }
@@ -196,18 +193,18 @@ struct ModelDetailsSheet: View {
     }
 
     private func header(_ model: CatalogModel, row: ModelRow) -> some View {
-        HStack(alignment: .top, spacing: Space.s3) {
-            VStack(alignment: .leading, spacing: Space.s1) {
+        HStack(alignment: .top, spacing: DaybookSpacing.s3) {
+            VStack(alignment: .leading, spacing: DaybookSpacing.s1) {
                 Text(model.name).font(.title3.weight(.semibold))
                 if let maker = model.maker { Text(maker).foregroundStyle(.secondary) }
             }
-            Spacer(minLength: Space.s3)
+            Spacer(minLength: DaybookSpacing.s3)
             HStack(spacing: 6) { ForEach(row.labels, id: \.self) { ModelLabelChip($0) } }
                 .padding(.top, 3)
         }
-        .padding(.horizontal, Space.s5)
-        .padding(.top, Space.s5)
-        .padding(.bottom, Space.s1)
+        .padding(.horizontal, DaybookSpacing.s5)
+        .padding(.top, DaybookSpacing.s5)
+        .padding(.bottom, DaybookSpacing.s1)
     }
 
     @ViewBuilder private func about(_ model: CatalogModel, row: ModelRow, snapshot: ModelManagerSnapshot) -> some View {
@@ -265,7 +262,7 @@ struct ModelDetailsSheet: View {
                     Text(row.status.label).monospacedDigit()
                     // Why Download waits.
                     if let note = snapshot.spaceNote(for: model) {
-                        Text(note.text).foregroundStyle(Ink.warning).monospacedDigit()
+                        Text(note.text).foregroundStyle(DaybookPalette.Ink.warning).monospacedDigit()
                     }
                 }
             }
@@ -292,7 +289,7 @@ struct ModelDetailsSheet: View {
     }
 
     private func footer(_ row: ModelRow?) -> some View {
-        HStack(spacing: Space.s2) {
+        HStack(spacing: DaybookSpacing.s2) {
             if let row, row.canRemove {
                 Button(row.isAddedByYou ? "Remove Download…" : "Remove…", role: .destructive) { removal = manager.removal(of: row.id) }
                     .disabled(!manager.canChangeFiles)
@@ -316,8 +313,8 @@ struct ModelDetailsSheet: View {
             Button("Done") { dismiss() }
                 .keyboardShortcut(.defaultAction)
         }
-        .padding(.horizontal, Space.s5)
-        .padding(.vertical, Space.s4)
+        .padding(.horizontal, DaybookSpacing.s5)
+        .padding(.vertical, DaybookSpacing.s4)
         .background {
             // Esc closes it, as Cancel would: a sheet with only a Return button stays open otherwise.
             Button("Close") { dismiss() }

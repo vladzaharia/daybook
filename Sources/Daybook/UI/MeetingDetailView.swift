@@ -48,7 +48,7 @@ struct MeetingDetailView: View {
             }
             .animation(DaybookMotion.resolved(DaybookMotion.pageTurn, reduceMotion: reduceMotion), value: pairs)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(DaybookStyle.paper)
+            .background(DaybookPalette.paper)
             // The toolbar's switch and the View menu follow the room the column has (`PageSides`).
             .onGeometryChange(for: Bool.self) { PageSpreadLayout.split(width: $0.size.width, crease: nil) != nil } action: {
                 if state.window.pageSpreadFits != $0 { state.window.pageSpreadFits = $0 }
@@ -98,7 +98,7 @@ struct MeetingDetailView: View {
 
     private func requestPlayback(_ track: RecordingTrack, at seconds: Double) {
         playbackRequest?.cancel()
-        let animation = DaybookMotion.resolved(Motion.state, reduceMotion: reduceMotion)
+        let animation = DaybookMotion.resolved(DaybookMotion.state, reduceMotion: reduceMotion)
         playbackRequest = Task {
             guard let url = await state.audioURL(for: track, meetingID: meetingID), !Task.isCancelled,
                   state.window.openID == meetingID || state.window.place.isDevice else { return }
@@ -214,7 +214,7 @@ private struct PageSwitch: View {
                         Text("Bookmark")
                     } icon: {
                         Image(systemName: "bookmark.fill")
-                            .foregroundStyle(DaybookStyle.bookmark)
+                            .foregroundStyle(DaybookPalette.bookmark)
                             .daybookBounce(value: meeting.highlights.count)
                     }
                     .labelStyle(.titleAndIcon)

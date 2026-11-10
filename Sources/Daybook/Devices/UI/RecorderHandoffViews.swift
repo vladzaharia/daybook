@@ -1,5 +1,6 @@
 import AppKit
 import DaybookCore
+import DaybookDesign
 import DaybookKit
 import SwiftUI
 
@@ -44,7 +45,7 @@ struct RecorderOwnershipRow: View {
             let handoff = state.recorderHandoff
             let current = handoff.state(of: session)
             LabeledContent("Managed by") {
-                HStack(spacing: Space.s2) {
+                HStack(spacing: DaybookSpacing.s2) {
                     if let line = state.handoffLine(for: session), current.isPending {
                         ProgressView().controlSize(.mini)
                         Text(line).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
@@ -65,7 +66,7 @@ struct RecorderOwnershipRow: View {
                     }
                 }
             }
-            .padding(.leading, Space.s5)
+            .padding(.leading, DaybookSpacing.s5)
         }
     }
 }

@@ -1,5 +1,6 @@
 import AppKit
 import DaybookCore
+import DaybookDesign
 import DaybookKit
 import DaybookUI
 import SwiftUI
@@ -22,7 +23,7 @@ struct DevicePage: View {
         if let session = state.selectedDevice {
             DevicePageContent(state: state, session: session, browser: session.browser, services: services).id(session.id)
         } else {
-            Color.clear.background(DaybookStyle.paper)
+            Color.clear.background(DaybookPalette.paper)
         }
     }
 }

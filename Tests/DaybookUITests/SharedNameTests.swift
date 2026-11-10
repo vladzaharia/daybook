@@ -23,7 +23,7 @@ final class SharedNameTests: XCTestCase {
         "AddBookmarkIntent", "ConversationEntity", "ConversationQuery", "DaybookFocusFilter", "DaybookShortcuts",
         "NewNoteIntent", "OpenConversationIntent", "StartRecordingIntent", "StopRecordingIntent",
         // Each app's own model behind a shared screen or rule.
-        "LaunchOptions", "LiveCaptionStore", "LiveCaptionsController", "LocalPasteboard", "LocalPasteboardWriting", "PhoneLink",
+        "LaunchOptions", "LiveCaptionsController", "LocalPasteboard", "LocalPasteboardWriting", "PhoneLink",
         // Drawn by each app, around shared parts; to lift, or to name for their platform.
         "AddDeviceSheet", "ConversationMoreMenu", "DevicePage", "DevicePageContent", "PageColophon", "PageHeader",
         "PersonalLockSection", "RowMenu", "SummaryPage"

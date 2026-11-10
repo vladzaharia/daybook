@@ -58,7 +58,7 @@ struct WelcomeWindow: View {
         }
         .contentShape(Rectangle())
         .gesture(WindowDragGesture())
-        .containerBackground(DaybookStyle.paper, for: .window)
+        .containerBackground(DaybookPalette.paper, for: .window)
         // Back from System Settings, the Allow page says what's allowed now.
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in permissions.refresh() }
         .onDisappear { onboardingCompleted = true }
@@ -152,11 +152,11 @@ private struct WelcomeQuality: View {
         WelcomeStepPage(title: WelcomeWords.qualityTitle, message: WelcomeWords.qualityMessage) {
             WelcomePresetGroup(state: state, selection: $preset, freeBytes: freeBytes)
                 .frame(width: WelcomeMetrics.columnWidth)
-                .padding(.top, Space.s5)
+                .padding(.top, DaybookSpacing.s5)
             Text(WelcomeWords.changeLater)
                 .font(.subheadline)
-                .foregroundStyle(Ink.secondary)
-                .padding(.top, Space.s3)
+                .foregroundStyle(DaybookPalette.Ink.secondary)
+                .padding(.top, DaybookSpacing.s3)
         } actions: {
             WelcomePrimaryButton(needsDownload ? WelcomeWords.downloadAndContinue : WelcomeWords.next, action: download)
                 .disabled(!fits)
@@ -196,7 +196,7 @@ private struct WelcomePresetGroup: View {
             ForEach(ModelPreset.allCases) { preset in
                 let shortfall = WelcomeQualityFit.shortfall(preset, in: state, free: freeBytes)
                 Button { selection = preset } label: {
-                    HStack(alignment: .center, spacing: Space.s3) {
+                    HStack(alignment: .center, spacing: DaybookSpacing.s3) {
                         PresetRadio(isOn: selection == preset)
                         VStack(alignment: .leading, spacing: 2) {
                             HStack(spacing: 6) {
@@ -204,21 +204,21 @@ private struct WelcomePresetGroup: View {
                                 if preset == .recommended { ModelLabelChip("Recommended") }
                             }
                             Text(shortfall ?? description(preset))
-                                .foregroundStyle(shortfall == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(Ink.warning))
+                                .foregroundStyle(shortfall == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(DaybookPalette.Ink.warning))
                                 .fixedSize(horizontal: false, vertical: true)
                         }
-                        Spacer(minLength: Space.s3)
+                        Spacer(minLength: DaybookSpacing.s3)
                         Text(ModelSize.format(preset.bytes(in: state)))
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
                     }
-                    .padding(.horizontal, Space.s4)
-                    .padding(.vertical, Space.s3)
-                    .background(DaybookStyle.accent.opacity(selection == preset ? 0.08 : 0))
+                    .padding(.horizontal, DaybookSpacing.s4)
+                    .padding(.vertical, DaybookSpacing.s3)
+                    .background(DaybookPalette.accent.opacity(selection == preset ? 0.08 : 0))
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .daybookMotion(Motion.hover, value: selection)
+                .daybookMotion(DaybookMotion.hover, value: selection)
                 .accessibilityElement(children: .combine)
                 .accessibilityAddTraits(selection == preset ? .isSelected : [])
             }
@@ -254,7 +254,7 @@ private struct WelcomeAllow: View {
                                      openSettings: { permissions.openSettings(for: .computerAudio) })
             }
             .frame(width: 400)
-            .padding(.top, Space.s6)
+            .padding(.top, DaybookSpacing.s6)
         } actions: {
             WelcomePrimaryButton(WelcomeWords.next, action: next)
         }
@@ -297,14 +297,14 @@ private struct WelcomeReady: View {
                 let total = ModelSize.bytes(ids, in: state.modelCatalog), done = ModelSize.downloaded(ids, in: state)
                 WelcomeDownloadProgress(WelcomeWords.downloading(chosen?.title), fraction: Double(done) / Double(max(total, 1)))
                     .frame(width: 400)
-                    .padding(.top, Space.s6)
+                    .padding(.top, DaybookSpacing.s6)
             }
         } actions: {
-            HStack(spacing: Space.s3) {
+            HStack(spacing: DaybookSpacing.s3) {
                 Button(action: record) {
                     RecordControlLabel(title: WelcomeWords.record, size: 15)
                         .frame(minWidth: 96, minHeight: 38)
-                        .padding(.horizontal, Space.s4)
+                        .padding(.horizontal, DaybookSpacing.s4)
                         .contentShape(Rectangle())
                 }
                 .daybookControl(.standard, shape: .capsule)
@@ -313,7 +313,7 @@ private struct WelcomeReady: View {
                     Text(WelcomeWords.importAudio)
                         .font(.system(size: 15, weight: .medium))
                         .frame(minWidth: 96, minHeight: 38)
-                        .padding(.horizontal, Space.s4)
+                        .padding(.horizontal, DaybookSpacing.s4)
                         .contentShape(Rectangle())
                 }
                 .daybookControl(.standard, shape: .capsule)
@@ -324,11 +324,11 @@ private struct WelcomeReady: View {
             }
             .toggleStyle(.checkbox)
             .padding(.top, DaybookSpacing.s1)
-            HStack(spacing: Space.s1) {
-                Text(WelcomeWords.recorderQuestion).foregroundStyle(Ink.secondary)
+            HStack(spacing: DaybookSpacing.s1) {
+                Text(WelcomeWords.recorderQuestion).foregroundStyle(DaybookPalette.Ink.secondary)
                 Button(WelcomeWords.addDevice, action: addDevice).buttonStyle(.daybookLink)
             }
-            .padding(.top, Space.s2)
+            .padding(.top, DaybookSpacing.s2)
             WelcomeNotNowButton(action: finish)
         }
     }

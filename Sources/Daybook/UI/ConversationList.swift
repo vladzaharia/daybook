@@ -1,6 +1,7 @@
 import AppKit
 import DaybookCaptions
 import DaybookCore
+import DaybookDesign
 import DaybookKit
 import DaybookUI
 import SwiftUI
@@ -82,7 +83,7 @@ struct ConversationList: View {
         .environment(\.conversationListIsWide, isWide)
         // ⌘C copies the selection: inside Daybook the conversations, elsewhere their Markdown or their words.
         .copyable(state.meetings.filter { selection.wrappedValue.contains($0.id) && !state.personalLock.hides($0) }.map(ConversationTransfer.init))
-        .motion(state.isReady ? Motion.state : .linear(duration: 0), value: meetings.map(\.id))
+        .daybookMotion(state.isReady ? DaybookMotion.state : .linear(duration: 0), value: meetings.map(\.id))
         .contextMenu(forSelectionType: UUID.self) { ids in
             RowMenu(state: state, ids: Array(ids), undoManager: undoManager) { tagging = ConversationIDs(ids: $0) }
         } primaryAction: { ids in
@@ -233,7 +234,7 @@ private struct SearchResults: View {
             SearchScopePicker(scope: Bindable(state.window).searchScope, folder: viewedFolder)
             .controlSize(.small)
             .frame(maxWidth: .infinity)
-            .padding(.bottom, Space.s3)
+            .padding(.bottom, DaybookSpacing.s3)
             .selectionDisabled()
             .listRowSeparator(.hidden)
             // The control's edges line up with the result rows' highlight.
@@ -351,7 +352,7 @@ struct TrashDetail: View {
             if let meeting {
                 TrashedConversationPage(meeting: meeting) { MacTrash.restore([meeting.id], state: state) }
             } else {
-                DaybookStyle.paper
+                DaybookPalette.paper
             }
         }
         .task(id: [state.window.openID, state.libraryRevision] as [AnyHashable?]) {
@@ -443,7 +444,7 @@ struct BatchActionButtons: View {
     var body: some View {
         let groups = ConversationActions.batch(ids, in: state.meetings, context: .init(platform: .mac))
         let actions = groups.flatMap(\.actions)
-        VStack(spacing: Space.s3) {
+        VStack(spacing: DaybookSpacing.s3) {
             HStack {
                 ForEach(actions.filter { $0.role != .destructive }) { action in
                     if let custom = MacActions.custom(action, ids: ids, state: state) {
@@ -459,7 +460,7 @@ struct BatchActionButtons: View {
             ForEach(actions.filter { $0.role == .destructive }) { action in
                 Button(action.title, role: .destructive) { perform(action.id) }
                     .buttonStyle(.plain)
-                    .foregroundStyle(Ink.error)
+                    .foregroundStyle(DaybookPalette.Ink.error)
                     .disabled(!action.isAvailable)
             }
         }
@@ -671,11 +672,11 @@ private struct LibraryNotice: View {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(Array(state.noticeLines.enumerated()), id: \.offset) { _, line in
                         LibraryNoticeLine(text: line, action: state.noticeAction(on: line)) {
-                            withAnimation(Motion.resolved(Motion.fade, reduceMotion: reduceMotion)) { state.performNoticeAction() }
+                            withAnimation(DaybookMotion.resolved(DaybookMotion.fade, reduceMotion: reduceMotion)) { state.performNoticeAction() }
                         }
                     }
                 }
-                Button { withAnimation(Motion.resolved(Motion.fade, reduceMotion: reduceMotion)) { state.notice = nil } } label: {
+                Button { withAnimation(DaybookMotion.resolved(DaybookMotion.fade, reduceMotion: reduceMotion)) { state.notice = nil } } label: {
                     Image(systemName: "xmark")
                 }
                 .buttonStyle(.plain).foregroundStyle(.secondary)
@@ -700,7 +701,7 @@ private struct LibraryNoticeLine: View {
                 words
                 Button(action.title, action: perform)
                     .buttonStyle(.daybookLink)
-                    .font(TypeStyle.status)
+                    .font(DaybookFont.status.font(.window))
                     .fixedSize()
             }
             // Heard as one: the line, then what it offers.
@@ -714,7 +715,7 @@ private struct LibraryNoticeLine: View {
     /// The words take the room the link leaves, which keeps its own at the trailing edge. They wrap in that width;
     /// a fixed vertical size made the window's split view taller than the window once a line wrapped.
     private var words: some View {
-        Text(text).font(TypeStyle.status).textSelection(.enabled).lineLimit(4)
+        Text(text).font(DaybookFont.status.font(.window)).textSelection(.enabled).lineLimit(4)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -726,11 +727,11 @@ struct DropOutline: View {
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(DaybookStyle.accent.opacity(0.06))
-                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(DaybookStyle.accent, style: StrokeStyle(lineWidth: 2, dash: [7, 5])))
+                .fill(DaybookPalette.accent.opacity(0.06))
+                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(DaybookPalette.accent, style: StrokeStyle(lineWidth: 2, dash: [7, 5])))
                 .padding(6)
             VStack(spacing: 6) {
-                Image(systemName: "tray.and.arrow.down").font(.system(size: 20)).foregroundStyle(DaybookStyle.accent)
+                Image(systemName: "tray.and.arrow.down").font(.system(size: 20)).foregroundStyle(DaybookPalette.accent)
                 Text(label).font(.headline)
             }
             .padding(16)
@@ -739,7 +740,7 @@ struct DropOutline: View {
         .scaleEffect(shown || reduceMotion ? 1 : 0.98)
         .opacity(shown ? 1 : 0)
         .onAppear { shown = true }
-        .motion(.easeOut(duration: 0.15), value: shown)
+        .daybookMotion(.easeOut(duration: 0.15), value: shown)
         .allowsHitTesting(false)
     }
 }

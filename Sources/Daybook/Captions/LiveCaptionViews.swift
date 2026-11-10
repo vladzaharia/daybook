@@ -34,7 +34,7 @@ struct LiveCaptionsSection: View {
                                  status: LiveCaptionStatus.line(captions.state, locale: captions.locale),
                                  style: Self.style)
             }
-            .padding(.top, Space.s6)
+            .padding(.top, DaybookSpacing.s6)
         }
     }
 
@@ -62,8 +62,6 @@ struct LiveCaptionsSection: View {
 // MARK: - Settings
 
 /// Settings › Recording › Live Captions: DaybookUI's section with this Mac's settings.
-typealias LiveCaptionSettingsSection = DaybookUI.LiveCaptionSettingsSection<LiveCaptionSettings>
-
 extension DaybookUI.LiveCaptionSettingsSection where Settings == LiveCaptionSettings {
     /// This Mac's: the languages its downloaded live recognizers cover, whether one covers the chosen
     /// language, and whether this system's Speech framework captions (macOS 26).

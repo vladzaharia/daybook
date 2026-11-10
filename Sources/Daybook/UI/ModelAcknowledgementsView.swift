@@ -1,4 +1,5 @@
 import AppKit
+import DaybookDesign
 import DaybookKit
 import DaybookUI
 import SwiftUI
@@ -15,15 +16,15 @@ struct ModelAcknowledgementsView: View {
         VStack(alignment: .leading, spacing: 0) {
             Text(AboutWords.acknowledgements)
                 .font(.headline)
-                .padding(.horizontal, Space.s5)
-                .padding(.top, Space.s5)
+                .padding(.horizontal, DaybookSpacing.s5)
+                .padding(.top, DaybookSpacing.s5)
             AcknowledgementsScreen(entries: ModelAcknowledgements.entries(from: catalog, usable: nil, meetings: []))
             HStack {
                 Spacer()
                 Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
             }
-            .padding(.horizontal, Space.s5)
-            .padding(.vertical, Space.s4)
+            .padding(.horizontal, DaybookSpacing.s5)
+            .padding(.vertical, DaybookSpacing.s4)
         }
         .background {
             // A sheet with only a Return button ignores Esc; this one takes it.

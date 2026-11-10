@@ -7,9 +7,6 @@ import DaybookUI
 import Foundation
 import Observation
 
-/// Where this Mac keeps the live captions it made: DaybookCaptions' store, the iPhone's too.
-typealias LiveCaptionStore = DaybookCaptions.LiveCaptionStore
-
 /// The Mac's live captions while it records, on the shared DaybookCaptions engine the iPhone uses:
 /// one captioner for You (the microphone) and one for Call (the call or system track), fed by the
 /// recorder's caption tap (docs/capture.md, "Live captions").

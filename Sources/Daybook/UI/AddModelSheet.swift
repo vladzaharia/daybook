@@ -1,5 +1,7 @@
+import DaybookDesign
 import DaybookIntelligence
 import DaybookKit
+import DaybookUI
 import SwiftUI
 
 /// Add Model: a Hugging Face repository (and optionally a revision or folder) is checked by every
@@ -40,8 +42,8 @@ struct AddModelSheet: View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Add Model")
                 .font(.headline)
-                .padding(.horizontal, Space.s5)
-                .padding(.top, Space.s5)
+                .padding(.horizontal, DaybookSpacing.s5)
+                .padding(.top, DaybookSpacing.s5)
             Form {
                 Section {
                     TextField("Repository", text: $repositoryText, prompt: Text("owner/name or link"))
@@ -129,7 +131,7 @@ struct AddModelSheet: View {
             }
             // The files behind a button, so this row's label and value line up with the rest.
             LabeledContent("Download") {
-                HStack(spacing: Space.s2) {
+                HStack(spacing: DaybookSpacing.s2) {
                     Text("\(candidate.files.count == 1 ? "1 file" : "\(candidate.files.count) files") · \(ModelSize.format(candidate.bytes))")
                         .monospacedDigit()
                     Button { showingFiles = true } label: { Image(systemName: "info.circle") }
@@ -148,17 +150,17 @@ struct AddModelSheet: View {
 
     private func files(_ candidate: ModelAdditionPreview.Candidate) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: Space.s1) {
+            VStack(alignment: .leading, spacing: DaybookSpacing.s1) {
                 ForEach(candidate.files, id: \.path) { file in
                     HStack {
                         Text(file.path).lineLimit(1).truncationMode(.middle)
-                        Spacer(minLength: Space.s3)
+                        Spacer(minLength: DaybookSpacing.s3)
                         Text(ModelSize.format(file.size)).monospacedDigit().foregroundStyle(.secondary)
                     }
                 }
             }
             .font(.subheadline)
-            .padding(Space.s4)
+            .padding(DaybookSpacing.s4)
         }
         .frame(width: 360)
         .frame(maxHeight: 280)
@@ -166,7 +168,7 @@ struct AddModelSheet: View {
     }
 
     private var footer: some View {
-        HStack(spacing: Space.s2) {
+        HStack(spacing: DaybookSpacing.s2) {
             if phase == .checking || phase == .adding {
                 ProgressView().controlSize(.small)
                 Text(phase == .checking ? "Checking…" : "Adding…").foregroundStyle(.secondary)
@@ -185,8 +187,8 @@ struct AddModelSheet: View {
                     .disabled(phase == .checking || repositoryText.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
-        .padding(.horizontal, Space.s5)
-        .padding(.vertical, Space.s4)
+        .padding(.horizontal, DaybookSpacing.s5)
+        .padding(.vertical, DaybookSpacing.s4)
     }
 
     // MARK: Actions

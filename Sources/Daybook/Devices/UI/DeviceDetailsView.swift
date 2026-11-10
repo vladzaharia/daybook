@@ -18,13 +18,13 @@ struct DeviceDetailsView: View {
 
     var body: some View {
         let detailed = session.direct as? any DetailedConnection
-        VStack(alignment: .leading, spacing: Space.s4) {
-            HStack(spacing: Space.s3) {
+        VStack(alignment: .leading, spacing: DaybookSpacing.s4) {
+            HStack(spacing: DaybookSpacing.s3) {
                 DeviceGlyph(session: session)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(session.device.name).font(.headline)
                     if let vendor = session.kind.vendor {
-                        Text(vendor).font(TypeStyle.status).foregroundStyle(.secondary)
+                        Text(vendor).font(DaybookFont.status.font(.window)).foregroundStyle(.secondary)
                     }
                 }
             }
@@ -33,7 +33,7 @@ struct DeviceDetailsView: View {
                     if detail.label == "Recorder firmware" { Divider().padding(.vertical, 2) }
                     row(detail.label) {
                         if let copy = detail.copyValue {
-                            HStack(spacing: Space.s2) {
+                            HStack(spacing: DaybookSpacing.s2) {
                                 Text(detail.value).monospacedDigit()
                                     .help("Only the last four characters are shown.")
                                 Button(copied ? "Copied" : "Copy") {
@@ -52,9 +52,9 @@ struct DeviceDetailsView: View {
                 }
                 Divider().padding(.vertical, 2)
                 row("Status updated") {
-                    HStack(spacing: Space.s2) {
+                    HStack(spacing: DaybookSpacing.s2) {
                         Text(updated(session.status?.updatedAt))
-                        Spacer(minLength: Space.s3)
+                        Spacer(minLength: DaybookSpacing.s3)
                         // Only while it can: connected, and not busy importing or listing.
                         if session.isLinked, session.queue.current == nil {
                             Button("Refresh") { session.primary?.refresh() }
@@ -65,7 +65,7 @@ struct DeviceDetailsView: View {
                 }
             }
 
-            VStack(alignment: .leading, spacing: Space.s3) {
+            VStack(alignment: .leading, spacing: DaybookSpacing.s3) {
                 Button {
                     withAnimation(reduceMotion ? nil : DaybookMotion.fade) { browser.showsTechnicalDetails.toggle() }
                 } label: {
@@ -91,7 +91,7 @@ struct DeviceDetailsView: View {
                             row("Last problem") { Text(problem).textSelection(.enabled) }
                         }
                     }
-                    VStack(alignment: .leading, spacing: Space.s2) {
+                    VStack(alignment: .leading, spacing: DaybookSpacing.s2) {
                         ForEach(session.kind.technicalNotes, id: \.self) { note in
                             Text(note).fixedSize(horizontal: false, vertical: true)
                         }
@@ -101,14 +101,14 @@ struct DeviceDetailsView: View {
             }
         }
         .font(.system(size: 12))
-        .padding(Space.s4)
+        .padding(DaybookSpacing.s4)
         .frame(width: 400, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
     }
 
     /// A label in the shared column, then its value.
     private func row(_ label: String, @ViewBuilder value: () -> some View) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: Space.s3) {
+        HStack(alignment: .firstTextBaseline, spacing: DaybookSpacing.s3) {
             Text(label).foregroundStyle(.secondary)
                 .frame(width: Self.labelWidth, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
