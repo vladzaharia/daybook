@@ -3,8 +3,9 @@ import CoreSpotlight
 import DaybookKit
 import Foundation
 
-/// A conversation, for Siri, Shortcuts, and Spotlight: its title and date. Open Conversation opens it;
-/// Spotlight lists every conversation but Personal ones (`ConversationIndex`).
+/// A conversation, for Siri, Shortcuts, and Spotlight: its title and date, as on the Mac. Open Conversation
+/// opens it; Spotlight lists every conversation but Personal ones (`ConversationIndex`), by title and dates
+/// only, never what was said.
 struct ConversationEntity: AppEntity, IndexedEntity {
     static let typeDisplayRepresentation: TypeDisplayRepresentation = "Conversation"
     static let defaultQuery = ConversationQuery()
@@ -23,8 +24,20 @@ struct ConversationEntity: AppEntity, IndexedEntity {
         self.init(id: entry.id, title: entry.title, date: entry.date)
     }
 
+    /// "Nov 10, 2026 at 9:00 AM": the subtitle in Shortcuts, and the description in Spotlight.
+    var when: String { date.formatted(date: .abbreviated, time: .shortened) }
+
     var displayRepresentation: DisplayRepresentation {
-        DisplayRepresentation(title: "\(title)", subtitle: "\(date.formatted(date: .abbreviated, time: .shortened))")
+        DisplayRepresentation(title: "\(title)", subtitle: "\(when)")
+    }
+
+    var attributeSet: CSSearchableItemAttributeSet {
+        let attributes = defaultAttributeSet
+        attributes.title = title
+        attributes.contentDescription = when
+        attributes.contentCreationDate = date
+        attributes.metadataModificationDate = date
+        return attributes
     }
 }
 

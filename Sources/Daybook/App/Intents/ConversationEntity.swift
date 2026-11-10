@@ -5,39 +5,44 @@ import DaybookKit
 import Foundation
 import os
 
-/// A conversation, for Shortcuts and Spotlight: its title, when it was, and its gist. Personal conversations are never
-/// named outside the app (the menu bar extra's rule), so they're never indexed or suggested; a shortcut made with one
-/// still opens it.
+/// A conversation, for Shortcuts and Spotlight: its title and when it was, as on the iPhone. Shortcuts reads both
+/// (`@Property`). Spotlight gets the title and dates only, never the summary: what it copies sits outside the
+/// library's encryption. Personal conversations are never named outside the app (the menu bar extra's rule), so
+/// they're never indexed or suggested; a shortcut made with one still opens it.
 struct ConversationEntity: AppEntity, IndexedEntity, Equatable {
     static let typeDisplayRepresentation: TypeDisplayRepresentation = "Conversation"
     static let defaultQuery = ConversationQuery()
 
-    var id: UUID
-    var title: String
-    var date: Date
-    /// The summary's overview, when there is one.
-    var gist: String?
+    let id: UUID
+    @Property(title: "Title") var title: String
+    @Property(title: "Date") var date: Date
 
-    init(id: UUID, title: String, date: Date, gist: String?) {
+    init(id: UUID, title: String, date: Date) {
         self.id = id
         self.title = title
         self.date = date
-        self.gist = gist
     }
 
     init(_ meeting: Meeting) {
-        self.init(id: meeting.id, title: meeting.title, date: meeting.date,
-                  gist: meeting.summary?.overview.isEmpty == false ? meeting.summary?.overview : nil)
+        self.init(id: meeting.id, title: meeting.title, date: meeting.date)
     }
 
+    /// The same conversation, as named now: a property is a reference, so equality reads the values.
+    static func == (lhs: ConversationEntity, rhs: ConversationEntity) -> Bool {
+        lhs.id == rhs.id && lhs.title == rhs.title && lhs.date == rhs.date
+    }
+
+    /// "Nov 10, 2026 at 9:00 AM": the subtitle in Shortcuts, and the description in Spotlight.
+    var when: String { date.formatted(date: .abbreviated, time: .shortened) }
+
     var displayRepresentation: DisplayRepresentation {
-        DisplayRepresentation(title: "\(title)", subtitle: "\(date.formatted(date: .abbreviated, time: .shortened))")
+        DisplayRepresentation(title: "\(title)", subtitle: "\(when)")
     }
 
     var attributeSet: CSSearchableItemAttributeSet {
         let attributes = defaultAttributeSet
         attributes.title = title
-        attributes.contentDescription = gist
+        attributes.contentDescription = when
         attributes.contentCreationDate = date
         attributes.metadataModificationDate = date
         return attributes
