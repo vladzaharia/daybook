@@ -1,4 +1,5 @@
 import AppIntents
+import DaybookDesign
 import Foundation
 
 // App Intents shared by the app and the widget extension. Both targets compile this file so each
@@ -79,7 +80,7 @@ enum RecordingDialogs {
     static let notRecording = "Daybook isn’t recording."
 
     /// "Bookmarked at 12:03."
-    static func bookmarked(at time: TimeInterval) -> String { "Bookmarked at \(TimeLabel.short(time))." }
+    static func bookmarked(at time: TimeInterval) -> String { "Bookmarked at \(DaybookTime.short(time))." }
 }
 
 struct StartRecordingIntent: AudioRecordingIntent {

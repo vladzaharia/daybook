@@ -1,3 +1,4 @@
+import DaybookDesign
 import DaybookKit
 import DaybookUI
 import SwiftUI
@@ -37,7 +38,7 @@ struct ConversationInfo: View {
             }
             .navigationTitle("Info")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button(role: .close) { dismiss() }.tint(PhoneStyle.Ink.title) } }
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button(role: .close) { dismiss() }.tint(DaybookPalette.Ink.title) } }
         }
         .presentationDetents([.medium, .large], selection: $detent)
         .presentationDragIndicator(.visible)

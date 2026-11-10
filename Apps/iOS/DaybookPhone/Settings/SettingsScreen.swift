@@ -1,3 +1,4 @@
+import DaybookDesign
 import DaybookKit
 import DaybookUI
 import SwiftUI
@@ -140,7 +141,7 @@ struct SettingsScreen: View {
         .settingsScrollEnd()
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .topBarTrailing) { Button(role: .close) { dismiss() }.tint(PhoneStyle.Ink.title) } }
+        .toolbar { ToolbarItem(placement: .topBarTrailing) { Button(role: .close) { dismiss() }.tint(DaybookPalette.Ink.title) } }
     }
 
     private var recordingSummary: String {
@@ -317,7 +318,7 @@ struct SettingsLink<Label: View>: View {
             Button { pages.open(route) } label: {
                 label.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
             }
-            .listRowBackground(chosen ? PhoneStyle.accent.opacity(0.14) : Color(uiColor: .secondarySystemGroupedBackground))
+            .listRowBackground(chosen ? DaybookPalette.accent.opacity(0.14) : Color(uiColor: .secondarySystemGroupedBackground))
             .accessibilityAddTraits(chosen ? .isSelected : [])
         } else {
             NavigationLink(value: route) { label }

@@ -111,15 +111,11 @@ struct ConversationFindBar: View {
             Button { find.previous() } label: { Image(systemName: "chevron.up") }
                 .disabled(!find.canStep)
                 .accessibilityLabel("Find Previous")
-                #if os(macOS)
-                .help("Find Previous (⇧⌘G)")
-                #endif
+                .macHelp("Find Previous (⇧⌘G)")
             Button { find.next() } label: { Image(systemName: "chevron.down") }
                 .disabled(!find.canStep)
                 .accessibilityLabel("Find Next")
-                #if os(macOS)
-                .help("Find Next (⌘G)")
-                #endif
+                .macHelp("Find Next (⌘G)")
             Button("Done") { find.close() }
         }
         .buttonStyle(.borderless)

@@ -1,3 +1,4 @@
+import DaybookDesign
 import SwiftUI
 
 /// Asks about a library in the wrong place (`LibraryLaunchCheck.offer`, docs/sandbox.md). For a move, the library stays
@@ -7,12 +8,12 @@ struct LibraryMoveSheet: View {
     let offer: LibraryMoveOffer
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.s3) {
+        VStack(alignment: .leading, spacing: DaybookSpacing.s3) {
             // A sheet is chrome: the system's label colours, not the page's ink.
             Text(text.title).font(.headline)
             Text(text.message).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if let problem = state.launchCheck.moveError { ProblemLine(problem: problem) }
-            HStack(spacing: Space.s2) {
+            HStack(spacing: DaybookSpacing.s2) {
                 if state.launchCheck.isMoving {
                     ProgressView().controlSize(.small)
                     Text("Moving…").foregroundStyle(.secondary)
@@ -31,9 +32,9 @@ struct LibraryMoveSheet: View {
                 }
             }
             .disabled(state.launchCheck.isMoving)
-            .padding(.top, Space.s2)
+            .padding(.top, DaybookSpacing.s2)
         }
-        .padding(Space.s5)
+        .padding(DaybookSpacing.s5)
         .frame(width: 440)
         .interactiveDismissDisabled()
     }

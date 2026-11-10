@@ -159,11 +159,11 @@ struct ConversationStatus: View {
             if let shown {
                 // A countdown's seconds tick in the block's own words; nothing else here redraws for them.
                 MarginRow { StatusBlock(shown, perform: perform) }
-                .padding(.top, Space.s5)
+                .padding(.top, DaybookSpacing.s5)
                 .daybookTransition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .daybookMotion(Motion.state, value: StatusBlockLayout.motionKey(shown))
+        .daybookMotion(DaybookMotion.state, value: StatusBlockLayout.motionKey(shown))
     }
 
     private func perform(_ action: ConversationStatusPresentation.Action) {

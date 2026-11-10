@@ -80,7 +80,7 @@ struct LibraryView: View {
             // on the detached item and throws. So both sides are one view whatever they show.
             // Teal is content's: the page's checkboxes, links, and fills. The toolbar, the inspector, the list, and the
             // sidebar follow the accent the person chose in System Settings (the AccentColor asset under Multicolor).
-            ZStack { detail.tint(DaybookStyle.accent) }
+            ZStack { detail.tint(DaybookPalette.accent) }
                 .confirmationBeat(Bindable(state.window).confirmation)
                 .overlay(alignment: .topTrailing) {
                     SharingAnchor(holder: shareAnchor).frame(width: 1, height: 1).padding(.trailing, 72).accessibilityHidden(true)
@@ -185,13 +185,13 @@ struct LibraryView: View {
             EmptyLibraryView(state: state)
         } else if !state.window.isSearching && state.visibleMeetings.isEmpty {
             // An empty place says so in its list; the page stays blank rather than asking for a choice.
-            DaybookStyle.paper
+            DaybookPalette.paper
         } else {
             Text("No Conversation Selected")
-                .font(TypeStyle.heading())
-                .foregroundStyle(Ink.faint)
+                .font(DaybookFont.heading.font(.window))
+                .foregroundStyle(DaybookPalette.Ink.faint)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(DaybookStyle.paper)
+                .background(DaybookPalette.paper)
         }
     }
 
@@ -519,7 +519,7 @@ struct RecordControl: View {
                         if saved {
                             DoneMark()
                         } else {
-                            Image(systemName: "record.circle").symbolRenderingMode(.palette).foregroundStyle(Ink.record, .secondary)
+                            Image(systemName: "record.circle").symbolRenderingMode(.palette).foregroundStyle(DaybookPalette.Ink.record, .secondary)
                         }
                     }
                 }
@@ -529,8 +529,8 @@ struct RecordControl: View {
             }
         }
         .transition(reduceMotion ? .opacity : AnyTransition(.blurReplace))
-        .motion(Motion.state, value: phase)
-        .motion(Motion.fade, value: saved)
+        .daybookMotion(DaybookMotion.state, value: phase)
+        .daybookMotion(DaybookMotion.fade, value: saved)
         .onChange(of: state.recordingID) { _, id in if let id { recorded = id } }
         .onChange(of: phase) { old, new in
             guard old != .idle, new == .idle, let id = recorded else { return }
@@ -584,13 +584,13 @@ private struct EmptyLibraryView: View {
     /// Record's and Import's words.
     private static let controlText: CGFloat = 13
     var body: some View {
-        VStack(spacing: Space.s4) {
+        VStack(spacing: DaybookSpacing.s4) {
             DaybookMark(size: 64)
-                .padding(.bottom, Space.s2)
-            Text("No Conversations Yet").font(TypeStyle.docTitleSmall).foregroundStyle(Ink.title)
-            Text("Record a conversation, or drop audio files here.").foregroundStyle(Ink.secondary)
+                .padding(.bottom, DaybookSpacing.s2)
+            Text("No Conversations Yet").font(DaybookFont.sheetTitle.font(.window)).foregroundStyle(DaybookPalette.Ink.title)
+            Text("Record a conversation, or drop audio files here.").foregroundStyle(DaybookPalette.Ink.secondary)
             // One shape for both: capsules of one height, Import the quieter.
-            HStack(spacing: Space.s3) {
+            HStack(spacing: DaybookSpacing.s3) {
                 // The red dot, as on the toolbar's Record and Floating Notes': the one red control.
                 Button { Task { await state.startRecording() } } label: {
                     RecordControlLabel(size: Self.controlText).padding(.horizontal, 14).padding(.vertical, 6)
@@ -605,19 +605,19 @@ private struct EmptyLibraryView: View {
                 }
                 .buttonStyle(DaybookControlStyle(role: .standard, shape: .capsule))
             }
-            .padding(.top, Space.s2)
+            .padding(.top, DaybookSpacing.s2)
             if let models = state.modelDownloadState {
                 ActivityReader {
                     Text(ProcessingWords.modelDownloadLine(models))
-                        .font(TypeStyle.status)
-                        .foregroundStyle(Ink.secondary)
-                        .padding(.top, Space.s6)
+                        .font(DaybookFont.status.font(.window))
+                        .foregroundStyle(DaybookPalette.Ink.secondary)
+                        .padding(.top, DaybookSpacing.s6)
                 }
             }
         }
         .offset(y: -24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(DaybookStyle.paper)
+        .background(DaybookPalette.paper)
         .overlay { if isDropTargeted { DropOutline(label: "Import Audio") } }
         .dropDestination(for: URL.self) { urls, _ in
             Task { do { try await state.importFiles(urls, source: .imported, attachTo: nil) } catch { state.report("Couldn’t Import Audio", "Choose an audio or video file and try again.", error) } }
@@ -631,22 +631,22 @@ private struct BatchSelectionView: View {
     let ids: [UUID]
     private var meetings: [Meeting] { state.meetings.filter { ids.contains($0.id) }.sorted { $0.date > $1.date } }
     var body: some View {
-        VStack(spacing: Space.s3) {
-            Text("\(meetings.count) Conversations").font(TypeStyle.docTitleSmall).foregroundStyle(Ink.title)
+        VStack(spacing: DaybookSpacing.s3) {
+            Text("\(meetings.count) Conversations").font(DaybookFont.sheetTitle.font(.window)).foregroundStyle(DaybookPalette.Ink.title)
             // Up to four names; "and 1 more" would take the place of the one name it hides. One the Personal lock hides
             // is "Personal conversation".
             let titles = meetings.map { state.personalLock.hides($0) ? PersonalLockWords.hiddenTitle : $0.title }
             Text(titles.count > 4 ? titles.prefix(3).joined(separator: ", ") + ", and \(titles.count - 3) more"
                  : titles.formatted(.list(type: .and)))
-                .foregroundStyle(Ink.secondary)
+                .foregroundStyle(DaybookPalette.Ink.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 420)
             // What the selection's menu offers (`ConversationActions.batch`), as buttons.
             BatchActionButtons(state: state, ids: ids)
-                .padding(.top, Space.s2)
+                .padding(.top, DaybookSpacing.s2)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(DaybookStyle.paper)
+        .background(DaybookPalette.paper)
     }
 }
 

@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookDesign
 import DaybookKit
 import DaybookLink
 import DaybookUI
@@ -29,7 +30,7 @@ struct PhoneOverview: View {
             PeerDevicePage(PeerPage(facts(now: context.date), here: PairingWords.here(.mac), now: context.date), actions: actions)
         }
         .scrollContentBackground(.hidden)
-        .background(DaybookStyle.paper)
+        .background(DaybookPalette.paper)
     }
 
     /// What the page says, from the phone's link and its device.

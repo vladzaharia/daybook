@@ -146,17 +146,17 @@ private struct KindChooser: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             AddRecorderHeader(symbol: "plus.circle", title: "Add Device")
-            VStack(spacing: Space.s2) {
+            VStack(spacing: DaybookSpacing.s2) {
                 ForEach(DeviceCatalog.kinds) { kind in
                     KindCard(kind: kind, isSetUp: !kind.allowsMultiple && state.devices.session(kind: kind.id) != nil) { choose(kind) }
                 }
             }
-            .padding(.top, Space.s4)
+            .padding(.top, DaybookSpacing.s4)
             SheetFooter {
                 Button("Cancel", action: cancel).keyboardShortcut(.cancelAction)
             }
         }
-        .padding(Space.s5)
+        .padding(DaybookSpacing.s5)
     }
 }
 
@@ -170,15 +170,15 @@ private struct KindCard: View {
     var body: some View {
         Button(action: action) {
             RecorderKindRow(kind: kind, isSetUp: isSetUp)
-                .padding(Space.s3)
+                .padding(DaybookSpacing.s3)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(hovering ? Color.primary.opacity(0.09) : DaybookStyle.quietFill,
+                .background(hovering ? Color.primary.opacity(0.09) : DaybookPalette.quietFill,
                             in: RoundedRectangle(cornerRadius: DaybookRadius.box, style: .continuous))
                 .contentShape(RoundedRectangle(cornerRadius: DaybookRadius.box, style: .continuous))
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .motion(Motion.hover, value: hovering)
+        .daybookMotion(DaybookMotion.hover, value: hovering)
         .accessibilityLabel("\(kind.name). \(RecorderStatusWords.kindLabel(kind))")
     }
 }
@@ -191,7 +191,7 @@ private struct SheetFooter<Actions: View>: View {
     @ViewBuilder var actions: Actions
 
     var body: some View {
-        HStack(spacing: Space.s3) {
+        HStack(spacing: DaybookSpacing.s3) {
             if let back {
                 Button { back() } label: { Label(backTitle, systemImage: "chevron.left") }
                     .buttonStyle(.borderless)
@@ -199,7 +199,7 @@ private struct SheetFooter<Actions: View>: View {
             Spacer()
             actions
         }
-        .padding(.top, Space.s5)
+        .padding(.top, DaybookSpacing.s5)
     }
 }
 
@@ -218,7 +218,7 @@ private struct MethodChooser: View {
         let methods = AddRecorderStep.methods(kind, on: .mac)
         VStack(alignment: .leading, spacing: 0) {
             AddRecorderHeader(symbol: kind.systemImage, title: "Set Up \(kind.name)")
-            VStack(spacing: Space.s3) {
+            VStack(spacing: DaybookSpacing.s3) {
                 ForEach(Array(methods.enumerated()), id: \.element.id) { index, method in
                     MethodCard(method: method, recommended: index == 0 && methods.count > 1,
                                isSetUp: session.connection(method.kind)?.isSetUp == true) {
@@ -230,7 +230,7 @@ private struct MethodChooser: View {
                     }
                 }
             }
-            .padding(.top, Space.s4)
+            .padding(.top, DaybookSpacing.s4)
             SheetFooter(back: back, backTitle: "All Devices") {
                 if session.setUpMethods.isEmpty {
                     Button("Cancel", action: cancel).keyboardShortcut(.cancelAction)
@@ -239,7 +239,7 @@ private struct MethodChooser: View {
                 }
             }
         }
-        .padding(Space.s5)
+        .padding(DaybookSpacing.s5)
     }
 }
 
@@ -251,40 +251,40 @@ private struct MethodCard: View {
     let action: () -> Void
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: Space.s3) {
+        HStack(alignment: .firstTextBaseline, spacing: DaybookSpacing.s3) {
             Image(systemName: method.systemImage)
                 .font(.system(size: 17))
                 .foregroundStyle(.secondary)
                 .frame(width: 24)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: Space.s1) {
-                HStack(alignment: .firstTextBaseline, spacing: Space.s2) {
+            VStack(alignment: .leading, spacing: DaybookSpacing.s1) {
+                HStack(alignment: .firstTextBaseline, spacing: DaybookSpacing.s2) {
                     Text(method.title).font(.system(size: 13, weight: .semibold))
                     if recommended && !isSetUp { RecommendedLabel() }
                     Spacer()
                 }
                 Text(method.summary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if let note = method.note, !isSetUp {
-                    Text(note).font(TypeStyle.status).foregroundStyle(.secondary)
+                    Text(note).font(DaybookFont.status.font(.window)).foregroundStyle(.secondary)
                 }
                 HStack {
                     Spacer()
                     if isSetUp {
                         Label("Set Up", systemImage: "checkmark.circle.fill")
-                            .font(TypeStyle.status).foregroundStyle(.secondary)
+                            .font(DaybookFont.status.font(.window)).foregroundStyle(.secondary)
                     } else if recommended {
                         Button(method.setupAction, action: action)
                             .buttonStyle(.borderedProminent)
-                            .tint(DaybookStyle.prominentFill)
+                            .tint(DaybookPalette.prominentFill)
                     } else {
                         Button(method.setupAction, action: action)
                     }
                 }
-                .padding(.top, Space.s2)
+                .padding(.top, DaybookSpacing.s2)
             }
         }
-        .padding(Space.s4)
-        .background(DaybookStyle.quietFill, in: RoundedRectangle(cornerRadius: DaybookRadius.box, style: .continuous))
+        .padding(DaybookSpacing.s4)
+        .background(DaybookPalette.quietFill, in: RoundedRectangle(cornerRadius: DaybookRadius.box, style: .continuous))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(recommended ? "\(method.title), recommended" : method.title)
     }
@@ -325,7 +325,7 @@ private struct DiscoveryStep: View {
                 }
             }
         }
-        .padding(Space.s5)
+        .padding(DaybookSpacing.s5)
         .onAppear {
             if connection.state == .connected { finish() }
             else if !searching && !connecting && connection.discovered.isEmpty && connection.problem == nil && !connection.searchFoundNothing {

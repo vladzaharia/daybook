@@ -14,7 +14,7 @@ struct RecordingLiveActivity: Widget {
         ActivityConfiguration(for: RecordingActivityAttributes.self) { context in
             RecordingActivityContent(context: context)
                 .activityBackgroundTint(nil)
-                .activitySystemActionForegroundColor(PhoneStyle.Ink.record)
+                .activitySystemActionForegroundColor(DaybookPalette.Ink.record)
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
@@ -28,7 +28,7 @@ struct RecordingLiveActivity: Widget {
                 DynamicIslandExpandedRegion(.trailing) {
                     ActivityClock(state: context.state, isStale: context.isStale)
                         .font(.title3.weight(.semibold).monospacedDigit())
-                        .foregroundStyle(isLive(context) ? PhoneStyle.Ink.record : .white)
+                        .foregroundStyle(isLive(context) ? DaybookPalette.Ink.record : .white)
                         .padding(.trailing, 4)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
@@ -52,7 +52,7 @@ struct RecordingLiveActivity: Widget {
             } compactTrailing: {
                 CompactClock(state: context.state, isStale: context.isStale)
                     .font(.caption.weight(.semibold).monospacedDigit())
-                    .foregroundStyle(isLive(context) ? PhoneStyle.Ink.record : .white)
+                    .foregroundStyle(isLive(context) ? DaybookPalette.Ink.record : .white)
                     .frame(maxWidth: 52)
             } minimal: {
                 RecordingGlyph(context: context)
@@ -93,7 +93,7 @@ private struct SmallRecording: View {
                 Spacer(minLength: 4)
                 ActivityClock(state: state, isStale: context.isStale)
                     .font(.headline.weight(.semibold).monospacedDigit())
-                    .foregroundStyle(isLive(context) ? PhoneStyle.Ink.record : .primary)
+                    .foregroundStyle(isLive(context) ? DaybookPalette.Ink.record : .primary)
             }
             if let line = state.endLine {
                 Text(line).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
@@ -136,13 +136,13 @@ private func isLive(_ context: ActivityViewContext<RecordingActivityAttributes>)
 
 /// The glyph's ink: red while recording, the warning ink once it stopped by itself, grey otherwise.
 private func glyphInk(_ context: ActivityViewContext<RecordingActivityAttributes>) -> Color {
-    if context.state.phase == .stopped { return PhoneStyle.Ink.warning }
-    return isLive(context) ? PhoneStyle.Ink.record : .gray
+    if context.state.phase == .stopped { return DaybookPalette.Ink.warning }
+    return isLive(context) ? DaybookPalette.Ink.record : .gray
 }
 
 /// The title's ink: the warning ink once it stopped by itself, else the system's.
 private func titleInk(_ context: ActivityViewContext<RecordingActivityAttributes>) -> Color {
-    context.state.phase == .stopped ? PhoneStyle.Ink.warning : .primary
+    context.state.phase == .stopped ? DaybookPalette.Ink.warning : .primary
 }
 
 /// Daybook's waveform, for the compact and minimal presentations.
@@ -193,7 +193,7 @@ struct HearingDot: View {
 
     var body: some View {
         let recording = state.phase == .recording && !isStale
-        let ink = state.phase == .stopped ? PhoneStyle.Ink.warning : recording ? PhoneStyle.Ink.record : Color.gray
+        let ink = state.phase == .stopped ? DaybookPalette.Ink.warning : recording ? DaybookPalette.Ink.record : Color.gray
         Circle().fill(ink.opacity(recording && state.level == 0 ? 0.45 : 1))
             .frame(width: size, height: size)
             .frame(width: size * 1.6, height: size * 1.6)
@@ -224,27 +224,27 @@ struct ActivityButtons: View {
                 Button(intent: AddBookmarkIntent()) {
                     Label(state.bookmarkCount > 0 ? "Bookmark · \(state.bookmarkCount)" : "Bookmark", systemImage: "bookmark.fill")
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(PhoneStyle.ActivityButton.bookmark.labelColor)
+                        .foregroundStyle(DaybookPalette.ActivityInk.bookmark.label.color)
                         .frame(maxWidth: .infinity)
                 }
-                .tint(PhoneStyle.ActivityButton.bookmark.fillColor)
+                .tint(DaybookPalette.ActivityInk.bookmark.fill.color)
             } else if state.offersResume, !isStale {
                 Button(intent: ResumeRecordingIntent()) {
                     Label("Resume", systemImage: "record.circle")
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(PhoneStyle.ActivityButton.resume.labelColor)
+                        .foregroundStyle(DaybookPalette.ActivityInk.resume.label.color)
                         .frame(maxWidth: .infinity)
                 }
-                .tint(PhoneStyle.ActivityButton.resume.fillColor)
+                .tint(DaybookPalette.ActivityInk.resume.fill.color)
             }
             if !state.hasEnded {
                 Button(intent: StopRecordingIntent()) {
                     Label("Stop", systemImage: "stop.fill")
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(PhoneStyle.ActivityButton.stop.labelColor)
+                        .foregroundStyle(DaybookPalette.ActivityInk.stop.label.color)
                         .frame(maxWidth: .infinity)
                 }
-                .tint(PhoneStyle.ActivityButton.stop.fillColor)
+                .tint(DaybookPalette.ActivityInk.stop.fill.color)
             }
         }
         .buttonStyle(.borderedProminent)
@@ -309,7 +309,7 @@ struct LockScreenRecording: View {
                 Spacer(minLength: 8)
                 ActivityClock(state: state, isStale: context.isStale)
                     .font(.title2.weight(.semibold).monospacedDigit())
-                    .foregroundStyle(isLive(context) ? PhoneStyle.Ink.record : .primary)
+                    .foregroundStyle(isLive(context) ? DaybookPalette.Ink.record : .primary)
                     .frame(maxWidth: 120, alignment: .trailing)
             }
             ActivityCaption(state: state, isStale: context.isStale, lines: typeSize > .xLarge ? 1 : 2)

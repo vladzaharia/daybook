@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookDesign
 import DaybookIntelligence
 import DaybookKit
 import DaybookUI
@@ -106,7 +107,7 @@ struct MeetingInspector: View {
             guard !state.isRecording else { return }
             Task {
                 guard let url = await state.audioURL(for: track, meetingID: id) else { return }
-                withAnimation(Motion.state) { state.playback.play(url: url, at: 0, trackID: track.id, meetingID: id) }
+                withAnimation(DaybookMotion.state) { state.playback.play(url: url, at: 0, trackID: track.id, meetingID: id) }
             }
         case .adjustTiming:
             state.window.sheet = .adjustTiming(track.id)

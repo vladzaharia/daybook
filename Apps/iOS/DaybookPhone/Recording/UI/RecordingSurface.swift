@@ -43,7 +43,7 @@ struct RecorderScreen: View {
             }
         }
         .environment(\.recorderInputControl, PhoneInputButton.control)
-        .background(PhoneStyle.paper.ignoresSafeArea())
+        .background(DaybookPalette.paper.ignoresSafeArea())
         .onAppear {
             if let launch = model.options.recorderSheet { sheetExpansion = launch }
             levels.adopt(model.levels, for: .microphone)
@@ -234,7 +234,7 @@ private struct TableRecording<Content: View>: View {
         // brightness, still readable from across the table.
         .environment(\.colorScheme, dimmed ? .dark : colorScheme)
         .opacity(dimmed ? RecordingStyle.dimmedOpacity : 1)
-        .background((dimmed ? Color.black : PhoneStyle.paper).ignoresSafeArea())
+        .background((dimmed ? Color.black : DaybookPalette.paper).ignoresSafeArea())
         .contentShape(Rectangle())
         .simultaneousGesture(TapGesture().onEnded { wake() })
         .animation(TableIdle.animation(dimming: dimmed, reduceMotion: reduceMotion), value: dimmed)

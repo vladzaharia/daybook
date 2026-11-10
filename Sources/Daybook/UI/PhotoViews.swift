@@ -1,5 +1,6 @@
 import AppKit
 import DaybookCore
+import DaybookDesign
 import DaybookKit
 import DaybookUI
 import SwiftUI
@@ -91,8 +92,8 @@ struct PhotoDropTarget: ViewModifier {
             .overlay {
                 if targeted {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(DaybookStyle.accent, lineWidth: 2)
-                        .padding(Space.s2)
+                        .stroke(DaybookPalette.accent, lineWidth: 2)
+                        .padding(DaybookSpacing.s2)
                         .allowsHitTesting(false)
                 }
             }

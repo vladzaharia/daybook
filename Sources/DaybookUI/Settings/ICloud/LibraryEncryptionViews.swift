@@ -188,9 +188,7 @@ public struct EnterRecoveryKeyForm: View {
             Section {
                 TextField(SyncSettingsCase.label("Recovery key", density), text: $text)
                     .font(.system(.body, design: .monospaced))
-                    #if os(iOS)
-                    .textInputAutocapitalization(.characters)
-                    #endif
+                    .touchKeyboard(capitalization: .characters)
                     .autocorrectionDisabled()
                     .onSubmit(open)
                 if let problem { ProblemLine(text: problem.message, details: problem.details) }

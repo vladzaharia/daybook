@@ -373,7 +373,7 @@ struct LiveTimelineBar: View {
             GeometryReader { proxy in
                 let width = proxy.size.width
                 ZStack(alignment: .leading) {
-                    Capsule().fill(RecordingStyle.quietFill)
+                    Capsule().fill(DaybookPalette.quietFill)
                     if let paused = recorder.pausedAt {
                         // The pause so far, in the colour of what needs you.
                         UnevenRoundedRectangle(topLeadingRadius: 2, bottomLeadingRadius: 2, bottomTrailingRadius: 7, topTrailingRadius: 7)

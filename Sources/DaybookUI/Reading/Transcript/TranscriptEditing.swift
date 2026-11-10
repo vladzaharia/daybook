@@ -137,9 +137,7 @@ public struct CorrectPassageSheet: View {
                 .padding(density == .touch ? 20 : DaybookSpacing.s5)
                 .background(DaybookPalette.paper.ignoresSafeArea())
                 .navigationTitle("Correct Passage")
-                #if os(iOS)
-                .navigationBarTitleDisplayMode(.inline)
-                #endif
+                .touchInlineTitle()
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel") { if changed { confirmingDiscard = true } else { close() } }
@@ -245,9 +243,7 @@ struct RenameSpeakerForm: View {
             Text("Rename Speaker").font(.headline).foregroundStyle(DaybookPalette.Ink.title)
             TextField("Name", text: $draft)
                 .textFieldStyle(.roundedBorder)
-                #if os(iOS)
-                .textInputAutocapitalization(.words)
-                #endif
+                .touchKeyboard(capitalization: .words)
                 .focused($focused)
                 .onSubmit(commit)
             HStack {

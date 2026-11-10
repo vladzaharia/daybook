@@ -36,12 +36,12 @@ struct MiniPlayer: View {
             Button(action: open) {
                 HStack(spacing: 10) {
                     Image(systemName: "waveform")
-                        .foregroundStyle(PhoneStyle.neonMint)
+                        .foregroundStyle(DaybookPalette.neonMint)
                         .symbolEffect(
                             .variableColor.iterative, options: .repeating,
                             isActive: player.isPlaying && !reduceMotion
                         )
-                        .neonGlow(PhoneStyle.neonMint, radius: 3)
+                        .daybookGlow(DaybookPalette.neonMint, radius: 3)
                     VStack(alignment: .leading, spacing: 0) {
                         Text(meeting.title.isEmpty ? "Untitled Conversation" : meeting.title).font(
                             .subheadline.weight(.semibold)

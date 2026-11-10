@@ -48,19 +48,19 @@ struct SummaryPage: View {
             } else if meeting.tracks.isEmpty && !isRecording {
                 // The byline already says "Notes only"; this line offers the ways to add audio.
                 MarginRow {
-                    HStack(spacing: Space.s4) {
+                    HStack(spacing: DaybookSpacing.s4) {
                         Button("Record") { Task { await state.startRecording(into: meeting.id) } }
                             .disabled(state.isRecording || state.isStartingRecording)
                             .help("Record into this conversation")
                         Button("Add Recording…") { state.chooseImport(attachTo: meeting.id) }
                     }
                     .buttonStyle(.daybookLink)
-                    .font(TypeStyle.status)
+                    .font(DaybookFont.status.font(.window))
                 }
-                .padding(.top, Space.s5)
+                .padding(.top, DaybookSpacing.s5)
             }
             NotesSection(state: state, meeting: meeting, play: play, passages: passages)
-                .padding(.top, meeting.summary == nil ? Space.s5 : Space.s2)
+                .padding(.top, meeting.summary == nil ? DaybookSpacing.s5 : DaybookSpacing.s2)
                 // Without a summary there's no "Your notes" heading: the notes are where Show in Your Notes goes.
                 .id(meeting.summary == nil ? SummaryBlockID.notes : "notes-body")
             // Every photo, in the order taken; the summary's sections show the ones they illustrate.
@@ -79,8 +79,8 @@ struct SummaryPage: View {
         .environment(\.findQuery, state.window.searchText)
         .macReadingContext(state)
         .onChange(of: meeting.id) { arrival = SummaryArrival(opening: meeting) }
-        .daybookMotion(Motion.page, value: meeting.summary?.createdAt)
-        .daybookMotion(Motion.dim, value: meeting.status == .summarizing)
+        .daybookMotion(DaybookMotion.page, value: meeting.summary?.createdAt)
+        .daybookMotion(DaybookMotion.dim, value: meeting.status == .summarizing)
     }
 }
 
@@ -104,9 +104,9 @@ private struct NotesSection: View {
                 text: Binding(get: { meeting.notes }, set: { state.editNotes(meeting.id, text: $0) }),
                 times: times,
                 placeholder: "Add a note…",
-                fontSize: DaybookFont.body.size(.window) * scale, lineSpacing: TypeStyle.bodyLineSpacing(scale),
+                fontSize: DaybookFont.body.size(.window) * scale, lineSpacing: DaybookFont.bodyLineSpacing(.window, scale: scale),
                 // Narrow, the times keep a lane as the bookmarks and Floating Notes do, rather than disappearing.
-                margin: narrow ? (times.contains { $0 != nil } ? FloatingLayout.textLeading : 0) : DaybookStyle.margin,
+                margin: narrow ? (times.contains { $0 != nil } ? FloatingLayout.textLeading : 0) : ReadingGeometry.margin,
                 timeFontSize: DaybookFont.marginTime.size(.window) * scale,
                 focusOnAppear: isRecording && meeting.notes.isEmpty,
                 playTime: state.isRecording ? nil : { play(.timeline($0)) })

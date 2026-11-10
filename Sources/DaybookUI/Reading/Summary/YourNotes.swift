@@ -161,9 +161,7 @@ struct BookmarkRow: View {
                     .foregroundStyle(DaybookPalette.Ink.body)
                     .textFieldStyle(.plain)
                     .focused($editing)
-                    #if os(iOS)
-                    .submitLabel(.done)
-                    #endif
+                    .touchKeyboard(submit: .done)
                     .onSubmit { editing = false }
                     .accessibilityLabel("Bookmark at \(SpokenTime.format(time))")
             }

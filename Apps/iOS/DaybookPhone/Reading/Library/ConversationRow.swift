@@ -6,9 +6,6 @@ import SwiftUI
 // The library's rows are DaybookUI's, the Mac's too: `ConversationRowView`, `SearchResultRowView`, and
 // `CaptionHitRowView` (docs/interface.md, "Window structure"). What's here is how this iPhone feeds them.
 
-/// The shared label style, by the name the reading screens use.
-typealias CompactLabelStyle = DaybookUI.CompactLabelStyle
-
 /// What a row says on this iPhone (`ConversationStatusPresentation.row`): a Mac recording it now (over the link),
 /// a Mac's live progress on it before sync says so, where its summary runs, this iPhone's own work, and what the
 /// library says; and the mint waveform while it plays here.

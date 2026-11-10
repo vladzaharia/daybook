@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookDesign
 import DaybookKit
 import DaybookUI
 import SwiftUI
@@ -50,7 +51,7 @@ struct SidebarView: View {
                             .buttonStyle(.plain)
                             .foregroundStyle(.secondary)
                             .opacity(hoveringFolders ? 1 : 0)
-                            .motion(Motion.hover, value: hoveringFolders)
+                            .daybookMotion(DaybookMotion.hover, value: hoveringFolders)
                             .help("New Folder")
                             .accessibilityLabel("New Folder")
                     }

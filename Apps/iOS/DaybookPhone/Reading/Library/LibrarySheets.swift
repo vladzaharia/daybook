@@ -1,3 +1,4 @@
+import DaybookDesign
 import DaybookKit
 import DaybookUI
 import SwiftUI
@@ -22,7 +23,7 @@ struct TrashList: View {
                     .listRowBackground(PageRowBackground(shown: twoPage && session.trashedID == meeting.id))
                     .swipeActions(edge: .leading, allowsFullSwipe: true) {
                         Button { restore(meeting.id) } label: { Label(TrashWords.restore, systemImage: TrashWords.restoreSymbol) }
-                            .tint(PhoneStyle.prominentFill)
+                            .tint(DaybookPalette.prominentFill)
                     }
                     .contextMenu {
                         Button { restore(meeting.id) } label: { Label(TrashWords.restore, systemImage: TrashWords.restoreSymbol) }
@@ -76,7 +77,7 @@ struct TrashedPage: View {
             if let meeting {
                 TrashedConversationPage(meeting: meeting) { TrashList.restore(meeting.id, library: library, session: session) }
             } else {
-                PhoneStyle.paper.ignoresSafeArea()
+                DaybookPalette.paper.ignoresSafeArea()
             }
         }
         // Restoring it changes the library's revision; it's gone from the Trash then.
@@ -113,7 +114,7 @@ struct MoveSheet: View {
                 }
                 Section("New Folder") {
                     HStack {
-                        Image(systemName: "folder.badge.plus").foregroundStyle(PhoneStyle.Ink.secondary)
+                        Image(systemName: "folder.badge.plus").foregroundStyle(DaybookPalette.Ink.secondary)
                             .frame(width: 28).accessibilityHidden(true)
                         TextField("Name", text: $newFolder)
                             .focused($naming)

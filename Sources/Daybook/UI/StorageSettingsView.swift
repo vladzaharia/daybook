@@ -1,5 +1,6 @@
 import AppKit
 import DaybookCore
+import DaybookDesign
 import DaybookKit
 import DaybookUI
 import SwiftUI
@@ -15,7 +16,7 @@ struct StorageSettingsRow: View {
 
     var body: some View {
         LabeledContent {
-            HStack(spacing: Space.s3) {
+            HStack(spacing: DaybookSpacing.s3) {
                 if let report {
                     Text(StorageWords.audioSummary(bytes: report.audio, here: "this Mac")).foregroundStyle(.secondary).monospacedDigit()
                 } else {

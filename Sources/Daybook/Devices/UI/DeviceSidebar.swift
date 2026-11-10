@@ -38,7 +38,7 @@ struct DevicesSidebarSection: View {
                         .buttonStyle(.plain)
                         .foregroundStyle(.secondary)
                         .opacity(hovering ? 1 : 0)
-                        .motion(Motion.hover, value: hovering)
+                        .daybookMotion(DaybookMotion.hover, value: hovering)
                         .help("Add Device…")
                         .accessibilityLabel("Add Device")
                 }
@@ -56,7 +56,7 @@ private struct DeviceSidebarRow: View {
     var body: some View {
         let progress = session.importProgress
         let newCount = progress == nil ? session.importableCount : 0
-        HStack(spacing: Space.s2) {
+        HStack(spacing: DaybookSpacing.s2) {
             Label {
                 Text(session.device.name).lineLimit(1)
             } icon: {
@@ -82,7 +82,7 @@ private struct DeviceSidebarRow: View {
     /// Teal while a recorder is linked, as on the iPhone; otherwise the sidebar's own icon colour,
     /// like every other place in it.
     private var iconStyle: AnyShapeStyle {
-        session.isLinked ? AnyShapeStyle(DaybookStyle.accent) : AnyShapeStyle(HierarchicalShapeStyle.primary)
+        session.isLinked ? AnyShapeStyle(DaybookPalette.accent) : AnyShapeStyle(HierarchicalShapeStyle.primary)
     }
 
     private func accessibilityLabel(newCount: Int) -> String {
@@ -176,7 +176,7 @@ private struct ImportRing: View {
             Circle().stroke(Color.primary.opacity(0.14), lineWidth: 2)
             Circle()
                 .trim(from: 0, to: max(0.04, min(1, progress)))
-                .stroke(DaybookStyle.accent, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                .stroke(DaybookPalette.accent, style: StrokeStyle(lineWidth: 2, lineCap: .round))
                 .rotationEffect(.degrees(-90))
         }
         .frame(width: 12, height: 12)

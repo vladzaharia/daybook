@@ -50,9 +50,9 @@ struct PhonePairingStep: View {
                     Button(link.paired.isEmpty ? "Cancel" : "Done") { finish(nil) }.keyboardShortcut(.cancelAction)
                 }
             }
-            .padding(.top, Space.s5)
+            .padding(.top, DaybookSpacing.s5)
         }
-        .padding(Space.s5)
+        .padding(DaybookSpacing.s5)
         .onAppear { if link.pairing == .closed { state.beginPhonePairing() } }
         .onDisappear { state.endPhonePairing() }
         .alert(PairingWords.unpairQuestion(unpairing?.name ?? PairingWords.unnamed(.iPhone)),
@@ -68,30 +68,30 @@ struct PhonePairingStep: View {
     @ViewBuilder private var stage: some View {
         switch link.pairing {
         case .closed, .starting:
-            HStack(spacing: Space.s2) {
+            HStack(spacing: DaybookSpacing.s2) {
                 ProgressView().controlSize(.small)
                 Text(PairingWords.gettingACode).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, minHeight: 96)
         case .showing(let code):
-            VStack(spacing: Space.s3) {
+            VStack(spacing: DaybookSpacing.s3) {
                 PairingCodeView(code)
                 Text(PairingWords.onTheIPhone(macName: link.identity.name))
-                    .font(TypeStyle.status).foregroundStyle(Ink.secondary)
+                    .font(DaybookFont.status.font(.window)).foregroundStyle(DaybookPalette.Ink.secondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
                 TimelineView(.periodic(from: .now, by: 30)) { context in
-                    Text(PairingWords.expiry(code, now: context.date)).font(TypeStyle.status).foregroundStyle(Ink.meta)
+                    Text(PairingWords.expiry(code, now: context.date)).font(DaybookFont.status.font(.window)).foregroundStyle(DaybookPalette.Ink.meta)
                 }
                 if let problem = link.pairingProblem {
                     Label(problem, systemImage: "exclamationmark.triangle.fill")
-                        .font(TypeStyle.status).foregroundStyle(Ink.warning)
+                        .font(DaybookFont.status.font(.window)).foregroundStyle(DaybookPalette.Ink.warning)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .frame(maxWidth: .infinity)
-            .padding(Space.s4)
-            .background(DaybookStyle.quietFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .padding(DaybookSpacing.s4)
+            .background(DaybookPalette.quietFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         case .paired:
             // The title says who paired, and the list below shows it connected.
             EmptyView()
@@ -112,31 +112,31 @@ struct PairedPhonesList: View {
     @Binding var unpairing: LinkPairedDevice?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.s2) {
-            Text(PairingWords.pairedIPhones).font(TypeStyle.statusLead).foregroundStyle(Ink.secondary)
+        VStack(alignment: .leading, spacing: DaybookSpacing.s2) {
+            Text(PairingWords.pairedIPhones).font(DaybookFont.statusLead.font(.window)).foregroundStyle(DaybookPalette.Ink.secondary)
             VStack(spacing: 0) {
                 ForEach(Array(link.paired.enumerated()), id: \.element.id) { index, phone in
                     if index > 0 { Divider() }
-                    HStack(spacing: Space.s3) {
+                    HStack(spacing: DaybookSpacing.s3) {
                         Image(systemName: "iphone")
                             // Connected is teal, like every linked device; mint means playing.
-                            .foregroundStyle(link.peers[phone.deviceID] != nil ? AnyShapeStyle(DaybookStyle.accent) : AnyShapeStyle(.secondary))
+                            .foregroundStyle(link.peers[phone.deviceID] != nil ? AnyShapeStyle(DaybookPalette.accent) : AnyShapeStyle(.secondary))
                             .frame(width: 20)
                             .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(phone.name.isEmpty ? PairingWords.unnamed(.iPhone) : phone.name)
                             Text(line(phone))
-                                .font(TypeStyle.status).foregroundStyle(phone.isDamaged ? Ink.warning : Ink.secondary)
+                                .font(DaybookFont.status.font(.window)).foregroundStyle(phone.isDamaged ? DaybookPalette.Ink.warning : DaybookPalette.Ink.secondary)
                         }
                         Spacer()
                         Button(PairingWords.unpair) { unpairing = phone }.controlSize(.small)
                     }
-                    .padding(.vertical, Space.s2)
+                    .padding(.vertical, DaybookSpacing.s2)
                     .accessibilityElement(children: .combine)
                 }
             }
-            .padding(.horizontal, Space.s3)
-            .background(DaybookStyle.quietFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .padding(.horizontal, DaybookSpacing.s3)
+            .background(DaybookPalette.quietFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

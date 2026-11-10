@@ -1,9 +1,11 @@
 import DaybookCaptions
 import ActivityKit
+import DaybookDesign
 import DaybookDevices
 import DaybookKit
 import DaybookLink
 import DaybookModelStore
+import DaybookUI
 import Foundation
 import Observation
 import SwiftUI
@@ -38,7 +40,7 @@ final class PhoneAppModel: RecordingCommandHandling {
     let devices: PhoneDevices
     let audio: SyncAudioProvider
     /// The rolling input meter on the recording screen.
-    let levels = LevelHistory()
+    let levels = LevelTrail()
     /// Tentative on-device captions while recording (never the transcript).
     let captions: LiveCaptionsController
     /// The models live captions run on this iPhone, and those that process its recordings, when

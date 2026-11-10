@@ -30,42 +30,42 @@ struct RecordingPage: View {
     @ViewBuilder private func single(_ recording: DeviceRecording) -> some View {
         let queue = session.queue
         DevicePageTitle(title: recording.title) { recordingGlyph(queue.contains(recording.id)) }
-        Text(byline(recording)).font(TypeStyle.byline()).foregroundStyle(Ink.secondary).padding(.top, 6)
+        Text(byline(recording)).font(DaybookFont.byline.font(.window)).foregroundStyle(DaybookPalette.Ink.secondary).padding(.top, 6)
 
         if queue.current?.id == recording.id {
-            VStack(alignment: .leading, spacing: Space.s2) {
+            VStack(alignment: .leading, spacing: DaybookSpacing.s2) {
                 HStack {
-                    Text((session.phase ?? .preparing).label).font(TypeStyle.statusLead).monospacedDigit()
-                        .foregroundStyle(Ink.body)
+                    Text((session.phase ?? .preparing).label).font(DaybookFont.statusLead.font(.window)).monospacedDigit()
+                        .foregroundStyle(DaybookPalette.Ink.body)
                         .contentTransition(.numericText())
                     Spacer()
                     Button("Stop Importing") { session.requestStop(all: false) }
-                        .buttonStyle(.daybookLink).font(TypeStyle.status)
+                        .buttonStyle(.daybookLink).font(DaybookFont.status.font(.window))
                 }
                 // Until the transfer reports a fraction, the bar waits empty under "Preparing…".
                 ProgressView(value: session.phase?.fraction ?? 0)
                     .progressViewStyle(.brand(width: nil))
             }
-            .padding(.top, Space.s5)
+            .padding(.top, DaybookSpacing.s5)
             .transition(.opacity)
         } else if queue.isWaiting(recording.id) {
-            HStack(spacing: Space.s3) {
+            HStack(spacing: DaybookSpacing.s3) {
                 Label(queue.isSuspended ? "Waiting for your \(session.kind.shortName)" : "Waiting to import", systemImage: "arrow.down.circle.dotted")
-                    .font(TypeStyle.status).foregroundStyle(Ink.secondary)
+                    .font(DaybookFont.status.font(.window)).foregroundStyle(DaybookPalette.Ink.secondary)
                 Button("Remove from Queue") { session.removeFromQueue(recording.id) }
-                    .buttonStyle(.daybookLink).font(TypeStyle.status)
+                    .buttonStyle(.daybookLink).font(DaybookFont.status.font(.window))
             }
-            .padding(.top, Space.s5)
+            .padding(.top, DaybookSpacing.s5)
         } else {
             if canImport { importButtons([recording], title: "Import") }
             if let failure = session.failures.first(where: { $0.id == recording.id }) {
                 Label {
-                    Text(failure.message).foregroundStyle(Ink.secondary)
+                    Text(failure.message).foregroundStyle(DaybookPalette.Ink.secondary)
                 } icon: {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Ink.warning)
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(DaybookPalette.Ink.warning)
                 }
-                .font(TypeStyle.status)
-                .padding(.top, Space.s3)
+                .font(DaybookFont.status.font(.window))
+                .padding(.top, DaybookSpacing.s3)
             }
         }
 
@@ -73,7 +73,7 @@ struct RecordingPage: View {
             ForEach(session.overlaps(recording)) { overlap in
                 AttentionBox(kind: .info, title: "Overlaps “\(overlap.title)”", symbol: "link", message: "Recorded on this Mac \(overlap.span)",
                              primary: AttentionAction("Add to “\(overlap.title)”") { session.importRecordings([recording], attachTo: overlap.meetingID) })
-                    .padding(.top, Space.s4)
+                    .padding(.top, DaybookSpacing.s4)
             }
         }
     }
@@ -83,26 +83,26 @@ struct RecordingPage: View {
         let estimated = recordings.contains { $0.length?.isEstimate ?? true }
         DevicePageTitle(title: "\(recordings.count) Recordings Selected") { recordingGlyph(false) }
         Text("\(total > 0 ? "\(estimated ? "About " : "")\(DurationLabel.format(total)) in all · " : "")\(location) · Not in Daybook yet")
-            .font(TypeStyle.byline()).foregroundStyle(Ink.secondary).padding(.top, 6)
+            .font(DaybookFont.byline.font(.window)).foregroundStyle(DaybookPalette.Ink.secondary).padding(.top, 6)
         if canImport { importButtons(recordings, title: "Import \(recordings.count) Recordings") }
     }
 
     /// Import, the page's one action, and Add to… for the conversations it could join instead.
     private func importButtons(_ recordings: [DeviceRecording], title: String) -> some View {
-        HStack(spacing: Space.s3) {
+        HStack(spacing: DaybookSpacing.s3) {
             Button { session.importRecordings(recordings) } label: { Label(title, systemImage: "arrow.down.circle") }
                 .buttonStyle(.borderedProminent)
-                .tint(DaybookStyle.prominentFill)
+                .tint(DaybookPalette.prominentFill)
             AddToMenu(session: session, recordings: recordings).fixedSize()
         }
         .controlSize(.large)
-        .padding(.top, Space.s5)
+        .padding(.top, DaybookSpacing.s5)
     }
 
     private func recordingGlyph(_ queued: Bool) -> some View {
         Image(systemName: queued ? "arrow.down.circle.fill" : "arrow.down.circle")
             .font(.system(size: 22))
-            .foregroundStyle(Ink.secondary)
+            .foregroundStyle(DaybookPalette.Ink.secondary)
             .contentTransition(.symbolEffect(.replace))
             .accessibilityHidden(true)
     }

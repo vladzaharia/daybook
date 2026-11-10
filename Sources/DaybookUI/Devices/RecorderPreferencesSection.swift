@@ -93,9 +93,7 @@ public struct RecorderPreferencesSection: View {
                     Toggle(option.title(on: services.place), isOn: binding(option, services: services))
                         .labelsHidden()
                         .toggleStyle(.switch)
-                        #if os(macOS)
-                        .controlSize(.small)
-                        #endif
+                        .macControlSize(.small)
                 }
                 .disabled(!enabled(option))
                 .padding(.vertical, DaybookSpacing.s2 + 2)
@@ -133,9 +131,7 @@ public struct RecorderPreferencesSection: View {
     private func formOptions(_ options: [RecorderStatusWords.Option], services: RecorderServices) -> some View {
         ForEach(options, id: \.self) { option in
             Toggle(option.title(on: services.place), isOn: binding(option, services: services))
-                #if os(macOS)
-                .controlSize(.regular)
-                #endif
+                .macControlSize(.regular)
                 .padding(.leading, DaybookSpacing.s5)
                 .disabled(!enabled(option))
         }

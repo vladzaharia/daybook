@@ -60,14 +60,14 @@ struct SummaryPage: View {
                     VStack(alignment: .leading, spacing: 0) {
                         if let status, !(twoPage && isRecordedOnly && !hasCaptions) {
                             StatusBlock(status, perform: perform)
-                                .padding(.top, PhoneStyle.Space.s4)
+                                .padding(.top, DaybookSpacing.s4)
                                 .daybookTransition(.opacity.combined(with: .move(edge: .top)))
                                 .id("status")
                         } else if meeting.tracks.isEmpty && !twoPage {
                             // Only notes so far: the byline says so, and Record records into it. Two pages offer it
                             // on the transcript's page.
                             RecordIntoButton(meeting: meeting)
-                                .padding(.top, PhoneStyle.Space.s4)
+                                .padding(.top, DaybookSpacing.s4)
                                 .id("status")
                         }
                     }
@@ -76,7 +76,7 @@ struct SummaryPage: View {
                         SummaryBody(meeting: meeting, summary: summary, library: library, query: query,
                                     revealing: arrival.reveals(summary, in: meeting), passages: passages,
                                     blockID: Self.blockID) { section in
-                            ForEach(meeting.photos(in: section)) { PhotoTile(meeting: meeting, photo: $0, large: true).padding(.top, PhoneStyle.Space.s2) }
+                            ForEach(meeting.photos(in: section)) { PhotoTile(meeting: meeting, photo: $0, large: true).padding(.top, DaybookSpacing.s2) }
                         }
                         // A new summary is a new block, so it reveals itself; the ID is a String, as the page's anchors are.
                         .id("summary:\(summary.createdAt.timeIntervalSinceReferenceDate)")
@@ -84,7 +84,7 @@ struct SummaryPage: View {
                         .daybookTransition(.opacity)
                     }
                     PhoneNotes(library: library, meeting: meeting, play: play, passages: passages)
-                        .padding(.top, meeting.summary == nil ? PhoneStyle.Space.s5 : 0)
+                        .padding(.top, meeting.summary == nil ? DaybookSpacing.s5 : 0)
                         .id(meeting.summary == nil ? SummaryBlockID.notes : "notes-body")
                     PhotoStrip(meeting: meeting)
                     if let summary = meeting.summary {
@@ -93,8 +93,8 @@ struct SummaryPage: View {
                 }
                 .scrollTargetLayout()
                 .pageColumn()
-                .padding(.top, PhoneStyle.Space.s3)
-                .padding(.bottom, PhoneStyle.Space.s8)
+                .padding(.top, DaybookSpacing.s3)
+                .padding(.bottom, DaybookSpacing.s8)
             }
             .scrollPosition(id: $session.summaryAnchor, anchor: .top)
             .scrollDismissesKeyboard(.interactively)

@@ -3,17 +3,13 @@ import DaybookDesign
 import SwiftUI
 import WidgetKit
 
-/// The extension links DaybookDesign and not DaybookKit, so the shared files it compiles read times from
-/// `DaybookTime`, which has DaybookKit's `TimeLabel` rule (tests hold the two equal).
-typealias TimeLabel = DaybookTime
-
 /// A small Home Screen and Lock Screen widget: Record when idle (with the last conversation),
 /// the clock and Bookmark while recording.
 struct RecorderWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: SharedRecordingState.widgetKind, provider: RecorderTimeline()) { entry in
             RecorderWidgetView(entry: entry)
-                .containerBackground(for: .widget) { PhoneStyle.paper }
+                .containerBackground(for: .widget) { DaybookPalette.paper }
         }
         .configurationDisplayName("Recorder")
         .description("Start a recording, or bookmark the one in progress.")
@@ -130,12 +126,12 @@ private struct SmallRecorder: View {
             case .recording, .paused:
                 let recording = { if case .recording = display { return true } else { return false } }()
                 HStack(spacing: 6) {
-                    Circle().fill(recording ? PhoneStyle.Ink.record : Color.gray).frame(width: 8, height: 8)
+                    Circle().fill(recording ? DaybookPalette.Ink.record : Color.gray).frame(width: 8, height: 8)
                     Text(SharedRecordingState.headline(display)).font(.caption.weight(.semibold))
                 }
                 WidgetClock(display: display)
                     .font(.title.weight(.semibold).monospacedDigit())
-                    .foregroundStyle(recording ? PhoneStyle.Ink.record : PhoneStyle.Ink.title)
+                    .foregroundStyle(recording ? DaybookPalette.Ink.record : DaybookPalette.Ink.title)
                 Spacer(minLength: 0)
                 SmallAction(action: WidgetAction(display: display, state: state), bookmarkCount: state.bookmarkCount)
             case .unconfirmed, .idle:
@@ -145,26 +141,26 @@ private struct SmallRecorder: View {
                         Text(SharedRecordingState.headline(display)).font(.caption.weight(.semibold))
                     }
                 } else {
-                    Text("Daybook").font(PhoneStyle.Typeface.title(.headline)).foregroundStyle(PhoneStyle.Ink.title)
+                    Text("Daybook").font(DaybookType.title(.headline)).foregroundStyle(DaybookPalette.Ink.title)
                 }
                 if let title = state.lastRecordingTitle {
                     // A conversation's title is private: hidden while the iPhone is locked.
-                    Text(title).font(.caption).foregroundStyle(PhoneStyle.Ink.secondary).lineLimit(2).privacySensitive()
+                    Text(title).font(.caption).foregroundStyle(DaybookPalette.Ink.secondary).lineLimit(2).privacySensitive()
                     if let date = state.lastRecordingDate {
-                        Text(date, style: .relative).font(.caption2).foregroundStyle(PhoneStyle.Ink.meta)
+                        Text(date, style: .relative).font(.caption2).foregroundStyle(DaybookPalette.Ink.meta)
                     }
                 } else {
-                    Text("No recordings yet").font(.caption).foregroundStyle(PhoneStyle.Ink.secondary)
+                    Text("No recordings yet").font(.caption).foregroundStyle(DaybookPalette.Ink.secondary)
                 }
                 Spacer(minLength: 0)
                 Button(intent: StartRecordingIntent()) {
                     HStack(spacing: 6) {
-                        Circle().fill(PhoneStyle.Ink.record).frame(width: 8, height: 8)
+                        Circle().fill(DaybookPalette.Ink.record).frame(width: 8, height: 8)
                         Text("Record").font(.caption.weight(.semibold))
                     }
                     .frame(maxWidth: .infinity)
                 }
-                .tint(PhoneStyle.Ink.title)
+                .tint(DaybookPalette.Ink.title)
             }
         }
         .buttonStyle(.bordered)
@@ -199,9 +195,9 @@ enum WidgetAction: Equatable {
 
     var ink: Color {
         switch self {
-        case .bookmark: return PhoneStyle.bookmark
-        case .resume: return PhoneStyle.Ink.record
-        case .stop: return PhoneStyle.Ink.title
+        case .bookmark: return DaybookPalette.bookmark
+        case .resume: return DaybookPalette.Ink.record
+        case .stop: return DaybookPalette.Ink.title
         }
     }
 }

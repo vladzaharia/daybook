@@ -25,9 +25,7 @@ public struct GettingConversationsView: View {
     public var body: some View {
         VStack(spacing: DaybookSpacing.s3) {
             ProgressView()
-                #if os(macOS)
-                .controlSize(.small)
-                #endif
+                .macControlSize(.small)
             Text(LibraryWords.gettingConversations)
                 .font(DaybookFont.status.font(density))
                 .foregroundStyle(DaybookPalette.Ink.secondary)

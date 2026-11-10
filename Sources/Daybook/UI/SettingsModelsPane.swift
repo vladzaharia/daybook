@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookDesign
 import DaybookIntelligence
 import DaybookKit
 import DaybookUI
@@ -159,7 +160,7 @@ private struct ModelsOverview: View {
             Text("Quality")
             if let current {
                 if let shortfall = snapshot.space.shortfall(current.missingBytes) {
-                    Text(shortfall).foregroundStyle(Ink.warning)
+                    Text(shortfall).foregroundStyle(DaybookPalette.Ink.warning)
                 } else {
                     Text("\(ModelSize.format(current.bytes)) · \(current.memoryGB) GB memory").monospacedDigit()
                 }
@@ -265,7 +266,7 @@ private struct SpeakerModelsPage: View {
                 // What the speaker model can't do isn't offered, rather than shown dimmed with an apology.
                 if supportsVoiceMatching {
                     LabeledContent {
-                        HStack(spacing: Space.s3) {
+                        HStack(spacing: DaybookSpacing.s3) {
                             if state.processingPreferences.matchSpeakersAcrossSources {
                                 Button("Adjust…") { showingVoiceMatching = true }
                             }
@@ -403,7 +404,7 @@ private struct DownloadedModelsPage: View {
             // Nothing downloaded has nothing to update: models included with macOS update with it.
             if state.installedModels.contains(where: { state.modelCatalog.model($0)?.isSystemModel == false }) {
                 LabeledContent {
-                    HStack(spacing: Space.s2) {
+                    HStack(spacing: DaybookSpacing.s2) {
                         if manager.updateCheck == .checking { ProgressView().controlSize(.small) }
                         Button("Check for Updates") { Task { await manager.checkForUpdates() } }
                             .disabled(manager.updateCheck == .checking)
@@ -411,14 +412,14 @@ private struct DownloadedModelsPage: View {
                 } label: {
                     Text("Updates")
                     if let line = updateLine(snapshot) {
-                        Text(line).foregroundStyle(isUpdateProblem ? Ink.warning : .secondary)
+                        Text(line).foregroundStyle(isUpdateProblem ? DaybookPalette.Ink.warning : .secondary)
                     }
                 }
                 .id(ModelSettingsAnchor.updates)
             }
             ForEach(snapshot.pendingUpdates, id: \.revision.id) { update in
                 ModelUpdateRow(manager: manager, update: update)
-                    .padding(.leading, Space.s5)
+                    .padding(.leading, DaybookSpacing.s5)
             }
         }
     }
@@ -438,12 +439,12 @@ private struct DownloadedModelsPage: View {
     }
 
     private var libraryFooter: some View {
-        HStack(spacing: Space.s2) {
+        HStack(spacing: DaybookSpacing.s2) {
             Spacer()
             Button("Acknowledgements…") { showingAcknowledgements = true }
             Button("Add Model…") { showingAddModel = true }
         }
-        .padding(.top, Space.s2)
+        .padding(.top, DaybookSpacing.s2)
     }
 }
 
@@ -464,9 +465,9 @@ private struct VoiceMatchingSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.s5) {
+        VStack(alignment: .leading, spacing: DaybookSpacing.s5) {
             Text("Voice Matching").font(.headline)
-            VStack(alignment: .leading, spacing: Space.s2) {
+            VStack(alignment: .leading, spacing: DaybookSpacing.s2) {
                 Text("How alike two voices must be")
                 Slider(value: $state.processingPreferences.speakerMatchThreshold, in: 0.65...0.95) {
                     Text("How alike two voices must be")
@@ -477,7 +478,7 @@ private struct VoiceMatchingSheet: View {
                 }
                 .labelsHidden()
             }
-            VStack(alignment: .leading, spacing: Space.s2) {
+            VStack(alignment: .leading, spacing: DaybookSpacing.s2) {
                 Text("How clearly the best match must win")
                 Slider(value: $state.processingPreferences.speakerMatchMargin, in: 0...0.2) {
                     Text("How clearly the best match must win")
@@ -498,7 +499,7 @@ private struct VoiceMatchingSheet: View {
                     .keyboardShortcut(.defaultAction)
             }
         }
-        .padding(Space.s5)
+        .padding(DaybookSpacing.s5)
         .frame(width: 420)
         .presentationSizing(.fitted)
     }

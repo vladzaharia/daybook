@@ -149,10 +149,7 @@ public struct SpeakerProfileDetail: View {
         return Form {
             Section {
                 TextField("Name", text: $draft)
-                    #if os(iOS)
-                    .textInputAutocapitalization(.words)
-                    .submitLabel(.done)
-                    #endif
+                    .touchKeyboard(capitalization: .words, submit: .done)
                     .focused($naming)
                     .onSubmit { rename(profile) }
                     .accessibilityLabel("Name")

@@ -2,6 +2,7 @@ import AppKit
 import DaybookCore
 import DaybookDesign
 import DaybookKit
+import DaybookUI
 import SwiftUI
 
 /// Something the person asked for that couldn't be done, for the main window's alert: a title that
@@ -91,11 +92,11 @@ struct LibraryProblemPage: View {
     var body: some View {
         // Where the empty library's words would be: nothing else is on the page.
         box
-            .frame(maxWidth: DaybookStyle.measure)
-            .padding(.horizontal, Space.s6)
+            .frame(maxWidth: ReadingGeometry.measure)
+            .padding(.horizontal, DaybookSpacing.s6)
             .offset(y: -24)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(DaybookStyle.paper)
+            .background(DaybookPalette.paper)
     }
 
     /// A problem box in `AttentionBox`'s inks and wash: the warning glyph in its column, the title and the sentence, and
@@ -103,24 +104,24 @@ struct LibraryProblemPage: View {
     /// here because the shared box fixes its words' height, which, outside a scroll view, makes the split view taller
     /// than the window and pushes the sidebar under the title bar.
     private var box: some View {
-        HStack(alignment: .firstTextBaseline, spacing: Space.s3) {
+        HStack(alignment: .firstTextBaseline, spacing: DaybookSpacing.s3) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 15))
-                .foregroundStyle(Ink.warning)
+                .foregroundStyle(DaybookPalette.Ink.warning)
                 .frame(width: 18)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: Space.s2) {
+            VStack(alignment: .leading, spacing: DaybookSpacing.s2) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(problem.title).font(TypeStyle.statusLead).foregroundStyle(AttentionBoxLayout.title(for: .problem).ink.color)
-                    Text(problem.message).font(TypeStyle.status).foregroundStyle(AttentionBoxLayout.message(for: .problem).ink.color)
+                    Text(problem.title).font(DaybookFont.statusLead.font(.window)).foregroundStyle(AttentionBoxLayout.title(for: .problem).ink.color)
+                    Text(problem.message).font(DaybookFont.status.font(.window)).foregroundStyle(AttentionBoxLayout.message(for: .problem).ink.color)
                 }
                 .accessibilityElement(children: .combine)
-                HStack(spacing: Space.s3) { actions }
+                HStack(spacing: DaybookSpacing.s3) { actions }
                     .controlSize(.small)
             }
             Spacer(minLength: 0)
         }
-        .padding(Space.s3)
+        .padding(DaybookSpacing.s3)
         .background(AttentionBoxLayout.wash(for: .problem).color, in: DaybookRadius.shape(DaybookRadius.box))
     }
 
@@ -133,7 +134,7 @@ struct LibraryProblemPage: View {
             Task { await state.retryOpeningLibrary(); retrying = false }
         }
         .buttonStyle(.borderedProminent)
-        .tint(DaybookStyle.prominentFill)
+        .tint(DaybookPalette.prominentFill)
         .disabled(retrying)
     }
 }
@@ -158,7 +159,7 @@ struct ProblemDetailsSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.s3) {
+        VStack(alignment: .leading, spacing: DaybookSpacing.s3) {
             Text(problem.title).font(.headline)
             Text(problem.message).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             ScrollView {
@@ -166,16 +167,16 @@ struct ProblemDetailsSheet: View {
                     .font(.callout.monospaced())
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(Space.s2)
+                    .padding(DaybookSpacing.s2)
             }
             .frame(minHeight: 60, maxHeight: 220)
-            .background(DaybookStyle.quietFill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .background(DaybookPalette.quietFill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             HStack {
                 Spacer()
                 Button("OK") { dismiss() }.keyboardShortcut(.defaultAction)
             }
         }
-        .padding(Space.s4)
+        .padding(DaybookSpacing.s4)
         .frame(width: 420)
     }
 }
