@@ -207,8 +207,10 @@ struct LockScreenRecording: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(state.title(isStale: context.isStale)).font(.subheadline.weight(.semibold))
                         .foregroundStyle(titleInk(context))
-                    // A conversation's title is private: hidden while the iPhone is locked.
-                    Text(context.attributes.title).font(.caption).foregroundStyle(.secondary).lineLimit(1).privacySensitive()
+                    // A conversation's title is private: hidden while the iPhone is locked. A Personal one has none.
+                    if context.attributes.namesConversation {
+                        Text(context.attributes.title).font(.caption).foregroundStyle(.secondary).lineLimit(1).privacySensitive()
+                    }
                     if let multipoint = state.multipoint, !state.hasEnded, !context.isStale, !captioned {
                         Label(multipoint, systemImage: "macbook.and.iphone")
                             .font(.caption2.weight(.medium))

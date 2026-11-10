@@ -360,11 +360,15 @@ background relaunch that never reaches `launch`), so each says what it can still
 
 - **The recording's Live Activity** has a rolling stale date (90 s while recording, two hours while
   paused) that the app refreshes at least once a minute while it records. Stale, it says "Open
-  Daybook to check", with no running clock and only Stop.
+  Daybook to check", with no running clock and only Stop. On the Lock Screen it names the conversation
+  under its state; a Personal one (Keep Recording into it) is never named: its activity's title is
+  "Recording", and the line is left out (`RecordingActivityController.activityTitle`).
 - **Recorder widget and the Control Center control** read `SharedRecordingState`, which carries `asOf`; the
   app writes it at least once a minute while recording (`SharedStatePublisher`). The timeline adds an
   entry where an unconfirmed recording turns into "Open Daybook to check", and the control is on only while
   it's confirmed. Paused, the clock is frozen ("Paused · 12:03"). The Recorder's Lock Screen sizes are unchanged.
+  At rest it names the newest conversation Spotlight may list (`ConversationIndex.isShown`), never a Personal
+  one, and follows the library: a conversation made Personal leaves it at once (`PhoneAppModel.lastRecording`).
 - **Recent Conversations** is a Home Screen widget: small opens the latest conversation, medium lists three,
   and large lists six, each linked to its own page. An empty widget opens the library; a conversation
   deleted or not yet synced here also returns there. Like Spotlight, it excludes Trash and conversations
@@ -396,7 +400,11 @@ background relaunch that never reaches `launch`), so each says what it can still
   updates the activity at most every 5 seconds (`captionInterval`), within the system's update
   budget; one going away (captions off, paused) goes at once. What was said is `privacySensitive`,
   hidden while locked, and isn't shown at the dimmed Always-On brightness, paused, or once the
-  activity is stale.
+  activity is stale. Locked, the activity carries no caption at all: `activityCaption` gives one only
+  while `isProtectedDataAvailable`, and the protected-data notifications update the activity, so once
+  the iPhone's data is locked (seconds after the lock) what was said reaches neither the Lock Screen
+  nor anywhere the system mirrors the activity (a Watch, CarPlay, a Mac's menu bar), whatever each
+  does with redaction.
 - **Soundcore Work** gets its own Live Activity (`RecorderLiveActivity`) for Listen Live (with Stop
   Listening) and for a recording this iPhone started on it: live while connected, "Recording · as
   of 10:07 AM" after it lets the recorder go, and "Open Daybook to check" once that's 20 minutes old. Its updates

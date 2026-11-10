@@ -105,7 +105,8 @@ final class PhoneAppModel: RecordingCommandHandling {
 
     @ObservationIgnored let activities = RecordingActivityController()
     @ObservationIgnored private var launched = false
-    @ObservationIgnored private let sharedState = SharedStatePublisher()
+    /// What the widgets and the control were last told (tests read it).
+    @ObservationIgnored let sharedState = SharedStatePublisher()
     /// The audio session synthetic demos use, so a script can interrupt the recording.
     @ObservationIgnored var demoAudioSession: ScriptedAudioSession?
     #if DEBUG
@@ -120,6 +121,8 @@ final class PhoneAppModel: RecordingCommandHandling {
     @ObservationIgnored let recorderCaptions = LiveCaptureCaptions()
     /// Heat, power, and battery changes the processor backs off for.
     @ObservationIgnored private var processingObservers: [NSObjectProtocol] = []
+    /// The iPhone locking and unlocking, which the Live Activity's caption follows.
+    @ObservationIgnored private var lockObservers: [NSObjectProtocol] = []
     /// Each recording being filed, by conversation: a photo taken as it ended waits for it (`whileFiling`).
     @ObservationIgnored var filings: [UUID: Task<Void, Never>] = [:]
     /// The stop under way (Stop, a Mac's, or the recording stopping by itself) until it has ended the Live Activity,
@@ -229,6 +232,10 @@ final class PhoneAppModel: RecordingCommandHandling {
         }) { snapshot in
             if let snapshot { publishRecentConversations(snapshot) }
         })
+        // The Recorder widget's last conversation follows the library: one made Personal leaves it at once.
+        watches.append(ObservationWatch.distinctValues(of: {
+            controller.isLoaded ? Self.lastRecording(in: controller.meetings) : nil
+        }, initial: false) { [weak self] _ in self?.publish() })
         let publishNextSteps = environment.publishNextSteps
         watches.append(ObservationWatch.distinctValues(of: {
             controller.isLoaded ? SharedNextSteps(meetings: controller.meetings) : nil
@@ -240,6 +247,12 @@ final class PhoneAppModel: RecordingCommandHandling {
 
     /// The recorder's news reaches the Live Activity, the widgets, the Macs, and the person.
     private func wireRecorder() {
+        // Locking takes the caption off the Live Activity, and unlocking puts it back (`activityCaption`).
+        for name in [UIApplication.protectedDataWillBecomeUnavailableNotification, UIApplication.protectedDataDidBecomeAvailableNotification] {
+            lockObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.updateActivity() }
+            })
+        }
         recorder.onChange = { [weak self] in self?.recorderChanged() }
         recorder.onLevel = { [weak self] level in self?.levelChanged(level) }
         recorder.onUnexpectedStop = { [weak self] recording in self?.stoppedByItself(recording) }
@@ -649,7 +662,9 @@ final class PhoneAppModel: RecordingCommandHandling {
         // a Mac's request); otherwise the setting decides.
         let background = UIApplication.shared.applicationState != .active
         if !options.isRunningTests, settings.showsLiveActivity || background {
-            activities.start(conversationID: id, title: title, state: activityState())
+            // A Personal conversation (Keep Recording into one) is never named on the Lock Screen: it says "Recording".
+            let personal = library.controller.meeting(id)?.effectivePlacement == .personal
+            activities.start(conversationID: id, title: title, personal: personal, state: activityState())
         }
         // A recording that stops by itself in a pocket says so with a notification: asked about now,
         // with Daybook in front and recording. Not in simulator demos, whose prompt would cover their screenshots.
@@ -1016,14 +1031,18 @@ final class PhoneAppModel: RecordingCommandHandling {
             multipoint: multipoints.session?.shortLine,
             caption: Self.activityCaption(captionsOn: settings.liveCaptions, showing: captions.isShowing,
                                           forThisRecording: recorder.captureID != nil && captions.activeMeetingID == recorder.captureID,
-                                          paused: recorder.isPaused, newest: captions.segments.last?.text),
+                                          paused: recorder.isPaused, unlocked: UIApplication.shared.isProtectedDataAvailable,
+                                          newest: captions.segments.last?.text),
             canResume: recorder.isPaused ? recorder.canResume : nil)
     }
 
     /// The newest live caption for the Live Activity: only while captions are on and showing for this
-    /// recording, and it isn't paused.
-    static func activityCaption(captionsOn: Bool, showing: Bool, forThisRecording: Bool, paused: Bool, newest: String?) -> String? {
-        guard captionsOn, showing, forThisRecording, !paused else { return nil }
+    /// recording, it isn't paused, and the iPhone is unlocked (`isProtectedDataAvailable`). Locked, the activity
+    /// carries no caption at all, so what was said never reaches the Lock Screen or anywhere the system mirrors
+    /// the activity (a Watch, CarPlay, a Mac's menu bar), whatever each does with `privacySensitive`.
+    static func activityCaption(captionsOn: Bool, showing: Bool, forThisRecording: Bool, paused: Bool, unlocked: Bool,
+                                newest: String?) -> String? {
+        guard captionsOn, showing, forThisRecording, !paused, unlocked else { return nil }
         return RecordingActivityAttributes.ContentState.captionLine(newest)
     }
 
@@ -1045,13 +1064,27 @@ final class PhoneAppModel: RecordingCommandHandling {
             state.pausedElapsed = recorder.isPaused ? recorder.pausedAt : nil
             state.canResume = recorder.isPaused ? recorder.canResume : nil
         }
-        if let latest = library.conversations.first {
+        if let latest = Self.lastRecording(in: library.controller.meetings) {
             state.lastRecordingTitle = latest.title
             state.lastRecordingDate = latest.date
-            state.lastRecordingDuration = latest.tracks.compactMap(\.duration).max()
+            state.lastRecordingDuration = latest.duration
         }
         sharedState.writes = !options.isRunningTests
         sharedState.publish(state)
+    }
+
+    /// What the Recorder widget says of the last conversation at rest.
+    struct LastRecording: Equatable {
+        var title: String
+        var date: Date
+        var duration: TimeInterval?
+    }
+
+    /// The newest conversation Daybook may name outside the app (`ConversationIndex.isShown`): never a Personal one.
+    static func lastRecording(in meetings: [Meeting]) -> LastRecording? {
+        meetings.filter(ConversationIndex.isShown).max { $0.date < $1.date }.map {
+            LastRecording(title: $0.title, date: $0.date, duration: $0.tracks.compactMap(\.duration).max())
+        }
     }
 }
 

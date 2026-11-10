@@ -22,10 +22,18 @@ final class RecordingActivityController {
 
     var isRunning: Bool { runner.isRunning }
 
-    func start(conversationID: UUID, title: String, state: RecordingActivityAttributes.ContentState) {
+    /// The name the activity shows: the conversation's title, or "Recording" for a Personal conversation, which is
+    /// never named outside the app (the Mac's menu bar doesn't either).
+    static func activityTitle(_ title: String, personal: Bool) -> String {
+        personal ? RecordingActivityAttributes.unnamed : title
+    }
+
+    /// Starts the activity, named after its conversation: a Personal one's says only "Recording" (`activityTitle`).
+    func start(conversationID: UUID, title: String, personal: Bool, state: RecordingActivityAttributes.ContentState) {
         let now = Date()
         // A previous run's activity (the app was killed mid-recording) no longer means anything.
-        let started = runner.request(RecordingActivityAttributes(conversationID: conversationID, title: title),
+        let attributes = RecordingActivityAttributes(conversationID: conversationID, title: Self.activityTitle(title, personal: personal))
+        let started = runner.request(attributes,
                                      content: ActivityContent(state: state, staleDate: state.staleDate(from: now), relevanceScore: 100),
                                      endingLeftovers: { $0.conversationID != conversationID })
         guard started else { return }

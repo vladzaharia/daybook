@@ -47,6 +47,11 @@ struct RecordingActivityAttributes: ActivityAttributes {
 
     var conversationID: UUID
     var title: String
+
+    /// The title of a Personal conversation's activity: no name (`RecordingActivityController.activityTitle`).
+    static let unnamed = "Recording"
+    /// Whether the activity names its conversation: a Personal one's doesn't, and the Lock Screen leaves the line out.
+    var namesConversation: Bool { title != Self.unnamed }
 }
 
 extension RecordingActivityAttributes.ContentState {

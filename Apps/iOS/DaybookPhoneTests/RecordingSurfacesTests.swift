@@ -184,23 +184,73 @@ final class RecordingSurfacesTests: XCTestCase {
   let say = "Let's hold the fourteenth."
   XCTAssertEqual(
    PhoneAppModel.activityCaption(
-    captionsOn: true, showing: true, forThisRecording: true, paused: false, newest: say), say)
+    captionsOn: true, showing: true, forThisRecording: true, paused: false, unlocked: true, newest: say), say)
   XCTAssertNil(
    PhoneAppModel.activityCaption(
-    captionsOn: false, showing: true, forThisRecording: true, paused: false, newest: say))
+    captionsOn: false, showing: true, forThisRecording: true, paused: false, unlocked: true, newest: say))
   XCTAssertNil(
    PhoneAppModel.activityCaption(
-    captionsOn: true, showing: false, forThisRecording: true, paused: false, newest: say))
+    captionsOn: true, showing: false, forThisRecording: true, paused: false, unlocked: true, newest: say))
   XCTAssertNil(
    PhoneAppModel.activityCaption(
-    captionsOn: true, showing: true, forThisRecording: false, paused: false, newest: say))
+    captionsOn: true, showing: true, forThisRecording: false, paused: false, unlocked: true, newest: say))
   XCTAssertNil(
    PhoneAppModel.activityCaption(
-    captionsOn: true, showing: true, forThisRecording: true, paused: true, newest: say))
+    captionsOn: true, showing: true, forThisRecording: true, paused: true, unlocked: true, newest: say))
   XCTAssertNil(
    PhoneAppModel.activityCaption(
-    captionsOn: true, showing: true, forThisRecording: true, paused: false, newest: nil),
+    captionsOn: true, showing: true, forThisRecording: true, paused: false, unlocked: true, newest: nil),
    "nothing heard yet, no line")
+  XCTAssertNil(
+   PhoneAppModel.activityCaption(
+    captionsOn: true, showing: true, forThisRecording: true, paused: false, unlocked: false, newest: say),
+   "locked, what was said never leaves the app, whatever a surface does with redaction")
+ }
+
+ /// A Personal conversation is never named outside the app: its Live Activity says only "Recording", and the
+ /// Lock Screen leaves the name's line out rather than say it twice.
+ func testBehaviorAPersonalConversationsLiveActivityIsCalledRecording() {
+  XCTAssertEqual(
+   RecordingActivityController.activityTitle("Session with Dr. Lee", personal: true), "Recording")
+  XCTAssertEqual(
+   RecordingActivityController.activityTitle("Design review", personal: false), "Design review")
+  let personal = RecordingActivityAttributes(
+   conversationID: UUID(),
+   title: RecordingActivityController.activityTitle("Session with Dr. Lee", personal: true))
+  XCTAssertFalse(personal.namesConversation)
+  XCTAssertTrue(
+   RecordingActivityAttributes(conversationID: UUID(), title: "Design review").namesConversation)
+ }
+
+ /// The Recorder widget names the newest conversation Daybook may name outside the app, never a Personal one, and
+ /// follows the library: a conversation made Personal leaves it at once.
+ func testBehaviorTheRecorderWidgetNeverNamesAPersonalConversation() async throws {
+  let library = PhoneLibrary(rootURL: try temporaryDirectory(), installation: "INSTALL-1")
+  let model = PhoneAppModel(
+   recorder: RecorderRig().recorder, library: library, posture: DevicePosture(),
+   options: LaunchOptions(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]))
+  try await library.reload()
+  let start = Date(timeIntervalSince1970: 1_800_000_000)
+  let sync = library.controller.newMeeting(title: "Weekly product sync", date: start)
+  _ = library.controller.newMeeting(
+   title: "Session with Dr. Lee", date: start.addingTimeInterval(60), placement: .personal)
+  try await waitUntil("the newest it may name") {
+   model.sharedState.published?.lastRecordingTitle == "Weekly product sync"
+  }
+  XCTAssertEqual(model.sharedState.published?.lastRecordingDate, start)
+
+  let call = library.controller.newMeeting(title: "Call with Mum", date: start.addingTimeInterval(120))
+  try await waitUntil("a newer one") { model.sharedState.published?.lastRecordingTitle == "Call with Mum" }
+  library.controller.update(call) { $0.placement = .personal }
+  try await waitUntil("made Personal") {
+   model.sharedState.published?.lastRecordingTitle == "Weekly product sync"
+  }
+  // Found Personal by its template: nothing left to name.
+  library.controller.update(sync) { $0.kind = .therapy }
+  try await waitUntil("nothing it may name") {
+   model.sharedState.published != nil && model.sharedState.published?.lastRecordingTitle == nil
+  }
+  XCTAssertNil(PhoneAppModel.lastRecording(in: library.controller.meetings))
  }
 
  func testANewCaptionUpdatesTheActivityAtMostEveryFewSeconds() {

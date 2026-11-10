@@ -577,7 +577,8 @@ extension MarginTextView: UIScribbleInteractionDelegate, UIPencilInteractionDele
                     if let undo = ink.remove(id, true) { self?.registerUndo(undo) }
                 })
                 actions.append(UIAction(title: "Copy Text", image: UIImage(systemName: "doc.on.doc")) { _ in
-                    UIPasteboard.general.string = words
+                    // This iPhone only, as every copy of a conversation's words is (`LocalCopy`).
+                    LocalCopy.copy(words)
                 })
             }
             actions.append(UIAction(title: "Delete", image: UIImage(systemName: "trash"), attributes: .destructive) { _ in
