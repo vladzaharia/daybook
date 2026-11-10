@@ -12,9 +12,12 @@ load-sensitive timing tests (`SoundcoreSharedRecordingTests`'s button press, `Au
 budget) passed when rerun alone. The shared iPhone simulators were in use by several packages at once, so the iPhone
 suites were run on private clones. Integration: after every merge the package built with tests and the touched suites
 ran green (DaybookKit, DaybookUI, DaybookDesign, DaybookCore, DaybookDevices, DaybookLink, DaybookCaptions, and the
-Mac and iPhone suites named below); two merges needed a semantic fix (W1-B's call prompt used a glass helper W1-G had
+Mac and iPhone suites named below); four merges needed a semantic fix (W1-B's call prompt used a glass helper W1-G had
 deleted as unused, restored; W1-D's list subtitle read a per-model download field W1-E replaced with the whole set's
-state, rewired to the shared words).
+state, rewired to the shared words; W2-C's Soundcore Start could be beaten to the link by its own cascade's live
+audio, fixed under W2-C; W2-I's scrubber bookmark tests placed recordings at a rate W2-D reads as 1, refitted). After
+the last merge, 27 packages in: the whole package's `swift test` and the whole DaybookPhoneTests bundle on a private
+simulator clone were run on the quiet machine; the results are at the end of this section.
 
 **Capturing the screens.** 237 captures: the Mac through `--snapshot` at 760, 1000, 1280, 1440 (with the inspector),
 1920, and 2560 pt, light and dark, every Settings pane, the standalone windows, every Floating Notes state, and the
@@ -249,6 +252,23 @@ not Daybook's.
   PhoneCalendar, SettingsWords, StatusSheetModel, DeviceOwnership, Shell, and PlainWords suites (236 across the
   items); Mac snapshots of Version History and the conversation page before and after (identical), Settings ›
   Recording, Device Details, and the iPhone's Version History. Not checked against a real Spotlight index.
+- **W3-B2, recordings in progress kept until unlock (security F-08, P4 step 1).** On the iPhone `Staging/<id>` is
+  created class B (`StagingProtection`), so the segments, the joined file, the journal, and photos inherit it; live
+  captions are class B on iOS (`LiveCaptionStore.protection`) and class C on the Mac; the filed copies keep class B,
+  so a recording filed just before a lock reaches iCloud after unlock, as the proposal accepted. Protected data is
+  injectable through `PhoneAppEnvironment.protectedData`. A Stop while locked ends capture, writes `stopping`, ends
+  everything else at once, and joins, files, and attaches captions after the unlock (`finishAfterUnlock`, restarted
+  by iOS's notification, coming to the front, or a 10 s recheck); the recorder is free to record again meanwhile. The
+  Live Activity and the after-Stop screen say "Saved · Finishes when you unlock iPhone", and Siri says it. A file
+  that can't be opened is `PhoneRecorderError.locked`, never "No audio was recorded"; recovery skips the recording in
+  progress and any stop still finishing, waits while locked, and deletes a folder only when it read every file in it.
+  The whole DaybookPhoneTests bundle on a simulator clone (490, 0 failures), with the new StagingProtectionTests
+  (a pretend lock, unreadable files, and the folder's class set through the file system, since the simulator applies
+  no data protection and reads every file as class C) and additions to PhoneRecorderTests, CaptureRecoveryTests, and
+  RecordingSurfacesTests; LiveCaptionStoreTests on macOS. Still needs a passcode-locked device: the file classes of
+  staging files and filed copies; a Lock Screen Stop then unlock (time to "Saved", with Daybook running and after
+  iOS suspended it); the Live Activity after that unlock; a self-stop, a crash, and captions while locked; and a
+  conversation filed just before a lock reaching iCloud and the Mac after unlock.
 - **W3-S, the transcription language is a library setting (xdev-settings-08).** The language is a synced library
   choice (`LibraryMetadata.choices`, merged like folders, Automatic stored as a choice with nothing selected, unknown
   shapes kept and written back), shown as Settings › Models › Transcription › Language on both apps (DaybookUI's
