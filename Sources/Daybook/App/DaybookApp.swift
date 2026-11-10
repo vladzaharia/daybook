@@ -131,7 +131,7 @@ struct DaybookApp: App {
             // Help › Show Welcome opens it; the Window menu doesn't list it as well.
             .commandsRemoved()
             // A library to move first (docs/sandbox.md) is asked about in the library window, which opens instead.
-            .defaultLaunchBehavior(onboardingCompleted || LaunchOptions.libraryURL != nil || state.libraryMoveOffer?.holdsLibrary == true
+            .defaultLaunchBehavior(onboardingCompleted || LaunchOptions.libraryURL != nil || state.launchCheck.offer?.holdsLibrary == true
                                    ? .suppressed : .presented)
 
         Window("Vocabulary", id: WindowID.vocabulary) { GlossaryView(state: state).defaultAppStorage(LaunchOptions.defaults) }

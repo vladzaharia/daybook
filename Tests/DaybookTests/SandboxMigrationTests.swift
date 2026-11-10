@@ -117,8 +117,8 @@ final class SandboxMigrationTests: XCTestCase {
 
     func testWhatTheSandboxedAppOffersAtLaunch() throws {
         let home = root.appendingPathComponent("Home", isDirectory: true)
-        func launch(_ defaults: UserDefaults = makeTestDefaults(), bundle: String = "local.daybook", priorUse: Bool = true) -> AppState.LaunchCheck {
-            AppState.launchCheck(library: container, bundleIdentifier: bundle, defaults: defaults, sandboxed: true, priorUse: priorUse,
+        func launch(_ defaults: UserDefaults = makeTestDefaults(), bundle: String = "local.daybook", priorUse: Bool = true) -> LibraryLaunchCheck.Finding {
+            LibraryLaunchCheck.check(library: container, bundleIdentifier: bundle, defaults: defaults, sandboxed: true, priorUse: priorUse,
                                  home: home, store: keychain.store(for:))
         }
         XCTAssertEqual(launch(priorUse: false), .init(), "a new library")
@@ -143,8 +143,8 @@ final class SandboxMigrationTests: XCTestCase {
     /// identity comes from the keychain item named after the old place.
     func testTheAppStoreBuildTakesTheLibraryFromAnEarlierRelease() throws {
         let home = root.appendingPathComponent("Home", isDirectory: true)
-        func launch(_ defaults: UserDefaults = makeTestDefaults(), priorUse: Bool = true) -> AppState.LaunchCheck {
-            AppState.launchCheck(library: container, bundleIdentifier: "local.daybook", defaults: defaults, sandboxed: true,
+        func launch(_ defaults: UserDefaults = makeTestDefaults(), priorUse: Bool = true) -> LibraryLaunchCheck.Finding {
+            LibraryLaunchCheck.check(library: container, bundleIdentifier: "local.daybook", defaults: defaults, sandboxed: true,
                                  priorUse: priorUse, home: home, store: keychain.store(for:))
         }
         try writeLibrary(at: legacy)
@@ -164,7 +164,7 @@ final class SandboxMigrationTests: XCTestCase {
         let defaults = makeTestDefaults()
         XCTAssertEqual(check(defaults: defaults, priorUse: true), .stillAtOldLocation)
         let state = AppState(libraryURL: container, defaults: defaults)
-        state.libraryMoveOffer = .moveIntoContainer(.init(legacy: legacy, library: container, legacyExists: false))
+        state.launchCheck.offer = .moveIntoContainer(.init(legacy: legacy, library: container, legacyExists: false))
         await state.initialize()
         XCTAssertFalse(state.isReady, "held until the person answers")
         await state.declineLibraryMove()
@@ -176,11 +176,11 @@ final class SandboxMigrationTests: XCTestCase {
     func testAnOldCopyLeftBehindDoesNotHoldTheLibrary() async throws {
         let defaults = makeTestDefaults()
         let state = AppState(libraryURL: container, defaults: defaults)
-        state.libraryMoveOffer = .oldCopyRemains(legacy)
+        state.launchCheck.offer = .oldCopyRemains(legacy)
         await state.initialize()
         XCTAssertTrue(state.isReady)
         await state.declineLibraryMove()
-        XCTAssertNil(state.libraryMoveOffer)
+        XCTAssertNil(state.launchCheck.offer)
         XCTAssertEqual(defaults.string(forKey: SandboxMigration.keptOldCopyKey), legacy.path)
     }
 

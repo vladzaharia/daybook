@@ -139,7 +139,7 @@ struct LibraryView: View {
         .onChange(of: state.window.pageSpreadChosen) { _, chosen in if restored { storedSpread = chosen } }
         .sheet(item: Bindable(state.window).sheet) { sheet in ConversationSheet(state: state, sheet: sheet) }
         .sheet(item: $state.addDeviceRequest) { request in AddDeviceSheet(state: state, request: request) }
-        .sheet(item: $state.libraryMoveOffer) { offer in LibraryMoveSheet(state: state, offer: offer) }
+        .sheet(item: Bindable(state.launchCheck).offer) { offer in LibraryMoveSheet(state: state, offer: offer) }
         .alert(trashTitle, isPresented: Binding(get: { !state.window.confirmingTrash.isEmpty }, set: { if !$0 { state.window.confirmingTrash = [] } })) {
             Button("Move to Trash", role: .destructive) {
                 state.trashMeetings(state.window.confirmingTrash, undoManager: undoManager)
