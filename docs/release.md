@@ -337,6 +337,17 @@ If Daybook ever adds non-exempt encryption (its own algorithms, or encryption be
 
 The Mac's Info.plist (`Resources/Info.plist`) carries the same key: App Store Connect asks the Mac App Store build too, and a Developer ID build ignores it.
 
+## Privacy manifests
+
+Each bundle carries a `PrivacyInfo.xcprivacy`: the Mac app (`Resources/PrivacyInfo.xcprivacy`, a resource in `Apps/macOS/project.yml`), the iPhone app (`Apps/iOS/DaybookPhone/Resources/`), and the widgets extension (`Apps/iOS/DaybookPhoneWidgets/`). None tracks or collects anything. They give the reason for each required-reason API that Daybook and its packages call:
+
+- Preferences: CA92.1, and 1C8F.1 for the app group the iPhone shares with its widgets.
+- File dates: C617.1 for the library, and 3B52.1 for files the person chose (imports, the Mac's library folder, a recorder's folder).
+- Free space: E174.1 before a model download, and 85F4.1 for Welcome's "12 GB free".
+- The host clock (iPhone only): 35F9.1, for the recorder's timing. The Mac's release build doesn't read it.
+
+A new call to one of these APIs, or to another category, adds its reason here before the next upload (ITMS-91053 otherwise).
+
 ## Cutting a release
 
 From an up-to-date `main` whose CI is green. The tag must point at a commit that's on `main`: `prepare` checks it with `git merge-base --is-ancestor` and refuses anything else, so a tag on an unmerged branch never releases. (That guards against mistakes; the tag ruleset and the approval guard against people, because a tag's run uses the workflow files at that tag.)
