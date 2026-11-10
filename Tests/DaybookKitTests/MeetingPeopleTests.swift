@@ -4,7 +4,7 @@ import XCTest
 @testable import DaybookKit
 
 /// A conversation's people, as both apps' People list them: background voices left out, shares of the talking
-/// shown, and the pickers' automatic items carrying their guess.
+/// shown, and the placement picker's automatic item carrying its guess.
 final class MeetingPeopleTests: XCTestCase {
     func testBehaviorABackgroundVoiceIsntOneOfThePeopleAndSharesAreOfThoseShown() {
         let track = UUID()
@@ -25,12 +25,10 @@ final class MeetingPeopleTests: XCTestCase {
         XCTAssertTrue(Meeting(title: "Quiet").peopleSpeakers.isEmpty)
     }
 
-    func testBehaviorTheAutomaticItemsCarryTheirGuess() {
+    func testBehaviorTheAutomaticItemCarriesItsGuess() {
         var meeting = Meeting(title: "Sync")
-        XCTAssertEqual(meeting.automaticTemplateTitle, "Automatic")
         XCTAssertEqual(meeting.automaticPlacementTitle, "Automatic", "a kind not known yet goes nowhere by guess")
         meeting.summary = MeetingSummary(kind: .general, title: "Sync", overview: "Done")
-        XCTAssertEqual(meeting.automaticTemplateTitle, "Automatic (\(MeetingKind.general.title))")
         XCTAssertEqual(meeting.automaticPlacementTitle, "Work (automatic)")
         meeting.placement = .personal
         XCTAssertEqual(meeting.automaticPlacementTitle, "Work (automatic)", "the person's choice doesn't change the guess")

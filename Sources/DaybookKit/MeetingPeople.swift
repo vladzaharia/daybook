@@ -37,13 +37,6 @@ extension Meeting {
         }
     }
 
-    /// The template picker's first item, which carries the guess: "Automatic (Meeting)", or "Automatic" before
-    /// there's a summary to guess from.
-    public var automaticTemplateTitle: String {
-        guard let kind = summary?.kind, kind != .auto else { return "Automatic" }
-        return "Automatic (\(kind.title))"
-    }
-
     /// The placement picker's automatic item, with where the conversation goes without a choice: "Work
     /// (automatic)", "Personal (automatic)", or "Automatic" while its kind isn't known.
     public var automaticPlacementTitle: String {

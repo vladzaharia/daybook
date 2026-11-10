@@ -118,22 +118,15 @@ struct ConversationInfo: View {
         case .putBack(let track):
             library.putBackRecording(track.id, in: id, undoManager: undoManager, changed: processAgain)
         case .process(let mode):
-            if mode == .summaryOnly { library.summarize(id, placement: placement) } else { library.requestProcessing(id, mode: mode) }
+            PhoneActions.process(id, mode, library: library, placement: placement)
         case .summarize(let template):
             library.summarize(id, templateID: template, placement: placement)
         case .versionHistory:
             // The sheet becomes Version History: the sheet presenting it swaps, and on the Duo's page the card does.
             session.sheet = .history(id)
-        case .status(.placement(let choice)):
-            placement?.perform(choice, for: id)
-        case .status(.stopSummary):
-            placement?.stop(id)
-        case .status(.dontWait):
-            library.stopWaitingForRecordings(in: id, undoManager: undoManager)
-        case .status(.waitAgain):
-            library.waitAgainForMissingRecordings(in: id, undoManager: undoManager)
-        case .status:
-            break
+        case .status(let action):
+            PhoneStatusActions(library: library, undoManager: undoManager, session: session, placement: placement)
+                .perform(action, on: id)
         case .searchTag(let tag):
             // Info and the conversation step aside for the tag's conversations.
             session.sheet = nil
@@ -148,8 +141,6 @@ struct ConversationInfo: View {
     /// transcribed where that happens, else the summary it had is written again from the transcript it has now.
     private var processAgain: @MainActor (UUID, ProcessingRequest.Mode) -> Void {
         let library = library, placement = placement
-        return { id, mode in
-            if mode == .summaryOnly { library.summarize(id, placement: placement) } else { library.requestProcessing(id, mode: mode) }
-        }
+        return { id, mode in PhoneActions.process(id, mode, library: library, placement: placement) }
     }
 }
