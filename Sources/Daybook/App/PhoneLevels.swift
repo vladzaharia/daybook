@@ -42,6 +42,13 @@ final class PhoneLevels {
         return feed.last
     }
 
+    /// The phone's newest reading for `conversation`, leaving the meter's queue as it is; nil when it hasn't
+    /// sent one lately. Live captions compare it with other sources' (`LiveCaptionMixer`).
+    func last(_ phone: UUID, conversation: UUID, at now: Date = Date()) -> Double? {
+        guard let feed = feeds[phone], feed.conversationID == conversation, now.timeIntervalSince(feed.heardAt) < Self.lifetime else { return nil }
+        return feed.pending.last ?? feed.last
+    }
+
     func reset() { feeds = [:] }
 }
 

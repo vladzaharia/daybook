@@ -24,11 +24,15 @@ public struct LiveCaptionSegment: Codable, Equatable, Identifiable, Sendable {
     /// The live speaker model didn't hear it (speakers were shed under load, or the model failed), so
     /// it has no speaker yet; labelling the recording afterwards can give it one. Nil otherwise.
     public var needsSpeaker: Bool?
+    /// Other sources that heard the same words, put together into this line (`LiveCaptionMixer`): a
+    /// transcript of any of their recordings replaces it too. Nil when only its own source heard it.
+    public var alsoHeard: [LiveCaptionSource]?
 
     public init(id: UUID = UUID(), start: TimeInterval, end: TimeInterval, text: String, isTentative: Bool,
-                source: LiveCaptionSource? = nil, speaker: LiveCaptionSpeaker? = nil, needsSpeaker: Bool? = nil) {
+                source: LiveCaptionSource? = nil, speaker: LiveCaptionSpeaker? = nil, needsSpeaker: Bool? = nil,
+                alsoHeard: [LiveCaptionSource]? = nil) {
         self.id = id; self.start = start; self.end = end; self.text = text; self.isTentative = isTentative
-        self.source = source; self.speaker = speaker; self.needsSpeaker = needsSpeaker
+        self.source = source; self.speaker = speaker; self.needsSpeaker = needsSpeaker; self.alsoHeard = alsoHeard
     }
 }
 
@@ -71,20 +75,88 @@ public struct LiveCaptionSource: RawRepresentable, Codable, Hashable, Sendable {
 /// The captions of one recording, as stored beside it on the device that made them.
 public struct LiveCaptions: Codable, Equatable, Sendable {
     public var meetingID: UUID
+    /// The recording on this device they were made of: each recording into a conversation keeps its own
+    /// (`LiveCaptionKey`). Nil in captions saved before recordings were kept apart, the conversation's only ones.
+    public var captureID: UUID?
     /// The track the captions were heard from, once filed.
     public var trackID: UUID?
     public var localeIdentifier: String
     public var segments: [LiveCaptionSegment]
     public var createdAt: Date
     public var updatedAt: Date
+    /// When the recording began, by this device's clock: where the lines' times count from. Nil in captions
+    /// saved before it was kept, which count from `createdAt`, a moment before.
+    public var startedAt: Date?
     /// Other devices' names by their source (`LiveCaptionSource.device`, raw value): "Soundcore",
     /// "iPhone". Nil when every caption is this device's own.
     public var sourceNames: [String: String]?
+    /// Each other device's recording, by its source (raw value): how its track is found once it's in the
+    /// conversation, so a transcript of it replaces its lines (`LiveCaptionCoverage`). This device's own
+    /// sources are found by `trackID` and `startedAt`.
+    public var tracks: [String: LiveCaptionTrack]?
+    /// Several recordings' captions of one conversation read together (`together`): each as saved, its
+    /// lines among `segments`. Nil for one recording's.
+    public var parts: [LiveCaptions]?
 
-    public init(meetingID: UUID, trackID: UUID? = nil, localeIdentifier: String, segments: [LiveCaptionSegment] = [],
-                createdAt: Date = Date(), updatedAt: Date = Date(), sourceNames: [String: String]? = nil) {
-        self.meetingID = meetingID; self.trackID = trackID; self.localeIdentifier = localeIdentifier
-        self.segments = segments; self.createdAt = createdAt; self.updatedAt = updatedAt; self.sourceNames = sourceNames
+    public init(meetingID: UUID, captureID: UUID? = nil, trackID: UUID? = nil, localeIdentifier: String,
+                segments: [LiveCaptionSegment] = [], createdAt: Date = Date(), updatedAt: Date = Date(), startedAt: Date? = nil,
+                sourceNames: [String: String]? = nil, tracks: [String: LiveCaptionTrack]? = nil) {
+        self.meetingID = meetingID; self.captureID = captureID; self.trackID = trackID; self.localeIdentifier = localeIdentifier
+        self.segments = segments; self.createdAt = createdAt; self.updatedAt = updatedAt; self.startedAt = startedAt
+        self.sourceNames = sourceNames; self.tracks = tracks
+    }
+
+    /// Where they're kept: the conversation and the recording.
+    public var key: LiveCaptionKey { LiveCaptionKey(meetingID: meetingID, captureID: captureID) }
+    /// Where the lines' times count from.
+    public var origin: Date { startedAt ?? createdAt }
+
+    /// Several recordings' captions of one conversation as one, the oldest recording's first: what the
+    /// transcript's page and search read. One recording's as they are; none, nil.
+    public static func together(_ captures: [LiveCaptions]) -> LiveCaptions? {
+        let ordered = captures.sorted { $0.origin < $1.origin }
+        guard var first = ordered.first else { return nil }
+        guard ordered.count > 1 else { return first }
+        first.segments = ordered.flatMap(\.segments)
+        first.updatedAt = ordered.map(\.updatedAt).max() ?? first.updatedAt
+        let names = ordered.reduce(into: [String: String]()) { names, part in names.merge(part.sourceNames ?? [:]) { kept, _ in kept } }
+        first.sourceNames = names.isEmpty ? nil : names
+        first.parts = ordered
+        return first
+    }
+
+    /// The recording's own captions a line of these was saved with: themselves, unless read together.
+    public func part(of segment: LiveCaptionSegment) -> LiveCaptions {
+        parts?.first { $0.segments.contains { $0.id == segment.id } } ?? self
+    }
+}
+
+/// Where one recording's captions are kept: its conversation and the recording on this device.
+public struct LiveCaptionKey: Hashable, Sendable {
+    public var meetingID: UUID
+    /// Nil for captions saved before recordings were kept apart.
+    public var captureID: UUID?
+
+    public init(meetingID: UUID, captureID: UUID? = nil) {
+        self.meetingID = meetingID; self.captureID = captureID
+    }
+}
+
+/// How another device's recording is found among a conversation's tracks: filed (`trackID`); by the ID its
+/// device gave it (an iPhone's, over the companion link; a recorder's own), with the device's kind; or as one
+/// of another Mac's own sources (`capture`: "microphone" or "systemAudio"), by when that recording began.
+public struct LiveCaptionTrack: Codable, Hashable, Sendable {
+    public var trackID: UUID?
+    public var deviceKind: String?
+    public var recordingID: String?
+    /// The audio source of a device's own capture (`AudioSource` raw value), found by `startedAt`.
+    public var capture: String?
+    public var startedAt: Date?
+
+    public init(trackID: UUID? = nil, deviceKind: String? = nil, recordingID: String? = nil, capture: String? = nil,
+                startedAt: Date? = nil) {
+        self.trackID = trackID; self.deviceKind = deviceKind; self.recordingID = recordingID
+        self.capture = capture; self.startedAt = startedAt
     }
 }
 

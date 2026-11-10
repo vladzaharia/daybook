@@ -180,6 +180,8 @@ final class PhoneLink {
     @ObservationIgnored var onMacRecordingState: ((UUID, LinkRecordingState) -> Void)?
     /// A Mac wrote a note or made or changed a bookmark while it records a conversation with this iPhone.
     @ObservationIgnored var onSharedNotes: ((LinkMessage, UUID) -> Void)?
+    /// A Mac recording a conversation with this iPhone sent its call's live captions (`liveCaptionsFeature`).
+    @ObservationIgnored var onCaptions: ((LinkCaptions, UUID) -> Void)?
     /// A Mac's live progress on a conversation (its summary's countdown among them).
     @ObservationIgnored var onLiveProgress: ((LiveProgress) -> Void)?
     /// A Mac said whether this iPhone may start a recording there, and maybe asked this iPhone to keep an off it had.
@@ -210,7 +212,8 @@ final class PhoneLink {
                             features: [LinkCapabilities.recordControlFeature, LinkCapabilities.bookmarksFeature,
                                        LinkCapabilities.recorderHandoffFeature, LinkCapabilities.recorderControlFeature,
                                        LinkCapabilities.cascadeFeature, LinkCapabilities.sharedNotesFeature,
-                                       LinkCapabilities.pageStopFeature, LinkCapabilities.recordPermissionFeature],
+                                       LinkCapabilities.pageStopFeature, LinkCapabilities.recordPermissionFeature,
+                                       LinkCapabilities.liveCaptionsFeature],
                             syncDeviceID: syncDeviceID)
     }
 
@@ -604,8 +607,11 @@ final class PhoneLink {
         case .recordPermission(let permission):
             update(macID) { $0.takesStartsFromHere = permission.allowed }
             onRecordPermission?(macID, permission)
-        case .processingNudge, .captions, .levels, .summaryChoice:
-            // A Mac's captions stay on the Mac; this iPhone shows its own. Levels and choices go the other way.
+        case .captions(let captions):
+            // A Mac's call, which this iPhone may not hear (headphones on the Mac).
+            onCaptions?(captions, macID)
+        case .processingNudge, .levels, .summaryChoice:
+            // Levels and choices go the other way.
             break
         case .recorderHandoffRequest, .recorderHandoffReply, .recorderRelease:
             onHandoffMessage?(message, macID)

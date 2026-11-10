@@ -142,8 +142,8 @@ public struct CompactLabelStyle: LabelStyle {
 }
 
 /// Search of saved live captions for both apps' results: in the conversations a search could list, the first
-/// matching caption of each that the text search didn't already find. Captions show only until a transcript made
-/// after they began replaces them, and only with words to read. Read off the main actor from the library's
+/// matching caption of each that the text search didn't already find. Captions show only until a transcript
+/// replaces them (`SavedCaptions.shown`), and only with words to read. Read off the main actor from the library's
 /// `LiveCaptions` folder, where both apps keep them.
 public enum LibraryCaptionSearch {
     public struct Hit: Identifiable, Sendable {
@@ -152,7 +152,7 @@ public enum LibraryCaptionSearch {
         public var id: UUID { meeting.id }
     }
 
-    /// Where a library keeps saved live captions: `<library>/LiveCaptions/<conversation>.json`.
+    /// Where a library keeps saved live captions: `<library>/LiveCaptions/`, a file per recording (`LiveCaptionStore`).
     public static func directory(libraryRoot: URL) -> URL {
         libraryRoot.appendingPathComponent("LiveCaptions", isDirectory: true)
     }
@@ -162,16 +162,12 @@ public enum LibraryCaptionSearch {
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let candidates = meetings.filter { !found.contains($0.id) }
         guard !text.isEmpty, !candidates.isEmpty else { return [] }
-        let folder = directory(libraryRoot: libraryRoot)
+        let store = LiveCaptionStore(libraryRoot: libraryRoot)
         return await Task.detached(priority: .userInitiated) { () -> [Hit] in
-            let saved = Set(((try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [])
-                .filter { $0.pathExtension == "json" }
-                .compactMap { UUID(uuidString: $0.deletingPathExtension().lastPathComponent) })
+            let saved = Set(store.conversations())
             guard !saved.isEmpty else { return [] }
-            let decoder = JSONDecoder()
             return candidates.filter { saved.contains($0.id) }.compactMap { meeting in
-                guard let data = try? Data(contentsOf: folder.appendingPathComponent("\(meeting.id.uuidString).json")),
-                      let captions = try? decoder.decode(LiveCaptions.self, from: data),
+                guard let captions = LiveCaptions.together(store.captures(of: meeting.id)),
                       let segment = firstMatch(text, in: captions, of: meeting) else { return nil }
                 return Hit(meeting: meeting, segment: segment)
             }

@@ -155,14 +155,19 @@ final class LiveCaptionsTests: XCTestCase {
         await rig.captions.finish()
     }
 
-    func testEchoNeedsMostOfTheLinesWordsNearbyInTime() {
-        let call = [line("We still need legal to sign off on the pricing page before Friday.", 20, 24)]
-        XCTAssertTrue(CaptionEcho.isEcho(line("we still need legal to sign off on the pricing page", 20.3, 23.9), of: call))
-        XCTAssertTrue(CaptionEcho.isEcho(line("Let’s see — legal to sign off the pricing page by Friday", 21, 24), of: call), "close enough to be the echo")
-        XCTAssertFalse(CaptionEcho.isEcho(line("I can ask legal today.", 21, 22), of: call), "your own words, even mid-call")
-        XCTAssertFalse(CaptionEcho.isEcho(line("we still need legal to sign off on the pricing page", 40, 43), of: call), "too long after")
-        XCTAssertEqual(CaptionEcho.words("Let’s go, Priya's 14th!"), ["lets", "go", "priyas", "14th"])
-        XCTAssertEqual(CaptionEcho.sharedRun(["a", "b", "c", "d"], ["x", "a", "c", "y", "d"]), 3)
+    func testOnlyHeadphonesKeepTheMicrophoneFromHearingTheCall() async throws {
+        XCTAssertFalse(CaptionEcho.canEcho(.headphones))
+        XCTAssertTrue(CaptionEcho.canEcho(.speakers))
+        XCTAssertTrue(CaptionEcho.canEcho(.bluetooth), "a Bluetooth device of unknown form may be a speaker")
+        // On speakers, your own words mid-call stay yours; the echo is too far from the call's line to be it.
+        let rig = rig(route: .speakers)
+        try await start(rig, meeting: UUID())
+        rig.call.post([line("We still need legal to sign off on the pricing page before Friday.", 20, 24)])
+        rig.you.post([line("I can ask legal today.", 21, 22), line("we still need legal to sign off on the pricing page", 40, 43)])
+        try await waitUntil("all three") { rig.captions.segments.count == 3 }
+        XCTAssertEqual(rig.captions.segments.map(\.source), [.call, .microphone, .microphone])
+        _ = await rig.recorder.stop()
+        await rig.captions.finish()
     }
 
     // MARK: Every source
@@ -211,17 +216,48 @@ final class LiveCaptionsTests: XCTestCase {
         state.recordingStartedAt = Date(timeIntervalSince1970: 1_000)
         let phone = UUID()
         // The phone began four seconds after this Mac (no clock samples here: its clock is taken as is).
+        let dropped = UUID()
         state.phoneCaptioned(LinkCaptions(conversationID: id, startedAt: Date(timeIntervalSince1970: 1_004), lines: [
             .init(id: UUID(), start: 1, end: 2, text: "Heard on the phone.", isTentative: false, speakerSlot: "S1", speakerName: "Priya"),
             .init(id: UUID(), start: 3, end: 4, text: "Heard by its recorder.", isTentative: true, device: "Soundcore"),
+            .init(id: dropped, start: 6, end: 6.5, text: "and then", isTentative: true),
         ]), from: phone)
         state.phoneCaptioned(LinkCaptions(conversationID: UUID(), startedAt: Date(), lines: [
             .init(id: UUID(), start: 0, end: 1, text: "Another conversation", isTentative: false)]), from: phone)
+        try await waitUntil("the phone's lines") { state.captions.segments.count == 3 }
+        // Its recognizer took back the words it was still revising.
+        state.phoneCaptioned(LinkCaptions(conversationID: id, startedAt: Date(timeIntervalSince1970: 1_004), lines: [], removed: [dropped]),
+                             from: phone)
+        try await waitUntil("taken back") { state.captions.segments.count == 2 }
         XCTAssertEqual(state.captions.segments.map(\.text), ["Heard on the phone.", "Heard by its recorder."])
         XCTAssertEqual(state.captions.segments.first?.start ?? 0, 5, accuracy: 0.001)
         XCTAssertEqual(state.captions.segments.first?.speaker?.name, "Priya")
         XCTAssertEqual(state.captions.segments.map { state.captions.label(for: $0.source) }, ["iPhone", "Soundcore"])
+        let forwarded = await state.captions.session.forwardable()
+        XCTAssertTrue(forwarded.isEmpty, "a phone's lines are never sent on")
         await state.captions.finish()
+    }
+
+    /// LC-08: the call's lines go to an iPhone recording the conversation too that shows other devices'
+    /// captions, a second at a time and only what changed, with what was taken back; never You.
+    func testTheCallsLinesGoToAPhoneRecordingTheConversationToo() async throws {
+        let rig = rig(route: .headphones)
+        let meeting = UUID(), phone = UUID()
+        try await start(rig, meeting: meeting)
+        var sent: [LinkCaptions] = []
+        rig.captions.shareCall(conversation: meeting, startedAt: Date(timeIntervalSince1970: 1_000), recipients: { [phone] },
+                               send: { message, to in if to == phone { sent.append(message) } })
+        let revised = UUID(), thanks = line("Thanks for joining.", 2, 3.1)
+        rig.call.post([thanks, LiveCaptionSegment(id: revised, start: 3.5, end: 4, text: "So", isTentative: true)])
+        rig.you.post([line("Happy to be here.", 3.4, 4.6)])
+        try await waitUntil("sent", timeout: 5) { sent.flatMap(\.lines).count >= 2 }
+        XCTAssertEqual(Set(sent.flatMap(\.lines).map(\.text)), ["Thanks for joining.", "So"], "the call's lines only")
+        XCTAssertEqual(sent.first?.conversationID, meeting)
+        // The recognizer drops the words it was still revising.
+        rig.call.post([thanks])
+        try await waitUntil("taken back", timeout: 5) { sent.contains { $0.removed == [revised] } }
+        _ = await rig.recorder.stop()
+        await rig.captions.finish()
     }
 
     // MARK: Never in the recording's way
@@ -263,16 +299,18 @@ final class LiveCaptionsTests: XCTestCase {
         await rig.captions.finish()
 
         let store = rig.captions.store
-        XCTAssertEqual(store.url(for: meetingID).path, root.appendingPathComponent("LiveCaptions/\(meetingID.uuidString).json").path,
-                       "beside the library, outside Meetings/, so sync never sees it")
         let saved = try XCTUnwrap(store.captions(for: meetingID))
+        let capture = try XCTUnwrap(saved.captureID)
+        XCTAssertEqual(store.url(for: saved.key).path,
+                       root.appendingPathComponent("LiveCaptions/\(meetingID.uuidString).\(capture.uuidString).json").path,
+                       "beside the library, outside Meetings/, so sync never sees it; one file per recording")
         XCTAssertEqual(saved.segments.map(\.text), ["Thanks for joining.", "Happy to be here"])
         XCTAssertEqual(saved.segments.map(\.source), [.call, .microphone])
         XCTAssertEqual(saved.segments.map(\.isTentative), [false, false], "what stood at Stop is kept as heard")
         XCTAssertNotNil(rig.captions.lastSave)
         let permissions = try FileManager.default.attributesOfItem(atPath: store.directory.path)[.posixPermissions] as? Int
         XCTAssertEqual(permissions, 0o700)
-        let file = try FileManager.default.attributesOfItem(atPath: store.url(for: meetingID).path)
+        let file = try FileManager.default.attributesOfItem(atPath: store.url(for: saved.key).path)
         XCTAssertEqual(file[.posixPermissions] as? Int, 0o600, "readable by this user only, as on the iPhone")
         XCTAssertEqual(file[.protectionKey] as? FileProtectionType, .completeUntilFirstUserAuthentication, "and protected as on the iPhone")
 
@@ -412,6 +450,28 @@ final class LiveCaptionsTests: XCTestCase {
         try await state.captions.store.save(LiveCaptions(meetingID: id, localeIdentifier: "en_US", segments: [line("  ", 0, 1)]))
         await state.captions.readSaved()
         XCTAssertFalse(state.hasTranscriptPage(meeting), "nothing to read, nothing to turn to")
+    }
+
+    /// LC-07: each save while recording reads that conversation's captions again, not every conversation's.
+    func testBehaviorASaveReadsOnlyTheConversationSavedAgain() async throws {
+        let store = LiveCaptionStore(libraryRoot: root)
+        let captions = LiveCaptionsController(store: store) { _ in nil }
+        let recorded = UUID(), other = UUID()
+        try await store.save(LiveCaptions(meetingID: recorded, localeIdentifier: "en_US", segments: [line("Before", 0, 1)]))
+        try await store.save(LiveCaptions(meetingID: other, localeIdentifier: "en_US", segments: [line("Another", 0, 1)]))
+        await captions.readSaved()
+        XCTAssertEqual(Set(captions.saved.keys), [recorded, other])
+        // Both change on disk; only the recording's are saved here.
+        try await store.save(LiveCaptions(meetingID: other, localeIdentifier: "en_US", segments: [line("Another, changed", 0, 1)],
+                                          updatedAt: Date().addingTimeInterval(5)))
+        try await store.save(LiveCaptions(meetingID: recorded, localeIdentifier: "en_US", segments: [line("After", 0, 1)],
+                                          updatedAt: Date().addingTimeInterval(5)))
+        await captions.readSaved(recorded)
+        XCTAssertEqual(captions.saved[recorded]?.map { $0.segments.map(\.text) }, [["After"]])
+        XCTAssertEqual(captions.saved[other]?.map { $0.segments.map(\.text) }, [["Another"]], "not read again")
+        await store.remove(recorded)
+        await captions.readSaved(recorded)
+        XCTAssertNil(captions.saved[recorded])
     }
 
     func testBehaviorPruningFollowsTranscriptsAndConversationsNeverNotes() {

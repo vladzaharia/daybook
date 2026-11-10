@@ -582,8 +582,8 @@ public struct LinkNote: Codable, Sendable, Equatable, Identifiable {
 }
 
 /// Live captions the sender is making of a shared recording, for a device recording it too to show
-/// beside its own: the lines that changed since it last sent, by ID. Tentative feedback like every
-/// live caption: never synced, never the transcript.
+/// beside its own: the lines that changed since it last sent, by ID, and those it took back. Tentative
+/// feedback like every live caption: never synced, never the transcript.
 public struct LinkCaptions: Codable, Sendable, Equatable {
     public struct Line: Codable, Sendable, Equatable, Identifiable {
         public var id: UUID
@@ -609,10 +609,14 @@ public struct LinkCaptions: Codable, Sendable, Equatable {
     /// When the sender's recording began, on its clock: where its lines' times count from.
     public var startedAt: Date
     public var lines: [Line]
+    /// Lines sent before that the sender took back (a recognizer dropped words it was still revising): the
+    /// receiver drops them. Additive within version 1: nil from an older build, which never takes one back.
+    public var removed: [UUID]?
     public var sentAt: Date
 
-    public init(conversationID: UUID, startedAt: Date, lines: [Line], sentAt: Date = Date()) {
-        self.conversationID = conversationID; self.startedAt = startedAt; self.lines = lines; self.sentAt = sentAt
+    public init(conversationID: UUID, startedAt: Date, lines: [Line], removed: [UUID]? = nil, sentAt: Date = Date()) {
+        self.conversationID = conversationID; self.startedAt = startedAt; self.lines = lines; self.removed = removed
+        self.sentAt = sentAt
     }
 }
 

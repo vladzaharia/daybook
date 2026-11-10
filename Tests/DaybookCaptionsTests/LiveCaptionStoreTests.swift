@@ -28,15 +28,62 @@ final class LiveCaptionStoreTests: XCTestCase {
     func testBehaviorATranscriptReplacesCaptionsOnlyOnceOneIsMadeAfterThem() {
         let id = UUID(), began = Date(timeIntervalSince1970: 1_000)
         let captions = LiveCaptions(meetingID: id, localeIdentifier: "en_US", segments: [line("Heard", 0)], createdAt: began)
-        XCTAssertFalse(LiveCaptionStore.isReplaced(captions, transcriptsMadeAt: []))
-        XCTAssertFalse(LiveCaptionStore.isReplaced(captions, transcriptsMadeAt: [began.addingTimeInterval(-60)]),
-                       "an earlier recording's transcript doesn't cover them")
-        XCTAssertTrue(LiveCaptionStore.isReplaced(captions, transcriptsMadeAt: [began.addingTimeInterval(-60), began.addingTimeInterval(300)]))
-        XCTAssertEqual(LiveCaptionStore.shown(captions, conversation: id, transcriptsMadeAt: []), captions)
-        XCTAssertNil(LiveCaptionStore.shown(captions, conversation: UUID(), transcriptsMadeAt: []), "another conversation's never show")
-        XCTAssertNil(LiveCaptionStore.shown(captions, conversation: id, transcriptsMadeAt: [began]))
+        func replaced(_ made: [Date]) -> Bool { LiveCaptionCoverage(otherTranscripts: made).replacesAll(captions) }
+        XCTAssertFalse(replaced([]))
+        XCTAssertFalse(replaced([began.addingTimeInterval(-60)]), "an earlier recording's transcript doesn't cover them")
+        XCTAssertTrue(replaced([began.addingTimeInterval(-60), began.addingTimeInterval(300)]))
+        XCTAssertEqual(LiveCaptionStore.shown(captions, conversation: id, coverage: LiveCaptionCoverage()), captions)
+        XCTAssertNil(LiveCaptionStore.shown(captions, conversation: UUID(), coverage: LiveCaptionCoverage()), "another conversation's never show")
+        XCTAssertNil(LiveCaptionStore.shown(captions, conversation: id, coverage: LiveCaptionCoverage(otherTranscripts: [began])))
         let blank = LiveCaptions(meetingID: id, localeIdentifier: "en_US", segments: [line("  ", 0)], createdAt: began)
-        XCTAssertNil(LiveCaptionStore.shown(blank, conversation: id, transcriptsMadeAt: []), "nothing to read, nothing shown")
+        XCTAssertNil(LiveCaptionStore.shown(blank, conversation: id, coverage: LiveCaptionCoverage()), "nothing to read, nothing shown")
+    }
+
+    /// An iPhone that began recording half an hour before a Mac joined: the Mac's transcript covers the second half
+    /// only, so the first half's captions stay until the iPhone's own recording is transcribed.
+    func testBehaviorAPhoneThatStartedFirstKeepsWhatTheMacsTranscriptDoesntCover() {
+        let id = UUID(), began = Date(timeIntervalSince1970: 10_000), phoneTrack = UUID()
+        let captions = LiveCaptions(meetingID: id, trackID: phoneTrack, localeIdentifier: "en_US",
+                                    segments: [line("Before the Mac joined", 600), line("Once the Mac joined", 2_700)],
+                                    createdAt: began, startedAt: began)
+        var phone = LiveCaptionCoverage.Recording(trackID: phoneTrack, source: "microphone", deviceKind: "daybook.iphone", recordingID: "r",
+                                                  startedAt: began, createdAt: began, duration: 3_600)
+        let mac = LiveCaptionCoverage.Recording(trackID: UUID(), source: "microphone", startedAt: began.addingTimeInterval(1_800),
+                                                createdAt: began.addingTimeInterval(3_600), duration: 1_800,
+                                                transcribedAt: began.addingTimeInterval(3_700))
+        var coverage = LiveCaptionCoverage(recordings: [phone, mac])
+        XCTAssertEqual(coverage.shown(captions)?.segments.map(\.text), ["Before the Mac joined"])
+        XCTAssertFalse(coverage.replacesAll(captions), "kept: the first half is still to read")
+        phone.transcribedAt = began.addingTimeInterval(4_000)
+        coverage = LiveCaptionCoverage(recordings: [phone, mac])
+        XCTAssertNil(coverage.shown(captions))
+        XCTAssertTrue(coverage.replacesAll(captions), "its own recording's transcript replaces every line")
+    }
+
+    /// On a Mac: a phone's lines wait for the phone's own recording, found by the ID the link gave it; this Mac's
+    /// own lines go with this Mac's transcript; a line both heard goes with either.
+    func testBehaviorAnotherDevicesLinesWaitForTheirOwnRecording() {
+        let id = UUID(), began = Date(timeIntervalSince1970: 20_000), phone = LiveCaptionSource.device("phone:p")
+        var mine = line("Mine", 10), theirs = line("The phone's", 20), both = line("Both heard", 30)
+        mine.source = .microphone
+        theirs.source = phone
+        both.source = phone
+        both.alsoHeard = [.microphone]
+        let captions = LiveCaptions(meetingID: id, localeIdentifier: "en_US", segments: [mine, theirs, both], createdAt: began, startedAt: began,
+                                    tracks: [phone.rawValue: LiveCaptionTrack(deviceKind: "daybook.iphone", recordingID: "rec-1")])
+        let macTrack = LiveCaptionCoverage.Recording(trackID: UUID(), source: "microphone", startedAt: began.addingTimeInterval(0.2),
+                                                     createdAt: began.addingTimeInterval(60), duration: 60,
+                                                     transcribedAt: began.addingTimeInterval(120))
+        var phoneTrack = LiveCaptionCoverage.Recording(trackID: UUID(), source: "microphone", deviceKind: "daybook.iphone", recordingID: "rec-1",
+                                                       startedAt: began, createdAt: began.addingTimeInterval(300), duration: 60)
+        XCTAssertEqual(LiveCaptionCoverage(recordings: [macTrack]).shown(captions)?.segments.map(\.text), ["The phone's"],
+                       "the phone's recording hasn't arrived: its line stays")
+        XCTAssertEqual(LiveCaptionCoverage(recordings: [macTrack, phoneTrack]).shown(captions)?.segments.map(\.text), ["The phone's"],
+                       "arrived, not transcribed")
+        phoneTrack.transcribedAt = began.addingTimeInterval(400)
+        XCTAssertTrue(LiveCaptionCoverage(recordings: [macTrack, phoneTrack]).replacesAll(captions))
+        XCTAssertNil(LiveCaptionCoverage(recordings: [phoneTrack]).shown(captions),
+                     "the phone's transcript covers this Mac's own lines' time too")
     }
 
     // MARK: Files
@@ -90,7 +137,8 @@ final class LiveCaptionStoreTests: XCTestCase {
         for id in [untranscribed, olderTranscript, replaced, trashed, recording] {
             try await store.save(LiveCaptions(meetingID: id, localeIdentifier: "en_US", segments: [line("Hi", 0)], createdAt: began))
         }
-        await store.prune([untranscribed: [], olderTranscript: [began.addingTimeInterval(-600)], replaced: [began.addingTimeInterval(60)]],
+        await store.prune([untranscribed: LiveCaptionCoverage(), olderTranscript: LiveCaptionCoverage(otherTranscripts: [began.addingTimeInterval(-600)]),
+                           replaced: LiveCaptionCoverage(otherTranscripts: [began.addingTimeInterval(60)])],
                           keeping: [recording])
         XCTAssertEqual(Set(store.conversations()), [untranscribed, olderTranscript, recording])
         await store.remove(untranscribed)
@@ -105,11 +153,11 @@ final class LiveCaptionStoreTests: XCTestCase {
             try await store.save(LiveCaptions(meetingID: id, localeIdentifier: "en_US", segments: [line("Hi", 0)], createdAt: began))
         }
         // The iPhone: a recording joins the library once it's filed, so only what's in the Trash is gone.
-        await store.prune([replaced: [began.addingTimeInterval(60)]], keeping: [], trashed: [trashed])
+        await store.prune([replaced: LiveCaptionCoverage(otherTranscripts: [began.addingTimeInterval(60)])], keeping: [], trashed: [trashed])
         XCTAssertEqual(store.conversations(), [unfiled], "a recording stopped a moment ago, or left by a crash, keeps its captions")
 
         // Filed, its captions stay until a transcript replaces them, or it goes to the Trash.
-        await store.prune([unfiled: []], keeping: [], trashed: [])
+        await store.prune([unfiled: LiveCaptionCoverage()], keeping: [], trashed: [])
         XCTAssertEqual(store.conversations(), [unfiled])
         await store.prune([:], keeping: [], trashed: [unfiled])
         XCTAssertTrue(store.conversations().isEmpty)
@@ -133,6 +181,7 @@ final class LiveCaptionStoreTests: XCTestCase {
 
         // A recorder recording along, a second ahead of this device.
         session.received([line("The recorder heard this.", 5)], from: .device("sim"), name: "Soundcore", offset: -1)
+        try await waitUntil("the recorder's line") { session.segments.count == 3 }
         XCTAssertEqual(session.segments.map(\.text), ["Budget agreed", "Next we", "The recorder heard this."])
         XCTAssertEqual(session.segments.last?.start ?? 0, 4, accuracy: 0.001)
 
@@ -140,10 +189,39 @@ final class LiveCaptionStoreTests: XCTestCase {
         let saved = try XCTUnwrap(store.captions(for: id))
         XCTAssertEqual(saved.segments.map(\.isTentative), [false, false, false], "what stood at the end is kept as heard")
         XCTAssertEqual(saved.sourceNames?[LiveCaptionSource.device("sim").rawValue], "Soundcore")
+        XCTAssertNotNil(saved.captureID, "kept as this recording's")
+        XCTAssertNotNil(saved.startedAt)
         XCTAssertNil(session.meetingID)
         XCTAssertTrue(session.segments.isEmpty)
         session.received([line("Late", 9)], from: .device("sim"), name: "Soundcore", offset: 0)
         XCTAssertTrue(session.segments.isEmpty, "nothing joins once the recording's captions are done")
+    }
+
+    /// Each recording into a conversation keeps its own captions: a second one doesn't overwrite the first's, nor
+    /// take the recording the first was filed with.
+    func testBehaviorASecondRecordingIntoAConversationKeepsTheFirstsCaptions() async throws {
+        let store = LiveCaptionStore(libraryRoot: root)
+        let session = LiveCaptionSession(store: store, saveInterval: .seconds(60))
+        let id = UUID(), track = UUID()
+        for text in ["The first recording", "Recorded into again"] {
+            let captioner = ScriptedCaptioner(lines: [])
+            XCTAssertTrue(session.begin(meetingID: id, captioners: [(.microphone, captioner)]))
+            await session.start(locale: Locale(identifier: "en_US"))
+            try await waitUntil("listening") { session.states[.microphone] == .listening }
+            captioner.apply(text: text, start: 0.4, end: 1.5, isFinal: true)
+            try await waitUntil("heard") { session.segments.map(\.text) == [text] }
+            await session.finish()
+            if text == "The first recording" { try await store.update(id) { $0.trackID = track; return true } }
+        }
+        let captures = store.captures(of: id)
+        XCTAssertEqual(captures.map { $0.segments.map(\.text) }, [["The first recording"], ["Recorded into again"]])
+        XCTAssertEqual(captures.map(\.trackID), [track, nil], "the second isn't filed with the first's recording")
+        XCTAssertEqual(Set(captures.map(\.captureID)).count, 2)
+        XCTAssertEqual(store.conversations(), [id])
+        XCTAssertEqual(LiveCaptions.together(captures)?.segments.map(\.text), ["The first recording", "Recorded into again"],
+                       "read together, the oldest first")
+        await store.remove(id)
+        XCTAssertTrue(store.keys().isEmpty)
     }
 
     /// A recording's last save has no later one to try it again: a write that fails as it stops is kept, read as it
@@ -164,7 +242,8 @@ final class LiveCaptionStoreTests: XCTestCase {
         let folder = store.directory.path
         try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: folder)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder) }
-        func onDisk() throws -> LiveCaptions { try JSONDecoder().decode(LiveCaptions.self, from: Data(contentsOf: store.url(for: id))) }
+        let file = store.url(for: LiveCaptionKey(meetingID: id, captureID: session.captureID))
+        func onDisk() throws -> LiveCaptions { try JSONDecoder().decode(LiveCaptions.self, from: Data(contentsOf: file)) }
         await session.finish()
         XCTAssertEqual(try onDisk().segments.last?.isTentative, true, "the file is still the last snapshot")
         XCTAssertEqual(store.captions(for: id)?.segments.map(\.isTentative), [false, false], "read as the last save left them")

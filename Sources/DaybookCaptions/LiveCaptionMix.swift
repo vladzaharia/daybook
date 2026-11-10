@@ -1,130 +1,99 @@
 import Foundation
 
-/// Captions another device makes of the same recording: a recorder recording along (its live audio,
-/// captioned here) or a paired iPhone (its captions, sent over the local link). Its times are its
-/// own; `offset` moves them onto this recording's timeline.
-public struct DeviceCaptionFeed: Equatable, Sendable {
-    public var source: LiveCaptionSource
-    /// What its captions are labelled with where no person was recognized: "Soundcore", "iPhone".
-    public var name: String
-    /// Seconds to add to its times to place them on this recording's timeline.
-    public var offset: TimeInterval
-    public var segments: [LiveCaptionSegment]
-
-    public init(source: LiveCaptionSource, name: String, offset: TimeInterval, segments: [LiveCaptionSegment] = []) {
-        self.source = source; self.name = name; self.offset = offset; self.segments = segments
-    }
-
-    /// Takes lines that changed, by ID (a phone sends only those), keeping the rest; in time order.
-    public mutating func update(_ lines: [LiveCaptionSegment]) {
-        var byID = Dictionary(segments.map { ($0.id, $0) }, uniquingKeysWith: { _, later in later })
-        for line in lines { byID[line.id] = line }
-        segments = byID.values.sorted { $0.start == $1.start ? $0.id.uuidString < $1.id.uuidString : $0.start < $1.start }
-    }
-}
-
-/// One recording's captions from every source that heard it, as one list. Several devices in one
-/// room hear the same speech: a line another device captioned that repeats one already shown nearby
-/// is left out, so the room reads once. This device's own lines come first, then each other device's
-/// in turn, so a line is kept from the first source that captioned it.
+/// When two sources' lines are the same speech: the word rules the mixer puts lines together by
+/// (`LiveCaptionMixer`). Several devices in one room hear the same speech, and through a Mac's speakers its
+/// microphone hears the call too; each recognizer cuts and spells it a little differently.
 public enum LiveCaptionMix {
     /// How far apart two devices' captions of the same words may be: their clocks are matched only
-    /// roughly, and each recognizer lags its audio by its own amount.
+    /// roughly, and each recognizer cuts its lines in its own places.
     public static let window: TimeInterval = 4
-    /// The share of a line's words, in order, that must already be shown nearby for it to be left out.
+    /// The same, for two of one device's own sources (a Mac's You and Call), which share its clock.
+    public static let ownWindow: TimeInterval = 2
+    /// The share of the shorter line's words, in order, the longer must have for the two to be one utterance.
     public static let threshold = 0.6
-
-    /// `own` (in time order) with the feeds' lines added: each tagged with its feed's source and moved
-    /// onto this recording's timeline, without lines from before this recording began or lines that
-    /// repeat what's already there; all in time order.
-    public static func adding(_ feeds: [DeviceCaptionFeed], to own: [LiveCaptionSegment]) -> [LiveCaptionSegment] {
-        var shown = own
-        for feed in feeds.sorted(by: { $0.source.rawValue < $1.source.rawValue }) {
-            var added: [LiveCaptionSegment] = []
-            let index = NearbyLines(shown)
-            for line in feed.segments where !line.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                var moved = line
-                moved.start += feed.offset
-                moved.end += feed.offset
-                moved.source = feed.source
-                guard moved.end > 0 else { continue }
-                moved.start = max(0, moved.start)
-                if repeats(moved, among: index.near(moved)) { continue }
-                added.append(moved)
-            }
-            shown = merged(shown, added)
-        }
-        return shown
-    }
-
-    /// Whether most of `line`'s words, in order, are in the lines near it.
-    static func repeats(_ line: LiveCaptionSegment, among nearby: [LiveCaptionSegment]) -> Bool {
-        let spoken = words(line.text)
-        guard !spoken.isEmpty, !nearby.isEmpty else { return false }
-        return Double(sharedRun(spoken, nearby.flatMap { words($0.text) })) / Double(spoken.count) >= threshold
-    }
-
-    /// Two lists in time order, as one.
-    static func merged(_ a: [LiveCaptionSegment], _ b: [LiveCaptionSegment]) -> [LiveCaptionSegment] {
-        guard !b.isEmpty else { return a }
-        var result: [LiveCaptionSegment] = []
-        result.reserveCapacity(a.count + b.count)
-        var first = a[...], second = b.sorted { $0.start < $1.start }[...]
-        while let x = first.first, let y = second.first {
-            if x.start <= y.start { result.append(x); first = first.dropFirst() } else { result.append(y); second = second.dropFirst() }
-        }
-        return result + first + second
-    }
+    /// A line that runs past the words already shown by more than this (seconds) brings new words; less is
+    /// the same words heard a moment later, or spelled differently.
+    public static let runsOn: TimeInterval = 1
 
     /// Lowercased words without punctuation, accents, or apostrophes ("Let’s" and "lets" match).
     public static func words(_ text: String) -> [String] {
-        text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
-            .replacingOccurrences(of: "'", with: "")
-            .replacingOccurrences(of: "\u{2019}", with: "")
-            .split { !$0.isLetter && !$0.isNumber }
-            .map(String.init)
+        fold(text).split { !$0.isLetter && !$0.isNumber }.map(String.init)
     }
 
     /// The longest run of `a`'s words that appears in `b` in the same order (gaps allowed).
-    public static func sharedRun(_ a: [String], _ b: [String]) -> Int {
-        guard !a.isEmpty, !b.isEmpty else { return 0 }
-        var previous = [Int](repeating: 0, count: b.count + 1)
-        var current = previous
-        for word in a {
-            for index in 1...b.count {
-                current[index] = word == b[index - 1] ? previous[index - 1] + 1 : max(previous[index], current[index - 1])
+    public static func sharedRun(_ a: [String], _ b: [String]) -> Int { align(a, b).count }
+
+    /// The words two lines share, in order (gaps allowed), as pairs of positions in each: one longest such run.
+    public static func align(_ a: [String], _ b: [String]) -> [(a: Int, b: Int)] {
+        guard !a.isEmpty, !b.isEmpty else { return [] }
+        let columns = b.count + 1
+        var table = [Int32](repeating: 0, count: (a.count + 1) * columns)
+        for i in stride(from: a.count - 1, through: 0, by: -1) {
+            for j in stride(from: b.count - 1, through: 0, by: -1) {
+                table[i * columns + j] = a[i] == b[j] ? table[(i + 1) * columns + j + 1] + 1
+                    : max(table[(i + 1) * columns + j], table[i * columns + j + 1])
             }
-            swap(&previous, &current)
         }
-        return previous[b.count]
+        var pairs: [(a: Int, b: Int)] = []
+        pairs.reserveCapacity(Int(table[0]))
+        var i = 0, j = 0
+        while i < a.count, j < b.count {
+            if a[i] == b[j] { pairs.append((i, j)); i += 1; j += 1 }
+            else if table[(i + 1) * columns + j] >= table[i * columns + j + 1] { i += 1 }
+            else { j += 1 }
+        }
+        return pairs
     }
 
-    /// Lines in time order, found by time: an hour of captions isn't searched for every line.
-    struct NearbyLines {
-        let lines: [LiveCaptionSegment]
-        /// The longest line, so a search by start time doesn't miss one that began well before.
-        let longest: TimeInterval
+    /// Whether two lines' words are one utterance: most of the shorter line's words are in the longer, in
+    /// order; or one's ending is the other's beginning (recognizers cut lines in different places), at least
+    /// three words long and mostly matching where they meet.
+    public static func matches(_ a: [String], _ b: [String]) -> Bool {
+        let pairs = align(a, b)
+        guard let first = pairs.first, let last = pairs.last else { return false }
+        if Double(pairs.count) >= threshold * Double(min(a.count, b.count)) { return true }
+        guard pairs.count >= 3 else { return false }
+        let dense = Double(pairs.count) >= threshold * Double(last.a - first.a + 1)
+            && Double(pairs.count) >= threshold * Double(last.b - first.b + 1)
+        let aThenB = last.a >= a.count - 2 && first.b <= 1
+        let bThenA = last.b >= b.count - 2 && first.a <= 1
+        return dense && (aThenB || bThenA)
+    }
 
-        init(_ lines: [LiveCaptionSegment]) {
-            self.lines = lines
-            longest = lines.map { $0.end - $0.start }.max() ?? 0
+    /// One line's words with where each sits in its text, so the new words of a line can be shown as it
+    /// wrote them.
+    struct Words: Equatable, Sendable {
+        let text: String
+        let words: [String]
+        /// The text split on spaces, and the piece each word is in.
+        let pieces: [Substring]
+        let pieceOfWord: [Int]
+
+        init(_ text: String) {
+            self.text = text
+            let pieces = text.split(whereSeparator: \.isWhitespace)
+            var words: [String] = [], pieceOfWord: [Int] = []
+            for (index, piece) in pieces.enumerated() {
+                for word in LiveCaptionMix.words(String(piece)) {
+                    words.append(word)
+                    pieceOfWord.append(index)
+                }
+            }
+            self.pieces = pieces
+            self.words = words
+            self.pieceOfWord = pieceOfWord
         }
 
-        func near(_ line: LiveCaptionSegment) -> [LiveCaptionSegment] {
-            let from = line.start - LiveCaptionMix.window - longest
-            var low = 0, high = lines.count
-            while low < high {
-                let middle = (low + high) / 2
-                if lines[middle].start < from { low = middle + 1 } else { high = middle }
-            }
-            var found: [LiveCaptionSegment] = []
-            var index = low
-            while index < lines.count, lines[index].start <= line.end + LiveCaptionMix.window {
-                let other = lines[index]
-                if other.end >= line.start - LiveCaptionMix.window { found.append(other) }
-                index += 1
-            }
-            return found
+        /// The text of words `range`, as written.
+        func text(_ range: Range<Int>) -> String {
+            guard !range.isEmpty else { return "" }
+            return pieces[pieceOfWord[range.lowerBound]...pieceOfWord[range.upperBound - 1]].joined(separator: " ")
         }
+    }
+
+    private static func fold(_ text: String) -> String {
+        text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+            .replacingOccurrences(of: "'", with: "")
+            .replacingOccurrences(of: "\u{2019}", with: "")
     }
 }

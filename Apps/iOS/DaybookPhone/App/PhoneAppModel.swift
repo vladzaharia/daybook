@@ -314,6 +314,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         }, send: { message, mac in try await link.send(message, to: mac) })
         handoff.handsBackAutomatically = settings.handsRecorderBackToMac
         link.onHandoffMessage = { message, mac in handoff.receive(message, from: mac) }
+        link.onCaptions = { [weak self] message, mac in self?.macCaptioned(message, from: mac) }
         link.onMacsChanged = { [weak self] in
             Task { @MainActor in
                 handoff.peersChanged()
