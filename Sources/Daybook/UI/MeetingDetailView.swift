@@ -319,99 +319,23 @@ private struct MoreButton: View {
 }
 
 /// The conversation's More menu: what DaybookKit's `ConversationActions` lists, in its order (share, add, reprocess,
-/// history, filing, the Trash), as the iPhone's More menu lists it. What doesn't apply now is dimmed, its reason as help.
+/// history, filing, the Trash), as the iPhone's More menu lists it, each carried out as from a row (`MacActions`).
+/// What doesn't apply now is dimmed, its reason as help.
 struct ConversationMoreMenu: View {
     let state: AppState
     let meeting: Meeting
     let windowAction: (ConversationAction.ID, Meeting) -> Void
+    @Environment(\.undoManager) private var undoManager
 
     var body: some View {
-        ConversationActionMenuItems(ConversationActions.actions(for: meeting, context: MoreMenuActions.context(state, meeting)), platform: .mac,
+        ConversationActionMenuItems(ConversationActions.actions(for: meeting, context: MacActions.context(state, meeting)), platform: .mac,
                                     perform: { id in
-                                        if MoreMenuActions.needsWindow(id) { windowAction(id, meeting) }
-                                        else { MoreMenuActions.perform(id, meeting: meeting, state: state) }
+                                        // Sharing hangs its picker from the window, and Tags… opens its inspector.
+                                        MacActions.perform(id, on: [meeting.id], state: state, undoManager: undoManager) { action, _ in
+                                            windowAction(action, meeting)
+                                        }
                                     },
-                                    custom: { MoreMenuActions.custom($0, meeting: meeting, state: state) })
-    }
-}
-
-/// Reprocess ▸, as the More menu has it, for the inspector and a row's menu.
-struct ReprocessMenu: View {
-    let state: AppState
-    let meeting: Meeting
-    var body: some View {
-        let groups = ConversationActions.actions(for: meeting, context: MoreMenuActions.context(state, meeting)).filter { $0.id == .reprocess }
-        ConversationActionMenuItems(groups, platform: .mac) { MoreMenuActions.perform($0, meeting: meeting, state: state) }
-    }
-}
-
-/// What the Mac does for each of a conversation's actions (`ConversationActions`).
-@MainActor
-enum MoreMenuActions {
-    /// What the Mac knows about a conversation for its actions: recording here, or being processed here.
-    static func context(_ state: AppState, _ meeting: Meeting) -> ConversationActions.Context {
-        let recording = state.recordingID == meeting.id && (state.isRecording || state.isStartingRecording || state.isStoppingRecording)
-        return ConversationActions.Context(platform: .mac, isRecording: recording, isProcessingHere: state.processingID == meeting.id,
-                                           status: state.processingStatus(for: meeting))
-    }
-
-    /// Actions the window answers itself: sharing hangs its picker from it, and Tags… opens its inspector.
-    static func needsWindow(_ id: ConversationAction.ID) -> Bool {
-        switch id {
-        case .shareMarkdown, .shareAudio, .tags: return true
-        default: return false
-        }
-    }
-
-    static func perform(_ id: ConversationAction.ID, meeting: Meeting, state: AppState) {
-        switch id {
-        case .copySummary: state.copySummary(meeting.id)
-        case .exportMarkdown: state.export(meeting.id)
-        case .exportJSON: state.export(meeting.id, json: true)
-        case .showFloatingNotes: state.showNotes(for: meeting.id)
-        case .addPhotos: state.chooseAddPhoto(to: meeting.id)
-        case .addRecordingFromFile: state.chooseImport(attachTo: meeting.id)
-        case .process(let mode): state.enqueue(meeting.id, mode: mode)
-        case .versionHistory:
-            state.selectedID = meeting.id
-            state.activeSheet = .versionHistory
-        case .rename:
-            state.selectedID = meeting.id
-            state.focusTitle(meeting.id)
-        case .moveTo(let placement): state.setPlacement([meeting.id], placement)
-        case .showInFinder: state.showInFinder(meeting.id)
-        case .moveToTrash: state.trashRequestIDs = [meeting.id]
-        case .moveToFolder, .addRecording, .share, .export, .reprocess:
-            break // Menus.
-        case .shareMarkdown, .shareJSON, .shareAudio, .tags:
-            break // The window's (`needsWindow`), or the iPhone's.
-        case .takePhoto:
-            break // The iPhone's.
-        case .play, .adjustTiming, .showOriginalTranscript, .moveToNewConversation, .removeRecording:
-            break // A recording's, in the inspector.
-        }
-    }
-
-    /// The Mac's own submenus: Move to Folder lists the folders, and Add Recording each recorder beside a file.
-    static func custom(_ action: ConversationAction, meeting: Meeting, state: AppState) -> AnyView? {
-        switch action.id {
-        case .moveToFolder:
-            return AnyView(Menu { FolderMenuItems(state: state, meetingIDs: [meeting.id]) } label: {
-                Label(action.title, systemImage: action.symbol)
-            }
-            .disabled(!action.isAvailable))
-        case .addRecording:
-            return AnyView(Menu {
-                Button("From a File…") { state.chooseImport(attachTo: meeting.id) }
-                AddRecordingFromDeviceItems(state: state)
-            } label: {
-                Label(action.title, systemImage: action.symbol)
-            }
-            .disabled(!action.isAvailable)
-            .help({ if case .unavailable(let why) = action.availability { return why } else { return "" } }()))
-        default:
-            return nil
-        }
+                                    custom: { MacActions.custom($0, ids: [meeting.id], state: state) })
     }
 }
 

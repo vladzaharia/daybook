@@ -253,7 +253,7 @@ private struct PlacementMenuItem: View {
     var body: some View {
         let personal = meeting?.effectivePlacement == .personal
         Button(personal ? "Move to Work" : "Move to Personal") {
-            if let meeting { state.setPlacement([meeting.id], personal ? .work : .personal, undoManager: undoManager ?? NSApp.keyWindow?.undoManager) }
+            if let meeting { state.library.setPlacement([meeting.id], personal ? .work : .personal, undoManager: undoManager ?? NSApp.keyWindow?.undoManager) }
         }
         .disabled(meeting == nil)
     }
@@ -365,10 +365,10 @@ struct FolderMenuItems: View {
     let meetingIDs: [UUID]
     @Environment(\.undoManager) private var undoManager
     var body: some View {
-        Button("None") { state.moveToFolder(meetingIDs, nil, undoManager: undo) }
+        Button("None") { state.library.moveToFolder(meetingIDs, nil, undoManager: undo) }
         if !state.folders.isEmpty { Divider() }
         ForEach(state.folders) { folder in
-            Button(folder.name) { state.moveToFolder(meetingIDs, folder.id, undoManager: undo) }
+            Button(folder.name) { state.library.moveToFolder(meetingIDs, folder.id, undoManager: undo) }
         }
         Divider()
         Button("New Folder") { state.requestNewFolder(moving: meetingIDs) }
