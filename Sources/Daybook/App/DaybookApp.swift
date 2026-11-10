@@ -422,11 +422,11 @@ private struct DebugLaunchActions: ViewModifier {
             }
             if let query = LaunchOptions.value(after: "--search") { state.window.searchText = query }
             PerfProbe.stage = {
-                guard let id = state.processingID else { return "idle" }
+                guard let id = state.processor.queue.runningID else { return "idle" }
                 let status = state.meetings.first { $0.id == id }?.status.rawValue ?? ""
-                return "\(status): \(state.processingProgress.message)"
+                return "\(status): \(state.processor.queue.activity.value.message)"
             }
-            PerfProbe.driveProgress(state.processingActivity)
+            PerfProbe.driveProgress(state.processor.queue.activity)
             PerfProbe.driveTouches(state)
             // `DAYBOOK_IMPORT_AUDIO=<file>` imports a recording into a new conversation, which then processes. (A path
             // among the arguments would be opened as a document, and the window wouldn't open.)

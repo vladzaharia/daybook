@@ -133,17 +133,17 @@ enum LibraryDemo {
         for delay in [1.0, 2.5] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { state.installedModels = Set(state.routedRequiredModelIDs) }
         }
-        state.processingTask = Task { try? await Task.sleep(for: .seconds(86_400)) }
+        state.processor.queue.task = Task { try? await Task.sleep(for: .seconds(86_400)) }
         func id(_ title: String) -> UUID? { state.meetings.first { $0.title == title }?.id }
         // A Floating Notes scenario (`--notes-demo`) sets what this Mac is processing itself.
         if FloatingNotesDemo.scenario == nil, let running = id(transcribing) {
             state.update(running) { $0.status = .transcribing }
-            state.processingID = running
-            state.processingProgress = IntelligenceProgress(0.4, "Transcribing", stage: .transcribing)
+            state.processor.queue.runningID = running
+            state.processor.queue.activity.set(IntelligenceProgress(0.4, "Transcribing", stage: .transcribing))
         }
-        if let waiting = id(queued) { state.processingQueue = [state.makeJob(meetingID: waiting, mode: .newAudio)] }
-        if let held = id(paused) { state.pausedIDs = [held] }
-        if let models = id(waitingForModels) { state.awaitingModels = [models] }
+        if let waiting = id(queued) { state.processor.queue.jobs = [state.makeJob(meetingID: waiting, mode: .newAudio)] }
+        if let held = id(paused) { state.processor.queue.paused = [held] }
+        if let models = id(waitingForModels) { state.processor.queue.awaitingModels = [models] }
         // On this Mac the walkthrough waits for an iPhone's audio, which says where it is: "· Sending 40%".
         if let walkthrough = id(ReadingDemo.Title.awaiting), let meeting = state.meetings.first(where: { $0.id == walkthrough }) {
             var phone = CompanionRecording(deviceID: "demo-iphone", deviceKind: DaybookPhoneIntegration.id, deviceName: "Alex’s iPhone",

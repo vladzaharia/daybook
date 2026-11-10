@@ -128,7 +128,7 @@ extension AppState {
 
     /// "Transcribing", "Summarizing", or "Waiting to transcribe" for a conversation still being processed.
     func deviceProcessingLabel(_ id: UUID) -> String? {
-        guard let meeting = meetings.first(where: { $0.id == id }) else { return queuedIDs.contains(id) ? "Waiting to transcribe" : nil }
+        guard let meeting = meetings.first(where: { $0.id == id }) else { return processor.queue.queuedIDs.contains(id) ? "Waiting to transcribe" : nil }
         switch processingStatus(for: meeting) {
         case .processing(let progress) where progress.device == nil: return progress.stage == .summarizing ? "Summarizing" : "Transcribing"
         case .requested(.queued): return "Waiting to transcribe"

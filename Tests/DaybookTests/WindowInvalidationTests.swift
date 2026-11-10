@@ -40,28 +40,28 @@ final class WindowInvalidationTests: XCTestCase {
         await state.initialize()
         let id = state.newMeeting(title: "Roadmap review")
         let other = state.newMeeting(title: "Standup")
-        state.processingID = id
+        state.processor.queue.runningID = id
         // What the window around a progress line reads: the list, the selection, the place, the queue, and a row
         // that isn't being processed.
         let window = ObservationCount {
-            _ = state.visibleMeetings; _ = state.window.openID; _ = state.window.place; _ = state.processingQueue
+            _ = state.visibleMeetings; _ = state.window.openID; _ = state.window.place; _ = state.processor.queue.jobs
             _ = state.meetings.first { $0.id == other }.map { MacRowStatus.make(state, $0) }
         }
-        let followed = ObservationCount { _ = state.processingProgress }
+        let followed = ObservationCount { _ = state.processor.queue.activity.value }
         let row = ObservationCount { _ = state.meetings.first { $0.id == id }.map { MacRowStatus.make(state, $0) } }
         defer { window.cancel(); followed.cancel(); row.cancel() }
-        state.processingProgress = IntelligenceProgress(0.101, "Transcribing")
-        state.processingProgress = IntelligenceProgress(0.102, "Transcribing")
+        state.processor.queue.activity.set(IntelligenceProgress(0.101, "Transcribing"))
+        state.processor.queue.activity.set(IntelligenceProgress(0.102, "Transcribing"))
         XCTAssertEqual(followed.count, 1, "A report that changes neither the percent nor the message redraws nothing")
-        XCTAssertEqual(state.processingProgress.fraction, 0.102, "It's kept, for the next redraw and for the claim and iPhones")
-        state.processingProgress = IntelligenceProgress(0.11, "Transcribing")
-        state.processingProgress = IntelligenceProgress(0.11, "Identifying speakers")
-        state.downloadProgress = IntelligenceProgress(0.5, "Downloading")
+        XCTAssertEqual(state.processor.queue.activity.value.fraction, 0.102, "It's kept, for the next redraw and for the claim and iPhones")
+        state.processor.queue.activity.set(IntelligenceProgress(0.11, "Transcribing"))
+        state.processor.queue.activity.set(IntelligenceProgress(0.11, "Identifying speakers"))
+        state.processor.queue.downloadActivity.set(IntelligenceProgress(0.5, "Downloading"))
         XCTAssertEqual(window.count, 0, "Progress reaches only what reads it (a progress line, the row being processed); the window isn't redrawn")
         XCTAssertEqual(followed.count, 3, "A new percent or a new message reaches what draws it")
         XCTAssertEqual(row.count, 3, "The row being processed follows it")
-        XCTAssertEqual(state.processingActivity.value.message, "Identifying speakers")
-        state.processingID = nil
+        XCTAssertEqual(state.processor.queue.activity.value.message, "Identifying speakers")
+        state.processor.queue.runningID = nil
         await state.flush()
     }
 
@@ -87,18 +87,18 @@ final class WindowInvalidationTests: XCTestCase {
         await state.initialize()
         let id = state.newMeeting(title: "Roadmap review")
         state.update(id) { $0.status = .transcribing }
-        state.processingID = id
+        state.processor.queue.runningID = id
         func row() throws -> ConversationRowStatus { try XCTUnwrap(MacRowStatus.make(state, try XCTUnwrap(state.meetings.first { $0.id == id }))) }
-        state.processingProgress = IntelligenceProgress(0.37, "Transcribed 340 of 923 seconds")
+        state.processor.queue.activity.set(IntelligenceProgress(0.37, "Transcribed 340 of 923 seconds"))
         let before = try row()
-        state.processingProgress = IntelligenceProgress(0.38, "Transcribed 350 of 923 seconds")
+        state.processor.queue.activity.set(IntelligenceProgress(0.38, "Transcribed 350 of 923 seconds"))
         let after = try row()
         XCTAssertEqual([before.text, after.text], ["Transcribing · 37%", "Transcribing · 38%"])
         XCTAssertEqual(before.phrase, "Transcribing")
         XCTAssertEqual(after.phrase, before.phrase, "The line's animation follows its words, so a new percent doesn't fade it")
         state.update(id) { $0.status = .summarizing }
         XCTAssertEqual(try row().phrase, "Summarizing")
-        state.processingID = nil
+        state.processor.queue.runningID = nil
         await state.flush()
     }
 
@@ -126,7 +126,7 @@ final class WindowInvalidationTests: XCTestCase {
         await state.initialize()
         let id = state.newMeeting(title: "Roadmap review")
         state.update(id) { $0.status = .transcribing }
-        state.processingID = id
+        state.processor.queue.runningID = id
         func stage() throws -> ProcessingRequest.Stage? {
             guard case .processing(let progress) = state.processingStatus(for: try XCTUnwrap(state.meetings.first { $0.id == id })) else { return nil }
             return progress.stage
@@ -134,19 +134,19 @@ final class WindowInvalidationTests: XCTestCase {
         func floating() -> ProcessingRequest.Stage? {
             FloatingStatusInputs.make(state, meeting: nil, afterStop: false, inputDevice: nil).overview.local.running
         }
-        state.processingProgress = IntelligenceProgress(0.6, "Making voice profiles", stage: .identifyingSpeakers)
+        state.processor.queue.activity.set(IntelligenceProgress(0.6, "Making voice profiles", stage: .identifyingSpeakers))
         XCTAssertEqual(try stage(), .identifyingSpeakers, "voice profiles are part of finding speakers, whatever the words")
         XCTAssertEqual(state.runningStage, .identifyingSpeakers, "and so is the claim")
         XCTAssertEqual(floating(), .identifyingSpeakers, "and Floating Notes")
-        state.processingProgress = IntelligenceProgress(0.2, "Loading the speaker-aware transcription model", stage: .transcribing)
+        state.processor.queue.activity.set(IntelligenceProgress(0.2, "Loading the speaker-aware transcription model", stage: .transcribing))
         XCTAssertEqual(try stage(), .transcribing, "a word about speakers doesn't make it finding them")
         XCTAssertEqual(floating(), .transcribing)
         // Marked summarizing, it says so at once, before the summary reports.
         state.update(id) { $0.status = .summarizing }
-        state.processingActivity.enter(.summarizing)
+        state.processor.queue.activity.enter(.summarizing)
         XCTAssertEqual(try stage(), .summarizing)
         XCTAssertEqual(floating(), .summarizing)
-        state.processingID = nil
+        state.processor.queue.runningID = nil
         await state.flush()
     }
 
@@ -186,20 +186,20 @@ final class WindowInvalidationTests: XCTestCase {
         }
         defer { navigation.cancel() }
         // A job runs and reports, others wait, pause, and wait for models, and a model downloads.
-        state.processingID = id
-        state.processingProgress = IntelligenceProgress(0.2, "Transcribing", stage: .transcribing)
-        state.processingProgress = IntelligenceProgress(0.6, "Making voice profiles", stage: .identifyingSpeakers)
-        state.processingQueue = [ProcessingJob(meetingID: other, transcriptionModelID: "whisper/base", summaryModelID: "qwen2.5/7b-4bit")]
-        state.pausedIDs.insert(other)
-        state.awaitingModels.insert(other)
-        state.downloadingID = "whisper/base"
-        state.downloadProgress = IntelligenceProgress(0.5, "Downloading")
+        state.processor.queue.runningID = id
+        state.processor.queue.activity.set(IntelligenceProgress(0.2, "Transcribing", stage: .transcribing))
+        state.processor.queue.activity.set(IntelligenceProgress(0.6, "Making voice profiles", stage: .identifyingSpeakers))
+        state.processor.queue.jobs = [ProcessingJob(meetingID: other, transcriptionModelID: "whisper/base", summaryModelID: "qwen2.5/7b-4bit")]
+        state.processor.queue.paused.insert(other)
+        state.processor.queue.awaitingModels.insert(other)
+        state.processor.queue.downloadingID = "whisper/base"
+        state.processor.queue.downloadActivity.set(IntelligenceProgress(0.5, "Downloading"))
         XCTAssertEqual(navigation.count, 0, "Where the person is reads nothing of the queue, so its progress redraws none of it")
         state.window.pageMode = .transcript
         XCTAssertEqual(navigation.count, 1, "It redraws for where the person goes")
-        state.processingQueue = []
-        state.processingID = nil
-        state.downloadingID = nil
+        state.processor.queue.jobs = []
+        state.processor.queue.runningID = nil
+        state.processor.queue.downloadingID = nil
         await state.flush()
     }
 

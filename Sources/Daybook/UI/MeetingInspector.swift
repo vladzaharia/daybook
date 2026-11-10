@@ -28,7 +28,7 @@ struct MeetingInspector: View {
                 .menuStyle(.button)
                 .controlSize(.small)
                 .fixedSize()
-                .disabled(state.processingID == meeting.id || state.recordingID == meeting.id)
+                .disabled(state.processor.queue.runningID == meeting.id || state.recordingID == meeting.id)
             }
         } else {
             ContentUnavailableView("No Selection", systemImage: "sidebar.trailing")
@@ -50,7 +50,7 @@ struct MeetingInspector: View {
 
     static func context(_ state: AppState, _ meeting: Meeting) -> ConversationActions.Context {
         ConversationActions.Context(platform: .mac, isRecording: state.recordingID == meeting.id,
-                                    isProcessingHere: state.processingID == meeting.id || state.queuedIDs.contains(meeting.id),
+                                    isProcessingHere: state.processor.queue.runningID == meeting.id || state.processor.queue.queuedIDs.contains(meeting.id),
                                     status: state.processingStatus(for: meeting), isDeviceRecording: state.isRecording)
     }
 
@@ -67,10 +67,10 @@ struct MeetingInspector: View {
     /// until asked for too.
     static func processAgain(_ state: AppState, source: UUID? = nil) -> @MainActor (UUID, ProcessingRequest.Mode) -> Void {
         { [weak state] id, mode in
-            guard let state, state.processingID != id, !state.pausedIDs.contains(id),
-                  !(source.map(state.pausedIDs.contains) ?? false) else { return }
+            guard let state, state.processor.queue.runningID != id, !state.processor.queue.paused.contains(id),
+                  !(source.map(state.processor.queue.paused.contains) ?? false) else { return }
             state.cancelQueued(id)
-            state.enqueue(id, mode: mode)
+            state.processor.enqueue(id, mode: mode)
         }
     }
 
@@ -83,12 +83,12 @@ struct MeetingInspector: View {
             state.library.putBackRecording(track.id, in: id, phoneName: state.phoneName(track), undoManager: undoManager,
                                            changed: Self.processAgain(state))
         case .process(let mode):
-            state.enqueue(id, mode: mode)
+            state.processor.enqueue(id, mode: mode)
         case .summarize:
             // Choosing a different template summarizes again right away; the earlier summary stays in Version History.
-            guard state.processingID != id else { return }
+            guard state.processor.queue.runningID != id else { return }
             state.cancelQueued(id)
-            state.enqueue(id, mode: .summaryOnly)
+            state.processor.enqueue(id, mode: .summaryOnly)
         case .versionHistory:
             state.window.sheet = .versionHistory
         case .status(let action):

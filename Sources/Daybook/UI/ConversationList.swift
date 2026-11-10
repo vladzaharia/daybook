@@ -130,7 +130,7 @@ enum MacRowStatus {
             words: .mac(id: state.library.thisDevice.id), local: .mac(),
             isRecording: state.recordingID == meeting.id,
             placement: .init(planner: state.placements[meeting.id]),
-            queuedMode: state.processingQueue.first { $0.meetingID == meeting.id }?.mode,
+            queuedMode: state.processor.queue.jobs.first { $0.meetingID == meeting.id }?.mode,
             isPlaying: state.playback.meetingID == meeting.id && state.playback.isPlaying)
         return ConversationStatusPresentation.row(state.processingStatus(for: meeting), meeting: meeting, inputs: inputs, now: now)
     }
@@ -152,14 +152,14 @@ enum MacListSubtitle {
 
     /// When the running conversation's summary starts, while it counts down.
     static func countdown(_ state: AppState) -> Date? {
-        state.processingID.flatMap { state.placements[$0]?.deadline }
+        state.processor.queue.runningID.flatMap { state.placements[$0]?.deadline }
     }
 
     /// This Mac's queue as the shared words take it, as Floating Notes' home reads it: the step the page and the
     /// claim say (`AppState.runningStage`), where the summary runs, what waits, and a download.
     static func queue(_ state: AppState) -> QueueStatusWords.Queue {
-        var queue = QueueStatusWords.Queue(waiting: state.processingQueue.count)
-        if let id = state.processingID, state.meetings.contains(where: { $0.id == id }) {
+        var queue = QueueStatusWords.Queue(waiting: state.processor.queue.jobs.count)
+        if let id = state.processor.queue.runningID, state.meetings.contains(where: { $0.id == id }) {
             queue.running = state.runningStage
             switch state.placements[id]?.phase {
             case .countingDown(_, let until)?: queue.countdown = until
@@ -483,13 +483,13 @@ enum MacActions {
     /// What the Mac knows about a conversation for its actions: recording here, or being processed here.
     static func context(_ state: AppState, _ meeting: Meeting) -> ConversationActions.Context {
         let recording = state.recordingID == meeting.id && (state.isRecording || state.isStartingRecording || state.isStoppingRecording)
-        return ConversationActions.Context(platform: .mac, isRecording: recording, isProcessingHere: state.processingID == meeting.id,
+        return ConversationActions.Context(platform: .mac, isRecording: recording, isProcessingHere: state.processor.queue.runningID == meeting.id,
                                            status: state.processingStatus(for: meeting))
     }
 
     /// How the Mac processes a conversation in a mode, from its menus and its status alike: its queue.
     static func process(_ id: UUID, _ mode: ProcessingRequest.Mode, state: AppState) {
-        state.enqueue(id, mode: mode)
+        state.processor.enqueue(id, mode: mode)
     }
 
     /// Carries out `id` on the conversations `ids`. `window` answers what needs the window: Tags… (the chooser over the
@@ -589,7 +589,7 @@ struct MacStatusActions: ConversationStatusActionHandler {
         case .cancel: state.cancelQueued(id)
         case .cancelDownload: state.cancelDownload()
         case .downloadModels, .downloadSummaryModel:
-            state.enqueue(id)
+            state.processor.enqueue(id)
             state.downloadModels(state.missingSelectedModels)
         case .chooseModels: openSettings(.models)
         case .cloudSettings: openSettings(.cloud)

@@ -112,7 +112,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         let id = try await conversation(rig, "No key", frequency: 300)
         let counted = CountdownSeen(rig.state.placements, for: id)
         defer { counted.cancel() }
-        rig.state.enqueue(id)
+        rig.state.processor.enqueue(id)
         try await rig.processed(id)
         XCTAssertFalse(counted.happened, "Nothing to choose: no countdown")
         XCTAssertEqual(rig.inference.summarized.count, 1)
@@ -128,7 +128,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
     func testBehaviorWithAKeyItCountsDownThenSummarizesHere() async throws {
         let rig = try await rig(seconds: 1)
         let id = try await conversation(rig, "Countdown", frequency: 320)
-        rig.state.enqueue(id)
+        rig.state.processor.enqueue(id)
         try await countingDown(rig, id)
         let planner = try XCTUnwrap(rig.state.placements[id])
         XCTAssertEqual(planner.line(at: Date(), thisDevice: AppState.thisDeviceWords), SummaryPlacementWords.countdown(on: AppState.thisDeviceWords, seconds: 1))
@@ -144,7 +144,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
     func testBehaviorTheCountdownShowsWhereProcessingStatusShows() async throws {
         let rig = try await rig(seconds: 30)
         let id = try await conversation(rig, "Shown", frequency: 330)
-        rig.state.enqueue(id)
+        rig.state.processor.enqueue(id)
         try await countingDown(rig, id)
         let meeting = try XCTUnwrap(rig.meeting(id))
         let row = try XCTUnwrap(MacRowStatus.make(rig.state, meeting))
@@ -171,7 +171,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
     func testBehaviorStartNowSkipsTheRestOfTheCountdown() async throws {
         let rig = try await rig(seconds: 30)
         let id = try await conversation(rig, "Start now", frequency: 340)
-        rig.state.enqueue(id)
+        rig.state.processor.enqueue(id)
         try await countingDown(rig, id)
         rig.state.chooseSummaryPlacement(.startNow, for: id)
         try await rig.processed(id)
@@ -183,7 +183,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         let rig = try await rig(cloud: cloud, seconds: 30)
         let id = try await conversation(rig, "Cloud", frequency: 360)
         cloud.hold()
-        rig.state.enqueue(id)
+        rig.state.processor.enqueue(id)
         try await countingDown(rig, id)
         rig.state.chooseSummaryPlacement(.useCloud, for: id)
         try await waitUntil("the cloud to be asked") { cloud.isWaiting }
@@ -229,7 +229,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         XCTAssertEqual(rig.state.summaryOptions.cloud?.name, "Claude Sonnet 5.5", "What Settings › Cloud resolves to")
 
         let id = try await conversation(rig, "Real cloud", frequency: 365)
-        rig.state.enqueue(id)
+        rig.state.processor.enqueue(id)
         try await countingDown(rig, id)
         XCTAssertEqual(rig.state.placements[id]?.actions, [.useCloud, .startNow])
         rig.state.chooseSummaryPlacement(.useCloud, for: id)
@@ -268,7 +268,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         rig.state.cloudSummarizer = FakeCloud()
         cloud.preferences.countdownSeconds = 30
         let first = try await conversation(rig, "Key removed", frequency: 370)
-        rig.state.enqueue(first)
+        rig.state.processor.enqueue(first)
         try await countingDown(rig, first)
         // The key is removed while it counts down: there's nothing to choose any more, so it starts here now.
         await cloud.removeKey(for: .anthropic)
@@ -281,7 +281,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         again.preferences.countdownSeconds = 30
         rig.state.cloud = again
         let second = try await conversation(rig, "Never chosen", frequency: 375)
-        rig.state.enqueue(second)
+        rig.state.processor.enqueue(second)
         try await countingDown(rig, second)
         again.preferences.policy = .never
         try await rig.processed(second)
@@ -292,7 +292,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         let cloud = FakeCloud()
         let rig = try await rig(cloud: cloud, policy: .always)
         let id = try await conversation(rig, "Always", frequency: 380)
-        rig.state.enqueue(id)
+        rig.state.processor.enqueue(id)
         try await rig.processed(id)
         XCTAssertEqual(cloud.summarized, [id])
         XCTAssertTrue(rig.inference.summarized.isEmpty)
@@ -305,7 +305,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         let rig = try await rig(cloud: cloud, policy: .always, seconds: 30)
         let filed = try await conversation(rig, "Filed in Personal", frequency: 345)
         rig.state.library.update(filed) { $0.placement = .personal }
-        rig.state.enqueue(filed)
+        rig.state.processor.enqueue(filed)
         try await countingDown(rig, filed)
         XCTAssertEqual(rig.state.placements[filed]?.actions, [.useCloud, .startNow])
         rig.state.chooseSummaryPlacement(.startNow, for: filed)
@@ -315,7 +315,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
 
         let therapy = try await conversation(rig, "Therapy template", frequency: 355)
         rig.state.library.update(therapy) { $0.kind = .therapy }
-        rig.state.enqueue(therapy)
+        rig.state.processor.enqueue(therapy)
         try await countingDown(rig, therapy)
         rig.state.chooseSummaryPlacement(.useCloud, for: therapy)
         try await rig.processed(therapy)
@@ -330,7 +330,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         let rig = try await rig(cloud: cloud, policy: .always)
         let id = try await conversation(rig, "Names", frequency: 390)
         cloud.hold()
-        rig.state.enqueue(id)
+        rig.state.processor.enqueue(id)
         try await waitUntil("the cloud to be asked") { cloud.isWaiting }
         let speaker = try XCTUnwrap(rig.meeting(id)?.speakers.first)
         XCTAssertEqual(speaker.name, "Speaker 1")
@@ -342,7 +342,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         XCTAssertEqual(rig.meeting(id)?.revisions.filter { $0.field == "summary" }.count, 1, "One summary in Version History")
 
         cloud.hold()
-        rig.state.enqueue(id, mode: .summaryOnly)
+        rig.state.processor.enqueue(id, mode: .summaryOnly)
         try await waitUntil("the cloud to be asked again") { cloud.isWaiting }
         rig.state.library.update(id) { $0.notes = "Bring the deck" }
         cloud.release()
@@ -354,7 +354,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         let cloud = FakeCloud()
         let rig = try await rig(cloud: cloud, policy: .always)
         let id = try await conversation(rig, "Here", frequency: 385)
-        rig.state.enqueue(id)
+        rig.state.processor.enqueue(id)
         try await rig.processed(id)
         XCTAssertEqual(cloud.summarized, [id], "Always: the cloud")
         rig.state.summarizeHere(id)
@@ -365,7 +365,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         XCTAssertNil(rig.meeting(id)?.summary?.origin.cloudModel)
         XCTAssertNil(rig.state.placements[id], "Ended with its step")
         // The next Summarize follows the preferences again.
-        rig.state.enqueue(id, mode: .summaryOnly)
+        rig.state.processor.enqueue(id, mode: .summaryOnly)
         try await waitUntil("the cloud again") { cloud.summarized.count == 2 }
         try await rig.processed(id)
         XCTAssertEqual(rig.inference.summarized.count, 1)
@@ -375,7 +375,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         let cloud = FakeCloud()
         let rig = try await rig(cloud: cloud, policy: .never)
         let id = try await conversation(rig, "Never", frequency: 390)
-        rig.state.enqueue(id)
+        rig.state.processor.enqueue(id)
         try await rig.processed(id)
         XCTAssertEqual(rig.inference.summarized.count, 1)
         XCTAssertTrue(cloud.summarized.isEmpty)
@@ -384,13 +384,13 @@ final class SummaryPlacementProcessingTests: XCTestCase {
     func testBehaviorSummarizeAgainStartsAtOnce() async throws {
         let rig = try await rig(seconds: 30)
         let id = try await conversation(rig, "Again", frequency: 400)
-        rig.state.enqueue(id)
+        rig.state.processor.enqueue(id)
         try await countingDown(rig, id)
         rig.state.chooseSummaryPlacement(.startNow, for: id)
         try await rig.processed(id)
         let counted = CountdownSeen(rig.state.placements, for: id)
         defer { counted.cancel() }
-        rig.state.enqueue(id, mode: .summaryOnly)
+        rig.state.processor.enqueue(id, mode: .summaryOnly)
         try await waitUntil("the second summary") { rig.inference.summarized.count == 2 }
         try await rig.processed(id)
         XCTAssertFalse(counted.happened, "The person asked: no countdown")
@@ -399,7 +399,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
     func testBehaviorAPhonesSummaryRequestStartsAtOnce() async throws {
         let rig = try await rig(seconds: 30)
         let id = try await conversation(rig, "Phone asks", frequency: 420)
-        rig.state.enqueue(id)
+        rig.state.processor.enqueue(id)
         try await countingDown(rig, id)
         rig.state.chooseSummaryPlacement(.startNow, for: id)
         try await rig.processed(id)
@@ -417,7 +417,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
     func testBehaviorAPhonesRequestJoiningACountdownStartsItNow() async throws {
         let rig = try await rig(seconds: 60)
         let id = try await conversation(rig, "Joining", frequency: 430)
-        rig.state.enqueue(id)
+        rig.state.processor.enqueue(id)
         try await countingDown(rig, id)
         // The phone's own countdown for this conversation ran out and sent the request: no second wait.
         rig.state.library.requestProcessing(id, mode: .summaryOnly, by: .phone)
@@ -432,7 +432,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         let audio = try rig.audio("Transcribing.wav", frequency: 435)
         let id = try await rig.waitingConversation("Transcribing", audio: audio, script: [(0, "We ship on Friday.")])
         try rig.inference.block(audio)
-        rig.state.enqueue(id)
+        rig.state.processor.enqueue(id)
         try await waitUntil("transcribing") { rig.inference.isWaiting(on: audio) }
         rig.state.library.requestProcessing(id, mode: .summaryOnly, by: .phone)
         rig.state.pickUpRequests()
@@ -449,11 +449,11 @@ final class SummaryPlacementProcessingTests: XCTestCase {
     func testBehaviorPausingDuringTheCountdownPausesTheJob() async throws {
         let rig = try await rig(seconds: 60)
         let id = try await conversation(rig, "Pause", frequency: 440)
-        rig.state.enqueue(id)
+        rig.state.processor.enqueue(id)
         try await countingDown(rig, id)
         rig.state.pauseProcessing(id)
         try await rig.processed()
-        XCTAssertTrue(rig.state.pausedIDs.contains(id))
+        XCTAssertTrue(rig.state.processor.queue.paused.contains(id))
         XCTAssertNil(rig.state.placements[id])
         XCTAssertTrue(rig.inference.summarized.isEmpty)
         XCTAssertEqual(rig.state.processingStatus(for: try XCTUnwrap(rig.meeting(id))), .requested(.paused))
@@ -464,7 +464,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
     func testBehaviorAnotherDeviceHoldingTheSummaryMakesThisMacStandDown() async throws {
         let rig = try await rig(seconds: 60)
         let id = try await conversation(rig, "Stand down", frequency: 460)
-        rig.state.enqueue(id)
+        rig.state.processor.enqueue(id)
         try await countingDown(rig, id)
         // The phone chose the cloud while this Mac counted down; its claim arrives through sync.
         let phone = ProcessingRequest.Device.phone
@@ -487,7 +487,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         let rig = try await rig(cloud: cloud, seconds: 60)
         let id = try await conversation(rig, "Kept", frequency: 480)
         cloud.hold()
-        rig.state.enqueue(id)
+        rig.state.processor.enqueue(id)
         try await countingDown(rig, id)
         rig.state.chooseSummaryPlacement(.useCloud, for: id)
         try await waitUntil("the cloud to be asked") { cloud.isWaiting }
@@ -505,7 +505,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
     func testBehaviorAMacArrivingLateLeavesAPhonesCloudSummaryAlone() async throws {
         let rig = try await rig(cloud: nil)
         let id = try await conversation(rig, "Late", frequency: 470)
-        rig.state.enqueue(id, mode: .newAudio)
+        rig.state.processor.enqueue(id, mode: .newAudio)
         try await rig.processed(id)
         let before = rig.inference.summarized.count
         // The phone chose the cloud while no Mac was around: it holds the Summarize request it made.
@@ -535,7 +535,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
     func testBehaviorASummaryAPhoneHeldAndNeverCameBackForIsTakenOver() async throws {
         let rig = try await rig(cloud: nil)
         let id = try await conversation(rig, "Stranded", frequency: 475)
-        rig.state.enqueue(id, mode: .newAudio)
+        rig.state.processor.enqueue(id, mode: .newAudio)
         try await rig.processed(id)
         rig.state.update(id) { $0.summary = nil }
         let before = rig.inference.summarized.count
@@ -564,7 +564,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         let rig = try await rig(cloud: cloud, seconds: 60)
         let phone = try await PhoneLinkRig.connect(rig.state)
         let id = try await conversation(rig, "From the phone", frequency: 500)
-        rig.state.enqueue(id)
+        rig.state.processor.enqueue(id)
         try await countingDown(rig, id)
         try await waitUntil("the phone to hear the countdown") {
             phone.events.progress.contains { $0.meetingID == id && $0.phase == .summaryCountdown }
@@ -616,20 +616,20 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         XCTAssertFalse(rig.state.summaryOptions.thisDeviceCanSummarize, "No summary model here")
         let id = try await conversation(rig, "Always, no model", frequency: 385)
         XCTAssertFalse(rig.state.summaryWaitsForModel(try XCTUnwrap(rig.meeting(id))), "The cloud takes it at once")
-        rig.state.enqueue(id)
-        XCTAssertTrue(rig.state.awaitingModels.isEmpty, "Nothing waits for the summary model")
+        rig.state.processor.enqueue(id)
+        XCTAssertTrue(rig.state.processor.queue.awaitingModels.isEmpty, "Nothing waits for the summary model")
         try await rig.processed(id)
         XCTAssertEqual(cloud.summarized, [id])
         XCTAssertTrue(rig.inference.summarized.isEmpty)
-        XCTAssertTrue(rig.state.queue.awaitingSummaryModel.isEmpty)
+        XCTAssertTrue(rig.state.processor.queue.awaitingSummaryModel.isEmpty)
         XCTAssertEqual(rig.meeting(id)?.summary?.origin.cloudModel, "Claude Sonnet 5.5")
 
         // A Personal conversation isn't sent on its own: it waits for the model here, with Use the Cloud.
         let personal = try await conversation(rig, "Personal, no model", frequency: 395)
         rig.state.library.update(personal) { $0.placement = .personal }
-        rig.state.enqueue(personal)
+        rig.state.processor.enqueue(personal)
         try await rig.processed(personal)
-        XCTAssertEqual(rig.state.queue.awaitingSummaryModel, [personal])
+        XCTAssertEqual(rig.state.processor.queue.awaitingSummaryModel, [personal])
         XCTAssertEqual(cloud.summarized, [id], "Never sent on its own")
     }
 
@@ -640,9 +640,9 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         let rig = try await rig(cloud: cloud, seconds: 30)
         rig.state.installedModels.remove(rig.state.summaryModel)
         let id = try await conversation(rig, "Waiting for the model", frequency: 405)
-        rig.state.enqueue(id)
+        rig.state.processor.enqueue(id)
         try await rig.processed(id)
-        XCTAssertEqual(rig.state.queue.awaitingSummaryModel, [id], "No countdown holds the queue: it waits for the model")
+        XCTAssertEqual(rig.state.processor.queue.awaitingSummaryModel, [id], "No countdown holds the queue: it waits for the model")
         XCTAssertNil(rig.state.placements[id])
         let meeting = try XCTUnwrap(rig.meeting(id))
         let status = rig.state.processingStatus(for: meeting)
@@ -663,7 +663,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         try await rig.processed(id)
         XCTAssertEqual(cloud.summarized, [id])
         XCTAssertTrue(rig.inference.summarized.isEmpty)
-        XCTAssertTrue(rig.state.queue.awaitingSummaryModel.isEmpty)
-        XCTAssertFalse(rig.state.queue.isOwed(id))
+        XCTAssertTrue(rig.state.processor.queue.awaitingSummaryModel.isEmpty)
+        XCTAssertFalse(rig.state.processor.queue.isOwed(id))
     }
 }

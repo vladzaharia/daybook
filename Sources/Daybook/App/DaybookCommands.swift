@@ -203,19 +203,19 @@ private struct ConversationCommands: Commands {
     var body: some Commands {
         let meeting = state.shownMeeting(shownID)
         let locked = meeting.map { state.isBusy($0.id) } ?? true
-        let queued = meeting.map { state.queuedIDs.contains($0.id) } ?? false
+        let queued = meeting.map { state.processor.queue.queuedIDs.contains($0.id) } ?? false
         CommandMenu("Conversation") {
-            if let meeting, state.processingID == meeting.id {
+            if let meeting, state.processor.queue.runningID == meeting.id {
                 Button("Pause Transcription") { state.pauseProcessing(meeting.id) }
-            } else if let meeting, state.pausedIDs.contains(meeting.id) {
-                Button("Resume Transcription") { state.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting)) }
+            } else if let meeting, state.processor.queue.paused.contains(meeting.id) {
+                Button("Resume Transcription") { state.processor.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting)) }
             } else {
-                Button("Transcribe") { if let meeting { state.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting)) } }
+                Button("Transcribe") { if let meeting { state.processor.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting)) } }
                     .disabled(meeting?.hasUntranscribedAudio != true || locked || queued)
             }
             Divider()
             ForEach([ProcessingRequest.Mode.summaryOnly, .speakerRefresh, .newAudio, .fullRetranscription]) { mode in
-                Button(mode.title) { if let id = meeting?.id { state.enqueue(id, mode: mode) } }
+                Button(mode.title) { if let id = meeting?.id { state.processor.enqueue(id, mode: mode) } }
                     .disabled(meeting?.tracks.isEmpty != false || locked || queued)
             }
             Menu("Template") {

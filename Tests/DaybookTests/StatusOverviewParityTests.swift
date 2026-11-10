@@ -30,8 +30,8 @@ final class StatusOverviewParityTests: XCTestCase {
         await ReadingDemo.seed(state.library, as: .mac, now: now) { _, _, _, _ in }?.value
         let roadmap = try XCTUnwrap(state.meetings.first { $0.title == ReadingDemo.Title.transcribing })
         state.update(roadmap.id) { $0.status = .transcribing }
-        state.processingID = roadmap.id
-        state.processingProgress = IntelligenceProgress(0.4, "Transcribing", stage: .transcribing)
+        state.processor.queue.runningID = roadmap.id
+        state.processor.queue.activity.set(IntelligenceProgress(0.4, "Transcribing", stage: .transcribing))
         var mac = StatusOverviewInputs.make(state, meeting: nil, afterStop: false, inputDevice: nil)
         // The devices beside it: a recorder, the iPhone it's paired with, and iCloud paused (the words the gatherer
         // gives a sync problem).
@@ -78,7 +78,7 @@ final class StatusOverviewParityTests: XCTestCase {
         XCTAssertEqual(macWork.progress, phoneWork.progress)
         // The demo's work on Studio Mac is what the iPhone says of that Mac; a Mac's home names only its iPhones.
         XCTAssertEqual(phoneLines[1].text, "Transcribing · 55%")
-        state.processingID = nil
+        state.processor.queue.runningID = nil
         await state.flush()
     }
 }

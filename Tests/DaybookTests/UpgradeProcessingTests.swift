@@ -37,7 +37,7 @@ final class UpgradeProcessingTests: XCTestCase {
         let audio = try rig.audio("\(title).wav", frequency: frequency)
         try rig.inference.voice(audio, [1, 0, 0])
         let id = try await rig.waitingConversation(title, audio: audio, script: [(0, "We ship on Friday."), (5, "Dana owns the launch notes.")])
-        rig.state.enqueue(id)
+        rig.state.processor.enqueue(id)
         try await rig.processed(id)
         return id
     }
@@ -154,10 +154,10 @@ final class UpgradeProcessingTests: XCTestCase {
         let audio = try rig.audio("Busy.wav", frequency: 355)
         let busy = try await rig.waitingConversation("Busy", audio: audio, script: [(0, "Hello there.")])
         try rig.inference.block(audio)
-        rig.state.enqueue(busy)
+        rig.state.processor.enqueue(busy)
         try await waitUntil("the other conversation to be transcribing") { rig.inference.isWaiting(on: audio) }
         rig.state.summarizeHere(id)
-        XCTAssertTrue(rig.state.queuedIDs.contains(id))
+        XCTAssertTrue(rig.state.processor.queue.queuedIDs.contains(id))
         XCTAssertNil(rig.state.placements[id], "Placed only when its summary step starts")
         rig.state.cancelQueued(id)
         XCTAssertNil(rig.state.placements[id], "Cancelled: nothing left placed")
@@ -196,7 +196,7 @@ final class UpgradeProcessingTests: XCTestCase {
         XCTAssertEqual(request.upgrade?.model, "parakeet/ultra")
         // This Mac's Whisper Base isn't as good: it leaves the request to Studio Mac.
         rig.state.pickUpRequests()
-        XCTAssertTrue(rig.state.processingQueue.isEmpty && rig.state.processingID == nil)
+        XCTAssertTrue(rig.state.processor.queue.jobs.isEmpty && rig.state.processor.queue.runningID == nil)
         let waiting = try XCTUnwrap(rig.meeting(id))
         guard case .requested(.device(let asked)) = rig.state.processingStatus(for: waiting) else { return XCTFail("Waits for Studio Mac") }
         XCTAssertEqual(asked.upgrade?.waitingLine, "Waiting for Studio Mac to upgrade the transcript")
@@ -233,7 +233,7 @@ final class UpgradeProcessingTests: XCTestCase {
                                                                           device: studio))
         rig.state.update(id) { $0.upsertProcessingRequest(better) }
         rig.state.pickUpRequests()
-        XCTAssertTrue(rig.state.processingQueue.isEmpty && rig.state.processingID == nil)
+        XCTAssertTrue(rig.state.processor.queue.jobs.isEmpty && rig.state.processor.queue.runningID == nil)
         XCTAssertNil(rig.meeting(id)?.processingRequests?.first { $0.id == better.id }?.claim)
     }
 }

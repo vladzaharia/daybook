@@ -70,9 +70,9 @@ extension AppState {
     /// Keep Recording or Record Again, from the panel or a notification: into the same conversation, after what was
     /// saved. The processing its first part queued waits for the whole.
     func recordAgain(into id: UUID) async {
-        if processingID == id { pauseProcessing(id) } else if queuedIDs.contains(id) { cancelQueued(id) }
+        if processor.queue.runningID == id { pauseProcessing(id) } else if processor.queue.queuedIDs.contains(id) { cancelQueued(id) }
         // A job that was running lets go of the conversation once its work notices.
-        for _ in 0..<40 where processingID == id { try? await Task.sleep(for: .milliseconds(50)) }
+        for _ in 0..<40 where processor.queue.runningID == id { try? await Task.sleep(for: .milliseconds(50)) }
         // The first part is still being added: its capture holds the conversation's folder until it's in the library.
         let session = storageURL.appendingPathComponent("Staging").appendingPathComponent(id.uuidString)
             .appendingPathComponent("capture-session.json").path

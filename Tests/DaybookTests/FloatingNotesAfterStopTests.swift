@@ -83,7 +83,7 @@ final class FloatingNotesAfterStopTests: XCTestCase {
         XCTAssertNotNil(state.unexpectedStops[id])
 
         // As the inspector's Record on This Mac does, once the conversation's processing lets go of it.
-        if state.processingID == id { state.pauseProcessing(id) } else if state.queuedIDs.contains(id) { state.cancelQueued(id) }
+        if state.processor.queue.runningID == id { state.pauseProcessing(id) } else if state.processor.queue.queuedIDs.contains(id) { state.cancelQueued(id) }
         let staging = state.storageURL.appendingPathComponent("Staging").appendingPathComponent(id.uuidString)
         try await waitUntil("the conversation to be free") {
             state.canRecordInto(id) && !["capture-session.json", "microphone.caf"].contains {

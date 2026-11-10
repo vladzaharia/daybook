@@ -234,7 +234,7 @@ shows processing shows it, on the Mac and the iPhone:
 - Sync passes run while this Mac processes (any job, not only one carrying another device's request), with the
   conversation being processed protected from remote deletion and status. So the phone's recording, notes, and
   request come in while this Mac transcribes its own audio, not after its summary. A recording the running job's
-  conversation waited for that lands before fusion joins that job (`AppState.process`, `foldsArrivalsInto`):
+  conversation waited for that lands before fusion joins that job (`MacProcessor.process`, `foldsArrivalsInto`):
   it's placed as it would have been and transcribed, then fused and summarized once with the rest. One that lands
   after that point gets a job of its own, as before.
 - The wait and the arrival don't depend on **Transcribe synced recordings on this Mac**. A recording the

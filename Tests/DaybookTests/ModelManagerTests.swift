@@ -327,16 +327,16 @@ final class ModelManagerTests: XCTestCase {
             !model.isSystemModel && !chosen.contains(model.key) && !state.installedModels.contains(model.key)
                 && manager.snapshot.status(of: model) == .notDownloaded
         })
-        state.downloadingID = other.key
+        state.processor.queue.downloadingID = other.key
         state.downloadModels(chosen)
-        XCTAssertEqual(state.pendingDownloads, chosen, "queued behind it")
+        XCTAssertEqual(state.processor.queue.pendingDownloads, chosen, "queued behind it")
         XCTAssertEqual(manager.downloadSummary?.title, "Waiting to download")
 
         manager.cancelSelected()
-        XCTAssertTrue(state.pendingDownloads.isEmpty)
-        XCTAssertEqual(state.downloadingID, other.key, "the other model's download carries on")
+        XCTAssertTrue(state.processor.queue.pendingDownloads.isEmpty)
+        XCTAssertEqual(state.processor.queue.downloadingID, other.key, "the other model's download carries on")
         guard case .missing? = manager.downloadSummary else { return XCTFail("the choices are still to download") }
-        state.downloadingID = nil
+        state.processor.queue.downloadingID = nil
     }
 
     /// A download that wouldn't fit in what's free on this Mac says how much it needs and doesn't start: Download waits,
@@ -403,7 +403,7 @@ final class ModelManagerTests: XCTestCase {
     func testBehaviorASecondDownloadThatWouldFillTheDiskWaits() async throws {
         let state = AppState(libraryURL: try library(), defaults: defaults())
         // Held by "processing", the queue keeps what's asked for and starts nothing: tests never download.
-        state.processingID = UUID()
+        state.processor.queue.runningID = UUID()
         var requested: [[String]] = []
         let manager = ModelManager(state: state, hubClient: ScriptedHub(), requestDownload: { requested.append($0); state.downloadModels($0) })
         let first = try XCTUnwrap(state.modelCatalog.model("whisper/small"))
@@ -413,7 +413,7 @@ final class ModelManagerTests: XCTestCase {
         XCTAssertTrue(manager.space.fits(second.approximateBytes))
 
         manager.download(first.key)
-        XCTAssertEqual(state.pendingDownloads, [first.key])
+        XCTAssertEqual(state.processor.queue.pendingDownloads, [first.key])
         XCTAssertFalse(manager.space.fits(second.approximateBytes))
         manager.download(second.key)
         XCTAssertEqual(requested, [[first.key]], "each fits, but together they'd fill the disk")
@@ -422,7 +422,7 @@ final class ModelManagerTests: XCTestCase {
         manager.download(second.key)
         XCTAssertEqual(requested, [[first.key], [second.key]])
         manager.cancel(second.key)
-        XCTAssertEqual(state.pendingDownloads, [])
+        XCTAssertEqual(state.processor.queue.pendingDownloads, [])
     }
 
     // MARK: Removal

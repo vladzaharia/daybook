@@ -100,42 +100,9 @@ final class AppState {
     var isListeningToEarlierRecordings = false
     var listenedRecordings = Set<UUID>()
     var backgroundListeningDelay: Duration = .seconds(20)
-    /// This Mac's processing queue and model downloads (ProcessingQueue.swift). The views, menus, and tests read it
-    /// through the names below, as they always have.
-    let queue: ProcessingQueue
-    /// The conversation being processed now.
-    var processingID: UUID? {
-        get { queue.runningID }
-        set { queue.runningID = newValue }
-    }
-    /// The running job's progress, throttled (`ActivityProgress`). The window isn't redrawn by it: the
-    /// views that draw it observe `processingActivity`, and redraw when its percent, message, or step changes.
-    var processingActivity: ActivityProgress { queue.activity }
-    var processingProgress: IntelligenceProgress {
-        get { queue.activity.value }
-        set { queue.activity.set(newValue) }
-    }
-    /// Waiting, in order.
-    var processingQueue: [ProcessingJob] {
-        get { queue.jobs }
-        set { queue.jobs = newValue }
-    }
-    /// The job running now (`processingID`'s), with the request it carries out, if any.
-    var runningJob: ProcessingJob? {
-        get { queue.running }
-        set { queue.running = newValue }
-    }
-    var queuedIDs: [UUID] { queue.queuedIDs }
-    /// Conversations the person paused; they resume only when asked.
-    var pausedIDs: Set<UUID> {
-        get { queue.paused }
-        set { queue.paused = newValue }
-    }
-    /// Conversations that start transcribing as soon as the selected models finish downloading.
-    var awaitingModels: Set<UUID> {
-        get { queue.awaitingModels }
-        set { queue.awaitingModels = newValue }
-    }
+    /// This Mac's processing: the queue and model downloads it owns (`ProcessingQueue`), and the jobs it runs
+    /// (MacProcessor.swift).
+    let processor: MacProcessor
     /// This Mac's own processing preferences, kept in its UserDefaults: the speaker settings and the model for other
     /// languages. The transcription language is the library's (`transcriptionLanguage`); a stored one is carried into the
     /// library once at launch (`followLibraryLanguage`).
@@ -178,19 +145,6 @@ final class AppState {
             if oldValue[.summarization] != summaryModel, installedModels.contains(summaryModel) { summaryModelArrived() }
         }
     }
-    /// The model downloading now (`ProcessingQueue`).
-    var downloadingID: String? {
-        get { queue.downloadingID }
-        set { queue.downloadingID = newValue }
-    }
-    /// The current download's progress, throttled like `processingActivity`.
-    var downloadActivity: ActivityProgress { queue.downloadActivity }
-    var downloadProgress: IntelligenceProgress {
-        get { queue.downloadActivity.value }
-        set { queue.downloadActivity.set(newValue) }
-    }
-    /// Models still to download after the current one.
-    var pendingDownloads: [String] { queue.pendingDownloads }
     var glossary: [GlossaryTerm] { library.glossary }
     var recordingID: UUID?
     var isStartingRecording = false
@@ -313,11 +267,6 @@ final class AppState {
     @ObservationIgnored var voicingTask: Task<Void, Never>?
     /// Runs given voices (or tried) this session.
     var voicedRuns = Set<UUID>()
-    var processingTask: Task<Void, Never>? {
-        get { queue.task }
-        set { queue.task = newValue }
-    }
-    var currentRequest: Task<Void, Error>? { queue.currentRequest }
     /// How requests from other devices are claimed and kept (tests shorten these).
     var requestTiming = RequestTiming()
     /// The memory a summary model must fit in (tests set it, so they don't depend on the machine's).
@@ -332,23 +281,6 @@ final class AppState {
         set { cloudSummarizerOverride = newValue }
     }
     @ObservationIgnored private var cloudSummarizerOverride: (any CloudSummarizing)?
-    /// Conversations whose running job stopped because another device took its request over.
-    var claimsLost: Set<UUID> {
-        get { queue.claimsLost }
-        set { queue.claimsLost = newValue }
-    }
-    var claimHeartbeat: Task<Void, Never>? {
-        get { queue.claimHeartbeat }
-        set { queue.claimHeartbeat = newValue }
-    }
-    var lastClaimRenewal: Date {
-        get { queue.lastClaimRenewal }
-        set { queue.lastClaimRenewal = newValue }
-    }
-    var lastRenewedStage: ProcessingRequest.Stage? {
-        get { queue.lastRenewedStage }
-        set { queue.lastRenewedStage = newValue }
-    }
     /// Daybook on iPhone from this Mac's side, as state (PhoneCoordinator.swift). `AppState+Phone.swift`,
     /// `AppState+SharedNotes.swift`, and the tests read it through the names below, as they always have.
     let phones = PhoneCoordinator()
@@ -424,7 +356,7 @@ final class AppState {
         // Where the library is, before anything here writes preferences or sync resolves its identity (docs/sandbox.md).
         let launch = Self.launchCheck(library: libraryURL, defaults: defaults)
         recorder = RecordingController(environment: capture)
-        queue = ProcessingQueue(owedURL: libraryURL.appendingPathComponent("local-queue.json"))
+        processor = MacProcessor(owedURL: libraryURL.appendingPathComponent("local-queue.json"))
         let storedPreferences = defaults.data(forKey: Preference.processingPreferences).flatMap { try? JSONDecoder().decode(ProcessingPreferences.self, from: $0) }
         var processingPreferences = storedPreferences ?? .init()
         // A fresh Mac starts on its recommended preset, speaker effort included (ux-mac-14).
@@ -487,7 +419,8 @@ final class AppState {
         liveModels = MacLiveModels(store: runtime.store)
         captions = LiveCaptionsController(store: LiveCaptionStore(libraryRoot: libraryURL),
                                           makeCaptioner: MacCaptioners.recordingFactory(settings: captionSettings))
-        processingActivity.onChange = { [weak self] _ in self?.processingProgressChanged() }
+        processor.app = self
+        processor.queue.activity.onChange = { [weak processor] _ in processor?.processingProgressChanged() }
         searchMemo.onUpdate = { [weak self] in self?.searchResultsArrived &+= 1 }
         sync.onSyncRequested = { [weak self] in await self?.synchronizeLibrary() }
         monitor.onMeetingStarted = { [weak self] candidate in
@@ -816,7 +749,7 @@ final class AppState {
             try await library.load()
             followLibraryLanguage()
             // What this Mac owed when it last quit, restarted, or crashed, before anything is queued now.
-            queue.loadOwedWork()
+            processor.queue.loadOwedWork()
             recordReplicaIdentity()
             if let launchNotice { post([launchNotice]); self.launchNotice = nil }
             // Installs from before the model system move into the store first, without downloading.
@@ -964,7 +897,7 @@ final class AppState {
             await sourceArrived(meetingID, before: meeting, imported: imported, url: url, device: device, plan: plan)
             if device == nil { window.openID = meetingID }
             meetingIDs.append(meetingID)
-            enqueue(meetingID)
+            processor.enqueue(meetingID)
         }
         return meetingIDs
     }
@@ -1021,109 +954,6 @@ final class AppState {
         InferenceProcessingEngine(inference: sources.inference ?? runtime, configuration: job.engineConfiguration)
     }
 
-    /// Runs one job. The engine turns recordings into transcripts, speakers, and a summary; this
-    /// Mac decides what to process, places new recordings first, applies each result as it
-    /// arrives (so a pause keeps finished recordings), and moves recordings between conversations.
-    func process(_ request: ProcessingJob) async throws {
-        let id = request.meetingID
-        guard library.isLoaded, meetings.contains(where: { $0.id == id }) else { return }
-        await flush()
-        // A recording the iPhone transcribed itself finds its conversation first, once (AppState+Phone.swift).
-        if await phoneTranscriptArrived(id, job: request) { return }
-        guard let initial = meetings.first(where: { $0.id == id }) else { return }
-        let options = request.preferences
-        let engine = processingEngine(for: request)
-        let terms = glossary.filter { $0.approved || $0.sourceMeetingIDs.contains(id) }.map(\.term)
-        update(id) { $0.status = .transcribing; $0.errorMessage = nil }
-        let activity = processingActivity
-        let progress: ProcessingProgressHandler = { value in activity.report(IntelligenceProgress(value.fraction, value.message, stage: value.stage)) }
-        let matching = options.matchSpeakersAcrossSources
-            ? SpeakerMatchingConfiguration(minimumSimilarity: options.speakerMatchThreshold, minimumMargin: options.speakerMatchMargin) : nil
-        if request.mode != .summaryOnly {
-            // A synced iPhone recording finds its conversation first; one that moved isn't processed here.
-            if await phoneRecordingsArrived(id, job: request) { return }
-            try await placePendingSources(id)
-        }
-        // An original with a derived track (the microphone before echo removal) is transcribed through it. A recording this
-        // conversation waits for that syncs in meanwhile (passes run while this Mac works) joins this job before fusion,
-        // placed as it would have been, so there's one fused transcript and one summary; after that point, one gets a job
-        // of its own.
-        if request.mode != .summaryOnly { phones.foldsArrivalsInto = id }
-        defer { if phones.foldsArrivalsInto == id { phones.foldsArrivalsInto = nil } }
-        var tracks = request.mode == .summaryOnly ? [] : initial.transcribableTracks
-        var taken = Set(tracks.map(\.id))
-        while !tracks.isEmpty {
-            for track in tracks {
-                try Task.checkCancellation()
-                let previous = meetings.first(where: { $0.id == id })?.transcripts.filter { $0.trackID == track.id }.max { $0.createdAt < $1.createdAt }
-                if request.mode == .newAudio && previous != nil { continue }
-                let url = try await library.audioURL(for: track, in: id)
-                let output = try await engine.transcribe(TrackProcessingInput(meetingID: id, track: track, audioURL: url, mode: request.mode,
-                                                                              previousTranscript: previous, vocabulary: terms), progress: progress)
-                post(output.notices)
-                update(id) { $0.apply(output, matching: matching, allowSameSource: previous != nil) }
-            }
-            tracks = []
-            guard request.mode != .summaryOnly, let current = meetings.first(where: { $0.id == id }),
-                  current.transcribableTracks.contains(where: { track in !taken.contains(track.id) && !current.transcripts.contains { $0.trackID == track.id } })
-            else { break }
-            // The job as it runs now: it may have taken on the request the recording came with (`pickUpRequests`).
-            if await phoneRecordingsArrived(id, job: runningJob.flatMap { $0.meetingID == id ? $0 : nil } ?? request) { return }
-            try await placePendingSources(id)
-            guard let placed = meetings.first(where: { $0.id == id }) else { return }
-            tracks = placed.transcribableTracks.filter { !taken.contains($0.id) }
-            taken.formUnion(tracks.map(\.id))
-        }
-        phones.foldsArrivalsInto = nil
-        try Task.checkCancellation()
-        await realign(id)
-        if await sourcesAfterTranscription(id) { return }
-        _ = try await readPhotos(id, engine: engine, progress: progress)
-        await labelSpeakers(before: id)
-        guard let before = meetings.first(where: { $0.id == id }) else { return }
-        let transcript = MeetingEvidence.transcript(before)
-        guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AppError.noSpeech }
-        // Transcript first: without the summary model here, and with the cloud not taking the summary at once, the job ends
-        // with the transcript, and the summary waits for the model or the person's Use the Cloud
-        // (AppState+SummaryPlacement.swift).
-        let job = runningJob.flatMap { $0.meetingID == id ? $0 : nil } ?? request
-        if await summaryWaitsForModelAtStep(job, in: before) {
-            try Task.checkCancellation()
-            leaveSummaryForModel(id, after: job)
-            return
-        }
-        update(id) { $0.status = .summarizing }
-        processingActivity.enter(.summarizing)
-        renewRunningClaim(force: false)
-        reportToPhones(id)
-        let template = template(for: request, meeting: before)
-        // Where it runs: here, or in the cloud if the person chooses during the countdown (AppState+SummaryPlacement.swift).
-        guard let placed = try await placedSummary(id, job: request, engine: engine, template: template, vocabulary: terms, progress: progress) else {
-            // Another device is summarizing it; its summary arrives through sync.
-            update(id) { $0.status = $0.summary == nil ? .imported : .ready }
-            return
-        }
-        try Task.checkCancellation()
-        let current = placed.meeting, generated = placed.output
-        // What was said, written, or chosen meanwhile is summarized again; a speaker's new name follows into this one.
-        let inputsChanged = meetings.first(where: { $0.id == id })?.summaryInputsChanged(since: current) ?? false
-        // A summary another device wrote meanwhile stays: one summary per conversation.
-        if meetings.first(where: { $0.id == id })?.summaryWrittenElsewhere(after: placed.started, excluding: library.thisDevice.id) == true {
-            update(id) { $0.status = .ready }
-            return
-        }
-        let summary = generated.summary.placed(placed.place, by: library.thisDevice, inputs: current.modelsBehindTranscript)
-        update(id) { meeting in
-            meeting.setSummary(summary, writtenFrom: current)
-            // Keep Auto selected so a new source or revised context can change the inferred kind.
-            meeting.status = .ready
-            meeting.errorMessage = generated.warnings.isEmpty ? nil : generated.warnings.joined(separator: "\n")
-        }
-        try await library.proposeTerms(generated.suggestedTerms, for: id)
-        await flush()
-        if inputsChanged { enqueue(id) }
-    }
-
     /// Applies the sync folder's changes, then queues new audio that arrived when the person processes synced audio on
     /// this Mac, and picks up requests. Passes run while this Mac processes, whatever the job (docs/iphone.md, "On the
     /// Mac"): they publish a request's claim heartbeat and progress, show whether another device took the request over,
@@ -1139,8 +969,8 @@ final class AppState {
             return
         }
         guard recordingID == nil, !isStartingRecording, !isStoppingRecording else { sync.deferUntilIdle(); return }
-        defer { runQueue() }
-        guard let applied = await library.synchronize(protecting: processingID ?? recordingID) else { return }
+        defer { processor.runQueue() }
+        guard let applied = await library.synchronize(protecting: processor.queue.runningID ?? recordingID) else { return }
         if window.openID == nil || !meetings.contains(where: { $0.id == window.openID }) { selectQuietly(meetings.sorted { $0.date > $1.date }.first?.id) }
         reconcileClaims()
         await syncedLibraryIdentity()
@@ -1155,13 +985,13 @@ final class AppState {
             for id in applied.newAudio(in: meetings) where !isHeldElsewhere(id) && !movedPhoneRecordings.contains(id) {
                 guard processSyncedAudio || meetings.first(where: { $0.id == id })?.hasAwaitedRecordingToAdd() == true else { continue }
                 // The job running for it takes it before fusion: one fused transcript, one summary.
-                if id == processingID, phones.foldsArrivalsInto == id { continue }
-                enqueue(id)
+                if id == processor.queue.runningID, phones.foldsArrivalsInto == id { continue }
+                processor.enqueue(id)
             }
             // A recording an iPhone transcribed itself may belong to a conversation of this Mac's: checked once.
             for id in phoneTranscriptsToCheck() {
                 checkingPhoneTranscripts.insert(id)
-                enqueue(id)
+                processor.enqueue(id)
             }
         }
         pickUpRequests(start: false)
@@ -1226,7 +1056,7 @@ final class AppState {
     /// Removes downloads one after another. A role that used a removed model moves to its preset's
     /// next installed choice, or keeps it and waits for a download; queued jobs keep what they froze.
     func removeModels(_ ids: [String]) {
-        guard processingID == nil, downloadingID == nil else { return }
+        guard processor.queue.runningID == nil, processor.queue.downloadingID == nil else { return }
         Task {
             for id in ids {
                 do {
@@ -1302,7 +1132,7 @@ final class AppState {
 
     /// Removes revisions updates replaced, once nothing selected, queued, running, or pinned uses them.
     func collectOldModelRevisions() {
-        let references = (processingQueue + [runningJob].compactMap { $0 }).flatMap(\.modelReferences)
+        let references = (processor.queue.jobs + [processor.queue.running].compactMap { $0 }).flatMap(\.modelReferences)
             + modelSelections.allKeys.map { ModelReference($0) }
         Task { await runtime.collectGarbage(protecting: references) }
     }
@@ -1410,7 +1240,7 @@ final class AppState {
 
     /// Recorded or processed now, or with a recording starting or stopping: it can't go to the Trash.
     func isBusy(_ id: UUID) -> Bool {
-        id == recordingID || id == processingID || isStartingRecording || isStoppingRecording
+        id == recordingID || id == processor.queue.runningID || isStartingRecording || isStoppingRecording
     }
 
     func trashMeeting(_ id: UUID, undoManager: UndoManager? = nil) { trashMeetings([id], undoManager: undoManager) }
@@ -1426,8 +1256,8 @@ final class AppState {
         let neighbour = Self.neighbour(of: Set(ids), in: listedMeetingIDs)
         let titles = ids.map { id in meetings.first { $0.id == id }?.title ?? "" }
         for id in ids {
-            queue.removeJobs(for: id)
-            queue.settle(id)
+            processor.queue.removeJobs(for: id)
+            processor.queue.settle(id)
         }
         Task { [weak self] in
             guard let self else { return }
@@ -1607,7 +1437,7 @@ extension AppState {
             sourcesAfterCapture(id, startedAt: result.startedAt, captureID: result.id)
             // Added to the notice: it may already say why the recording stopped.
             if !result.warnings.isEmpty { post(result.warnings) }
-            enqueue(id)
+            processor.enqueue(id)
         } catch {
             update(id) { $0.status = .failed; $0.errorMessage = "Recording is preserved in the recovery folder: \(error.localizedDescription)" }
             report("Couldn’t Add the Recording", "It’s kept, and Daybook adds it the next time it opens.", error)
@@ -1677,7 +1507,7 @@ extension AppState {
                 try await ingestCapture(result, meetingID: id)
                 sources.recovered.append((id, result.startedAt, result.endedAt))
                 // Transcribed as a recording that stopped normally is, and said by name, with a way to it.
-                enqueue(id)
+                processor.enqueue(id)
                 let title = meetings.first { $0.id == id }?.title ?? ""
                 post(title.isEmpty ? "Recovered a recording." : "Recovered “\(title)”.",
                      action: LibraryNoticeAction(title: "Show") { [weak self] in self?.showConversation(id) })

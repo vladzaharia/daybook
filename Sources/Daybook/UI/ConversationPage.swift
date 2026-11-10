@@ -206,10 +206,10 @@ extension ConversationStatusPresentation.Inputs {
         // What the choices still need to download, and how this Mac's downloads stand ("Downloading models · 40%").
         var inputs = Self(words: state.statusWords, local: state.localCapabilities)
         // The cloud at work on its job: "Summarizing with Claude Sonnet 5.5 · 35%", with Stop.
-        inputs.placement = .queue(state.placements[meeting.id], running: state.processingID == meeting.id)
-        inputs.runningTitle = state.processingID.flatMap { id in state.meetings.first { $0.id == id }?.title }
-        inputs.queueWaitsForDownload = state.downloadingID != nil && state.processingID == nil
-        inputs.queuedMode = state.processingQueue.first { $0.meetingID == meeting.id }?.mode
+        inputs.placement = .queue(state.placements[meeting.id], running: state.processor.queue.runningID == meeting.id)
+        inputs.runningTitle = state.processor.queue.runningID.flatMap { id in state.meetings.first { $0.id == id }?.title }
+        inputs.queueWaitsForDownload = state.processor.queue.downloadingID != nil && state.processor.queue.runningID == nil
+        inputs.queuedMode = state.processor.queue.jobs.first { $0.meetingID == meeting.id }?.mode
         // Transcript first: "Waiting to summarize after the download · 38%", with Use the Cloud when it's on offer.
         var summaryMayWait = status == .transcribed
         if case .requested(.device) = status { summaryMayWait = true }

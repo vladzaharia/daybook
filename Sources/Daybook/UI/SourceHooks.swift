@@ -51,7 +51,7 @@ struct SourceHooks: View {
             Button(targets.count == 1 ? "Move There" : "Add to “\(title(target))”") {
                 Task { await state.confirmSourceSuggestion(suggestion.id, in: meeting.id, into: target) }
             }
-            .disabled(state.processingID == meeting.id || state.processingID == target || state.recordingID == meeting.id)
+            .disabled(state.processor.queue.runningID == meeting.id || state.processor.queue.runningID == target || state.recordingID == meeting.id)
         }
         Button("Keep Separate") { state.dismissSourceSuggestion(suggestion.id, in: meeting.id) }
     }

@@ -238,9 +238,9 @@ enum MenuBarStatus {
     @MainActor
     static func inputs(_ state: AppState) -> Inputs {
         var inputs = Inputs(sync: state.sync.status)
-        if let id = state.processingID, let meeting = state.meetings.first(where: { $0.id == id }) {
+        if let id = state.processor.queue.runningID, let meeting = state.meetings.first(where: { $0.id == id }) {
             var work = Work(id: id, title: meeting.effectivePlacement == .personal ? nil : meeting.title, stage: state.runningStage,
-                            fraction: state.processingProgress.fraction, waiting: state.processingQueue.count)
+                            fraction: state.processor.queue.activity.value.fraction, waiting: state.processor.queue.jobs.count)
             switch state.placements[id]?.phase {
             case .countingDown(_, let until)?:
                 work.countdown = until

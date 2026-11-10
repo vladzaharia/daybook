@@ -155,8 +155,8 @@ struct FloatingAfterStop: View {
         let retries = failure.kind != .noSpeech
         return RecorderProblem(title: words.title, message: words.message, help: failure.reason,
                                actionTitle: retries ? "Try Again" : nil,
-                               actionEnabled: !state.queuedIDs.contains(meeting.id) && state.processingID != meeting.id,
-                               action: retries ? { [state, meeting] in state.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting)) } : nil)
+                               actionEnabled: !state.processor.queue.queuedIDs.contains(meeting.id) && state.processor.queue.runningID != meeting.id,
+                               action: retries ? { [state, meeting] in state.processor.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting)) } : nil)
     }
 }
 

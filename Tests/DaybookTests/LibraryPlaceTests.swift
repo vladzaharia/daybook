@@ -134,11 +134,11 @@ final class LibraryPlaceTests: XCTestCase {
         let meeting = try XCTUnwrap(state.meetings.first { $0.id == id })
         XCTAssertNil(MacRowStatus.make(state, meeting), "a conversation that's only notes is ready")
 
-        state.pausedIDs.insert(id)
+        state.processor.queue.paused.insert(id)
         let paused = try XCTUnwrap(MacRowStatus.make(state, meeting))
         XCTAssertEqual(paused.kind, .paused, "the pause glyph, as on the iPhone")
         XCTAssertEqual(paused.text, "Paused")
-        state.pausedIDs.remove(id)
+        state.processor.queue.paused.remove(id)
 
         state.recordingID = id
         XCTAssertEqual(MacRowStatus.make(state, meeting)?.kind, .recording)
@@ -155,11 +155,11 @@ final class LibraryPlaceTests: XCTestCase {
         let waiting = state.newMeeting(title: "Northwind call")
         XCTAssertEqual(MacListSubtitle.text(state, results: 0), "", "nothing works: nothing to say")
 
-        state.processingID = running
-        state.processingProgress = IntelligenceProgress(0.4, "Transcribing", stage: .transcribing)
-        state.processingQueue = [state.makeJob(meetingID: waiting, mode: .newAudio)]
+        state.processor.queue.runningID = running
+        state.processor.queue.activity.set(IntelligenceProgress(0.4, "Transcribing", stage: .transcribing))
+        state.processor.queue.jobs = [state.makeJob(meetingID: waiting, mode: .newAudio)]
         XCTAssertEqual(MacListSubtitle.text(state, results: 0), "Transcribing · 1 waiting", "the figure is the row's")
-        state.processingProgress = IntelligenceProgress(0, "Summarizing", stage: .summarizing)
+        state.processor.queue.activity.set(IntelligenceProgress(0, "Summarizing", stage: .summarizing))
         XCTAssertEqual(MacListSubtitle.text(state, results: 0), "Summarizing · 1 waiting", "the step that runs, not always Transcribing")
         XCTAssertNil(MacListSubtitle.countdown(state), "no countdown: it doesn't tick")
 
@@ -169,8 +169,8 @@ final class LibraryPlaceTests: XCTestCase {
         XCTAssertEqual(MacListSubtitle.text(state, results: 1), "1 result", "a search counts its results anywhere")
         state.window.searchText = ""
         state.window.place = .section(.all)
-        state.processingQueue = []
-        state.processingID = nil
+        state.processor.queue.jobs = []
+        state.processor.queue.runningID = nil
         XCTAssertEqual(MacListSubtitle.text(state, results: 0), "")
     }
 

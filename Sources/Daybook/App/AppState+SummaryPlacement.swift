@@ -47,7 +47,7 @@ extension AppState {
     /// This Mac's summary model is here: the running job's, else the one chosen now. Whether it fits this Mac's memory is
     /// what other devices are told (`processingCapabilities`); this Mac's own work runs the model the person chose.
     var summarizesLocally: Bool {
-        let model = runningJob?.summaryModelID ?? summaryModel
+        let model = processor.queue.running?.summaryModelID ?? summaryModel
         return !model.isEmpty && installedModels.contains(model)
     }
 
@@ -123,13 +123,13 @@ extension AppState {
     func leaveSummaryForModel(_ id: UUID, after job: ProcessingJob) {
         update(id) { $0.status = $0.summary == nil ? .imported : .ready; $0.errorMessage = nil }
         guard let requestID = job.requestID, let request = request(requestID, in: id) else {
-            queue.awaitSummaryModel(id)
+            processor.queue.awaitSummaryModel(id)
             return
         }
         if request.mode == .summaryOnly {
             library.releaseProcessingRequest(requestID, in: id)
             // Finishing the job then leaves the request open.
-            runningJob = job.withoutRequest
+            processor.queue.running = job.withoutRequest
         } else {
             library.requestProcessing(id, mode: .summaryOnly, templateID: job.templateID, by: library.thisDevice)
         }
@@ -144,9 +144,9 @@ extension AppState {
     /// The summaries owed for the summary model go on once they can start (the model is here, or the cloud now takes
     /// them at once), the oldest conversation first.
     func takeUpWaitingSummaries() {
-        guard library.isLoaded, !queue.awaitingSummaryModel.isEmpty else { return }
-        let waiting = meetings.filter { queue.awaitingSummaryModel.contains($0.id) }.sorted { $0.date < $1.date }
-        for meeting in waiting where !summaryWaitsForModel(meeting) { enqueue(meeting.id, mode: .summaryOnly) }
+        guard library.isLoaded, !processor.queue.awaitingSummaryModel.isEmpty else { return }
+        let waiting = meetings.filter { processor.queue.awaitingSummaryModel.contains($0.id) }.sorted { $0.date < $1.date }
+        for meeting in waiting where !summaryWaitsForModel(meeting) { processor.enqueue(meeting.id, mode: .summaryOnly) }
     }
 
     // MARK: The summary step
@@ -178,7 +178,7 @@ extension AppState {
     func placedSummary(_ id: UUID, job started: ProcessingJob, engine: any ProcessingEngine, template: SummaryTemplate?, vocabulary: [String],
                        progress: @escaping ProcessingProgressHandler) async throws -> PlacedSummary? {
         // The job as it is now: it may have taken on another device's request since it started.
-        let job = runningJob.flatMap { $0.meetingID == id ? $0 : nil } ?? started
+        let job = processor.queue.running.flatMap { $0.meetingID == id ? $0 : nil } ?? started
         if summaryHolderElsewhere(id, job: job) != nil { return nil }
         // The keys and models as they are now (a key added on another device arrives through iCloud Keychain).
         await cloud.reload()
@@ -233,13 +233,13 @@ extension AppState {
     /// job carries the choice to its summary step (`ProcessingJob.summarizesHere`), so Cancel or Pause before then
     /// leaves nothing placed, and the next Summarize places as usual.
     func summarizeHere(_ id: UUID) {
-        enqueue(id, mode: .summaryOnly, summarizesHere: true)
+        processor.enqueue(id, mode: .summaryOnly, summarizesHere: true)
     }
 
     /// Use the Cloud or Start Now, from the page, the inspector, Floating Notes, or a phone. A summary waiting for the
     /// summary model has no countdown: Use the Cloud summarizes it there now (`summarizeInCloud`).
     func chooseSummaryPlacement(_ action: SummaryPlacementPlanner.Action, for id: UUID) {
-        if action == .useCloud, placements[id] == nil, processingID != id, !queue.isQueued(id) {
+        if action == .useCloud, placements[id] == nil, processor.queue.runningID != id, !processor.queue.isQueued(id) {
             summarizeInCloud(id)
             return
         }
@@ -249,7 +249,7 @@ extension AppState {
     /// Use the Cloud for a summary waiting for this Mac's summary model: a Summarize that goes to the cloud with no
     /// countdown (`ProcessingJob.summarizesInCloud`), carrying out a Summarize request left open for it.
     func summarizeInCloud(_ id: UUID) {
-        enqueue(id, mode: .summaryOnly, summarizesInCloud: true)
+        processor.enqueue(id, mode: .summaryOnly, summarizesInCloud: true)
     }
 
     /// A paired phone chose for a countdown this Mac shows it.
@@ -280,7 +280,7 @@ extension AppState {
                                           countdown: LinkSummaryCountdown(secondsLeft: max(0, until.timeIntervalSince(now)),
                                                                           cloudOffered: planner.cloud != nil))
         case .started(.cloud(let model)):
-            return LinkProcessingProgress(meetingID: id, phase: .summarizing, fraction: min(1, max(0, processingProgress.fraction)),
+            return LinkProcessingProgress(meetingID: id, phase: .summarizing, fraction: min(1, max(0, processor.queue.activity.value.fraction)),
                                           macName: name, cloudModel: model.name)
         case .started, .waitingForMac, .waiting:
             return nil

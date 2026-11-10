@@ -93,9 +93,9 @@ final class PersonalLockAppTests: XCTestCase {
         let rig = try await rig(answers: false)
         let state = rig.state
         state.update(rig.personal) { $0.notes = "Written while it was locked." }
-        state.enqueue(rig.personal, mode: .summaryOnly)
-        XCTAssertTrue(state.queue.isQueued(rig.personal) || state.queue.awaitingModels.contains(rig.personal)
-                        || state.queue.awaitingSummaryModel.contains(rig.personal),
+        state.processor.enqueue(rig.personal, mode: .summaryOnly)
+        XCTAssertTrue(state.processor.queue.isQueued(rig.personal) || state.processor.queue.awaitingModels.contains(rig.personal)
+                        || state.processor.queue.awaitingSummaryModel.contains(rig.personal),
                       "the queue takes it as it would unlocked (a Summarize waits for the summary model when it isn't here)")
         XCTAssertEqual(state.meetings.first { $0.id == rig.personal }?.notes, "Written while it was locked.")
         XCTAssertEqual(rig.authenticator.asked, 0)

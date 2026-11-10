@@ -110,7 +110,7 @@ extension AppState {
     func systemDidWake() async {
         settleKeptRecording()
         await phoneLink.systemDidWake()
-        renewRunningClaim(force: true)
+        processor.renewRunningClaim(force: true)
         sync.requestSync()
     }
 
@@ -156,7 +156,7 @@ extension AppState {
         // It hears whether it may start recording here, and an off this Mac owes it.
         sendRecordPermission(to: peer.deviceID)
         // A phone that reconnects while this Mac processes sees where it is at once.
-        if let id = processingID { reportToPhones(id, force: true) }
+        if let id = processor.queue.runningID { reportToPhones(id, force: true) }
         // A stop this Mac couldn't deliver goes now, and so do the notes and bookmarks it missed.
         sources.recorders.reconnected(peer.deviceID.uuidString)
         sendOwedNotes(to: peer.deviceID)
@@ -487,7 +487,7 @@ extension AppState {
             if phase == .finished { fraction = 1 }
         } else {
             guard case .processing(let progress) = processingStatus(for: meeting), progress.device == nil else { return }
-            if processingProgress.message.hasPrefix("Lining up") { resolved = .aligning }
+            if processor.queue.activity.value.message.hasPrefix("Lining up") { resolved = .aligning }
             else {
                 switch progress.stage {
                 case .transcribing: resolved = .transcribing
@@ -495,7 +495,7 @@ extension AppState {
                 case .summarizing: resolved = .summarizing
                 }
             }
-            fraction = min(1, max(0, processingProgress.fraction))
+            fraction = min(1, max(0, processor.queue.activity.value.fraction))
         }
         send(LinkProcessingProgress(meetingID: meetingID, phase: resolved, fraction: fraction, macName: library.thisDevice.name, detail: detail),
              force: force)
@@ -746,8 +746,8 @@ extension AppState {
     /// conversations (its link).
     func phoneTranscriptsToCheck() -> [UUID] {
         meetings.compactMap { meeting in
-            guard !hasRequestThisMacCouldTake(meeting), !movedPhoneRecordings.contains(meeting.id), processingID != meeting.id,
-                  !queuedIDs.contains(meeting.id), let track = phoneTranscriptToCheck(meeting) else { return nil }
+            guard !hasRequestThisMacCouldTake(meeting), !movedPhoneRecordings.contains(meeting.id), processor.queue.runningID != meeting.id,
+                  !processor.queue.queuedIDs.contains(meeting.id), let track = phoneTranscriptToCheck(meeting) else { return nil }
             if processSyncedAudio { return meeting.id }
             guard let identity = track.device else { return nil }
             let others = meetings.filter { $0.id != meeting.id }

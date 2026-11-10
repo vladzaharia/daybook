@@ -34,7 +34,7 @@ final class SpeakerProfileProcessingTests: XCTestCase {
         try rig.inference.script(mic, [(0, "Let us start"), (5, "The launch is on track"), (10, "Questions next")])
         try rig.inference.voice(mic, SyntheticVoice.near(me, similarity: 0.95, seed: 2))
         let id = try await rig.macConversation("Standup", at: start, seconds: 60, audio: mic)
-        state.enqueue(id)
+        state.processor.enqueue(id)
         try await rig.processed(id)
 
         let speaker = try XCTUnwrap(rig.meeting(id)?.speakers.first)
@@ -148,7 +148,7 @@ final class SpeakerProfileProcessingTests: XCTestCase {
         let mic = try rig.audio("mic.wav", frequency: 220)
         try rig.inference.script(mic, [(0, "New words")])
         let new = try await rig.macConversation("Today", at: start, seconds: 30, audio: mic)
-        state.enqueue(new)
+        state.processor.enqueue(new)
         try await rig.processed(new)
         XCTAssertEqual(rig.meeting(new)?.status, .ready)
         XCTAssertNil(rig.meeting(old.id)?.speakers.first?.embedding, "Stopped for the job")

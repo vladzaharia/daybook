@@ -17,7 +17,7 @@ struct BackgroundAudioHook: View {
                 Button(included ? "Leave Out" : "Include") { Task { await state.includeBackgroundAudio(!included, in: meeting.id) } }
                     .buttonStyle(.daybookLink)
                     .font(.caption)
-                    .disabled(state.processingID == meeting.id)
+                    .disabled(state.processor.queue.runningID == meeting.id)
             }
         }
     }

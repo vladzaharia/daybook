@@ -83,9 +83,9 @@ extension AppState {
         }, set: { [weak self] id in
             guard let self, self.library.chooseTemplate(id, for: meetingID),
                   let after = self.meetings.first(where: { $0.id == meetingID }),
-                  !after.unifiedTranscript.isEmpty, self.processingID != meetingID else { return }
+                  !after.unifiedTranscript.isEmpty, self.processor.queue.runningID != meetingID else { return }
             self.cancelQueued(meetingID)
-            self.enqueue(meetingID, mode: .summaryOnly)
+            self.processor.enqueue(meetingID, mode: .summaryOnly)
         })
     }
 }

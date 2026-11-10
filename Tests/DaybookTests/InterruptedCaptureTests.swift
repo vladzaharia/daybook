@@ -173,7 +173,7 @@ final class InterruptedCaptureTests: XCTestCase {
         let state = await openLibrary(root, makeTestDefaults())
         let recovered = try XCTUnwrap(state.meetings.first { $0.id == manifest.id })
         XCTAssertEqual(recovered.title, AppState.recordingTitle(nil, at: manifest.startedAt))
-        XCTAssertEqual(state.awaitingModels, [manifest.id], "Queued, and waiting for this Mac's models")
+        XCTAssertEqual(state.processor.queue.awaitingModels, [manifest.id], "Queued, and waiting for this Mac's models")
         XCTAssertEqual(state.noticeLines, ["Recovered “\(recovered.title)”."])
         XCTAssertEqual(state.shownNoticeAction?.title, "Show")
         state.window.place = .section(.work)

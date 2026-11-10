@@ -136,6 +136,6 @@ private struct PageColophon: View {
     private var summarizeAgain: (() -> Void)? {
         guard !meeting.unifiedTranscript.isEmpty, !state.processingStatus(for: meeting).isPending,
               state.recordingID != meeting.id else { return nil }
-        return { [state, id = meeting.id] in state.enqueue(id, mode: .summaryOnly) }
+        return { [state, id = meeting.id] in state.processor.enqueue(id, mode: .summaryOnly) }
     }
 }

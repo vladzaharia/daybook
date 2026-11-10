@@ -94,7 +94,7 @@ final class MultipointRecordingTests: XCTestCase {
         XCTAssertEqual(meeting.companions?.first?.state, .attached)
         XCTAssertEqual(meeting.companions?.first?.trackID, track.id)
         XCTAssertTrue(meeting.revisions.contains { $0.field == "source:\(track.id.uuidString)" && $0.newValue == "Added Soundcore Work recording" })
-        XCTAssertTrue(rig.state.awaitingModels.contains(id), "Waits for models rather than failing")
+        XCTAssertTrue(rig.state.processor.queue.awaitingModels.contains(id), "Waits for models rather than failing")
         session.libraryChanged(rig.state.meetings, ready: true)
         XCTAssertEqual(session.links.imported[link.recordingID!], id, "The device page shows it as already in Daybook")
     }
