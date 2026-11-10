@@ -28,6 +28,14 @@ final class LibraryListTests: XCTestCase {
         XCTAssertEqual(ConversationRowView.title(Meeting(title: "  ")), "Untitled Conversation")
     }
 
+    func testBehaviorTheTrashPagesBylineReadsAsAPagesDoes() {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let parts = TrashedConversationPage.byline(Meeting(title: "Old standup", date: date))
+        XCTAssertEqual(parts, ["Notes only", date.formatted(.dateTime.weekday(.abbreviated).day().month(.wide).hour().minute())],
+                       "The page's byline and its date, not the row's")
+        XCTAssertNotEqual(parts.last, TrashRowView.detail(Meeting(title: "Old standup", date: date)))
+    }
+
     func testBehaviorAPausedRowShowsThePauseGlyphOnBothApps() {
         XCTAssertEqual(ConversationRowStatus.Kind.paused.symbol, "pause.circle")
         XCTAssertEqual(ConversationRowStatus.Kind.waitingForModels.symbol, "arrow.down.circle")

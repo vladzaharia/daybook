@@ -11,9 +11,11 @@ public enum AttentionKind: Hashable, Sendable {
 }
 
 /// A state that needs the person, in one box: a glyph in its column, a title, what happened and what's
-/// safe, and at most two actions. Beside the words when there's room; under them, on the words' edge,
-/// in a narrow box (under 520 pt) or a compact one. The conversation page's problems, the device page's,
-/// Floating Notes' "Recording stopped", and the iPhone's pause box are all this.
+/// safe, and at most two actions. In a window the box hugs its words, up to its column, with the actions
+/// 16 pt after them while the title fits on one line beside them, and under them, on the words' edge, when
+/// it wouldn't. Under touch it spans its column, its actions at the far end from 520 pt and under the words
+/// below that; in the panel, or compact, they're always under the words. The conversation page's problems,
+/// the device page's, Floating Notes' "Recording stopped", and the iPhone's pause box are all this.
 public struct AttentionBox<Actions: View>: View {
     private let kind: AttentionKind
     private let symbol: String
@@ -39,46 +41,75 @@ public struct AttentionBox<Actions: View>: View {
     private var stacked: Bool { AttentionBoxLayout.stacks(width: width, compact: compact, density: density) }
 
     public var body: some View {
-        HStack(alignment: stacked ? .firstTextBaseline : .center, spacing: compact ? DaybookSpacing.s2 : DaybookSpacing.s3) {
-            Image(systemName: symbol)
-                .font(glyphFont)
-                .symbolRenderingMode(kind == .problem ? .monochrome : .hierarchical)
-                .foregroundStyle(tint)
-                .frame(width: compact ? 14 : 18)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: compact ? 6 : DaybookSpacing.s2) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title)
-                        .font(titleFont)
-                        .foregroundStyle(AttentionBoxLayout.title(for: kind).ink.color)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if let message {
-                        Text(message)
-                            .font(messageFont)
-                            .foregroundStyle(AttentionBoxLayout.message(for: kind).ink.color)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+        Group {
+            if stacked || !hasActions {
+                row(beside: false)
+            } else if density == .window {
+                // Beside the words while the title fits on one line beside the actions; under them when it would wrap.
+                ViewThatFits(in: .horizontal) {
+                    row(beside: true)
+                    row(beside: false)
                 }
-                .accessibilityElement(children: .combine)
-                if stacked && hasActions { actionRow }
-            }
-            .layoutPriority(1)
-            if !stacked && hasActions {
-                Spacer(minLength: DaybookSpacing.s3)
-                actionRow
+            } else {
+                row(beside: true)
             }
         }
         .padding(compact ? 10 : DaybookSpacing.s3)
-        // Stacked or not, the box spans its column, so boxes and lines share both edges.
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: AttentionBoxLayout.hugs(density) ? nil : .infinity, alignment: .leading)
         .background(AttentionBoxLayout.wash(for: kind).color, in: DaybookRadius.shape(DaybookRadius.box))
         .overlay {
             if contrast == .increased {
                 DaybookRadius.shape(DaybookRadius.box).strokeBorder(kind == .problem ? DaybookPalette.Ink.warning : DaybookPalette.Ink.meta, lineWidth: 1)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .accessibilityElement(children: .contain)
+    }
+
+    private func row(beside: Bool) -> some View {
+        HStack(alignment: beside ? .center : .firstTextBaseline, spacing: compact ? DaybookSpacing.s2 : DaybookSpacing.s3) {
+            Image(systemName: symbol)
+                .font(glyphFont)
+                .symbolRenderingMode(kind == .problem ? .monochrome : .hierarchical)
+                .foregroundStyle(tint)
+                .frame(width: compact ? 14 : 18)
+                .accessibilityHidden(true)
+            if beside {
+                HStack(spacing: AttentionBoxLayout.actionGap(density)) {
+                    words(oneLineTitle: density == .window)
+                        .layoutPriority(1)
+                    if density != .window { Spacer(minLength: DaybookSpacing.s3) }
+                    actionRow
+                }
+            } else {
+                VStack(alignment: .leading, spacing: compact ? 6 : DaybookSpacing.s2) {
+                    words(oneLineTitle: false)
+                    if hasActions { actionRow }
+                }
+                .layoutPriority(1)
+            }
+        }
+    }
+
+    /// The title and the message. Beside the actions in a window the title keeps one line, and the message wraps to
+    /// whatever width is left without asking for more, so only the title decides whether the actions fit beside it.
+    private func words(oneLineTitle: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(titleFont)
+                .foregroundStyle(AttentionBoxLayout.title(for: kind).ink.color)
+                .fixedSize(horizontal: oneLineTitle, vertical: true)
+            if let message {
+                NoIdealWidth(when: oneLineTitle) {
+                    Text(message)
+                        .font(messageFont)
+                        .foregroundStyle(AttentionBoxLayout.message(for: kind).ink.color)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .accessibilityElement(children: .combine)
     }
 
     private var actionRow: some View {
@@ -108,11 +139,23 @@ public struct AttentionBox<Actions: View>: View {
 
 /// The box's rules, as plain values.
 public enum AttentionBoxLayout {
-    /// Below this width a box's actions move under its message.
+    /// Under touch, below this width a box's actions move under its message.
     public static let stackBelow: CGFloat = 520
 
+    /// Whether a box's actions go under its words whatever they say: compact, in the panel, and under touch below
+    /// `stackBelow`. In a window the words decide: the actions go under them only when the title wouldn't fit on one
+    /// line beside them.
     public static func stacks(width: CGFloat, compact: Bool, density: DaybookDensity) -> Bool {
-        compact || density == .panel || width < stackBelow
+        compact || density == .panel || (density == .touch && width < stackBelow)
+    }
+
+    /// Whether a box is as wide as its words and actions (up to its column), rather than its column: in a window.
+    public static func hugs(_ density: DaybookDensity) -> Bool { density == .window }
+
+    /// From the words to the actions beside them: 16 pt in a window; under touch the actions sit at the far end, at
+    /// least 12 pt away.
+    public static func actionGap(_ density: DaybookDensity) -> CGFloat {
+        density == .window ? DaybookSpacing.s4 : DaybookSpacing.s3
     }
 
     /// A kind's wash: warning at 8% (12% in Dark Mode), accent at 8%, or the quiet fill.
@@ -141,6 +184,41 @@ public enum AttentionBoxLayout {
         case .accent: return "sparkles"
         case .info: return "info.circle.fill"
         }
+    }
+}
+
+/// Lays its content out at the width it's given, but asks for none of its own when measured for its ideal size, so a
+/// long message wraps beside a box's actions instead of deciding they don't fit (`ViewThatFits` measures ideal sizes).
+public struct NoIdealWidth<Content: View>: View {
+    private let active: Bool
+    private let content: Content
+
+    public init(when active: Bool = true, @ViewBuilder content: () -> Content) {
+        self.active = active
+        self.content = content()
+    }
+
+    public var body: some View {
+        if active { NoIdealWidthLayout { content } } else { content }
+    }
+}
+
+private struct NoIdealWidthLayout: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let subview = subviews.first else { return .zero }
+        guard proposal.width != nil else { return CGSize(width: 0, height: subview.sizeThatFits(proposal).height) }
+        return subview.sizeThatFits(proposal)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: bounds.height))
+    }
+
+    func explicitAlignment(of guide: VerticalAlignment, in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews,
+                           cache: inout ()) -> CGFloat? {
+        guard let subview = subviews.first else { return nil }
+        let dimensions = subview.dimensions(in: ProposedViewSize(width: bounds.width, height: bounds.height))
+        return bounds.minY + dimensions[guide]
     }
 }
 

@@ -356,9 +356,16 @@ final class DesignTokenTests: XCTestCase {
 
     func testABoxStacksItsActionsWhenNarrowOrCompact() {
         XCTAssertFalse(AttentionBoxLayout.stacks(width: 640, compact: false, density: .window))
-        XCTAssertTrue(AttentionBoxLayout.stacks(width: 519, compact: false, density: .window))
+        XCTAssertFalse(AttentionBoxLayout.stacks(width: 400, compact: false, density: .window),
+                       "In a window the words decide, by whether the title fits beside the actions")
         XCTAssertTrue(AttentionBoxLayout.stacks(width: 640, compact: true, density: .window))
         XCTAssertTrue(AttentionBoxLayout.stacks(width: 640, compact: false, density: .panel), "Floating Notes is always narrow")
+        XCTAssertTrue(AttentionBoxLayout.stacks(width: 402, compact: false, density: .touch), "An iPhone: under the words")
+        XCTAssertFalse(AttentionBoxLayout.stacks(width: 600, compact: false, density: .touch), "The open Duo as one page: beside them")
+        XCTAssertTrue(AttentionBoxLayout.hugs(.window), "A window's box is as wide as what it says")
+        XCTAssertFalse(AttentionBoxLayout.hugs(.touch))
+        XCTAssertFalse(AttentionBoxLayout.hugs(.panel))
+        XCTAssertEqual(AttentionBoxLayout.actionGap(.window), 16, "The actions follow the words")
         XCTAssertEqual(AttentionBoxLayout.symbol(for: .problem), "exclamationmark.triangle.fill")
     }
 

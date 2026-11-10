@@ -226,7 +226,7 @@ private struct ProcessingRows: View {
                 Text(services.catalog.name(for: run.modelID, provenance: run.processingSettings?.model))
             } label: {
                 Text("Transcribed")
-                Text(run.createdAt.formatted(date: .abbreviated, time: .shortened))
+                Text(InfoDate.format(run.createdAt))
             }
         }
         // Which model found the speakers; "Not identified" only for a transcript that has none.
@@ -242,7 +242,7 @@ private struct ProcessingRows: View {
     /// The model that wrote the summary; a cloud model's with what it used and cost ("12,700 tokens · $0.05").
     private func summaryRow(_ summary: MeetingSummary) -> some View {
         let cloud = summary.cloudProvenance
-        let when = summary.createdAt.formatted(date: .abbreviated, time: .shortened)
+        let when = InfoDate.format(summary.createdAt)
         let row = LabeledContent {
             Text(cloud?.name ?? services.catalog.name(for: summary.modelID, provenance: summary.processingSettings?.model))
         } label: {

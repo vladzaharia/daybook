@@ -53,6 +53,8 @@ final class ConversationPageRulesTests: XCTestCase {
 
     func testBehaviorABoxStacksItsActionsWhenNarrowAndSpacesThemForAFinger() {
         XCTAssertFalse(StatusBlockLayout.stacksActions(width: 640, density: .window), "the Mac's page: beside the words")
+        XCTAssertFalse(StatusBlockLayout.stacksActions(width: 480, density: .window),
+                       "the Mac's narrow page: its words decide, not its width")
         XCTAssertTrue(StatusBlockLayout.stacksActions(width: 402, density: .touch), "an iPhone: under them")
         XCTAssertFalse(StatusBlockLayout.stacksActions(width: 600, density: .touch), "the open Duo as one page: beside them")
         XCTAssertTrue(StatusBlockLayout.stacksActions(width: 640, density: .panel), "Floating Notes: always under")
@@ -60,6 +62,12 @@ final class ConversationPageRulesTests: XCTestCase {
         XCTAssertEqual(StatusBlockLayout.attention(.problem), .problem)
         XCTAssertEqual(StatusBlockLayout.attention(.accent), .accent)
         XCTAssertEqual(StatusBlockLayout.attention(.info), .info)
+    }
+
+    func testBehaviorACountdownKeepsTheWidthOfItsWidestSecond() {
+        XCTAssertEqual(StatusBlockLayout.countdownWidth("Summarizing on this Mac in 12 s"), "Summarizing on this Mac in 00 s")
+        XCTAssertEqual(StatusBlockLayout.countdownWidth("Summarizing in 9 s"), "Summarizing in 0 s")
+        XCTAssertEqual(StatusBlockLayout.countdownWidth("Summarizing on Studio Mac in 30 s"), "Summarizing on Studio Mac in 00 s")
     }
 
     func testBehaviorANewSummaryRevealsBlockByBlockUpToSix() {
