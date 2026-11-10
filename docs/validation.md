@@ -153,6 +153,8 @@ not Daybook's.
   build-ios --test for the iPhone's processing, library, rail, and reading suites pass. Needs real devices: the
   echo-cancelled drift magnitudes; a Mac microphone against an iPhone microphone in one room; two Macs and one iPhone
   end to end.
+  After the merge, W2-I's ScrubberBookmarksTests failed on the integration branch: its fixtures placed recordings at
+  rate 2, which this rule reads as rate 1 re-centred. The fixtures now use rate 1 with the same bookmarks (3 tests).
 - **W2-L1, the iPhone recorder's surfaces.** The pocket recorder's resting header and caption line, the Duo resting at
   the whole recorder, Write by Hand in the keyboard bar, the More menu, and the control row, ink drawn as a picture at
   rest, notes kept while saving, Open's chevron, and sentence-case recorder labels on both apps. DaybookUITests,
