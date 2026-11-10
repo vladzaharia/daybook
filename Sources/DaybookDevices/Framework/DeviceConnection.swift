@@ -363,8 +363,47 @@ public struct DiscoveredRecorder: Identifiable, Equatable {
 @MainActor
 public protocol RecordControlConnection: DeviceConnection {
     var recordCommandPending: Bool { get }
+    /// The person's Record and Pause (the device page, its menu): sent as soon as it can be, with no deadline.
     func startRecording()
     func pauseRecording()
+    /// A Start or Pause that acts now or not at all (docs/devices.md, "Record commands come first"): it goes ahead of
+    /// imports, and answers within `deadline`. One still waiting to be sent by then is dropped; one already sent that
+    /// the recorder confirms late is undone where that's safe (a Start nobody waits for any more is paused again).
+    /// A nil deadline waits as long as it takes.
+    func recordCommand(_ command: RecordCommand, deadline: Duration?) async -> RecordCommandOutcome
+}
+
+/// Start or Pause.
+public enum RecordCommand: Equatable, Sendable {
+    case start, pause
+
+    /// The recording state it asks for.
+    public var records: Bool { self == .start }
+}
+
+/// What a Start or Pause with a deadline came to.
+public enum RecordCommandOutcome: Equatable, Sendable {
+    /// The recorder confirmed the state it was asked for.
+    case confirmed
+    /// It didn't confirm in time. Nothing was sent, or what was sent is undone if it confirms late (a Start).
+    case notConfirmed
+    /// It couldn't be asked: not connected, or another Start or Pause is under way.
+    case unavailable
+}
+
+extension RecordControlConnection {
+    /// For a device that answers on its own terms (Daybook on iPhone over the link): asks, then watches its state
+    /// until `deadline` (15 seconds when there's none).
+    public func recordCommand(_ command: RecordCommand, deadline: Duration?) async -> RecordCommandOutcome {
+        guard state.isConnected, !recordCommandPending else { return .unavailable }
+        if command == .start { startRecording() } else { pauseRecording() }
+        let limit = ContinuousClock.now.advanced(by: deadline ?? .seconds(15))
+        let confirmed = { self.status?.isRecording == command.records && !self.recordCommandPending }
+        while !confirmed() {
+            guard ContinuousClock.now < limit, (try? await Task.sleep(for: .milliseconds(100))) != nil else { break }
+        }
+        return confirmed() ? .confirmed : .notConfirmed
+    }
 }
 
 /// What a recorder is recording, as one device knows it: live while connected, otherwise as last
@@ -409,6 +448,9 @@ public protocol RecordingStateConnection: RecordControlConnection {
     /// Holds the link while the recorder is in range, so its button is heard (the iPhone, for a recorder
     /// that records along with it): never let go when idle, and back at once after a drop.
     var staysConnected: Bool { get set }
+    /// Whether this device already expects a recording (its `DeviceRecording.id`): one a handoff brought, or a shared
+    /// recording's. The held link coming back to find it just started isn't the button (`SoundcoreTiming.buttonCatchUp`).
+    var expectsRecording: ((String) -> Bool)? { get set }
 }
 
 /// A direct connection to a recorder that only one device may manage at a time (a synced
@@ -510,14 +552,33 @@ public final class LiveCapture {
     public struct Saved: Equatable {
         public let seconds: TimeInterval
         public let recordingID: String
+        /// Time the stream lost (packets missing, or one that didn't decode), kept as silence so what followed kept
+        /// its place.
+        public let filledSeconds: TimeInterval
 
-        public init(seconds: TimeInterval, recordingID: String) {
+        public init(seconds: TimeInterval, recordingID: String, filledSeconds: TimeInterval = 0) {
             self.seconds = seconds
             self.recordingID = recordingID
+            self.filledSeconds = filledSeconds
         }
     }
 
     public var isListening = false
+    /// The live audio is behind the recording and arriving faster than real time to catch up (a recorder streams
+    /// what it recorded before listening began first): "Catching up…", and the meter shows no level meanwhile, so
+    /// earlier audio never reads as live.
+    public internal(set) var isCatchingUp = false
+    /// Where the live stream starts, on this device's clock: when its audio arrived less its place in the stream,
+    /// the earliest so far. A stream that starts now counts from its first buffer; one that starts with what was
+    /// recorded before listening began settles on the recording's start once it has caught up. Captions of the
+    /// stream are placed from it (`LiveCaptureCaptions.Update.startedAt`).
+    @ObservationIgnored public private(set) var streamStartedAt: Date?
+    /// Recent arrivals and their place in the stream, for its pace.
+    @ObservationIgnored private var pace: [(at: Date, position: TimeInterval)] = []
+    /// The pace is judged over this long.
+    static let paceWindow: TimeInterval = 3
+    /// Faster than this, the stream is catching up.
+    static let catchUpPace = 1.25
     /// What's being said, as tentative live captions made on this device (DaybookCaptions), oldest
     /// first. Never the transcript. Empty when not listening.
     public var captions: [LiveCaptionSegment] = []
@@ -534,9 +595,10 @@ public final class LiveCapture {
     /// How long a level counts as current after the audio it came from.
     public static let levelLifetime: TimeInterval = 1
 
-    /// The level while audio keeps arriving; nil before any has, or once it stops.
+    /// The level while audio keeps arriving; nil before any has, once it stops, and while the stream catches up (the
+    /// audio arriving then isn't what's being said now).
     public func level(at now: Date = Date()) -> Double? {
-        guard let heardAt, now.timeIntervalSince(heardAt) < Self.levelLifetime else { return nil }
+        guard let heardAt, now.timeIntervalSince(heardAt) < Self.levelLifetime, !isCatchingUp else { return nil }
         return meterValue
     }
 
@@ -546,9 +608,24 @@ public final class LiveCapture {
         heardAt = now
     }
 
-    /// Listening ended: no level until audio arrives again.
+    /// The stream's audio up to `position` seconds into it has arrived `now`: where the stream starts on this device's
+    /// clock, and whether it's catching up (more than 1.25 seconds of audio a second, over the last three seconds).
+    func streamed(to position: TimeInterval, at now: Date = Date()) {
+        let origin = now.addingTimeInterval(-position)
+        if streamStartedAt.map({ origin < $0 }) ?? true { streamStartedAt = origin }
+        pace.append((now, position))
+        pace.removeAll { now.timeIntervalSince($0.at) > Self.paceWindow }
+        guard let first = pace.first, now.timeIntervalSince(first.at) >= Self.paceWindow / 2 else { return }
+        let catching = (position - first.position) / now.timeIntervalSince(first.at) > Self.catchUpPace
+        if catching != isCatchingUp { isCatchingUp = catching }
+    }
+
+    /// Listening began or ended: no level, pace, or start until audio arrives again.
     func clearLevel() {
         meterValue = 0
         heardAt = nil
+        streamStartedAt = nil
+        pace = []
+        if isCatchingUp { isCatchingUp = false }
     }
 }

@@ -215,6 +215,71 @@ final class RecorderHandoffTests: XCTestCase {
         }
     }
 
+    /// The owner said over the link it would let go once it finished an import, then went quiet (it quit, or the link
+    /// went): the wait doesn't hang. Once the owner has said nothing for `ownerQuiet`, the request waits through sync
+    /// (a record the owner takes up when it's back), overdue at once, so the page offers Take Over Anyway with when it
+    /// was last heard from. The owner, back, finishes letting go through sync.
+    func testBehaviorAnOwnerThatGoesQuietWhileFinishingIsOverdueAndFinishesWhenItsBack() async throws {
+        let recorder = makeRecorder(count: 1)
+        let mac = try await makeSide("Mac", .mac, recorder)
+        let phone = try await makeSide("Phone", .phone, recorder)
+        try await macStartsManaging(mac)
+        try await syncAll(mac, phone)
+
+        // The Mac answers once, finishing an import, and then says nothing more: it quit mid-release.
+        let macLinkID = UUID()
+        let macPeer = RecorderHandoff.Peer(linkID: macLinkID, syncID: mac.id, name: "Studio Mac", deviceClass: .mac, handsOffRecorders: true)
+        var requestID: UUID?
+        phone.handoff.link = RecorderHandoff.Link(peers: { [macPeer] }, send: { message, _ in
+            guard case .recorderHandoffRequest(let request) = message, requestID == nil else { return }
+            requestID = request.id
+            let ack = LinkRecorderHandoffAck(finishing: .import, finishingTitle: "Today, 10:02 AM", secondsLeft: 600)
+            phone.handoff.receive(.recorderHandoffReply(LinkRecorderHandoffReply(
+                requestID: request.id, outcome: .accepted(ack), from: LinkHandoffDevice(syncID: mac.id, name: "Studio Mac", deviceClass: .mac))),
+                from: macLinkID)
+        })
+        phone.handoff.useHere(phone.session)
+        try await waitUntil("the Mac says it's finishing an import") {
+            if case .ownerFinishing(_, .importing?) = phone.handoff.state(of: phone.session) { return true }; return false
+        }
+        try await waitUntil("its silence noticed", timeout: 10) {
+            if case .waitingForSync = phone.handoff.state(of: phone.session) { return true }; return false
+        }
+        let state = phone.handoff.state(of: phone.session)
+        XCTAssertTrue(phone.handoff.isOverdue(state), "Take Over Anyway is offered at once, with when it was last heard from")
+        let record = try XCTUnwrap(phone.library.recorderHandoff(kind: kind, serial: recorder.serial))
+        XCTAssertEqual(record.id, requestID, "the same request, through sync")
+        XCTAssertEqual(record.phase, .requested)
+        XCTAssertEqual(record.ownerID, mac.id)
+
+        // The Mac, back, finds the request and lets go through sync; the phone takes over.
+        try await syncAll(phone, mac)
+        try await waitUntil("the Mac lets go") { mac.library.recorderOwner(kind: kind, serial: recorder.serial)?.ownerID == phone.id }
+        try await syncAll(mac, phone)
+        try await waitUntil("the phone connects", timeout: 20) { phone.session.isLinked }
+        XCTAssertEqual(phone.library.recorderOwner(kind: kind, serial: recorder.serial)?.ownerID, phone.id)
+    }
+
+    /// A release the owner began through sync and didn't finish (it quit with the record saying `releasing`) carries on
+    /// when it's back: it finishes, lets go, and the requester takes over.
+    func testBehaviorAReleaseLeftUnfinishedCarriesOnWhenTheOwnerIsBack() async throws {
+        let recorder = makeRecorder(count: 1)
+        let mac = try await makeSide("Mac", .mac, recorder)
+        let phone = try await makeSide("Phone", .phone, recorder)
+        try await macStartsManaging(mac)
+        try await syncAll(mac, phone)
+
+        // What the Mac's last run left: the phone's request, answered `releasing`, and nothing of it in memory now.
+        mac.library.saveRecorderHandoff(RecorderHandoffRecord(kind: kind, serial: recorder.serial, ownerID: mac.id, ownerName: "Studio Mac",
+                                                              requesterID: phone.id, requesterName: "Alex’s iPhone", requesterClass: .phone,
+                                                              phase: .releasing))
+        try await waitUntil("the Mac carries on and lets go") { mac.library.recorderOwner(kind: kind, serial: recorder.serial)?.ownerID == phone.id }
+        XCTAssertEqual(mac.library.recorderHandoff(kind: kind, serial: recorder.serial)?.phase, .released)
+        XCTAssertFalse(mac.session.isLinked)
+        try await syncAll(mac, phone)
+        try await waitUntil("the phone connects", timeout: 20) { phone.session.isLinked }
+    }
+
     /// Stop Waiting while the owner finishes an import calls the handoff off on the owner too: it keeps the recorder
     /// and carries on importing, and the phone never reaches for it.
     func testBehaviorStoppingTheWaitWhileTheOwnerFinishesLeavesTheRecorderWhereItIs() async throws {
@@ -862,6 +927,8 @@ final class RecorderHandoffTests: XCTestCase {
         var timing = RecorderHandoff.Timing()
         timing.replyTimeout = .seconds(2)
         timing.patience = 0.3
+        // Long against the owner's 0.3 s updates, so a busy machine never takes an owner at work for one that's gone.
+        timing.ownerQuiet = 2
         timing.doneDisplay = .seconds(1)
         timing.connectPatience = .seconds(20)
         timing.handBackCooldown = 0

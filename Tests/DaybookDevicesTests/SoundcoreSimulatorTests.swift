@@ -40,6 +40,8 @@ final class SoundcoreSimulatorTests: XCTestCase {
         timing.automaticIdleRelease = .milliseconds(300)
         timing.automaticCooldown = .seconds(60)
         timing.otherAppQuiet = .milliseconds(300)
+        // As on iPhone, where another app shares the link: the other-app tests run here on the Mac.
+        timing.otherAppYields = 3
         return timing
     }
 

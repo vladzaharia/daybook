@@ -86,8 +86,9 @@ extension AppState {
         Task { await captions.finish() }
     }
 
-    /// A recorder recording along captioned its live audio, which starts with its recording: its lines
-    /// move onto this Mac's recording by when each began.
+    /// A recorder recording along captioned its live audio: its lines move onto this Mac's recording by when each
+    /// began, counted from where its live stream starts on this Mac's clock (`Update.startedAt`), not from its
+    /// recording's start, which a recorder already recording began minutes before the stream.
     func recorderCaptioned(_ update: LiveCaptureCaptions.Update) {
         guard let id = recordingID, captions.meetingID == id, let start = recordingStartedAt else { return }
         let link = meetings.first { $0.id == id }?.companions?.last { $0.deviceID == update.recorderID && $0.macEndedAt == nil }

@@ -120,10 +120,37 @@ public final class DeviceHub {
     }
 
     /// The library's ownership records changed. Sessions whose recorder another device owns stop
-    /// connecting to it; one this device owns, or nobody does, connects as usual.
+    /// connecting to it; one this device owns, or nobody does, connects as usual. They're kept with the devices
+    /// (`lastKnownOwnershipKey`), so a relaunch applies them before the library has loaded
+    /// (`applyLastKnownOwnership`).
     public func recorderOwnersChanged(_ owners: [RecorderOwnership], thisDevice: String) {
         ownership = (owners, thisDevice)
         sessions.forEach { $0.applyOwnership(owners, thisDevice: thisDevice) }
+        let known = LastKnownOwnership(owners: owners, thisDevice: thisDevice)
+        if let data = try? JSONEncoder().encode(known), data != environment.defaults.data(forKey: Self.lastKnownOwnershipKey) {
+            environment.defaults.set(data, forKey: Self.lastKnownOwnershipKey)
+        }
+    }
+
+    /// Applies the ownership this device last knew, as stored with its devices. Called before `start()` where the
+    /// library loads after the devices do (the iPhone, which iOS can relaunch in the background for a recorder before
+    /// anything loads the library): a recorder another device manages is never reached for meanwhile. The library's
+    /// own records replace it as soon as they're read (`recorderOwnersChanged`). Returns whether there was any.
+    @discardableResult
+    public func applyLastKnownOwnership() -> Bool {
+        guard ownership == nil, let data = environment.defaults.data(forKey: Self.lastKnownOwnershipKey),
+              let known = try? JSONDecoder().decode(LastKnownOwnership.self, from: data) else { return false }
+        ownership = (known.owners, known.thisDevice)
+        sessions.forEach { $0.applyOwnership(known.owners, thisDevice: known.thisDevice) }
+        return true
+    }
+
+    /// Where the last ownership applied is kept: "devices.ownership".
+    public static let lastKnownOwnershipKey = "devices.ownership"
+
+    private struct LastKnownOwnership: Codable {
+        var owners: [RecorderOwnership]
+        var thisDevice: String
     }
 
     /// Follows the library's ownership records and this device's sync ID, as `owners` reads them. Applied now, and again
@@ -202,6 +229,7 @@ public final class DeviceHub {
         let session = sessions.remove(at: index)
         session.shutDown()
         session.connections.forEach { $0.forget() }
+        session.removeStoredState()
         persist()
     }
 

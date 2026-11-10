@@ -107,6 +107,8 @@ public struct RecorderFacts: Equatable {
     /// It was last seen recording then, while it isn't connected.
     public var recordingAsOf: Date?
     public var isListeningLive = false
+    /// Its live audio is behind the recording and catching up (`DeviceSession.isLiveCatchingUp`): "Catching up…".
+    public var isCatchingUp = false
     /// A Record or Pause sent to it hasn't been confirmed yet.
     public var recordCommandPending = false
     /// Its link to the recording under way (multipoint), while there is one.
@@ -114,6 +116,10 @@ public struct RecorderFacts: Equatable {
     /// Another device manages it: "Alex’s iPhone".
     public var managedBy: String?
     public var managedByPhone = false
+    /// The device managing it hasn't been heard from since then, more than `RecorderStatusWords.managerQuietLimit`
+    /// ago (its claim, its latest import of this recorder's that reached this library, or its last word over the
+    /// link): it may be gone, wiped, or no longer used, while the recorder overwrites its oldest recordings when full.
+    public var managerQuietSince: Date?
     /// What it was last known to be doing while it isn't live here: "Recording since 10:02, as of 10:14".
     public var lastKnown: String?
     public var handoff: RecorderHandoff.State = .idle
@@ -156,12 +162,15 @@ public struct RecorderFacts: Equatable {
         isRecording = session.isLinked && status?.isRecording == true
         if !session.isLinked, let status, status.isRecording == true { recordingAsOf = status.updatedAt }
         isListeningLive = session.isListeningLive
+        isCatchingUp = session.isLiveCatchingUp
         recordCommandPending = (session.primary as? any RecordControlConnection)?.recordCommandPending == true
         self.along = along
         if let owner = session.managedElsewhere {
             managedBy = owner.ownerName
             managedByPhone = owner.ownerClass == .phone
             if !session.isLinked { lastKnown = link?.summary(now: now) }
+            let heard = [owner.claimedAt, session.links.recent.first?.importedAt, link?.asOf].compactMap { $0 }.max() ?? owner.claimedAt
+            if now.timeIntervalSince(heard) > RecorderStatusWords.managerQuietLimit { managerQuietSince = heard }
         } else if !session.isLinked {
             lastKnown = LinkRecorderState(session: session)?.summary(now: now)
         }
@@ -213,6 +222,15 @@ public enum RecorderStatusWords {
         "Last seen \(DeviceDateFormat.lastSeen(date, now: now))"
     }
 
+    /// A claim on a recorder whose manager hasn't been heard from in this long (14 days) asks for attention: Use on
+    /// This Mac takes it over (`RecorderFacts.managerQuietSince`).
+    public static let managerQuietLimit: TimeInterval = 14 * 86_400
+
+    /// "Not heard from since 20 Oct".
+    static func notHeardFrom(since date: Date) -> String {
+        "Not heard from since \(date.formatted(.dateTime.day().month(.abbreviated)))"
+    }
+
     /// The recorder's status line: "Soundcore Work  Connected · 80% · 1 new". `here` is how this device calls itself
     /// ("this Mac"). The same words serve the window's subtitle.
     public static func line(_ facts: RecorderFacts, here: String, now: Date = Date()) -> StatusLineWords {
@@ -227,10 +245,13 @@ public enum RecorderStatusWords {
         default: return line(handoffLine(facts.handoff) ?? "Moving…", .working, short: shortHandoff(facts.handoff))
         }
         if let owner = facts.managedBy {
+            if let quiet = facts.managerQuietSince {
+                return line("Managed by \(owner) · \(notHeardFrom(since: quiet))", .attention, short: "Managed by \(owner)")
+            }
             return line(facts.lastKnown.map { "Managed by \(owner) · \($0)" } ?? "Managed by \(owner)", .calm,
                         short: facts.lastKnown == nil ? nil : "Managed by \(owner)")
         }
-        if facts.isListeningLive { return line("Listening live", .recording) }
+        if facts.isListeningLive { return line(facts.isCatchingUp ? "Catching up…" : "Listening live", .recording) }
         if let wait = facts.otherAppWait { return line(wait, .working, short: "Waiting…") }
         if let importing = facts.importing {
             if importing.suspended {
@@ -308,11 +329,12 @@ public enum RecorderStatusWords {
         case .notSetUp: return "Not set up"
         case .connected:
             if let wait = facts.otherAppWait { return "Connected · \(wait)" }
-            if facts.isListeningLive { return "Connected · Listening live" }
+            if facts.isListeningLive { return facts.isCatchingUp ? "Connected · Catching up…" : "Connected · Listening live" }
             if facts.recordCommandPending { return "Connected · Waiting for \(facts.shortName)…" }
             return facts.isRecording ? "Connected · Recording" : "Connected"
         case .notConnected:
             if let owner = facts.managedBy, facts.isDirect {
+                if let quiet = facts.managerQuietSince { return "Managed by \(owner) · \(notHeardFrom(since: quiet))" }
                 return facts.lastKnown.map { "Managed by \(owner) · \($0)" } ?? "Managed by \(owner)"
             }
             if let asOf = facts.recordingAsOf { return DeviceDateFormat.recordingAsOf(asOf) }
@@ -336,8 +358,12 @@ public enum RecorderStatusWords {
         default: return chip("Moving…", .working, detail: RecorderHandoff.Words.headline(facts.handoff, recorder: name, here: here) ?? "Moving \(name)…")
         }
         if let owner = facts.managedBy {
-            return chip("\(facts.shortName) on \(owner)", short: facts.managedByPhone ? "On iPhone" : "On Mac", .calm,
-                        detail: [name, "Managed by \(owner)", facts.lastKnown].compactMap { $0 }.joined(separator: " · "))
+            let quiet = facts.managerQuietSince.map(notHeardFrom(since:))
+            return chip("\(facts.shortName) on \(owner)", short: facts.managedByPhone ? "On iPhone" : "On Mac", quiet == nil ? .calm : .attention,
+                        detail: [name, "Managed by \(owner)", quiet ?? facts.lastKnown].compactMap { $0 }.joined(separator: " · "))
+        }
+        if facts.isListeningLive, facts.isCatchingUp {
+            return chip("\(facts.shortName) · Catching up…", short: facts.shortName, .recording, dot: true, detail: "\(name) · Catching up…")
         }
         if recording, let along = facts.along, [.unavailable, .failed].contains(along) {
             return chip("Not recording", .attention, detail: "\(name) didn’t start recording. Start it on the recorder to record along.")

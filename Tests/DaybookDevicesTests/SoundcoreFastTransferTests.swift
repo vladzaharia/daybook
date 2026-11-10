@@ -86,6 +86,8 @@ final class SoundcoreFastTransferTests: XCTestCase {
         timing.idleRelease = .seconds(60)
         timing.automaticIdleRelease = .seconds(60)
         timing.otherAppQuiet = .milliseconds(300)
+        // Fast Transfer is the iPhone's, where another app may share the link.
+        timing.otherAppYields = 3
         // Recordings of a second count as long here.
         timing.fastTransferMinimum = .milliseconds(500)
         timing.accessPointStartup = .milliseconds(50)

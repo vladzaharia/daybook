@@ -40,16 +40,32 @@ public struct SoundcorePacket: Equatable {
 }
 
 /// Reassembles notifications into frames. Garbage between frames is skipped, frames with a bad
-/// length or checksum are rejected, and the buffer never grows past one maximum-size frame.
+/// length or checksum are rejected, and the buffer never grows past one maximum-size frame. However much
+/// arrives at once (a Wi‑Fi message can carry megabytes of frames), it's taken `piece` bytes at a time, so the
+/// only size limit is the link's own (`WebSocketFrame.maximumPayload`).
 public struct SoundcorePacketBuffer {
     public static let maximumFrame = 65_535
+    /// What's reassembled at a time: 64 KB.
+    public static let piece = 65_536
     private var bytes: [UInt8] = []
     public private(set) var rejectedFrames = 0
+
+    public init() {}
 
     public mutating func reset() { bytes.removeAll(); rejectedFrames = 0 }
 
     public mutating func append(_ data: Data) -> [SoundcorePacket] {
-        guard data.count <= 1_048_576 else { bytes.removeAll(); rejectedFrames += 1; return [] }
+        var result: [SoundcorePacket] = []
+        var start = data.startIndex
+        while start < data.endIndex {
+            let end = data.index(start, offsetBy: Self.piece, limitedBy: data.endIndex) ?? data.endIndex
+            result += appendPiece(data[start..<end])
+            start = end
+        }
+        return result
+    }
+
+    private mutating func appendPiece(_ data: Data) -> [SoundcorePacket] {
         bytes.append(contentsOf: data)
         var result: [SoundcorePacket] = []
         var offset = 0
@@ -86,13 +102,32 @@ public struct SoundcoreDeviceInfo: Equatable, Codable {
     public var totalBytes: UInt64 = 0
     public var freeBytes: UInt64 = 0
     public var isRecording = false
+    /// The battery bytes as they came, so the scale can be settled per recorder (`reading(inPercent:)`). Optional, so
+    /// earlier snapshots decode.
+    public var microphoneBatteryWire: UInt8?
+    public var caseBatteryWire: UInt8?
 
     public static let minimumLength = 51
 
-    /// Wire values 0–9 are 10% buckets; larger values up to 100 are literal percentages.
-    public static func battery(_ wire: UInt8) -> Int? {
-        if wire <= 9 { return (Int(wire) + 1) * 10 }
+    /// Wire values 0–9 are 10% buckets (the protocol notes); larger values up to 100 are literal percentages. A
+    /// recorder that has reported one of those (`reportsPercent`) reports percentages throughout, so with `inPercent`
+    /// 0–9 are literal too (5 is 5%, not 60%).
+    public static func battery(_ wire: UInt8, inPercent: Bool = false) -> Int? {
+        if wire <= 9, !inPercent { return (Int(wire) + 1) * 10 }
         return wire <= 100 ? Int(wire) : nil
+    }
+
+    /// A reading only a recorder that reports percentages makes: a battery byte from 10 to 100.
+    public var reportsPercent: Bool {
+        [microphoneBatteryWire, caseBatteryWire].contains { wire in wire.map { (10...100).contains($0) } ?? false }
+    }
+
+    /// The same reading, its battery bytes read as percentages or as buckets.
+    public func reading(inPercent: Bool) -> SoundcoreDeviceInfo {
+        var reading = self
+        if let wire = microphoneBatteryWire { reading.microphoneBattery = Self.battery(wire, inPercent: inPercent) }
+        if let wire = caseBatteryWire { reading.caseBattery = Self.battery(wire, inPercent: inPercent) }
+        return reading
     }
 
     public static func parse(_ payload: Data) throws -> Self {
@@ -103,11 +138,14 @@ public struct SoundcoreDeviceInfo: Equatable, Codable {
             return String(decoding: characters, as: UTF8.self).trimmingCharacters(in: .whitespaces)
         }
         let total = try b.le32(at: 24), free = try b.le32(at: 28)
-        return .init(microphoneBattery: battery(b[1]), caseBattery: battery(b[38]),
-                     microphoneCharging: b[2] == 1, caseCharging: b[32] == 1,
-                     firmware: text(3..<8), caseFirmware: text(33..<38), serial: text(8..<24),
-                     totalBytes: UInt64(total) * 1_024, freeBytes: UInt64(min(free, total)) * 1_024,
-                     isRecording: b[50] == 1)
+        var info = Self(microphoneBattery: battery(b[1]), caseBattery: battery(b[38]),
+                        microphoneCharging: b[2] == 1, caseCharging: b[32] == 1,
+                        firmware: text(3..<8), caseFirmware: text(33..<38), serial: text(8..<24),
+                        totalBytes: UInt64(total) * 1_024, freeBytes: UInt64(min(free, total)) * 1_024,
+                        isRecording: b[50] == 1)
+        info.microphoneBatteryWire = b[1]
+        info.caseBatteryWire = b[38]
+        return info
     }
 
     public init(microphoneBattery: Int? = nil, caseBattery: Int? = nil, microphoneCharging: Bool = false, caseCharging: Bool = false, firmware: String = "", caseFirmware: String = "", serial: String = "", totalBytes: UInt64 = 0, freeBytes: UInt64 = 0, isRecording: Bool = false) {
@@ -223,6 +261,10 @@ public enum SoundcoreError: LocalizedError, Equatable {
     case codecUnavailable, corruptAudio, liveFileUnavailable, timedOut, stalled
     /// Another app on the same link started a transfer of its own before this one's audio arrived.
     case yielded
+    /// Another app took the recorder for its own transfers more often than a transfer gives way (`otherAppYields`).
+    case yieldedTooOften
+    /// A Start or Pause went first: the transfer starts again from its beginning after it.
+    case preempted
 
     public var errorDescription: String? {
         switch self {
@@ -238,6 +280,8 @@ public enum SoundcoreError: LocalizedError, Equatable {
         case .timedOut: return "The recorder didn’t answer in time."
         case .stalled: return "No audio arrived for 45 seconds."
         case .yielded: return "Another app started a transfer, so this one waits until it’s done."
+        case .yieldedTooOften: return "Another app kept taking the recorder for its own transfers."
+        case .preempted: return "A Start or Pause went first; the transfer starts again after it."
         }
     }
 }

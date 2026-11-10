@@ -294,6 +294,8 @@ final class DeviceHubTests: XCTestCase {
         let bad = folder.appendingPathComponent("notes.m4a")
         try Data(repeating: 1, count: 64).write(to: bad)
         try Data("not audio".utf8).write(to: folder.appendingPathComponent("readme.txt"))
+        // Written long enough ago to count as finished; one that can't be read is listed after a while, to say why.
+        try Self.writtenAgo(600, good, bad)
 
         let kind = OtherRecorderIntegration().kind
         let device = ConfiguredDevice(id: "folder", kind: kind)
@@ -343,6 +345,53 @@ final class DeviceHubTests: XCTestCase {
         XCTAssertEqual(session.newRecordings.count, 2, "It's offered again, for the person to choose")
     }
 
+    /// Sets files' modification dates `seconds` back, as a file finished that long ago.
+    private static func writtenAgo(_ seconds: TimeInterval, _ urls: URL...) throws {
+        for url in urls {
+            try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-seconds)], ofItemAtPath: url.path)
+        }
+    }
+
+    /// A file counts once it's finished: unchanged across two looks, last written at least 30 seconds ago (a slow writer
+    /// pausing between looks isn't done), and readable as audio, though one that still can't be read after five minutes
+    /// is listed so its import can say why.
+    func testBehaviorAFolderFileCountsOnlyOnceItsWriterIsDone() async throws {
+        let folder = root.appendingPathComponent("Slow", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let format = AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1)!
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8_000)!
+        buffer.frameLength = 8_000
+        let fresh = folder.appendingPathComponent("fresh.wav")
+        try AVAudioFile(forWriting: fresh, settings: format.settings).write(from: buffer)
+        let settled = folder.appendingPathComponent("settled.wav")
+        try AVAudioFile(forWriting: settled, settings: format.settings).write(from: buffer)
+        // An M4A whose index hasn't been written yet: its bytes aren't a readable container.
+        let partial = folder.appendingPathComponent("partial.m4a")
+        try Data(repeating: 7, count: 512).write(to: partial)
+        let abandoned = folder.appendingPathComponent("abandoned.m4a")
+        try Data(repeating: 9, count: 512).write(to: abandoned)
+        try Self.writtenAgo(45, settled, partial)
+        try Self.writtenAgo(400, abandoned)
+
+        let device = ConfiguredDevice(id: "slow", kind: OtherRecorderIntegration().kind)
+        let files = ImportFolderWatcher(storage: environment().storage(for: device, method: .files), interval: .seconds(3600))
+        defer { files.shutDown() }
+        try files.watch(folder)
+        await files.scan()
+        await files.scan()
+        XCTAssertEqual(Set(files.recordings.compactMap(\.fileName)), ["settled.wav", "abandoned.m4a"],
+                       "written moments ago, or not yet readable, it waits; unreadable for minutes, it's listed to say why")
+
+        // The fresh file's writer has been quiet for long enough now.
+        try Self.writtenAgo(31, fresh)
+        await files.scan()
+        await files.scan()
+        XCTAssertTrue(files.recordings.contains { $0.fileName == "fresh.wav" })
+        XCTAssertFalse(files.recordings.contains { $0.fileName == "partial.m4a" })
+        XCTAssertTrue(ImportFolderWatcher.isReadableAudio(settled))
+        XCTAssertFalse(ImportFolderWatcher.isReadableAudio(partial))
+    }
+
     /// The watcher looks again (twice: a file counts once it's unchanged across two looks), the session acts on what
     /// it saw, and whatever that queued has run: a moment in which something that shouldn't import would have.
     private func settle(_ files: ImportFolderWatcher, _ session: DeviceSession) async throws {
@@ -362,6 +411,7 @@ final class DeviceHubTests: XCTestCase {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             try Data(bytes.utf8).write(to: folder.appendingPathComponent("recording.wav"))
             try Data(bytes.utf8).write(to: folder.appendingPathComponent("copy.wav"))
+            try Self.writtenAgo(600, folder.appendingPathComponent("recording.wav"), folder.appendingPathComponent("copy.wav"))
             try files.watch(folder)
             await files.scan()
             await files.scan()
