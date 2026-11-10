@@ -677,8 +677,9 @@ tests drive it with scripted looks.
 
 **Use Calendar** (Settings › Recording, under When a call starts; off by default, and unavailable while
 When a call starts is Off) reads the calendars on this Mac through EventKit (`MeetingCalendar.swift`).
-Turning it on asks for full access to events; without it, the switch stays off and the page says so,
-with Open System Settings… (Privacy & Security › Calendars). Events are read on this Mac and never
+Turning it on asks for full access to events; without it, the switch stays off and the page says
+"Daybook can’t read your calendars." with Open System Settings… (Privacy & Security › Calendars), the
+row both apps draw (DaybookUI's `CalendarSettingsRow`). Events are read on this Mac and never
 leave it. Only a meeting's title is kept, as its conversation's title, as a typed one would be.
 
 - **A call takes its meeting's name.** When a call starts, `CalendarMeetings.current` picks the

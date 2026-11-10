@@ -210,8 +210,6 @@ private struct RecordingSettings: View {
     @State private var microphone = AVCaptureDevice.authorizationStatus(for: .audio)
     @State private var screenCapture = CGPreflightScreenCaptureAccess()
     @State private var showingSupportedApps = false
-    /// Use Calendar was turned on and the system said no.
-    @State private var calendarRefused = false
 
     var body: some View {
         Form {
@@ -242,20 +240,12 @@ private struct RecordingSettings: View {
                     Text("When a call starts")
                     if state.callPolicy != .off { DetectionStatusLine(state: state) }
                 }
-                Toggle("Use Calendar", isOn: Binding(get: { state.usesCalendar }, set: { on in
-                    Task {
-                        await state.setUsesCalendar(on)
-                        calendarRefused = on && !state.usesCalendar
-                    }
-                }))
+                CalendarSettingsRow(isOn: state.usesCalendar, access: state.meetingCalendar.access, set: { on in
+                    await state.setUsesCalendar(on)
+                    return state.usesCalendar
+                }, openSettings: { PrivacySettings.open(.calendars) })
                 .controlSize(.regular)
                 .disabled(state.callPolicy == .off)
-                // Refused just now, or taken away in System Settings since.
-                if calendarRefused || (state.usesCalendar && state.meetingCalendar.access == .denied) {
-                    ProblemLine(text: "Daybook can’t read your calendars.", details: nil) {
-                        Button("Open System Settings…") { PrivacySettings.open(.calendars) }
-                    }
-                }
                 Toggle("Show floating notes while recording", isOn: $showsFloatingNotes)
                     .controlSize(.regular)
             }

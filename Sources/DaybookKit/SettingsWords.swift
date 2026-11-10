@@ -129,6 +129,20 @@ public enum SettingsWords {
         return text.range(of: "MacBook", options: .caseInsensitive) != nil
     }
 
+    // MARK: Calendar
+
+    /// Settings › Recording's toggle (DaybookUI's `CalendarSettingsRow`): Calendar is the app's name, so it reads the
+    /// same on both.
+    public static let useCalendar = "Use Calendar"
+    /// The problem line while the system refuses Daybook its calendars.
+    public static let calendarRefused = "Daybook can’t read your calendars."
+
+    /// Whether Use Calendar says it can't read the calendars: it was turned on just now and refused, or it's on and
+    /// access was taken away in the system's settings since.
+    public static func calendarIsRefused(justNow: Bool, isOn: Bool, access: CalendarAccess) -> Bool {
+        justNow || (isOn && access == .denied)
+    }
+
     // MARK: Casing
 
     /// A sentence-case label as a title-case one, as the iPhone's Settings shows labels ("Use the cloud" → "Use the
