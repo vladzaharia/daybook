@@ -37,6 +37,19 @@ The items the design pass deferred (docs/audits/2026-11-10/README.md, "Still to 
   across the Kit and the selected Mac suites, 91 across six iPhone suites. Mac snapshots before and after of the home,
   recording with four sources, and a countdown after Stop at 360×560, 340×228, and 280×196, light and dark, the same
   layout; the 18 Pro's status sheet unchanged at medium and large.
+- **F6, `AppState` split along its seams (code-quality P8, CQ-21).** Four commits: the library window's navigation
+  is `LibraryWindowModel` (`AppState.window`, named as the iPhone's `ReadingSession`: `openID`, `place`, `pageMode`,
+  `searchText`, `selection`, `sheet`, `confirmation`, `confirmingTrash`; the spread helpers and `turnPage(to:)` with it;
+  the `SummaryJump.window` singleton replaced by the token request the iPhone uses, with `ScrollRequest` and
+  `SummaryBlockID` shared in DaybookUI's `PageJumps.swift`); this Mac's processing is `MacProcessor`
+  (`AppState.processor`, owning `ProcessingQueue` with `enqueue`, `runQueue`, `process`, and the claim heartbeat; the
+  18 queue forwarders deleted); the library's launch check and move offer are `LibraryLaunchCheck`; and the XCTest
+  checks are an injected `MacEnvironment` (`.live` in the app, `.inert` in tests). `swift test` (2,592 tests, 0
+  failures), `WindowInvalidationTests.testWhereThePersonIsDoesntRedrawForTheQueue` (reading every navigation property
+  redraws nothing for job progress, pauses, awaiting models, or a download), CalendarCallTests' environment case,
+  `scripts/build-ios.sh` with ReadingTests and TranscriptPageTests (41), and library-window snapshots (1440×900
+  summary, transcript, search, and the 2560 spread) before, after each step, and at the end, identical by pixel diff
+  apart from the demo's clock times; the move sheet still draws.
 - **F5, a level per source on the iPhone's recorder.** `levels` now goes both ways: a Mac recording with an iPhone
   sends the louder of its microphone and computer audio each meter tick (`RecordingController.onLevelsRead`,
   `AppState.shareLevel`), a few readings at a time, only to an iPhone recording the same conversation that lists
