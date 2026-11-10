@@ -175,7 +175,7 @@ final class SmallTasksTests: XCTestCase {
         let room = 4_096 - AppleSmallTasksModel.answerTokens - AppleSmallTasksModel.slackTokens
         XCTAssertLessThanOrEqual(used, room, "the answer has its room")
         XCTAssertGreaterThan(used, room * 9 / 10, "and the excerpt the rest")
-        XCTAssertTrue(prompts.values[0].contains("[…]"))
+        XCTAssertLessThan(prompts.values[0].components(separatedBy: "Alex: line").count - 1, 800, "an excerpt")
         XCTAssertTrue(prompts.values[0].contains("Ship Friday"))
     }
 
@@ -191,8 +191,7 @@ final class SmallTasksTests: XCTestCase {
         let model = try XCTUnwrap(loaded as? any PerformingSmallTasks)
         let short = (0..<20).map { "Alex: line \($0) about the launch." }.joined(separator: "\n")
         _ = try await model.performSmallTasks(SmallTaskRequest(transcript: short, notes: "", modelID: "m"), progress: { _ in })
-        XCTAssertTrue(prompts.values[0].contains("line 19 about the launch"))
-        XCTAssertFalse(prompts.values[0].contains("[…]"))
+        XCTAssertEqual(prompts.values[0].components(separatedBy: "Alex: line").count - 1, 20, "every line")
 
         struct Unavailable: Error {}
         let estimated = Prompts()
