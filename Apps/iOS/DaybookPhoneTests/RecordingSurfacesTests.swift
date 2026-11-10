@@ -323,6 +323,64 @@ final class RecordingSurfacesTests: XCTestCase {
   }
   XCTAssertEqual(PhoneStyle.ActivityButton.all.count, 3)
  }
+
+ // MARK: Hearing and background cost
+
+ private func recordingModel(_ rig: RecorderRig) throws -> PhoneAppModel {
+  PhoneAppModel(
+   recorder: rig.recorder,
+   library: PhoneLibrary(rootURL: try temporaryDirectory("library"), installation: "INSTALL-1"),
+   posture: DevicePosture(),
+   options: LaunchOptions(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]),
+   environment: try .test(self))
+ }
+
+ /// The recording surface and the Live Activity say "Microphone silent" while the hearing check does (five seconds of
+ /// zeros here), and stop as soon as it hears again. The activity's level is only that, so the voice sends nothing.
+ func testBehaviorMicrophoneSilentFollowsTheHearingCheckOnTheSurfaceAndTheLiveActivity() async throws {
+  let rig = RecorderRig()
+  let model = try recordingModel(rig)
+  try await model.startRecording()
+  rig.pump(1)
+  rig.recorder.updateLevels()
+  XCTAssertEqual(RecordingStatusWords.phase(PhoneRecorderStatus.inputs(model))?.detail, "Synthetic Microphone")
+  XCTAssertEqual(model.activityState().level, 1)
+  XCTAssertEqual(model.activityState().title(isStale: false), "Recording")
+
+  rig.inputs.current.signal = .silence
+  rig.pump(5.2)
+  rig.recorder.updateLevels()
+  let silent = try XCTUnwrap(RecordingStatusWords.phase(PhoneRecorderStatus.inputs(model)))
+  XCTAssertEqual(silent.detail, "Microphone silent")
+  XCTAssertTrue(silent.detailIsWarning)
+  XCTAssertEqual(model.activityState().level, 0)
+  XCTAssertEqual(model.activityState().title(isStale: false), "Microphone silent")
+
+  rig.inputs.current.signal = .tone(frequency: 440, amplitude: 0.3)
+  rig.pump(0.2)
+  rig.recorder.updateLevels()
+  XCTAssertEqual(RecordingStatusWords.phase(PhoneRecorderStatus.inputs(model))?.detail, "Synthetic Microphone")
+  XCTAssertEqual(model.activityState().title(isStale: false), "Recording")
+  try await model.stopRecording()
+ }
+
+ /// Out of sight, the meter reads twice a second (enough for the hearing check, the Live Activity, and the widgets)
+ /// unless a Mac draws this iPhone's level; in front, fifteen times.
+ func testBehaviorTheMeterSlowsOutOfSightUnlessAMacDrawsTheLevel() async throws {
+  XCTAssertEqual(PhoneAppModel.meterInterval(inFront: true, macsDrawingLevel: false), PhoneRecorder.levelInterval)
+  XCTAssertEqual(PhoneAppModel.meterInterval(inFront: false, macsDrawingLevel: true), PhoneRecorder.levelInterval)
+  XCTAssertEqual(PhoneAppModel.meterInterval(inFront: false, macsDrawingLevel: false), 0.5)
+
+  let rig = RecorderRig()
+  let model = try recordingModel(rig)
+  try await model.startRecording()
+  XCTAssertEqual(rig.recorder.meterInterval, PhoneRecorder.levelInterval)
+  model.scenePhaseChanged(.background)
+  XCTAssertEqual(rig.recorder.meterInterval, PhoneRecorder.backgroundLevelInterval)
+  model.scenePhaseChanged(.active)
+  XCTAssertEqual(rig.recorder.meterInterval, PhoneRecorder.levelInterval)
+  try await model.stopRecording()
+ }
 }
 
 /// The recorder on the iPhone, as the recorder both apps share draws it: what it says about the recording and the

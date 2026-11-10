@@ -120,6 +120,112 @@ final class RecordingInterruptionsTests: XCTestCase {
         try await model.stopRecording()
     }
 
+    // MARK: A paused recording in a pocket
+
+    private func listen(_ model: PhoneAppModel) -> NoticeLog {
+        let log = NoticeLog()
+        model.notices = PhoneNotices(post: { log.posted.append($0) }, remove: { log.removed.append($0) }, askPermission: {})
+        return log
+    }
+
+    /// An interruption that ends without iOS asking to continue leaves the recording paused: out of sight, "Recording
+    /// paused" says so, time-sensitive, opening the recorder; once Daybook is in front again it resumes, and the notice
+    /// goes.
+    func testBehaviorAPocketRecordingLeftPausedSaysSoAndResumesWhenDaybookIsOpened() async throws {
+        let rig = RecorderRig()
+        let model = try makeModel(rig: rig)
+        let log = listen(model)
+        try await model.startRecording()
+        rig.pump(2)
+        model.scenePhaseChanged(.background)
+        rig.session.send(.interruptionBegan(reason: "Siri"))
+        try await waitUntil("paused") { model.recorder.isPaused }
+        XCTAssertTrue(log.posted.isEmpty, "nothing while the interruption lasts")
+
+        rig.session.send(.interruptionEnded(shouldResume: false))
+        let notice = try XCTUnwrap(log.posted.last)
+        XCTAssertEqual(notice.id, PhoneNotices.recordingPausedID)
+        XCTAssertEqual(notice.title, "Recording paused")
+        XCTAssertEqual(notice.body, "Open Daybook to resume recording.")
+        XCTAssertTrue(notice.timeSensitive)
+        XCTAssertEqual(notice.destination, .recording)
+        XCTAssertTrue(model.recorder.isPaused, "it waits for the person")
+
+        model.scenePhaseChanged(.active)
+        try await waitUntil("resumed once Daybook is in front") { model.recorder.state == .recording }
+        XCTAssertEqual(log.removed, [PhoneNotices.recordingPausedID])
+        try await model.stopRecording()
+    }
+
+    func testBehaviorAnAutomaticResumeThatFailsInAPocketSaysItsPaused() async throws {
+        let rig = RecorderRig()
+        let model = try makeModel(rig: rig)
+        let log = listen(model)
+        try await model.startRecording()
+        rig.pump(1)
+        model.scenePhaseChanged(.background)
+        rig.session.send(.interruptionBegan(reason: nil))
+        try await waitUntil("paused for the call") { model.recorder.isPaused }
+        rig.session.activationError = callHolding
+        rig.session.send(.interruptionEnded(shouldResume: true))
+        try await waitUntil("the pause is said") { log.posted.contains { $0.id == PhoneNotices.recordingPausedID } }
+        XCTAssertTrue(model.recorder.isPaused)
+        rig.session.activationError = nil
+        try await model.stopRecording()
+        XCTAssertEqual(log.removed, [PhoneNotices.recordingPausedID], "stopped: no longer true")
+    }
+
+    /// In front, the recorder shows Paused with Resume: nothing is posted, and only the person resumes it, after a glance
+    /// at Control Center (inactive, then active again) or a trip to another app.
+    func testBehaviorAPauseInFrontPostsNothing() async throws {
+        let rig = RecorderRig()
+        let model = try makeModel(rig: rig)
+        let log = listen(model)
+        try await model.startRecording()
+        rig.pump(1)
+        rig.session.send(.interruptionBegan(reason: "Siri"))
+        try await waitUntil("paused") { model.recorder.isPaused }
+        rig.session.send(.interruptionEnded(shouldResume: false))
+        XCTAssertTrue(model.recorder.canResume)
+        XCTAssertTrue(log.posted.isEmpty)
+        model.scenePhaseChanged(.inactive)
+        XCTAssertTrue(log.posted.isEmpty, "Control Center over Daybook isn't out of sight")
+        model.scenePhaseChanged(.active)
+        model.scenePhaseChanged(.background)
+        model.scenePhaseChanged(.active)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertTrue(model.recorder.isPaused, "it paused where the person could see it: they resume it")
+        try await model.stopRecording()
+    }
+
+    // MARK: Stop, in the background
+
+    /// Stop holds background time from its first line until the recording is filed (a Stop from the Lock Screen comes
+    /// with Daybook in the background), and a recording that stops by itself does too.
+    func testBehaviorStopHoldsBackgroundTimeUntilTheRecordingIsFiled() async throws {
+        let rig = RecorderRig()
+        let time = RecordedBackgroundTime()
+        var environment = try PhoneAppEnvironment.test(self)
+        environment.backgroundTime = time
+        let library = PhoneLibrary(rootURL: try temporaryDirectory("library"), installation: "INSTALL-1")
+        let model = PhoneAppModel(recorder: rig.recorder, library: library, posture: DevicePosture(),
+                                  options: DebugLaunch(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]),
+                                  environment: environment)
+        try await model.startRecording()
+        rig.pump(2)
+        model.scenePhaseChanged(.background)
+        // Filing waits for the library.
+        await model.library.controller.acquireLock()
+        let stop = Task { try await model.stopRecording() }
+        try await waitUntil("the recording is finished, and waits to be filed") { model.recorder.state == .idle && model.isFiling }
+        XCTAssertEqual(time.begun, [PhoneAppModel.savingTitle])
+        XCTAssertTrue(time.ended.isEmpty, "held while it's filed")
+        model.library.controller.releaseLock()
+        try await stop.value
+        XCTAssertEqual(time.ended, [1])
+        XCTAssertEqual(model.library.conversations.count, 1)
+    }
+
     // MARK: Stopped by itself
 
     func testBehaviorARecordingThatStopsByItselfEndsAsStoppedAndNotifiesThePocket() async throws {
@@ -238,4 +344,25 @@ final class RecordingInterruptionsTests: XCTestCase {
         XCTAssertFalse(PhoneNotices.isStorageFull(NSError(domain: AVFoundationErrorDomain, code: AVError.Code.unknown.rawValue), spaceLeft: 0))
         XCTAssertFalse(PhoneNotices.isStorageFull(nil, spaceLeft: 0))
     }
+}
+
+/// The notifications a test's app model posted and took away.
+@MainActor
+private final class NoticeLog {
+    var posted: [PhoneNotices.Notice] = []
+    var removed: [String] = []
+}
+
+/// Background time, as granted and given back.
+@MainActor
+private final class RecordedBackgroundTime: BackgroundTime {
+    private(set) var begun: [String] = []
+    private(set) var ended: [Int] = []
+
+    func begin(_ name: String, expired: @escaping @MainActor @Sendable () -> Void) -> Int? {
+        begun.append(name)
+        return begun.count
+    }
+
+    func end(_ assertion: Int) { ended.append(assertion) }
 }

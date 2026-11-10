@@ -115,7 +115,8 @@ final class ShippedCaptureJournalTests: XCTestCase {
 
         let after = try PhoneCaptureJournal.load(from: folder)
         XCTAssertEqual(after.state, .stopped)
-        XCTAssertEqual(after.finalFile?.frameCount, 5 * 48_000 + secondFrames)
+        // The parts' packets are copied: the second lands within one AAC frame of where it was recorded.
+        XCTAssertEqual(Double(after.finalFile?.frameCount ?? 0), Double(5 * 48_000 + secondFrames), accuracy: Double(RecordingAssembler.packetFrames))
         let audio = try DecodedAudio(url: recording.audioURL)
         XCTAssertEqual(audio.frequency(0.3..<2.7), 440, accuracy: 3)
         XCTAssertLessThan(audio.rms(3.2..<4.8), 0.003, "the interruption is silence")

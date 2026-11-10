@@ -51,6 +51,15 @@ extension PhoneAppModel {
     /// Its notes couldn't be added yet; they stay for the next launch.
     static let notesNotFiled = "No audio was recorded. Couldn’t add your notes to your library. They’re kept and will be added next time Daybook opens."
 
+    /// What the notice says of a recording an earlier run left, as it's filed: one Daybook was making when it quit, or one
+    /// Stop had ended that Daybook was interrupted while saving (whole, so nothing's said to be missing).
+    static func recovered(_ recovery: PhoneRecording.Recovery) -> String {
+        switch recovery {
+        case .quitWhileRecording: return "Recovered a recording Daybook was making when it quit."
+        case .interruptedWhileSaving: return "Saved a recording Daybook was interrupted while saving."
+        }
+    }
+
     /// Runs the filing of conversation `id`'s recording, registered while it runs so a photo taken as the
     /// recording ended waits for it rather than polling.
     func whileFiling(_ id: UUID?, _ filing: Task<StopOutcome, Never>) async -> StopOutcome {
@@ -82,7 +91,7 @@ extension PhoneAppModel {
                 // Speakers the live model missed, from the recording, while the app is in front.
                 labelCaptionSpeakers()
             }
-            if recording.recovered { say("Recovered a recording Daybook was making when it quit.") }
+            if let recovery = recording.recovery { say(Self.recovered(recovery)) }
             if let request = filed.request { link.nudge(request) }
             if !options.isRunningTests { sync.synchronizeFinishing(.filed) }
             // Transcribed here when this iPhone has the models (it claimed the request as it filed it).

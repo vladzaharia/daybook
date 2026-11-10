@@ -9,7 +9,10 @@ import WidgetKit
 /// sent when what it shows changes, and at least once a minute while recording, so its stale date
 /// (`ContentState.staleAfter`) keeps rolling: if the app stops (a crash, the system ending it), the
 /// activity goes stale and asks to open Daybook instead of counting on. The clock counts itself.
-/// Updates and the end go out in the order made (`LiveActivityRunner`).
+/// Its level is only whether the microphone hears (`ContentState.level(hearing:)`), so the voice never
+/// sends an update: a long recording in a pocket sends one a minute, and one each time it stops or starts
+/// hearing. The app offers it the state at the meter's pace, twice a second out of sight
+/// (`PhoneAppModel.meterInterval`). Updates and the end go out in the order made (`LiveActivityRunner`).
 @MainActor
 final class RecordingActivityController {
     private let runner = LiveActivityRunner<RecordingActivityAttributes>()
@@ -17,7 +20,8 @@ final class RecordingActivityController {
     private var lastSent = Date.distantPast
     private var lastLevelUpdate = Date.distantPast
     private var lastCaptionUpdate = Date.distantPast
-    /// Hearing-or-not changes at most this often, to stay inside the system's update budget.
+    /// Hearing-or-not changes at most this often, so a microphone on the edge of the hearing check can't spend the
+    /// system's update budget.
     static let levelInterval: TimeInterval = 2
 
     var isRunning: Bool { runner.isRunning }

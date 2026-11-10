@@ -130,6 +130,15 @@ final class PhoneAppModel: RecordingCommandHandling {
     @ObservationIgnored var stopUnderway: StopUnderway?
     /// Stops asked for while the recording stops by itself, until that stop is under way (`stoppedByItself`).
     @ObservationIgnored private var waitingForStopByItself: [CheckedContinuation<Void, Never>] = []
+    /// A join at Stop that encodes again goes on in the background as "Saving recording", where iOS allows it (iOS 26's
+    /// continued processing), apart from the processor's own.
+    @ObservationIgnored private lazy var savingInBackground = ContinuedProcessing(scheduler: environment.continuedProcessing())
+    /// "Recording paused" is showing (`needsResume`), until the recording goes on or stops.
+    @ObservationIgnored private var pausedNoticeShown = false
+    /// The scene is in the background (`scenePhaseChanged`): not merely inactive under Control Center.
+    @ObservationIgnored private var inBackground = false
+    /// Background time for a recording that's stopping by itself, from the moment it starts to until it's filed.
+    @ObservationIgnored private var stoppingByItself: BackgroundAssertion?
     /// What Spotlight lists of the library.
     @ObservationIgnored private(set) var conversationIndex: ConversationIndex?
 
@@ -257,9 +266,15 @@ final class PhoneAppModel: RecordingCommandHandling {
         }
         recorder.onChange = { [weak self] in self?.recorderChanged() }
         recorder.onLevel = { [weak self] level in self?.levelChanged(level) }
+        recorder.onStoppingByItself = { [weak self] in self?.holdTimeToStopByItself() }
         recorder.onUnexpectedStop = { [weak self] recording in self?.stoppedByItself(recording) }
-        // The interruption ended and iOS asked to continue, but recording couldn't: the person hears why.
-        recorder.onResumeFailed = { [weak self] error in self?.sayResumeFailed(error) }
+        // The interruption ended and iOS asked to continue, but recording couldn't: the person hears why, and out of
+        // sight, that it's paused.
+        recorder.onResumeFailed = { [weak self] error in
+            self?.sayResumeFailed(error)
+            self?.needsResume()
+        }
+        recorder.onNeedsResume = { [weak self] in self?.needsResume() }
     }
 
     private func wireSync() {
@@ -420,7 +435,11 @@ final class PhoneAppModel: RecordingCommandHandling {
         guard !options.isRunningTests else { return }
         watchCalendar()
         remindMeetings()
-        if !recorder.isActive { activities.endOrphans() }
+        if !recorder.isActive {
+            activities.endOrphans()
+            // A run that ended while paused left "Recording paused"; its recording is recovered below.
+            notices.recordingNoLongerPaused()
+        }
         await recoverLeftovers()
         pruneCaptions()
         if let probe = options.captionProbe { Task { await CaptionProbe.run(file: probe.isEmpty ? nil : probe, locale: settings.captionLocale) } }
@@ -455,6 +474,8 @@ final class PhoneAppModel: RecordingCommandHandling {
     /// The scene moved to the foreground or background: sync, the link, and devices follow.
     func scenePhaseChanged(_ phase: ScenePhase) {
         isForeground = phase == .active
+        inBackground = phase == .background
+        paceMeter()
         sync.isForeground = isForeground
         processor.conditions.screen = phase == .active ? .active : phase == .inactive ? .inactive : .background
         devices.foregroundChanged(isForeground)
@@ -462,6 +483,9 @@ final class PhoneAppModel: RecordingCommandHandling {
         switch phase {
         case .active:
             if multipoints.recorderOnly != nil, !recorder.isActive { Task { await multipoints.recordAlongWithRecorder() } }
+            // A recording that paused out of sight ("Recording paused") goes on: the person came back to it. One that
+            // paused in front waits for Resume, wherever the person went meanwhile.
+            if pausedNoticeShown, recorder.isPaused, recorder.canResume { Task { try? await self.resumeRecording() } }
             recordMeetingWhenInFront()
             remindMeetings()
             labelCaptionSpeakers()
@@ -680,6 +704,12 @@ final class PhoneAppModel: RecordingCommandHandling {
     }
 
     func stopRecording() async throws {
+        // Background time from the first line until the recording is filed and handed to sync, which holds its own for
+        // the upload (`synchronizeFinishing`): a Stop from the Lock Screen, Siri, or a Mac comes with Daybook in the
+        // background, and iOS would otherwise suspend it partway through saving.
+        let time = BackgroundAssertion(environment.backgroundTime)
+        time.begin(Self.savingTitle)
+        defer { time.end() }
         // Stop again while a stop finishes (tapped twice as it saves, a Mac's stop with the person's): it waits for that
         // one and comes to what it came to. It never ends the Live Activity, files, or says anything itself.
         if let underway = stopUnderway, !recorder.isActive || recorder.recordingID == underway.recordingID {
@@ -707,12 +737,20 @@ final class PhoneAppModel: RecordingCommandHandling {
         defer { isFiling = false }
         let session = multipoints.session
         let clocks = link.peerClocks { mac in session?.macs.first(where: { $0.id == mac.id })?.startedAt ?? mac.recording?.startedAt }
+        // The Macs this iPhone started stop as its capture ends, not once it's filed. Its recorders and a Mac that leads stop
+        // after filing (`endCascade`), so their recordings join a conversation that's already in the library.
+        let stopMacs = RunOnce { [weak self] in self?.multipoints.stopMacsStartedHere(session) }
+        let job = recorder.recordingID ?? UUID()
         // Finishing and filing must complete even if the caller is cancelled (an intent that timed
         // out, a view that went away): an unstructured task doesn't inherit cancellation.
         let filing = Task { @MainActor [final] () -> StopOutcome in
             // Saving, with no buttons, as the recorder starts to finish (nothing updates the activity after this).
             self.activities.showSaving(Self.savingActivity(final))
-            let stopped = await self.recorder.stop()
+            let stopped = await self.recorder.stop(PhoneRecorder.StopEvents(
+                captureEnded: { stopMacs() },
+                longJoin: { self.savingInBackground.begin(job: job, title: Self.savingTitle, subtitle: "") },
+                joinProgress: { fraction in self.savingInBackground.report(fraction: fraction) }))
+            defer { self.savingInBackground.end(success: stopped != nil) }
             // Saved only once there's a recording to save.
             self.activities.end(Self.endedActivity(final, recorded: stopped != nil, failure: self.recorder.lastFailure,
                                                    kept: self.recorder.unfinishedFolder != nil))
@@ -732,7 +770,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         }
         await beginStop(of: recorder.recordingID) {
             self.noteStopped(await self.whileFiling(stopping, filing))
-            self.multipoints.stopMacsStartedHere(session)
+            stopMacs()
             self.multipoints.endCascade(stopping, session: session, cascadesUp: cascadesUp)
             self.multipoints.session = nil
             self.sync.controller?.publishActivity(recording: nil)
@@ -745,11 +783,29 @@ final class PhoneAppModel: RecordingCommandHandling {
     /// The recording stopped by itself: finishing it is the stop under way, and a Stop asked for as it stopped
     /// waits for it.
     private func stoppedByItself(_ recording: PhoneRecording?) {
-        beginStop(of: recording?.recordingID) { await self.finishUnexpectedly(recording) }
+        // As Stop does, from the moment it started to stop (`holdTimeToStopByItself`) until it's filed.
+        let time = stoppingByItself ?? BackgroundAssertion(environment.backgroundTime)
+        if stoppingByItself == nil { time.begin(Self.savingTitle) }
+        stoppingByItself = nil
+        beginStop(of: recording?.recordingID) {
+            await self.finishUnexpectedly(recording)
+            time.end()
+        }
         let waiting = waitingForStopByItself
         waitingForStopByItself = []
         for stop in waiting { stop.resume() }
     }
+
+    /// The recording started to stop by itself: background time from now, through its join and filing.
+    private func holdTimeToStopByItself() {
+        stoppingByItself?.end()
+        let time = BackgroundAssertion(environment.backgroundTime)
+        time.begin(Self.savingTitle)
+        stoppingByItself = time
+    }
+
+    /// What background time and continued processing call saving a stopped recording.
+    static let savingTitle = "Saving recording"
 
     /// Filing put a conversation in the library (`PhoneAppModel+Filing.swift`).
     func noteFiled(_ id: UUID) { lastFiledID = id }
@@ -1005,6 +1061,10 @@ final class PhoneAppModel: RecordingCommandHandling {
 
     private func recorderChanged() {
         if !recorder.isCapturing { levels.reset() }
+        if pausedNoticeShown, !recorder.isPaused {
+            pausedNoticeShown = false
+            notices.recordingNoLongerPaused()
+        }
         // Processing never runs beside a recording.
         processor.conditions.isRecording = recorder.isActive
         updateActivity()
@@ -1013,6 +1073,7 @@ final class PhoneAppModel: RecordingCommandHandling {
     }
 
     private func levelChanged(_ level: AudioLevel) {
+        paceMeter()
         levels.append(recorder.state == .recording ? level.meterValue : 0)
         sharing.shareLevel(level)
         updateActivity()
@@ -1020,6 +1081,31 @@ final class PhoneAppModel: RecordingCommandHandling {
         // The widgets' confirmation that it's still recording, once a minute.
         if sharedState.isDue() { publish() }
         multipoints.checkLead()
+    }
+
+    // MARK: Background cost and a paused recording
+
+    /// How often the recorder's meter reads (`PhoneRecorder.meterInterval`): fifteen times a second while someone can
+    /// see a meter (Daybook in front, or a Mac drawing this iPhone's level), else twice, which is all the hearing check,
+    /// the Live Activity (whose level is only whether it hears), and the widgets need.
+    static func meterInterval(inFront: Bool, macsDrawingLevel: Bool) -> TimeInterval {
+        inFront || macsDrawingLevel ? PhoneRecorder.levelInterval : PhoneRecorder.backgroundLevelInterval
+    }
+
+    private func paceMeter() {
+        let drawing = recorder.captureID.map { !sharing.macsShowingLevels($0).isEmpty } ?? false
+        let interval = Self.meterInterval(inFront: isForeground, macsDrawingLevel: drawing)
+        if recorder.meterInterval != interval { recorder.meterInterval = interval }
+    }
+
+    /// The recording is paused and won't go on by itself (an interruption ended without iOS asking to continue, a
+    /// resume or the microphone failed). Out of sight (in the background, not under Control Center), "Recording paused"
+    /// says so, time-sensitive, and Daybook resumes it once it's back in front (`scenePhaseChanged`). In front, the
+    /// recorder's Resume is there, and only the person resumes it.
+    private func needsResume() {
+        guard recorder.isPaused, inBackground || UIApplication.shared.applicationState == .background else { return }
+        notices.recordingPaused()
+        pausedNoticeShown = true
     }
 
     /// What the Live Activity shows now.
@@ -1097,4 +1183,17 @@ struct OwedMacStop: OwedStop {
     /// The conversation the Mac is to stop recording.
     var conversationID: UUID
     var owedAt: Date
+}
+
+/// Work done once, by whichever caller comes first.
+@MainActor
+final class RunOnce {
+    private var work: (() -> Void)?
+    init(_ work: @escaping () -> Void) { self.work = work }
+
+    func callAsFunction() {
+        let work = self.work
+        self.work = nil
+        work?()
+    }
 }

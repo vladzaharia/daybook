@@ -45,6 +45,8 @@ struct PhoneAppEnvironment {
     /// Publishes the loaded library's bounded widget snapshots.
     var publishRecentConversations: (SharedRecentConversations) -> Void
     var publishNextSteps: (SharedNextSteps) -> Void
+    /// Time iOS grants to finish work once Daybook leaves the foreground (Stop's saving and filing); none by default.
+    var backgroundTime: any BackgroundTime = NoBackgroundTime()
 
     /// The app's: the keychain, `UserDefaults.standard`, Application Support's models with background
     /// downloads, the shared Wi‑Fi monitor, Bluetooth (or the simulated recorder), notifications, and Spotlight.
@@ -74,7 +76,8 @@ struct PhoneAppEnvironment {
             publishNextSteps: { snapshot in
                 guard snapshot != SharedNextSteps.load(), snapshot.save() else { return }
                 WidgetCenter.shared.reloadTimelines(ofKind: SharedNextSteps.widgetKind)
-            })
+            },
+            backgroundTime: SystemBackgroundTime())
     }
 
     /// Nothing real: memory key stores, a scratch suite and models folder for this process, no downloads, no
@@ -98,6 +101,12 @@ struct PhoneAppEnvironment {
             publishRecentConversations: { _ in },
             publishNextSteps: { _ in })
     }
+}
+
+/// No background time: tests, and the test host.
+struct NoBackgroundTime: BackgroundTime {
+    func begin(_ name: String, expired: @escaping @MainActor @Sendable () -> Void) -> Int? { nil }
+    func end(_ assertion: Int) {}
 }
 
 /// The scratch space of `.inert`: one folder per process under the temporary directory, holding its

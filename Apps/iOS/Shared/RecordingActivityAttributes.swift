@@ -74,14 +74,14 @@ extension RecordingActivityAttributes.ContentState {
         }
     }
 
-    /// "Recording", "Paused", "Saving…", "Saved", "Recording stopped", or "Open Daybook to check" once the
-    /// system marks it stale.
+    /// "Recording" ("Microphone silent" while it hears nothing, the recording surface's words), "Paused", "Saving…",
+    /// "Saved", "Recording stopped", or "Open Daybook to check" once the system marks it stale.
     func title(isStale: Bool) -> String {
         switch phase {
         case .saved: return "Saved"
         case .stopped: return "Recording stopped"
         case _ where isStale: return SharedRecordingState.unconfirmedLine
-        case .recording: return "Recording"
+        case .recording: return level == 0 ? "Microphone silent" : "Recording"
         case .paused: return "Paused"
         case .saving: return "Saving…"
         }

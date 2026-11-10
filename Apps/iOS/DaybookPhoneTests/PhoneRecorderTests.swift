@@ -597,6 +597,185 @@ final class PhoneRecorderTests: XCTestCase {
         XCTAssertNotNil(rig.recorder.startedAt)
         _ = await rig.recorder.stop()
     }
+
+    // MARK: Joining by copying packets
+
+    /// An interrupted recording is joined by copying each part's AAC packets, byte for byte, into one file: the second part
+    /// keeps its encoder priming inside the gap, lands within one AAC frame (21 ms) of where it was recorded, and the
+    /// notes and bookmarks keep their times.
+    func testAnInterruptedRecordingIsJoinedByCopyingEachPartsPackets() async throws {
+        let rig = RecorderRig()
+        let folder = try temporaryDirectory().appendingPathComponent("capture")
+        try await rig.recorder.start(in: folder, title: "Call")
+        rig.pump(1)
+        rig.recorder.editNotes("Before the call")
+        rig.recorder.addBookmark()
+        rig.pump(2)
+        rig.session.send(.interruptionBegan(reason: nil))
+        try await waitUntil("the first part is closed") {
+            rig.recorder.isPaused && ((try? PhoneCaptureJournal.load(from: folder))?.segments.first?.closed == true)
+        }
+        rig.clock.advance(2.5)   // the call: not a whole number of AAC frames
+        rig.recorder.editNotes("Before the call\nDuring the call")
+        rig.session.send(.interruptionEnded(shouldResume: true))
+        try await waitUntil("recording to resume") { rig.recorder.state == .recording }
+        // Another voice after the call, so the parts' packets differ.
+        rig.inputs.current.signal = .tone(frequency: 660, amplitude: 0.3)
+        rig.pump(2)
+        rig.recorder.addBookmark()
+        rig.pump(1)
+
+        let recording = try await rig.stop()
+        let joined = try await Self.packets(of: recording.audioURL)
+        let first = try await Self.packets(of: folder.appendingPathComponent("segment-000.m4a"))
+        let second = try await Self.packets(of: folder.appendingPathComponent("segment-001.m4a"))
+        XCTAssertEqual(Array(joined.prefix(first.count)), first, "the first part's packets open the file, untouched")
+        let at = try XCTUnwrap(Self.firstIndex(of: second, in: joined), "the second part's packets are in the file, untouched and in order")
+        XCTAssertGreaterThan(at, first.count, "silence between them")
+        XCTAssertEqual(at + second.count, joined.count, "and nothing after the second part")
+        let silence = Set(joined[first.count..<at])
+        XCTAssertEqual(silence.count, 1, "the gap is one packet of silence, again and again")
+
+        let frame = Double(RecordingAssembler.packetFrames) / 48_000
+        XCTAssertEqual(recording.duration, 8.5, accuracy: frame, "3 s, the 2.5 s call, 3 s: within one AAC frame")
+        let audio = try DecodedAudio(url: recording.audioURL)
+        XCTAssertEqual(audio.duration, recording.duration, accuracy: 1e-9)
+        XCTAssertEqual(audio.rms(0.3..<2.8), toneRMS, accuracy: 0.02)
+        XCTAssertLessThan(audio.rms(3.2..<5.3), 0.003, "the call is silence")
+        XCTAssertEqual(audio.rms(5.8..<8.2), toneRMS, accuracy: 0.02)
+        XCTAssertEqual(audio.frequency(0.3..<2.8), 440, accuracy: 3)
+        XCTAssertEqual(audio.frequency(5.8..<8.2), 660, accuracy: 3)
+        let onset = try XCTUnwrap(audio.samples.indices.dropFirst(Int(4.5 * 48_000)).first { abs(audio.samples[$0]) > 0.05 })
+        XCTAssertEqual(Double(onset) / 48_000, 5.5, accuracy: frame, "the second part starts where it was recorded")
+
+        XCTAssertEqual(recording.timedNotes.map(\.time), [1, 5.5], "note times are the conversation's, unchanged")
+        XCTAssertEqual(recording.highlights.map(\.time), [1, 7.5])
+        let journal = try PhoneCaptureJournal.load(from: folder)
+        XCTAssertEqual(journal.finalFile?.joined, true)
+        XCTAssertNil(journal.finalFile?.reencoded)
+        XCTAssertEqual(journal.finalFile?.frameCount, Int64(audio.samples.count))
+        XCTAssertTrue(recording.capture.notes?.contains("Joined from 2 parts.") == true, "\(recording.capture.notes ?? [])")
+    }
+
+    /// Parts in another format (none are written so today) can't share a file's packets: they're decoded and encoded
+    /// once, exactly placed, and say so. Only a long one asks for time to finish in the background.
+    func testPartsInDifferentFormatsAreEncodedAgain() async throws {
+        let folder = try temporaryDirectory().appendingPathComponent("capture")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var other = RecordingFormat.speech
+        other.sampleRate = 44_100
+        _ = try CaptureFiles.writeClosedSegment(to: folder.appendingPathComponent("segment-000.m4a"), seconds: 2, frequency: 440)
+        _ = try CaptureFiles.writeClosedSegment(to: folder.appendingPathComponent("segment-001.m4a"), seconds: 2, frequency: 660, format: other)
+        var journal = PhoneCaptureJournal(id: UUID(), title: "Two formats", createdAt: Date(timeIntervalSince1970: 1_800_000_000), format: .speech)
+        journal.startedAt = journal.createdAt
+        journal.segments = [
+            CaptureSegment(index: 0, fileName: "segment-000.m4a", startOffset: 0, frameCount: 96_000, closed: true,
+                           firstSampleHostTime: 1_000, clockAnchors: [], notes: nil),
+            CaptureSegment(index: 1, fileName: "segment-001.m4a", startOffset: 3, frameCount: 88_200, closed: true,
+                           firstSampleHostTime: 1_003, clockAnchors: [], notes: nil),
+        ]
+        journal.state = .stopped
+        try journal.write(to: folder)
+        let pieces = PhoneCaptureFinisher.pieces(journal, in: folder)
+        XCTAssertFalse(RecordingAssembler.expectsLongJoin(pieces, format: .speech), "five seconds is quick to encode")
+        XCTAssertTrue(RecordingAssembler.expectsLongJoin(pieces, format: .speech, longerThan: 4))
+
+        let recording = try await PhoneRecorder.recover(in: folder)
+        let after = try PhoneCaptureJournal.load(from: folder)
+        XCTAssertEqual(after.finalFile?.reencoded, true)
+        XCTAssertEqual(Double(after.finalFile?.frameCount ?? 0), 5 * 48_000, accuracy: 64, "placed at its offset, at 48 kHz")
+        XCTAssertTrue(recording.capture.notes?.contains("Joined from 2 parts and encoded again.") == true, "\(recording.capture.notes ?? [])")
+        let audio = try DecodedAudio(url: recording.audioURL)
+        XCTAssertEqual(audio.frequency(0.3..<1.7), 440, accuracy: 3)
+        XCTAssertEqual(audio.frequency(3.3..<4.7), 660, accuracy: 3)
+    }
+
+    /// Stop ends the capture first: every part closed and the journal saying it's being saved, before the audio session
+    /// is given back, and before anything is joined.
+    func testStopSaysItsSavingBeforeTheSessionGoes() async throws {
+        let rig = RecorderRig()
+        let folder = try temporaryDirectory().appendingPathComponent("capture")
+        try await rig.recorder.start(in: folder, title: "Two steps")
+        rig.pump(2)
+        var atCaptureEnd: (journal: PhoneCaptureJournal, sessionActive: Bool, joined: Bool)?
+        let recording = await rig.recorder.stop(PhoneRecorder.StopEvents(captureEnded: {
+            atCaptureEnd = ((try? PhoneCaptureJournal.load(from: folder))!, rig.session.isActive,
+                            FileManager.default.fileExists(atPath: folder.appendingPathComponent(PhoneCaptureJournal.finalFileName).path))
+        }))
+        let ended = try XCTUnwrap(atCaptureEnd)
+        XCTAssertEqual(ended.journal.state, .stopping)
+        XCTAssertNotNil(ended.journal.endedAt)
+        XCTAssertEqual(ended.journal.segments.map(\.closed), [true])
+        XCTAssertFalse(ended.sessionActive, "the session is given back once the journal says so")
+        XCTAssertFalse(ended.joined, "joining comes after")
+        XCTAssertNotNil(recording)
+        XCTAssertEqual(try PhoneCaptureJournal.load(from: folder).state, .stopped)
+    }
+
+    // MARK: Hearing
+
+    /// The hearing check is rolling: digital zeros for 5 s, or nothing above −90 dBFS for 20 s, is "Microphone silent",
+    /// and sound clears it at once. A pause doesn't count against it.
+    func testTheHearingCheckFlipsAfterZerosAndClearsWhenSoundComesBack() async throws {
+        let rig = RecorderRig()
+        let folder = try temporaryDirectory().appendingPathComponent("capture")
+        try await rig.recorder.start(in: folder, title: "Hearing")
+        rig.pump(2)
+        rig.recorder.updateLevels()
+        XCTAssertFalse(rig.recorder.isMicrophoneSilent)
+
+        // A mute switch: digital zeros.
+        rig.inputs.current.signal = .silence
+        rig.pump(4.5)
+        rig.recorder.updateLevels()
+        XCTAssertFalse(rig.recorder.isMicrophoneSilent, "under five seconds")
+        rig.pump(0.6)
+        rig.recorder.updateLevels()
+        XCTAssertTrue(rig.recorder.isMicrophoneSilent, "five seconds of zeros")
+
+        rig.inputs.current.signal = .tone(frequency: 440, amplitude: 0.3)
+        rig.pump(0.2)
+        rig.recorder.updateLevels()
+        XCTAssertFalse(rig.recorder.isMicrophoneSilent, "it clears as soon as it hears")
+
+        // Something, but nothing a person could have said: about −103 dBFS.
+        rig.inputs.current.signal = .tone(frequency: 440, amplitude: 0.000_01)
+        rig.pump(19.5)
+        rig.recorder.updateLevels()
+        XCTAssertFalse(rig.recorder.isMicrophoneSilent)
+        rig.pump(0.6)
+        rig.recorder.updateLevels()
+        XCTAssertTrue(rig.recorder.isMicrophoneSilent, "twenty seconds under −90 dBFS")
+
+        // A long pause, then the microphone again: not silent for the time it was paused.
+        rig.inputs.current.signal = .tone(frequency: 440, amplitude: 0.3)
+        rig.pump(0.2)
+        rig.session.send(.interruptionBegan(reason: nil))
+        try await waitUntil("paused") { rig.recorder.isPaused }
+        rig.clock.advance(60)
+        rig.session.send(.interruptionEnded(shouldResume: true))
+        try await waitUntil("resumed") { rig.recorder.state == .recording }
+        rig.pump(0.3)
+        rig.recorder.updateLevels()
+        XCTAssertFalse(rig.recorder.isMicrophoneSilent)
+        _ = await rig.recorder.stop()
+    }
+
+    // MARK: Helpers
+
+    /// A file's AAC packets, as they're stored.
+    static func packets(of url: URL) async throws -> [Data] {
+        let reader = try await PacketReader(url: url, matching: nil)
+        var packets: [Data] = []
+        while let run = try reader.next() { packets += run.packets }
+        return packets
+    }
+
+    /// Where `part` starts in `whole`, as one unbroken run.
+    static func firstIndex(of part: [Data], in whole: [Data]) -> Int? {
+        guard let head = part.first, part.count <= whole.count else { return nil }
+        return (0...(whole.count - part.count)).first { whole[$0] == head && Array(whole[$0..<$0 + part.count]) == part }
+    }
 }
 
 @MainActor
