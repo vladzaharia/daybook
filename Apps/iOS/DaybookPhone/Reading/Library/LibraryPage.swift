@@ -1,11 +1,15 @@
+import DaybookDesign
 import DaybookKit
 import DaybookUI
 import SwiftUI
 
 /// The library: a place (All, Work, Personal, a folder, or the Trash) as a date-grouped list, or search results.
-/// Places are the title's menu; search opens from Search beside Record (or on the status sheet), at the thumb, with
-/// tag and speaker suggestions; and Select turns on multi-select for what `ConversationActions.batch` offers. The
-/// rows, results, empty places, and the Trash's rows are DaybookUI's, the Mac's too.
+/// The same on one page and two (docs/iphone.md, "Scope"): places are the title's menu; More holds Select
+/// Conversations, New Folder…, and Devices, beside Settings; the toolbar at the foot holds Record, the system's
+/// search (minimized to its button until it's used, then the field at the thumb, with tag and speaker suggestions),
+/// and New (New Note, Import Audio…); and the status strip says, above it, the one thing worth saying, if anything
+/// (`StatusStrip`). Select turns on multi-select for what `ConversationActions.batch` offers. The rows, results,
+/// empty places, and the Trash's rows are DaybookUI's, the Mac's too.
 ///
 /// It reads the `LibraryController` directly, which is `@Observable`, as the player is: the list redraws for the
 /// conversations, and a row for whether it's playing.
@@ -14,25 +18,15 @@ struct LibraryPage: View {
   let rootURL: URL
   /// Two pages: a tap shows the conversation on the right page instead of opening it; a second tap opens it.
   var twoPage = false
-  @Binding var panelDetent: StatusDetent
-  init(
-    library: LibraryController, rootURL: URL, twoPage: Bool = false,
-    panelDetent: Binding<StatusDetent> = .constant(.compact)
-  ) {
-    self.library = library
-    self.rootURL = rootURL
-    self.twoPage = twoPage
-    self._panelDetent = panelDetent
-  }
   @Environment(ReadingSession.self) private var session
   @Environment(PhoneAppModel.self) private var model
   @Environment(\.liveCaptionStore) private var captionStore
-  /// The status sheet holds Record, Import, and Search while it's up (pocket); leave it room.
-  @Environment(\.statusSheetInset) private var statusSheetInset
+  @Environment(\.showStatus) private var showStatus
   @Environment(\.creaseEdge) private var creaseEdge
   @Environment(\.undoManager) private var undoManager
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var showingSettings = false
+  @State private var importing = false
   @State private var naming: FolderNaming?
   @State private var folderName = ""
   @State private var deletingFolder: LibraryFolder?
@@ -50,36 +44,34 @@ struct LibraryPage: View {
   }
 
   var body: some View {
-    GeometryReader { proxy in
-      page(in: proxy.size.height)
-    }
-  }
-
-  private var showsStatusTray: Bool {
-    twoPage && !session.isSelecting && !session.isSearchPresented
-  }
-
-  private func page(in height: CGFloat) -> some View {
-    @Bindable var session = session
-    return Group {
-      if twoPage {
-        content
-          .opacity(showsStatusTray && panelDetent == .large ? 0 : 1)
-          .accessibilityHidden(showsStatusTray && panelDetent == .large)
-          .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar(in: height) }
-      } else {
-        content
-          .safeAreaBar(edge: .bottom, spacing: 0) { bottomBar(in: height) }
-      }
-    }
+    content
+    // The list fades hard under the strip and the toolbar: no row reads under them.
+    .scrollEdgeEffectStyle(.hard, for: .bottom)
+    .safeAreaBar(edge: .bottom, spacing: 0) { foot }
     .navigationTitle(title)
-    .navigationBarTitleDisplayMode(.inline)
-    // One way into search, at the thumb (Search beside Record, or on the status sheet): the field is there only
-    // while search is up, at the thumb above the keyboard, never at rest above the list.
-    .modifier(SearchWhilePresented(library: library))
-    .toolbar { toolbar }
+    .toolbarTitleDisplayMode(.inline)
+    // The place's menu stands in for the title, leading in every place, the Trash too (`placesTitle`); selection
+    // keeps the system's title, "2 Selected".
+    .toolbar(removing: session.isSelecting ? nil : .title)
+    // One way into search, the system's at the thumb: its button in the toolbar, the field there while it's used.
+    .modifier(
+      LibrarySearchField(
+        library: library,
+        offered: LibraryChrome.offersSearch(in: place, selecting: session.isSelecting)))
+    .toolbar {
+      topBar
+      bottomBar
+    }
     .environment(\.editMode, .constant(session.isSelecting ? .active : .inactive))
     .settingsSheet(isPresented: $showingSettings)
+    .fileImporter(
+      isPresented: $importing, allowedContentTypes: RecordStartButton.audioTypes,
+      allowsMultipleSelection: true
+    ) { result in
+      guard case .success(let urls) = result else { return }
+      Task { await model.importFiles(urls) }
+    }
+    .task { await openRequestedAtLaunch() }
     // A conversation opened from Settings (a recorder's Recent imports) shows once Settings steps aside.
     .onChange(of: session.openID) { _, id in
       if id != nil, showingSettings { showingSettings = false }
@@ -174,8 +166,6 @@ struct LibraryPage: View {
     }
     .listStyle(.plain)
     .scrollContentBackground(.hidden)
-    // The combined tray supplies its own glass backing; don't carry the list's edge fade behind it.
-    .scrollEdgeEffectStyle(showsStatusTray ? nil : .hard, for: .bottom)
     .paperBackground()
     .contextMenu(forSelectionType: UUID.self) { ids in
       RowMenu(library: library, ids: Array(ids))
@@ -353,21 +343,27 @@ struct LibraryPage: View {
     }
   }
 
-  @ToolbarContentBuilder private var toolbar: some ToolbarContent {
+  /// The top bar: the place's menu as the title, leading; More and Settings, trailing, each its own glass.
+  @ToolbarContentBuilder private var topBar: some ToolbarContent {
     if !session.isSelecting {
-      ToolbarTitleMenu {
-        PlacesMenu(
-          library: library,
-          newFolder: {
-            naming = .new([])
-            folderName = ""
-          },
-          renameFolder: { id in
-            naming = .rename(id)
-            folderName = library.folders.first { $0.id == id }?.name ?? ""
-          },
-          deleteFolder: { id in deletingFolder = library.folders.first { $0.id == id } })
+      ToolbarItem(placement: .topBarLeading) {
+        Menu {
+          PlacesMenu(
+            library: library,
+            newFolder: newFolder,
+            renameFolder: { id in
+              naming = .rename(id)
+              folderName = library.folders.first { $0.id == id }?.name ?? ""
+            },
+            deleteFolder: { id in deletingFolder = library.folders.first { $0.id == id } })
+        } label: {
+          PlacesTitle(title: title)
+        }
+        .accessibilityLabel(title)
+        .accessibilityHint("Shows places, folders, and the Trash")
+        .accessibilityAddTraits(.isHeader)
       }
+      .sharedBackgroundVisibility(.hidden)
     }
     if session.isSelecting {
       ToolbarItem(placement: .topBarLeading) {
@@ -388,29 +384,23 @@ struct LibraryPage: View {
         .fontWeight(.semibold)
       }
     } else {
-      // Only what works here: no New Note in the Trash, no Select with nothing to select. Glyphs in the title's
-      // ink, as the system's back chevron; teal is for what confirms.
-      if !place.isTrash {
-        ToolbarItem(placement: .topBarTrailing) {
-          Button(action: newNote) { Label("New Note", systemImage: "square.and.pencil") }
-            .tint(PhoneStyle.Ink.title)
-        }
-        if !meetings.isEmpty {
-          ToolbarItem(placement: .topBarTrailing) {
+      // Only what works here (`LibraryChrome.more`): no Select with nothing to select. Glyphs in the title's ink, as
+      // the system's back chevron; teal is for what confirms.
+      ToolbarItem(placement: .topBarTrailing) {
+        Menu {
+          ForEach(LibraryChrome.more(in: place, isEmpty: meetings.isEmpty), id: \.self) { item in
             Button {
-              withAnimation(
-                PhoneStyle.Motion.resolved(PhoneStyle.Motion.state, reduceMotion: reduceMotion)
-              ) {
-                session.isSelecting = true
-                session.selection = []
-              }
+              perform(item)
             } label: {
-              Label("Select", systemImage: "checkmark.circle")
+              Label(item.title, systemImage: item.symbol)
             }
-            .tint(PhoneStyle.Ink.title)
           }
+        } label: {
+          Label("More", systemImage: "ellipsis")
         }
+        .tint(PhoneStyle.Ink.title)
       }
+      ToolbarSpacer(.fixed, placement: .topBarTrailing)
       ToolbarItem(placement: .topBarTrailing) {
         Button {
           showingSettings = true
@@ -422,8 +412,36 @@ struct LibraryPage: View {
     }
   }
 
-  /// One combined tray on the notebook's library page; selection and playback keep their contextual controls.
-  @ViewBuilder private func bottomBar(in height: CGFloat) -> some View {
+  /// The toolbar at the foot, on one page and two: Record in its own glass, then the system's search and New
+  /// (New Note, Import Audio…). Selection has its own bar, and the Trash records nothing.
+  @ToolbarContentBuilder private var bottomBar: some ToolbarContent {
+    if LibraryChrome.showsToolbar(in: place, selecting: session.isSelecting) {
+      ToolbarItem(placement: .bottomBar) {
+        RecordStartButton()
+      }
+      ToolbarSpacer(.flexible, placement: .bottomBar)
+      DefaultToolbarItem(kind: .search, placement: .bottomBar)
+      ToolbarSpacer(.fixed, placement: .bottomBar)
+      ToolbarItem(placement: .bottomBar) {
+        Menu {
+          Button(action: newNote) { Label("New Note", systemImage: "square.and.pencil") }
+          Button {
+            importing = true
+          } label: {
+            Label("Import Audio…", systemImage: "square.and.arrow.down")
+          }
+        } label: {
+          Label("New", systemImage: "plus")
+        }
+        .tint(PhoneStyle.Ink.title)
+        .accessibilityHint("New Note, or Import Audio from Files")
+      }
+    }
+  }
+
+  /// Above the toolbar: the selection's bar while selecting; else what's playing, what Record has to say (a notice,
+  /// an import under way), and the status strip, each only while it has something to say.
+  @ViewBuilder private var foot: some View {
     if session.isSelecting {
       SelectionBar(library: library, ids: Array(session.selection))
         .padding(.leading, barInset(.leading))
@@ -431,45 +449,26 @@ struct LibraryPage: View {
         .padding(.bottom, PhoneStyle.Space.s2)
         .daybookTransition(.move(edge: .bottom).combined(with: .opacity))
     } else if !session.isSearchPresented {
-      VStack(spacing: PhoneStyle.Space.s2) {
-        if let id = session.player.meetingID, !(twoPage && session.openID == id),
-          !(showsStatusTray && panelDetent == .large), let meeting = library.meeting(id)
-        {
-          MiniPlayer(player: session.player, meeting: meeting) {
-            twoPage ? session.select(id) : session.open(id)
-          }
-        }
-        if showsStatusTray {
-          StatusPanel(
-            detent: $panelDetent, availableHeight: height, hostsQuickActions: !place.isTrash)
-        } else if let statusSheetInset {
-          Color.clear.frame(height: statusSheetInset).accessibilityHidden(true)
-        } else if !place.isTrash {
-          // One row at the thumb: Record, Import, and Search, the same size and spacing as on
-          // the status sheet's row.
-          HStack(alignment: .bottom, spacing: StatusQuickActionLayout.spacing) {
-            RecordStartButton()
-            Button {
-              session.isSearchPresented = true
-            } label: {
-              Image(systemName: "magnifyingglass")
-                .font(.title3.weight(.medium))
-                .frame(width: 60, height: 60)
-                .contentShape(Circle())
-            }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.circle)
-            .foregroundStyle(PhoneStyle.Ink.title)
-            .accessibilityLabel("Search")
-            .accessibilityHint("Searches titles, notes, transcripts, and summaries")
-            .accessibilityShowsLargeContentViewer()
-          }
-          .dynamicTypeSize(...StatusCompactDetent.recordLargestSize)
-        }
+      let playing = session.player.meetingID.flatMap { id in
+        twoPage && session.openID == id ? nil : library.meeting(id)
       }
-      .padding(.leading, showsStatusTray && creaseEdge != .leading ? 0 : barInset(.leading))
-      .padding(.trailing, showsStatusTray && creaseEdge != .trailing ? 0 : barInset(.trailing))
-      .padding(.bottom, showsStatusTray ? 0 : PhoneStyle.Space.s2)
+      let notices = !place.isTrash && RecordStartNotices.isShowing(model)
+      let strip = StatusStrip.shown(model)
+      if playing != nil || notices || strip != nil {
+        VStack(spacing: PhoneStyle.Space.s2) {
+          if let playing {
+            MiniPlayer(player: session.player, meeting: playing) {
+              twoPage ? session.select(playing.id) : session.open(playing.id)
+            }
+          }
+          if notices { RecordStartNotices() }
+          if let strip { strip.transition(.opacity) }
+        }
+        .padding(.leading, barInset(.leading))
+        .padding(.trailing, barInset(.trailing))
+        .padding(.bottom, PhoneStyle.Space.s2)
+        .daybookMotion(PhoneStyle.Motion.state, value: strip?.line.id)
+      }
     }
   }
 
@@ -482,6 +481,35 @@ struct LibraryPage: View {
 
   private func newNote() {
     session.newNote(in: library)
+  }
+
+  private func newFolder() {
+    naming = .new([])
+    folderName = ""
+  }
+
+  private func perform(_ item: LibraryChrome.MoreItem) {
+    switch item {
+    case .select:
+      withAnimation(PhoneStyle.Motion.resolved(PhoneStyle.Motion.state, reduceMotion: reduceMotion)) {
+        session.isSelecting = true
+        session.selection = []
+      }
+    case .newFolder: newFolder()
+    case .devices: showStatus(StatusRequest())
+    }
+  }
+
+  /// `--show-importer` and `--open-settings` (debug): Import Audio's picker, or Settings, at launch, for screenshots.
+  private func openRequestedAtLaunch() async {
+    if model.options.showImporter {
+      try? await Task.sleep(for: .milliseconds(600))
+      importing = true
+    }
+    if model.options.openSettings != nil, !showingSettings {
+      try? await Task.sleep(for: .milliseconds(400))
+      showingSettings = true
+    }
   }
 
   private func commitFolder() {
@@ -498,18 +526,20 @@ struct LibraryPage: View {
   }
 }
 
-/// The search field, only while search is up: Search beside Record, or on the status sheet, opens it, and the system
-/// keeps it at the thumb above the keyboard. The scopes are the results' first row (`SearchScopePicker`) on one page
-/// and on two, as on the Mac; the system's scope bar doesn't show on two pages. It's attached to the page's
-/// background, so opening and closing it never rebuilds the list or loses its place.
-private struct SearchWhilePresented: ViewModifier {
+/// The library's search: the system's, minimized to its button in the toolbar (`DefaultToolbarItem(kind: .search)`)
+/// until it's used, then the field at the thumb above the keyboard, on one page and two. The scopes are the results'
+/// first row (`SearchScopePicker`), as on the Mac. It's attached to the page's background, so opening and closing it
+/// never rebuilds the list or loses its place; in the Trash, which offers no search, it's there only while a search
+/// begun elsewhere is.
+private struct LibrarySearchField: ViewModifier {
   let library: LibraryController
+  let offered: Bool
   @Environment(ReadingSession.self) private var session
 
   func body(content: Content) -> some View {
     @Bindable var session = session
     content.background {
-      if session.isSearchPresented || session.isSearching {
+      if offered || session.isSearchPresented || session.isSearching {
         Color.clear
           .searchable(
             text: $session.searchText, tokens: $session.searchTokens,
@@ -518,13 +548,83 @@ private struct SearchWhilePresented: ViewModifier {
                 for: session.searchText, tags: library.allTags,
                 meetings: library.meetings, chosen: session.searchTokens)),
             isPresented: $session.isSearchPresented,
-            placement: .navigationBarDrawer(displayMode: .always),
             prompt: LibraryWords.searchPrompt
           ) { token in
             Label(token.text, systemImage: token.symbol)
           }
+          .searchToolbarBehavior(.minimize)
       }
     }
+  }
+}
+
+/// What the library's chrome offers in a place, on one page and two alike (the open Duo's left page draws the same
+/// bars as the 18 Pro). Plain values, so tests read it.
+enum LibraryChrome {
+  /// The More menu's items, in order.
+  enum MoreItem: Hashable, CaseIterable {
+    case select, newFolder, devices
+
+    var title: String {
+      switch self {
+      case .select: return "Select Conversations"
+      case .newFolder: return "New Folder…"
+      case .devices: return StatusSheetModel.title
+      }
+    }
+
+    var symbol: String {
+      switch self {
+      case .select: return "checkmark.circle"
+      case .newFolder: return "folder.badge.plus"
+      case .devices: return "macbook.and.iphone"
+      }
+    }
+  }
+
+  /// The top bar, outside selection: the place's menu as the title, More, and Settings.
+  enum TopItem: Hashable { case titleMenu, more, settings }
+
+  static func topBar(selecting: Bool) -> [TopItem] {
+    selecting ? [] : [.titleMenu, .more, .settings]
+  }
+
+  /// More: Select Conversations when there's something to select (never in the Trash, whose rows restore one at a
+  /// time), New Folder…, and Devices.
+  static func more(in place: LibraryPlace, isEmpty: Bool) -> [MoreItem] {
+    (place.isTrash || isEmpty ? [] : [.select]) + [.newFolder, .devices]
+  }
+
+  /// The toolbar at the foot: everywhere but the Trash and selection (which has its own bar).
+  static func showsToolbar(in place: LibraryPlace, selecting: Bool) -> Bool {
+    !place.isTrash && !selecting
+  }
+
+  /// Search is offered wherever the toolbar is: the Trash's rows aren't searched, and selection has its own bar.
+  static func offersSearch(in place: LibraryPlace, selecting: Bool) -> Bool {
+    showsToolbar(in: place, selecting: selecting)
+  }
+}
+
+/// The place's name as the bar's title, leading, with the menu's chevron: "All Conversations ⌄", in every place.
+/// The system's own title (`.inline`) moves between leading and centred with what the bar holds, and its large inline
+/// form neither shows the chevron nor fits a long name beside More and Settings.
+private struct PlacesTitle: View {
+  let title: String
+
+  var body: some View {
+    HStack(spacing: DaybookSpacing.s1 + 2) {
+      Text(title)
+        .font(.title3.weight(.bold))
+        .foregroundStyle(DaybookPalette.Ink.title)
+        .lineLimit(1)
+      Image(systemName: "chevron.down.circle.fill")
+        .font(.subheadline)
+        .symbolRenderingMode(.hierarchical)
+        .foregroundStyle(DaybookPalette.Ink.secondary)
+        .accessibilityHidden(true)
+    }
+    .fixedSize(horizontal: false, vertical: true)
   }
 }
 

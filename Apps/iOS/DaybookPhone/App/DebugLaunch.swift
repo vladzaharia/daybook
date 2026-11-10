@@ -66,11 +66,11 @@ import SwiftUI
 ///                                network, no keychain); open it with --open-settings cloud (failed: cloud-key)
 ///     --profile-name <name>, --merge-into <name>, --confirm-merge   a speaker profile's page, its Merge Into, and the
 ///                                merge's confirmation
-///     --status-detent compact|medium|large   open the status sheet (or the notebook's status panel) at this size
+///     --status-detent medium|large   open the status sheet at this size (on the right page when open)
 ///     --status-scroll-end        the status sheet's content scrolled to its foot
 ///     --status-open device|mac|storage|icloud|add-recorder   the status sheet at full height, showing that screen
-///     --status-demo phone-working|phone-paused   this iPhone's own work in the status sheet (see `StatusSheetDemo`)
-///     --status-choose mac|sync|recorder   tap that line of the compact status sheet, for screenshots of where it leads
+///     --status-demo phone-working|phone-paused   this iPhone's own work in the status strip and sheet (`StatusSheetDemo`)
+///     --status-choose mac|sync|recorder   tap that line as the status strip would, for screenshots of where it leads
 ///
 /// The device:
 ///

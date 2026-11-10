@@ -2,81 +2,47 @@ import DaybookDesign
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Starting a recording from the library: the Record control at the thumb, Import Audio beside it,
-/// and one line when something needs saying. `LibraryBrowser` places it. When a recording is saved while it's
-/// on screen, it says so for a moment (the accent checkmark drawn on, "Saved"), then reads Record again.
+/// Starting a recording from the library: Record, the leading item of the library's toolbar, in its own glass (its
+/// New menu holds Import Audio…). `LibraryPage` places it, and `RecordStartNotices` above the toolbar says what Record
+/// has to say. When a recording is saved while it's on screen, it says so for a moment (the accent checkmark drawn on,
+/// "Saved"), then reads Record again.
 struct RecordStartButton: View {
     @Environment(PhoneAppModel.self) private var model
-    @State private var importing = false
-    @State private var showingDebugSettings = false
     /// The person's own presses of Record, for the tap that answers them.
     @State private var presses = 0
     /// A recording was saved just now: the checkmark and "Saved" stand in for the dot and "Record".
     @State private var savedBeat = false
+    @ScaledMetric(relativeTo: .body) private var dot: CGFloat = 12
 
     var body: some View {
-        VStack(spacing: PhoneStyle.Space.s2) {
-            RecordingNotice()
-                .padding(.horizontal, PhoneStyle.Space.s1)
-            if let only = model.recorderOnly, !model.recorder.isActive {
-                RecorderOnlyLine(recorder: only.recorderName)
-                    .padding(.horizontal, PhoneStyle.Space.s1)
-                    .transition(.opacity)
-            }
-            if model.importing > 0 {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text(model.importing == 1 ? "Importing 1 recording…" : "Importing \(model.importing) recordings…")
-                        .font(.footnote)
-                        .foregroundStyle(PhoneStyle.Ink.secondary)
+        Button {
+            presses += 1
+            // While only a recorder records the shared recording, this iPhone joins it.
+            if model.recorderOnly != nil { Task { await model.recordAlongWithRecorder() } }
+            else { Task { try? await model.startRecording() } }
+        } label: {
+            HStack(spacing: DaybookSpacing.s2) {
+                if savedBeat {
+                    DoneMark(size: dot + 2).accessibilityHidden(true)
+                } else {
+                    Circle().fill(DaybookPalette.Ink.record).frame(width: dot, height: dot)
+                        .daybookGlow(DaybookPalette.Ink.record, radius: 3)
                 }
-                .transition(.opacity)
+                Text(model.isFiling ? "Saving…" : savedBeat ? "Saved" : "Record")
+                    .font(.body.weight(.semibold))
+                    .contentTransition(.interpolate)
+                    .lineLimit(1)
             }
-            HStack(spacing: StatusQuickActionLayout.spacing) {
-                Button {
-                    presses += 1
-                    // While only a recorder records the shared recording, this iPhone joins it.
-                    if model.recorderOnly != nil { Task { await model.recordAlongWithRecorder() } }
-                    else { Task { try? await model.startRecording() } }
-                } label: {
-                    HStack(spacing: 10) {
-                        if savedBeat {
-                            DoneMark(size: 18).accessibilityHidden(true)
-                        } else {
-                            Circle().fill(PhoneStyle.Ink.record).frame(width: 16, height: 16)
-                                .daybookGlow(PhoneStyle.Ink.record, radius: 3)
-                        }
-                        Text(model.isFiling ? "Saving…" : savedBeat ? "Saved" : "Record")
-                            .font(.title3.weight(.semibold))
-                            .contentTransition(.interpolate)
-                    }
-                    .foregroundStyle(PhoneStyle.Ink.title)
-                    .frame(maxWidth: .infinity, minHeight: 60)
-                    .contentShape(Capsule())
-                }
-                .daybookControl(.standard, shape: .capsule)
-                .disabled(model.recorder.state != .idle || model.isFiling)
-                .sensoryFeedback(.impact(weight: .medium), trigger: presses)
-                .accessibilityLabel(savedBeat ? "Record. Saved." : "Record")
-                .accessibilityHint(model.recorderOnly != nil ? "Records on this iPhone too" : "Starts recording with the microphone")
-                // The row stops growing at the status sheet's largest size; past it, a long press shows the label large.
-                .accessibilityShowsLargeContentViewer { Label("Record", systemImage: "record.circle") }
-
-                Button { importing = true } label: {
-                    Image(systemName: "square.and.arrow.down")
-                        .font(.title3.weight(.medium))
-                        .foregroundStyle(PhoneStyle.Ink.title)
-                        .frame(width: 60, height: 60)
-                        .contentShape(Circle())
-                }
-                .daybookControl(.standard, shape: .circle)
-                .accessibilityLabel("Import Audio")
-                .accessibilityHint("Adds a recording from Files, such as a voice memo")
-                .accessibilityShowsLargeContentViewer()
-            }
+            .foregroundStyle(DaybookPalette.Ink.title)
+            .padding(.horizontal, DaybookSpacing.s3)
+            .contentShape(Capsule())
         }
-        .daybookMotion(DaybookMotion.state, value: model.importing)
-        .daybookMotion(DaybookMotion.state, value: model.recorderOnly)
+        .disabled(model.recorder.state != .idle || model.isFiling)
+        .sensoryFeedback(.impact(weight: .medium), trigger: presses)
+        .accessibilityLabel(savedBeat ? "Record. Saved." : "Record")
+        .accessibilityHint(model.recorderOnly != nil ? "Records on this iPhone too" : "Starts recording with the microphone")
+        // A toolbar item stops growing with the text; past it, a long press shows the label large.
+        .accessibilityShowsLargeContentViewer { Label("Record", systemImage: "record.circle") }
         .daybookMotion(DaybookMotion.fade, value: savedBeat)
         .onChange(of: model.lastFiling) { _, filing in
             // Saved while this is on screen: one short beat, then Record again.
@@ -89,26 +55,45 @@ struct RecordStartButton: View {
             try? await Task.sleep(for: DaybookMotion.hold)
             savedBeat = false
         }
-        .fileImporter(isPresented: $importing, allowedContentTypes: Self.audioTypes, allowsMultipleSelection: true) { result in
-            guard case .success(let urls) = result else { return }
-            Task { await model.importFiles(urls) }
-        }
-        .settingsSheet(isPresented: $showingDebugSettings)
-        .task {
-            if model.options.showImporter {
-                try? await Task.sleep(for: .milliseconds(600))
-                importing = true
-            }
-            // `--open-settings`: Settings at launch, for screenshots.
-            if model.options.openSettings != nil, !showingDebugSettings {
-                try? await Task.sleep(for: .milliseconds(400))
-                showingDebugSettings = true
-            }
-        }
     }
 
     /// What Import Audio offers: anything iOS can play as audio.
     static let audioTypes: [UTType] = [.audio, .mpeg4Audio, .mp3, .wav, .aiff]
+}
+
+/// What Record has to say, above the library's toolbar, only while there's something: a notice (a recording that
+/// couldn't be added, the microphone not allowed), only a recorder recording the shared recording, and an import
+/// under way.
+struct RecordStartNotices: View {
+    @Environment(PhoneAppModel.self) private var model
+
+    /// Whether it has anything to say now; with nothing, the library leaves no room for it.
+    static func isShowing(_ model: PhoneAppModel) -> Bool {
+        RecordingNotice.isShowing(model) || (model.recorderOnly != nil && !model.recorder.isActive) || model.importing > 0
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DaybookSpacing.s2) {
+            RecordingNotice()
+            if let only = model.recorderOnly, !model.recorder.isActive {
+                RecorderOnlyLine(recorder: only.recorderName)
+                    .transition(.opacity)
+            }
+            if model.importing > 0 {
+                HStack(spacing: DaybookSpacing.s2) {
+                    ProgressView().controlSize(.small)
+                    Text(model.importing == 1 ? "Importing 1 recording…" : "Importing \(model.importing) recordings…")
+                        .font(.footnote)
+                        .foregroundStyle(DaybookPalette.Ink.secondary)
+                    Spacer(minLength: 0)
+                }
+                .transition(.opacity)
+            }
+        }
+        .padding(.horizontal, DaybookSpacing.s1)
+        .daybookMotion(DaybookMotion.state, value: model.importing)
+        .daybookMotion(DaybookMotion.state, value: model.recorderOnly)
+    }
 }
 
 /// Only a recorder records the shared recording: its button started it while Daybook was in the

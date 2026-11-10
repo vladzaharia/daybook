@@ -3,25 +3,25 @@ import DaybookKit
 import DaybookUI
 import Foundation
 
-/// What the status sheet says (docs/iphone.md, "Status sheet"): the recorder, your Mac, this iPhone
-/// while it has work, and sync, one line each when compact; then a group each, a card each: recorders,
-/// Macs, and this iPhone. Plain values built from plain inputs, so tests read exactly what each state
-/// says, and the views only draw them, with the overview both apps share (DaybookUI's `StatusOverview`).
+/// What the status says (docs/iphone.md, "Status sheet"): a line for each thing that exists (each recorder added,
+/// each Mac, this iPhone while it has work, iCloud when it's a problem), the one of them with something to say in the
+/// library's status strip, and the sheet the strip opens, a group each, a card each: recorders, Macs, and this iPhone.
+/// Plain values built from plain inputs, so tests read exactly what each state says, and the views only draw them, with
+/// the overview both apps share (DaybookUI's `StatusOverview`).
 enum StatusDetent: String, CaseIterable, Sendable {
-    case compact, medium, large
+    case medium, large
 
-    /// How deep the overview goes at this size: lines, then cards, then cards with what can be done.
+    /// How deep the overview goes at this size: cards, then cards with what can be done.
     var density: StatusDensity {
         switch self {
-        case .compact: return .lines
         case .medium: return .cards
         case .large: return .manage
         }
     }
 }
 
-/// What tapping a compact line does: a line that needs the person goes to where it's fixed; the rest
-/// show more.
+/// What tapping a line does (the strip's, or iCloud's in the sheet): a line that needs the person goes to where it's
+/// fixed; the rest show the sheet.
 enum StatusLineRoute: Equatable {
     case showMore
     /// More of the sheet, at the group that says what to do (the Macs card, for a Mac).
@@ -88,21 +88,20 @@ struct StatusQueueEntry: Equatable, Identifiable, Sendable {
     }
 }
 
-/// What the sheet shows, top to bottom; each detent adds to the one before. Below the lines, each
-/// group is a heading and one card, and each device is in one card only.
+/// What the sheet shows, top to bottom. Each group is a heading and one card, and each device is in one card only; a
+/// line a card says isn't repeated above it.
 enum StatusSection: Hashable, Sendable {
-    /// Record, Import, and Search (the pocket sheet hosts them).
-    case quickActions
-    /// The lines: recorder, Mac, this iPhone while it has work, and iCloud.
+    /// iCloud's line, while it's a problem: no card says it.
     case lines
     /// Live listening captions, while a recorder streams.
     case captions
-    /// A card per recorder: its status and handoff ("Use on This iPhone" / "Use on Studio Mac"); large
-    /// adds its storage, its actions, and the recordings waiting on it. Add Recorder… when there's none.
+    /// A card per recorder added: its status and handoff ("Use on This iPhone" / "Use on Studio Mac"); large adds its
+    /// storage, its actions, and the recordings waiting on it.
     case recorders
-    /// One card: every paired Mac, the queue under the Mac doing it, and Pair with Your Mac….
+    /// One card, while there's a Mac or work waiting for one: every Mac, the queue under the Mac doing it, and Pair
+    /// with Your Mac… while none is paired.
     case macs
-    /// This iPhone's own queue while it has work, and (large) the audio kept on it, opening Storage.
+    /// This iPhone: its own queue while it has work, and the audio kept on it, opening Storage.
     case iphone
 }
 
@@ -200,6 +199,10 @@ struct StatusInputs: Equatable {
         var isConnected: Bool
         /// Connected, and it said it doesn't transcribe: it isn't set up yet.
         var notProcessing = false
+        /// Recording, by the link or its presence in the library.
+        var isRecording = false
+        /// Something keeps it from connecting that its page fixes (Pair Again, Local Network).
+        var problem = false
     }
 
     enum SyncTone: Equatable { case upToDate, working, attention, checking }
@@ -218,7 +221,6 @@ struct StatusInputs: Equatable {
     var syncTone: SyncTone = .checking
     /// iCloud can't be used here (signed out, iCloud Drive off): the crossed-out cloud.
     var syncOff = false
-    var hostsRecordButton = false
     var hasLiveCaptions = false
     var pairedMacs: [Mac] = []
 
@@ -227,19 +229,23 @@ struct StatusInputs: Equatable {
 }
 
 enum StatusSheetModel {
+    /// The sheet's title, and the More menu's item that shows it while everything is calm.
+    static let title = "Devices"
+
     // MARK: Sections
 
-    /// What each detent shows. Compact: the lines (with Record and Import when the sheet hosts them).
-    /// Medium adds live captions while a recorder streams (first: they're what's happening now), the
-    /// recorders with handoff, the Macs with their queue, and this iPhone while it has work of its own.
-    /// Large always adds this iPhone (its storage); the recorder cards grow their storage, actions, and
-    /// waiting recordings (`showsManagement`).
-    static func sections(for detent: StatusDetent, _ inputs: StatusInputs) -> [StatusSection] {
-        var sections: [StatusSection] = inputs.hostsRecordButton ? [.quickActions, .lines] : [.lines]
-        guard detent != .compact else { return sections }
+    /// What the sheet shows, at either size, only of what exists: iCloud's line while it's a problem (no card says
+    /// it), live captions while a recorder streams (first: they're what's happening now), a card per recorder added
+    /// with its handoff, the Macs with their queue while there's a Mac or work for one, and this iPhone, its work and
+    /// the audio kept on it. Large grows the recorder cards' storage, actions, and waiting recordings
+    /// (`showsManagement`).
+    static func sections(_ inputs: StatusInputs, now: Date = Date()) -> [StatusSection] {
+        var sections: [StatusSection] = []
+        if syncLine(inputs) != nil { sections.append(.lines) }
         if inputs.hasLiveCaptions { sections.append(.captions) }
-        sections += [.recorders, .macs]
-        if detent == .large || inputs.phoneHasWork { sections.append(.iphone) }
+        if !inputs.recorders.isEmpty { sections.append(.recorders) }
+        if !macRows(inputs, now: now).isEmpty || !inputs.queue.isEmpty { sections.append(.macs) }
+        sections.append(.iphone)
         return sections
     }
 
@@ -267,8 +273,8 @@ enum StatusSheetModel {
     /// What a Mac that doesn't transcribe yet needs, in one sentence: "Finish in Daybook › Settings on Studio Mac."
     static func notProcessingFix(_ name: String) -> String { "Finish in Daybook › Settings on \(name)." }
 
-    /// Every paired Mac, then a Mac the library syncs with that isn't paired here (by its presence).
-    /// The queue goes under the Mac that does the work: the connected one, else the one presence names.
+    /// Every paired Mac, then a Mac the library synced with in the last 30 days that isn't paired here (by its
+    /// presence). The queue goes under the Mac that does the work: the connected one, else the one presence names.
     /// A Mac that isn't set up to transcribe says so in warning ink, with what to do under it.
     static func macRows(_ inputs: StatusInputs, now: Date = Date()) -> [StatusMacRow] {
         let notSetUp: String? = { if case .notProcessing(let name, _) = inputs.mac { return name } else { return nil } }()
@@ -277,7 +283,8 @@ enum StatusSheetModel {
             if mac.notProcessing || mac.name == notSetUp { row.isNotSetUp() }
             return row
         }
-        if let name = inputs.mac.macName, !rows.contains(where: { $0.name == name }), let text = presenceText(inputs.mac, now: now) {
+        if let name = inputs.mac.macName, !rows.contains(where: { $0.name == name }), isRecent(inputs.mac, now: now),
+           let text = presenceText(inputs.mac, now: now) {
             var row = StatusMacRow(id: .synced(name), name: name, text: text, isConnected: false)
             if name == notSetUp { row.isNotSetUp() }
             rows.append(row)
@@ -286,6 +293,18 @@ enum StatusSheetModel {
             rows[index].showsQueue = true
         }
         return rows
+    }
+
+    /// A Mac the library last synced with longer ago than this has no line or row, unless it's paired here.
+    static let macShownFor: TimeInterval = 30 * 86_400
+
+    /// The Mac presence names synced in the last 30 days (`macShownFor`), or is here now.
+    static func isRecent(_ presence: MacPresence, now: Date = Date()) -> Bool {
+        switch presence {
+        case .seen(_, let date), .notProcessing(_, let date): return now.timeIntervalSince(date) < macShownFor
+        case .connected, .recording, .olderMac: return true
+        case .checking, .unavailable, .noMac: return false
+        }
     }
 
     /// A synced Mac's row, from its presence, dated as every device's absence is ("Last seen today, 9:12 AM").
@@ -316,53 +335,49 @@ enum StatusSheetModel {
 
     // MARK: Lines
 
-    static let noRecorderID = "recorder"
     static let macID = "mac"
     static let syncID = "sync"
 
-    /// The lines, in order: the recorder, your Mac, this iPhone while it has work, and iCloud. The recorder,
-    /// Mac, and iCloud lines always show, fine or not: the compact sheet is the one place that says the three
-    /// things a recording here depends on, at a height that doesn't move Record under the thumb.
+    /// The lines, one for each thing that exists, in order: each recorder added, each Mac (`macLines`), this iPhone
+    /// while it has work, and iCloud when it's a problem. As Floating Notes' home: nothing added and nothing wrong,
+    /// no lines.
     static func lines(_ inputs: StatusInputs, now: Date = Date()) -> [StatusLineItem] {
-        var lines = [recorderLine(primaryRecorder(inputs.recorders), now: now), macLine(inputs, now: now)]
+        var lines = inputs.recorders.map { recorderLine($0, now: now) }
+        lines += macLines(inputs, now: now)
         if let phone = phoneLine(inputs, now: now) { lines.append(phone) }
-        lines.append(syncLine(inputs))
+        if let sync = syncLine(inputs) { lines.append(sync) }
         return lines
     }
 
-    /// The compact lines: every line; at the accessibility sizes, the one that matters most (`mostPressing`), so the
-    /// compact sheet stays the Record row and a line and the list above it stays usable. The rest are a tap away.
-    static func compactLines(_ lines: [StatusLineItem], accessibilitySize: Bool) -> [StatusLineItem] {
-        guard accessibilitySize, let line = mostPressing(lines) else { return lines }
-        return [line]
-    }
-
-    /// The line that matters most: what needs the person, then what's recording, then work under way or counting
-    /// down, then what's connected, then the rest; among equals the first, and "None added" last.
-    static func mostPressing(_ lines: [StatusLineItem]) -> StatusLineItem? {
+    /// The library's status strip: the one line with something to say, in order what needs the person, then what's
+    /// recording elsewhere, then what's working or counting down; among equals the first. Otherwise nothing: a
+    /// recorder that's connected, a Mac that's idle, and a queue paused until it can continue say nothing there.
+    static func strip(_ lines: [StatusLineItem]) -> StatusLineItem? {
         func rank(_ line: StatusLineItem) -> Int {
-            if line.id == noRecorderID { return 0 }
             switch line.tone {
-            case .attention: return 5
-            case .recording: return 4
-            case .working: return 3
-            case .linked: return 2
-            case .calm: return line.countdownUntil == nil ? 1 : 3
+            case .attention: return 3
+            case .recording: return 2
+            case .working: return 1
+            case .calm: return line.countdownUntil == nil ? 0 : 1
+            case .linked: return 0
             }
         }
         var best: StatusLineItem?
-        for line in lines where best.map({ rank(line) > rank($0) }) ?? true { best = line }
+        for line in lines where rank(line) > (best.map(rank) ?? 0) { best = line }
         return best
     }
 
     /// Where a line leads when it's tapped. A line that needs the person goes to where it's fixed: iCloud's to
-    /// Settings › iCloud, a recorder's to its page, a Mac's to the Macs card, which says what to do for a Mac
-    /// that isn't set up to transcribe (paired here or not) and lists what it couldn't finish. Every other line
-    /// shows more of the sheet.
+    /// Settings › iCloud, a recorder's to its page, a paired Mac's that can't connect to its page, and a Mac that
+    /// isn't set up to transcribe (paired here or not) to the Macs card, which says what to do and lists what it
+    /// couldn't finish. Every other line shows the sheet.
     static func route(for line: StatusLineItem, _ inputs: StatusInputs) -> StatusLineRoute {
         guard line.tone == .attention else { return .showMore }
         if line.id == syncID { return .open(.icloud) }
         if line.id == macID { return .showFix(.macs) }
+        if let mac = inputs.pairedMacs.first(where: { pairedID($0) == line.id }) {
+            return mac.notProcessing ? .showFix(.macs) : .open(.mac(mac.id))
+        }
         if line.id.hasPrefix("recorder-") { return .open(.device(String(line.id.dropFirst("recorder-".count)))) }
         return .showMore
     }
@@ -376,21 +391,37 @@ enum StatusSheetModel {
         }
     }
 
-    /// The recorder the compact line is about: one that's doing something, else the first with Bluetooth.
-    static func primaryRecorder(_ recorders: [StatusInputs.Recorder]) -> StatusInputs.Recorder? {
-        recorders.first { $0.handoff != .idle || $0.importing != nil || $0.isListeningLive }
-            ?? recorders.first { $0.isLinked } ?? recorders.first { $0.isDirect } ?? recorders.first
+    /// A recorder's line in the words both apps give a recorder (`RecorderStatusWords`).
+    static func recorderLine(_ recorder: StatusInputs.Recorder, now: Date = Date()) -> StatusLineItem {
+        StatusLineItem(RecorderStatusWords.line(recorder.facts, here: PhoneSummaryPlacement.thisDeviceWords, now: now))
     }
 
-    /// The recorder's line in the words both apps give a recorder (`RecorderStatusWords`); "None added" with none.
-    static func recorderLine(_ recorder: StatusInputs.Recorder?, now: Date = Date()) -> StatusLineItem {
-        guard let recorder else {
-            return StatusLineItem(id: noRecorderID, symbol: "recordingtape", title: "Recorder", text: "None added", tone: .calm)
+    /// A line per Mac: the one doing or counting down to this iPhone's work, or else the library's by its presence
+    /// (`macLine`), then every other Mac paired here, whatever sync says.
+    static func macLines(_ inputs: StatusInputs, now: Date = Date()) -> [StatusLineItem] {
+        var lines = macLine(inputs, now: now).map { [$0] } ?? []
+        for mac in inputs.pairedMacs where !lines.contains(where: { $0.title == mac.name }) {
+            lines.append(pairedLine(mac))
         }
-        return StatusLineItem(RecorderStatusWords.line(recorder.facts, here: PhoneSummaryPlacement.thisDeviceWords, now: now))
+        return lines
     }
 
-    static func macLine(_ inputs: StatusInputs, now: Date = Date()) -> StatusLineItem {
+    static func pairedID(_ mac: StatusInputs.Mac) -> String { "mac-\(mac.id.uuidString)" }
+
+    /// A paired Mac's line, from the link: "Connected" in teal, "Recording now" with the red dot, "Not set up to
+    /// transcribe" or what keeps it from connecting in warning ink, else when it was last seen.
+    static func pairedLine(_ mac: StatusInputs.Mac) -> StatusLineItem {
+        let tone: StatusTone = mac.notProcessing || mac.problem ? .attention
+            : mac.isRecording ? .recording : mac.isConnected ? .linked : .calm
+        return StatusLineItem(id: pairedID(mac), symbol: "desktopcomputer", title: mac.name,
+                              text: mac.notProcessing ? "Not set up to transcribe" : mac.line, tone: tone,
+                              shortText: mac.notProcessing ? "Not set up" : nil)
+    }
+
+    /// The Mac doing this iPhone's work (live over the link, or by a synced claim) or counting down to it, else the
+    /// library's Mac by its presence: connected, recording, not set up, or seen in the last 30 days. Nil when no Mac
+    /// is known: none has synced the library, iCloud can't be used, or it's still looking.
+    static func macLine(_ inputs: StatusInputs, now: Date = Date()) -> StatusLineItem? {
         func line(_ title: String, _ text: String, _ tone: StatusTone, progress: Double? = nil, short: String? = nil,
                   countdown: Date? = nil) -> StatusLineItem {
             StatusLineItem(id: macID, symbol: "desktopcomputer", title: title, text: text, tone: tone, progress: progress, shortText: short,
@@ -428,34 +459,29 @@ enum StatusSheetModel {
             // Narrow, the waiting work stays: the teal glyph already says it's connected.
             return line(name, ["Connected", waitingText].compactMap { $0 }.joined(separator: " · "), .linked, short: waitingText)
         case .seen(let name, let date):
+            guard isRecent(inputs.mac, now: now) else { return nil }
             return line(name, [RecorderStatusWords.lastSeen(date, now: now), waitingText].compactMap { $0 }.joined(separator: " · "), .calm,
                         short: waitingText)
         case .recording(let name, _):
             return line(name, ["Recording", waitingText].compactMap { $0 }.joined(separator: " · "), .recording,
                         short: waitingText == nil ? nil : "Recording")
         case .notProcessing(let name, _):
+            guard isRecent(inputs.mac, now: now) else { return nil }
             return line(name, "Not set up to transcribe", .attention, short: "Not set up")
         case .olderMac:
             return line("Your Mac", "Syncs with an earlier Daybook", .calm)
-        case .noMac:
-            return line("Your Mac", "Hasn’t synced this library yet", .calm)
-        case .unavailable:
-            // The iCloud line below says why; this one says what the Mac waits on, without promising it'll come.
-            return line("Your Mac", "Needs iCloud", .calm)
-        case .checking:
-            return line("Your Mac", "Looking for it…", .calm)
+        case .noMac, .unavailable, .checking:
+            // No Mac known, nothing to say about one: iCloud's own line says when it can't be used.
+            return nil
         }
     }
 
-    static func syncLine(_ inputs: StatusInputs) -> StatusLineItem {
-        let tone: StatusTone
-        switch inputs.syncTone {
-        case .upToDate, .checking: tone = .calm
-        case .working: tone = .working
-        case .attention: tone = .attention
-        }
-        let symbol = inputs.syncOff ? "icloud.slash" : inputs.syncTone == .attention ? "exclamationmark.icloud" : "icloud"
-        return StatusLineItem(id: syncID, symbol: symbol, title: "iCloud", text: inputs.syncLine, tone: tone, shortText: inputs.syncShort)
+    /// iCloud's line, only while it's a problem: signed out, off, full, a pass that failed, the library's key not
+    /// here. Up to date, syncing, and checking say nothing.
+    static func syncLine(_ inputs: StatusInputs) -> StatusLineItem? {
+        guard inputs.syncTone == .attention else { return nil }
+        return StatusLineItem(id: syncID, symbol: inputs.syncOff ? "icloud.slash" : "exclamationmark.icloud", title: "iCloud",
+                              text: inputs.syncLine, tone: .attention, shortText: inputs.syncShort)
     }
 
     /// iCloud's line when it can't be used, from the reason sync gave: the reason in a few words, as Settings'

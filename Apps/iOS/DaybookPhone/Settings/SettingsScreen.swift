@@ -139,7 +139,7 @@ struct SettingsScreen: View {
         .settingsScrollEnd()
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        .toolbar { ToolbarItem(placement: .topBarTrailing) { Button(role: .close) { dismiss() }.tint(PhoneStyle.Ink.title) } }
     }
 
     private var recordingSummary: String {

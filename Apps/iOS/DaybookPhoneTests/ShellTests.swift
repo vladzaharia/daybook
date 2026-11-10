@@ -74,19 +74,6 @@ final class ShellTests: XCTestCase {
   posture.heightClass = .regular
   posture.update(fold: .closed, angle: 0)
   XCTAssertEqual(posture.layout(isRecording: false, horizontalSizeClass: .compact), .pocket)
-
-  func shows(_ heightClass: UserInterfaceSizeClass?) -> Bool {
-   StatusSheetHost.shows(
-    enabled: true, reading: false, searching: false, selecting: false, inTrash: false,
-    heightClass: heightClass)
-  }
-  XCTAssertTrue(shows(.regular))
-  XCTAssertTrue(shows(nil))
-  XCTAssertFalse(shows(.compact), "never over the whole window")
-  XCTAssertFalse(
-   StatusSheetHost.shows(
-    enabled: true, reading: true, searching: false, selecting: false, inTrash: false,
-    heightClass: .regular))
  }
 
  func testBookmarksSitBetweenTheParagraphsAroundThem() {
