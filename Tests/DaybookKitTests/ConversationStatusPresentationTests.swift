@@ -436,6 +436,87 @@ final class ConversationStatusPresentationTests: XCTestCase {
         XCTAssertEqual(row(.done, nil, inputs)?.kind.symbol, "checkmark.circle.fill")
     }
 
+    /// "Needs your Mac to summarize" offers this iPhone's own summary model where it could run one (P3, uxf-09): the
+    /// download beside the fact, then how the whole set comes, then, for the summary it asked of a Mac, Summarize on This
+    /// iPhone. Without the memory for one, or with processing here off, the fact stays bare; a Mac never offers it.
+    func testBehaviorNeedsYourMacOffersThisIPhonesSummaryModelWhereItCouldRunOne() {
+        let request = ProcessingRequest(meetingID: UUID(), mode: .summaryOnly, requestedBy: alexPhone, createdAt: now)
+        let transcribed = recorded(transcribed: true)
+        var inputs = phone
+        inputs.mac = .noMac
+        inputs.local = .iPhone(processesHere: true, summaryModelBytes: 3_580_000_000)
+        let asked = page(.requested(.device(request)), transcribed, inputs)
+        XCTAssertEqual(asked, Presentation(kind: .line, symbol: "desktopcomputer", title: "Needs your Mac to summarize",
+                                           detail: Presentation.MacStanding.noMacLine,
+                                           actions: [.downloadSummaryModel(bytes: 3_580_000_000), .cancelRequest(request.id)]))
+        XCTAssertEqual(asked?.actions.first?.title, "Download · 3.6 GB")
+        XCTAssertEqual(asked?.actions.first?.isPrimary, false, "a link on the line, as Cancel is")
+        XCTAssertEqual(page(.transcribed, transcribed, inputs),
+                       Presentation(kind: .line, symbol: "desktopcomputer", title: "Needs your Mac to summarize",
+                                    detail: Presentation.MacStanding.noMacLine, actions: [.downloadSummaryModel(bytes: 3_580_000_000)]))
+        XCTAssertEqual(row(.requested(.device(request)), transcribed, inputs)?.text, "Needs your Mac to summarize")
+
+        // Asked for: the whole set's download (here, after the transcription models), with Cancel; the row waits for it.
+        inputs.local = .iPhone(processesHere: true, models: .downloading(done: 1_772_000_000, total: 4_430_000_000), summaryModelAsked: true)
+        let arriving = Presentation(kind: .line, symbol: "arrow.down.circle", title: "Downloading models · 40%", detail: "1.8 of 4.4 GB",
+                                    progress: 0.4, actions: [.cancelDownload])
+        XCTAssertEqual(page(.requested(.device(request)), transcribed, inputs), arriving)
+        XCTAssertEqual(page(.transcribed, transcribed, inputs), arriving)
+        XCTAssertEqual(row(.requested(.device(request)), transcribed, inputs), ConversationRowStatus(kind: .waitingForModels, text: "Waiting for models"))
+        // Waiting for Wi‑Fi: an iPhone's downloads keep to it unless Settings allows cellular, so Cancel, not Download.
+        inputs.local.models = .waitingForWiFi(bytes: 3_580_000_000)
+        XCTAssertEqual(page(.transcribed, transcribed, inputs),
+                       Presentation(kind: .line, symbol: "wifi", title: "Downloading models · Waiting for Wi‑Fi", detail: "3.6 GB",
+                                    actions: [.cancelDownload]))
+        inputs.local.models = .failed(model: "Gemma 4 E2B", bytes: 3_580_000_000)
+        XCTAssertEqual(page(.transcribed, transcribed, inputs)?.title, "Couldn’t download Gemma 4 E2B")
+        XCTAssertEqual(page(.transcribed, transcribed, inputs)?.actions, [.downloadModels(bytes: 3_580_000_000, again: true)])
+
+        // Here: the summary it asked of a Mac, with no Mac around, can be made here now.
+        inputs.local = .iPhone(processesHere: true, summarizes: true)
+        XCTAssertEqual(page(.requested(.device(request)), transcribed, inputs)?.actions, [.summarizeHere("This iPhone"), .cancelRequest(request.id)])
+        inputs.mac = .seen(name: "Studio Mac", at: now.addingTimeInterval(-3600))
+        XCTAssertEqual(page(.requested(.device(request)), transcribed, inputs)?.actions, [.cancelRequest(request.id)], "a Mac will take it")
+        inputs.mac = .noMac
+
+        // No summary model fits, or processing here is off: a bare fact, never a promise.
+        inputs.local = .iPhone(processesHere: true)
+        XCTAssertEqual(page(.transcribed, transcribed, inputs)?.actions, [])
+        inputs.local = .iPhone(processesHere: false, summaryModelBytes: 3_580_000_000)
+        XCTAssertEqual(page(.transcribed, transcribed, inputs)?.actions, [])
+        XCTAssertEqual(page(.requested(.device(request)), transcribed, inputs)?.actions, [.cancelRequest(request.id)])
+        // A Mac's summarizer is its queue's.
+        var onMac = mac
+        onMac.mac = .noMac
+        onMac.local = Presentation.LocalCapabilities(processesHere: true, transcribes: true, summarizes: false, controlsQueue: true,
+                                                    managesModels: true, summaryModelBytes: 3_580_000_000)
+        XCTAssertEqual(page(.transcribed, transcribed, onMac)?.actions, [])
+    }
+
+    /// An iPhone's own downloads read as the one set a Mac's do, never a model at a time: the transcript's wait says the
+    /// whole set's figure and total, Wi‑Fi with Cancel, and a stopped download with Try Again.
+    func testBehaviorAniPhonesOwnDownloadsReadAsTheWholeSet() {
+        let request = ProcessingRequest(meetingID: UUID(), mode: .newAudio, requestedBy: alexPhone, createdAt: now)
+        var inputs = phone
+        inputs.mac = .noMac
+        inputs.local = .iPhone(processesHere: true, download: .init(name: "Parakeet Ultra", fraction: 0.4),
+                               models: .downloading(done: 1_772_000_000, total: 4_430_000_000))
+        XCTAssertEqual(page(.requested(.device(request)), nil, inputs),
+                       Presentation(kind: .line, symbol: "arrow.down.circle", title: "Downloading models · 40%", detail: "1.8 of 4.4 GB",
+                                    progress: 0.4, actions: [.cancelDownload]))
+        inputs.local = .iPhone(processesHere: true, download: .init(name: "Parakeet Ultra", fraction: 0), models: .waitingForWiFi(bytes: 852_000_000))
+        XCTAssertEqual(page(.requested(.device(request)), nil, inputs),
+                       Presentation(kind: .line, symbol: "wifi", title: "Downloading models · Waiting for Wi‑Fi", detail: "852 MB",
+                                    actions: [.cancelDownload]))
+        XCTAssertEqual(row(.requested(.device(request)), nil, inputs), ConversationRowStatus(kind: .waitingForModels, text: "Waiting for models"))
+        inputs.local = .iPhone(processesHere: true, missingModelBytes: 852_000_000, models: .failed(model: "Parakeet Ultra", bytes: 852_000_000))
+        XCTAssertEqual(page(.requested(.device(request)), nil, inputs),
+                       Presentation(kind: .box(.problem), symbol: "exclamationmark.triangle.fill", title: "Couldn’t download Parakeet Ultra",
+                                    actions: [.downloadModels(bytes: 852_000_000, again: true)]))
+        inputs.local = .iPhone(processesHere: true, missingModelBytes: 852_000_000)
+        XCTAssertEqual(page(.requested(.device(request)), nil, inputs)?.title, "Download models to transcribe this conversation")
+    }
+
     func testBehaviorActionTitlesAreTheInterfacesWords() {
         XCTAssertEqual(Presentation.Action.tryAgain(.newAudio).title, "Try Again")
         XCTAssertEqual(Presentation.Action.details("x").title, "Details…")

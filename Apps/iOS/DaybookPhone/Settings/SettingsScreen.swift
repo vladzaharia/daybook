@@ -149,14 +149,30 @@ struct SettingsScreen: View {
     private var storageSummary: String { StatusSheetModel.audioOnThisIPhone(bytes: model.audio.usage.bytes) }
 
     private var modelsSummary: String {
-        let missing = Self.missingModelBytes(model.models, processesHere: model.settings.processesOnThisIPhone)
+        Self.modelsDetail(model.models, processesHere: model.settings.processesOnThisIPhone,
+                          transcribes: model.processingCapabilities.transcribes)
+    }
+
+    /// The Models row's words. While this iPhone transcribes its own recordings and the processing models asked for are
+    /// coming, how that whole set stands, the page's figure ("Downloading · 40%", "Waiting for Wi‑Fi", "Couldn’t
+    /// download"); else what's still to download (`missingModelBytes`); else what it does.
+    static func modelsDetail(_ models: PhoneModels, processesHere: Bool, transcribes: Bool) -> String {
+        if processesHere, let state = models.processingDownloadState {
+            switch state {
+            case .downloading: return ModelStatus.downloading(state.fraction ?? 0).label
+            case .waitingForWiFi: return ModelStatus.waitingForWiFi.label
+            case .failed: return ProcessingWords.downloadStopped
+            }
+        }
+        let missing = missingModelBytes(models, processesHere: processesHere)
         if missing > 0 { return "\(ByteSize.format(missing)) to download" }
-        return model.processingCapabilities.transcribes ? "Transcribes on this iPhone" : "Live transcription on this iPhone"
+        return transcribes ? "Transcribes on this iPhone" : "Live transcription on this iPhone"
     }
 
     /// What the row's figure counts (uxf-18): while this iPhone transcribes its own recordings, only what transcribing
-    /// still needs, the figure Welcome offered ("Transcription and speakers · 852 MB"); live captions' models are listed
-    /// inside Models with their own sizes. Otherwise, live transcription's, the only models it uses.
+    /// still needs, the figure Welcome offered ("Transcription and speakers · 852 MB"); the summary model and live
+    /// captions' models are listed inside Models with their own sizes. Otherwise, live transcription's, the only models
+    /// it uses.
     static func missingModelBytes(_ models: PhoneModels, processesHere: Bool) -> Int64 {
         processesHere ? models.processingMissingBytes : models.missingBytes
     }

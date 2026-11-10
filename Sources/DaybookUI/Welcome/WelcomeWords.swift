@@ -15,13 +15,15 @@ public enum WelcomeWords {
     public static let downloadAndContinue = "Download and Continue"
     public static let changeLater = "You can change this later in Settings."
 
-    /// What Daybook is, a line each.
-    public static func points(_ device: Device) -> [WelcomePoint] {
+    /// What Daybook is, a line each. `summaries`: something here or within reach makes them (a Mac, or this iPhone's own
+    /// model); without, the reading line promises transcripts and search alone.
+    public static func points(_ device: Device, summaries: Bool = true) -> [WelcomePoint] {
         [
             WelcomePoint(symbol: "mic.circle.fill", text: device == .mac
                          ? "Record calls, and conversations in the room."
                          : "Record conversations in the room, or with a recorder."),
-            WelcomePoint(symbol: "magnifyingglass.circle.fill", text: "Read a short summary. Search every word."),
+            WelcomePoint(symbol: "magnifyingglass.circle.fill",
+                         text: summaries ? "Read a short summary. Search every word." : "Read the transcript. Search every word."),
             WelcomePoint(symbol: "play.circle.fill", text: "Play back any moment."),
             WelcomePoint(symbol: "lock.circle.fill", text: "Transcribed and summarized on your devices, unless you choose a cloud model.")
         ]
@@ -37,6 +39,10 @@ public enum WelcomeWords {
     public static let phoneModelsMessage = "Download models so this iPhone transcribes what it records."
     /// What the download holds, beside its size.
     public static let phoneModelsRow = "Transcription and speakers"
+    /// The summary model's row, where this iPhone can run one.
+    public static let phoneSummariesRow = "Summaries"
+    /// The button with the total of the rows chosen: "Download 4.4 GB and Continue".
+    public static func downloadAndContinue(_ size: String) -> String { "Download \(size) and Continue" }
     /// A download the disk can't hold: "Needs 16.5 GB · 12 GB free".
     public static func needsSpace(_ needed: String, free: String) -> String { "Needs \(needed) · \(free) free" }
 
@@ -75,16 +81,21 @@ public enum WelcomeWords {
 
     /// The Ready page's line: what happens to a recording made now. `transcribesElsewhere`: a Mac known to transcribe
     /// this library transcribes what this iPhone records. `waitsForWiFi`: the download is asked for and waits for Wi‑Fi,
-    /// so the transcript waits for it too.
+    /// so the transcript waits for it too. `summarizesElsewhere`: this iPhone won't summarize it and a Mac known to this
+    /// library will; with neither, the line says nothing of a summary.
     public static func readyMessage(downloading: Bool, canTranscribe: Bool, transcribesElsewhere: Bool = false,
-                                    waitsForWiFi: Bool = false) -> String {
+                                    waitsForWiFi: Bool = false, summarizesElsewhere: Bool = false) -> String {
+        let summary = summarizesElsewhere ? " Your Mac summarizes it." : ""
         if downloading {
-            return waitsForWiFi ? "Start a conversation now. It’s transcribed once the models download on Wi‑Fi."
-                : "Start a conversation now. It’s transcribed once the models download."
+            return (waitsForWiFi ? "Start a conversation now. It’s transcribed once the models download on Wi‑Fi."
+                : "Start a conversation now. It’s transcribed once the models download.") + summary
         }
-        if canTranscribe { return "Start a conversation now." }
-        if transcribesElsewhere { return "Start a conversation now. Your Mac transcribes it." }
-        return "Start a conversation now. Download models in Settings to transcribe it."
+        if canTranscribe { return "Start a conversation now." + summary }
+        if transcribesElsewhere {
+            return summarizesElsewhere ? "Start a conversation now. Your Mac transcribes and summarizes it."
+                : "Start a conversation now. Your Mac transcribes it."
+        }
+        return "Start a conversation now. Download models in Settings to transcribe it." + summary
     }
 
     /// "Downloading Balanced models", or without a name, "Downloading models".

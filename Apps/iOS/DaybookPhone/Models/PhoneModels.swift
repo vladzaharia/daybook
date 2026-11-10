@@ -57,7 +57,12 @@ final class PhoneModels {
     private(set) var selections: ModelSelections
     private(set) var progress: [String: Double] = [:]
     private(set) var waiting: Set<String> = []
+    /// Asked for, and waiting their turn behind the models transcribing here needs (`download`): a summary model.
+    private(set) var queued: Set<String> = []
     private(set) var failures: [String: String] = [:]
+    /// The processing models asked for together, in order, finished ones included, so the set's figure counts a model
+    /// that finished whole and never starts over (`processingDownloadState`). Emptied once every one is here or cancelled.
+    private(set) var processingBatch: [String] = []
     /// What's free where the models go, as the system said at the last refresh, and what the downloads then under way had
     /// fetched (their partial files, and their progress): that much is already out of it.
     private(set) var freeSpace = ModelSpace.unknown
@@ -120,6 +125,17 @@ final class PhoneModels {
         self.catalog = catalog
         registry = .standard
         runtime = LocalIntelligenceRuntime(modelsDirectory: root, store: store)
+        var physicalMemory = physicalMemory, memoryLimit = memoryLimit, runsLanguageModels = runsLanguageModels
+        #if DEBUG
+        // `--demo-iphone-memory <GB>`: the simulator stands in for an iPhone with that much memory (its tier, and what
+        // iOS would let Daybook use), offering a summary model where one would fit, so Welcome's Models page and the
+        // page's Download can be seen. Nothing should download it there: the simulator's graphics can't run it.
+        if let gigabytes = LaunchOptions.value(after: "--demo-iphone-memory", in: CommandLine.arguments).flatMap(UInt64.init) {
+            physicalMemory = gigabytes * 1_073_741_824
+            memoryLimit = AppMemoryLimit.estimate(physicalMemory: physicalMemory, increasedLimit: false)
+            runsLanguageModels = true
+        }
+        #endif
         tier = PhoneTier(physicalMemory: physicalMemory)
         self.memoryLimit = memoryLimit ?? PhoneMemory.limit() ?? AppMemoryLimit.estimate(physicalMemory: physicalMemory, increasedLimit: false)
         self.runsLanguageModels = runsLanguageModels
@@ -199,6 +215,7 @@ final class PhoneModels {
         if inventory.resolve(model.key) != nil { return .downloaded }
         if let fraction = progress[model.key] { return .downloading(fraction) }
         if waiting.contains(model.key) { return .waitingForWiFi }
+        if queued.contains(model.key) { return .waiting }
         if let failure = failures[model.key] { return .failed(failure) }
         return .notDownloaded
     }
@@ -209,8 +226,9 @@ final class PhoneModels {
     var missingBytes: Int64 { missing.reduce(0) { $0 + $1.approximateBytes } }
 
     /// The chosen processing models for transcribing here (transcription, speakers, voice profiles)
-    /// not yet on this iPhone. The summary model is downloaded on its own: it's gigabytes.
-    var processingMissing: [CatalogModel] { missing(in: [.transcription, .diarization, .speakerEmbedding]) }
+    /// not yet on this iPhone. The summary model is asked for on its own (`summaryModel`): it's gigabytes, and lands
+    /// after these.
+    var processingMissing: [CatalogModel] { missing(in: Self.transcribingRoles) }
 
     var processingMissingBytes: Int64 { processingMissing.reduce(0) { $0 + $1.approximateBytes } }
 
@@ -233,9 +251,9 @@ final class PhoneModels {
     /// take, so two that each fit but together wouldn't don't both start. One that wouldn't fit says so and waits.
     var space: ModelSpace { freeSpace.less(promisedBytes) }
 
-    /// What the downloads under way and waiting for Wi‑Fi will still take.
+    /// What the downloads under way, waiting their turn, and waiting for Wi‑Fi will still take.
     var promisedBytes: Int64 {
-        Set(progress.keys).union(waiting).compactMap { catalog.model($0) }.reduce(0) { $0 + downloadBytes($1) }
+        Set(progress.keys).union(waiting).union(queued).compactMap { catalog.model($0) }.reduce(0) { $0 + downloadBytes($1) }
     }
 
     /// What downloading `model` still takes: its size, less what it had fetched when `freeSpace` was read.
@@ -330,6 +348,10 @@ final class PhoneModels {
         guard tasks[key] == nil, case .available = model.availability(engines: engines, platform: .iOS) else { return }
         failures[key] = nil
         remember(key, downloading: true)
+        if processingRoles.contains(where: model.serves), !processingBatch.contains(key) { processingBatch.append(key) }
+        // A summary model waits its turn behind what transcribing here needs, so it never delays a transcript.
+        if model.serves(.summarization), transcribingDownloadsUnderWay { waiting.remove(key); queued.insert(key); return }
+        queued.remove(key)
         guard allowsCellular || network.condition() == .unrestricted else { waiting.insert(key); return }
         waiting.remove(key)
         guard let revision = model.latestRevision else { return }
@@ -365,7 +387,25 @@ final class PhoneModels {
     func cancel(_ model: CatalogModel) {
         tasks[model.key]?.cancel()
         waiting.remove(model.key)
+        queued.remove(model.key)
+        processingBatch.removeAll { $0 == model.key }
         remember(model.key, downloading: false)
+        settleProcessingBatch()
+        downloadQueued()
+    }
+
+    /// Whether a model transcribing here needs is downloading or waiting for Wi‑Fi: a summary model waits behind it.
+    private var transcribingDownloadsUnderWay: Bool {
+        Self.transcribingRoles.compactMap(choice(for:)).contains { tasks[$0.key] != nil || waiting.contains($0.key) }
+    }
+
+    /// Starts the downloads that waited their turn, once nothing transcribing here needs is on its way.
+    private func downloadQueued() {
+        guard !queued.isEmpty, !transcribingDownloadsUnderWay else { return }
+        for key in queued.sorted() {
+            queued.remove(key)
+            if let model = catalog.model(key) { download(model) }
+        }
     }
 
     /// Downloads asked for and not finished, kept so they carry on after iOS ends the app; with
@@ -384,7 +424,9 @@ final class PhoneModels {
         if let downloads = fetcher as? BackgroundModelFetcher {
             for file in await downloads.inFlight() { if let key = store.variantKey(downloading: file) { keys.insert(key) } }
         }
-        for key in keys.sorted() {
+        // What transcribing needs first: a summary model takes its turn behind it again.
+        let summaries = { (key: String) in self.catalog.model(key)?.serves(.summarization) == true ? 1 : 0 }
+        for key in keys.sorted(by: { (summaries($0), $0) < (summaries($1), $1) }) {
             guard let model = catalog.model(key), inventory.resolve(key) == nil else { remember(key, downloading: false); continue }
             download(model)
         }
@@ -428,6 +470,19 @@ final class PhoneModels {
             remember(key, downloading: false)
         }
         await refresh()
+        settleProcessingBatch()
+        downloadQueued()
+    }
+
+    /// The set is done once every model in it is here or cancelled: the next one asked for starts a set of its own. One
+    /// still on its way, or stopped, keeps it.
+    private func settleProcessingBatch() {
+        let open = processingBatch.contains { key in
+            guard let model = catalog.model(key) else { return false }
+            let status = status(of: model)
+            return status.isTransferring || status.isFailed
+        }
+        if !open { processingBatch = [] }
     }
 
     private func networkChanged() {
