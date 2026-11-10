@@ -131,8 +131,8 @@ final class WindowInvalidationTests: XCTestCase {
             guard case .processing(let progress) = state.processingStatus(for: try XCTUnwrap(state.meetings.first { $0.id == id })) else { return nil }
             return progress.stage
         }
-        func floating() -> FloatingStatusInputs.Queue.Stage? {
-            FloatingStatusInputs.make(state, meeting: nil, afterStop: false, inputDevice: nil).queue.running
+        func floating() -> ProcessingRequest.Stage? {
+            FloatingStatusInputs.make(state, meeting: nil, afterStop: false, inputDevice: nil).overview.local.running
         }
         state.processingProgress = IntelligenceProgress(0.6, "Making voice profiles", stage: .identifyingSpeakers)
         XCTAssertEqual(try stage(), .identifyingSpeakers, "voice profiles are part of finding speakers, whatever the words")

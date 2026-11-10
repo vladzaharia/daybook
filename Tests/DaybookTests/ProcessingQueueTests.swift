@@ -249,10 +249,11 @@ final class ProcessingQueueTests: XCTestCase {
         XCTAssertEqual(state.missingSelectedModels, [summaryModel])
         // While the summary model downloads, Floating Notes' chip says the transcript is ready, and what the summary waits for.
         state.queue.downloadingID = summaryModel
-        guard case .transcriptReady(let waiting)? = FloatingStatusInputs.work(for: try XCTUnwrap(rig.meeting(newer)), state: state) else {
-            return XCTFail("Transcript ready, with the wait")
-        }
+        let shown = FloatingStatusInputs.conversation(try XCTUnwrap(rig.meeting(newer)), state: state)
+        XCTAssertEqual(shown.ready, false, "Transcript ready, with the wait")
+        let waiting = try XCTUnwrap(shown.summaryWaits)
         XCTAssertTrue(waiting.hasPrefix("Waiting to summarize after the download · "), waiting)
+        XCTAssertEqual(FloatingStatus.workChip(shown, words: state.statusWords, models: nil)?.detail, "Transcript ready · \(waiting)")
         state.queue.downloadingID = nil
 
         // Owed across a relaunch: the next launch waits for the model again.

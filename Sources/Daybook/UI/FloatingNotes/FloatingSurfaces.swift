@@ -148,11 +148,12 @@ struct FloatingAfterStop: View {
             }
             return RecorderProblem(title: "Recording stopped", message: message, help: meeting.errorMessage)
         }
-        guard case .failed(let words)? = inputs.work else { return nil }
-        let failure: ProcessingStatus.Failure? = { if case .failed(let failure) = state.processingStatus(for: meeting) { return failure }; return nil }()
+        // Couldn't finish, in the words both apps use for the failure.
+        guard case .failed(let failure)? = inputs.conversation?.status else { return nil }
+        let words = FailureWords(failure, words: inputs.overview.words)
         // A recording with no speech in it can't do better a second time.
-        let retries = failure?.kind != .noSpeech
-        return RecorderProblem(title: words.title, message: words.message, help: failure?.reason,
+        let retries = failure.kind != .noSpeech
+        return RecorderProblem(title: words.title, message: words.message, help: failure.reason,
                                actionTitle: retries ? "Try Again" : nil,
                                actionEnabled: !state.queuedIDs.contains(meeting.id) && state.processingID != meeting.id,
                                action: retries ? { [state, meeting] in state.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting)) } : nil)
@@ -161,9 +162,9 @@ struct FloatingAfterStop: View {
 
 // MARK: - Home
 
-/// Nothing recording: the iPhone's status sheet, floating. Status lines (recorders, iPhones, this
-/// Mac's queue), then recent conversations, or the focused conversation's notes; Record and Import
-/// at the foot. Compact: the status bar and Record and Import. A Personal conversation the lock hides isn't opened
+/// Nothing recording: the iPhone's status sheet, floating. The status overview both apps draw, at `.lines`
+/// (recorders, iPhones, this Mac's queue, iCloud), then recent conversations, or the focused conversation's notes;
+/// Record and Import at the foot. Compact: the status bar and Record and Import. A Personal conversation the lock hides isn't opened
 /// here: Recent takes its place.
 struct HomeSurface: View {
     let context: PanelContext
@@ -196,21 +197,16 @@ struct HomeSurface: View {
                 }
                 Spacer(minLength: 0)
             } else {
-                // The status lines take the chips' room under the band.
-                let lines = FloatingStatus.lines(inputs)
+                // The overview's lines take the chips' room under the band.
+                let lines = StatusOverviewModel.lines(inputs.overview)
                 if !lines.isEmpty {
-                    // A countdown moves a second at a time; otherwise the lines' recency ("Last seen") every half minute.
-                    TimelineView(.periodic(from: .now, by: lines.contains { $0.countdownUntil != nil } ? 1 : 30)) { timeline in
-                        VStack(alignment: .leading, spacing: 7) {
-                            ForEach(FloatingStatus.lines(inputs, now: timeline.date)) { line in
-                                let item = FloatingStatus.item(line, at: timeline.date)
-                                // A countdown's digits roll down as they change.
-                                StatusLineButton(context: context, line: item)
-                                    .daybookMotion(DaybookMotion.tick, value: line.countdownUntil == nil ? "" : item.text)
-                            }
-                        }
-                        .padding(.horizontal, FloatingLayout.inset)
-                        .padding(.bottom, 14)
+                    // A countdown ticks in its own line; the lines' recency ("Last seen") moves every half minute.
+                    TimelineView(.periodic(from: .now, by: 30)) { timeline in
+                        StatusOverview(lines: StatusOverviewModel.lines(inputs.overview, now: timeline.date).map(StatusLineItem.init),
+                                       hint: { _ in "Opens it in Daybook" }, leads: { Self.device(of: $0) != nil },
+                                       choose: { line in if let device = Self.device(of: line) { context.showDevice(device) } })
+                            .padding(.horizontal, FloatingLayout.inset)
+                            .padding(.bottom, 14)
                     }
                     .padding(.top, context.band + FloatingLayout.chipsTop)
                 }
@@ -238,6 +234,14 @@ struct HomeSurface: View {
         }
     }
 
+    /// The device a status line is about, whose page it opens: a recorder's or an iPhone's. This Mac's queue and iCloud
+    /// lead nowhere.
+    static func device(of line: StatusLineItem) -> String? {
+        if line.id.hasPrefix("recorder-") { return String(line.id.dropFirst("recorder-".count)) }
+        if line.id.hasPrefix("phone-") { return String(line.id.dropFirst("phone-".count)) }
+        return nil
+    }
+
     /// Record goes into the focused conversation only while it has only notes; one that already has a recording
     /// gets a new conversation of its own, so a past call is never added to (docs/interface.md, "Home").
     static func recordTarget(_ focused: Meeting?) -> UUID? {
@@ -263,23 +267,6 @@ struct HomeSurface: View {
             .daybookControl(.standard, shape: .circle)
             .help("Import Audio… (⇧⌘I)")
             .accessibilityLabel("Import Audio")
-        }
-    }
-}
-
-/// A status line that opens what it's about: a recorder's or iPhone's page.
-private struct StatusLineButton: View {
-    let context: PanelContext
-    let line: StatusLineItem
-
-    var body: some View {
-        let device = line.id.hasPrefix("recorder-") ? String(line.id.dropFirst(9)) : line.id.hasPrefix("phone-") ? String(line.id.dropFirst(6)) : nil
-        if let device {
-            Button { context.showDevice(device) } label: { StatusLineView(line) }
-                .buttonStyle(.plain)
-                .accessibilityHint("Opens it in Daybook")
-        } else {
-            StatusLineView(line)
         }
     }
 }

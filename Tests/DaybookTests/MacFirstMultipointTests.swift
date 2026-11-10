@@ -66,7 +66,8 @@ final class MacFirstMultipointTests: XCTestCase {
                                                                       since: try XCTUnwrap(meeting.companions?.first?.macEndedAt))]))
         // Wherever processing status shows: the list row, the page line, Floating Notes.
         XCTAssertEqual(MacRowStatus.make(state, meeting)?.text, "Waiting for iPhone audio")
-        XCTAssertEqual(FloatingStatusInputs.work(for: meeting, state: state), .awaiting("Waiting for iPhone audio"))
+        XCTAssertEqual(FloatingStatus.workChip(FloatingStatusInputs.conversation(meeting, state: state), words: state.statusWords, models: nil)?.label,
+                       "Waiting for iPhone audio")
         if case .awaitingRecordings(let recordings) = waiting {
             XCTAssertEqual(ProcessingStatus.awaitingDetail(recordings), "Waiting for audio from \(PhoneLinkRig.phoneName)")
         }

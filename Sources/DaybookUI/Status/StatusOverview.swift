@@ -2,10 +2,10 @@ import DaybookDesign
 import SwiftUI
 
 // What's going on, at a glance and then in depth, the same on both apps (docs/interface.md, "Status overview"): the
-// iPhone's status sheet and the open Duo's status panel draw it at each of their sizes. Floating Notes' home draws the
-// same `StatusLineView` lines on its own for now, and moves onto the overview at `.lines` later. One line each for
-// what's there (`StatusLines`); below them, at more depth, a group per kind of thing (`StatusGroup`), each a heading
-// and a card, with the queue as rows (`StatusQueueRow`).
+// iPhone's status sheet and the open Duo's status panel draw it at each of their sizes, and Floating Notes' home at
+// `.lines`. One line each for what's there (`StatusLines`, from DaybookKit's `StatusOverviewModel`); below them, at
+// more depth, a group per kind of thing (`StatusGroup`), each a heading and a card, with the queue as rows
+// (`StatusQueueRow`).
 
 /// How deep the overview goes.
 public enum StatusDensity: Int, CaseIterable, Comparable, Hashable, Sendable {
@@ -32,18 +32,22 @@ public struct StatusOverview<Groups: View>: View {
     private let lines: [StatusLineItem]
     private let density: StatusDensity
     private let hint: (StatusLineItem) -> String?
+    private let leads: (StatusLineItem) -> Bool
     private let choose: ((StatusLineItem) -> Void)?
     private let groups: Groups
     @Environment(\.daybookDensity) private var surface
 
     /// - Parameters:
     ///   - hint: What choosing a line does, for VoiceOver ("Shows more", "Opens iCloud settings").
+    ///   - leads: Whether a line leads anywhere; one that doesn't is words only (Floating Notes' queue and iCloud lines).
     ///   - choose: What a line leads to; nil draws the lines as words only.
     public init(lines: [StatusLineItem], density: StatusDensity, hint: @escaping (StatusLineItem) -> String? = { _ in nil },
-                choose: ((StatusLineItem) -> Void)? = nil, @ViewBuilder groups: () -> Groups) {
+                leads: @escaping (StatusLineItem) -> Bool = { _ in true }, choose: ((StatusLineItem) -> Void)? = nil,
+                @ViewBuilder groups: () -> Groups) {
         self.lines = lines
         self.density = density
         self.hint = hint
+        self.leads = leads
         self.choose = choose
         self.groups = groups()
     }
@@ -51,7 +55,7 @@ public struct StatusOverview<Groups: View>: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: surface == .touch ? DaybookSpacing.s5 : DaybookSpacing.s4) {
             if !lines.isEmpty {
-                StatusLines(lines, hint: hint, choose: choose)
+                StatusLines(lines, hint: hint, leads: leads, choose: choose)
             }
             if density.showsGroups {
                 groups
@@ -63,30 +67,34 @@ public struct StatusOverview<Groups: View>: View {
 
 extension StatusOverview where Groups == EmptyView {
     /// Lines alone.
-    public init(lines: [StatusLineItem], hint: @escaping (StatusLineItem) -> String? = { _ in nil }, choose: ((StatusLineItem) -> Void)? = nil) {
-        self.init(lines: lines, density: .lines, hint: hint, choose: choose) { EmptyView() }
+    public init(lines: [StatusLineItem], hint: @escaping (StatusLineItem) -> String? = { _ in nil },
+                leads: @escaping (StatusLineItem) -> Bool = { _ in true }, choose: ((StatusLineItem) -> Void)? = nil) {
+        self.init(lines: lines, density: .lines, hint: hint, leads: leads, choose: choose) { EmptyView() }
     }
 }
 
 /// Status lines, one per thing, each one element for VoiceOver ("Soundcore Work, Connected · 80%"). A line that
 /// leads somewhere is a button: to its device's page, to the fix for what needs the person, or to more of the
-/// overview.
+/// overview. One that leads nowhere is its words only.
 public struct StatusLines: View {
     private let lines: [StatusLineItem]
     private let hint: (StatusLineItem) -> String?
+    private let leads: (StatusLineItem) -> Bool
     private let choose: ((StatusLineItem) -> Void)?
     @Environment(\.daybookDensity) private var density
 
-    public init(_ lines: [StatusLineItem], hint: @escaping (StatusLineItem) -> String? = { _ in nil }, choose: ((StatusLineItem) -> Void)? = nil) {
+    public init(_ lines: [StatusLineItem], hint: @escaping (StatusLineItem) -> String? = { _ in nil },
+                leads: @escaping (StatusLineItem) -> Bool = { _ in true }, choose: ((StatusLineItem) -> Void)? = nil) {
         self.lines = lines
         self.hint = hint
+        self.leads = leads
         self.choose = choose
     }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: density == .touch ? DaybookSpacing.s2 : 7) {
             ForEach(lines) { line in
-                if let choose {
+                if let choose, leads(line) {
                     Button { choose(line) } label: { StatusLineView(line) }
                         .buttonStyle(.plain)
                         .accessibilityElement(children: .ignore)

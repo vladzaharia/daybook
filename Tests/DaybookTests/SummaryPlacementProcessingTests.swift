@@ -159,10 +159,9 @@ final class SummaryPlacementProcessingTests: XCTestCase {
             let moment = tick.addingTimeInterval(offset)
             XCTAssertEqual(MacListSubtitle.text(rig.state, results: 0, at: moment), row.text(at: moment), "\(offset) s on")
         }
-        guard case .summaryCountdown(_, let cloud)? = FloatingStatusInputs.work(for: meeting, state: rig.state) else {
-            return XCTFail("Floating Notes shows the countdown")
-        }
-        XCTAssertTrue(cloud)
+        let chip = FloatingStatus.workChip(FloatingStatusInputs.conversation(meeting, state: rig.state), words: rig.state.statusWords, models: nil)
+        XCTAssertNotNil(chip?.countdownUntil, "Floating Notes shows the countdown")
+        XCTAssertNotNil(rig.state.placements[id]?.cloud, "with Use the Cloud in its menu")
         XCTAssertNotNil(rig.state.placementProgress(id)?.countdown, "and so do phones")
         rig.state.chooseSummaryPlacement(.startNow, for: id)
         try await rig.processed(id)
@@ -656,7 +655,9 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         XCTAssertEqual(ConversationStatusPresentation.page(status, meeting: meeting, inputs: inputs),
                        ConversationStatusPresentation(kind: .line, symbol: "clock", title: "Waiting to summarize after the download · 38%",
                                                       progress: 0.385, actions: [.placement(.useCloud)]))
-        XCTAssertEqual(FloatingStatusInputs.work(for: meeting, state: rig.state), .ready(summary: false), "Nothing downloading: no wait to name")
+        let shown = FloatingStatusInputs.conversation(meeting, state: rig.state)
+        XCTAssertEqual(shown.ready, false)
+        XCTAssertNil(shown.summaryWaits, "Nothing downloading: no wait to name")
 
         rig.state.chooseSummaryPlacement(.useCloud, for: id)
         try await rig.processed(id)
