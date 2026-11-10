@@ -467,7 +467,7 @@ public struct Scrubber: View {
                 }
         )
         .animation(
-            DaybookMotion.resolved(.snappy(duration: 0.15), reduceMotion: reduceMotion),
+            DaybookMotion.resolved(DaybookMotion.hover, reduceMotion: reduceMotion),
             value: dragging == nil
         )
         .accessibilityElement()

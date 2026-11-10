@@ -57,10 +57,10 @@ let package = Package(
         // warning, not silence.
         .target(name: "DaybookCore", swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]),
         .target(name: "DaybookLink"),
-        // Foundation, AVFoundation, and Speech only, so the device framework can use it too.
-        .target(name: "DaybookCaptions"),
-        // SwiftUI only, no models: either app's views can use it without the other's code.
-        .target(name: "DaybookDesign"),
+        // Foundation, AVFoundation, and Speech only, so the device framework can use it too. Complete checking, as Core's.
+        .target(name: "DaybookCaptions", swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]),
+        // SwiftUI only, no models: either app's views can use it without the other's code. Complete checking, as Core's.
+        .target(name: "DaybookDesign", swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]),
         .target(name: "DaybookDevices", dependencies: ["DaybookCore", "DaybookCaptions"]),
         // Shared screens over the library's models; not the model store or the engines, so it stays light
         // for the iPhone. macOS 26 API behind availability checks: the Mac deploys to macOS 15.

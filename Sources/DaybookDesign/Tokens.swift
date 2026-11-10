@@ -68,7 +68,7 @@ public enum DaybookTileSize: Hashable, Sendable {
 /// except work in progress and the Listening dot. Go through `daybookMotion(_:value:)`,
 /// `daybookTransition(_:)`, and `daybookBounce(value:)`, which honour Reduce Motion.
 public enum DaybookMotion {
-    /// Hovering a time, a header, a row: a tint or a fade.
+    /// Hovering a time, a header, a row: a tint or a fade. Grabbing the player's scrubber grows its knob as quickly.
     public static let hover = Animation.easeOut(duration: 0.12)
     /// Something appearing or going: a line, a box, a caption.
     public static let fade = Animation.easeOut(duration: 0.2)
@@ -78,8 +78,12 @@ public enum DaybookMotion {
     public static let tick = Animation.snappy(duration: 0.3)
     /// Scrolling the page to a passage.
     public static let scroll = Animation.easeInOut(duration: 0.3)
-    /// Turning between pages: Summary and Transcript, a page of the notebook.
+    /// Turning a page: the notebook's, Welcome's, a summary arriving on the page.
     public static let page = Animation.easeInOut(duration: 0.35)
+    /// Summary and Transcript changing places on a conversation's page: a quick crossfade, the same on both apps.
+    public static let pageTurn = Animation.easeOut(duration: 0.15)
+    /// A figure moving between reports, steadily, never eased: a recorder's transfer ring.
+    public static let progress = Animation.linear(duration: 0.2)
     /// Dimming: the old summary while the new one is written, the table's idle dim.
     public static let dim = Animation.easeInOut(duration: 0.6)
     /// Something small arriving: a bookmark landing in the log.

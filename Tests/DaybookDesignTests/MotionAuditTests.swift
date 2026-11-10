@@ -3,10 +3,7 @@ import XCTest
 
 /// Every animation goes through DaybookDesign's motion (`daybookMotion`, `daybookTransition`,
 /// `DaybookMotion.resolved`), so Reduce Motion is honoured everywhere and a curve is retuned in one place
-/// (docs/interface.md, "Motion"). This finds curves written out in the apps' views.
-///
-/// Report-only while the screens move to the shared tokens: it lists what it finds and skips. Set
-/// `DAYBOOK_ENFORCE_MOTION_TOKENS=1` to make it fail on any.
+/// (docs/interface.md, "Motion"). This fails on a curve written out in a view.
 final class MotionAuditTests: XCTestCase {
     private static let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
 
@@ -25,6 +22,14 @@ final class MotionAuditTests: XCTestCase {
 
     /// The places that may name curves: DaybookDesign, where the tokens are.
     static func isAllowed(_ relativePath: String) -> Bool { relativePath.hasPrefix("Sources/DaybookDesign/") }
+
+    /// Curves still written out, by file, each until it moves to a token. Other packages of the 2026-11-10 design pass
+    /// own these files and move them there: the call prompt's draining time bar and the library's drop outline. Take a file
+    /// off once its count is 0 (the test says when); never add one.
+    static let stillToMove: [String: Int] = [
+        "Sources/Daybook/UI/CallPrompt.swift": 1,
+        "Sources/Daybook/UI/ConversationList.swift": 1
+    ]
 
     /// The line (from 1) of each raw curve in `text`, once each however the calls nest.
     static func rawCurveLines(in text: String) -> [Int] {
@@ -110,6 +115,7 @@ final class MotionAuditTests: XCTestCase {
 
     func testNoViewWritesOutItsOwnCurve() throws {
         var found: [String] = []
+        var counted: [String: Int] = [:]
         for folder in ["Sources", "Apps/iOS"] {
             let base = Self.root.appendingPathComponent(folder)
             guard let walker = FileManager.default.enumerator(at: base, includingPropertiesForKeys: nil) else { continue }
@@ -119,15 +125,17 @@ final class MotionAuditTests: XCTestCase {
                 guard url.pathExtension == "swift" else { continue }
                 let relative = String(url.path.dropFirst(Self.root.path.count + 1))
                 guard !Self.isAllowed(relative) else { continue }
-                for line in Self.rawCurveLines(in: try String(contentsOf: url, encoding: .utf8)) {
-                    found.append("\(relative):\(line)")
+                let lines = Self.rawCurveLines(in: try String(contentsOf: url, encoding: .utf8))
+                if let allowed = Self.stillToMove[relative] {
+                    counted[relative] = lines.count
+                    if lines.count <= allowed { continue }
                 }
+                found += lines.map { "\(relative):\($0)" }
             }
         }
-        if ProcessInfo.processInfo.environment["DAYBOOK_ENFORCE_MOTION_TOKENS"] == "1" {
-            XCTAssertEqual(found, [], "Animate through DaybookMotion and daybookMotion")
-        } else if !found.isEmpty {
-            throw XCTSkip("\(found.count) curves written out in views, to move to DaybookMotion:\n" + found.joined(separator: "\n"))
-        }
+        XCTAssertEqual(found, [], "Animate through DaybookMotion and daybookMotion")
+        // A file whose curves are all tokens comes off the list, so the list only shrinks.
+        XCTAssertEqual(Self.stillToMove.keys.filter { (counted[$0] ?? 0) == 0 }.sorted(), [],
+                       "No curve left: take the file off stillToMove")
     }
 }

@@ -32,7 +32,7 @@ struct MeetingDetailView: View {
                 }
             }
             .transition(.opacity)
-            .animation(DaybookMotion.resolved(.easeOut(duration: 0.15), reduceMotion: reduceMotion), value: mode)
+            .animation(DaybookMotion.resolved(DaybookMotion.pageTurn, reduceMotion: reduceMotion), value: mode)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(DaybookStyle.paper)
             .bottomBar {

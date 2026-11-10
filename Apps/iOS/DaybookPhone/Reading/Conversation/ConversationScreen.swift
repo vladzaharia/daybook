@@ -31,7 +31,7 @@ struct ConversationScreen: View {
                 }
             }
             .transition(.opacity)
-            .animation(DaybookMotion.resolved(.easeOut(duration: 0.15), reduceMotion: reduceMotion), value: mode)
+            .animation(DaybookMotion.resolved(DaybookMotion.pageTurn, reduceMotion: reduceMotion), value: mode)
             // A bar, so the page under the player gets the scroll edge effect rather than running sharp beneath it.
             .safeAreaBar(edge: .bottom, spacing: 0) {
                 ConversationPlayer(library: library, meeting: meeting)

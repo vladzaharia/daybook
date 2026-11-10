@@ -6,7 +6,7 @@ Daybook is a native SwiftUI application for Apple silicon Macs running macOS 15 
 
 Photo storage, timeline placement, and merges live in DaybookCore; import metadata and export live in DaybookKit; Apple Vision and optional MLXVLM captions live in DaybookIntelligence. Both apps render the same photo records. See [Photos](photos.md) for the data flow and recovery behavior.
 
-The package builds the shared logic for macOS 15 and iOS 26, so the Mac app and the iPhone app ([iphone.md](iphone.md)) stand on the same library. It stays in Swift 5 language mode; DaybookCore and DaybookKit build with complete concurrency checking (`StrictConcurrency`), so a data race there is a warning, and their shared state is held in `Mutex` or `Atomic` (Synchronization) rather than a lock behind `@unchecked Sendable`. Each layer depends only on the ones above it in this list:
+The package builds the shared logic for macOS 15 and iOS 26, so the Mac app and the iPhone app ([iphone.md](iphone.md)) stand on the same library. It stays in Swift 5 language mode; DaybookCore, DaybookKit, DaybookCaptions, and DaybookDesign build with complete concurrency checking (`StrictConcurrency`), so a data race there is a warning (the rest turn it on as each reaches none), and their shared state is held in `Mutex` or `Atomic` (Synchronization) rather than a lock behind `@unchecked Sendable`. Each layer depends only on the ones above it in this list:
 
 | Target | Platforms | Holds |
 | --- | --- | --- |
