@@ -42,7 +42,7 @@ extension AudioProviding {
     }
 }
 
-enum PhotoProvidingError: LocalizedError {
+enum PhotoProvidingError: LocalizedError, PlainSentenceError {
     case unavailable
     var errorDescription: String? { "The photo isn’t on this iPhone yet. Try again when you’re online." }
 }
@@ -59,7 +59,7 @@ enum AudioAvailability: Equatable, Sendable {
     case missing
 }
 
-enum AudioProvidingError: LocalizedError, Equatable {
+enum AudioProvidingError: LocalizedError, Equatable, PlainSentenceError {
     case offline
     case missing
     case notConfigured

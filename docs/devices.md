@@ -414,7 +414,8 @@ pushes, Settings).
   1. Its name in New York and a byline (`RecorderStatusWords.byline`: "Connected", "Not connected · Last seen
      today, 3:25 AM"), with Cancel while it connects. Where the column has a margin (600 pt and wider: the Mac's
      detail, a single page on the open Duo) the kind's glyph hangs in it; narrower, it sits on a tile beside the name.
-     Teal while the recorder is linked.
+     Teal while the recorder is linked. The tile is DaybookUI's `DeviceGlyph`, the one the iPhone's status sheet and
+     the Mac's Device Details draw too.
   2. The problem, in a problem box (`AttentionBox`) with at most two actions, the first leading, in this device's
      words (`RecorderStatusWords.problem`: the iPhone's Bluetooth is in Settings, with Open Settings). None while
      another device manages it.

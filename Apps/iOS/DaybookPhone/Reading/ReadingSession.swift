@@ -325,10 +325,10 @@ struct ReadingAlert: Equatable {
     }
 
     /// Daybook's own errors already say what to do in plain words; anything else gets `fallback`,
-    /// with its words behind Details.
+    /// with its words behind Details (`ProblemWords`, the Mac's rule too).
     init(title: String, error: Error, fallback: String) {
-        let plain = PlainError.message(for: error, fallback: fallback)
-        self.init(title: title, message: plain.message, details: plain.details)
+        let words = ProblemWords(title: title, fallback: fallback, error: error)
+        self.init(title: words.title, message: words.message, details: words.details)
     }
 }
 

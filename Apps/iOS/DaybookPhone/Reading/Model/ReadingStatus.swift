@@ -31,26 +31,6 @@ struct MacSighting: Equatable {
     }
 }
 
-/// Plain words for an error on this iPhone. Daybook's own errors already say what happened and what
-/// to do; the system's don't, so they get a sentence of their own and keep their words for Details.
-enum PlainError {
-    static func message(for error: Error, fallback: String) -> (message: String, details: String?) {
-        switch error {
-        case let error as PhoneRecorderError:
-            return (error.localizedDescription, error.details)
-        case is AudioProvidingError, is PhotoProvidingError, is PhotoStoreError:
-            return (error.localizedDescription, nil)
-        case let error as LibrarySyncError where error.isPlainSentence:
-            return (error.localizedDescription, nil)
-        case let error as AudioFetchError where error.isPlainSentence:
-            return (error.localizedDescription, nil)
-        default:
-            let words = error.localizedDescription
-            return (fallback, words.isEmpty || words == fallback ? nil : words)
-        }
-    }
-}
-
 // MARK: - The page's inputs
 
 extension ConversationStatusPresentation.MacStanding {

@@ -57,20 +57,6 @@ struct DevicePageTitle<Glyph: View>: View {
     }
 }
 
-/// A device kind's symbol: teal while the recorder is linked, secondary otherwise, as on the iPhone.
-struct DeviceGlyph: View {
-    let symbol: String
-    var size: CGFloat = 28
-    var linked = false
-
-    var body: some View {
-        Image(systemName: symbol)
-            .font(.system(size: size, weight: .regular))
-            .foregroundStyle(linked ? DaybookStyle.accent : Ink.secondary)
-            .accessibilityHidden(true)
-    }
-}
-
 /// The 7 pt dot before a status line: teal when connected (pulsing while connecting), warning
 /// when unavailable, meta otherwise.
 struct DeviceStatusDot: View {
@@ -91,22 +77,6 @@ struct DeviceStatusDot: View {
         case .unavailable: return Ink.warning
         default: return Ink.meta
         }
-    }
-}
-
-/// A state that needs the person, as a conversation's status box (`StatusBox`): a problem (warning),
-/// or something to know (quiet), spanning the column, its actions under the message when it's narrow.
-struct DeviceAttentionBox<Actions: View>: View {
-    var kind: StatusBoxKind = .info
-    let symbol: String
-    let title: String
-    var message: String?
-    @ViewBuilder var actions: Actions
-
-    var body: some View {
-        StatusBox(kind: kind, symbol: symbol, title: title, message: message, actions: actions)
-            .padding(.top, Space.s4)
-            .transition(.opacity)
     }
 }
 

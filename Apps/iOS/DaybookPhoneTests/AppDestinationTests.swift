@@ -92,12 +92,12 @@ final class AppDestinationTests: XCTestCase {
         var personal = Meeting(title: "Therapy", date: Date(timeIntervalSince1970: 1_800_000_100))
         personal.placement = .personal
         let unknown = Meeting(title: "Conversation at 10:15 AM", date: Date(timeIntervalSince1970: 1_800_000_200))
-        XCTAssertEqual(ConversationIndex.entries([work, personal, unknown]).map(\.title), ["Conversation at 10:15 AM", "Pricing review"])
+        XCTAssertEqual(SpotlightPlan.entries([work, personal, unknown]).map(\.title), ["Conversation at 10:15 AM", "Pricing review"])
 
         var indexed: [[String]] = [], removed: [[UUID]] = [], startedOver = 0
         let index = ConversationIndex(indexer: ConversationIndex.Indexer(isActive: true, index: { indexed.append($0.map(\.title)) },
                                                                          remove: { removed.append($0) }, removeAll: { startedOver += 1 }))
-        index.update(ConversationIndex.entries([work, unknown]))
+        index.update(SpotlightPlan.entries([work, unknown]))
         await index.settle()
         XCTAssertEqual(startedOver, 1, "what an earlier run listed goes first: it may have been trashed or made Personal since")
         XCTAssertEqual(indexed, [["Conversation at 10:15 AM", "Pricing review"]], "newest first")
@@ -107,12 +107,12 @@ final class AppDestinationTests: XCTestCase {
         renamed.title = "Hiring sync"
         var nowPersonal = work
         nowPersonal.placement = .personal
-        index.update(ConversationIndex.entries([nowPersonal, renamed]))
+        index.update(SpotlightPlan.entries([nowPersonal, renamed]))
         await index.settle()
         XCTAssertEqual(indexed.last, ["Hiring sync"])
         XCTAssertEqual(removed, [[work.id]])
 
-        index.update(ConversationIndex.entries([nowPersonal, renamed]))
+        index.update(SpotlightPlan.entries([nowPersonal, renamed]))
         await index.settle()
         XCTAssertEqual(indexed.count, 2, "nothing changed, nothing sent")
         XCTAssertEqual(startedOver, 1, "once a run")
@@ -125,7 +125,7 @@ final class AppDestinationTests: XCTestCase {
         let index = ConversationIndex(indexer: indexer, namingDelay: .zero)
         let start = Date(timeIntervalSince1970: 1_800_000_000)
         let meetings = (0..<(ConversationQuery.limit + 1)).map { Meeting(title: "Conversation \($0)", date: start.addingTimeInterval(Double($0) * 60)) }
-        index.update(ConversationIndex.entries(meetings))
+        index.update(SpotlightPlan.entries(meetings))
         await index.settle()
         XCTAssertEqual(refreshed, 1, "a run's first list: what came while Daybook wasn't running")
 
@@ -133,19 +133,19 @@ final class AppDestinationTests: XCTestCase {
         var renamed = meetings
         for title in ["P", "Pri", "Pricing review"] {
             renamed[ConversationQuery.limit].title = title
-            index.update(ConversationIndex.entries(renamed))
+            index.update(SpotlightPlan.entries(renamed))
         }
         await index.settle()
         XCTAssertEqual(refreshed, 2)
 
         // The oldest, past what Siri suggests, changes nothing it may name.
         renamed[0].title = "Kickoff"
-        index.update(ConversationIndex.entries(renamed))
+        index.update(SpotlightPlan.entries(renamed))
         await index.settle()
         XCTAssertEqual(refreshed, 2)
 
         // A new conversation is one it may name.
-        index.update(ConversationIndex.entries(renamed + [Meeting(title: "Hiring sync", date: start.addingTimeInterval(86_400))]))
+        index.update(SpotlightPlan.entries(renamed + [Meeting(title: "Hiring sync", date: start.addingTimeInterval(86_400))]))
         await index.settle()
         XCTAssertEqual(refreshed, 3)
     }
@@ -195,7 +195,7 @@ final class AppDestinationTests: XCTestCase {
 
     func testBehaviorAConversationIsAnEntityByItsTitleAndDate() {
         let date = Date(timeIntervalSince1970: 1_800_000_000)
-        let entity = ConversationEntity(ConversationIndex.Entry(id: UUID(), title: "Design review", date: date))
+        let entity = ConversationEntity(SpotlightPlan.Entry(id: UUID(), title: "Design review", date: date))
         XCTAssertEqual(entity.title, "Design review")
         XCTAssertEqual(entity.date, date)
     }
@@ -204,7 +204,7 @@ final class AppDestinationTests: XCTestCase {
     /// as on the Mac, and nothing more: never what was said.
     func testBehaviorSpotlightDescribesAConversationByItsDate() {
         let date = Date(timeIntervalSince1970: 1_800_000_000)
-        let attributes = ConversationEntity(ConversationIndex.Entry(id: UUID(), title: "Design review", date: date)).attributeSet
+        let attributes = ConversationEntity(SpotlightPlan.Entry(id: UUID(), title: "Design review", date: date)).attributeSet
         XCTAssertEqual(attributes.title, "Design review")
         XCTAssertEqual(attributes.contentDescription, date.formatted(date: .abbreviated, time: .shortened))
         XCTAssertEqual(attributes.contentCreationDate, date)

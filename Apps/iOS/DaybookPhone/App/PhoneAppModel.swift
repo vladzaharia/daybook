@@ -233,7 +233,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         if environment.spotlight.isActive {
             let index = ConversationIndex(indexer: environment.spotlight)
             conversationIndex = index
-            watches.append(ObservationWatch.distinctValues(of: { controller.isLoaded ? ConversationIndex.entries(controller.meetings) : nil }) { entries in
+            watches.append(ObservationWatch.distinctValues(of: { controller.isLoaded ? SpotlightPlan.entries(controller.meetings) : nil }) { entries in
                 if let entries { index.update(entries) }
             })
         }
@@ -1171,9 +1171,9 @@ final class PhoneAppModel: RecordingCommandHandling {
         var duration: TimeInterval?
     }
 
-    /// The newest conversation Daybook may name outside the app (`ConversationIndex.isShown`): never a Personal one.
+    /// The newest conversation Daybook may name outside the app (`SpotlightPlan.isShown`): never a Personal one.
     static func lastRecording(in meetings: [Meeting]) -> LastRecording? {
-        meetings.filter(ConversationIndex.isShown).max { $0.date < $1.date }.map {
+        meetings.filter(SpotlightPlan.isShown).max { $0.date < $1.date }.map {
             LastRecording(title: $0.title, date: $0.date, duration: $0.tracks.compactMap(\.duration).max())
         }
     }

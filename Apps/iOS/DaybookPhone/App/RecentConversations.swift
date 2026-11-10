@@ -8,7 +8,7 @@ extension SharedRecentConversations {
     init(meetings: [Meeting]) {
         var recent: [Conversation] = []
         recent.reserveCapacity(Self.limit)
-        for meeting in meetings where ConversationIndex.isShown(meeting) {
+        for meeting in meetings where SpotlightPlan.isShown(meeting) {
             let index = recent.firstIndex { entry in
                 meeting.date > entry.date || (meeting.date == entry.date && meeting.id.uuidString < entry.id.uuidString)
             } ?? recent.endIndex

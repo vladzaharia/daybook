@@ -928,13 +928,3 @@ struct PageRowBackground: View {
     }
   }
 }
-
-/// An empty place in a sheet ("No Changes Yet"): DaybookUI's empty state with the place's glyph.
-struct EmptyPlace: View {
-  let title: String
-  let systemImage: String
-
-  var body: some View {
-    LibraryEmptyPlaceView(LibraryWords.EmptyPlace(title: title, symbol: systemImage))
-  }
-}

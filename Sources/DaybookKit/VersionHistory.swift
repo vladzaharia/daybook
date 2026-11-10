@@ -247,3 +247,47 @@ public enum WordChanges {
         return result
     }
 }
+
+/// Version History's list, the same on both apps (DaybookUI's `VersionHistoryScreen`): the changes newest first under
+/// each day's heading, and the line under a change's title.
+public enum VersionHistoryList {
+    /// The changes, newest first, under "Today", "Yesterday", or the day (`DateGroup.title`).
+    public static func days(_ revisions: [MeetingRevision], now: Date = Date(),
+                            calendar: Calendar = .current) -> [(day: String, revisions: [MeetingRevision])] {
+        var result: [(day: String, revisions: [MeetingRevision])] = []
+        for revision in revisions.reversed() {
+            let day = DateGroup.title(for: revision.date, now: now, calendar: calendar)
+            if result.last?.day == day { result[result.count - 1].revisions.append(revision) } else { result.append((day, [revision])) }
+        }
+        return result
+    }
+
+    /// The line under a change's title in a list that has room for one: what it's about, else what it says now ("Empty"
+    /// when that's nothing); nothing when it only repeats the title ("Photo added", "added").
+    public static func detail(_ revision: MeetingRevision, in meeting: Meeting) -> String? {
+        let title = RevisionText.title(revision, in: meeting)
+        let subject = RevisionText.subject(revision, in: meeting)
+        if subject != title { return subject }
+        let text = RevisionText.readable(revision.newValue, field: revision.field).replacingOccurrences(of: "\n", with: " ")
+        if text.isEmpty { return VersionHistoryWords.empty }
+        return title.localizedCaseInsensitiveContains(text) ? nil : text
+    }
+}
+
+/// What Version History says, on both apps.
+public enum VersionHistoryWords {
+    public static let title = "Version History"
+    public static let symbol = "clock.arrow.circlepath"
+    public static let noChanges = "No Changes Yet"
+    public static let chooseChange = "Choose a Change"
+    public static let empty = "Empty"
+    /// The button under a change that can be put back; the Mac adds "…", since it asks first.
+    public static let restorePrevious = "Restore Previous Version"
+    public static let restoreHelp = "Put back the text from before this change"
+    /// Why it can't be put back now: the conversation is recording or being processed, which would overwrite it.
+    public static let locked = "Wait until this conversation finishes recording or processing."
+    public static let restoreQuestion = "Restore the previous version?"
+    public static let restoreConsequence = "What’s there now stays in Version History."
+    public static let restore = "Restore"
+    public static let restored = "Restored"
+}

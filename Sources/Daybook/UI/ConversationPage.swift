@@ -34,63 +34,6 @@ struct PageScroll<Content: View>: View {
     }
 }
 
-/// One block of the page: an optional margin item (a time, a glyph) and content in the measure.
-struct MarginRow<Margin: View, Content: View>: View {
-    var alignment: VerticalAlignment = .firstTextBaseline
-    /// A 4 pt dot drawn in the 8 pt gutter between the margin and the text, never moving the time.
-    var gutterDot: Color? = nil
-    @ViewBuilder var margin: Margin
-    @ViewBuilder var content: Content
-    @Environment(\.pageIsNarrow) private var narrow
-
-    var body: some View {
-        if narrow {
-            HStack(alignment: alignment, spacing: 6) {
-                margin.fixedSize()
-                content.frame(maxWidth: .infinity, alignment: .leading)
-            }
-        } else {
-            HStack(alignment: alignment, spacing: 0) {
-                HStack(spacing: 4) { margin }
-                    .frame(width: DaybookStyle.margin - 8, alignment: .trailing)
-                    .padding(.trailing, 8)
-                    .overlay(alignment: .trailing) {
-                        if let gutterDot { Circle().fill(gutterDot).frame(width: 4, height: 4).offset(x: -2) }
-                    }
-                content.frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-    }
-}
-
-extension MarginRow where Margin == EmptyView {
-    init(alignment: VerticalAlignment = .firstTextBaseline, @ViewBuilder content: () -> Content) {
-        self.init(alignment: alignment, gutterDot: nil, margin: { EmptyView() }, content: content)
-    }
-}
-
-/// A clickable time in the margin: meta ink, link ink on hover, plays from there.
-struct MarginTime: View {
-    let time: TimeInterval
-    var alwaysVisible = true
-    let play: () -> Void
-    @Environment(\.readingScale) private var scale
-    @State private var hovering = false
-    var body: some View {
-        Button(action: play) {
-            Text(TimeLabel.short(time))
-                .font(TypeStyle.margin(scale))
-                .foregroundStyle(hovering ? Ink.link : Ink.meta)
-        }
-        .buttonStyle(.plain)
-        .opacity(alwaysVisible || hovering ? 1 : 0)
-        .onHover { hovering = $0 }
-        .motion(Motion.hover, value: hovering)
-        .help("Play from here")
-        .accessibilityLabel("Play from \(SpokenTime.format(time))")
-    }
-}
-
 // MARK: - Reading context
 
 extension AppState {
@@ -295,47 +238,5 @@ struct ConversationStatus: View {
     private func openSettingsPane(_ pane: String) {
         settingsPane = pane
         openSettingsWindow.settings()
-    }
-}
-
-/// What a status box is about: something went wrong, something to do, or something to know.
-enum StatusBoxKind { case problem, accent, info }
-
-/// A state that needs the person, on a device's page: DaybookDesign's `AttentionBox`, the same box as a conversation's
-/// status (`StatusBlock`), with its glyph on the title's first baseline and its actions after the words, or under them
-/// when the title wouldn't fit beside them.
-struct StatusBox<Actions: View>: View {
-    let kind: StatusBoxKind
-    let symbol: String
-    let title: String
-    let message: String?
-    let actions: Actions
-
-    private var attention: AttentionKind {
-        switch kind {
-        case .problem: return .problem
-        case .accent: return .accent
-        case .info: return .info
-        }
-    }
-
-    var body: some View {
-        AttentionBox(kind: attention, title: title, symbol: symbol, message: message) { actions }
-    }
-}
-
-
-/// Plain-language reasons for processing failures, for Floating Notes' box, which has only the conversation's message.
-/// The page words a failure from its stored kind (`FailureWords`). The technical message stays one click away.
-enum FriendlyError {
-    /// The recording worked but holds no speech; trying again can't help.
-    static func isNoSpeech(_ error: String) -> Bool { error.lowercased().contains("no speech") }
-
-    static func message(for error: String) -> String {
-        let lower = error.lowercased()
-        if lower.contains("no speech") { return "No speech was found. \(FailureWords.saved)" }
-        if lower.contains("download") || lower.contains("not installed") { return "Its models aren’t downloaded yet. \(FailureWords.saved)" }
-        if lower.contains("memory") || lower.contains("language model") { return "The summary model couldn’t start. Choose Quick in Settings › Models, or close other apps and try again." }
-        return "Something went wrong. \(FailureWords.saved)"
     }
 }
