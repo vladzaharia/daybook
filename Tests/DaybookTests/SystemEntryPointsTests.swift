@@ -2,6 +2,7 @@ import CoreSpotlight
 import DaybookCore
 import DaybookDevices
 import DaybookTestSupport
+import DaybookUI
 import Foundation
 @preconcurrency import UserNotifications
 import XCTest
@@ -163,6 +164,46 @@ final class SystemEntryPointsTests: XCTestCase {
         withPanel.update(to: .init(automaticRecording: true))
         withPanel.update(to: .init(recordingID: UUID(), automatic: false))
         XCTAssertTrue(shown.posted.isEmpty)
+        await state.flush()
+    }
+
+    /// While Daybook is behind the call: a microphone that stops hearing, and a disk running out of room, are said once
+    /// each time they start, naming the conversation, and taken back when they're over or the recording ends. In front,
+    /// Floating Notes says them.
+    func testBehaviorAMicrophoneThatStopsHearingAndLowSpaceAreSaidOutsideDaybook() async throws {
+        let state = await state()
+        let center = FakeNotificationCenter()
+        let notifier = notifications(state, center: center)
+        let id = state.newMeeting(title: "Design review")
+        notifier.update(to: .init(recordingID: id))
+        notifier.update(to: .init(recordingID: id, notHearing: true))
+        let silent = try XCTUnwrap(center.showing.first)
+        XCTAssertEqual(silent.kind, .microphoneSilent)
+        XCTAssertEqual(silent.title, "Microphone silent")
+        XCTAssertEqual(silent.subtitle, "Design review")
+        XCTAssertEqual(silent.body, RecordingStatusWords.microphoneSilentHelp)
+        notifier.update(to: .init(recordingID: id, notHearing: true))
+        XCTAssertEqual(center.posted.count, 1, "said once")
+        notifier.update(to: .init(recordingID: id))
+        XCTAssertTrue(center.showing.isEmpty, "hearing again, it goes")
+
+        let line = RecordingStatusWords.storageDetail(spaceLeft: 25 * 60, callStopped: false)
+        notifier.update(to: .init(recordingID: id, lowSpace: line))
+        XCTAssertEqual(center.showing.map(\.kind), [.lowSpace])
+        XCTAssertEqual(center.showing.first?.title, "Low on space")
+        XCTAssertEqual(center.showing.first?.body, line)
+        let later = RecordingStatusWords.storageDetail(spaceLeft: 20 * 60, callStopped: false)
+        notifier.update(to: .init(recordingID: id, notHearing: true, lowSpace: later))
+        XCTAssertEqual(center.showing.filter { $0.kind == .lowSpace }.last?.body, later, "it keeps up with the minutes")
+        XCTAssertEqual(RecordingNotifications.spaceStep(25 * 60 + 20), 25 * 60, "in five-minute steps")
+        XCTAssertEqual(RecordingNotifications.spaceStep(4 * 60 + 50), 4 * 60, "by the minute in the last five")
+        notifier.update(to: .init())
+        XCTAssertTrue(center.showing.isEmpty, "the recording ended: both go")
+
+        let inFront = FakeNotificationCenter()
+        let front = notifications(state, center: inFront, inFront: true)
+        front.update(to: .init(recordingID: id, notHearing: true, lowSpace: line))
+        XCTAssertTrue(inFront.posted.isEmpty, "in front, Floating Notes says it")
         await state.flush()
     }
 

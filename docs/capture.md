@@ -63,11 +63,13 @@ Code: `Sources/Daybook/Capture/` (capture, devices, finalizing) and `Sources/Day
 
 If the tap fails *during* a call, `RecordingController` switches the same `systemAudio.caf` to
 ScreenCaptureKit and records `switchedAt`. The failure might be a rebuild that didn't work, the
-device disappearing, or the watchdog (only when that switch needs no new prompt; see
-Permissions). If ScreenCaptureKit also fails, or fails later, only the
-call track stops; the microphone keeps recording and a warning is kept. Only a microphone failure,
-a disk that can't keep up, or sleep ends a recording. In every case the audio captured so far is
-preserved.
+device disappearing, a tap that stays silent through three restarts (When the world misbehaves,
+below), or the watchdog (only when that switch needs no new prompt; see Permissions).
+ScreenCaptureKit records through the main display (`CGMainDisplayID`), the one that stays when an
+external display is unplugged, and a stream that stops on its own or stalls restarts once there. If
+it fails again, only the call track stops; the microphone keeps recording and a warning is kept. A
+recording ends only when someone stops it, the microphone fails for good, a writer stops moving for
+a minute, or the Mac is put to sleep. In every case the audio captured so far is preserved.
 
 The path used is saved in two places:
 
@@ -122,7 +124,7 @@ The caller supplies a fresh directory for each recording. Files are owner-only: 
 |---|---|
 | `capture-session.json` | Session ID, wall-clock and host-clock anchor, and the target call app. Saved before recording starts. |
 | `microphone.caf`, `systemAudio.caf` | The originals: independent native PCM tracks, never modified after capture. |
-| `microphone.json`, `systemAudio.json` | Track timing, format, frame count, capture method, notes, and **clock anchors**. Saved after the first buffer, every ten seconds, and at the end, as compact JSON on a queue of its own, so a slow disk never holds up the audio; the last save is the finished track's. Earlier, pretty-printed sidecars read the same. |
+| `microphone.json`, `systemAudio.json` | Track timing, format, frame count, capture method, notes, and **clock anchors**, and `gaps` (where the timeline holds no captured audio, and why). Saved after the first buffer, every ten seconds, and at the end, as compact JSON on a queue of its own, so a slow disk never holds up the audio; the last save is the finished track's. Earlier, pretty-printed sidecars read the same. |
 | `capture-result.json` | Final result: warnings, call-capture path, output-route events, and later the echo-removal report and derived tracks. |
 | `microphone.echo-cancelled.caf` | The microphone with the call's echo removed: 16 kHz mono Float32, written after Stop. |
 
@@ -142,11 +144,19 @@ places a track's first sample relative to the session anchor.
   about 1,500 rather than 14,400, and the fit below measures the same drift from them. The
   iPhone's journal keeps its anchors the same way.
 - **Gaps.** Each buffer is compared with the time predicted from the latest anchor, which is at
-  most about a second old. Slow drift therefore never looks like a gap.
-  - A real gap of more than 80 ms and up to 5 s is padded with silence, and the next anchor is
-    marked `resync`.
-  - A jump of more than 5 s forward or more than 100 ms backward stops that track and preserves
-    it.
+  most about a second old. Slow drift therefore never looks like a gap. A track never stops for its
+  clock (the iPhone's rule, `PhoneTrackWriter`):
+  - A real gap of more than 80 ms and up to 5 minutes is padded with silence, and the next anchor is
+    marked `resync`. The silence ramps over 5 ms from the last sample written and into the next
+    buffer's first, so neither seam clicks; the captured samples themselves are untouched.
+  - A gap longer than 5 minutes isn't padded: the next anchor is marked `resync` at the buffer's
+    real host time, which starts a new clock segment.
+  - A jump of more than 100 ms backward drops the audio that overlaps what's already written (buffer
+    after buffer, until the stamps reach the timeline again) and resyncs where it continues.
+
+  Each is kept in the track's `gaps` (`CaptureGap`: `padded`, `lost`, `skipped`, or `overlap`, with
+  its frame and seconds), and the capture notes say the total ("3 gaps were filled with silence
+  (8.2 s in all).").
 
   The earlier code compared against the time predicted from the *first* buffer, which caused two
   problems:
@@ -167,7 +177,8 @@ places a track's first sample relative to the session anchor.
     session seconds per track second, with the same convention as `TrackAlignment.rate`:
     `meetingTime = offset + trackTime × clockRate`.
 
-  `TranscriptFusion` doesn't read `clockRate` yet. That's the alignment owner's call.
+  Fusion applies it: a track this Mac recorded, and not otherwise placed, goes to `TranscriptFusion`
+  as a placement with its measured rate (`SourceFusion`).
 
 ## Device and route changes
 
@@ -176,7 +187,12 @@ places a track's first sample relative to the session anchor.
   to the hands-free profile because an app opened their microphone. `PCMTrackWriter` converts the
   new format to the file's original format with `AVAudioConverter`. It drains the converter's
   look-ahead at every switch and at the end, so no frames are lost. It also pads the switch gap
-  and starts a new clock segment. Recording stops only after 20 restarts, or if a restart fails.
+  and starts a new clock segment. Restarts are limited by rate, not count: more than 10 in a minute
+  is a microphone that won't settle, and ends the recording, so AirPods coming and going all day
+  never do. A start that fails (a new device reporting 0 Hz for a moment) is tried again after 0.25,
+  0.5, 1, and 2 s, then on the Mac's built-in microphone (`AVMicrophoneEngine.builtInInput`), before
+  the microphone counts as failed. Each start is a fresh `AVAudioEngine` (behind `MicrophoneEngine`,
+  which tests replace).
 - **Output route.** `AudioRouteMonitor` records the default output device: once at start, then at
   every device or data-source change. Data-source changes cover a headphone jack being plugged
   in. The events go in `capture-result.json` as `outputRoutes`.
@@ -192,6 +208,48 @@ places a track's first sample relative to the session anchor.
   Daybook doesn't use Bluetooth APIs to identify the form factor.
 - **Call tap.** The tap rebuilds its aggregate device on the new output device. The writer pads
   the short gap and resyncs.
+
+## When the world misbehaves
+
+A recorder's first duty is to keep the audio, so recoverable trouble never ends a recording, and
+trouble that loses sound is said where the person is looking. The controller's 15 Hz meter timer
+(`updateLevels`) does the watching.
+
+- **A busy disk.** Each writer holds up to 30 s of audio (`PCMTrackWriter.defaultBacklog`, counted
+  in seconds, not buffers) while its queue waits on the disk. Past that a buffer is dropped and
+  counted, and the gap code pads the hole once writing catches up, as a `lost` gap; the track's
+  notes and the conversation say it: "2.4 s of call audio were lost while the disk was busy."
+  (`RecordingWords.lostAudio`). Only a writer with audio waiting that hasn't finished any for 60 s
+  (`CaptureWriting.stallLimit`) stops: the microphone's ends the recording ("The disk couldn't keep
+  up…"), the call's stops only the call. A write that fails is the same: a call-track problem never
+  stops the microphone.
+- **A source that stops delivering.** No buffer for 3 s while recording restarts that source
+  (`CaptureAudioSource.restart`): the microphone's engine, the tap rebuilt on the current output, or
+  ScreenCaptureKit once on the main display. Each restart gets its own 3 s. A call source still
+  silent after three restarts has failed: a tap falls back to ScreenCaptureKit (when that needs no new
+  prompt; otherwise only the call stops), and ScreenCaptureKit's call track ends. The microphone is
+  restarted for as long as it's silent, within its rate limit. Audio arriving starts the count over.
+- **The audio system restarting.** A `kAudioHardwarePropertyServiceRestarted` listener
+  (`AudioServiceRestartMonitor`) hears coreaudiod restart (a crash, `killall coreaudiod`); every
+  device, tap, and aggregate is new afterwards, so both sources start again. The conversation says
+  "The microphone stopped for a moment and was restarted, leaving a short gap." rather than that the
+  microphone changed.
+- **Hearing.** The microphone isn't hearing when no non-zero sample arrived in the last 5 s, or
+  nothing above −90 dBFS for 20 s (`CaptureLevelMonitor.isNotHearing`). It's rolling, so a
+  microphone that goes to digital zeros partway (a MacBook lid closed in clamshell mode, a mute
+  switch, a dead interface) is said too, and it clears as soon as it hears again. Floating Notes says
+  "Microphone silent" (the iPhone's words), and a notification goes out while Daybook isn't in front.
+- **Space.** Every 30 s the free space (`volumeAvailableCapacityForImportantUsage`) is divided by the
+  recording's byte rate (2.3 GB an hour for a typical call). Under 30 minutes, Floating Notes shows
+  "Low on space" and a notification goes out while Daybook is behind; under 3 minutes, call audio
+  stops (two thirds of the bytes) so the microphone has what's left, and the room is measured again
+  at its rate.
+- **Sleep.** While recording, Daybook holds an idle-sleep assertion (`SleepAssertion`,
+  `.idleSystemSleepDisabled` with `.userInitiated`), so a long call on battery never idles the Mac to
+  sleep. A forced sleep (the lid, the Apple menu) still stops this Mac's tracks
+  (`RecordingController.stoppedForSleep`), but the recorders and iPhones recording along keep going
+  (docs/multipoint.md). After wake, Floating Notes says "Soundcore Work and Alex's iPhone kept
+  recording." with Stop.
 
 ## Echo removal
 
@@ -337,8 +395,8 @@ Observe these:
 Keep a visible recording indicator whenever the state is `.starting`, `.recording`, or
 `.stopping`.
 
-Set `onUnexpectedStop` to import partial audio after a microphone failure, a disk backlog, or
-sleep. A failed start can still leave a partial result in `lastResult`; don't delete that staging
+Set `onUnexpectedStop` to import partial audio after a microphone failure, a writer that stopped
+moving for a minute, or sleep. A failed start can still leave a partial result in `lastResult`; don't delete that staging
 folder. With nothing recorded, `AppState` takes back a conversation it made for the recording (to the
 Trash, the library's only way out) and leaves one it recorded into as it was; the alert says why, with
 Open System Settings when a permission is the reason. The hook gets the partial result and one sentence saying why it stopped (the recorder's
@@ -369,7 +427,9 @@ only then quits (`DaybookDelegate`, `QuitDecision`):
 - the microphone source;
 - the system-audio provider;
 - the current route and route observation;
-- the host clock.
+- the host clock;
+- free space, the idle-sleep assertion, and the audio system's restarts;
+- how writers buffer (`CaptureWriting`: the backlog, the stall limit, and a hook before each write).
 
 Tests drive the controller with fakes, so no device, tap, or stream is opened. `AppState` takes
 the same fakes (`capture:`).
@@ -378,12 +438,14 @@ the same fakes (`capture:`).
 
 | API | Type | Meaning |
 |---|---|---|
-| `recorder.levels.microphone` | `CaptureLevelMonitor.Level` | "You": `rms` and `peak` in dBFS. `meterValue` maps −60…0 dBFS to 0…1. |
+| `recorder.levels.microphone` | `CaptureLevelMonitor.Level` | "You": `rms` (smoothed over 300 ms) and `peak` (held for a second) in dBFS, so a tap's 10 ms buffers and the microphone's 85 ms ones move alike. `meterValue` maps −60…0 dBFS to 0…1. |
 | `recorder.levels.call` | same | "Call", with the same fields. |
 | `recorder.levels.isCallAudioDetected` | `Bool` | The call track was above −50 dBFS within the last 4 s. |
 | `recorder.isCallAudioDetected` | `Bool` | The same signal on the controller. It changes rarely, so any view may read it. |
-| `recorder.levels.isMicrophoneSilent` | `Bool` | After 3 s, not one non-zero microphone sample has arrived. The input is muted in hardware, unplugged, or denied. |
+| `recorder.levels.isMicrophoneSilent` | `Bool` | The microphone isn't hearing: no non-zero sample in the last 5 s, or nothing above −90 dBFS for 20 s. Rolling: it clears when it hears again. |
 | `recorder.levels.isCapturingCall` | `Bool` | Call audio is part of this recording. It's false after the call track stops. |
+| `recorder.spaceLeft` | `TimeInterval?` | Seconds of recording the disk has room for at the current rate, once that's under 30 minutes. |
+| `recorder.callStoppedForSpace` | `Bool` | Call audio stopped to leave the disk's last minutes to the microphone. |
 
 Floating Notes meters every source a recording has, not only these two (docs/interface.md, "Meters"): a
 recorder recording along from the live audio it saves into the recording (`LiveCapture.level(at:)`, the
@@ -653,7 +715,7 @@ candidate becomes the process-tap target.
 ## Notifications
 
 While Daybook isn't in front, `RecordingNotifications` (Sources/Daybook/App/MacNotifications.swift)
-says two things a person would otherwise miss, by the same background-only rule as a recorder's
+says what a person would otherwise miss, by the same background-only rule as a recorder's
 notifications (`DeviceNotifications`):
 
 - **Recording stopped**, when a recording ends without Stop (`AppState.unexpectedStops`: a
@@ -664,6 +726,10 @@ notifications (`DeviceNotifications`):
   next recording starts.
 - **Recording**, when a call starts recording on its own while Floating Notes isn't showing,
   naming the call ("Zoom call"). A click shows Floating Notes. It goes when that recording ends.
+- **Microphone silent**, when the microphone stops hearing while recording, and **Low on space**,
+  once the disk has room for under half an hour (Floating Notes' chip's sentence, kept up to date in
+  steps of five minutes). Each names the conversation unless it's Personal, a click shows Floating
+  Notes, and each goes when it's over or the recording ends.
 
 Permission is asked the first time someone records or chooses Record Automatically, for
 alerts and sound, as a recorder's first import asks (`DeviceNotifications.authorizationOptions`):
@@ -690,7 +756,12 @@ logic with snapshots and a fake center. The app starts it with its other system 
 - **Output format.** The derived track is 16 kHz, which suits speech recognition and diarization.
   Listen to the original for full bandwidth.
 - **Clock correction.** Drift correction depends on host-time stamps. ScreenCaptureKit's
-  presentation stamps are assumed to be host time. Fusion doesn't apply `clockRate` yet.
+  presentation stamps are assumed to be host time. Fusion applies `clockRate` from the longest clock
+  piece only. A gap longer than 5 minutes isn't padded (its audio starts a new clock segment), and
+  neither the library's one offset and rate nor echo removal's resampler (`SessionTimelineReader`,
+  which reads on across a gap between clock pieces) honours it: audio after one reads early by the
+  gap. With the stall watch restarting a silent source after 3 s, such a gap needs a source dead for
+  five minutes that then comes back.
 - **Detection heuristics.** Automatic detection is defeated by:
   - localized or renamed meeting windows;
   - browser helper-process attribution and custom meeting titles;
@@ -734,7 +805,26 @@ decaying tail, with added noise. They cover:
 - PCM writing, offsets, and gap padding with resync;
 - format changes converted without frame loss;
 - 900 ppm drift in both directions over two minutes, with no stop and no inserted silence;
-- recovery and backward clock jumps.
+- recovery;
+- a +8 s jump padded with 5 ms ramps, a 400 s one skipped onto a new clock segment, and a −0.5 s
+  jump whose overlap is dropped, none stopping the track.
+
+**`Tests/DaybookTests/CaptureResilienceTests.swift`** covers, with fake sources, a fake disk, a fake
+clock, and a fake free-space reading:
+
+- a 5 s disk stall keeping both tracks, padding the hole, and saying what was lost;
+- a call writer stuck for a minute stopping only the call, and the microphone's ending the
+  recording;
+- sources that stop delivering restarted every 3 s, and a tap silent through three rebuilds falling
+  back to ScreenCaptureKit;
+- the audio system restarting both sources, and sleep held off only while recording;
+- a microphone that goes to zeros after speech (and one under −90 dBFS for 20 s) said, and heard
+  again;
+- meters that move alike for 10 ms and 85 ms buffers, with the peak held a second;
+- low space warning under 30 minutes and stopping the call under 3;
+- sleep stopping this Mac's tracks and saying it was for sleep;
+- `MicrophoneRestartTests`: 30 device changes in 10 minutes all followed, 11 in a minute failing, a
+  restart that fails twice then succeeds, and one that falls back to the built-in microphone.
 
 **`Tests/DaybookTests/CallCaptureTests.swift`** covers:
 
@@ -751,7 +841,8 @@ decaying tail, with added noise. They cover:
   - a call-track failure that keeps the microphone running;
   - computer audio that can't start without a call app, recording the microphone alone with its
     one warning, and a known call app whose audio can't be recorded failing the start;
-  - sleep stopping the recording, from a watch that ends with the controller;
+  - sleep stopping the recording, from a watch that ends with the controller (the devices recording
+    along keep going: `PhoneLinkTests`);
   - microphone denial before any call capture;
 - `CaptureFinalizer`:
   - originals byte-identical;
@@ -778,6 +869,8 @@ Spotlight index:
 
 - a recording that stops on its own said once while Daybook is behind, its conversation named
   unless Personal, nothing while it's in front, and taken back once seen;
+- a microphone that stops hearing and a disk running low said while Daybook is behind, kept up to
+  date, and taken back when over or when the recording ends;
 - an automatic start said only while Floating Notes is hidden, taken back when it ends, and an
   earlier stop taken back by the next recording; permission asked once, at the first recording or
   When a call starts (Record Automatically);

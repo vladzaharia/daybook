@@ -212,3 +212,24 @@ enum CoreAudioProperty {
         return Array(UnsafeBufferPointer(start: typed, count: count))
     }
 }
+
+/// Hears the audio system (coreaudiod) restart: every device, tap, and aggregate is new afterwards, so whatever
+/// records rebuilds (`kAudioHardwarePropertyServiceRestarted`). Listening needs no permission. Stops when released.
+final class AudioServiceRestartMonitor: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "app.daybook.audio-service")
+    private var listener: AudioObjectPropertyListenerBlock?
+
+    init(onRestart: @escaping @Sendable () -> Void) {
+        var property = CoreAudioProperty.address(kAudioHardwarePropertyServiceRestarted)
+        let block: AudioObjectPropertyListenerBlock = { _, _ in onRestart() }
+        if AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &property, queue, block) == noErr {
+            listener = block
+        }
+    }
+
+    deinit {
+        guard let listener else { return }
+        var property = CoreAudioProperty.address(kAudioHardwarePropertyServiceRestarted)
+        AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &property, queue, listener)
+    }
+}

@@ -1122,6 +1122,66 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertLessThan(waited, .seconds(2))
     }
 
+    /// Put to sleep (the lid), this Mac stops only its own tracks: the phone recording along isn't told to stop, and
+    /// hears this Mac's recording as paused so it doesn't stop on its own. After wake, Stop stops it; so does recording
+    /// again, before anything is asked to record.
+    func testBehaviorPutToSleepThePhoneKeepsRecordingUntilItsStoppedHere() async throws {
+        let rig = try await rig()
+        let phone = try await PhoneLinkRig.connect(rig.state)
+        defer { Task { await phone.tearDown(rig.state) } }
+        let id = macStartsRecording(rig)
+        await rig.state.sources.recorders.settle()
+        rig.state.recordingWillFinish(id, at: Date(), forSleep: true)
+        rig.state.recordingID = nil
+        rig.state.recordingStartedAt = nil
+        await rig.state.prepareForSleep(within: .milliseconds(300))
+        await rig.state.sources.recorders.settle()
+        XCTAssertEqual(phone.recorder.requests.map(\.action), [.start], "nothing is sent for sleep")
+        XCTAssertEqual(rig.meeting(id)?.companions?.first?.state, .recording)
+        let paused = rig.state.macRecordingState()
+        XCTAssertEqual(paused.phase, .paused)
+        XCTAssertEqual(paused.conversationID, id)
+        XCTAssertEqual(rig.state.keptRecordingNames(id), [PhoneLinkRig.phoneName])
+        XCTAssertEqual(RecordingStatusWords.keptRecording(rig.state.keptRecordingNames(id)), "\(PhoneLinkRig.phoneName) kept recording.")
+
+        await rig.state.systemDidWake()
+        XCTAssertNotNil(rig.state.phones.sleptRecording, "still recording after wake: the person stops it")
+        rig.state.endKeptRecording()
+        await rig.state.sources.recorders.settle()
+        XCTAssertEqual(phone.recorder.requests.map(\.action), [.start, .stop])
+        XCTAssertEqual(rig.meeting(id)?.companions?.first?.state, .stopped)
+        XCTAssertEqual(rig.state.macRecordingState().phase, .idle)
+        XCTAssertTrue(rig.state.keptRecordingNames(id).isEmpty)
+
+        // Asleep again, and the phone stops on its own meanwhile (it says so): nothing is left to keep.
+        let second = macStartsRecording(rig, into: id)
+        await rig.state.sources.recorders.settle()
+        rig.state.recordingWillFinish(second, at: Date(), forSleep: true)
+        rig.state.recordingID = nil
+        rig.state.recordingStartedAt = nil
+        XCTAssertEqual(phone.recorder.requests.map(\.action), [.start, .stop, .start])
+        try await phone.client.send(.recordingState(LinkRecordingState(phase: .idle)))
+        try await waitUntil("its link to close") { rig.state.phones.sleptRecording == nil }
+        await rig.state.sources.recorders.settle()
+        XCTAssertEqual(phone.recorder.requests.map(\.action), [.start, .stop, .start, .stop])
+
+        // Asleep once more; this time the next recording stops it before anything new starts.
+        let third = macStartsRecording(rig, into: id)
+        await rig.state.sources.recorders.settle()
+        try await phone.client.send(.recordingState(LinkRecordingState(phase: .recording, conversationID: id, startedAt: Date())))
+        try await waitUntil("the phone's state") { rig.state.phoneLink.recordingStates[phone.phoneID]?.phase == .recording }
+        rig.state.recordingWillFinish(third, at: Date(), forSleep: true)
+        rig.state.recordingID = nil
+        rig.state.recordingStartedAt = nil
+        XCTAssertEqual(rig.state.keptRecordingNames(id), [PhoneLinkRig.phoneName])
+        let fourth = macStartsRecording(rig)
+        await rig.state.sources.recorders.settle()
+        XCTAssertEqual(phone.recorder.requests.map(\.action), [.start, .stop, .start, .stop, .start, .stop, .start])
+        XCTAssertNil(rig.state.phones.sleptRecording)
+        macStopsRecording(rig, fourth)
+        await rig.state.sources.recorders.settle()
+    }
+
     func testARecoveredRecordingClosesItsLinksAndStopsThePhoneItStarted() async throws {
         let rig = try await rig()
         let phone = try await PhoneLinkRig.connect(rig.state)

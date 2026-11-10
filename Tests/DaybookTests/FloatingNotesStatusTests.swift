@@ -81,6 +81,33 @@ final class FloatingNotesStatusTests: XCTestCase {
         XCTAssertTrue(missing?.detail.contains("Screen & System Audio Recording") == true, "A missing call says how to fix it")
     }
 
+    /// The disk running out of room speaks only under half an hour, in warning ink after the call, and says when call
+    /// audio stopped for it; nothing after Stop.
+    func testBehaviorLowSpaceIsAChipWhileRecording() throws {
+        XCTAssertFalse(FloatingStatus.chips(recording { $0.recording.call = .detected }).contains { $0.target == .storage })
+        let low = FloatingStatus.chips(recording { $0.recording.call = .detected; $0.recording.spaceLeft = 25 * 60 + 20 })
+        XCTAssertEqual(low.map(\.target), [.call, .storage])
+        let chip = try XCTUnwrap(low.last)
+        XCTAssertEqual(chip.label, "Low on space")
+        XCTAssertEqual(chip.shortLabel, "Space")
+        XCTAssertEqual(chip.tone, .attention)
+        XCTAssertTrue(chip.isProminent, "it keeps its words longest")
+        XCTAssertEqual(chip.detail, "Room for about 25 more minutes. Free up space to keep recording.")
+        XCTAssertEqual(RecordingStatusWords.storageDetail(spaceLeft: 40, callStopped: true),
+                       "The disk is almost full, so call audio stopped. Room for less than a minute more. Free up space to keep recording.")
+        XCTAssertEqual(RecordingStatusWords.storageDetail(spaceLeft: 90, callStopped: false),
+                       "Room for about 1 more minute. Free up space to keep recording.")
+        var saved = recording { $0.recording.spaceLeft = 60 }
+        saved.phase = .saved
+        XCTAssertFalse(FloatingStatus.chips(saved).contains { $0.target == .storage })
+    }
+
+    /// Put to sleep, the devices recording along kept going; the box after Stop names them.
+    func testTheDevicesThatKeptRecordingAreNamed() {
+        XCTAssertNil(RecordingStatusWords.keptRecording([]))
+        XCTAssertEqual(RecordingStatusWords.keptRecording(["Soundcore Work", "Alex’s iPhone"]), "Soundcore Work and Alex’s iPhone kept recording.")
+    }
+
     func testCallChipOnlyWhileRecording() {
         var inputs = recording { $0.recording.call = .detected }
         XCTAssertEqual(FloatingStatus.chips(inputs).first?.target, .call)

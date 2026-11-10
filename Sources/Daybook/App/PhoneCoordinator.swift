@@ -19,6 +19,8 @@ final class PhoneCoordinator {
     var stopCause: String?
     /// A recorder whose own button is starting this Mac's recording, by session ID.
     var pendingRecorderLead: String?
+    /// This Mac's recording stopped because it went to sleep, and the devices recording along kept going.
+    var sleptRecording: SleptRecording?
     /// Conversations an iPhone recording moved out of, on their way to the Trash: not processed.
     var movedRecordings: Set<UUID> = []
     /// Conversations of an iPhone's own queued only to check where its recording belongs (`phoneTranscriptArrived`):

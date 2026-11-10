@@ -139,9 +139,14 @@ struct FloatingAfterStop: View {
 
     private var problem: RecorderProblem? {
         if stoppedShort {
-            // Why it stopped, when the recorder knows; the system's words stay in the tooltip.
-            return RecorderProblem(title: "Recording stopped", message: FloatingStatus.stoppedMessage(state.unexpectedStops[meeting.id]),
-                                   help: meeting.errorMessage)
+            // Why it stopped, when the recorder knows; the system's words stay in the tooltip. Put to sleep, this Mac
+            // names the devices that kept recording, with Stop.
+            let message = FloatingStatus.stoppedMessage(state.unexpectedStops[meeting.id])
+            if let kept = RecordingStatusWords.keptRecording(state.keptRecordingNames(meeting.id)) {
+                return RecorderProblem(title: "Recording stopped", message: "\(message) \(kept)", help: meeting.errorMessage,
+                                       actionTitle: "Stop", action: { [state] in state.endKeptRecording() })
+            }
+            return RecorderProblem(title: "Recording stopped", message: message, help: meeting.errorMessage)
         }
         guard case .failed(let words)? = inputs.work else { return nil }
         let failure: ProcessingStatus.Failure? = { if case .failed(let failure) = state.processingStatus(for: meeting) { return failure }; return nil }()

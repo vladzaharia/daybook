@@ -4,8 +4,8 @@ import AppKit
 import Foundation
 import UserNotifications
 
-/// Keeps this device from idle-sleeping while a transfer or live capture runs, so an hour-long import
-/// doesn't stop halfway. The display may still sleep.
+/// Keeps this device from idle-sleeping while a transfer, a live capture, or the Mac's own recording runs, so neither an
+/// hour-long import nor a long call stops halfway. The display may still sleep.
 @MainActor
 public final class SleepAssertion {
     private var token: NSObjectProtocol?

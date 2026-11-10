@@ -294,8 +294,10 @@ extension AppState {
         meetings.contains { $0.id == id } && processingID != id && !queuedIDs.contains(id)
     }
 
-    /// Before this Mac records into a conversation: what it already holds.
+    /// Before this Mac records into a conversation: what it already holds. Devices that kept recording while this
+    /// Mac slept are stopped first.
     func prepareSourceCapture(_ id: UUID) {
+        endKeptRecording()
         guard let meeting = meetings.first(where: { $0.id == id }) else { sources.captures[id] = nil; return }
         sources.captures[id] = .init(preexistingTrackIDs: Set(meeting.tracks.map(\.id)), date: meeting.date,
                                      noteIDs: Set((meeting.timedNotes ?? []).map(\.id)), highlightIDs: Set(meeting.highlights.map(\.id)),
@@ -320,10 +322,12 @@ extension AppState {
 
     /// This Mac's recording is ending: stop the recorders Daybook started with it, and the devices
     /// recording with it (a cascading stop), except the one whose word this is.
-    func recordingWillFinish(_ id: UUID, at end: Date) {
+    func recordingWillFinish(_ id: UUID, at end: Date, forSleep: Bool? = nil) {
         let cause = stopCause
         stopCause = nil
-        sources.recorders.macRecordingStopped(id, at: end, stoppedBy: cause)
+        // Put to sleep, this Mac stops only its own tracks (docs/multipoint.md).
+        if forSleep ?? recorder.stoppedForSleep { keepAlongThroughSleep(id, at: end, cause: cause) }
+        else { sources.recorders.macRecordingStopped(id, at: end, stoppedBy: cause) }
         stopSharingNotes(id)
     }
 
