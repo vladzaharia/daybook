@@ -71,7 +71,7 @@ extension MarginTextView: UIScribbleInteractionDelegate, UIPencilInteractionDele
         let attachments = inkAttachments.filter { $0.attachment !== inkGap?.attachment }
         guard wanted == attachments.map(\.attachment.inkID) else {
             // Handwriting became words, was deleted, or came back: a dissolve, not a jump.
-            crossfading { setText(value) }
+            crossfading { [weak self] in self?.setText(value) }
             return
         }
         guard !attachments.isEmpty else { return }
@@ -132,7 +132,7 @@ extension MarginTextView: UIScribbleInteractionDelegate, UIPencilInteractionDele
         if session.isWriting, isFirstResponder { resignFirstResponder() }
         if !session.showsTools { closeInkGap() }
         for scroller in scrollersUpTheTree { scroller.panGestureRecognizer.minimumNumberOfTouches = session.isWriting ? 2 : 1 }
-        if wasShowingInkTools, !session.showsTools { crossfading { trimBlocks() } }
+        if wasShowingInkTools, !session.showsTools { crossfading { [weak self] in self?.trimBlocks() } }
         wasShowingInkTools = session.showsTools
         session.refreshUndo()
         for view in Array(inkViews.values) + [tailView].compactMap({ $0 }) {
@@ -161,7 +161,7 @@ extension MarginTextView: UIScribbleInteractionDelegate, UIPencilInteractionDele
     }
 
     /// A change to the page's layout that isn't under the pen, as a short dissolve.
-    private func crossfading(_ change: () -> Void) {
+    private func crossfading(_ change: @escaping () -> Void) {
         guard window != nil, !UIAccessibility.isReduceMotionEnabled else {
             change()
             return
@@ -349,9 +349,9 @@ extension MarginTextView: UIScribbleInteractionDelegate, UIPencilInteractionDele
         let character = NSMutableAttributedString(attachment: attachment)
         character.addAttributes(attributes, range: NSRange(location: 0, length: character.length))
         opening.append(character)
-        crossfading {
-            textStorage.insert(opening, at: NSMaxRange(ranges[index]))
-            textDidChange()
+        crossfading { [weak self] in
+            self?.textStorage.insert(opening, at: NSMaxRange(ranges[index]))
+            self?.textDidChange()
         }
         let view = makeInkView(id: block.id, authoredWidth: width)
         inkViews[block.id] = view
@@ -366,9 +366,9 @@ extension MarginTextView: UIScribbleInteractionDelegate, UIPencilInteractionDele
         gap.view.removeFromSuperview()
         inkViews[gap.view.id] = nil
         guard let location = inkAttachments.first(where: { $0.attachment === gap.attachment })?.location, location > 0 else { return }
-        crossfading {
-            textStorage.replaceCharacters(in: NSRange(location: location - 1, length: 2), with: "")
-            textDidChange()
+        crossfading { [weak self] in
+            self?.textStorage.replaceCharacters(in: NSRange(location: location - 1, length: 2), with: "")
+            self?.textDidChange()
         }
     }
 
