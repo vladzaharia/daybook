@@ -51,8 +51,10 @@ The items the design pass deferred (docs/audits/2026-11-10/README.md, "Still to 
   FloatingNotesMetersTests (the Mac sends only to an iPhone along that lists the feature), RecorderSurfaceTests (the
   labelling rule and the scaled stack), CascadingRecordingTests (a loopback Mac's row with its glyph, playback, resting
   after 1.5 s, none for an older Mac), RecorderScreenTests (three rows fit the Duo cover and the open page at
-  accessibility5), RecordingSurfacesTests, LinkServicesTests; captures of a Mac recording along on the 18 Pro
-  (collapsed and expanded, light and dark) and the Duo cover. Still needs hardware: a Mac's level reaching an iPhone
+  accessibility5), RecordingSurfacesTests, LinkServicesTests; captures on the 18 Pro of recording alone (one
+  unlabelled meter), a Mac along (collapsed and expanded, light and dark), a recorder and a Mac along (three rows,
+  `--device-simulator --device-autopilot`), and a Mac along at accessibility-extra-large, the Duo cover with a Mac,
+  and the open Duo's resting recorder alone and with a Mac. Still needs hardware: a Mac's level reaching an iPhone
   over real Wi‑Fi during a call (latency, dropped sends), a real Soundcore's row on the iPhone, VoiceOver reading the
   rows, and the cost of receiving levels while the iPhone records in the background.
 - **F4, Protect while iPhone is locked (security F-08, P4 step 2).** Settings › Storage › Protect While iPhone Is
