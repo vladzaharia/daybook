@@ -40,15 +40,15 @@ struct ConversationScreen: View {
             .confirmationBeat($session.confirmation)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                // The switch only when there's a second page to turn to; the page itself says why not.
-                if hasTranscript {
-                    ToolbarItem(placement: .principal) {
-                        Picker("Page", selection: $session.pageMode) {
-                            ForEach(PageMode.allCases) { Text($0.title).tag($0) }
-                        }
-                        .pickerStyle(.segmented)
-                        .fixedSize()
+                // Always the switch, so the bar's centre stays put. Until there's a transcript to turn to it's dimmed on
+                // Summary, as the Mac's is (a segmented picker can't dim one segment), and the page itself says why.
+                ToolbarItem(placement: .principal) {
+                    Picker("Page", selection: hasTranscript ? $session.pageMode : .constant(.summary)) {
+                        ForEach(PageMode.allCases) { Text($0.title).tag($0) }
                     }
+                    .pickerStyle(.segmented)
+                    .fixedSize()
+                    .disabled(!hasTranscript)
                 }
                 ConversationToolbar(library: library, meeting: meeting)
             }

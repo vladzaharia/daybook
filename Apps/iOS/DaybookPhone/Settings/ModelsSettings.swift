@@ -19,7 +19,8 @@ struct ModelsSettingsScreen: View {
         @Bindable var settings = model.settings
         Form {
             ModelProcessingSection(toggleTitle: "Transcribe on this iPhone", isOn: $settings.processesOnThisIPhone,
-                                   download: models.processingDownload, space: models.space,
+                                   download: models.processingDownload, downloadName: "Transcription and speakers",
+                                   space: models.space,
                                    downloadAction: { models.downloadMissing(in: PhoneModels.transcribingRoles) },
                                    cancelAction: { models.cancelDownloads(in: PhoneModels.transcribingRoles) })
             // The voice-profile model comes with the speaker model: it isn't a choice of its own.
@@ -28,7 +29,8 @@ struct ModelsSettingsScreen: View {
             }
             if let live = models.liveDownload {
                 Section {
-                    ModelDownloadRow(live, space: models.space, download: { models.downloadMissing(in: models.roles) },
+                    ModelDownloadRow(live, name: "Live captions", space: models.space,
+                                     download: { models.downloadMissing(in: models.roles) },
                                      cancel: { models.cancelDownloads(in: models.roles) })
                 } header: {
                     Text("Live")

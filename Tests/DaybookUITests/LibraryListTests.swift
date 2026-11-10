@@ -54,6 +54,20 @@ final class LibraryListTests: XCTestCase {
         XCTAssertEqual(RowGlyph.slot, 16)
     }
 
+    /// VI-11, P5: under touch a row's glyph, its slot, and the processing line grow with the words beside them; the
+    /// Mac's window and panel keep their fixed sizes.
+    @MainActor
+    func testBehaviorARowsGlyphScalesWithDynamicTypeOnlyUnderTouch() {
+        XCTAssertEqual(RowGlyph.touchGlyph, 13, "the footnote's size at the default text size")
+        XCTAssertEqual(RowGlyph.lineWidth, 44)
+        let large = RowGlyph.Metrics(glyph: 31, slot: 38, line: 105)
+        XCTAssertEqual(RowGlyph.metrics(.touch, scaled: large), large, "at AX5 the clock, its slot, and the line grow together")
+        let fixed = RowGlyph.Metrics(glyph: RowGlyph.fixedGlyph, slot: 16, line: 44)
+        XCTAssertEqual(RowGlyph.metrics(.window, scaled: large), fixed)
+        XCTAssertEqual(RowGlyph.metrics(.panel, scaled: large), fixed)
+        XCTAssertEqual(RowGlyph.fixedGlyph, 11)
+    }
+
     /// VM-13: in a window every row is two lines; its tags end the date's line, by name while they fit beside the
     /// gist's start, with a count for the rest, else the count alone.
     func testBehaviorAWindowRowEndsItsDateLineWithItsTagsOrACount() {
