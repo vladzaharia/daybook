@@ -155,6 +155,59 @@ final class SmallTasksTests: XCTestCase {
         XCTAssertLessThan(prompts.values[1].count, prompts.values[0].count)
     }
 
+    /// Where the model counts tokens (26.4), the excerpt is sized by its count, not the three-characters-per-token
+    /// estimate: one request that fills the context, with room left for the answer.
+    func testACountingModelFillsTheContextInOneRequest() async throws {
+        let prompts = Prompts()
+        // Two characters per token: denser than the estimate assumes, so the estimate alone would overflow.
+        let count: AppleFoundationModelsEngine.TokenCounter = { instructions, prompt, _ in (instructions.count + prompt.count) / 2 + 50 }
+        let engine = AppleFoundationModelsEngine(availability: { .available }, contextSize: { 4_096 }, tokenCounter: count) { _, prompt, _ in
+            prompts.add(prompt)
+            return .init(title: "Launch checklist", kind: "general", terms: [])
+        }
+        let model = try await engine.load(systemInstallation(), role: .smallTasks, progress: { _ in }) as? any PerformingSmallTasks
+        let long = transcript + "\n" + transcript
+        let result = try await XCTUnwrap(model).performSmallTasks(SmallTaskRequest(transcript: long, notes: "Ship Friday", modelID: "m"),
+                                                                 progress: { _ in })
+        XCTAssertEqual(result.title, "Launch checklist")
+        XCTAssertEqual(prompts.values.count, 1, "no retry")
+        let used = try await count(SmallTasks.instructions, XCTUnwrap(prompts.values.first), true)
+        let room = 4_096 - AppleSmallTasksModel.answerTokens - AppleSmallTasksModel.slackTokens
+        XCTAssertLessThanOrEqual(used, room, "the answer has its room")
+        XCTAssertGreaterThan(used, room * 9 / 10, "and the excerpt the rest")
+        XCTAssertTrue(prompts.values[0].contains("[…]"))
+        XCTAssertTrue(prompts.values[0].contains("Ship Friday"))
+    }
+
+    /// A conversation that fits goes whole, counted; a count that fails leaves the estimate.
+    func testAConversationThatFitsIsSentWholeAndAFailedCountFallsBackToTheEstimate() async throws {
+        let prompts = Prompts()
+        let engine = AppleFoundationModelsEngine(availability: { .available }, contextSize: { 4_096 },
+                                                 tokenCounter: { instructions, prompt, _ in (instructions.count + prompt.count) / 3 }) { _, prompt, _ in
+            prompts.add(prompt)
+            return .init(title: "Short", kind: "general", terms: [])
+        }
+        let loaded = try await engine.load(systemInstallation(), role: .smallTasks, progress: { _ in })
+        let model = try XCTUnwrap(loaded as? any PerformingSmallTasks)
+        let short = (0..<20).map { "Alex: line \($0) about the launch." }.joined(separator: "\n")
+        _ = try await model.performSmallTasks(SmallTaskRequest(transcript: short, notes: "", modelID: "m"), progress: { _ in })
+        XCTAssertTrue(prompts.values[0].contains("line 19 about the launch"))
+        XCTAssertFalse(prompts.values[0].contains("[…]"))
+
+        struct Unavailable: Error {}
+        let estimated = Prompts()
+        let failing = AppleFoundationModelsEngine(availability: { .available }, contextSize: { 4_096 },
+                                                  tokenCounter: { _, _, _ in throw Unavailable() }) { _, prompt, _ in
+            estimated.add(prompt)
+            return .init(title: "Estimated", kind: "general", terms: [])
+        }
+        let loadedFallback = try await failing.load(systemInstallation(), role: .smallTasks, progress: { _ in })
+        let fallback = try XCTUnwrap(loadedFallback as? any PerformingSmallTasks)
+        let result = try await fallback.performSmallTasks(SmallTaskRequest(transcript: transcript, notes: "", modelID: "m"), progress: { _ in })
+        XCTAssertEqual(result.title, "Estimated")
+        XCTAssertLessThan(estimated.values[0].count, (4_096 - 1_600) * 3 + 2_000, "the estimate's excerpt")
+    }
+
     func testAFailureOtherThanLengthIsntRetried() async throws {
         struct Refused: Error {}
         let prompts = Prompts()
