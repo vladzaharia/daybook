@@ -26,6 +26,13 @@ extension MeetingStore {
     private var libraryURL: URL { rootURL.appendingPathComponent("library.json") }
     private var libraryRecoveryURL: URL { rootURL.appendingPathComponent("library.recovery.json") }
 
+    /// Keeps the library's settings files (`library.json`, its recovery copy, and a damaged copy kept aside) out of
+    /// backups as they're saved, or lets the next saves back in: the iPhone's rule for an encrypted library, whose
+    /// sealed journal in iCloud holds them (`BackupExclusion`). Every save replaces the file, so each marks its new file
+    /// before it's renamed into place; the files already there are the caller's to mark.
+    public nonisolated func excludeSettingsFromBackup(_ excluded: Bool) { settingsBackupExclusion.withLock { $0 = excluded } }
+    public nonisolated var excludesSettingsFromBackup: Bool { settingsBackupExclusion.withLock { $0 } }
+
     public func loadLibraryMetadata() -> LibraryMetadataFile {
         let primary = Self.readLibraryFile(libraryURL)
         switch primary {
@@ -43,8 +50,8 @@ extension MeetingStore {
                 "Your folders and templates couldn’t be read, so changes to them won’t be saved until Daybook can read them."])
         case .missing, .damaged:
             if case .damaged = primary { keepDamagedLibraryFile() }
-            if case .valid(let metadata) = Self.readLibraryFile(libraryRecoveryURL),
-               let bytes = try? Data(contentsOf: libraryRecoveryURL), (try? LocalFiles.atomicWrite(bytes, to: libraryURL)) != nil {
+            if case .valid(let metadata) = Self.readLibraryFile(libraryRecoveryURL), let bytes = try? Data(contentsOf: libraryRecoveryURL),
+               (try? LocalFiles.atomicWrite(bytes, to: libraryURL, backupExcluded: excludesSettingsFromBackup)) != nil {
                 noteWrite(libraryURL)
                 libraryFile = .writable(primaryIsValid: true)
                 return LibraryMetadataFile(metadata: metadata, isWritable: true, warnings: [
@@ -65,21 +72,25 @@ extension MeetingStore {
         guard case .writable(let primaryIsValid) = libraryFile else { throw LibraryError.unreadableLibrarySettings }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let bytes = try encoder.encode(metadata)
+        let excluded = excludesSettingsFromBackup
         if primaryIsValid, FileStamp(libraryURL) != nil {
             let temporary = rootURL.appendingPathComponent(".library-\(UUID().uuidString).json")
             try bytes.write(to: temporary, options: .withoutOverwriting)
             defer { try? FileManager.default.removeItem(at: temporary) }
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
+            if excluded { try LocalFiles.excludeFromBackup(temporary) }
             if renamex_np(temporary.path, libraryURL.path, UInt32(RENAME_SWAP)) == 0 {
+                // `temporary` now holds the file it replaced: marked already, unless it was saved before the rule.
+                if excluded { try LocalFiles.excludeFromBackup(temporary) }
                 guard rename(temporary.path, libraryRecoveryURL.path) == 0 else { throw CocoaError(.fileWriteUnknown) }
             } else {
-                try LocalFiles.atomicWrite(Data(contentsOf: libraryURL), to: libraryRecoveryURL)
+                try LocalFiles.atomicWrite(Data(contentsOf: libraryURL), to: libraryRecoveryURL, backupExcluded: excluded)
                 guard rename(temporary.path, libraryURL.path) == 0 else { throw CocoaError(.fileWriteUnknown) }
             }
         } else {
-            try LocalFiles.atomicWrite(bytes, to: libraryURL)
+            try LocalFiles.atomicWrite(bytes, to: libraryURL, backupExcluded: excluded)
             if !FileManager.default.fileExists(atPath: libraryRecoveryURL.path) || Self.readLibraryFile(libraryRecoveryURL).metadata == nil {
-                try LocalFiles.atomicWrite(bytes, to: libraryRecoveryURL)
+                try LocalFiles.atomicWrite(bytes, to: libraryRecoveryURL, backupExcluded: excluded)
             }
         }
         libraryFile = .writable(primaryIsValid: true)
@@ -89,6 +100,7 @@ extension MeetingStore {
     private func keepDamagedLibraryFile() {
         let damaged = rootURL.appendingPathComponent("library.damaged-\(UUID().uuidString).json")
         try? FileManager.default.copyItem(at: libraryURL, to: damaged)
+        if excludesSettingsFromBackup { try? LocalFiles.excludeFromBackup(damaged) }
     }
 
     private enum LibraryFileRead {

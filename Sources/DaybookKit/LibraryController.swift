@@ -43,6 +43,14 @@ public final class LibraryController {
     /// the durability barrier (`flushDurably`) flushes what each wrote. Nil until `load`.
     @ObservationIgnored private(set) var store: MeetingStore?
     @ObservationIgnored private var glossaryStore: GlossaryStore?
+    /// The library's settings files (`library.json`, `glossary.json`, and their copies) stay out of backups as they're
+    /// saved: the iPhone's rule for an encrypted library (`BackupExclusion`). Off on the Mac.
+    @ObservationIgnored public var excludesSettingsFromBackup = false {
+        didSet {
+            store?.excludeSettingsFromBackup(excludesSettingsFromBackup)
+            glossaryStore?.excludeFromBackup(excludesSettingsFromBackup)
+        }
+    }
     /// Saves, coalesced and written in the background (`LibrarySaveQueue`).
     private let saves = LibrarySaveQueue()
     /// Saves that failed, until one of the same thing succeeds.
@@ -93,6 +101,8 @@ public final class LibraryController {
         guard !isLoaded else { return }
         let store = try MeetingStore(rootURL: rootURL)
         let glossaryStore = try GlossaryStore(rootURL: rootURL)
+        store.excludeSettingsFromBackup(excludesSettingsFromBackup)
+        glossaryStore.excludeFromBackup(excludesSettingsFromBackup)
         self.store = store; self.glossaryStore = glossaryStore
         meetings = try await store.list()
         var warnings = await store.warnings

@@ -43,7 +43,7 @@ struct DaybookPhoneApp: App {
         }
         // Storage errors surface when loading, and retry the same durable location.
         let library = PhoneLibrary(rootURL: root, sync: sync)
-        BackupExclusion.apply(libraryRoot: root, inbox: library.inboxURL, library: BackupExclusion.library(
+        BackupExclusion.apply(to: library, BackupExclusion.library(
             includesLibrary: settings.includesLibraryInBackups, encrypted: LibrarySyncEngine.hasSyncedEncryptedLibrary(localRoot: root),
             includesEncryptedLibrary: settings.includesEncryptedLibraryInBackups))
         let model = PhoneAppModel(recorder: PhoneRecorder(environment: recorderEnvironment), library: library,

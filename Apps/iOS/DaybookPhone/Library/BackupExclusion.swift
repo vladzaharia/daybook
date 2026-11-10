@@ -9,10 +9,11 @@ import os
 /// Include in iPhone Backups is off; then the whole library folder stays out.
 ///
 /// An encrypted library (docs/icloud-sync.md, "Encryption") has a choice of its own, off unless the person turns it on:
-/// its conversations, Trash, sync state, and saved captions (`Meetings/`, `Trash/`, `Sync/`, `LiveCaptions/`) stay out,
-/// because the sealed journal in iCloud is their backup and a backup isn't encrypted end to end. A choice made for the
-/// plaintext library doesn't carry over as on, so turning encryption on never leaves plaintext in backups unless the
-/// person turns it on again; turned off there, the whole folder stays out as before. See docs/iphone.md, "Backups".
+/// its conversations, Trash, sync state, and saved captions (`Meetings/`, `Trash/`, `Sync/`, `LiveCaptions/`) and its
+/// settings (`settingsFiles`) stay out, because the sealed journal in iCloud is their backup and a backup isn't encrypted
+/// end to end. A choice made for the plaintext library doesn't carry over as on, so turning encryption on never leaves
+/// plaintext in backups unless the person turns it on again; turned off there, the whole folder stays out as before.
+/// See docs/iphone.md, "Backups".
 enum BackupExclusion {
     /// What a backup holds of the library.
     enum Library: Equatable {
@@ -36,6 +37,16 @@ enum BackupExclusion {
         ["Meetings", "Trash", "Sync", "LiveCaptions"].map { libraryRoot.appendingPathComponent($0, isDirectory: true) }
     }
 
+    /// An encrypted library's settings, which stay out with its folders: folders, templates, vocabulary, and the
+    /// speakers' names and voiceprints (`library.json`, `glossary.json`, their recovery copies, and any damaged copy
+    /// kept aside). The sealed journal in iCloud holds them as settings versions.
+    static func settingsFiles(libraryRoot: URL) -> [URL] {
+        let damaged = ((try? FileManager.default.contentsOfDirectory(atPath: libraryRoot.path)) ?? [])
+            .filter { $0.hasPrefix("library.damaged-") && $0.hasSuffix(".json") }.sorted()
+        return (["library.json", "library.recovery.json", "glossary.json", "glossary.recovery.json"] + damaged)
+            .map { libraryRoot.appendingPathComponent($0) }
+    }
+
     /// Folders that never go into a backup.
     static func rebuildableFolders(libraryRoot: URL, inbox: URL) -> [URL] {
         [libraryRoot.appendingPathComponent("Sync/Inbox", isDirectory: true),
@@ -44,11 +55,21 @@ enum BackupExclusion {
          inbox]
     }
 
+    /// Applies the rules to the library: to the settings files it saves from now on, each marked before it replaces
+    /// the last (`LibraryController.excludesSettingsFromBackup`), and to what exists now.
+    @MainActor
+    static func apply(to library: PhoneLibrary, _ rules: Library) {
+        library.controller.excludesSettingsFromBackup = rules == .withoutEncryptedFolders
+        apply(libraryRoot: library.rootURL, inbox: library.inboxURL, library: rules)
+    }
+
     /// Applies the rules to what exists now. Safe to repeat: at launch, when a setting changes, when the library's
-    /// encryption changes, and after a sync pass (which may have made a folder).
+    /// encryption changes, and after a sync pass (which may have made a folder). For the settings files, a safety net
+    /// behind the mark each save puts on its new file.
     static func apply(libraryRoot: URL, inbox: URL, library: Library) {
         set(libraryRoot, excluded: library == .none)
         for folder in encryptedLibraryFolders(libraryRoot: libraryRoot) { set(folder, excluded: library == .withoutEncryptedFolders) }
+        for file in settingsFiles(libraryRoot: libraryRoot) { set(file, excluded: library == .withoutEncryptedFolders) }
         for folder in rebuildableFolders(libraryRoot: libraryRoot, inbox: inbox) { set(folder, excluded: true) }
     }
 

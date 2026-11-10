@@ -67,19 +67,58 @@ final class BackupExclusionTests: XCTestCase {
         let settings = PhoneSettings(defaults: makeTestDefaults("BackupExclusionTests"))
         XCTAssertFalse(settings.includesEncryptedLibraryInBackups, "off unless turned on")
 
+        // Its settings too: names, voiceprints, vocabulary, folders, and templates.
+        let settingsFiles = ["library.json", "library.recovery.json", "library.damaged-\(UUID().uuidString).json", "glossary.json", "glossary.recovery.json"]
+        for file in settingsFiles { try Data("{}".utf8).write(to: root.appendingPathComponent(file)) }
+        try Data("{}".utf8).write(to: root.appendingPathComponent("local-work.json"))
+
         BackupExclusion.apply(libraryRoot: root, inbox: inbox, library: .withoutEncryptedFolders)
         for folder in kept { XCTAssertTrue(excluded(folder), folder) }
+        for file in settingsFiles { XCTAssertTrue(excluded(file), file) }
+        XCTAssertFalse(excluded("local-work.json"), "only the settings")
         XCTAssertFalse(BackupExclusion.isExcluded(root), "the library folder itself stays in")
         XCTAssertFalse(excluded("Staging")); XCTAssertFalse(excluded("Devices"))
         XCTAssertTrue(excluded("Sync/Courier")); XCTAssertTrue(BackupExclusion.isExcluded(inbox))
 
         BackupExclusion.apply(libraryRoot: root, inbox: inbox, library: .whole)
         for folder in kept { XCTAssertFalse(excluded(folder), folder) }
+        for file in settingsFiles { XCTAssertFalse(excluded(file), file) }
         XCTAssertTrue(excluded("Sync/Courier"), "rebuildable copies stay out either way")
         XCTAssertTrue(excluded("Sync/Inbox"))
 
         BackupExclusion.apply(libraryRoot: root, inbox: inbox, library: .none)
         XCTAssertTrue(BackupExclusion.isExcluded(root))
+    }
+
+    /// Every save replaces a settings file, so a mark set on the file before would be lost: each save marks its new
+    /// file before it's renamed into place.
+    func testAnEncryptedLibrarysSettingsStayOutAfterEverySave() async throws {
+        let base = try temporaryDirectory()
+        let root = base.appendingPathComponent("Daybook", isDirectory: true)
+        let library = PhoneLibrary(rootURL: root, installation: "INSTALL-1")
+        library.inboxURL = base.appendingPathComponent("Documents/Inbox", isDirectory: true)
+        let files = ["library.json", "library.recovery.json", "glossary.json", "glossary.recovery.json"]
+        func excluded(_ file: String) -> Bool { BackupExclusion.isExcluded(URL(fileURLWithPath: root.appendingPathComponent(file).path)) }
+
+        BackupExclusion.apply(to: library, .withoutEncryptedFolders)
+        XCTAssertTrue(library.controller.excludesSettingsFromBackup)
+        try await library.reload()
+        for name in ["Family", "Clinic", "Work"] {
+            _ = library.controller.createFolder(named: name)
+            library.controller.saveGlossaryTerm(GlossaryTerm(term: name, approved: true))
+            await library.controller.flush()
+            for file in files { XCTAssertTrue(excluded(file), "\(file) after saving \(name)") }
+        }
+        let hidden = try FileManager.default.contentsOfDirectory(atPath: root.path).filter { $0.hasPrefix(".") }
+        XCTAssertEqual(hidden, [], "no temporary file is left")
+
+        // Included again: the files there go back in, and so do later saves.
+        BackupExclusion.apply(to: library, .whole)
+        XCTAssertFalse(library.controller.excludesSettingsFromBackup)
+        for file in files { XCTAssertFalse(excluded(file), file) }
+        _ = library.controller.createFolder(named: "Later")
+        await library.controller.flush()
+        XCTAssertFalse(excluded("library.json"))
     }
 
     func testApplyingToALibraryThatDoesNotExistYetChangesNothing() throws {

@@ -862,7 +862,7 @@ final class PhoneAppModel: RecordingCommandHandling {
 
     /// Keeps what Settings › Storage says out of iPhone backups (`BackupExclusion`).
     func applyBackupExclusion() {
-        BackupExclusion.apply(libraryRoot: library.rootURL, inbox: library.inboxURL, library: BackupExclusion.library(
+        BackupExclusion.apply(to: library, BackupExclusion.library(
             includesLibrary: settings.includesLibraryInBackups, encrypted: libraryIsEncrypted,
             includesEncryptedLibrary: settings.includesEncryptedLibraryInBackups))
     }
