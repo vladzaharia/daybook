@@ -13,7 +13,10 @@ import UniformTypeIdentifiers
 
 /// The Mac app's state. The library itself (conversations, edits, saving, sync, requests) is
 /// `library`, shared with the iPhone through DaybookKit; this adds what only the Mac does:
-/// capture, the processing queue and local models, devices' wiring, windows, and panels. Library
+/// capture, local models, devices' wiring, windows, and panels. Its parts with seams of their own are
+/// models of their own: where the person is in the library window (`window`, the iPhone's
+/// `ReadingSession`'s twin), this Mac's processing (`processor`, the twin of `PhoneProcessor`), the
+/// library's launch check (`launchCheck`), and what it reaches in the system (`environment`). Library
 /// members are forwarded so views and menus read them here as before.
 ///
 /// It's `@Observable`, like everything views read here (the library, sync, devices, the recorder, the
