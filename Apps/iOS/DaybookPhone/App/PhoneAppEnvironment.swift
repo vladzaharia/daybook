@@ -2,6 +2,7 @@ import DaybookKit
 import DaybookLink
 import DaybookModelStore
 import Foundation
+import UIKit
 import UserNotifications
 import WidgetKit
 
@@ -47,6 +48,9 @@ struct PhoneAppEnvironment {
     var publishNextSteps: (SharedNextSteps) -> Void
     /// Time iOS grants to finish work once Daybook leaves the foreground (Stop's saving and filing); none by default.
     var backgroundTime: any BackgroundTime = NoBackgroundTime()
+    /// Whether a recording's files, kept until unlock, can be read now (Stop on a locked iPhone waits to join and file
+    /// it); always by default.
+    var protectedData = ProtectedData.always
 
     /// The app's: the keychain, `UserDefaults.standard`, Application Support's models with background
     /// downloads, the shared Wi‑Fi monitor, Bluetooth (or the simulated recorder), notifications, and Spotlight.
@@ -77,7 +81,8 @@ struct PhoneAppEnvironment {
                 guard snapshot != SharedNextSteps.load(), snapshot.save() else { return }
                 WidgetCenter.shared.reloadTimelines(ofKind: SharedNextSteps.widgetKind)
             },
-            backgroundTime: SystemBackgroundTime())
+            backgroundTime: SystemBackgroundTime(),
+            protectedData: .system)
     }
 
     /// Nothing real: memory key stores, a scratch suite and models folder for this process, no downloads, no
@@ -107,6 +112,27 @@ struct PhoneAppEnvironment {
 struct NoBackgroundTime: BackgroundTime {
     func begin(_ name: String, expired: @escaping @MainActor @Sendable () -> Void) -> Int? { nil }
     func end(_ assertion: Int) {}
+}
+
+/// Whether files this iPhone keeps until it's unlocked (`FileProtectionType.completeUnlessOpen`: a recording in
+/// progress, `StagingProtection`) can be read now, and word each time they can again. UIKit's in the app; a pretend
+/// iPhone that tests lock and unlock.
+@MainActor
+struct ProtectedData {
+    var isAvailable: () -> Bool
+    /// Calls `handler` each time they become readable, from now on.
+    var whenAvailable: (@escaping @MainActor () -> Void) -> Void
+
+    /// Always readable, and never changing: tests and the test host.
+    static var always: ProtectedData { ProtectedData(isAvailable: { true }, whenAvailable: { _ in }) }
+
+    /// `UIApplication.isProtectedDataAvailable`, and its notification.
+    static var system: ProtectedData {
+        ProtectedData(isAvailable: { UIApplication.shared.isProtectedDataAvailable }, whenAvailable: { handler in
+            _ = NotificationCenter.default.addObserver(forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil,
+                                                       queue: .main) { _ in MainActor.assumeIsolated { handler() } }
+        })
+    }
 }
 
 /// The scratch space of `.inert`: one folder per process under the temporary directory, holding its

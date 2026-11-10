@@ -381,6 +381,44 @@ final class RecordingSurfacesTests: XCTestCase {
   XCTAssertEqual(rig.recorder.meterInterval, PhoneRecorder.levelInterval)
   try await model.stopRecording()
  }
+
+ /// Stopped while the iPhone was locked, the recording is saved and finishes once it's unlocked: the Live Activity and
+ /// the recorder after Stop say so in one line, the shared words, and Siri says it too. Never "No audio was recorded".
+ func testBehaviorAStopWhileLockedSaysItsSavedAndFinishesOnUnlock() {
+  var inputs = RecordingStatusInputs()
+  inputs.phase = .saving
+  inputs.waitsForUnlock = true
+  let phase = RecordingStatusWords.phase(inputs)
+  XCTAssertEqual(phase?.phase, .saved)
+  XCTAssertEqual(phase?.title, "Saved")
+  XCTAssertEqual(phase?.detail, "Finishes when you unlock iPhone")
+  XCTAssertEqual(phase?.detail, RecordingWords.finishesWhenUnlocked)
+  inputs.waitsForUnlock = false
+  XCTAssertEqual(RecordingStatusWords.phase(inputs)?.title, "Saving…", "once it's unlocked, it's being saved")
+
+  let started = Date(timeIntervalSince1970: 1_800_000_000)
+  let final = RecordingActivityAttributes.ContentState(
+   phase: .recording, timerStart: started, frozenElapsed: 754, level: 1, bookmarkCount: 2, caption: "Said just now", canResume: nil)
+  let saved = PhoneAppModel.savedUntilUnlockActivity(final)
+  XCTAssertEqual(saved.title(isStale: false), "Saved")
+  XCTAssertEqual(saved.title(isStale: true), "Saved", "never unconfirmed")
+  XCTAssertEqual(saved.endLine, "Finishes when you unlock iPhone")
+  XCTAssertNil(saved.caption)
+  XCTAssertEqual(saved.frozenElapsed, 754)
+  XCTAssertTrue(saved.hasEnded)
+  XCTAssertNil(saved.staleDate(from: started))
+  XCTAssertEqual(RecordingActivityController.dismissal(for: saved, now: started), .default, "until it's finished")
+  var plain = saved
+  plain.savedLine = nil
+  XCTAssertEqual(plain.endLine, "Saved to Daybook")
+
+  XCTAssertEqual(RecordingWords.savedUntilUnlock, "Saved to Daybook. It finishes when you unlock iPhone.")
+  XCTAssertEqual(PhoneRecorderError.locked.errorDescription, "The recording’s files can’t be opened until iPhone is unlocked.")
+  XCTAssertNotEqual(PhoneRecorderError.locked.errorDescription, PhoneRecorderError.nothingRecorded.errorDescription)
+  XCTAssertEqual(
+   AfterStop.outcome(isActive: false, isFiling: true, filing: nil, since: nil), .saving,
+   "the recorder after Stop stays on it while it waits")
+ }
 }
 
 /// The recorder on the iPhone, as the recorder both apps share draws it: what it says about the recording and the

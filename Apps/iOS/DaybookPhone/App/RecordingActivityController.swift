@@ -115,9 +115,25 @@ final class RecordingActivityController {
     }
 
     /// How long an ended activity stays: Saved briefly; a recording that stopped by itself until the
-    /// system takes it away (up to four hours), so a glance at the Lock Screen still tells.
+    /// system takes it away (up to four hours), so a glance at the Lock Screen still tells; and one saved while
+    /// the iPhone was locked ("Finishes when you unlock iPhone") until it's finished (`dismissFinished`).
     static func dismissal(for state: RecordingActivityAttributes.ContentState, now: Date = Date()) -> ActivityUIDismissalPolicy {
-        state.phase == .stopped ? .default : .after(now.addingTimeInterval(8))
+        state.phase == .stopped || state.savedLine != nil ? .default : .after(now.addingTimeInterval(8))
+    }
+
+    /// The conversations whose ended activities were taken away once their recording was finished (tests read it).
+    private(set) var dismissed: [UUID] = []
+
+    /// A recording saved while the iPhone was locked has been joined and filed: its ended activity, which said it
+    /// finishes when the iPhone is unlocked, goes. One recording in that conversation now keeps its own.
+    func dismissFinished(conversationID: UUID) {
+        dismissed.append(conversationID)
+        let running = runner.activity?.id
+        let ended = Activity<RecordingActivityAttributes>.activities.filter { $0.id != running && $0.attributes.conversationID == conversationID }
+        guard !ended.isEmpty else { return }
+        Task { @concurrent in
+            for activity in ended { await activity.end(nil, dismissalPolicy: .immediate) }
+        }
     }
 
     /// Ends activities left from a run that didn't finish (called at launch, before recovery).

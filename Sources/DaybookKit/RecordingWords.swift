@@ -118,6 +118,12 @@ public enum RecordingWords {
     /// And when Stop had ended it and Daybook was ended while saving it: nothing is missing.
     public nonisolated static let savedAfterInterruptedSave = "Saved after Daybook was interrupted while saving."
 
+    /// Under "Saved", for a recording stopped while the iPhone was locked: it's whole, and it's joined and filed once
+    /// the iPhone is unlocked (the Live Activity, the recorder after Stop).
+    public nonisolated static let finishesWhenUnlocked = "Finishes when you unlock iPhone"
+    /// What Siri and Shortcuts say of that Stop.
+    public nonisolated static let savedUntilUnlock = "Saved to Daybook. It finishes when you unlock iPhone."
+
     /// A short stretch of audio in seconds as a sentence says it: "0.4 s", "2.4 s", "42 s", "3 min".
     public nonisolated static func seconds(_ value: TimeInterval) -> String {
         let value = max(0, value)

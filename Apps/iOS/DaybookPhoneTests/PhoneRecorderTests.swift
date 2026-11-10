@@ -712,6 +712,43 @@ final class PhoneRecorderTests: XCTestCase {
         XCTAssertEqual(try PhoneCaptureJournal.load(from: folder).state, .stopped)
     }
 
+    /// Locked (its parts kept until unlock can't be read back), Stop ends the capture and leaves the join
+    /// (`waitingCapture`), the journal saying `stopping`: never a failure, nothing joined. `finish` joins it once
+    /// they can be read, as Stop would have.
+    func testStopWhileLockedLeavesTheJoinForTheUnlock() async throws {
+        let rig = RecorderRig()
+        var locked = false
+        rig.recorder.protectedDataAvailable = { !locked }
+        let folder = try temporaryDirectory().appendingPathComponent("capture")
+        try await rig.recorder.start(in: folder, title: "Locked")
+        rig.pump(2)
+        locked = true
+        var captureEnded = false
+        let stopped = await rig.recorder.stop(PhoneRecorder.StopEvents(captureEnded: { captureEnded = true }))
+        XCTAssertNil(stopped)
+        XCTAssertTrue(captureEnded)
+        XCTAssertEqual(rig.recorder.state, .idle, "free to record again")
+        XCTAssertFalse(rig.session.isActive)
+        XCTAssertNil(rig.recorder.lastFailure, "never a failure")
+        XCTAssertNil(rig.recorder.unfinishedFolder)
+        let waiting = try XCTUnwrap(rig.recorder.waitingCapture)
+        XCTAssertEqual(waiting.directory, folder)
+        XCTAssertEqual(waiting.journal.state, .stopping)
+        XCTAssertEqual(waiting.duration, 2, accuracy: 0.05)
+        XCTAssertEqual(try PhoneCaptureJournal.load(from: folder).state, .stopping)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent(PhoneCaptureJournal.finalFileName).path))
+
+        let recording = try await PhoneRecorder.finish(waiting)
+        XCTAssertEqual(recording.duration, 2, accuracy: 0.001)
+        XCTAssertNil(recording.recovery, "saved by Stop, not recovered")
+        XCTAssertEqual(try PhoneCaptureJournal.load(from: folder).state, .stopped)
+
+        // The next recording starts clean.
+        try await rig.recorder.start(in: try temporaryDirectory().appendingPathComponent("next"), title: "Next")
+        XCTAssertNil(rig.recorder.waitingCapture)
+        _ = await rig.recorder.stop()
+    }
+
     // MARK: Hearing
 
     /// The hearing check is rolling: digital zeros for 5 s, or nothing above −90 dBFS for 20 s, is "Microphone silent",

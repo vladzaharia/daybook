@@ -47,6 +47,8 @@ struct PhoneRecorderEnvironment {
 /// - Stop has two steps: capture ends (input stops, every segment closes, the journal says `stopping`, and the
 ///   audio session is given back; `StopEvents.captureEnded`), then the segments are joined, by copying their
 ///   packets (`RecordingAssembler`). A recording iOS ends Daybook during is recovered as saved, not as cut short.
+///   While the iPhone is locked the join waits for an unlock (`waitingCapture`): the parts are kept until unlock
+///   (`StagingProtection`), so they can't be read back before.
 /// - Hearing: the microphone isn't hearing after 5 s without a non-zero sample, or 20 s under −90 dBFS
 ///   (`HearingCheck`), rolling, so it's said whenever it happens and clears when sound comes back.
 /// - Crash safety: segments are written as fragmented M4A (readable up to the last fragment the
@@ -115,6 +117,13 @@ final class PhoneRecorder {
     /// The staging folder of the last recording Stop couldn't finish (`lastFailure` says why), kept for its
     /// notes and for recovery. Cleared when the next recording starts.
     private(set) var unfinishedFolder: URL?
+    /// The last recording Stop ended while the iPhone was locked: whole on disk, its journal saying `stopping`, and
+    /// still to be joined, which reads its parts back and so waits for an unlock (`StagingProtection`). Its caller
+    /// finishes it (`finish(_:)`). Cleared when the next recording starts.
+    private(set) var waitingCapture: StoppedCapture?
+    /// Whether files kept until unlock can be read now (`PhoneAppEnvironment.protectedData`): when they can't, Stop
+    /// ends the capture and leaves the join (`waitingCapture`).
+    @ObservationIgnored var protectedDataAvailable: () -> Bool = { true }
 
     /// State, pauses, routes, and bookmarks changed (not levels).
     @ObservationIgnored var onChange: (() -> Void)?
@@ -202,7 +211,7 @@ final class PhoneRecorder {
         guard state == .idle else { throw PhoneRecorderError.alreadyRecording }
         state = .starting
         cancelStart = false
-        lastError = nil; lastFailure = nil; unexpectedStop = nil; unfinishedFolder = nil; canResume = false; pauseMessage = nil
+        lastError = nil; lastFailure = nil; unexpectedStop = nil; unfinishedFolder = nil; waitingCapture = nil; canResume = false; pauseMessage = nil
         captureID = id; self.recordingID = recordingID; self.title = title; startedAt = nil
         notes = ""; timedNotes = []; ink = []; highlights = []; photos = []; sharedNotes = [:]; sharedBookmarks = [:]
         level = .silent; isMicrophoneSilent = false; lastHeardSpeechAt = nil
@@ -212,10 +221,10 @@ final class PhoneRecorder {
             }
             guard await environment.session.requestRecordPermission() else { throw PhoneRecorderError.microphoneDenied }
             try checkStartCancelled()
-            // Class C protection: the recording keeps writing while the phone is locked.
+            // Kept until unlock (class B), and everything made in it with it: a locked iPhone keeps writing the parts
+            // already open and can make new ones (`StagingProtection`).
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
-                                                    attributes: [.posixPermissions: 0o700,
-                                                                 .protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+                                                    attributes: [.posixPermissions: 0o700, .protectionKey: StagingProtection.type])
             self.directory = directory
             environment.session.onEvent = { [weak self] event in self?.handle(event) }
             try environment.session.activate()
@@ -326,7 +335,11 @@ final class PhoneRecorder {
         environment.session.deactivate()
         events.captureEnded()
         var recording: PhoneRecording?
-        if let snapshot = saving, let directory {
+        if let snapshot = saving, let directory, !protectedDataAvailable() {
+            // Locked: the recording is whole on disk and its journal says so. Joining reads its parts back, which waits
+            // for an unlock; the caller finishes it then.
+            waitingCapture = StoppedCapture(directory: directory, journal: snapshot)
+        } else if let snapshot = saving, let directory {
             let pieces = PhoneCaptureFinisher.pieces(snapshot, in: directory), format = snapshot.format
             let long = await Task.detached(priority: .userInitiated) { RecordingAssembler.expectsLongJoin(pieces, format: format) }.value
             if long { events.longJoin() }
@@ -341,6 +354,9 @@ final class PhoneRecorder {
                 }.value
                 self.journal = finished.0
                 recording = finished.1
+            } catch PhoneRecorderError.locked {
+                // Locked as it joined: the journal still says `stopping`, and the join starts again once it's unlocked.
+                waitingCapture = StoppedCapture(directory: directory, journal: snapshot)
             } catch {
                 lastError = error.localizedDescription
                 lastFailure = error as? PhoneRecorderError
@@ -458,7 +474,7 @@ final class PhoneRecorder {
         let url = directory.appendingPathComponent(entry.fileName)
         let data = photo.data
         try await Task.detached(priority: .userInitiated) {
-            try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            try data.write(to: url, options: [.atomic, StagingProtection.writing])
         }.value
         guard self.directory == directory, isCapturing else {
             try? FileManager.default.removeItem(at: url)
@@ -538,8 +554,19 @@ final class PhoneRecorder {
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
+    /// Joins a recording Stop left while the iPhone was locked (`waitingCapture`), once it's unlocked, and returns it
+    /// ready to file, as Stop would have. Throws `PhoneRecorderError.locked` while its parts can't be read yet, and
+    /// `nothingRecorded` when none of them has audio.
+    nonisolated static func finish(_ capture: StoppedCapture) async throws -> PhoneRecording {
+        try await Task.detached(priority: .userInitiated) {
+            var journal = capture.journal
+            return try await PhoneCaptureFinisher.finish(&journal, in: capture.directory, recovery: nil)
+        }.value
+    }
+
     /// Rebuilds a recording from a folder that no recorder is writing: after a crash, after the app
-    /// was killed while paused, or when filing failed after Stop.
+    /// was killed while paused, or when filing failed after Stop. Throws `PhoneRecorderError.locked` when the folder
+    /// can't be read until the iPhone is unlocked.
     nonisolated static func recover(in directory: URL) async throws -> PhoneRecording {
         try await Task.detached(priority: .utility) {
             var journal = try PhoneCaptureJournal.load(from: directory)
@@ -863,6 +890,19 @@ final class PhoneRecorder {
         let silent = HearingCheck.isNotHearing(reading, listeningSince: listeningSince, now: environment.clock.hostTime())
         if silent != isMicrophoneSilent { isMicrophoneSilent = silent }
         onLevel?(level)
+    }
+}
+
+/// A recording whose capture Stop has ended (every part closed, the journal saying `stopping`) and that's still to be
+/// joined: what Stop leaves while the iPhone is locked (`PhoneRecorder.waitingCapture`).
+struct StoppedCapture: Equatable, Sendable {
+    var directory: URL
+    var journal: PhoneCaptureJournal
+
+    var conversationID: UUID { journal.id }
+    /// Where the recording ends, by its parts' counted frames.
+    var duration: TimeInterval {
+        journal.segments.map { $0.startOffset + Double($0.frameCount) / journal.sampleRate }.max() ?? 0
     }
 }
 

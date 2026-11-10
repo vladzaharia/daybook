@@ -62,6 +62,8 @@ public struct RecordingStatusInputs: Equatable {
     public var phase: Phase = .idle
     /// The conversation's length, once saved.
     public var duration: TimeInterval?
+    /// Saving, a recording stopped while the iPhone was locked waits for it to be unlocked to be finished: it's saved.
+    public var waitsForUnlock = false
     /// What it records from: "MacBook Pro Microphone".
     public var inputDevice: String?
     /// The input can be changed where the phase is drawn (Floating Notes' input menu, the iPhone's input picker), so
@@ -228,6 +230,7 @@ public enum RecordingStatusWords {
             return RecorderPhase(phase: .recording, title: "Recording", detail: input.map(inputChoice) ?? inputs.inputDevice,
                                  choosesInput: chooses, input: input)
         case .paused: return RecorderPhase(phase: .paused, title: "Paused")
+        case .saving where inputs.waitsForUnlock: return RecorderPhase(phase: .saved, title: "Saved", detail: RecordingWords.finishesWhenUnlocked)
         case .saving: return RecorderPhase(phase: .saving, title: "Saving…")
         // How long it is, as the page and the list say it ("18 min"), never a time that reads like a clock.
         case .saved: return RecorderPhase(phase: .saved, title: "Saved", detail: inputs.duration.map(DurationLabel.format))
