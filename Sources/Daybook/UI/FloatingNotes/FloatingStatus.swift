@@ -146,11 +146,11 @@ enum FloatingStatus {
         case .awaiting(let line): return chip("clock", line, short: "Waiting", .calm)
         // Where its summary runs (docs/multipoint.md, "Where summaries run"): Use the Cloud and Start Now are in its menu.
         case .summaryCountdown(let until, _):
-            let seconds = max(1, Int(until.timeIntervalSince(now).rounded(.up)))
-            return chip("clock", "Summarizing in \(seconds) s", short: "\(seconds) s", .calm,
-                        detail: "Summarizing on \(AppState.thisDeviceWords) in \(seconds) s", countdown: until)
+            let seconds = SummaryPlacementWords.secondsLeft(until: until, at: now)
+            return chip("clock", SummaryPlacementWords.countdown(seconds: seconds), short: SummaryPlacementWords.seconds(seconds), .calm,
+                        detail: SummaryPlacementWords.countdown(on: AppState.thisDeviceWords, seconds: seconds), countdown: until)
         case .summarizingWith(let model):
-            return chip("cloud", "Summarizing with \(model)", short: "Summary…", .working)
+            return chip("cloud", SummaryPlacementWords.inCloud(model), short: "Summary…", .working)
         }
     }
 

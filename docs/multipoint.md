@@ -606,7 +606,8 @@ Waiting turns into a fresh countdown when somewhere to run it appears.
 transcript is ready and the summary is due, the job reads Settings › Cloud again (`AppState.cloud.reload`),
 counts down, then summarizes here, or in the cloud (`CloudSummarizer`, with the preferred effort) if the person
 chose it. The queue waits for the countdown, so a batch of imports counts down one at a time (Limits, below).
-Pause and Cancel during the countdown pause the job. It shows where processing status shows: the page's
+Pause and Cancel during the countdown pause the job. It shows where processing status shows, in the words both
+apps say it with (`SummaryPlacementWords`): the page's
 line ("Summarizing on this Mac in 12 s · Use the Cloud · Start Now", then "Summarizing with Claude Sonnet
 5.5" with Stop), the list row ("Summarizing in 12 s") and the list's subtitle, the inspector's Processing, and
 Floating Notes (the chip, whose menu has the choices, and the home's line for this Mac). Connected phones see the countdown too

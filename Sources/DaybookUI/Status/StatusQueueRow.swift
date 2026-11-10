@@ -46,13 +46,13 @@ public struct StatusQueueItem: Identifiable, Equatable, Sendable {
 
     /// The seconds left in its countdown at a moment, rounded up; nil without one.
     public func secondsLeft(at now: Date) -> Int? {
-        countdownUntil.map { max(1, Int($0.timeIntervalSince(now).rounded(.up))) }
+        countdownUntil.map { SummaryPlacementWords.secondsLeft(until: $0, at: now) }
     }
 
     /// The line at a moment: a countdown's seconds move with it.
     public func line(at now: Date) -> String {
         guard let seconds = secondsLeft(at: now) else { return line }
-        return line.replacingOccurrences(of: #"in \d+ s"#, with: "in \(seconds) s", options: .regularExpression)
+        return SummaryPlacementWords.ticking(line, to: seconds)
     }
 }
 

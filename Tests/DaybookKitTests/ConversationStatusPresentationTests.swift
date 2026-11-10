@@ -73,7 +73,7 @@ final class ConversationStatusPresentationTests: XCTestCase {
 
         inputs.placement.cloudOffered = true
         XCTAssertEqual(page(.transcribed, meeting, inputs)?.actions, [.placement(.useCloud)])
-        XCTAssertEqual(page(.transcribed, meeting, inputs)?.actions.first?.title, "Use the Cloud")
+        XCTAssertEqual(page(.transcribed, meeting, inputs)?.actions.first?.title, SummaryPlacementWords.title(.useCloud))
 
         inputs.local.models = .waitingForWiFi(bytes: 6_770_000_000)
         XCTAssertEqual(page(.transcribed, meeting, inputs),
@@ -418,13 +418,15 @@ final class ConversationStatusPresentationTests: XCTestCase {
         var inputs = mac
         inputs.placement.run = .thisDevice
         XCTAssertEqual(page(.transcribed, recorded(transcribed: true), inputs),
-                       Presentation(kind: .line, symbol: nil, title: "Summarizing on this Mac", isWorking: true, actions: [.stopSummary]))
-        XCTAssertEqual(row(.transcribed, recorded(transcribed: true), inputs), ConversationRowStatus(kind: .processing, text: "Summarizing on this Mac"))
+                       Presentation(kind: .line, symbol: nil, title: SummaryPlacementWords.running(.thisDevice, thisDevice: "this Mac"),
+                                    isWorking: true, actions: [.stopSummary]))
+        XCTAssertEqual(row(.transcribed, recorded(transcribed: true), inputs),
+                       ConversationRowStatus(kind: .processing, text: SummaryPlacementWords.running(.thisDevice, thisDevice: "this Mac")))
 
         var cloud = phone
         cloud.placement.cloudOffered = true
         let request = ProcessingRequest(meetingID: UUID(), mode: .summaryOnly, requestedBy: alexPhone, createdAt: now)
-        XCTAssertEqual(page(.requested(.device(request)), recorded(transcribed: true), cloud)?.title, "Waiting for a Mac to summarize")
+        XCTAssertEqual(page(.requested(.device(request)), recorded(transcribed: true), cloud)?.title, SummaryPlacementWords.waitingForMac)
         XCTAssertEqual(page(.requested(.device(request)), recorded(transcribed: true), cloud)?.actions, [.placement(.useCloud), .cancelRequest(request.id)])
         // Without the cloud, the request reads as any wait for a Mac.
         XCTAssertEqual(page(.requested(.device(request)), recorded(transcribed: true), phone)?.title, "Waiting for your Mac to summarize")
@@ -441,7 +443,7 @@ final class ConversationStatusPresentationTests: XCTestCase {
         placed.placement = .init(planner: waiting, cloudOffered: true)
         placed.mac = .seen(name: "Studio Mac", at: now.addingTimeInterval(-2 * 3600))
         XCTAssertEqual(page(.transcribed, recorded(transcribed: true), placed),
-                       Presentation(kind: .line, symbol: "clock", title: "Waiting for a Mac to summarize", detail: "Last seen 2 h ago",
+                       Presentation(kind: .line, symbol: "clock", title: SummaryPlacementWords.waitingForMac, detail: "Last seen 2 h ago",
                                     actions: [.placement(.useCloud)]))
     }
 
@@ -457,13 +459,14 @@ final class ConversationStatusPresentationTests: XCTestCase {
         // Before the cloud reports a figure: a spinner, and Stop.
         let starting = ProcessingStatus.processing(.init(stage: .summarizing, fraction: 0))
         XCTAssertEqual(page(starting, transcribed, inputs),
-                       Presentation(kind: .line, symbol: nil, title: "Summarizing with Claude Sonnet 5.5", isWorking: true, actions: [.stopSummary]))
+                       Presentation(kind: .line, symbol: nil, title: SummaryPlacementWords.inCloud("Claude Sonnet 5.5"), isWorking: true,
+                                    actions: [.stopSummary]))
         // Then its figure and bar, still with Stop; the line animates only when its words change.
         let working = ProcessingStatus.processing(.init(stage: .summarizing, fraction: 0.35))
         let line = page(working, transcribed, inputs)
-        XCTAssertEqual(line, Presentation(kind: .line, symbol: "cloud", title: "Summarizing with Claude Sonnet 5.5 · 35%", progress: 0.35,
-                                          actions: [.stopSummary]))
-        XCTAssertEqual(line?.phrase, "Summarizing with Claude Sonnet 5.5")
+        XCTAssertEqual(line, Presentation(kind: .line, symbol: "cloud", title: SummaryPlacementWords.inCloud("Claude Sonnet 5.5") + " · 35%",
+                                          progress: 0.35, actions: [.stopSummary]))
+        XCTAssertEqual(line?.phrase, SummaryPlacementWords.inCloud("Claude Sonnet 5.5"))
         XCTAssertEqual(Presentation.Action.stopSummary.title, "Stop")
 
         // Not the job running now: no Stop for work the queue hasn't started.
@@ -494,11 +497,12 @@ final class ConversationStatusPresentationTests: XCTestCase {
                                              countdown: LinkSummaryCountdown(secondsLeft: 12, cloudOffered: true))
         inputs.link = .init(message, receivedAt: now, answerable: true)
         let countdown = page(.transcribed, recorded(transcribed: true), inputs)
-        XCTAssertEqual(countdown?.title, "Summarizing on Studio Mac in 12 s")
-        XCTAssertEqual(countdown?.title(at: now.addingTimeInterval(5)), "Summarizing on Studio Mac in 7 s")
+        XCTAssertEqual(countdown?.title, SummaryPlacementWords.countdown(on: "Studio Mac", seconds: 12))
+        XCTAssertEqual(countdown?.title(at: now.addingTimeInterval(5)), SummaryPlacementWords.countdown(on: "Studio Mac", seconds: 7))
         XCTAssertEqual(countdown?.actions, [.placement(.useCloud), .placement(.startNow)])
-        XCTAssertEqual(countdown?.phrase, "Summarizing in")
-        XCTAssertEqual(row(.transcribed, recorded(transcribed: true), inputs)?.text(at: now.addingTimeInterval(2)), "Summarizing in 10 s")
+        XCTAssertEqual(countdown?.phrase, SummaryPlacementWords.phrase)
+        XCTAssertEqual(row(.transcribed, recorded(transcribed: true), inputs)?.text(at: now.addingTimeInterval(2)),
+                       SummaryPlacementWords.countdown(seconds: 10))
     }
 
     func testBehaviorRowsSayRecordingPlayingAndJustFinished() {
@@ -601,7 +605,7 @@ final class ConversationStatusPresentationTests: XCTestCase {
         XCTAssertEqual(Presentation.Action.tryAgain(.newAudio).title, "Try Again")
         XCTAssertEqual(Presentation.Action.details("x").title, "Details…")
         XCTAssertEqual(Presentation.Action.dontWait.title, "Don’t Wait")
-        XCTAssertEqual(Presentation.Action.placement(.useCloud).title, "Use the Cloud")
+        XCTAssertEqual(Presentation.Action.placement(.useCloud).title, SummaryPlacementWords.title(.useCloud))
         XCTAssertTrue(Presentation.Action.tryAgain(.newAudio).isPrimary)
         XCTAssertFalse(Presentation.Action.details("x").isPrimary)
     }

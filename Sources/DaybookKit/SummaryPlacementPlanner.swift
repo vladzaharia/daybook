@@ -31,14 +31,8 @@ public struct SummaryPlacementPlanner: Equatable, Sendable {
     public enum Action: String, CaseIterable, Equatable, Sendable {
         case useCloud, startNow, waitForMac
 
-        /// The button's title.
-        public var title: String {
-            switch self {
-            case .useCloud: return "Use the Cloud"
-            case .startNow: return "Start Now"
-            case .waitForMac: return "Wait for a Mac"
-            }
-        }
+        /// The button's title (`SummaryPlacementWords`).
+        public var title: String { SummaryPlacementWords.title(self) }
     }
 
     public private(set) var phase: Phase
@@ -90,7 +84,7 @@ public struct SummaryPlacementPlanner: Equatable, Sendable {
 
     /// Whole seconds left in the countdown, rounded up: "in 12 s".
     public func secondsLeft(at now: Date) -> Int? {
-        deadline.map { max(1, Int(($0.timeIntervalSince(now)).rounded(.up))) }
+        deadline.map { SummaryPlacementWords.secondsLeft(until: $0, at: now) }
     }
 
     /// What the person can do now, in the order they're shown.
@@ -186,19 +180,17 @@ public struct SummaryPlacementPlanner: Equatable, Sendable {
 // MARK: - Words
 
 extension SummaryPlacementPlanner {
-    /// The status line, the same on both apps: "Summarizing on this Mac in 12 s", "Summarizing on Vlad's
-    /// MacBook Pro in 12 s", "Waiting for a Mac to summarize", "Summarizing with Claude Sonnet 5.5". Nil when
-    /// the processing status says it instead (started here or sent to a Mac, or waiting as before).
+    /// The status line, the same on both apps (`SummaryPlacementWords`): "Summarizing on this Mac in 12 s",
+    /// "Summarizing on Vlad's MacBook Pro in 12 s", "Waiting for a Mac to summarize", "Summarizing with Claude Sonnet
+    /// 5.5". Nil when the processing status says it instead (started here or sent to a Mac, or waiting as before).
     /// `thisDevice` is how this device calls itself: "this Mac", "this iPhone".
     public func line(at now: Date, thisDevice: String) -> String? {
         switch phase {
-        case .countingDown(let place, _):
-            let seconds = secondsLeft(at: now) ?? 0
-            return "Summarizing \(Self.where(place, thisDevice: thisDevice)) in \(seconds) s"
-        case .waitingForMac:
-            return "Waiting for a Mac to summarize"
-        case .started(.cloud(let model)):
-            return "Summarizing with \(model.name)"
+        case .countingDown(let place, let until):
+            return SummaryPlacementWords.countdown(to: place, thisDevice: thisDevice,
+                                                   seconds: SummaryPlacementWords.secondsLeft(until: until, at: now))
+        case .waitingForMac, .started(.cloud):
+            return shortLine(at: now)
         case .started, .waiting:
             return nil
         }
@@ -207,23 +199,14 @@ extension SummaryPlacementPlanner {
     /// The same, short enough for a list row or a chip: "Summarizing in 12 s".
     public func shortLine(at now: Date) -> String? {
         switch phase {
-        case .countingDown:
-            return "Summarizing in \(secondsLeft(at: now) ?? 0) s"
+        case .countingDown(_, let until):
+            return SummaryPlacementWords.countdown(until: until, at: now)
         case .waitingForMac:
-            return "Waiting for a Mac to summarize"
+            return SummaryPlacementWords.waitingForMac
         case .started(.cloud(let model)):
-            return "Summarizing with \(model.name)"
+            return SummaryPlacementWords.inCloud(model.name)
         case .started, .waiting:
             return nil
-        }
-    }
-
-    /// "on this Mac", "on Vlad's MacBook Pro", "with Claude Sonnet 5.5".
-    public static func `where`(_ place: SummaryPlace, thisDevice: String) -> String {
-        switch place {
-        case .thisDevice: return "on \(thisDevice)"
-        case .mac(_, let name): return "on \(name)"
-        case .cloud(let model): return "with \(model.name)"
         }
     }
 }

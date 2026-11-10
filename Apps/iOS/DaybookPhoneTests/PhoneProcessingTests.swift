@@ -243,7 +243,8 @@ final class PhoneProcessingTests: XCTestCase {
         try await waitUntil("the countdown") { rig.placement.planners[meeting.id]?.deadline != nil }
         XCTAssertEqual(outcome(rig, meeting.id), .summaryDue, "transcribed and fused: the summary is the placement's")
         let planner = try XCTUnwrap(rig.placement.planners[meeting.id])
-        XCTAssertEqual(planner.line(at: rig.clock.now, thisDevice: PhoneSummaryPlacement.thisDeviceWords), "Summarizing on this iPhone in 15 s")
+        XCTAssertEqual(planner.line(at: rig.clock.now, thisDevice: PhoneSummaryPlacement.thisDeviceWords),
+                       SummaryPlacementWords.countdown(on: PhoneSummaryPlacement.thisDeviceWords, seconds: 15))
         XCTAssertEqual(planner.actions, [.useCloud, .startNow, .waitForMac])
         XCTAssertTrue(rig.summarizer.summarized.isEmpty, "nothing runs while it counts down")
         XCTAssertTrue(summaryRequest(rig, meeting.id)?.isClaimed(by: rig.library.controller.thisDevice, at: Date()) == true,

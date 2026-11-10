@@ -128,16 +128,14 @@ public struct ConversationStatusPresentation: Equatable, Sendable {
 
     /// The title without its figure, for animating the line only when its words change, not at every percent.
     public var phrase: String {
-        countdownUntil != nil ? "Summarizing in" : ProcessingWords.phrase(title)
+        countdownUntil != nil ? SummaryPlacementWords.phrase : ProcessingWords.phrase(title)
     }
 
     /// The title at a moment: a countdown's seconds move with it ("Summarizing on this Mac in 11 s").
     public func title(at now: Date) -> String {
-        guard let until = countdownUntil, let range = title.range(of: #" in \d+ s$"#, options: .regularExpression) else { return title }
-        return title[..<range.lowerBound] + " in \(Self.secondsLeft(until, at: now)) s"
+        guard let until = countdownUntil else { return title }
+        return SummaryPlacementWords.ticking(title, until: until, at: now)
     }
-
-    static func secondsLeft(_ until: Date, at now: Date) -> Int { max(1, Int(until.timeIntervalSince(now).rounded(.up))) }
 }
 
 // MARK: - Inputs
@@ -536,7 +534,7 @@ extension ConversationStatusPresentation {
     static func placement(_ status: ProcessingStatus, inputs: Inputs, now: Date) -> ConversationStatusPresentation? {
         let words = inputs.words, placement = inputs.placement
         if let run = placement.run {
-            let title = "Summarizing \(SummaryPlacementPlanner.where(run, thisDevice: words.here))"
+            let title = SummaryPlacementWords.running(run, thisDevice: words.here)
             // Its figure once it reports one, with the bar, as every working line has; a spinner until then.
             if case .processing(let progress) = status, progress.stage == .summarizing, isHere(progress, words: words),
                let fraction = progress.fraction, fraction > 0 {
@@ -556,16 +554,16 @@ extension ConversationStatusPresentation {
         }
         if let link = inputs.link, link.phase == .summaryCountdown, let until = link.countdownUntil {
             return ConversationStatusPresentation(kind: .line, symbol: "clock",
-                                                  title: "Summarizing on \(link.device) in \(secondsLeft(until, at: now)) s",
+                                                  title: SummaryPlacementWords.countdown(on: link.device, until: until, at: now),
                                                   countdownUntil: until, actions: link.placementActions.map(Action.placement))
         }
         if let link = inputs.link, link.phase == .summarizing, let model = link.cloudModel {
-            return ConversationStatusPresentation(kind: .line, symbol: nil, title: "Summarizing with \(model)", isWorking: true)
+            return ConversationStatusPresentation(kind: .line, symbol: nil, title: SummaryPlacementWords.inCloud(model), isWorking: true)
         }
         if placement.cloudOffered, !inputs.summaryWaitsForModel, case .requested(.device(let request)) = status, request.mode == .summaryOnly,
            request.upgrade == nil {
             let mine = request.requestedBy.id == words.thisDeviceID
-            return ConversationStatusPresentation(kind: .line, symbol: "clock", title: "Waiting for a Mac to summarize",
+            return ConversationStatusPresentation(kind: .line, symbol: "clock", title: SummaryPlacementWords.waitingForMac,
                                                   detail: inputs.mac?.detail(at: now),
                                                   actions: [.placement(.useCloud)] + (mine ? [.cancelRequest(request.id)] : []))
         }
@@ -798,14 +796,14 @@ public struct ConversationRowStatus: Equatable, Sendable {
 
     /// The words without their figure: the line fades when what it says changes, not at every percent.
     public var phrase: String? {
-        if countdownUntil != nil { return "Summarizing in" }
+        if countdownUntil != nil { return SummaryPlacementWords.phrase }
         return text.map(ProcessingWords.phrase)
     }
 
     /// The words at a moment: a countdown's seconds move with it.
     public func text(at now: Date) -> String? {
         guard let until = countdownUntil else { return text }
-        return "Summarizing in \(ConversationStatusPresentation.secondsLeft(until, at: now)) s"
+        return SummaryPlacementWords.countdown(until: until, at: now)
     }
 }
 
@@ -815,7 +813,7 @@ extension ConversationStatusPresentation {
         if inputs.isRecording { return ConversationRowStatus(kind: .recording, text: "Recording now") }
         let words = inputs.words, placement = inputs.placement
         if let run = placement.run {
-            return ConversationRowStatus(kind: .processing, text: "Summarizing \(SummaryPlacementPlanner.where(run, thisDevice: words.here))")
+            return ConversationRowStatus(kind: .processing, text: SummaryPlacementWords.running(run, thisDevice: words.here))
         }
         if let planner = placement.planner, let text = planner.shortLine(at: now) {
             if case .started(.cloud) = planner.phase { return ConversationRowStatus(kind: .processing, text: text) }
@@ -830,9 +828,11 @@ extension ConversationStatusPresentation {
 
     static func linkRow(_ link: LinkWork, now: Date) -> ConversationRowStatus? {
         if link.phase == .summaryCountdown, let until = link.countdownUntil {
-            return ConversationRowStatus(kind: .waiting, text: "Summarizing in \(secondsLeft(until, at: now)) s", countdownUntil: until)
+            return ConversationRowStatus(kind: .waiting, text: SummaryPlacementWords.countdown(until: until, at: now), countdownUntil: until)
         }
-        if link.phase == .summarizing, let model = link.cloudModel { return ConversationRowStatus(kind: .processing, text: "Summarizing with \(model)") }
+        if link.phase == .summarizing, let model = link.cloudModel {
+            return ConversationRowStatus(kind: .processing, text: SummaryPlacementWords.inCloud(model))
+        }
         if let stage = link.stage {
             return ConversationRowStatus(kind: .processing, text: ProcessingWords.elsewhere(stage, device: link.device, fraction: link.fraction),
                                          fraction: link.fraction)

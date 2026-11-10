@@ -150,7 +150,8 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         let id = transcribed(rig.library)
         await rig.placement.summaryIsDue(id)
         let planner = try XCTUnwrap(rig.placement.planners[id])
-        XCTAssertEqual(planner.line(at: rig.clock.now, thisDevice: PhoneSummaryPlacement.thisDeviceWords), "Summarizing on Studio Mac in 15 s")
+        XCTAssertEqual(planner.line(at: rig.clock.now, thisDevice: PhoneSummaryPlacement.thisDeviceWords),
+                       SummaryPlacementWords.countdown(on: "Studio Mac", seconds: 15))
         XCTAssertEqual(planner.actions, [.useCloud, .startNow])
         // Written down before the countdown, and held here so no Mac takes it while it counts down.
         // (Claims are read from their fields: the tests share a clock that starts at the same moment.)
@@ -188,7 +189,7 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         await rig.placement.summaryIsDue(id)
         XCTAssertEqual(rig.placement.planners[id]?.phase, .waitingForMac)
         let page = try XCTUnwrap(try pageStatus(rig, id, .transcribed, cloudOffered: true))
-        XCTAssertEqual(page.title, "Waiting for a Mac to summarize")
+        XCTAssertEqual(page.title, SummaryPlacementWords.waitingForMac)
         XCTAssertEqual(page.actions, [.placement(.useCloud)])
         let held = try XCTUnwrap(summaryRequests(rig.library, id).first)
         XCTAssertEqual(held.claim?.device, rig.library.thisDevice, "Held: a Mac arriving counts down first")
@@ -230,7 +231,7 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         XCTAssertEqual(claimed.claim?.device, rig.library.thisDevice)
         XCTAssertEqual(claimed.claim?.stage, .summarizing)
         let running = try XCTUnwrap(try pageStatus(rig, id, .transcribed, cloudOffered: true))
-        XCTAssertEqual(running.title, "Summarizing with Claude Sonnet 5.5")
+        XCTAssertEqual(running.title, SummaryPlacementWords.inCloud("Claude Sonnet 5.5"))
         XCTAssertEqual(running.actions, [.stopSummary])
         cloud.release()
         try await waitUntil("the summary") { rig.library.meeting(id)?.summary != nil }
@@ -254,7 +255,7 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         let waiting = try XCTUnwrap(rig.placement.waitingSummaryRequest(id), "Asked for: it waits for a Mac in the library")
         let meeting = try XCTUnwrap(rig.library.meeting(id))
         let page = try XCTUnwrap(try pageStatus(rig, id, ProcessingStatus(meeting), cloudOffered: true))
-        XCTAssertEqual(page.title, "Waiting for a Mac to summarize")
+        XCTAssertEqual(page.title, SummaryPlacementWords.waitingForMac)
         XCTAssertEqual(page.actions, [.placement(.useCloud), .cancelRequest(waiting.id)], "this iPhone asked: it can take it back")
         let plain = try XCTUnwrap(try pageStatus(rig, id, ProcessingStatus(meeting), cloudOffered: false))
         XCTAssertEqual(plain.title, "Waiting for your Mac to summarize", "Without the cloud it reads as before")
@@ -301,7 +302,8 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         let id = transcribed(rig.library)
         await rig.placement.summaryIsDue(id)
         let planner = try XCTUnwrap(rig.placement.planners[id])
-        XCTAssertEqual(planner.line(at: rig.clock.now, thisDevice: PhoneSummaryPlacement.thisDeviceWords), "Summarizing on this iPhone in 15 s")
+        XCTAssertEqual(planner.line(at: rig.clock.now, thisDevice: PhoneSummaryPlacement.thisDeviceWords),
+                       SummaryPlacementWords.countdown(on: PhoneSummaryPlacement.thisDeviceWords, seconds: 15))
         XCTAssertEqual(planner.actions, [.useCloud, .startNow, .waitForMac])
         rig.placement.perform(.startNow, for: id)
         // The processor saves the summary, then finishes the request once the suggested terms are in.
@@ -485,9 +487,9 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         XCTAssertNil(rig.placement.planners[id], "Two countdowns for one conversation: the Mac's is the one")
         let live = try XCTUnwrap(rig.placement.live(id))
         let page = try XCTUnwrap(try pageStatus(rig, id, .transcribed, live: live, cloudOffered: true, now: live.receivedAt.addingTimeInterval(2)))
-        XCTAssertEqual(page.title, "Summarizing on Studio Mac in 10 s")
+        XCTAssertEqual(page.title, SummaryPlacementWords.countdown(on: "Studio Mac", seconds: 10))
         XCTAssertEqual(page.actions, [.placement(.useCloud), .placement(.startNow)])
-        XCTAssertEqual(try rowStatus(rig, id, .transcribed, live: live, now: live.receivedAt)?.text, "Summarizing in 12 s")
+        XCTAssertEqual(try rowStatus(rig, id, .transcribed, live: live, now: live.receivedAt)?.text, SummaryPlacementWords.countdown(seconds: 12))
         rig.placement.perform(.useCloud, for: id)
         try await waitUntil("the choice at the Mac") { choices.received.contains { $0.meetingID == id && $0.choice == .useCloud } }
         XCTAssertTrue(summaryRequests(rig.library, id).allSatisfy { ($0.claim?.lease ?? 0) == 0 }, "The Mac runs it; nothing is held here")
@@ -510,12 +512,13 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         let queue = StatusSheetModel.queue(meetings: meetings, liveProgress: [:], thisDevice: "me", planners: [counting: toMac, waiting: forMac],
                                            cloudOffered: true, now: now)
         let byTitle = Dictionary(uniqueKeysWithValues: queue.map { ($0.title, $0) })
-        XCTAssertEqual(byTitle["Counting"]?.line(under: nil, at: now.addingTimeInterval(3)), "Summarizing on Studio Mac in 12 s")
-        XCTAssertEqual(byTitle["Counting"]?.line(under: "Studio Mac", at: now.addingTimeInterval(3)), "Summarizing in 12 s", "Under that Mac")
+        XCTAssertEqual(byTitle["Counting"]?.line(under: nil, at: now.addingTimeInterval(3)), SummaryPlacementWords.countdown(on: "Studio Mac", seconds: 12))
+        XCTAssertEqual(byTitle["Counting"]?.line(under: "Studio Mac", at: now.addingTimeInterval(3)), SummaryPlacementWords.countdown(seconds: 12),
+                       "Under that Mac")
         XCTAssertEqual(byTitle["Counting"]?.actions, [.useCloud, .startNow])
-        XCTAssertEqual(byTitle["Waiting"]?.line, "Waiting for a Mac to summarize")
+        XCTAssertEqual(byTitle["Waiting"]?.line, SummaryPlacementWords.waitingForMac)
         XCTAssertEqual(byTitle["Waiting"]?.actions, [.useCloud])
-        XCTAssertEqual(byTitle["Asked"]?.line, "Waiting for a Mac to summarize")
+        XCTAssertEqual(byTitle["Asked"]?.line, SummaryPlacementWords.waitingForMac)
         XCTAssertEqual(byTitle["Asked"]?.actions, [.useCloud])
         let withoutCloud = StatusSheetModel.queue(meetings: [askedMeeting], liveProgress: [:], thisDevice: "me", now: now)
         XCTAssertEqual(withoutCloud.first?.line, "Waiting")

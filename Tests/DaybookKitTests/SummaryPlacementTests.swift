@@ -115,7 +115,7 @@ final class SummaryPlacementTests: XCTestCase {
                                            personal: true)
         XCTAssertEqual(here.phase, .countingDown(to: .thisDevice, until: at(15)), "This device, as Offer First")
         XCTAssertEqual(here.actions, [.useCloud, .startNow], "The cloud is a tap away")
-        XCTAssertEqual(here.line(at: at(3), thisDevice: "this Mac"), "Summarizing on this Mac in 12 s")
+        XCTAssertEqual(here.line(at: at(3), thisDevice: "this Mac"), SummaryPlacementWords.countdown(on: "this Mac", seconds: 12))
         let mac = SummaryPlacementPlanner(options: options(macs: [studio]), preferences: preferences(.always), at: start,
                                           waitsForMacs: true, personal: true)
         XCTAssertEqual(mac.phase, .countingDown(to: .mac(id: studio.id, name: studio.name), until: at(15)))
@@ -325,18 +325,20 @@ final class SummaryPlacementTests: XCTestCase {
 
     func testBehaviorTheLineSaysWhereAndWhen() {
         let here = SummaryPlacementPlanner(options: options(local: true), preferences: preferences(), at: start)
-        XCTAssertEqual(here.line(at: at(3), thisDevice: "this Mac"), "Summarizing on this Mac in 12 s")
-        XCTAssertEqual(here.shortLine(at: at(3)), "Summarizing in 12 s")
+        typealias Words = SummaryPlacementWords
+        XCTAssertEqual(here.line(at: at(3), thisDevice: "this Mac"), Words.countdown(on: "this Mac", seconds: 12))
+        XCTAssertEqual(here.shortLine(at: at(3)), Words.countdown(seconds: 12))
         let mac = SummaryPlacementPlanner(options: options(macs: [laptop]), preferences: preferences(), at: start, waitsForMacs: true)
-        XCTAssertEqual(mac.line(at: at(0), thisDevice: "this iPhone"), "Summarizing on Vlad’s MacBook Pro in 15 s")
+        XCTAssertEqual(mac.line(at: at(0), thisDevice: "this iPhone"), Words.countdown(on: laptop.name, seconds: 15))
         let waiting = SummaryPlacementPlanner(options: options(), preferences: preferences(), at: start, waitsForMacs: true)
-        XCTAssertEqual(waiting.line(at: at(0), thisDevice: "this iPhone"), "Waiting for a Mac to summarize")
+        XCTAssertEqual(waiting.line(at: at(0), thisDevice: "this iPhone"), Words.waitingForMac)
         var cloud = waiting
         cloud.perform(.useCloud, at: at(1))
-        XCTAssertEqual(cloud.line(at: at(1), thisDevice: "this iPhone"), "Summarizing with Claude Sonnet 5.5")
+        XCTAssertEqual(cloud.line(at: at(1), thisDevice: "this iPhone"), Words.inCloud(sonnet.name))
         let started = SummaryPlacementPlanner(options: options(local: true, cloud: false), preferences: preferences(), at: start)
         XCTAssertNil(started.line(at: at(0), thisDevice: "this Mac"), "The processing status says the rest")
-        XCTAssertEqual(SummaryPlacementPlanner.Action.allCases.map(\.title), ["Use the Cloud", "Start Now", "Wait for a Mac"])
+        XCTAssertEqual(SummaryPlacementPlanner.Action.allCases.map(\.title),
+                       [Words.title(.useCloud), Words.title(.startNow), Words.title(.waitForMac)])
     }
 
     // MARK: Every conversation on a device
@@ -362,7 +364,7 @@ final class SummaryPlacementTests: XCTestCase {
         XCTAssertEqual(settled.last?.1, .started(.cloud(sonnet)))
         placements.end(a)
         XCTAssertNil(placements[a])
-        XCTAssertEqual(placements[b]?.line(at: now, thisDevice: "this Mac"), "Summarizing with Claude Sonnet 5.5", "Kept until the app ends it")
+        XCTAssertEqual(placements[b]?.line(at: now, thisDevice: "this Mac"), SummaryPlacementWords.inCloud(sonnet.name), "Kept until the app ends it")
     }
 
     @MainActor

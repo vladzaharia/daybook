@@ -313,28 +313,29 @@ final class FloatingNotesStatusTests: XCTestCase {
     /// Where a summary runs (docs/multipoint.md, "Where summaries run"): its countdown in the chip and the home's
     /// line for this Mac, a second at a time, and the cloud at work. Only the chip or the line redraws.
     func testBehaviorASummarysCountdownAndTheCloudShowInTheChipAndTheHome() throws {
+        typealias Words = SummaryPlacementWords
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let countdown = try XCTUnwrap(FloatingStatus.workChip(.summaryCountdown(until: now.addingTimeInterval(11.2), cloud: true), now: now))
-        XCTAssertEqual(countdown.label, "Summarizing in 12 s")
-        XCTAssertEqual(countdown.shortLabel, "12 s")
-        XCTAssertEqual(countdown.detail, "Summarizing on this Mac in 12 s", "The menu's first line says it whole")
+        XCTAssertEqual(countdown.label, Words.countdown(seconds: 12))
+        XCTAssertEqual(countdown.shortLabel, Words.seconds(12))
+        XCTAssertEqual(countdown.detail, Words.countdown(on: AppState.thisDeviceWords, seconds: 12), "The menu's first line says it whole")
         XCTAssertEqual(countdown.tone, .calm)
         let later = countdown.at(now.addingTimeInterval(3))
-        XCTAssertEqual(later.label, "Summarizing in 9 s", "The chip moves on its own")
-        XCTAssertEqual(later.shortLabel, "9 s")
-        XCTAssertEqual(later.detail, "Summarizing on this Mac in 9 s")
+        XCTAssertEqual(later.label, Words.countdown(seconds: 9), "The chip moves on its own")
+        XCTAssertEqual(later.shortLabel, Words.seconds(9))
+        XCTAssertEqual(later.detail, Words.countdown(on: AppState.thisDeviceWords, seconds: 9))
         XCTAssertNil(FloatingStatus.workChip(.summarizing)?.countdownUntil, "Nothing else ticks")
-        XCTAssertEqual(FloatingStatus.workChip(.summarizingWith("Claude Sonnet 5.5"))?.label, "Summarizing with Claude Sonnet 5.5")
+        XCTAssertEqual(FloatingStatus.workChip(.summarizingWith("Claude Sonnet 5.5"))?.label, Words.inCloud("Claude Sonnet 5.5"))
         var queue = FloatingStatusInputs.Queue(running: .summarizing, waiting: 1)
         queue.countdown = now.addingTimeInterval(5)
         let line = try XCTUnwrap(FloatingStatus.queueWords(queue, now: now))
-        XCTAssertEqual(line.text, "Summarizing in 5 s · 1 waiting")
-        XCTAssertEqual(FloatingStatus.item(line, at: now.addingTimeInterval(2)).text, "Summarizing in 3 s · 1 waiting")
-        XCTAssertEqual(FloatingStatus.item(line, at: now.addingTimeInterval(2)).shortText, "Summarizing in 3 s")
+        XCTAssertEqual(line.text, Words.countdown(seconds: 5) + " · 1 waiting")
+        XCTAssertEqual(FloatingStatus.item(line, at: now.addingTimeInterval(2)).text, Words.countdown(seconds: 3) + " · 1 waiting")
+        XCTAssertEqual(FloatingStatus.item(line, at: now.addingTimeInterval(2)).shortText, Words.countdown(seconds: 3))
         XCTAssertEqual(FloatingStatus.queueChip(queue, now: now)?.countdownUntil, queue.countdown)
         queue.countdown = nil
         queue.cloudModel = "Claude Sonnet 5.5"
-        XCTAssertEqual(FloatingStatus.queueWords(queue, now: now)?.text, "Summarizing with Claude Sonnet 5.5 · 1 waiting")
+        XCTAssertEqual(FloatingStatus.queueWords(queue, now: now)?.text, Words.inCloud("Claude Sonnet 5.5") + " · 1 waiting")
     }
 
     func testWorkChipShowsOnceTheConversationIsNotRecording() {
