@@ -24,6 +24,9 @@ struct DaybookCommands: Commands {
         // Continuity Camera: Take Photo, Scan Documents, and Add Sketch from an iPhone or iPad
         // (the page receives them through `importsItemProviders`).
         ImportFromDevicesCommands()
+        // Edit › Find in Conversation… (⌘F), Find Next, Find Previous. Edit › Find ▸ Find… comes first in the menu, so
+        // ⌘F still finds in the notes while they have the focus; Search Conversations is ⌥⌘F.
+        ConversationFindCommands(state: state)
         EditCommands(state: state)
         ViewCommands(state: state)
         WindowCommands(state: state)

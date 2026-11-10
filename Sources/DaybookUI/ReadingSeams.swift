@@ -47,10 +47,6 @@ public struct ReadingNavigator {
 /// player observes itself, so a view reading it redraws as it plays.
 @MainActor
 public protocol ReadingPlayer: AnyObject {
-    /// The conversation playing (or paused partway), if any.
-    var playingMeetingID: Meeting.ID? { get }
-    /// Where in it, in seconds from its start.
-    var playbackPosition: TimeInterval { get }
     var isPlaying: Bool { get }
     /// Plays a passage, a bookmark, or from a time in a conversation.
     func play(_ target: PlaybackTarget, in meetingID: Meeting.ID)

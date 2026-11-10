@@ -826,25 +826,6 @@ struct StatusRowButtonStyle: ButtonStyle {
   }
 }
 
-/// "Use on Vlad’s MacBook Pro (755)": on one line when it fits, else the name starts the next line,
-/// so it's never split across the phrase; a name too long for a line wraps at a space, never mid-word.
-struct NamePhrase: View {
-  let prefix: String
-  let name: String
-
-  var body: some View {
-    ViewThatFits(in: .horizontal) {
-      Text("\(prefix) \(name)")
-      VStack(alignment: .leading, spacing: 0) {
-        Text(prefix)
-        Text(name.wrappingAsName).fixedSize(horizontal: false, vertical: true)
-      }
-    }
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel("\(prefix) \(name)")
-  }
-}
-
 // MARK: Recorders
 
 /// A card per recorder; Add Recorder… when there's none.

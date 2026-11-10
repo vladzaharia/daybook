@@ -106,7 +106,7 @@ final class ConversationStatusPresentationTests: XCTestCase {
         XCTAssertEqual(onPhone?.title, onMac?.title)
         XCTAssertEqual(onPhone?.symbol, "desktopcomputer")
         XCTAssertEqual(onMac?.actions, [], "only the device doing it pauses it")
-        XCTAssertEqual(row(elsewhere, nil, phone)?.text, "Transcribing on Studio Mac · 40%")
+        XCTAssertEqual(row(elsewhere, nil, phone), ConversationRowStatus(kind: .processing, text: "Transcribing on Studio Mac · 40%", fraction: 0.4))
         XCTAssertEqual(row(elsewhere, nil, Presentation.Inputs(words: words, local: .mac()))?.text, "Transcribing on Studio Mac · 40%")
         // With no figure yet, a spinner.
         let silent = page(.processing(.init(stage: .transcribing, fraction: nil, device: studio)), nil, phone)
@@ -180,11 +180,30 @@ final class ConversationStatusPresentationTests: XCTestCase {
         XCTAssertEqual(row(.requested(.device(request)), nil, Presentation.Inputs(words: .mac(id: "this-mac"), local: .mac()))?.text,
                        "Requested from Alex’s iPhone")
 
-        // A Summarize request with a summary already says "again".
+        // A Summarize request says "again" only with a summary already.
+        let first = ProcessingRequest(meetingID: UUID(), mode: .summaryOnly, requestedBy: alexPhone, createdAt: now)
+        XCTAssertEqual(page(.requested(.device(first)), recorded(transcribed: true), phone),
+                       Presentation(kind: .line, symbol: "clock", title: "Waiting for your Mac to summarize", actions: [.cancelRequest(first.id)]))
+        XCTAssertEqual(row(.requested(.device(first)), recorded(transcribed: true), phone),
+                       ConversationRowStatus(kind: .waiting, text: "Waiting for your Mac to summarize"))
         var summarized = recorded(transcribed: true)
         summarized.summary = MeetingSummary(overview: "Done")
         let again = ProcessingRequest(meetingID: summarized.id, mode: .summaryOnly, requestedBy: alexPhone, createdAt: now)
         XCTAssertEqual(page(.requested(.device(again)), summarized, phone)?.title, "Waiting for your Mac to summarize again")
+        // Another device's request: nothing here to take back.
+        XCTAssertEqual(page(.requested(.device(again)), summarized, Presentation.Inputs(words: .iPhone(id: "other"), local: .iPhone()))?.actions, [])
+    }
+
+    func testBehaviorAMacLastSeenAWhileAgoSaysHowLongAgo() {
+        XCTAssertEqual(Presentation.MacStanding.ago(30), "1 min ago", "never 0 min")
+        XCTAssertEqual(Presentation.MacStanding.ago(5 * 60), "5 min ago")
+        XCTAssertEqual(Presentation.MacStanding.ago(2 * 3600), "2 h ago")
+        XCTAssertEqual(Presentation.MacStanding.ago(47 * 3600), "47 h ago")
+        XCTAssertEqual(Presentation.MacStanding.ago(3 * 86_400), "3 days ago")
+        // Seen a moment ago: named, with nothing more to say.
+        XCTAssertNil(Presentation.MacStanding.seen(name: "Studio Mac", at: now.addingTimeInterval(-60)).detail(at: now))
+        XCTAssertEqual(Presentation.MacStanding.seen(name: "Studio Mac", at: now.addingTimeInterval(-60)).present(at: now), "Studio Mac")
+        XCTAssertEqual(Presentation.MacStanding.noMac.detail(at: now), Presentation.MacStanding.noMacLine)
     }
 
     func testBehaviorAnUpgradeWaitingForItsMacUsesItsShortLineInRows() {
@@ -195,6 +214,12 @@ final class ConversationStatusPresentationTests: XCTestCase {
             XCTAssertEqual(page(.requested(.device(request)), meeting, inputs)?.title, "Waiting for Studio Mac to upgrade the transcript")
             XCTAssertEqual(row(.requested(.device(request)), meeting, inputs)?.text, "Waiting for Studio Mac")
         }
+        // Asked on this iPhone: Cancel brings the offer back. The cloud on offer doesn't make it Use the Cloud's wait.
+        var cloud = phone
+        cloud.placement.cloudOffered = true
+        XCTAssertEqual(page(.requested(.device(request)), meeting, cloud),
+                       Presentation(kind: .line, symbol: "clock", title: "Waiting for Studio Mac to upgrade the transcript",
+                                    actions: [.cancelRequest(request.id)]))
 
         // New audio comes first: the page and the row both say what happens to it, not the upgrade.
         var arrived = meeting
@@ -296,6 +321,23 @@ final class ConversationStatusPresentationTests: XCTestCase {
         let request = ProcessingRequest(meetingID: UUID(), mode: .summaryOnly, requestedBy: alexPhone, createdAt: now)
         XCTAssertEqual(page(.requested(.device(request)), recorded(transcribed: true), cloud)?.title, "Waiting for a Mac to summarize")
         XCTAssertEqual(page(.requested(.device(request)), recorded(transcribed: true), cloud)?.actions, [.placement(.useCloud), .cancelRequest(request.id)])
+        // Without the cloud, the request reads as any wait for a Mac.
+        XCTAssertEqual(page(.requested(.device(request)), recorded(transcribed: true), phone)?.title, "Waiting for your Mac to summarize")
+        XCTAssertEqual(page(.requested(.device(request)), recorded(transcribed: true), phone)?.actions, [.cancelRequest(request.id)])
+
+        // This iPhone's own summary with no Mac reachable and the cloud on offer: it waits, with Use the Cloud, saying
+        // when a Mac was last seen.
+        let sonnet = CloudModel(provider: .anthropic, id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", tier: .balanced,
+                                inputPrice: 2, outputPrice: 10, priceIsEstimated: false, contextTokens: 200_000, rank: 1)
+        let waiting = SummaryPlacementPlanner(options: SummaryOptions(thisDeviceCanSummarize: false, reachableMacs: [], cloud: sonnet),
+                                              preferences: CloudSummaryPreferences(), at: now)
+        XCTAssertEqual(waiting.phase, .waitingForMac)
+        var placed = phone
+        placed.placement = .init(planner: waiting, cloudOffered: true)
+        placed.mac = .seen(name: "Studio Mac", at: now.addingTimeInterval(-2 * 3600))
+        XCTAssertEqual(page(.transcribed, recorded(transcribed: true), placed),
+                       Presentation(kind: .line, symbol: "clock", title: "Waiting for a Mac to summarize", detail: "Last seen 2 h ago",
+                                    actions: [.placement(.useCloud)]))
     }
 
     func testBehaviorACloudSummaryOnAMacsQueueOffersStopWithItsBar() {

@@ -9,12 +9,6 @@ import SwiftUI
 /// The shared label style, by the name the reading screens use.
 typealias CompactLabelStyle = DaybookUI.CompactLabelStyle
 
-/// A summary snippet as plain words, by the shared rule (`SearchHit.plainText(fromMarkdown:)`), under the name the
-/// reading tests know it by.
-enum SearchSnippet {
-    static func plain(_ markdown: String) -> String { SearchHit.plainText(fromMarkdown: markdown) }
-}
-
 /// What a row says on this iPhone (`ConversationStatusPresentation.row`): a Mac recording it now (over the link),
 /// a Mac's live progress on it before sync says so, where its summary runs, this iPhone's own work, and what the
 /// library says; and the mint waveform while it plays here.
@@ -72,28 +66,5 @@ struct PhoneConversationRow: View {
     var body: some View {
         let context = PhoneRowStatus.context(model: model, library: library, player: session.player)
         ConversationRowView(meeting: meeting, status: PhoneRowStatus.make(meeting, context: context, now: Date()), timeLabel: timeLabel)
-    }
-}
-
-/// The library row, for the screens that still hand it the reading status's `RowStatus` (the recent list behind the
-/// recorder). The library draws `ConversationRowView` with `PhoneRowStatus` itself.
-struct ConversationRow: View {
-    let meeting: Meeting
-    let status: RowStatus?
-    let timeLabel: String
-
-    var body: some View {
-        ConversationRowView(meeting: meeting, status: status.map(Self.shared), timeLabel: timeLabel)
-    }
-
-    static func shared(_ status: RowStatus) -> ConversationRowStatus {
-        let kind: ConversationRowStatus.Kind
-        switch status.kind {
-        case .notTranscribed: kind = .notTranscribed
-        case .waiting: kind = status.text == "Paused" ? .paused : .waiting
-        case .processing: kind = .processing
-        case .failed: kind = .failed
-        }
-        return ConversationRowStatus(kind: kind, text: status.text, fraction: status.fraction, countdownUntil: status.countdownUntil)
     }
 }

@@ -55,6 +55,15 @@ final class SummaryMarkdownTests: XCTestCase {
         XCTAssertTrue(FindRanges.ranges(in: styled, query: "tea").isEmpty)
     }
 
+    func testBehaviorASearchSnippetReadsAsWordsWithoutMarkdown() {
+        XCTAssertEqual(SearchHit.plainText(fromMarkdown: "…date. - The sync conflict fix is the release gate."),
+                       "…date. The sync conflict fix is the release gate.", "a joined list item loses its marker")
+        XCTAssertEqual(SearchHit.plainText(fromMarkdown: "- Keep the **14th** as the beta date."), "Keep the 14th as the beta date.")
+        XCTAssertEqual(SearchHit.plainText(fromMarkdown: "• One: * two"), "One: two")
+        XCTAssertEqual(SearchHit.plainText(fromMarkdown: "Pre-release notes - mostly done"), "Pre-release notes - mostly done",
+                       "hyphens and dashes inside a sentence stay")
+    }
+
     func testBehaviorEvidenceFindsThePassageALineCameFrom() {
         let track = UUID()
         func segment(_ start: Double, _ speaker: String, _ text: String) -> TranscriptSegment {

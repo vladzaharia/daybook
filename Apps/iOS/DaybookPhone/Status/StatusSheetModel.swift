@@ -478,7 +478,7 @@ enum StatusSheetModel {
     /// A failure worth listing in a queue: recent, and not "No speech in this recording", which no device can do
     /// anything about (its row and page say it).
     static func listsFailure(_ failure: ProcessingStatus.Failure, meeting: Meeting, now: Date) -> Bool {
-        guard !failure.isNoSpeech, !FriendlyError.isNoSpeech(failure.reason) else { return false }
+        guard !failure.isNoSpeech else { return false }
         let when = failure.request?.outcome?.finishedAt ?? meeting.updatedAt
         return now.timeIntervalSince(when) < failureShownFor
     }

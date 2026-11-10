@@ -101,6 +101,12 @@ final class ReadingTests: XCTestCase {
         return ConversationStatusPresentation.page(status, meeting: meeting, inputs: inputs, now: now)
     }
 
+    /// The row's status, as this iPhone's list draws it (`PhoneRowStatus`): the shared presentation's row.
+    private func rowStatus(_ status: ProcessingStatus, _ meeting: Meeting) -> ConversationRowStatus? {
+        let inputs = ConversationStatusPresentation.Inputs(words: .iPhone(id: phone.id), local: .iPhone())
+        return ConversationStatusPresentation.row(status, meeting: meeting, inputs: inputs, now: now)
+    }
+
     func testRecordedIsACalmCompleteState() {
         let meeting = recorded()
         XCTAssertEqual(ProcessingStatus(meeting, now: now), .recorded)
@@ -108,7 +114,7 @@ final class ReadingTests: XCTestCase {
         XCTAssertEqual(page?.kind, .box(.accent), "the same box as the Mac's")
         XCTAssertEqual(page?.title, "Not transcribed yet")
         XCTAssertEqual(page?.actions, [.transcribe(newAudio: false)], "it offers Transcribe")
-        XCTAssertEqual(StatusPresentation.row(.recorded), RowStatus(kind: .notTranscribed, text: "Not transcribed yet"))
+        XCTAssertEqual(rowStatus(.recorded, meeting), ConversationRowStatus(kind: .notTranscribed, text: "Not transcribed yet"))
     }
 
     func testATranscriptWithoutASummaryOffersSummarize() {
@@ -121,7 +127,7 @@ final class ReadingTests: XCTestCase {
         XCTAssertEqual(page?.kind, .line)
         XCTAssertEqual(page?.title, "Not summarized yet")
         XCTAssertEqual(page?.actions, [.summarize], "the line offers Summarize")
-        XCTAssertNil(StatusPresentation.row(.transcribed), "the row shows its preview: the transcript reads")
+        XCTAssertNil(rowStatus(.transcribed, meeting), "the row shows its preview: the transcript reads")
         // With no Mac, no summarizer here, and no cloud, Summarize would only wait.
         XCTAssertEqual(pageStatus(.transcribed, meeting, mac: .noMac)?.title, "Needs your Mac to summarize")
     }
@@ -143,10 +149,21 @@ final class ReadingTests: XCTestCase {
         XCTAssertNil(recent?.detail)
         let never = pageStatus(status, meeting, mac: .phone(presence: nil, sighting: nil, connected: [], liveProgress: [:], meetingID: meeting.id))
         XCTAssertEqual(never?.detail, "No Mac has synced this library yet. Open Daybook on your Mac.", "one way of saying it, as Settings does")
-        XCTAssertEqual(MacSighting.line(nil, now: now), never?.detail)
-        XCTAssertEqual(StatusPresentation.row(status)?.text, "Waiting for your Mac")
-        XCTAssertEqual(StatusPresentation.waitingTitle(.summaryOnly), "Waiting for your Mac to summarize", "a first summary")
-        XCTAssertEqual(StatusPresentation.waitingTitle(.summaryOnly, summarized: true), "Waiting for your Mac to summarize again")
+        XCTAssertEqual(ConversationStatusPresentation.MacStanding.noMacLine, never?.detail)
+        XCTAssertEqual(rowStatus(status, meeting)?.text, "Waiting for your Mac")
+
+        // A Summarize request says "again" only when there's a summary already.
+        var transcribed = recorded()
+        let words = TranscriptSegment(trackID: trackID, start: 0, end: 2, text: "Come back in six months.")
+        transcribed.transcripts = [TrackTranscript(trackID: trackID, segments: [words], createdAt: now)]
+        transcribed.unifiedTranscript = [words]
+        let summarize = ProcessingRequest(meetingID: transcribed.id, mode: .summaryOnly, requestedBy: phone, createdAt: now)
+        transcribed.upsertProcessingRequest(summarize)
+        let first = ProcessingStatus(transcribed, now: now)
+        XCTAssertEqual(pageStatus(first, transcribed)?.title, "Waiting for your Mac to summarize", "a first summary")
+        XCTAssertEqual(rowStatus(first, transcribed)?.text, "Waiting for your Mac to summarize")
+        transcribed.summary = MeetingSummary(overview: "Come back in six months.", createdAt: now.addingTimeInterval(-3600))
+        XCTAssertEqual(pageStatus(ProcessingStatus(transcribed, now: now), transcribed)?.title, "Waiting for your Mac to summarize again")
     }
 
     func testTheWaitingLineSaysWhatTheMacIsDoing() {
@@ -196,7 +213,8 @@ final class ReadingTests: XCTestCase {
         // This iPhone's own work names it, with the same rounding as everywhere: down.
         let here = pageStatus(.processing(.init(stage: .transcribing, fraction: 0.396)), recorded())
         XCTAssertEqual(here?.title, "Transcribing on this iPhone · 39%")
-        XCTAssertEqual(StatusPresentation.row(.processing(reported)), RowStatus(kind: .processing, text: "Transcribing on Studio · 40%", fraction: 0.4))
+        XCTAssertEqual(rowStatus(.processing(reported), recorded()),
+                       ConversationRowStatus(kind: .processing, text: "Transcribing on Studio · 40%", fraction: 0.4))
     }
 
     func testCouldntFinishOffersTryAgainWithTheFailedRequestsMode() {
@@ -238,7 +256,7 @@ final class ReadingTests: XCTestCase {
         let sighting = MacSighting.latest(in: [weekly(), meeting], excluding: phone.id)
         XCTAssertEqual(sighting, MacSighting(name: "Studio", date: now.addingTimeInterval(-300)))
         XCTAssertNil(MacSighting.latest(in: [recorded()], excluding: phone.id))
-        XCTAssertEqual(MacSighting.ago(3 * 86_400), "3 days ago")
+        XCTAssertEqual(ConversationStatusPresentation.MacStanding.ago(3 * 86_400), "3 days ago")
     }
 
     // MARK: Evidence
@@ -407,11 +425,12 @@ final class ReadingTests: XCTestCase {
 
     // MARK: Version History and export
 
-    func testWordDiffMarksOnlyTheWordsThatChanged() {
-        let changes = WordDiff.changes(old: WordDiff.tokens("The sink conflict fix"), new: WordDiff.tokens("The sync conflict fix"))
+    func testWordChangesMarkOnlyTheWordsThatChanged() {
+        let changes = WordChanges.changes(old: WordChanges.tokens("The sink conflict fix"), new: WordChanges.tokens("The sync conflict fix"))
         XCTAssertEqual(Array(changes.removed), [1])
         XCTAssertEqual(Array(changes.inserted), [1])
-        let marked = WordDiff.marked(old: "The sink conflict fix", new: "The sync conflict fix")
+        let marked = WordChanges.marked(old: AttributedString("The sink conflict fix"), new: AttributedString("The sync conflict fix"),
+                                        removed: RevisionMarks.removed(dark: false), inserted: RevisionMarks.inserted(dark: false))
         XCTAssertEqual(String(marked.new.characters), "The sync conflict fix", "marking never changes the text")
     }
 
@@ -515,17 +534,6 @@ final class ReadingTests: XCTestCase {
         defer { UIPasteboard.remove(withName: pasteboard.name) }
         LocalPasteboard.copy("Ship it", to: pasteboard)
         XCTAssertEqual(pasteboard.string, "Ship it")
-    }
-
-    // MARK: Search
-
-    func testASummarySnippetReadsAsWordsWithoutMarkdown() {
-        XCTAssertEqual(SearchSnippet.plain("…date. - The sync conflict fix is the release gate."),
-                       "…date. The sync conflict fix is the release gate.", "a joined list item loses its marker")
-        XCTAssertEqual(SearchSnippet.plain("- Keep the **14th** as the beta date."), "Keep the 14th as the beta date.")
-        XCTAssertEqual(SearchSnippet.plain("• One: * two"), "One: two")
-        XCTAssertEqual(SearchSnippet.plain("Pre-release notes - mostly done"), "Pre-release notes - mostly done",
-                       "hyphens and dashes inside a sentence stay")
     }
 
     // MARK: The session across folds

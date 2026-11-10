@@ -259,10 +259,6 @@ final class PhoneDevices {
     func handoffState(_ session: DeviceSession) -> RecorderHandoff.State { handoff.state(of: session) }
     /// Macs on Wi‑Fi this iPhone could hand the recorder to.
     func handoffTargets(_ session: DeviceSession) -> [RecorderHandoff.Peer] { handoff.peersToGive(session) }
-    /// Stops waiting, or clears an answer that was shown.
-    func endHandoff(_ session: DeviceSession) {
-        if handoff.state(of: session).isPending { handoff.cancel(session) } else { handoff.dismiss(session) }
-    }
 
     /// Removing a recorder here lets another device manage it again.
     func remove(_ session: DeviceSession) {

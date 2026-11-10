@@ -10,16 +10,6 @@ import Observation
 // models from `ModelCatalog.models(for:)`, availability from `CatalogModel.availability(engines:)`,
 // labels from licenses and origins. A new engine, family, variant, or role appears without code here.
 
-// MARK: - Roles
-
-extension ModelRole {
-    /// The roles in the pipeline's order, then any other role a newer manifest names.
-    static func pipelineOrder(_ a: ModelRole, _ b: ModelRole) -> Bool {
-        let oa = ModelManagerSnapshot.order(a), ob = ModelManagerSnapshot.order(b)
-        return oa == ob ? a.rawValue < b.rawValue : oa < ob
-    }
-}
-
 // MARK: - Rows
 
 /// One model in the library.
@@ -69,12 +59,6 @@ struct ModelPresetSummary: Identifiable, Equatable {
     let missingBytes: Int64
     var id: String { preset?.rawValue ?? "custom" }
     var title: String { preset?.title ?? "Custom" }
-
-    /// As DaybookUI's quality row draws it.
-    var option: ModelQualityOption {
-        ModelQualityOption(id: id, title: title, isCustom: preset == nil, isRecommended: isRecommended, isCurrent: isCurrent,
-                           names: names, bytes: bytes, memoryGB: memoryGB)
-    }
 }
 
 /// What the library takes on disk, and what can go.

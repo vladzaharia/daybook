@@ -47,13 +47,6 @@ final class LibraryListPhoneTests: XCTestCase {
         XCTAssertNil(playing?.text, "the gist stays")
     }
 
-    func testBehaviorAPausedRowReadsPausedWithThePauseGlyphNotAClock() {
-        // The shared row has a paused kind of its own; the reading status's older row mapped it to waiting.
-        let shared = ConversationRow.shared(RowStatus(kind: .waiting, text: "Paused"))
-        XCTAssertEqual(shared.kind, .paused)
-        XCTAssertEqual(shared.kind.symbol, "pause.circle")
-    }
-
     func testBehaviorASelectionOffersWhatTheMacsDoesInTheSameOrder() async throws {
         let library = PhoneLibrary(rootURL: try temporaryDirectory(), installation: "TEST")
         try await library.reload()

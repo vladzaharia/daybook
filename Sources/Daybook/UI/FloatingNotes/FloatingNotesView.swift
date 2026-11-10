@@ -358,7 +358,7 @@ struct ChipMenuItems: View {
                     }
                 } else if state.processingID == meeting.id {
                     Button("Pause Transcription") { state.pauseProcessing(meeting.id) }
-                } else if state.pausedIDs.contains(meeting.id) || (meeting.status == .failed && !FriendlyError.isNoSpeech(meeting.errorMessage ?? "")) {
+                } else if state.pausedIDs.contains(meeting.id) || (meeting.status == .failed && !isNoSpeech(meeting)) {
                     Button(meeting.status == .failed ? "Try Again" : "Resume Transcription") {
                         state.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting))
                     }
@@ -392,6 +392,12 @@ struct ChipMenuItems: View {
         LaunchOptions.defaults.set(pane.rawValue, forKey: SettingsPane.storageKey)
         openSettingsWindow.settings()
         NSApp.activate()
+    }
+
+    /// A recording with no speech: trying again can't help, so there's no Try Again (`ProcessingRequest.FailureKind.noSpeech`).
+    private func isNoSpeech(_ meeting: Meeting) -> Bool {
+        if case .failed(let failure) = state.processingStatus(for: meeting) { return failure.isNoSpeech }
+        return false
     }
 }
 

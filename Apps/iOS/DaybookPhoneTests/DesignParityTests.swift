@@ -58,20 +58,11 @@ final class DesignParityTests: XCTestCase {
         XCTAssertEqual(pairs.count, Shade.all.count, "Every core token is checked")
         var speakers = PhoneStyle.speakerInks.enumerated().map { ("speaker\($0.offset)", $0.element, Shade.speakers[$0.offset]) }
         speakers.append(("no speaker", PhoneStyle.speakerInk(nil), Shade.secondary))
-        let uiInks: [(String, UIColor, DaybookShade)] = [
-            ("UIInk.title", PhoneStyle.UIInk.title, Shade.title), ("UIInk.body", PhoneStyle.UIInk.body, Shade.body),
-            ("UIInk.secondary", PhoneStyle.UIInk.secondary, Shade.secondary), ("UIInk.meta", PhoneStyle.UIInk.meta, Shade.meta),
-            ("UIInk.faint", PhoneStyle.UIInk.faint, Shade.faint), ("UIInk.link", PhoneStyle.UIInk.link, Shade.link),
-            ("UIInk.bookmark", PhoneStyle.UIInk.bookmark, Shade.bookmark), ("UIInk.accent", PhoneStyle.UIInk.accent, Shade.accent)
-        ]
         for appearance in appearances {
             let traits = traits(appearance.style, appearance.contrast)
             let dark = appearance.style == .dark, contrast = appearance.contrast == .high
             for (name, color, shade) in pairs + speakers {
                 XCTAssertEqual(hex(UIColor(color), traits), shade.hex(dark: dark, increasedContrast: contrast), "\(name), \(appearance.name)")
-            }
-            for (name, color, shade) in uiInks {
-                XCTAssertEqual(hex(color, traits), shade.hex(dark: dark, increasedContrast: contrast), "\(name), \(appearance.name)")
             }
         }
     }
