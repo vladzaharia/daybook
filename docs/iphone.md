@@ -24,7 +24,7 @@ Everything below is in v1:
 - **Reading.**
   - The summary page: lede, next steps, sections, your notes, bookmarks, colophon. Its blocks are the Mac's, from DaybookUI (`ConversationHeader`, `StatusBlock`, `SummaryBody`, `YourNotes`, `Colophon`): the same words, order, and behaviour, at the iPhone's size. A title or a bookmark label is saved once editing ends, and an emptied title puts the old one back; ticking a next step, editing a label, deleting a bookmark, and Don't Wait can be undone (shake, or three-finger swipe), each on its own item, as on the Mac.
   - The transcript: speakers, times, tap to play.
-  - Audio playback that downloads on demand, in the player both apps draw (DaybookUI's `PlayerBar` over DaybookKit's `PlaybackEngine`): the buttons on a row and the scrubber under them, with the time played and the time left ("−12:03") at its ends and, of several recordings, which one plays; a safe-area bar, so the page fades hard under it. The recorder owns the audio session: once a recording starts, however it starts, the player pauses, takes its card off the Lock Screen and Control Center, and stops answering their buttons and headphones' (`PlaybackController.follow(recording:)`, `suspendForRecording`); nothing plays and the session's category isn't touched until the recording is filed. The Lock Screen shows the title and when it was, never who was there, and a Personal conversation as "Daybook conversation".
+  - Audio playback that downloads on demand, in the player both apps draw (DaybookUI's `PlayerBar` over DaybookKit's `PlaybackEngine`): the buttons on a row and the scrubber under them, with the time played and the time left ("−12:03") at its ends and, of several recordings, which one plays, and an amber tick on the scrubber for each bookmark in the recording; a safe-area bar, so the page fades hard under it. The recorder owns the audio session: once a recording starts, however it starts, the player pauses, takes its card off the Lock Screen and Control Center, and stops answering their buttons and headphones' (`PlaybackController.follow(recording:)`, `suspendForRecording`); nothing plays and the session's category isn't touched until the recording is filed. The Lock Screen shows the title and when it was, never who was there, and a Personal conversation as "Daybook conversation".
   - The More menu lists what DaybookKit's `ConversationActions` lists, in the Mac's order and words, leaving out what doesn't apply now: Copy Summary (it says "Copied" for a moment), Share ▸ Markdown, Full Data (JSON), Audio; Take Photo, Add Photos…, Add Recording… (from Files, into this conversation); Reprocess ▸; Version History…; Move to Folder…, Tags…, Move to Work or Personal; Move to Trash…. Info and More are glyphs in title ink, like the back chevron (the open Duo's spread draws its back button the same way).
   - On the open Duo, a reading sheet is a card on the right page; it closes with Done, a swipe down from its grabber, or VoiceOver's escape, and leaves the left page in reach.
   - Version History, with restore.
@@ -274,14 +274,13 @@ Confirmed in the iOS 27.1 SDK: SwiftUI `onHingeChange { old, new in }` gives `De
 
 The playback bar stays on the transcript page. On the unfolded Duo its glass card has a paper backdrop, so transcript text doesn't show through the controls; one-column playback keeps its existing glass treatment.
 
-An open conversation's spine is a passive 24 pt context rail: a thin timeline with amber ticks for
-bookmarks on the effective placed timeline and a mint playhead for the loaded player (including while
-paused). Its extent is the furthest unified-transcript or placed-recording end; explicitly unaligned
-source bookmarks are omitted, and unplaced sources have no invented bookmark or playhead position.
-The rail appears only on the conversation spread, not its library preview or while a reading or share
-sheet is open. It has no hit targets or separate
-VoiceOver elements; the pages and their player remain the interactive controls. Only timeline numbers
-are derived for the rail, with no content, audio, or transcript copied or persisted.
+The spine is a gutter, as a book's is: the crease's hairline with a soft shade either side, and nothing on it. Marks
+placed by time beside text laid out by scrolling would suggest links that aren't there, so bookmarks stand on the
+player's scrubber instead, which measures time: an amber tick for each bookmark in the recording loaded, under the
+mint playhead (DaybookUI's `ScrubberBookmarks`, in every layout under touch; the Mac keeps its system slider). A
+bookmark made in that recording keeps its own time; one on the conversation's timeline, or in another placed
+recording, is carried through both placements, and only when the loaded recording is placed. One outside the
+recording, or in an unaligned recording, has no tick.
 
 The reading column's crease-side inset is the full 16 pt clearance, not an addition to the normal
 20 pt page gutter. Library row words and the selected-card wash use the same 16 pt clearance.

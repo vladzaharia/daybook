@@ -180,7 +180,7 @@ private struct ReadingLayout: View {
   // MARK: Two pages
 
   private var notebook: some View {
-    CreaseSplit(spineRail: spineRail) {
+    CreaseSplit {
       leftPage
     } trailing: {
       rightPage
@@ -200,21 +200,6 @@ private struct ReadingLayout: View {
         .daybookMotion(PhoneStyle.Motion.state, value: session.sheet?.id)
     }
     .daybookMotion(PhoneStyle.Motion.page, value: session.reading)
-  }
-
-  /// The spine belongs to the conversation spread only, never to its library preview or a sheet.
-  /// Observe the loaded track here, but let the spine alone follow the player's changing position.
-  private var spineRail: ConversationSpineRail? {
-    guard let id = session.spineMeetingID, let meeting = library.meeting(id) else { return nil }
-    let player = session.player
-    let active: ConversationSpineRailData.Player?
-    if player.phase == .ready, let meetingID = player.meetingID, let trackID = player.trackID {
-      active = .init(meetingID: meetingID, trackID: trackID, duration: player.duration)
-    } else {
-      active = nil
-    }
-    guard let data = ConversationSpineRailData(meeting: meeting, player: active) else { return nil }
-    return ConversationSpineRail(data: data, player: active?.meetingID == id ? player : nil)
   }
 
   /// The sheet shows on the right page: two pages, and anything but the system's share sheet.
