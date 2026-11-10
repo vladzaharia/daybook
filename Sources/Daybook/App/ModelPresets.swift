@@ -186,15 +186,15 @@ enum ModelSize {
         Set(ids).compactMap { model($0, in: state.modelCatalog) }.reduce(0) { total, model in
             if model.isSystemModel { return total }
             if state.installedModels.contains(model.key) { return total + model.approximateBytes }
-            if state.downloadingID.map({ ModelReference($0).id }) == model.key {
-                return total + Int64(Double(model.approximateBytes) * state.downloadProgress.fraction)
+            if state.processor.queue.downloadingID.map({ ModelReference($0).id }) == model.key {
+                return total + Int64(Double(model.approximateBytes) * state.processor.queue.downloadActivity.value.fraction)
             }
             return total
         }
     }
 
     @MainActor static func isDownloading(_ ids: [String], in state: AppState) -> Bool {
-        let busy = Set(([state.downloadingID].compactMap { $0 } + state.pendingDownloads).map { ModelReference($0).id })
+        let busy = Set(([state.processor.queue.downloadingID].compactMap { $0 } + state.processor.queue.pendingDownloads).map { ModelReference($0).id })
         return ids.contains { busy.contains($0) }
     }
 

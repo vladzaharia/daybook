@@ -13,7 +13,10 @@ import UniformTypeIdentifiers
 
 /// The Mac app's state. The library itself (conversations, edits, saving, sync, requests) is
 /// `library`, shared with the iPhone through DaybookKit; this adds what only the Mac does:
-/// capture, the processing queue and local models, devices' wiring, windows, and panels. Library
+/// capture, local models, devices' wiring, windows, and panels. Its parts with seams of their own are
+/// models of their own: where the person is in the library window (`window`, the iPhone's
+/// `ReadingSession`'s twin), this Mac's processing (`processor`, the twin of `PhoneProcessor`), the
+/// library's launch check (`launchCheck`), and what it reaches in the system (`environment`). Library
 /// members are forwarded so views and menus read them here as before.
 ///
 /// It's `@Observable`, like everything views read here (the library, sync, devices, the recorder, the
@@ -28,36 +31,12 @@ final class AppState {
     let library: LibraryController
     /// The library's conversations. Every change goes through `library` (`update`, `add`, …), which saves it.
     var meetings: [Meeting] { library.meetings }
-    /// The conversation the list selects, which the page, the inspector, Version History, Share, the menus, and
-    /// Floating Notes act on. A Personal one behind the lock (`personalLock`) is selected only once the person unlocks
-    /// it: setting it asks, and the selection stays where it was meanwhile, so nothing shows it locked.
-    var selectedID: UUID? {
-        get { selection }
-        set {
-            guard let id = newValue, personalLock.hides(id) else {
-                unlockingSelection = nil
-                selection = newValue
-                return
-            }
-            unlockingSelection = id
-            Task {
-                guard await personalLock.unlock(), unlockingSelection == id else { return }
-                unlockingSelection = nil
-                selection = id
-            }
-        }
-    }
-    private var selection: UUID?
-    /// The Personal conversation waiting for the person to unlock it: selected once they do, unless they chose another.
-    @ObservationIgnored private var unlockingSelection: UUID?
+    /// Where the person is in the library window: the place, the conversation on the page, its side, search, the
+    /// selection of several, and the window's sheet and requests (LibraryWindowModel.swift).
+    let window: LibraryWindowModel
     /// The lock for Personal conversations, and what a Focus asks (Settings › Library; docs/architecture.md, "The
     /// Personal lock").
     let personalLock: PersonalLock
-    var search = ""
-    var searchTokens: [SearchToken] = []
-    var searchScope: SearchScope = .all
-    /// The sidebar selection: a library section, a folder, or a device.
-    var place: LibraryPlace = .section(.all)
     /// Asks the main window to present Add Device (from menus, Welcome, Settings, or a device page).
     var addDeviceRequest: AddDeviceRequest?
     var libraryMetadata: LibraryMetadata { library.metadata }
@@ -65,33 +44,10 @@ final class AppState {
     var templates: [SummaryTemplate] { library.templates }
     var allTags: [String] { library.allTags }
 
-    /// The side of the page that shows alone: in a column too narrow for two pages, or once the person collapses the
-    /// spread to it.
-    var pageMode: PageMode = .summary
-    /// Whether the page shows Summary and Transcript side by side where the detail column has room for two pages
-    /// (`pageSpreadFits`); the toolbar's switch collapses it to one page, and the window keeps the choice
-    /// (`LibraryRestoration`).
-    var pageSpreadChosen = true
-    /// The detail column has room for two pages now (`PageSpreadLayout`): the page says so as it lays out.
-    var pageSpreadFits = false
-    /// A transcript passage the page should scroll to, from search or a bookmark.
-    var pageScrollTarget: UUID?
-    /// Set to ask the window to confirm moving conversations to the Trash.
-    var trashRequestIDs: [UUID] = []
-    var trashRequestID: UUID? {
-        get { trashRequestIDs.count == 1 ? trashRequestIDs[0] : nil }
-        set { trashRequestIDs = newValue.map { [$0] } ?? [] }
-    }
-    /// Several conversations selected in the list; empty when one or none is.
-    var multiSelection: Set<UUID> = []
     /// The folder being renamed in place in the sidebar.
     var renamingFolderID: UUID?
     /// The conversation the device page is showing for a selected, already-imported recording.
     var deviceConversationID: UUID?
-    /// Set to move keyboard focus to a conversation's title on its page.
-    var titleFocusRequest: UUID?
-    /// The one sheet the main window shows at a time.
-    var activeSheet: ActiveSheet?
     /// Set to ask the sidebar to create a folder, optionally moving conversations into it.
     var newFolderRequest: NewFolderRequest?
     /// Incremented to move keyboard focus to the library search field.
@@ -99,11 +55,6 @@ final class AppState {
     /// Incremented to ask the main window for the inspector (Tags…, the byline's people), which a window too narrow
     /// for it widens to show (`LibraryView`).
     var inspectorRequest = 0
-    /// A moment's word over the page after something that leaves nothing else to see: Copy Summary's "Copied", from
-    /// whichever menu it came (`ConfirmationBeat`).
-    var confirmation: ConfirmationBeat?
-    /// View › Make Text Bigger scales only the reading surface.
-    var readingScale: Double { didSet { preferences.set(readingScale, forKey: Preference.readingScale) } }
     /// App-owned so menu commands can drive it. Only what shows the playhead reads its position, which
     /// moves ten times a second; the Controls menu reads only whether it's playing.
     let playback = AudioPlaybackController()
@@ -121,14 +72,9 @@ final class AppState {
     var isReady = false
     /// The library couldn't open: said on the page with Try Again (`LibraryProblemPage`), until it opens.
     var libraryProblem: AppProblem?
-    /// A library in the wrong place for this build (docs/sandbox.md): the library doesn't open until the person decides.
-    var libraryMoveOffer: LibraryMoveOffer?
-    var isMovingLibrary = false
-    var libraryMoveError: AppProblem?
-    /// A library just copied into the container, before the person decides about the old copy.
-    var movedLibrary: MovedLibrary?
-    /// Said once the library opens (`LaunchCheck`).
-    var launchNotice: String?
+    /// Where the library is at launch, and the move offered when it's in the wrong place for this build
+    /// (docs/sandbox.md): the library doesn't open until the person decides (LibraryLaunchCheck.swift).
+    let launchCheck: LibraryLaunchCheck
     /// The library notice's button and the message it belongs to (`post(_:action:)`).
     private var noticeAction: (message: String, action: LibraryNoticeAction)?
     /// Recordings this Mac's capture ended on its own (a microphone that failed, sleep, a disk that couldn't keep up),
@@ -152,42 +98,9 @@ final class AppState {
     var isListeningToEarlierRecordings = false
     var listenedRecordings = Set<UUID>()
     var backgroundListeningDelay: Duration = .seconds(20)
-    /// This Mac's processing queue and model downloads (ProcessingQueue.swift). The views, menus, and tests read it
-    /// through the names below, as they always have.
-    let queue: ProcessingQueue
-    /// The conversation being processed now.
-    var processingID: UUID? {
-        get { queue.runningID }
-        set { queue.runningID = newValue }
-    }
-    /// The running job's progress, throttled (`ActivityProgress`). The window isn't redrawn by it: the
-    /// views that draw it observe `processingActivity`, and redraw when its percent, message, or step changes.
-    var processingActivity: ActivityProgress { queue.activity }
-    var processingProgress: IntelligenceProgress {
-        get { queue.activity.value }
-        set { queue.activity.set(newValue) }
-    }
-    /// Waiting, in order.
-    var processingQueue: [ProcessingJob] {
-        get { queue.jobs }
-        set { queue.jobs = newValue }
-    }
-    /// The job running now (`processingID`'s), with the request it carries out, if any.
-    var runningJob: ProcessingJob? {
-        get { queue.running }
-        set { queue.running = newValue }
-    }
-    var queuedIDs: [UUID] { queue.queuedIDs }
-    /// Conversations the person paused; they resume only when asked.
-    var pausedIDs: Set<UUID> {
-        get { queue.paused }
-        set { queue.paused = newValue }
-    }
-    /// Conversations that start transcribing as soon as the selected models finish downloading.
-    var awaitingModels: Set<UUID> {
-        get { queue.awaitingModels }
-        set { queue.awaitingModels = newValue }
-    }
+    /// This Mac's processing: the queue and model downloads it owns (`ProcessingQueue`), and the jobs it runs
+    /// (MacProcessor.swift).
+    let processor: MacProcessor
     /// This Mac's own processing preferences, kept in its UserDefaults: the speaker settings and the model for other
     /// languages. The transcription language is the library's (`transcriptionLanguage`); a stored one is carried into the
     /// library once at launch (`followLibraryLanguage`).
@@ -230,19 +143,6 @@ final class AppState {
             if oldValue[.summarization] != summaryModel, installedModels.contains(summaryModel) { summaryModelArrived() }
         }
     }
-    /// The model downloading now (`ProcessingQueue`).
-    var downloadingID: String? {
-        get { queue.downloadingID }
-        set { queue.downloadingID = newValue }
-    }
-    /// The current download's progress, throttled like `processingActivity`.
-    var downloadActivity: ActivityProgress { queue.downloadActivity }
-    var downloadProgress: IntelligenceProgress {
-        get { queue.downloadActivity.value }
-        set { queue.downloadActivity.set(newValue) }
-    }
-    /// Models still to download after the current one.
-    var pendingDownloads: [String] { queue.pendingDownloads }
     var glossary: [GlossaryTerm] { library.glossary }
     var recordingID: UUID?
     var isStartingRecording = false
@@ -294,10 +194,10 @@ final class AppState {
     @ObservationIgnored var calendarMeeting: (recording: UUID, event: MeetingEvent)?
     @ObservationIgnored var calendarWatch: Task<Void, Never>?
 
-    /// Looks at this Mac for calls, except under XCTest, whose AppStates must never read the real audio server or ask
-    /// about a call the developer is on (the monitor's own tests drive it with scripted looks).
+    /// Looks at this Mac for calls, only in the app (`MacEnvironment.watchesCalls`): a test's AppState must never read the
+    /// real audio server or ask about a call the developer is on (the monitor's own tests drive it with scripted looks).
     private func startCallMonitoring() {
-        guard !MacCaptioners.isRunningTests else { return }
+        guard environment.watchesCalls else { return }
         monitor.startMonitoring()
     }
     var includeComputerAudio: Bool { didSet { preferences.set(includeComputerAudio, forKey: Preference.includeComputerAudio) } }
@@ -327,6 +227,9 @@ final class AppState {
     let storageURL: URL
     /// This Mac's preferences (the app's, or a test's own suite).
     let preferences: UserDefaults
+    /// What it reaches in this Mac's system on its own: calls, the system's lock, the calendar, and live captioners
+    /// (`MacEnvironment`: `.live` in the app, `.inert` in tests).
+    @ObservationIgnored let environment: MacEnvironment
     /// Cloud summaries' keys, models, and this Mac's preferences (Settings › Cloud; docs/cloud.md): the one place the
     /// summary step reads them. Made when first used (Settings, or a summary step), so a launch that never needs it
     /// never reads the keychain. Demos and tests set their own (`CloudSetup.demo`).
@@ -365,11 +268,6 @@ final class AppState {
     @ObservationIgnored var voicingTask: Task<Void, Never>?
     /// Runs given voices (or tried) this session.
     var voicedRuns = Set<UUID>()
-    var processingTask: Task<Void, Never>? {
-        get { queue.task }
-        set { queue.task = newValue }
-    }
-    var currentRequest: Task<Void, Error>? { queue.currentRequest }
     /// How requests from other devices are claimed and kept (tests shorten these).
     var requestTiming = RequestTiming()
     /// The memory a summary model must fit in (tests set it, so they don't depend on the machine's).
@@ -384,23 +282,6 @@ final class AppState {
         set { cloudSummarizerOverride = newValue }
     }
     @ObservationIgnored private var cloudSummarizerOverride: (any CloudSummarizing)?
-    /// Conversations whose running job stopped because another device took its request over.
-    var claimsLost: Set<UUID> {
-        get { queue.claimsLost }
-        set { queue.claimsLost = newValue }
-    }
-    var claimHeartbeat: Task<Void, Never>? {
-        get { queue.claimHeartbeat }
-        set { queue.claimHeartbeat = newValue }
-    }
-    var lastClaimRenewal: Date {
-        get { queue.lastClaimRenewal }
-        set { queue.lastClaimRenewal = newValue }
-    }
-    var lastRenewedStage: ProcessingRequest.Stage? {
-        get { queue.lastRenewedStage }
-        set { queue.lastRenewedStage = newValue }
-    }
     /// Daybook on iPhone from this Mac's side, as state (PhoneCoordinator.swift). `AppState+Phone.swift`,
     /// `AppState+SharedNotes.swift`, and the tests read it through the names below, as they always have.
     let phones = PhoneCoordinator()
@@ -471,12 +352,14 @@ final class AppState {
     @ObservationIgnored private var visibleMemo: (place: LibraryPlace, revision: Int, showsPersonal: Bool, meetings: [Meeting])?
     let searchMemo = LibrarySearchMemo()
 
-    /// `capture` is this Mac's microphone and call audio; tests pass fakes.
-    init(libraryURL: URL = AppState.libraryURL, defaults: UserDefaults = .standard, capture: CaptureEnvironment = .live) {
+    /// `capture` is this Mac's microphone and call audio, and `environment` what else it reaches in the system on its own;
+    /// tests pass fakes, and build with `.inert` unless they say otherwise. The app passes `.live` (`DaybookApp`).
+    init(libraryURL: URL = AppState.libraryURL, defaults: UserDefaults = .standard, capture: CaptureEnvironment = .live,
+         environment: MacEnvironment = .inert) {
         // Where the library is, before anything here writes preferences or sync resolves its identity (docs/sandbox.md).
-        let launch = Self.launchCheck(library: libraryURL, defaults: defaults)
+        launchCheck = LibraryLaunchCheck(library: libraryURL, defaults: defaults)
         recorder = RecordingController(environment: capture)
-        queue = ProcessingQueue(owedURL: libraryURL.appendingPathComponent("local-queue.json"))
+        processor = MacProcessor(owedURL: libraryURL.appendingPathComponent("local-queue.json"))
         let storedPreferences = defaults.data(forKey: Preference.processingPreferences).flatMap { try? JSONDecoder().decode(ProcessingPreferences.self, from: $0) }
         var processingPreferences = storedPreferences ?? .init()
         // A fresh Mac starts on its recommended preset, speaker effort included (ux-mac-14).
@@ -505,6 +388,7 @@ final class AppState {
         library = LibraryController(rootURL: libraryURL, sync: sync)
         storageURL = libraryURL
         preferences = defaults
+        self.environment = environment
         #if DEBUG
         DeviceDemo.install()
         #endif
@@ -525,6 +409,7 @@ final class AppState {
         recorderHandoff = RecorderHandoff(library: library, devices: devices, deviceClass: .mac, defaults: defaults)
         sources = MultiSourceCoordinator(defaults: defaults)
         personalLock = PersonalLock(defaults: defaults, platform: .mac, authenticator: SystemPersonalLockAuthenticator())
+        window = LibraryWindowModel(personalLock: personalLock, defaults: defaults)
         callPolicy = CallPolicy.stored(in: defaults)
         callAppChoices = CallPolicy.storedChoices(in: defaults)
         usesCalendar = defaults.bool(forKey: Preference.usesCalendar)
@@ -532,14 +417,15 @@ final class AppState {
         processSyncedAudio = defaults.object(forKey: Preference.processSyncedAudio) as? Bool ?? true
         detectSpeakers = defaults.object(forKey: Preference.detectSpeakers) as? Bool ?? true
         transcriptionStandsIn = defaults.object(forKey: Preference.transcriptionStandIn) as? Bool ?? true
-        readingScale = defaults.object(forKey: Preference.readingScale) as? Double ?? 1
         runtime = LocalIntelligenceRuntime(modelsDirectory: libraryURL.appendingPathComponent("Models"), fetcher: ModelDemo.fetcher)
         let captionSettings = LiveCaptionSettings(defaults: defaults)
         self.captionSettings = captionSettings
         liveModels = MacLiveModels(store: runtime.store)
         captions = LiveCaptionsController(store: LiveCaptionStore(libraryRoot: libraryURL),
-                                          makeCaptioner: MacCaptioners.recordingFactory(settings: captionSettings))
-        processingActivity.onChange = { [weak self] _ in self?.processingProgressChanged() }
+                                          makeCaptioner: MacCaptioners.recordingFactory(settings: captionSettings,
+                                                                                        makesCaptioners: self.environment.makesCaptioners))
+        processor.app = self
+        processor.queue.activity.onChange = { [weak processor] _ in processor?.processingProgressChanged() }
         searchMemo.onUpdate = { [weak self] in self?.searchResultsArrived &+= 1 }
         sync.onSyncRequested = { [weak self] in await self?.synchronizeLibrary() }
         monitor.onMeetingStarted = { [weak self] candidate in
@@ -592,19 +478,18 @@ final class AppState {
         wireCaptions()
         wireSummaryPlacements()
         wirePersonalLock()
-        libraryMoveOffer = launch.offer
-        launchNotice = launch.notice
     }
 
     /// The lock finds conversations in the library, and the page follows it. The app's own also locks with the screen,
-    /// sleep, and idleness, and starts from the Focus that's on (never under XCTest, whose tests drive it themselves).
+    /// sleep, and idleness, and starts from the Focus that's on (`MacEnvironment.watchesPersonalLock`; tests drive it
+    /// themselves).
     private func wirePersonalLock() {
         personalLock.lookup = { [weak self] id in self?.meetings.first { $0.id == id } }
         personalLock.observe { [weak self] event in self?.personalLockChanged(event) }
         #if DEBUG
         if let demo = PersonalLockDemo.state() { PersonalLockDemo.apply(demo, to: personalLock, platform: .mac); return }
         #endif
-        guard !MacCaptioners.isRunningTests else { return }
+        guard environment.watchesPersonalLock else { return }
         personalLock.watchSystem()
         Task { [personalLock] in await DaybookFocusFilter.catchUp(personalLock) }
     }
@@ -637,125 +522,14 @@ final class AppState {
         static let onboardingCompleted = "onboardingCompleted"
     }
 
-    /// What the launch check found: a move to offer, or something to say once the library opens.
-    struct LaunchCheck: Equatable {
-        var offer: LibraryMoveOffer?
-        var notice: String?
-    }
-
-    /// Where the library is, before anything writes preferences or sync resolves its identity (docs/sandbox.md). A
-    /// library that moved gets this Mac's identity back (`ReplicaIdentity`). Then, for the app's own library only (never
-    /// `--library`, `swift run`, or tests): unsandboxed, whether to move it back out of the sandboxed build's container
-    /// (`LegacyLibraryReturn`); sandboxed, whether it's in place in the container (`SandboxMigration`).
-    static func launchCheck(library: URL, defaults: UserDefaults, bundle: Bundle = .main,
-                            sandboxed: Bool = SandboxEnvironment.isSandboxed) -> LaunchCheck {
-        let priorUse = SandboxMigration.preferencesShowPriorUse(defaults)
-        ReplicaIdentity.restore(library: library, defaults: defaults, machine: ReplicaIdentity.currentMachine)
-        guard library.standardizedFileURL.path == LibraryLocation.standard.standardizedFileURL.path,
-              LibraryLocation.folderName(bundleURL: bundle.bundleURL) == LibraryLocation.appFolder,
-              let identifier = bundle.bundleIdentifier else { return LaunchCheck() }
-        return launchCheck(library: library, bundleIdentifier: identifier, defaults: defaults, sandboxed: sandboxed, priorUse: priorUse)
-    }
-
-    static func launchCheck(library: URL, bundleIdentifier: String, defaults: UserDefaults, sandboxed: Bool, priorUse: Bool,
-                            home: URL = UserHome.url,
-                            store: (URL) -> SyncDeviceIdentityStore = { SyncDeviceIdentityStore.keychain(for: $0) }) -> LaunchCheck {
-        guard sandboxed else {
-            // Only the app itself goes back: its library is the old place its bundle ID's sandboxed build moved from.
-            guard SandboxMigration.legacyFolderName(bundleIdentifier: bundleIdentifier) == library.lastPathComponent else { return LaunchCheck() }
-            let plan = LegacyLibraryReturn.plan(library: library, bundleIdentifier: bundleIdentifier, home: home, defaults: defaults)
-            return LaunchCheck(offer: plan.map { .returnFromContainer($0) })
-        }
-        guard let legacy = SandboxMigration.legacyLibrary(bundleIdentifier: bundleIdentifier, home: home) else { return LaunchCheck() }
-        switch SandboxMigration.check(library: library, legacy: legacy, defaults: defaults, priorUse: priorUse, store: store) {
-        case .fresh, .moved:
-            return LaunchCheck()
-        case .stillAtOldLocation:
-            return LaunchCheck(offer: .moveIntoContainer(.init(legacy: legacy, library: library, legacyExists: LibraryContents.looksLikeLibrary(legacy))))
-        case .bothPresent:
-            guard defaults.string(forKey: SandboxMigration.keptOldCopyKey) != legacy.path else { return LaunchCheck() }
-            return LaunchCheck(offer: .oldCopyRemains(legacy))
-        case .identityMissing:
-            return LaunchCheck(notice: "If your iPhone can’t find this Mac, pair it again in Settings › Devices.")
-        }
-    }
-
-    /// Moves the library as offered. Back out of the container: moved, then the app starts over. Into the container: the
-    /// person chooses the old library (the sandbox can read it only then), it's copied into place, and the sheet asks
-    /// about the old copy (`finishLibraryMove`).
-    func acceptLibraryMove() {
-        guard let offer = libraryMoveOffer, !isMovingLibrary else { return }
-        libraryMoveError = nil
-        switch offer {
-        case .returnFromContainer(let plan):
-            isMovingLibrary = true
-            Task {
-                do {
-                    _ = try await detachedWork(priority: .userInitiated) { try LegacyLibraryReturn.move(plan) }
-                    LegacyLibraryReturn.finish(plan, defaults: preferences)
-                    AppRelaunch.relaunch()
-                } catch {
-                    isMovingLibrary = false
-                    libraryMoveError = AppProblem(title: "Couldn’t Move Your Library", fallback: "Your library couldn’t be moved. Try again.", error: error)
-                }
-            }
-        case .moveIntoContainer(let plan):
-            guard let source = SandboxMigration.chooseLibrary(near: plan.legacy) else { return }
-            isMovingLibrary = true
-            let scoped = source.startAccessingSecurityScopedResource()
-            Task {
-                do {
-                    try await detachedWork(priority: .userInitiated) { try SandboxMigration.copyLibrary(from: source, to: plan.library) }
-                    movedLibrary = MovedLibrary(source: source, scoped: scoped, legacy: plan.legacy)
-                } catch {
-                    if scoped { source.stopAccessingSecurityScopedResource() }
-                    libraryMoveError = AppProblem(title: "Couldn’t Move Your Library", fallback: "Your library couldn’t be moved. Try again.", error: error)
-                }
-                isMovingLibrary = false
-            }
-        case .oldCopyRemains(let legacy):
-            NSWorkspace.shared.activateFileViewerSelecting([legacy])
-            keepOldLibraryCopy(legacy)
-        }
-    }
-
-    /// After a move into the container: the old copy goes to the Trash or stays, and the app starts over with the
-    /// library in place.
-    func finishLibraryMove(trashingOldCopy: Bool) {
-        guard let moved = movedLibrary else { return }
-        var trashed = false
-        if trashingOldCopy {
-            trashed = (try? FileManager.default.trashItem(at: moved.source, resultingItemURL: nil)) != nil
-            if !trashed { NSWorkspace.shared.activateFileViewerSelecting([moved.source]) }
-        }
-        if !trashed { preferences.set(moved.legacy.path, forKey: SandboxMigration.keptOldCopyKey) }
-        if moved.scoped { moved.source.stopAccessingSecurityScopedResource() }
-        AppRelaunch.relaunch()
-    }
-
-    /// Not Now (or Quit, Start Fresh, Keep It), depending on the offer.
+    /// Not Now (or Quit, Start Fresh, Keep It) on the library move offered at launch: once it's answered, the library
+    /// opens (`LibraryLaunchCheck.decline`).
     func declineLibraryMove() async {
-        guard let offer = libraryMoveOffer, !isMovingLibrary else { return }
-        switch offer {
-        case .returnFromContainer(let plan): LegacyLibraryReturn.decline(plan, defaults: preferences)
-        case .moveIntoContainer(let plan):
-            // With a library at the old place, nothing opens without it; with none there, start a new one.
-            guard !plan.legacyExists else { NSApp.terminateFromRunLoop(); return }
-            preferences.set(true, forKey: SandboxMigration.startedFreshKey)
-        case .oldCopyRemains(let legacy):
-            keepOldLibraryCopy(legacy)
-            return
-        }
-        libraryMoveOffer = nil
+        guard launchCheck.decline() else { return }
         await initialize()
     }
 
-    private func keepOldLibraryCopy(_ legacy: URL) {
-        preferences.set(legacy.path, forKey: SandboxMigration.keptOldCopyKey)
-        libraryMoveOffer = nil
-    }
-
-    var selectedMeeting: Meeting? { meetings.first { $0.id == selectedID } }
+    var selectedMeeting: Meeting? { meetings.first { $0.id == window.openID } }
     var isRecording: Bool { recordingID != nil }
     /// This Mac transcribes now: the models that transcribe and find speakers are here. What picks up recordings and
     /// requests, and what presence says, goes by it; the summary model isn't one of them, since a summary waits for it
@@ -806,6 +580,7 @@ final class AppState {
     /// the place, the library, or the Focus changes.
     var visibleMeetings: [Meeting] {
         let showsPersonal = personalLock.focus.showsPersonal
+        let place = window.place
         if let memo = visibleMemo, memo.place == place, memo.revision == libraryRevision, memo.showsPersonal == showsPersonal {
             return memo.meetings
         }
@@ -818,17 +593,17 @@ final class AppState {
     /// by itself (at launch, after a sync, beside what went to the Trash) never asks for Touch ID.
     func selectQuietly(_ id: UUID?) {
         if let id, personalLock.hides(id) {
-            selectedID = personalLock.firstShown(in: visibleMeetings)?.id
+            window.openID = personalLock.firstShown(in: visibleMeetings)?.id
         } else {
-            selectedID = id
+            window.openID = id
         }
     }
 
     /// Unlocks Personal (Touch ID, or the password), and opens the place's newest when nothing is selected: choosing the
     /// Personal place, or Unlock on its page.
     func unlockPersonal() async {
-        guard await personalLock.unlock(), selectedID == nil, !place.isDevice, !place.isTrash else { return }
-        selectedID = visibleMeetings.first?.id
+        guard await personalLock.unlock(), window.openID == nil, !window.place.isDevice, !window.place.isTrash else { return }
+        window.openID = visibleMeetings.first?.id
     }
 
     /// The lock locked again: a Personal conversation on the page gives way to the place's first that isn't hidden, and
@@ -836,11 +611,9 @@ final class AppState {
     private func personalLockChanged(_ event: PersonalLock.Event) {
         switch event {
         case .locked:
-            unlockingSelection = nil
-            if let id = selection, personalLock.hides(id) { selection = personalLock.firstShown(in: visibleMeetings)?.id }
-            if multiSelection.contains(where: personalLock.hides) { multiSelection = [] }
+            window.lockReturned { personalLock.firstShown(in: visibleMeetings)?.id }
         case .focusChanged:
-            if !personalLock.focus.showsPersonal, place == .section(.personal) { place = .section(.all) }
+            if !personalLock.focus.showsPersonal, window.place == .section(.personal) { window.place = .section(.all) }
         }
     }
 
@@ -848,13 +621,13 @@ final class AppState {
     /// a large library is searched off the main actor (`LibrarySearchMemo`).
     var searchHits: [SearchHit] {
         _ = searchResultsArrived
-        let hits = searchMemo.hits(for: .init(text: search, tokens: searchTokens, scope: searchScope, revision: libraryRevision), in: meetings)
+        let hits = searchMemo.hits(for: .init(text: window.searchText, tokens: window.searchTokens, scope: window.searchScope, revision: libraryRevision),
+                                   in: meetings)
         // A Focus that leaves Personal out leaves it out of search too.
         guard !personalLock.focus.showsPersonal else { return hits }
         let left = Set(meetings.filter { !personalLock.lists($0) }.map(\.id))
         return hits.filter { !left.contains($0.meetingID) }
     }
-    var isSearching: Bool { !search.trimmingCharacters(in: .whitespaces).isEmpty || !searchTokens.isEmpty }
 
     /// Returns once the library is open and the app ready (`isReady`); at once when it is already.
     func whenReady() async {
@@ -863,15 +636,15 @@ final class AppState {
 
     func initialize() async {
         guard !isReady else { return }
-        // A library to move first: nothing opens until the person decides (`libraryMoveOffer`).
-        guard libraryMoveOffer?.holdsLibrary != true else { return }
+        // A library to move first: nothing opens until the person decides (`LibraryLaunchCheck.offer`).
+        guard launchCheck.offer?.holdsLibrary != true else { return }
         do {
             try await library.load()
             followLibraryLanguage()
             // What this Mac owed when it last quit, restarted, or crashed, before anything is queued now.
-            queue.loadOwedWork()
+            processor.queue.loadOwedWork()
             recordReplicaIdentity()
-            if let launchNotice { post([launchNotice]); self.launchNotice = nil }
+            if let launchNotice = launchCheck.notice { post([launchNotice]); launchCheck.notice = nil }
             // Installs from before the model system move into the store first, without downloading.
             let migration = await runtime.prepare()
             if !migration.failed.isEmpty {
@@ -917,14 +690,14 @@ final class AppState {
     /// elsewhere) takes neither the place being viewed nor the selection.
     @discardableResult func newMeeting(title: String = "Untitled Conversation", date: Date = Date(), selecting: Bool = true) -> UUID {
         var folder: UUID?, placement: LibraryPlacement?
-        switch place {
+        switch window.place {
         case .folder(let id) where selecting: folder = id
         case .section(.work) where selecting: placement = .work
         case .section(.personal) where selecting: placement = .personal
         default: break
         }
         let id = library.newMeeting(title: title, date: date, folderID: folder, placement: placement)
-        if selecting { selectedID = id }
+        if selecting { window.openID = id }
         return id
     }
 
@@ -936,7 +709,7 @@ final class AppState {
     func saveFolder(_ folder: LibraryFolder) { library.saveFolder(folder) }
     func removeFolder(_ id: UUID) {
         library.removeFolder(id)
-        if place == .folder(id) { place = .section(.all) }
+        if window.place == .folder(id) { window.place = .section(.all) }
     }
     func setTags(_ id: UUID, text: String) { library.setTags(id, text: text) }
 
@@ -990,7 +763,7 @@ final class AppState {
             var target = id
             if id == nil, let existing = try await library.existingMeeting(containingAudioAt: url) {
                 guard device != nil else {
-                    selectedID = existing.id
+                    window.openID = existing.id
                     notice = "This audio is already in \(existing.title)."
                     continue
                 }
@@ -1015,9 +788,9 @@ final class AppState {
                 sidecarURL: sidecar.url, duration: duration,
                 recorderClock: device.flatMap(DeviceRecordingStart.clock(of:)))).imported
             await sourceArrived(meetingID, before: meeting, imported: imported, url: url, device: device, plan: plan)
-            if device == nil { selectedID = meetingID }
+            if device == nil { window.openID = meetingID }
             meetingIDs.append(meetingID)
-            enqueue(meetingID)
+            processor.enqueue(meetingID)
         }
         return meetingIDs
     }
@@ -1074,109 +847,6 @@ final class AppState {
         InferenceProcessingEngine(inference: sources.inference ?? runtime, configuration: job.engineConfiguration)
     }
 
-    /// Runs one job. The engine turns recordings into transcripts, speakers, and a summary; this
-    /// Mac decides what to process, places new recordings first, applies each result as it
-    /// arrives (so a pause keeps finished recordings), and moves recordings between conversations.
-    func process(_ request: ProcessingJob) async throws {
-        let id = request.meetingID
-        guard library.isLoaded, meetings.contains(where: { $0.id == id }) else { return }
-        await flush()
-        // A recording the iPhone transcribed itself finds its conversation first, once (AppState+Phone.swift).
-        if await phoneTranscriptArrived(id, job: request) { return }
-        guard let initial = meetings.first(where: { $0.id == id }) else { return }
-        let options = request.preferences
-        let engine = processingEngine(for: request)
-        let terms = glossary.filter { $0.approved || $0.sourceMeetingIDs.contains(id) }.map(\.term)
-        update(id) { $0.status = .transcribing; $0.errorMessage = nil }
-        let activity = processingActivity
-        let progress: ProcessingProgressHandler = { value in activity.report(IntelligenceProgress(value.fraction, value.message, stage: value.stage)) }
-        let matching = options.matchSpeakersAcrossSources
-            ? SpeakerMatchingConfiguration(minimumSimilarity: options.speakerMatchThreshold, minimumMargin: options.speakerMatchMargin) : nil
-        if request.mode != .summaryOnly {
-            // A synced iPhone recording finds its conversation first; one that moved isn't processed here.
-            if await phoneRecordingsArrived(id, job: request) { return }
-            try await placePendingSources(id)
-        }
-        // An original with a derived track (the microphone before echo removal) is transcribed through it. A recording this
-        // conversation waits for that syncs in meanwhile (passes run while this Mac works) joins this job before fusion,
-        // placed as it would have been, so there's one fused transcript and one summary; after that point, one gets a job
-        // of its own.
-        if request.mode != .summaryOnly { phones.foldsArrivalsInto = id }
-        defer { if phones.foldsArrivalsInto == id { phones.foldsArrivalsInto = nil } }
-        var tracks = request.mode == .summaryOnly ? [] : initial.transcribableTracks
-        var taken = Set(tracks.map(\.id))
-        while !tracks.isEmpty {
-            for track in tracks {
-                try Task.checkCancellation()
-                let previous = meetings.first(where: { $0.id == id })?.transcripts.filter { $0.trackID == track.id }.max { $0.createdAt < $1.createdAt }
-                if request.mode == .newAudio && previous != nil { continue }
-                let url = try await library.audioURL(for: track, in: id)
-                let output = try await engine.transcribe(TrackProcessingInput(meetingID: id, track: track, audioURL: url, mode: request.mode,
-                                                                              previousTranscript: previous, vocabulary: terms), progress: progress)
-                post(output.notices)
-                update(id) { $0.apply(output, matching: matching, allowSameSource: previous != nil) }
-            }
-            tracks = []
-            guard request.mode != .summaryOnly, let current = meetings.first(where: { $0.id == id }),
-                  current.transcribableTracks.contains(where: { track in !taken.contains(track.id) && !current.transcripts.contains { $0.trackID == track.id } })
-            else { break }
-            // The job as it runs now: it may have taken on the request the recording came with (`pickUpRequests`).
-            if await phoneRecordingsArrived(id, job: runningJob.flatMap { $0.meetingID == id ? $0 : nil } ?? request) { return }
-            try await placePendingSources(id)
-            guard let placed = meetings.first(where: { $0.id == id }) else { return }
-            tracks = placed.transcribableTracks.filter { !taken.contains($0.id) }
-            taken.formUnion(tracks.map(\.id))
-        }
-        phones.foldsArrivalsInto = nil
-        try Task.checkCancellation()
-        await realign(id)
-        if await sourcesAfterTranscription(id) { return }
-        _ = try await readPhotos(id, engine: engine, progress: progress)
-        await labelSpeakers(before: id)
-        guard let before = meetings.first(where: { $0.id == id }) else { return }
-        let transcript = MeetingEvidence.transcript(before)
-        guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AppError.noSpeech }
-        // Transcript first: without the summary model here, and with the cloud not taking the summary at once, the job ends
-        // with the transcript, and the summary waits for the model or the person's Use the Cloud
-        // (AppState+SummaryPlacement.swift).
-        let job = runningJob.flatMap { $0.meetingID == id ? $0 : nil } ?? request
-        if await summaryWaitsForModelAtStep(job, in: before) {
-            try Task.checkCancellation()
-            leaveSummaryForModel(id, after: job)
-            return
-        }
-        update(id) { $0.status = .summarizing }
-        processingActivity.enter(.summarizing)
-        renewRunningClaim(force: false)
-        reportToPhones(id)
-        let template = template(for: request, meeting: before)
-        // Where it runs: here, or in the cloud if the person chooses during the countdown (AppState+SummaryPlacement.swift).
-        guard let placed = try await placedSummary(id, job: request, engine: engine, template: template, vocabulary: terms, progress: progress) else {
-            // Another device is summarizing it; its summary arrives through sync.
-            update(id) { $0.status = $0.summary == nil ? .imported : .ready }
-            return
-        }
-        try Task.checkCancellation()
-        let current = placed.meeting, generated = placed.output
-        // What was said, written, or chosen meanwhile is summarized again; a speaker's new name follows into this one.
-        let inputsChanged = meetings.first(where: { $0.id == id })?.summaryInputsChanged(since: current) ?? false
-        // A summary another device wrote meanwhile stays: one summary per conversation.
-        if meetings.first(where: { $0.id == id })?.summaryWrittenElsewhere(after: placed.started, excluding: library.thisDevice.id) == true {
-            update(id) { $0.status = .ready }
-            return
-        }
-        let summary = generated.summary.placed(placed.place, by: library.thisDevice, inputs: current.modelsBehindTranscript)
-        update(id) { meeting in
-            meeting.setSummary(summary, writtenFrom: current)
-            // Keep Auto selected so a new source or revised context can change the inferred kind.
-            meeting.status = .ready
-            meeting.errorMessage = generated.warnings.isEmpty ? nil : generated.warnings.joined(separator: "\n")
-        }
-        try await library.proposeTerms(generated.suggestedTerms, for: id)
-        await flush()
-        if inputsChanged { enqueue(id) }
-    }
-
     /// Applies the sync folder's changes, then queues new audio that arrived when the person processes synced audio on
     /// this Mac, and picks up requests. Passes run while this Mac processes, whatever the job (docs/iphone.md, "On the
     /// Mac"): they publish a request's claim heartbeat and progress, show whether another device took the request over,
@@ -1192,9 +862,9 @@ final class AppState {
             return
         }
         guard recordingID == nil, !isStartingRecording, !isStoppingRecording else { sync.deferUntilIdle(); return }
-        defer { runQueue() }
-        guard let applied = await library.synchronize(protecting: processingID ?? recordingID) else { return }
-        if selectedID == nil || !meetings.contains(where: { $0.id == selectedID }) { selectQuietly(meetings.sorted { $0.date > $1.date }.first?.id) }
+        defer { processor.runQueue() }
+        guard let applied = await library.synchronize(protecting: processor.queue.runningID ?? recordingID) else { return }
+        if window.openID == nil || !meetings.contains(where: { $0.id == window.openID }) { selectQuietly(meetings.sorted { $0.date > $1.date }.first?.id) }
         reconcileClaims()
         await syncedLibraryIdentity()
         await refreshSyncDevices()
@@ -1208,13 +878,13 @@ final class AppState {
             for id in applied.newAudio(in: meetings) where !isHeldElsewhere(id) && !movedPhoneRecordings.contains(id) {
                 guard processSyncedAudio || meetings.first(where: { $0.id == id })?.hasAwaitedRecordingToAdd() == true else { continue }
                 // The job running for it takes it before fusion: one fused transcript, one summary.
-                if id == processingID, phones.foldsArrivalsInto == id { continue }
-                enqueue(id)
+                if id == processor.queue.runningID, phones.foldsArrivalsInto == id { continue }
+                processor.enqueue(id)
             }
             // A recording an iPhone transcribed itself may belong to a conversation of this Mac's: checked once.
             for id in phoneTranscriptsToCheck() {
                 checkingPhoneTranscripts.insert(id)
-                enqueue(id)
+                processor.enqueue(id)
             }
         }
         pickUpRequests(start: false)
@@ -1279,7 +949,7 @@ final class AppState {
     /// Removes downloads one after another. A role that used a removed model moves to its preset's
     /// next installed choice, or keeps it and waits for a download; queued jobs keep what they froze.
     func removeModels(_ ids: [String]) {
-        guard processingID == nil, downloadingID == nil else { return }
+        guard processor.queue.runningID == nil, processor.queue.downloadingID == nil else { return }
         Task {
             for id in ids {
                 do {
@@ -1355,7 +1025,7 @@ final class AppState {
 
     /// Removes revisions updates replaced, once nothing selected, queued, running, or pinned uses them.
     func collectOldModelRevisions() {
-        let references = (processingQueue + [runningJob].compactMap { $0 }).flatMap(\.modelReferences)
+        let references = (processor.queue.jobs + [processor.queue.running].compactMap { $0 }).flatMap(\.modelReferences)
             + modelSelections.allKeys.map { ModelReference($0) }
         Task { await runtime.collectGarbage(protecting: references) }
     }
@@ -1463,7 +1133,7 @@ final class AppState {
 
     /// Recorded or processed now, or with a recording starting or stopping: it can't go to the Trash.
     func isBusy(_ id: UUID) -> Bool {
-        id == recordingID || id == processingID || isStartingRecording || isStoppingRecording
+        id == recordingID || id == processor.queue.runningID || isStartingRecording || isStoppingRecording
     }
 
     func trashMeeting(_ id: UUID, undoManager: UndoManager? = nil) { trashMeetings([id], undoManager: undoManager) }
@@ -1479,8 +1149,8 @@ final class AppState {
         let neighbour = Self.neighbour(of: Set(ids), in: listedMeetingIDs)
         let titles = ids.map { id in meetings.first { $0.id == id }?.title ?? "" }
         for id in ids {
-            queue.removeJobs(for: id)
-            queue.settle(id)
+            processor.queue.removeJobs(for: id)
+            processor.queue.settle(id)
         }
         Task { [weak self] in
             guard let self else { return }
@@ -1489,11 +1159,11 @@ final class AppState {
                 for id in ids {
                     guard library.isLoaded, try await library.moveToTrash(id, allowed: { !self.isBusy(id) }) else { continue }
                     trashed.append(id)
-                    if selectedID == id { selectQuietly(neighbour) }
+                    if window.openID == id { selectQuietly(neighbour) }
                 }
             } catch { report("Couldn’t Move to Trash", "Try again.", error) }
             guard !trashed.isEmpty else { return }
-            multiSelection.subtract(trashed)
+            window.selection.subtract(trashed)
             let title = trashed.count == 1 ? titles[ids.firstIndex(of: trashed[0]) ?? 0].trimmingCharacters(in: .whitespaces) : ""
             let message = trashed.count > 1 ? "Moved \(trashed.count) conversations to the Trash."
                 : title.isEmpty ? "Moved a conversation to the Trash." : "Moved “\(title)” to the Trash."
@@ -1528,8 +1198,8 @@ final class AppState {
             }
             record.ids = restored
             guard let first = restored.first else { return }
-            if !visibleMeetings.contains(where: { $0.id == first }) { place = .section(.all) }
-            selectedID = first
+            if !visibleMeetings.contains(where: { $0.id == first }) { window.place = .section(.all) }
+            window.openID = first
         }
     }
 
@@ -1544,75 +1214,13 @@ final class AppState {
     }
 
     /// The conversations the list shows now, in its order: the search's results while searching.
-    var listedMeetingIDs: [UUID] { isSearching ? searchHits.map(\.meetingID) : visibleMeetings.map(\.id) }
+    var listedMeetingIDs: [UUID] { window.isSearching ? searchHits.map(\.meetingID) : visibleMeetings.map(\.id) }
 
     /// The row to select when `removed` leave `order`: the first after them, else the last before them.
     nonisolated static func neighbour(of removed: Set<UUID>, in order: [UUID]) -> UUID? {
         guard let last = order.lastIndex(where: removed.contains) else { return nil }
         if let next = order[(last + 1)...].first(where: { !removed.contains($0) }) { return next }
         return order[..<last].last { !removed.contains($0) }
-    }
-}
-
-// MARK: - The page's sides
-
-extension AppState {
-    /// Whether `meeting`'s page shows Summary and Transcript side by side now: the detail column has room for two
-    /// pages, there's a transcript's page, and the person hasn't collapsed it to one.
-    func showsPageSpread(_ meeting: Meeting) -> Bool {
-        pageSpreadFits && pageSpreadChosen && hasTranscriptPage(meeting)
-    }
-
-    /// Where `meeting`'s Summary | Transcript is a pair of toggles rather than a switch: the column has room for two
-    /// pages, and there's a transcript's page to put beside the summary.
-    func pairsPages(_ meeting: Meeting) -> Bool {
-        pageSpreadFits && hasTranscriptPage(meeting)
-    }
-
-    /// Which sides of `meeting`'s page show, as the toolbar's switch and the View menu light them.
-    func pageSides(_ meeting: Meeting) -> PageSides {
-        PageSides(spread: showsPageSpread(meeting), mode: hasTranscriptPage(meeting) ? pageMode : .summary)
-    }
-
-    /// The toolbar's Summary or Transcript, or View › Summary (⌘1) or Transcript (⌘2), for `meeting` (`PageSides`).
-    func choosePage(_ side: PageMode, for meeting: Meeting) {
-        let next = PageSides(spread: pageSpreadChosen, mode: pageMode).choosing(side, pairs: pairsPages(meeting))
-        if next.spread != pageSpreadChosen { pageSpreadChosen = next.spread }
-        if next.mode != pageMode { pageMode = next.mode }
-    }
-
-    /// Brings a side of the page into view for something asked elsewhere (a passage, Your notes, Find): in a spread
-    /// it's already beside the other, so the page doesn't turn.
-    func turnPage(to side: PageMode) {
-        guard !(pageSpreadFits && pageSpreadChosen) else { return }
-        pageMode = side
-    }
-
-    /// Shows a passage in the transcript: it scrolls there and flashes it, the page turning to it first unless the
-    /// transcript is beside the summary.
-    func showPassage(_ segmentID: UUID) {
-        pageScrollTarget = segmentID
-        turnPage(to: .transcript)
-    }
-}
-
-/// The page's sides as the toolbar's Summary | Transcript chooses them where the window has room for two pages: a pair
-/// of toggles, both lit while both pages show. Choosing a lit one keeps that page alone; choosing the other puts it back
-/// beside it; one page always shows. Where there's room for one page it's a switch, and the spread waits for the room.
-struct PageSides: Equatable {
-    /// Both pages, side by side.
-    var spread: Bool
-    /// The page that shows alone.
-    var mode: PageMode
-
-    /// Whether `side` shows (is lit).
-    func shows(_ side: PageMode) -> Bool { spread || mode == side }
-
-    /// After `side` is chosen. `pairs`: the window has room for two pages (else it's a switch).
-    func choosing(_ side: PageMode, pairs: Bool) -> PageSides {
-        guard pairs else { return PageSides(spread: spread, mode: side) }
-        if spread { return PageSides(spread: false, mode: side) }
-        return side == mode ? self : PageSides(spread: true, mode: side)
     }
 }
 
@@ -1633,12 +1241,12 @@ extension AppState {
         guard !automatic || callPolicy != .off else { return }
         isStartingRecording = true
         defer { isStartingRecording = false }
-        let previousSelection = selectedID
+        let previousSelection = window.openID
         let into = existing.flatMap { id in canRecordInto(id) ? id : nil }
         let making = into == nil ? making.flatMap { new in meetings.contains { $0.id == new.id } ? nil : new } : nil
         let fromWindow = origin == .window
         let id = into ?? making?.id ?? newMeeting(title: Self.recordingTitle(title, at: Date()), selecting: fromWindow)
-        if fromWindow { selectedID = id }
+        if fromWindow { window.openID = id }
         prepareSourceCapture(id)
         let directory = storageURL.appendingPathComponent("Staging").appendingPathComponent(id.uuidString)
         captureDirectory = directory
@@ -1689,7 +1297,7 @@ extension AppState {
     private func discardUnrecorded(_ id: UUID, selecting previous: UUID?) async {
         guard let meeting = meetings.first(where: { $0.id == id }), meeting.tracks.isEmpty, meeting.highlights.isEmpty,
               meeting.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, meeting.visiblePhotos.isEmpty else { return }
-        if selectedID == id { selectQuietly(previous.flatMap { previous in meetings.contains { $0.id == previous } ? previous : nil }) }
+        if window.openID == id { selectQuietly(previous.flatMap { previous in meetings.contains { $0.id == previous } ? previous : nil }) }
         do { _ = try await library.moveToTrash(id) }
         catch { Self.log.notice("An empty conversation couldn't be removed (\(error.logCode, privacy: .public)): \(error.localizedDescription, privacy: .private)") }
     }
@@ -1722,7 +1330,7 @@ extension AppState {
             sourcesAfterCapture(id, startedAt: result.startedAt, captureID: result.id)
             // Added to the notice: it may already say why the recording stopped.
             if !result.warnings.isEmpty { post(result.warnings) }
-            enqueue(id)
+            processor.enqueue(id)
         } catch {
             update(id) { $0.status = .failed; $0.errorMessage = "Recording is preserved in the recovery folder: \(error.localizedDescription)" }
             report("Couldn’t Add the Recording", "It’s kept, and Daybook adds it the next time it opens.", error)
@@ -1792,7 +1400,7 @@ extension AppState {
                 try await ingestCapture(result, meetingID: id)
                 sources.recovered.append((id, result.startedAt, result.endedAt))
                 // Transcribed as a recording that stopped normally is, and said by name, with a way to it.
-                enqueue(id)
+                processor.enqueue(id)
                 let title = meetings.first { $0.id == id }?.title ?? ""
                 post(title.isEmpty ? "Recovered a recording." : "Recovered “\(title)”.",
                      action: LibraryNoticeAction(title: "Show") { [weak self] in self?.showConversation(id) })

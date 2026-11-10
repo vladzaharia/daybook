@@ -87,18 +87,18 @@ extension StatusOverviewInputs {
     @MainActor
     private static func queue(_ state: AppState) -> QueueStatusWords.Queue {
         var queue = QueueStatusWords.Queue()
-        if let id = state.processingID, state.meetings.contains(where: { $0.id == id }) {
+        if let id = state.processor.queue.runningID, state.meetings.contains(where: { $0.id == id }) {
             // The step the page and the claim say (`AppState.runningStage`), never guessed from the engine's words.
             queue.running = state.runningStage
-            queue.fraction = state.processingProgress.fraction
+            queue.fraction = state.processor.queue.activity.value.fraction
             switch state.placements[id]?.phase {
             case .countingDown(_, let until)?: queue.countdown = until
             case .started(.cloud(let model))?: queue.cloudModel = model.name
             default: break
             }
         }
-        queue.waiting = state.processingQueue.count
-        queue.awaitingModels = state.awaitingModels.count
+        queue.waiting = state.processor.queue.jobs.count
+        queue.awaitingModels = state.processor.queue.awaitingModels.count
         queue.models = state.modelDownloadState
         return queue
     }

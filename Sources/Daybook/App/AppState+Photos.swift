@@ -205,8 +205,8 @@ extension AppState {
     }
 
     func readNextPhotosWhenIdle() {
-        guard library.isLoaded, !library.isApplyingSync, processingTask == nil, processingQueue.isEmpty,
-              downloadingID == nil, readingPhotoID == nil else { return }
+        guard library.isLoaded, !library.isApplyingSync, processor.queue.task == nil, processor.queue.jobs.isEmpty,
+              processor.queue.downloadingID == nil, readingPhotoID == nil else { return }
         guard let id = pendingPhotoReadings.sorted(by: { $0.uuidString < $1.uuidString }).first(where: { $0 != recordingID }) else { return }
         pendingPhotoReadings.remove(id)
         guard let meeting = meetings.first(where: { $0.id == id }), meeting.visiblePhotos.contains(where: needsPhotoReading) else {
@@ -224,7 +224,7 @@ extension AppState {
                 photoReading = nil
                 // Stopped as Daybook quits (`cancelProcessing`): nothing else starts.
                 if !Task.isCancelled {
-                    runQueue()
+                    processor.runQueue()
                     startPendingDownload()
                     readNextPhotosWhenIdle()
                     listenToEarlierRecordingsWhenIdle()
@@ -232,7 +232,7 @@ extension AppState {
             }
             // The models run one at a time: while another reading or a download holds them, try again shortly.
             for attempt in 0..<6 {
-                guard processingID != id, recordingID != id else { return }
+                guard processor.queue.runningID != id, recordingID != id else { return }
                 do {
                     // Only what was just read moves; a summary is never emptied because reading couldn't run.
                     if try await readPhotos(id, engine: engine, progress: { _ in }) > 0 { placePhotosInSummary(id) }

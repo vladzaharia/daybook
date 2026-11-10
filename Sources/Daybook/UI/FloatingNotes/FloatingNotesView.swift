@@ -54,7 +54,7 @@ struct FloatingNotesRoot: View {
 
     var body: some View {
         FloatingNotesView(model: model, state: state, chrome: chrome, input: model.input)
-            .environment(\.readingScale, CGFloat(state.readingScale))
+            .environment(\.readingScale, CGFloat(state.window.readingScale))
             .modifier(FloatingNotesSurface())
             .modifier(DemoContrast())
     }
@@ -202,9 +202,9 @@ struct FloatingNotesView: View {
     private var shortcuts: some View {
         Group {
             Button("Open in Daybook") { context(compact: false, chips: []).open() }.keyboardShortcut("o")
-            Button("Make Text Bigger") { state.readingScale = ReadingScale.bigger(state.readingScale) }.keyboardShortcut("+")
-            Button("Make Text Smaller") { state.readingScale = ReadingScale.smaller(state.readingScale) }.keyboardShortcut("-")
-            Button("Actual Size") { state.readingScale = 1 }.keyboardShortcut("0")
+            Button("Make Text Bigger") { state.window.readingScale = ReadingScale.bigger(state.window.readingScale) }.keyboardShortcut("+")
+            Button("Make Text Smaller") { state.window.readingScale = ReadingScale.smaller(state.window.readingScale) }.keyboardShortcut("-")
+            Button("Actual Size") { state.window.readingScale = 1 }.keyboardShortcut("0")
             Button("Hide Floating Notes") { FloatingNotesWindow.shared.close() }.keyboardShortcut("w")
         }
         .frame(width: 0, height: 0)
@@ -235,8 +235,8 @@ struct PanelContext {
     @MainActor
     func openConversation(_ id: UUID?) {
         if let id {
-            state.place = .section(.all)
-            state.selectedID = id
+            state.window.place = .section(.all)
+            state.window.openID = id
         }
         Self.bringLibraryForward(showLibrary)
     }
@@ -361,7 +361,7 @@ struct ChipMenuItems: View {
                 Button("Show \(session.device.name)") { context.showDevice(id) }
             }
         case .processing:
-            if let meeting = context.meeting, state.awaitingModels.contains(meeting.id) {
+            if let meeting = context.meeting, state.processor.queue.awaitingModels.contains(meeting.id) {
                 // Waiting for models: the download comes first.
                 ModelDownloadMenuItems(state: state)
             }
@@ -371,32 +371,32 @@ struct ChipMenuItems: View {
                     ForEach(planner.actions, id: \.self) { action in
                         Button(action.title) { state.chooseSummaryPlacement(action, for: meeting.id) }
                     }
-                } else if state.processingID == meeting.id {
+                } else if state.processor.queue.runningID == meeting.id {
                     Button("Pause Transcription") { state.pauseProcessing(meeting.id) }
-                } else if state.pausedIDs.contains(meeting.id) || (meeting.status == .failed && !isNoSpeech(meeting)) {
+                } else if state.processor.queue.paused.contains(meeting.id) || (meeting.status == .failed && !isNoSpeech(meeting)) {
                     Button(meeting.status == .failed ? "Try Again" : "Resume Transcription") {
-                        state.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting))
+                        state.processor.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting))
                     }
                 }
                 Button("Open in Daybook") { context.open() }
             }
-            if let meeting = context.meeting, state.awaitingModels.contains(meeting.id) {
+            if let meeting = context.meeting, state.processor.queue.awaitingModels.contains(meeting.id) {
                 Button("Choose Models…") { openSettingsPane(.models) }
             }
         case .queue:
-            if state.processingID == nil, !state.awaitingModels.isEmpty || state.modelDownloadState != nil {
+            if state.processor.queue.runningID == nil, !state.processor.queue.awaitingModels.isEmpty || state.modelDownloadState != nil {
                 ModelDownloadMenuItems(state: state)
             }
-            if let id = state.processingID, let planner = state.placements[id], !planner.actions.isEmpty {
+            if let id = state.processor.queue.runningID, let planner = state.placements[id], !planner.actions.isEmpty {
                 ForEach(planner.actions, id: \.self) { action in
                     Button(action.title) { state.chooseSummaryPlacement(action, for: id) }
                 }
                 Button("Open in Daybook") { context.openConversation(id) }
-            } else if let id = state.processingID {
+            } else if let id = state.processor.queue.runningID {
                 Button("Pause Transcription") { state.pauseProcessing(id) }
                 Button("Open in Daybook") { context.openConversation(id) }
             }
-            if !state.awaitingModels.isEmpty {
+            if !state.processor.queue.awaitingModels.isEmpty {
                 Button("Choose Models…") { openSettingsPane(.models) }
             }
         case .sync:

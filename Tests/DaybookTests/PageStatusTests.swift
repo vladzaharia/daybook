@@ -21,10 +21,10 @@ final class PageStatusTests: XCTestCase {
         let state = AppState(libraryURL: makeTemporaryFolder("DaybookPageStatus"), defaults: defaults)
         await state.initialize()
         state.processSyncedAudio = false
-        state.processingTask = Task { try? await Task.sleep(for: .seconds(3600)) }
+        state.processor.queue.task = Task { try? await Task.sleep(for: .seconds(3600)) }
         state.cloud = CloudSetup.demo(providers: [], defaults: defaults)
         addTeardownBlock { @MainActor in
-            state.processingTask?.cancel()
+            state.processor.queue.task?.cancel()
             await state.flush()
         }
         await ReadingDemo.seed(state.library, as: .mac) { _, _, _, _ in }?.value
@@ -57,10 +57,10 @@ final class PageStatusTests: XCTestCase {
         let arriving = state.transcriptionModel
         let model = try XCTUnwrap(state.modelCatalog.model(arriving))
         state.installedModels.remove(model.key)
-        state.downloadingID = arriving
-        state.downloadProgress = IntelligenceProgress(0.5, "Downloading")
-        state.awaitingModels = [research]
-        state.processingQueue = [state.makeJob(meetingID: northwind, mode: .newAudio)]
+        state.processor.queue.downloadingID = arriving
+        state.processor.queue.downloadActivity.set(IntelligenceProgress(0.5, "Downloading"))
+        state.processor.queue.awaitingModels = [research]
+        state.processor.queue.jobs = [state.makeJob(meetingID: northwind, mode: .newAudio)]
 
         let waiting = try page(research, state)
         XCTAssertEqual(waiting?.title, "Downloading models · 50%")
@@ -71,9 +71,9 @@ final class PageStatusTests: XCTestCase {
         XCTAssertEqual(queued?.actions, [.cancel])
 
         // Once it's here, the queue goes on: the one in line waits for nothing.
-        state.downloadingID = nil
+        state.processor.queue.downloadingID = nil
         state.installedModels.insert(model.key)
-        state.awaitingModels = []
+        state.processor.queue.awaitingModels = []
         XCTAssertEqual(try page(northwind, state)?.title, "Waiting to transcribe")
         XCTAssertEqual(try page(research, state)?.kind, .box(.accent), "not transcribed yet")
     }
@@ -93,13 +93,13 @@ final class PageStatusTests: XCTestCase {
             state.update(id) { $0.status = .summarizing }
             state.placements.begin(id)
         }
-        state.processingID = personal
-        state.processingProgress = IntelligenceProgress(0, "Summarizing", stage: .summarizing)
+        state.processor.queue.runningID = personal
+        state.processor.queue.activity.set(IntelligenceProgress(0, "Summarizing", stage: .summarizing))
         let started = try XCTUnwrap(state.placements[personal]?.deadline).addingTimeInterval(-30)
         let countdown = try page(personal, state, now: started)
         XCTAssertEqual(countdown?.title, "Summarizing on this Mac in 30 s")
         XCTAssertEqual(countdown?.actions, [.placement(.useCloud), .placement(.startNow)])
-        state.processingID = work
+        state.processor.queue.runningID = work
         let sent = try page(work, state)
         XCTAssertEqual(sent?.title, "Summarizing with Claude Sonnet 5.5")
         XCTAssertEqual(sent?.actions, [.stopSummary])
@@ -107,7 +107,7 @@ final class PageStatusTests: XCTestCase {
             state.placements.end(id)
             state.update(id) { $0.status = .ready }
         }
-        state.processingID = nil
+        state.processor.queue.runningID = nil
 
         // Without its summary model, a Personal transcript waits for one, with Use the Cloud; a Work one would go.
         state.installedModels.remove(state.summaryModel)

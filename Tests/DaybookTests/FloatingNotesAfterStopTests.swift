@@ -83,7 +83,7 @@ final class FloatingNotesAfterStopTests: XCTestCase {
         XCTAssertNotNil(state.unexpectedStops[id])
 
         // As the inspector's Record on This Mac does, once the conversation's processing lets go of it.
-        if state.processingID == id { state.pauseProcessing(id) } else if state.queuedIDs.contains(id) { state.cancelQueued(id) }
+        if state.processor.queue.runningID == id { state.pauseProcessing(id) } else if state.processor.queue.queuedIDs.contains(id) { state.cancelQueued(id) }
         let staging = state.storageURL.appendingPathComponent("Staging").appendingPathComponent(id.uuidString)
         try await waitUntil("the conversation to be free") {
             state.canRecordInto(id) && !["capture-session.json", "microphone.caf"].contains {
@@ -158,11 +158,11 @@ final class FloatingNotesAfterStopTests: XCTestCase {
         XCTAssertEqual(state.recordMore(after: id), .keepRecording, "every Stop has its own two minutes")
 
         // Past the moment, Record makes a new conversation for the next call.
-        let selected = state.selectedID
+        let selected = state.window.openID
         await state.record(.record, after: id)
         let next = try XCTUnwrap(state.recordingID)
         XCTAssertNotEqual(next, id)
-        XCTAssertEqual(state.selectedID, selected, "started from the panel, the window is left as it was")
+        XCTAssertEqual(state.window.openID, selected, "started from the panel, the window is left as it was")
         XCTAssertEqual(state.meetings.count, 2)
         speak(microphone)
         await state.stopRecording()
@@ -225,9 +225,9 @@ final class FloatingNotesAfterStopTests: XCTestCase {
     func testBehaviorARecordingStartedElsewhereLandsInAllAndLeavesTheWindowAlone() async throws {
         let microphone = FakeCaptureSource(method: "microphone")
         let state = await state(microphone)
-        state.place = .section(.personal)
+        state.window.place = .section(.personal)
         let reading = state.newMeeting(title: "Prep notes")
-        XCTAssertEqual(state.selectedID, reading)
+        XCTAssertEqual(state.window.openID, reading)
 
         await state.startRecording(title: "Zoom Meeting", automatic: true, from: .elsewhere)
         let call = try XCTUnwrap(state.recordingID)
@@ -235,8 +235,8 @@ final class FloatingNotesAfterStopTests: XCTestCase {
         XCTAssertNil(recorded.placement, "not filed into Personal because the window happened to show it")
         XCTAssertNil(recorded.folderID)
         XCTAssertTrue(LibrarySection.all.contains(recorded))
-        XCTAssertEqual(state.selectedID, reading, "the page the person was reading stays")
-        XCTAssertEqual(state.place, .section(.personal))
+        XCTAssertEqual(state.window.openID, reading, "the page the person was reading stays")
+        XCTAssertEqual(state.window.place, .section(.personal))
         speak(microphone)
         await state.stopRecording()
         try await waitUntil("the capture to finish") { state.recordingID == nil }
@@ -244,11 +244,11 @@ final class FloatingNotesAfterStopTests: XCTestCase {
         // The window's own Record files into the place it shows and opens the recording, as before.
         state.createFolder(named: "Hiring", moving: [])
         let folder = try XCTUnwrap(state.folders.first { $0.name == "Hiring" })
-        state.place = .folder(folder.id)
+        state.window.place = .folder(folder.id)
         await state.startRecording()
         let own = try XCTUnwrap(state.recordingID)
         XCTAssertEqual(state.meetings.first { $0.id == own }?.folderID, folder.id)
-        XCTAssertEqual(state.selectedID, own)
+        XCTAssertEqual(state.window.openID, own)
         speak(microphone)
         await state.stopRecording()
         try await waitUntil("the second capture to finish") { state.recordingID == nil }

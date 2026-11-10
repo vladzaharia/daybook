@@ -18,7 +18,7 @@ extension AppState {
     /// Nothing else is running: no job, nothing queued, no download, photo reading, or speakers being
     /// given voices, no sync being applied, and nothing being recorded.
     var mayListenToEarlierRecordings: Bool {
-        library.isLoaded && !library.isApplyingSync && processingTask == nil && processingQueue.isEmpty && downloadingID == nil
+        library.isLoaded && !library.isApplyingSync && processor.queue.task == nil && processor.queue.jobs.isEmpty && processor.queue.downloadingID == nil
             && readingPhotoID == nil && voicingID == nil && recordingID == nil && !isStartingRecording && !isStoppingRecording
     }
 
@@ -48,7 +48,7 @@ extension AppState {
     /// The newest conversation's recording that has no analysis and wasn't tried since Daybook opened.
     /// Paused conversations wait for the person.
     func nextRecordingToListenTo() -> (meetingID: UUID, track: RecordingTrack)? {
-        for meeting in meetings.sorted(by: { $0.date > $1.date }) where !pausedIDs.contains(meeting.id) {
+        for meeting in meetings.sorted(by: { $0.date > $1.date }) where !processor.queue.paused.contains(meeting.id) {
             if let track = meeting.recordingsAwaitingBackgroundAudio.first(where: { !listenedRecordings.contains($0.id) }) {
                 return (meeting.id, track)
             }
@@ -68,7 +68,7 @@ extension AppState {
         catch { analysis = nil }
         guard !Task.isCancelled else { return }
         guard let analysis else { listenedRecordings.insert(track.id); return }
-        guard !library.isApplyingSync, processingID != id, !queuedIDs.contains(id), recordingID != id else { return }
+        guard !library.isApplyingSync, processor.queue.runningID != id, !processor.queue.queuedIDs.contains(id), recordingID != id else { return }
         listenedRecordings.insert(track.id)
         await library.addBackgroundAudio(analysis, toTrack: track.id, in: id)
     }

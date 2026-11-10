@@ -196,17 +196,17 @@ final class AppStateTests: XCTestCase {
         let ids = await threeConversations(state)
         XCTAssertEqual(state.listedMeetingIDs, ids)
         let undo = undoManager()
-        state.selectedID = ids[1]
+        state.window.openID = ids[1]
         state.trashMeetings([ids[1]], undoManager: undo)
         try await waitUntil("it to go to the Trash") { !state.meetings.contains { $0.id == ids[1] } }
-        XCTAssertEqual(state.selectedID, ids[2], "The row after it, not the top of the list")
+        XCTAssertEqual(state.window.openID, ids[2], "The row after it, not the top of the list")
         XCTAssertEqual(state.noticeLines, ["Moved “Tuesday” to the Trash."])
         XCTAssertEqual(state.shownNoticeAction?.title, "Undo")
         XCTAssertEqual(undo.undoActionName, "Move to Trash")
 
         undo.undo()
         try await waitUntil("it to come back") { state.meetings.contains { $0.id == ids[1] } }
-        XCTAssertEqual(state.selectedID, ids[1], "Back, and selected")
+        XCTAssertEqual(state.window.openID, ids[1], "Back, and selected")
         XCTAssertNil(state.notice, "The notice's line goes with what it said")
         XCTAssertTrue(undo.canRedo)
         XCTAssertEqual(undo.redoActionName, "Move to Trash")
@@ -220,10 +220,10 @@ final class AppStateTests: XCTestCase {
         let (state, _, _) = try await makeState()
         let ids = await threeConversations(state)
         let undo = undoManager()
-        state.selectedID = ids[2]
+        state.window.openID = ids[2]
         state.trashMeetings([ids[1], ids[2]], undoManager: undo)
         try await waitUntil("both to go") { state.meetings.count == 1 }
-        XCTAssertEqual(state.selectedID, ids[0], "The last rows went: the one before them")
+        XCTAssertEqual(state.window.openID, ids[0], "The last rows went: the one before them")
         XCTAssertEqual(state.noticeLines, ["Moved 2 conversations to the Trash."])
         state.performNoticeAction()
         try await waitUntil("both to come back") { state.meetings.count == 3 }
@@ -242,13 +242,13 @@ final class AppStateTests: XCTestCase {
         }
         await state.flush()
         XCTAssertEqual(state.listedMeetingIDs, ids)
-        state.selectedID = ids[1]
+        state.window.openID = ids[1]
         let list = ListSelectionFollower()
         list.follow(state)
         state.trashMeetings([ids[1], ids[2]], undoManager: nil)
         try await waitUntil("both to go") { state.meetings.count == 3 }
         try await waitUntil("the list to look") { list.looks > 0 }
-        XCTAssertEqual(state.selectedID, ids[3], "The row after them, not the top of the list")
+        XCTAssertEqual(state.window.openID, ids[3], "The row after them, not the top of the list")
         list.stop()
         await state.flush()
     }
@@ -298,7 +298,7 @@ final class AppStateTests: XCTestCase {
         let earlier = state.newMeeting(title: "Earlier")
         await state.startRecording()
         try await waitUntil("the empty conversation to go") { state.meetings.map(\.id) == [earlier] }
-        XCTAssertEqual(state.selectedID, earlier, "The selection goes back")
+        XCTAssertEqual(state.window.openID, earlier, "The selection goes back")
         XCTAssertEqual(state.shownProblem?.title, "Couldn’t Start Recording")
         XCTAssertEqual(state.shownProblem?.privacyPane, .microphone, "The alert offers Open System Settings")
         XCTAssertNil(state.recordingID)
@@ -356,9 +356,9 @@ final class AppStateTests: XCTestCase {
         let (state, _, _) = try await makeState()
         let shown = state.newMeeting(title: "Shown")
         XCTAssertEqual(state.floatingNotesFocus, shown)
-        state.multiSelection = [shown, state.newMeeting(title: "Other", selecting: false)]
+        state.window.selection = [shown, state.newMeeting(title: "Other", selecting: false)]
         XCTAssertNil(state.floatingNotesFocus, "Several selected: its home")
-        state.multiSelection = []
+        state.window.selection = []
         let recording = state.newMeeting(title: "Recording", selecting: false)
         state.recordingID = recording
         XCTAssertEqual(state.floatingNotesFocus, recording)
@@ -435,9 +435,9 @@ private final class ListSelectionFollower {
                     guard let self, let state, self.following else { return }
                     self.looks += 1
                     let visible = state.visibleMeetings
-                    if state.isReady, !state.isSearching, !state.place.isDevice, !visible.contains(where: { $0.id == state.selectedID }) {
-                        state.multiSelection = []
-                        state.selectedID = visible.first?.id
+                    if state.isReady, !state.window.isSearching, !state.window.place.isDevice, !visible.contains(where: { $0.id == state.window.openID }) {
+                        state.window.selection = []
+                        state.window.openID = visible.first?.id
                     }
                     self.observe(state)
                 }

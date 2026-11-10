@@ -341,8 +341,8 @@ struct MultiSourceRig {
         state.installedModels = []
         defer {
             state.installedModels = installed
-            state.awaitingModels.remove(id)
-            state.queue.settle(id)
+            state.processor.queue.awaitingModels.remove(id)
+            state.processor.queue.settle(id)
         }
         try await work()
     }
@@ -386,7 +386,7 @@ struct MultiSourceRig {
 
     /// Waits until the processing queue is idle.
     func processed() async throws {
-        try await waitUntil("processing to finish") { state.processingID == nil && state.queuedIDs.isEmpty }
+        try await waitUntil("processing to finish") { state.processor.queue.runningID == nil && state.processor.queue.queuedIDs.isEmpty }
         await state.flush()
     }
 
@@ -394,10 +394,10 @@ struct MultiSourceRig {
     /// be before their work starts): their requests answered, their status settled, and the queue idle.
     func processed(_ ids: UUID..., timeout: TimeInterval = 20) async throws {
         try await waitUntil("processing to finish", timeout: timeout) {
-            state.processingID == nil && state.queuedIDs.isEmpty && ids.allSatisfy { id in
+            state.processor.queue.runningID == nil && state.processor.queue.queuedIDs.isEmpty && ids.allSatisfy { id in
                 guard let meeting = meeting(id) else { return true }
-                let settled = meeting.status == .ready || meeting.status == .failed || state.awaitingModels.contains(id)
-                    || state.queue.awaitingSummaryModel.contains(id)
+                let settled = meeting.status == .ready || meeting.status == .failed || state.processor.queue.awaitingModels.contains(id)
+                    || state.processor.queue.awaitingSummaryModel.contains(id)
                 return settled && (meeting.processingRequests ?? []).allSatisfy { $0.outcome != nil }
             }
         }

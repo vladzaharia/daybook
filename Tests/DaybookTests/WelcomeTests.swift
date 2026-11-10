@@ -46,12 +46,12 @@ final class WelcomeTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(50))
         XCTAssertNil(answer.value)
         let folder = makeTemporaryFolder("DaybookWelcomeMove")
-        state.libraryMoveOffer = .moveIntoContainer(SandboxMigration.MovePlan(legacy: folder, library: folder, legacyExists: true))
+        state.launchCheck.offer = .moveIntoContainer(SandboxMigration.MovePlan(legacy: folder, library: folder, legacyExists: true))
         await waiting.value
         XCTAssertEqual(answer.value, false)
         XCTAssertNil(state.recordingID)
         // An old copy left behind is only a warning: it doesn't hold the library, so Record waits on.
-        state.libraryMoveOffer = .oldCopyRemains(folder)
+        state.launchCheck.offer = .oldCopyRemains(folder)
         let (second, waitingAgain) = waitForLibrary(state)
         try await Task.sleep(for: .milliseconds(50))
         XCTAssertNil(second.value)

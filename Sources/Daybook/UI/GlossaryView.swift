@@ -10,8 +10,8 @@ struct GlossaryView: View {
 
     var body: some View {
         VocabularyScreen(library: state.library) { id in
-            state.place = .section(.all)
-            state.selectedID = id
+            state.window.place = .section(.all)
+            state.window.openID = id
             openWindow(id: WindowID.library)
         }
     }

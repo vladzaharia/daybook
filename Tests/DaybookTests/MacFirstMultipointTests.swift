@@ -49,7 +49,7 @@ final class MacFirstMultipointTests: XCTestCase {
 
         // Processing starts at once, on this Mac's audio, and says what it's waiting for.
         try rig.inference.block(macAudio)
-        state.enqueue(id)
+        state.processor.enqueue(id)
         try await waitUntil("this Mac's audio to be transcribing") { rig.inference.isWaiting(on: macAudio) }
         guard case .processing(let working) = state.processingStatus(for: try XCTUnwrap(rig.meeting(id))) else {
             return XCTFail("processing")
@@ -91,7 +91,7 @@ final class MacFirstMultipointTests: XCTestCase {
         await phone.synchronize()
         await state.synchronizeLibrary()
         try await waitUntil("the phone's recording to be added and summarized", timeout: 20) {
-            rig.meeting(id)?.summary?.overview == "Summary 2" && state.processingID == nil && state.queuedIDs.isEmpty
+            rig.meeting(id)?.summary?.overview == "Summary 2" && state.processor.queue.runningID == nil && state.processor.queue.queuedIDs.isEmpty
         }
         meeting = try XCTUnwrap(rig.meeting(id))
         XCTAssertEqual(state.processingStatus(for: meeting), .done)
@@ -143,18 +143,18 @@ final class MacFirstMultipointTests: XCTestCase {
 
         // This Mac starts on its own audio; meanwhile the phone files its recording and a pass brings it here.
         try rig.inference.block(macAudio)
-        state.enqueue(id)
+        state.processor.enqueue(id)
         try await waitUntil("this Mac's audio to be transcribing") { rig.inference.isWaiting(on: macAudio) }
         try await phone.file(phoneAudio, recordingID: recordingID, into: id, start: phoneStart, duration: 0.5)
         await phone.synchronize()
         await state.synchronizeLibrary()
         XCTAssertEqual(rig.meeting(id)?.tracks.count, 2, "the pass ran while this Mac worked")
-        XCTAssertEqual(state.processingID, id)
-        XCTAssertFalse(state.queuedIDs.contains(id), "no second job: the running one takes it before fusion")
+        XCTAssertEqual(state.processor.queue.runningID, id)
+        XCTAssertFalse(state.processor.queue.queuedIDs.contains(id), "no second job: the running one takes it before fusion")
 
         try rig.inference.unblock(macAudio)
         try await waitUntil("one job to add it and summarize", timeout: 20) {
-            rig.meeting(id)?.summary != nil && state.processingID == nil && state.queuedIDs.isEmpty
+            rig.meeting(id)?.summary != nil && state.processor.queue.runningID == nil && state.processor.queue.queuedIDs.isEmpty
         }
         let meeting = try XCTUnwrap(rig.meeting(id))
         XCTAssertEqual(meeting.summary?.overview, "Summary 1", "one summary, from both recordings")
@@ -193,7 +193,7 @@ final class MacFirstMultipointTests: XCTestCase {
         await rig.stopRecording()
         await state.sources.recorders.settle()
         try await rig.storeMacRecording(id, audio: macAudio, start: macStart)
-        state.enqueue(id)
+        state.processor.enqueue(id)
         try await rig.processed(id)
 
         // Waiting for the phone's audio, in the words every place uses.
@@ -214,9 +214,9 @@ final class MacFirstMultipointTests: XCTestCase {
         await state.synchronizeLibrary()
 
         // The awaited one is queued here at once, as with the setting on, and the summary written again from both.
-        XCTAssertTrue(state.queuedIDs.contains(id) || state.processingID == id, "Not left waiting for another Mac")
+        XCTAssertTrue(state.processor.queue.queuedIDs.contains(id) || state.processor.queue.runningID == id, "Not left waiting for another Mac")
         try await waitUntil("the phone's recording to be added and summarized", timeout: 20) {
-            rig.meeting(id)?.summary?.overview == "Summary 2" && state.processingID == nil && state.queuedIDs.isEmpty
+            rig.meeting(id)?.summary?.overview == "Summary 2" && state.processor.queue.runningID == nil && state.processor.queue.queuedIDs.isEmpty
         }
         meeting = try XCTUnwrap(rig.meeting(id))
         XCTAssertEqual(state.processingStatus(for: meeting), .done)

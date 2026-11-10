@@ -15,8 +15,9 @@ extension AppState {
     func wireCaptions() {
         let settings = captionSettings
         liveModels.voices.metadata = { [weak self] in self?.library.metadata ?? LibraryMetadata() }
-        captions.makeCaptioner = MacCaptioners.recordingFactory(settings: settings, live: liveModels)
-        devices.environment.liveCaptions.makeCaptioner = MacCaptioners.recorderFactory(settings: settings, live: liveModels)
+        captions.makeCaptioner = MacCaptioners.recordingFactory(settings: settings, live: liveModels, makesCaptioners: environment.makesCaptioners)
+        devices.environment.liveCaptions.makeCaptioner = MacCaptioners.recorderFactory(settings: settings, live: liveModels,
+                                                                                         makesCaptioners: environment.makesCaptioners)
         devices.environment.liveCaptions.locale = { [weak settings] in settings?.locale ?? .current }
         captions.follow(recorder)
         // Recorders recording along: their live audio is captioned here and joins this Mac's captions.

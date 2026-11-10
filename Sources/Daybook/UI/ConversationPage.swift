@@ -77,10 +77,10 @@ private struct MacReadingContext: ViewModifier {
         content.readingContext(ReadingContext(
             thisDevice: AppState.thisDeviceWords, macPlace: "This Mac", audio: { _ in .local }, player: nil,
             // The window widens for the inspector where it has no room, as for any other ask of it.
-            navigator: ReadingNavigator(open: { state.selectedID = $0 },
+            navigator: ReadingNavigator(open: { state.window.openID = $0 },
                                         showInfo: { _ in state.showInspector() },
-                                        search: { state.search = $0 },
-                                        showTranscript: { _, _ in state.turnPage(to: .transcript) })))
+                                        search: { state.window.searchText = $0 },
+                                        showTranscript: { _, _ in state.window.turnPage(to: .transcript) })))
     }
 }
 
@@ -103,8 +103,8 @@ struct PageHeader: View {
         MarginRow {
             ConversationHeader(meeting: meeting, library: state.library,
                                recording: state.recordingID == meeting.id ? "Recording" : nil,
-                               focusTitle: state.titleFocusRequest == meeting.id,
-                               titleFocused: { state.titleFocusRequest = nil }) {
+                               focusTitle: state.window.titleFocusRequest == meeting.id,
+                               titleFocused: { state.window.titleFocusRequest = nil }) {
                 if let duration = meeting.duration {
                     ConversationPlayPill(duration: duration, player: pillPlayer, unavailable: state.isRecording ? "Playback is off while recording" : nil)
                 }
@@ -206,10 +206,10 @@ extension ConversationStatusPresentation.Inputs {
         // What the choices still need to download, and how this Mac's downloads stand ("Downloading models · 40%").
         var inputs = Self(words: state.statusWords, local: state.localCapabilities)
         // The cloud at work on its job: "Summarizing with Claude Sonnet 5.5 · 35%", with Stop.
-        inputs.placement = .queue(state.placements[meeting.id], running: state.processingID == meeting.id)
-        inputs.runningTitle = state.processingID.flatMap { id in state.meetings.first { $0.id == id }?.title }
-        inputs.queueWaitsForDownload = state.downloadingID != nil && state.processingID == nil
-        inputs.queuedMode = state.processingQueue.first { $0.meetingID == meeting.id }?.mode
+        inputs.placement = .queue(state.placements[meeting.id], running: state.processor.queue.runningID == meeting.id)
+        inputs.runningTitle = state.processor.queue.runningID.flatMap { id in state.meetings.first { $0.id == id }?.title }
+        inputs.queueWaitsForDownload = state.processor.queue.downloadingID != nil && state.processor.queue.runningID == nil
+        inputs.queuedMode = state.processor.queue.jobs.first { $0.meetingID == meeting.id }?.mode
         // Transcript first: "Waiting to summarize after the download · 38%", with Use the Cloud when it's on offer.
         var summaryMayWait = status == .transcribed
         if case .requested(.device) = status { summaryMayWait = true }

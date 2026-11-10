@@ -221,7 +221,7 @@ extension MultiSourceRig {
     func waitingConversation(_ title: String, audio: URL, script: [(Double, String)]) async throws -> UUID {
         try inference.script(audio, script)
         let id = try await macConversation(title, at: Date().addingTimeInterval(-120), seconds: 0.5, audio: audio)
-        state.awaitingModels.remove(id)
+        state.processor.queue.awaitingModels.remove(id)
         return id
     }
 }

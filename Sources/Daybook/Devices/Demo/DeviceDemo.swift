@@ -376,7 +376,7 @@ enum DeviceDemo {
         HandoffDemo.apply(to: state)
         let wantsOther = LaunchOptions.value(after: "--device") == "other"
         if let session = wantsOther ? state.devices.session(otherID) : (state.devices.session(soundcoreID) ?? state.devices.sessions.first) {
-            state.place = .device(session.id)
+            state.window.place = .device(session.id)
         }
         switch scenario {
         case .setup: state.addDeviceRequest = AddDeviceRequest()

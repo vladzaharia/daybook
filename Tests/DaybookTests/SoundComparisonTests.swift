@@ -94,8 +94,8 @@ final class SoundComparisonTests: XCTestCase {
         try await rig.state.importFiles([try rig.audio("recorder.wav", frequency: 523)], source: .soundcore, attachTo: id)
         try await rig.state.importFiles([try rig.audio("phone.wav", frequency: 330)], source: .imported, attachTo: id)
         rig.state.installedModels = installed
-        rig.state.awaitingModels.remove(id)
-        rig.state.queue.settle(id)
+        rig.state.processor.queue.awaitingModels.remove(id)
+        rig.state.processor.queue.settle(id)
         let tracks = try XCTUnwrap(rig.meeting(id)?.tracks)
         let (microphone, recorder, phone) = (tracks[0], tracks[1], tracks[2])
         rig.state.update(id) { meeting in

@@ -85,7 +85,7 @@ struct ModelSettings: View {
                                           showingAcknowledgements: $showingAcknowledgements, showingVoiceMatching: $showingVoiceMatching)
         }
         .onChange(of: state.installedModels) { _, _ in Task { await manager.refresh() } }
-        .onChange(of: state.downloadingID) { _, _ in Task { await manager.refresh() } }
+        .onChange(of: state.processor.queue.downloadingID) { _, _ in Task { await manager.refresh() } }
         .onChange(of: state.modelCatalog.models.count) { _, _ in Task { await manager.refresh() } }
         .sheet(isPresented: $showingVoiceMatching) { VoiceMatchingSheet(state: state) }
         .sheet(item: $details) { request in ModelDetailsSheet(state: state, manager: manager, key: request.key) }

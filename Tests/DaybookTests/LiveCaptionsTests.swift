@@ -413,16 +413,16 @@ final class LiveCaptionsTests: XCTestCase {
         await state.captions.readSaved()
         XCTAssertEqual(state.savedCaptions(for: meeting), captions)
         XCTAssertTrue(state.hasTranscriptPage(meeting))
-        state.search = "venue"
+        state.window.searchText = "venue"
         XCTAssertTrue(state.searchHits.isEmpty, "nothing else in the conversation says it")
-        let found = await LibraryCaptionSearch.hits(in: state.meetings, query: state.search, excluding: Set(state.searchHits.map(\.meetingID)),
+        let found = await LibraryCaptionSearch.hits(in: state.meetings, query: state.window.searchText, excluding: Set(state.searchHits.map(\.meetingID)),
                                                     libraryRoot: state.library.rootURL)
         XCTAssertEqual(found.map(\.meeting.id), [id], "search finds them")
-        state.search = "agreed on the date"
+        state.window.searchText = "agreed on the date"
         let again = await LibraryCaptionSearch.hits(in: state.meetings, query: "venue", excluding: Set(state.searchHits.map(\.meetingID)),
                                                     libraryRoot: state.library.rootURL)
         XCTAssertTrue(again.isEmpty, "a conversation the search found is listed once")
-        state.search = ""
+        state.window.searchText = ""
         state.recordingID = id
         XCTAssertNil(state.savedCaptions(for: meeting), "while this Mac records it, the page shows them live")
         state.recordingID = nil
@@ -517,11 +517,12 @@ final class LiveCaptionsTests: XCTestCase {
         // macOS 15 has no SpeechAnalyzer: the system makes no captioner, whatever the setting.
         XCTAssertNil(MacCaptioners.speechCaptioner(for: .microphone, allowsDownload: false, supported: false))
         XCTAssertNil(MacCaptioners.speechCaptioner(for: .call, allowsDownload: false, supported: false))
-        // Tests never reach the Speech framework, and captions turned off make none either.
-        XCTAssertNil(MacCaptioners.recordingFactory(settings: settings)(.microphone))
+        // Tests never reach the Speech framework (`MacEnvironment.inert`), and captions turned off make none either.
+        XCTAssertFalse(MacEnvironment.inert.makesCaptioners)
+        XCTAssertNil(MacCaptioners.recordingFactory(settings: settings, makesCaptioners: false)(.microphone))
         settings.isEnabled = false
         XCTAssertEqual(LiveCaptionSettings(defaults: defaults).isEnabled, false, "remembered on this Mac")
-        XCTAssertNil(MacCaptioners.recorderFactory(settings: settings)())
+        XCTAssertNil(MacCaptioners.recorderFactory(settings: settings, makesCaptioners: true)())
 
         let clock = FakeHostClock()
         let mic = FakeCaptureSource(method: "microphone")

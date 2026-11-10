@@ -18,8 +18,8 @@ extension AppState {
     /// on the recording, else the conversation the library window shows, else its home.
     var floatingNotesFocus: UUID? {
         if let recordingID { return recordingID }
-        guard multiSelection.count < 2 else { return nil }
-        return place.isDevice ? deviceConversationID : selectedID
+        guard window.selection.count < 2 else { return nil }
+        return window.place.isDevice ? deviceConversationID : window.openID
     }
 
     /// Add Bookmark (⌘D) can mark a moment: while this Mac records, the recording's, wherever the person is; otherwise
@@ -60,14 +60,14 @@ extension AppState {
     func copySummary(_ id: UUID, to pasteboard: some LocalPasteboardWriting = NSPasteboard.general) {
         guard let meeting = meetings.first(where: { $0.id == id }) else { return }
         LocalPasteboard.copy(MeetingExport.summaryMarkdown(meeting), to: pasteboard)
-        confirmation = .copied
+        window.confirmation = .copied
     }
 
     func focusSearch() { searchFocusRequest += 1 }
 
     func showInspector() { inspectorRequest += 1 }
 
-    func focusTitle(_ id: UUID) { titleFocusRequest = id }
+    func focusTitle(_ id: UUID) { window.titleFocusRequest = id }
 
     /// File › New Note (⌘N): a conversation that's only your notes so far, titled as on the iPhone
     /// ("Note at 10:15 AM"), in the place being viewed. Record records into it.
@@ -83,9 +83,9 @@ extension AppState {
         }, set: { [weak self] id in
             guard let self, self.library.chooseTemplate(id, for: meetingID),
                   let after = self.meetings.first(where: { $0.id == meetingID }),
-                  !after.unifiedTranscript.isEmpty, self.processingID != meetingID else { return }
+                  !after.unifiedTranscript.isEmpty, self.processor.queue.runningID != meetingID else { return }
             self.cancelQueued(meetingID)
-            self.enqueue(meetingID, mode: .summaryOnly)
+            self.processor.enqueue(meetingID, mode: .summaryOnly)
         })
     }
 }

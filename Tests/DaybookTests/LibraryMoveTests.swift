@@ -135,16 +135,16 @@ final class LibraryMoveTests: XCTestCase {
     /// Only the app's own library is ever moved: never a `--library`, `swift run`, or a test's.
     func testOnlyTheAppsOwnLibraryIsOffered() throws {
         try writeLibrary(at: container, meeting: "sandboxed")
-        XCTAssertEqual(AppState.launchCheck(library: AppState.libraryURL, defaults: makeTestDefaults(), sandboxed: false), .init())
-        XCTAssertEqual(AppState.launchCheck(library: library, defaults: makeTestDefaults(), sandboxed: false), .init(), "a test isn't the app")
-        let check = AppState.launchCheck(library: library, bundleIdentifier: bundleID, defaults: makeTestDefaults(), sandboxed: false,
+        XCTAssertEqual(LibraryLaunchCheck.check(library: AppState.libraryURL, defaults: makeTestDefaults(), sandboxed: false), .init())
+        XCTAssertEqual(LibraryLaunchCheck.check(library: library, defaults: makeTestDefaults(), sandboxed: false), .init(), "a test isn't the app")
+        let check = LibraryLaunchCheck.check(library: library, bundleIdentifier: bundleID, defaults: makeTestDefaults(), sandboxed: false,
                                          priorUse: true, home: home)
         guard case .returnFromContainer(let plan)? = check.offer else { return XCTFail("\(check)") }
         XCTAssertEqual(plan.container, container)
         // A build under another bundle ID never takes a library into the app's place.
         let rehearsal = home.appendingPathComponent("Library/Containers/local.daybook.rehearsal/Data/Library/Application Support/Daybook")
         try writeLibrary(at: rehearsal, meeting: "rehearsal")
-        XCTAssertEqual(AppState.launchCheck(library: library, bundleIdentifier: "local.daybook.rehearsal", defaults: makeTestDefaults(),
+        XCTAssertEqual(LibraryLaunchCheck.check(library: library, bundleIdentifier: "local.daybook.rehearsal", defaults: makeTestDefaults(),
                                             sandboxed: false, priorUse: true, home: home), .init())
     }
 
@@ -152,13 +152,13 @@ final class LibraryMoveTests: XCTestCase {
     func testTheLibraryWaitsForAnAnswer() async throws {
         let root = home.appendingPathComponent("Library under test", isDirectory: true)
         let state = AppState(libraryURL: root, defaults: makeTestDefaults())
-        state.libraryMoveOffer = .returnFromContainer(.init(container: container, library: root, containerPreferences: containerPreferences,
+        state.launchCheck.offer = .returnFromContainer(.init(container: container, library: root, containerPreferences: containerPreferences,
                                                             replacesOlder: false, containerChanged: Date()))
         await state.initialize()
         XCTAssertFalse(state.isReady)
         XCTAssertFalse(state.library.isLoaded)
         await state.declineLibraryMove()
-        XCTAssertNil(state.libraryMoveOffer)
+        XCTAssertNil(state.launchCheck.offer)
         XCTAssertTrue(state.isReady)
     }
 

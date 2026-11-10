@@ -55,7 +55,7 @@ enum PerfProbe {
         Task { @MainActor [weak state] in
             try? await Task.sleep(for: .seconds(4))
             while let state {
-                if let id = state.selectedID { state.update(id) { $0.updatedAt = Date() } }
+                if let id = state.window.openID { state.update(id) { $0.updatedAt = Date() } }
                 try? await Task.sleep(for: .seconds(2))
             }
         }

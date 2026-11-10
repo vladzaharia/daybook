@@ -174,9 +174,9 @@ macOS moves the library into the container once, through the manifest, when it c
 expected path, and it's a rename on the same volume. The manifest moves the preferences too: macOS doesn't move them
 by itself (the rehearsal showed it), and without them the first sandboxed launch would show Welcome and forget the
 devices, model choices, sync state, and folder bookmarks. Quit the unsandboxed app before the first sandboxed launch,
-so the preferences daemon isn't holding its copy. Everything else is the launch check's (`SandboxMigration`, at the
-top of `AppState.init`, before anything writes preferences or sync resolves its identity), for the app's own library
-in a sandboxed build:
+so the preferences daemon isn't holding its copy. Everything else is the launch check's (`LibraryLaunchCheck` with
+`SandboxMigration`, made first in `AppState.init`, before anything writes preferences or sync resolves its identity),
+for the app's own library in a sandboxed build:
 
 1. `ReplicaIdentity` restores the identity of a library that moved (above). If sync's keychain item is still named
    after the old place, it's copied to the new folder's name: the item never leaves this Mac, so it's always this

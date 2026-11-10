@@ -28,16 +28,16 @@ struct SummaryPage: View {
     }
 
     private var isRecording: Bool { state.recordingID == meeting.id }
-    private var passages: PassageLinks { PassageLinks(onTap: besideTranscript) { [state] in state.showPassage($0) } }
+    private var passages: PassageLinks { PassageLinks(onTap: besideTranscript) { [state] in state.window.showPassage($0) } }
 
     var body: some View {
         PageScroll(bottomInset: player.meetingID == meeting.id && player.duration > 0 ? 56 : 0) {
             PageHeader(state: state, player: player, meeting: meeting, play: play)
             ConversationStatus(state: state, meeting: meeting)
             if let summary = meeting.summary {
-                SummaryBody(meeting: meeting, summary: summary, library: state.library, query: state.search,
+                SummaryBody(meeting: meeting, summary: summary, library: state.library, query: state.window.searchText,
                             revealing: arrival.reveals(summary, in: meeting), passages: passages,
-                            blockID: { $0 == .notesHeading ? SummaryJump.notes : nil }) { section in
+                            blockID: { $0 == .notesHeading ? SummaryBlockID.notes : nil }) { section in
                     let pictures = meeting.photos(in: section)
                     if !pictures.isEmpty { SectionPhotos(state: state, meeting: meeting, photos: pictures) }
                 }
@@ -62,7 +62,7 @@ struct SummaryPage: View {
             NotesSection(state: state, meeting: meeting, play: play, passages: passages)
                 .padding(.top, meeting.summary == nil ? Space.s5 : Space.s2)
                 // Without a summary there's no "Your notes" heading: the notes are where Show in Your Notes goes.
-                .id(meeting.summary == nil ? SummaryJump.notes : "notes-body")
+                .id(meeting.summary == nil ? SummaryBlockID.notes : "notes-body")
             // Every photo, in the order taken; the summary's sections show the ones they illustrate.
             PhotoStrip(state: state, meeting: meeting)
             // Tentative captions while recording; after the notes, so arriving words never move what
@@ -75,8 +75,8 @@ struct SummaryPage: View {
             }
         }
         // Show in Your Notes on the transcript, and a search result found in the notes, move the page there once.
-        .summaryJumps(in: meeting.id)
-        .environment(\.findQuery, state.search)
+        .summaryJumps(in: meeting.id, window: state.window)
+        .environment(\.findQuery, state.window.searchText)
         .macReadingContext(state)
         .onChange(of: meeting.id) { arrival = SummaryArrival(opening: meeting) }
         .daybookMotion(Motion.page, value: meeting.summary?.createdAt)
@@ -136,6 +136,6 @@ private struct PageColophon: View {
     private var summarizeAgain: (() -> Void)? {
         guard !meeting.unifiedTranscript.isEmpty, !state.processingStatus(for: meeting).isPending,
               state.recordingID != meeting.id else { return nil }
-        return { [state, id = meeting.id] in state.enqueue(id, mode: .summaryOnly) }
+        return { [state, id = meeting.id] in state.processor.enqueue(id, mode: .summaryOnly) }
     }
 }
