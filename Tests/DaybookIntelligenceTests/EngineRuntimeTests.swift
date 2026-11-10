@@ -30,7 +30,7 @@ final class EngineRuntimeTests: XCTestCase {
         let named = Set(EngineRuntime.pinned.map(\.runtime))
         let descriptors = ModelEngineRegistry.standard.descriptors + LiveEngines.descriptors
         // Apple's engines name the system they run on, not a package.
-        let system: Set<ModelEngineID> = [.appleFoundationModels, .appleVision]
+        let system: Set<ModelEngineID> = [.appleFoundationModels, .appleSpeech, .appleVision]
         for descriptor in descriptors where !system.contains(descriptor.id) {
             XCTAssertTrue(named.contains(descriptor.runtime), "\(descriptor.name) runs on \(descriptor.runtime)")
         }

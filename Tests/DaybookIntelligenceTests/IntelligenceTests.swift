@@ -47,10 +47,11 @@ final class IntelligenceTests: XCTestCase {
         XCTAssertEqual(installed, ["apple-vision/system"])
     }
 
-    /// The standard engines, with Apple's system model reporting it's off, so results don't depend
-    /// on whether this Mac has Apple Intelligence turned on.
+    /// The standard engines, with Apple's system models reporting they're off, so results don't depend
+    /// on whether this Mac has Apple Intelligence turned on, or the system's speech model.
     static let withoutAppleIntelligence = ModelEngineRegistry.standard
         .registering(AppleFoundationModelsEngine(availability: { .appleIntelligenceNotEnabled }))
+        .registering(AppleSpeechEngine(availability: { .needsNewerSystem }))
 
     func testSummaryRespectsUserTemplateAndRejectsUnobservedTerms() {
         let json = #"{"kind":"scrum","title":"Check-in","overview":"Alex described a blocker in Daybook.","sections":[{"heading":"Themes","body":"Daybook needs testing."}],"actionItems":[{"text":"Test capture","owner":null}],"terms":["Daybook","InventedName"]}"#

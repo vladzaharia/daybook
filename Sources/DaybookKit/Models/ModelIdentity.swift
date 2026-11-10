@@ -76,6 +76,8 @@ public struct ModelEngineID: RawRepresentable, Codable, Hashable, Sendable, Expr
     // Engines planned next (docs/models.md, "How to add a model"). A manifest may already name them;
     // until an engine registers, its entries read "Needs a newer Daybook".
     public static let appleFoundationModels: ModelEngineID = "appleFoundationModels"
+    /// Apple's speech model through the Speech framework (`SpeechTranscriber`): transcripts with nothing to download.
+    public static let appleSpeech: ModelEngineID = "appleSpeech"
     /// Apple's Vision framework: text recognition, classification, sharpness, and near copies.
     public static let appleVision: ModelEngineID = "appleVision"
     public static let mlxAudio: ModelEngineID = "mlxAudio"
@@ -101,8 +103,8 @@ public enum ModelResidency: String, Codable, Sendable {
     /// Needs the machine to itself: loading it releases every other model, and loading any other
     /// model releases it (MLX language models on the GPU).
     case exclusive
-    /// Runs in the operating system, outside Daybook's memory (Apple Foundation Models): it
-    /// releases nothing when used, and nothing needs to release it.
+    /// Runs in the operating system, outside Daybook's memory (Apple Foundation Models, Apple
+    /// Speech): it releases nothing when used, and nothing needs to release it.
     case system
 }
 

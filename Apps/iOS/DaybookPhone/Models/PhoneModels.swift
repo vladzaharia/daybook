@@ -194,6 +194,8 @@ final class PhoneModels {
     func status(of model: CatalogModel) -> Status {
         let availability = model.availability(engines: engines, platform: .iOS)
         if let label = availability.label { return .unavailable(label) }
+        // The system's own (Apple Speech): nothing to download, so never Not downloaded.
+        if model.isSystemModel { return .builtIn }
         if model.serves(.summarization), !runsLanguageModels { return .unavailable("Not available in Simulator") }
         if !fits(model) { return .unavailable("Needs an iPhone with more memory") }
         if inventory.resolve(model.key) != nil { return .downloaded }

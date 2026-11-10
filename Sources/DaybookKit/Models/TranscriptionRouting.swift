@@ -31,6 +31,9 @@ public enum TranscriptionLanguages {
         }
     }
 
+    /// This device's language ("en" for en-GB): what the system's speech model transcribes in for Automatic.
+    public static var deviceLanguage: String? { normalize(Locale.current.language.languageCode?.identifier) }
+
     /// Whether a `languages` capability covers every language (nil, empty, or "*").
     public static func coversEverything(_ languages: [String]?) -> Bool {
         guard let languages, !languages.isEmpty else { return true }
@@ -119,6 +122,31 @@ public enum TranscriptionRouting {
         let ordered = presetOrder.compactMap { catalog.model($0) } + catalog.models(for: .transcription)
         let candidates = ordered.filter { usable($0) && TranscriptionLanguages.coversEverything($0.capabilities.languages) }
         return (candidates.first { installed.contains($0.key) } ?? candidates.first)?.key
+    }
+
+    /// The route a job takes while the model `route` names isn't on this device yet (docs/models.md, "Apple Speech"):
+    /// the system's speech model, when this device has it (`installed` holds system models only while they're available)
+    /// and it covers the language: the chosen one, or for Automatic the device's (`deviceLanguage`), which it then
+    /// transcribes in. The language and the language check's model stay as routed. Nil when the routed model is here, or
+    /// no system model can stand in, so the job waits for the download as before. Read from the catalog
+    /// (`systemProvided`, `languages`, the transcription rank, best first), never model IDs.
+    public static func interim(for route: TranscriptionRoute, deviceLanguage: String? = TranscriptionLanguages.deviceLanguage,
+                               catalog: ModelCatalog, engines: [ModelEngineDescriptor], installed: Set<String>,
+                               appVersion: ModelVersion? = ModelVersion.app) -> TranscriptionRoute? {
+        let routed = catalog.model(route.model)?.key ?? route.model
+        guard !installed.contains(routed),
+              let language = TranscriptionLanguages.normalize(route.language) ?? TranscriptionLanguages.normalize(deviceLanguage) else {
+            return nil
+        }
+        let standIns = catalog.models(for: .transcription).filter { model in
+            model.isSystemModel && model.key != routed && installed.contains(model.key)
+                && model.availability(engines: engines, appVersion: appVersion).isAvailable
+                && TranscriptionLanguages.covers(model.capabilities.languages, language)
+        }
+        guard let standIn = standIns.max(by: { ($0.quality(for: .transcription) ?? 0) < ($1.quality(for: .transcription) ?? 0) }) else {
+            return nil
+        }
+        return TranscriptionRoute(model: standIn.key, fallback: route.fallback == standIn.key ? nil : route.fallback, language: route.language)
     }
 
     /// Whether `other` covers some language `languages` doesn't.

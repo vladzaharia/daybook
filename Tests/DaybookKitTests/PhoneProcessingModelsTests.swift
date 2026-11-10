@@ -31,7 +31,29 @@ final class PhoneProcessingModelsTests: XCTestCase {
         for tier in [PhoneTier.medium, .standard, .large] {
             XCTAssertEqual(PhoneProcessingModels.defaults(for: .transcription, tier: tier, catalog: catalog).first, "parakeet/ultra", "\(tier)")
         }
-        XCTAssertEqual(PhoneProcessingModels.options(for: .transcription, catalog: catalog), ["parakeet/ultra", "parakeet/redux"])
+        XCTAssertEqual(PhoneProcessingModels.options(for: .transcription, catalog: catalog),
+                       ["parakeet/ultra", "parakeet/redux", "apple-speech/system"])
+    }
+
+    func testBehaviorTheSystemsSpeechModelIsOfferedLastAndNeverChosenForYou() {
+        func engines(appleSpeech reason: String?) -> [ModelEngineDescriptor] {
+            [.init(id: .parakeet, name: "Parakeet", version: 1, runtime: "FluidAudio 0.18.0", roles: [.transcription], platforms: [.macOS, .iOS]),
+             .init(id: .appleSpeech, name: "Apple Speech", version: 1, runtime: "Speech, iOS 27.2", roles: [.transcription],
+                   platforms: [.macOS, .iOS], residency: .system, unavailableReason: reason)]
+        }
+        XCTAssertEqual(PhoneProcessingModels.options(for: .transcription, catalog: catalog, engines: engines(appleSpeech: nil), appVersion: nil),
+                       ["parakeet/ultra", "parakeet/redux", "apple-speech/system"], "Built in, after the models to download")
+        XCTAssertEqual(PhoneProcessingModels.options(for: .transcription, catalog: catalog, engines: engines(appleSpeech: "Not available on this iPhone"),
+                                                     appVersion: nil), ["parakeet/ultra", "parakeet/redux"], "Not offered where it can't run (Simulator)")
+        for tier in PhoneTier.allCases {
+            XCTAssertEqual(PhoneProcessingModels.choice(for: .transcription, selections: ModelSelections(), tier: tier, memoryLimit: limit(twelveGB, increased: false),
+                                                        catalog: catalog, engines: engines(appleSpeech: nil), appVersion: nil),
+                           tier == .small ? "parakeet/redux" : "parakeet/ultra", "\(tier): a download is still the default")
+        }
+        XCTAssertEqual(PhoneProcessingModels.choice(for: .transcription, selections: ModelSelections([.transcription: "apple-speech/system"]), tier: .large,
+                                                    memoryLimit: limit(twelveGB, increased: false), catalog: catalog,
+                                                    engines: engines(appleSpeech: nil), appVersion: nil),
+                       "apple-speech/system", "A person can choose it")
     }
 
     func testBehaviorSpeakersAreNemotronWithCommunityOnesVoiceProfiles() {

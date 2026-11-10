@@ -7,9 +7,9 @@ import Foundation
 /// What this iPhone's processing models can do, and the engine and summarizer a job runs with
 /// (docs/iphone.md, "Processing on this iPhone").
 extension PhoneModels {
-    /// A processing role's model, when it's downloaded here and can run.
+    /// A processing role's model, when it's downloaded here (or the system's own) and can run.
     func installedChoice(for role: ModelRole) -> CatalogModel? {
-        guard let model = choice(for: role), status(of: model) == .downloaded else { return nil }
+        guard let model = choice(for: role), status(of: model).isReady else { return nil }
         return model
     }
 

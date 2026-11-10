@@ -124,6 +124,23 @@ final class UpgradeTests: XCTestCase {
         XCTAssertEqual(offer.line, "Upgrade transcript on Studio Mac")
     }
 
+    func testBehaviorATranscriptTheSystemsSpeechModelMadeIsOfferedTheChosenModelOnceItsHere() throws {
+        XCTAssertEqual(UpgradeRanks.builtIn.quality(of: "apple-speech/system", for: .transcription), 50)
+        let interim = conversation(transcription: ["apple-speech/system"])
+        for chosen in ["parakeet/redux", "parakeet/ultra", "whisper/base"] {
+            let offer = try XCTUnwrap(offer(interim, here: capabilities(transcription: chosen)), chosen)
+            XCTAssertEqual(offer.place, .thisDevice)
+            XCTAssertEqual(offer.model, chosen)
+            XCTAssertEqual(offer.current, "apple-speech/system")
+        }
+        XCTAssertNil(Upgrades.offer(.transcription, for: conversation(transcription: ["parakeet/redux"]),
+                                    candidates: UpgradeCandidates(thisDevice: capabilities(transcription: "apple-speech/system"), macs: [])),
+                     "Never offered over a model a person chose")
+        XCTAssertNil(Upgrades.offer(.transcription, for: conversation(transcription: ["apple-speech/system"], languages: ["ja"]),
+                                    candidates: UpgradeCandidates(thisDevice: capabilities(transcription: "parakeet/ultra"), macs: [])),
+                     "Parakeet isn't offered for a language it doesn't transcribe")
+    }
+
     func testBehaviorEachStepsMarginDecidesWhatIsClearlyBetter() {
         // Transcripts: Redux (80) to Ultra (90) clears 10; Whisper Large v3 Turbo (85) to Ultra doesn't.
         XCTAssertEqual(Upgrades.offer(.transcription, for: conversation(transcription: ["parakeet/redux"]),

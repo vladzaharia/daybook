@@ -108,6 +108,35 @@ final class PhoneModelsTests: XCTestCase {
         for role in models.roles { XCTAssertEqual(models.choice(for: role).map(models.status(of:)), .notDownloaded) }
     }
 
+    /// A model the system provides (Apple Speech; here a stand-in on Apple Vision's engine, which every iPhone has, since
+    /// Simulator has no transcriber): built in, never Not downloaded, and ready to transcribe with once chosen.
+    func testASystemModelReadsAsBuiltInAndIsReadyOnceChosen() throws {
+        let json = """
+            {"schemaVersion": 1, "minimumReaderVersion": 1, "families": [{"id": "system-speech", "name": "System Speech",
+             "engine": "appleVision", "roles": ["transcription"],
+             "variants": [{"id": "system", "name": "System Speech", "systemProvided": true, "revisions": []}]}]}
+            """
+        var manifest = try ModelCatalog.readBuiltInManifest().manifest
+        manifest.families += try ModelManifestReader.read(Data(json.utf8)).manifest.families
+        let catalog = ModelCatalog(builtIn: manifest)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("PhoneModelsTests-\(UUID())", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let models = PhoneModels(root: root, defaults: makeTestDefaults("PhoneModelsTests"), catalog: catalog, fetcher: RecordingFetcher(),
+                                 network: ScriptedNetwork().network, physicalMemory: 12 * 1_073_741_824, backgroundTime: FakeBackgroundTime())
+        let system = try XCTUnwrap(catalog.model("system-speech/system"))
+        XCTAssertEqual(models.status(of: system), .builtIn)
+        XCTAssertEqual(models.status(of: system).label, "Included with iOS")
+        models.select(system.key, for: .transcription)
+        let choice = try XCTUnwrap(models.roleChoice(for: .transcription))
+        XCTAssertEqual(choice.selection, system.key)
+        XCTAssertNil(choice.line(), "Chosen, its row says nothing")
+        XCTAssertFalse(choice.canDownload())
+        XCTAssertFalse(models.processingMissing.contains { $0.key == system.key }, "Nothing to download")
+        XCTAssertEqual(models.installedChoice(for: .transcription)?.key, system.key, "Ready to transcribe with")
+        let speech = try XCTUnwrap(catalog.model("apple-speech/system"))
+        XCTAssertNotEqual(models.status(of: speech), .notDownloaded, "The real one is built in, or unavailable here, never Not downloaded")
+    }
+
     func testASmallPhoneDoesntOfferTheRecognizer() throws {
         let models = makeModels(network: ScriptedNetwork().network, memoryGB: 4)
         let recognizer = try XCTUnwrap(models.choice(for: .liveTranscription))
