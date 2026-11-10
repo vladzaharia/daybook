@@ -369,6 +369,8 @@ extension LinkCapabilities {
     /// (`record.permission`), as a session begins and whenever that changes, and takes the other's: a device
     /// doesn't ask one that wouldn't record for it.
     public static let recordPermissionFeature = "recordPermission"
+    /// Says where a recording it waits for stands on the device that made it (`recording.arrival`): the Mac.
+    public static let recordingArrivalFeature = "recordingArrival"
 
     public var controlsRecorders: Bool { features.contains(Self.recorderControlFeature) }
     public var cascades: Bool { features.contains(Self.cascadeFeature) }
@@ -376,6 +378,7 @@ extension LinkCapabilities {
     public var showsCaptions: Bool { features.contains(Self.liveCaptionsFeature) }
     public var showsLevels: Bool { features.contains(Self.liveLevelsFeature) }
     public var placesSummaries: Bool { features.contains(Self.summaryPlacementFeature) }
+    public var hearsArrivals: Bool { features.contains(Self.recordingArrivalFeature) }
     public var stopsForPages: Bool { features.contains(Self.pageStopFeature) }
     public var tellsRecordPermission: Bool { features.contains(Self.recordPermissionFeature) }
 }
@@ -761,6 +764,44 @@ public struct LinkRecordPermission: Codable, Sendable, Equatable {
     }
 }
 
+/// Where a recording a connected Mac waits for stands on the iPhone that made it (docs/multipoint.md, "Mac first"): being
+/// saved, on its way, or held back (iCloud storage full, the library's key not here yet), until it's sent. The recording
+/// itself travels through sync; this lets the Mac's page say where it is. Sent as it changes, and again as a Mac
+/// connects, only to a Mac listing `recordingArrivalFeature`. Additive within version 1: an older build ignores it.
+public struct LinkRecordingArrival: Codable, Sendable, Equatable {
+    public struct Phase: LinkOpenValue {
+        public let rawValue: String
+        public init(rawValue: String) { self.rawValue = rawValue }
+        /// Being saved into its conversation after Stop.
+        public static let filing: Self = "filing"
+        /// Saved, and on its way: written to iCloud and not uploaded (or sent by the courier) yet.
+        public static let sending: Self = "sending"
+        /// Uploaded, or sent by the courier: the Mac gets it with sync.
+        public static let sent: Self = "sent"
+        /// iCloud has no room for it.
+        public static let storageFull: Self = "storageFull"
+        /// The encrypted library's key isn't on the iPhone yet, so nothing it records can sync.
+        public static let waitingForKey: Self = "waitingForKey"
+    }
+
+    /// The conversation the Mac waits in.
+    public var conversationID: UUID
+    /// The iPhone's recording (its track's device recording ID), when it's known.
+    public var recordingID: String?
+    public var phase: Phase
+    /// 0...1 of the recording's bytes on their way, when known.
+    public var fraction: Double?
+    public var sentAt: Date
+
+    public init(conversationID: UUID, recordingID: String? = nil, phase: Phase, fraction: Double? = nil, sentAt: Date = Date()) {
+        self.conversationID = conversationID
+        self.recordingID = recordingID
+        self.phase = phase
+        self.fraction = fraction.map { min(1, max(0, $0)) }
+        self.sentAt = sentAt
+    }
+}
+
 /// "I just wrote this processing request." The request itself travels through sync; this only
 /// tells a Mac that's listening to look now instead of at the next sync pass.
 public struct LinkProcessingNudge: Codable, Sendable, Equatable {
@@ -822,4 +863,7 @@ public enum LinkMessage: Sendable, Equatable {
     /// The sender's Can start recording for the receiver (`recordPermissionFeature`). Additive within version 1: an
     /// older build ignores it.
     case recordPermission(LinkRecordPermission)
+    /// Where a recording a Mac waits for stands on the iPhone that made it (`recordingArrivalFeature`). Additive within
+    /// version 1: an older build ignores it.
+    case recordingArrival(LinkRecordingArrival)
 }

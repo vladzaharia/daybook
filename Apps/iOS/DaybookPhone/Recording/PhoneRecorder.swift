@@ -67,6 +67,11 @@ final class PhoneRecorder {
     private(set) var level = AudioLevel.silent
     /// Several seconds without a single non-zero sample: muted, unplugged, or blocked.
     private(set) var isMicrophoneSilent = false
+    /// When the microphone last heard something as loud as speech (`speechLevel`): following a Mac it can't reach, this
+    /// iPhone stops only in a quiet room (`LeaderWatch`). Changes with every word, so unobserved.
+    @ObservationIgnored private(set) var lastHeardSpeechAt: Date?
+    /// At or above this level, dBFS, the microphone hears something as loud as speech (the Mac's `audibleThreshold`).
+    static let speechLevel: Float = -50
     /// The conversation being recorded.
     private(set) var captureID: UUID?
     /// This recording's own ID (one conversation can hold several of this iPhone's recordings).
@@ -180,7 +185,7 @@ final class PhoneRecorder {
         lastError = nil; lastFailure = nil; unexpectedStop = nil; unfinishedFolder = nil; canResume = false; pauseMessage = nil
         captureID = id; self.recordingID = recordingID; self.title = title; startedAt = nil
         notes = ""; timedNotes = []; ink = []; highlights = []; photos = []; sharedNotes = [:]; sharedBookmarks = [:]
-        level = .silent; isMicrophoneSilent = false
+        level = .silent; isMicrophoneSilent = false; lastHeardSpeechAt = nil
         do {
             guard !FileManager.default.fileExists(atPath: PhoneCaptureJournal.url(in: directory).path) else {
                 throw PhoneRecorderError.directoryInUse
@@ -766,6 +771,7 @@ final class PhoneRecorder {
         guard state == .recording else { return }
         let reading = writer.meter.read()
         if abs(reading.rms - level.rms) >= 0.5 || abs(reading.peak - level.peak) >= 0.5 { level = reading }
+        if reading.rms >= Self.speechLevel { lastHeardSpeechAt = Date() }
         let silent = elapsedTime >= Self.silentMicrophoneSeconds && !writer.meter.receivedSignal
         if silent != isMicrophoneSilent { isMicrophoneSilent = silent }
         onLevel?(level)

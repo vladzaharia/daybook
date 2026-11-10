@@ -1419,7 +1419,9 @@ extension AppState {
     /// Records into `existing` when given (a notes-only conversation), otherwise into a new conversation. From the
     /// library window (`origin`), a new conversation goes into the place it shows and is selected; from anywhere else it
     /// lands in All Conversations and the window stays as it was (`RecordingOrigin`).
-    func startRecording(title: String? = nil, automatic: Bool = false, into existing: UUID? = nil,
+    /// `making`: a conversation that isn't here yet (an iPhone's, as it will file it), made only once the recording has
+    /// started, so a start that fails leaves nothing behind.
+    func startRecording(title: String? = nil, automatic: Bool = false, into existing: UUID? = nil, making: Meeting? = nil,
                         from origin: RecordingOrigin = .window) async {
         guard isReady, recordingID == nil, !isStartingRecording, !isStoppingRecording else { return }
         guard !automatic || callPolicy != .off else { return }
@@ -1427,8 +1429,9 @@ extension AppState {
         defer { isStartingRecording = false }
         let previousSelection = selectedID
         let into = existing.flatMap { id in canRecordInto(id) ? id : nil }
+        let making = into == nil ? making.flatMap { new in meetings.contains { $0.id == new.id } ? nil : new } : nil
         let fromWindow = origin == .window
-        let id = into ?? newMeeting(title: Self.recordingTitle(title, at: Date()), selecting: fromWindow)
+        let id = into ?? making?.id ?? newMeeting(title: Self.recordingTitle(title, at: Date()), selecting: fromWindow)
         if fromWindow { selectedID = id }
         prepareSourceCapture(id)
         let directory = storageURL.appendingPathComponent("Staging").appendingPathComponent(id.uuidString)
@@ -1440,6 +1443,10 @@ extension AppState {
             let callApp = includeComputerAudio
                 ? monitor.activeCandidate.map(CallAppTarget.init) ?? CallAppResolver.activeCallApp(rules: monitor.rules) : nil
             try await recorder.start(in: directory, includeSystemAudio: includeComputerAudio, callApp: callApp)
+            if let making {
+                library.add(making)
+                prepareSourceCapture(id)
+            }
             startCaptions()
             recordingID = id
             // A conversation recorded into again, however it was started, is no longer one that stopped short; and
@@ -1454,6 +1461,7 @@ extension AppState {
         } catch {
             finishCaptions()
             if let partial = recorder.lastResult, !partial.tracks.isEmpty {
+                if let making, !meetings.contains(where: { $0.id == making.id }) { library.add(making) }
                 recordingID = id
                 await finishCapture(partial)
             } else {

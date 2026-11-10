@@ -16,6 +16,8 @@ struct RecordingNotification: Equatable {
         case microphoneSilent = "microphone-silent"
         /// The disk has room for under half an hour more.
         case lowSpace = "low-space"
+        /// The phone this Mac records for can't be reached; this Mac keeps recording (`LeaderWatch`).
+        case leadOutOfReach = "lead-out-of-reach"
     }
 
     var kind: Kind
@@ -55,6 +57,8 @@ protocol RecordingNotificationPosting: AnyObject {
 /// - "Recording" when a call starts recording on its own while Floating Notes isn't showing, naming the call.
 /// - "Microphone silent" while the microphone hears nothing (`CaptureLevelMonitor.isMicrophoneSilent`), and "Low on
 ///   space" once the disk has room for under half an hour, each naming the conversation unless it's Personal.
+/// - "Out of reach" while the phone this Mac records for can't be reached and this Mac keeps recording
+///   (`PhoneCoordinator.leadOutOfReach`).
 ///
 /// Each goes once it's no longer true: the stop's when it's been seen in the app or the next recording starts, the
 /// start's when that recording ends. Permission is asked the first time someone records or turns on Record calls
@@ -73,6 +77,8 @@ final class RecordingNotifications {
         var notHearing = false
         /// The recording's disk is running out of room: what Floating Notes' chip says.
         var lowSpace: String?
+        /// The phone this recording follows is out of reach: the sentence Floating Notes' chip says.
+        var outOfReach: String?
     }
 
     static let recordAgainAction = "record-again"
@@ -81,6 +87,7 @@ final class RecordingNotifications {
     static let recordingTitle = "Recording"
     static let microphoneSilentTitle = "Microphone silent"
     static let lowSpaceTitle = "Low on space"
+    static let outOfReachTitle = LeaderWatch.outOfReachLabel
 
     private weak var state: AppState?
     private let center: any RecordingNotificationPosting
@@ -125,7 +132,8 @@ final class RecordingNotifications {
         return Snapshot(recordingID: state.recordingID, automatic: automatic,
                         callName: automatic ? state.monitor.activeCandidate?.callName : nil,
                         automaticRecording: state.automaticRecording, stops: state.unexpectedStops,
-                        notHearing: recording && state.recorder.levels.isMicrophoneSilent, lowSpace: space)
+                        notHearing: recording && state.recorder.levels.isMicrophoneSilent, lowSpace: space,
+                        outOfReach: state.phones.leadOutOfReach.flatMap { $0.meetingID == state.recordingID ? $0.message : nil })
     }
 
     /// What changed since the last snapshot, posted and taken back. Internal so tests drive it with snapshots.
@@ -140,6 +148,7 @@ final class RecordingNotifications {
             take(RecordingNotification.identifier(.recording, ended))
             take(RecordingNotification.identifier(.microphoneSilent, ended))
             take(RecordingNotification.identifier(.lowSpace, ended))
+            take(RecordingNotification.identifier(.leadOutOfReach, ended))
         }
         if let id = next.recordingID { updateCaptureNotices(id, from: last.recordingID == id ? last : Snapshot(), to: next) }
         // A new recording: "Recording stopped" and its Record Again are out of date.
@@ -168,6 +177,17 @@ final class RecordingNotifications {
                 put(RecordingNotification(kind: .microphoneSilent, conversationID: id, title: Self.microphoneSilentTitle,
                                           subtitle: shownTitle(id), body: RecordingStatusWords.microphoneSilentHelp))
             } else if !next.notHearing {
+                take(identifier)
+            }
+        }
+        if next.outOfReach != last.outOfReach {
+            let identifier = RecordingNotification.identifier(.leadOutOfReach, id)
+            if let line = next.outOfReach {
+                if !isInForeground() {
+                    put(RecordingNotification(kind: .leadOutOfReach, conversationID: id, title: Self.outOfReachTitle, subtitle: shownTitle(id),
+                                              body: line))
+                }
+            } else {
                 take(identifier)
             }
         }
@@ -226,7 +246,7 @@ final class RecordingNotifications {
         case .open(.stopped, let id):
             if state.meetings.contains(where: { $0.id == id }) { state.showConversation(id) }
             openLibrary()
-        case .open(.recording, _), .open(.microphoneSilent, _), .open(.lowSpace, _):
+        case .open(.recording, _), .open(.microphoneSilent, _), .open(.lowSpace, _), .open(.leadOutOfReach, _):
             state.showFloatingNotes(focus: state.recordingID)
         }
     }

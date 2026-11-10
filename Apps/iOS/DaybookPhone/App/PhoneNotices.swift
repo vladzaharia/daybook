@@ -15,6 +15,8 @@ import UserNotifications
 /// - A recording stopped by itself while Daybook wasn't in front (storage full or too slow, the
 ///   encoder failed): time-sensitive, so it reaches a pocket through Focus, and opening it goes to the
 ///   conversation it was saved in.
+/// - The Mac this iPhone records for can't be reached, while this iPhone keeps recording (`LeaderWatch`); taken
+///   back when it's heard from again or the recording ends.
 @MainActor
 struct PhoneNotices {
     /// One notification.
@@ -57,6 +59,19 @@ struct PhoneNotices {
     }
 
     func recorderStopped() { remove(Self.recorderRecordingID) }
+
+    // MARK: The Mac this recording follows, out of reach
+
+    static let leaderOutOfReachID = "multipoint.leader-out-of-reach"
+
+    /// The Mac this iPhone records for can't be reached and this iPhone keeps recording (`LeaderWatch`): "Out of reach",
+    /// with the sentence the recording screen says.
+    func leaderOutOfReach(_ words: String) {
+        post(Notice(id: Self.leaderOutOfReachID, title: LeaderWatch.outOfReachLabel, body: words, destination: .recording))
+    }
+
+    /// The Mac is back, or the recording ended.
+    func leaderBack() { remove(Self.leaderOutOfReachID) }
 
     // MARK: A recording that stopped by itself
 

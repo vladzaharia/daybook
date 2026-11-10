@@ -257,6 +257,8 @@ struct ConversationStatus: View {
         inputs.queueWaitsForDownload = state.downloadingID != nil && state.processingID == nil
         inputs.queuedMode = state.processingQueue.first { $0.meetingID == meeting.id }?.mode
         if status == .done { inputs.upgrade = state.upgradeOffer(for: meeting) }
+        // Where an iPhone recording it waits for is: " · Sending 40%", " · Last online 10:02".
+        if case .awaitingRecordings = status { inputs.arrivals = state.arrivals(for: meeting) }
         if case .failed(let failure) = status, case .cloud = failure.kind, state.hasCloudSetup {
             inputs.cloudModel = state.cloud.resolved?.model.name
         }
@@ -277,6 +279,7 @@ struct ConversationStatus: View {
             let device = state.library.thisDevice
             state.library.update(id) { $0.withdrawProcessingRequest(request, by: device, at: Date()) }
         case .dontWait: state.library.stopWaitingForRecordings(in: id, undoManager: undoManager)
+        case .waitAgain: state.library.waitAgainForMissingRecordings(in: id, undoManager: undoManager)
         case .cancelDownload: state.cancelDownload()
         case .downloadModels:
             state.enqueue(id)

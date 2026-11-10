@@ -20,7 +20,8 @@ import Foundation
 /// | Requested, no device can summarize | line: "Needs your Mac to summarize" | the same |
 /// | Processing | line: "Transcribing · 40%" (here), "Transcribing on Studio Mac · 40%" + bar | the same + 2 pt line |
 /// | Couldn't finish | box (problem): `FailureWords` + Details…, the fix ("Couldn’t summarize with Claude Sonnet 5.5" + Cloud Settings…, Summarize on This Mac) | "Couldn’t finish" + warning |
-/// | Waiting for a recording | line: "Waiting for audio from Alex's iPhone" + Don’t Wait | "Waiting for iPhone audio" |
+/// | Waiting for a recording | line: "Waiting for audio from Alex's iPhone" (" · Sending 40%", " · Last online 10:02", when known) + Don’t Wait | "Waiting for iPhone audio" |
+/// | A recording didn't arrive | box (problem): "Alex's iPhone audio didn’t arrive" + Don’t Wait, Wait Again | "iPhone audio didn’t arrive" |
 /// | Done | an upgrade's line, or a note to dismiss, else nothing | the preview |
 ///
 /// A working state is a bare line; a state that waits on the person is a quiet box with at most two actions.
@@ -51,6 +52,8 @@ public struct ConversationStatusPresentation: Equatable, Sendable {
         case cancelRequest(UUID)
         /// Stop waiting for a recording made alongside, and finish with the audio that's here.
         case dontWait
+        /// Wait once more for a recording made alongside that didn't arrive in time.
+        case waitAgain
         /// Stop the model download the work waits for.
         case cancelDownload
         /// Download the models the work needs (this many bytes).
@@ -78,6 +81,7 @@ public struct ConversationStatusPresentation: Equatable, Sendable {
             case .resume: return "Resume"
             case .cancel, .cancelRequest, .cancelDownload: return "Cancel"
             case .dontWait: return "Don’t Wait"
+            case .waitAgain: return "Wait Again"
             case .downloadModels: return "Download"
             case .chooseModels: return "Choose Models…"
             case .cloudSettings: return "Cloud Settings…"
@@ -345,17 +349,23 @@ extension ConversationStatusPresentation {
         /// Rows: it's playing now, or its work just finished (the checkmark holds for a moment).
         public var isPlaying = false
         public var justFinished = false
+        /// Where each recording it waits for is, when this device knows (`ArrivalStatus`), by `AwaitedRecording.arrivalKey`.
+        public var arrivals: [String: ArrivalStatus]
+        /// This device's own recording of the conversation that a Mac waits for, while it isn't on its way yet (the
+        /// iPhone's: being saved, held back by full iCloud storage or the library's key, or sending).
+        public var unsent: ArrivalStatus?
 
         public init(words: DeviceWords, local: LocalCapabilities, isRecording: Bool = false, link: LinkWork? = nil, mac: MacStanding? = nil,
                     placement: Placement = Placement(), upgrade: UpgradeOffer? = nil, runningTitle: String? = nil,
                     queueWaitsForDownload: Bool = false, queuedMode: ProcessingRequest.Mode? = nil, ownsUntranscribed: Bool = true,
                     pause: ProcessingWords.PauseReason? = nil, cloudModel: String? = nil, isPlaying: Bool = false,
-                    justFinished: Bool = false) {
+                    justFinished: Bool = false, arrivals: [String: ArrivalStatus] = [:]) {
             self.words = words; self.local = local; self.isRecording = isRecording; self.link = link; self.mac = mac
             self.placement = placement; self.upgrade = upgrade; self.runningTitle = runningTitle
             self.queueWaitsForDownload = queueWaitsForDownload; self.queuedMode = queuedMode; self.ownsUntranscribed = ownsUntranscribed
             self.pause = pause
             self.cloudModel = cloudModel; self.isPlaying = isPlaying; self.justFinished = justFinished
+            self.arrivals = arrivals
         }
     }
 }
@@ -368,6 +378,12 @@ extension ConversationStatusPresentation {
         guard !inputs.isRecording else { return nil }
         if let placing = placement(status, inputs: inputs, now: now) { return placing }
         if let link = inputs.link, !link.isFinished, let live = linkLine(link) { return live }
+        // This device's own recording a Mac waits for, not on its way yet: the line the Mac's page matches.
+        if let unsent = inputs.unsent, !status.isPending, !status.isFailure {
+            let held = unsent == .storageFull || unsent == .waitingForKey
+            return ConversationStatusPresentation(kind: .line, symbol: held ? "exclamationmark.icloud" : "arrow.up.circle",
+                                                  title: ProcessingStatus.unsentLine(unsent, here: inputs.words.here))
+        }
         let words = inputs.words, local = inputs.local
         switch status {
         case .processing(let progress):
@@ -456,8 +472,14 @@ extension ConversationStatusPresentation {
             return ConversationStatusPresentation(kind: .line, symbol: "text.alignleft", title: "Not summarized yet", actions: [.summarize])
 
         case .awaitingRecordings(let recordings):
-            return ConversationStatusPresentation(kind: .line, symbol: "clock", title: ProcessingStatus.awaitingDetail(recordings),
+            return ConversationStatusPresentation(kind: .line, symbol: "clock",
+                                                  title: ProcessingStatus.awaitingDetail(recordings, arrivals: inputs.arrivals, now: now),
                                                   actions: [.dontWait])
+
+        case .missingRecordings(let recordings):
+            // What's here was summarized without it: said, never quietly done, with the two ways on.
+            return ConversationStatusPresentation(kind: .box(.problem), symbol: "exclamationmark.triangle.fill",
+                                                  title: ProcessingStatus.missingDetail(recordings), actions: [.dontWait, .waitAgain])
 
         case .done:
             if let offer = inputs.upgrade {
@@ -749,6 +771,8 @@ extension ConversationStatusPresentation {
             return meeting.tracks.isEmpty ? nil : ConversationRowStatus(kind: .notTranscribed, text: "Not transcribed yet")
         case .awaitingRecordings(let recordings):
             return ConversationRowStatus(kind: .waiting, text: ProcessingStatus.awaitingLine(recordings))
+        case .missingRecordings(let recordings):
+            return ConversationRowStatus(kind: .failed, text: ProcessingStatus.missingLine(recordings))
         case .transcribed, .done:
             return nil
         }

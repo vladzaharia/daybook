@@ -127,6 +127,7 @@ enum WireMessage: Equatable {
         case .app(.levels): return "levels"
         case .app(.summaryChoice): return "processing.choice"
         case .app(.recordPermission): return "record.permission"
+        case .app(.recordingArrival): return "recording.arrival"
         case .recordRequest: return "record.request"
         case .recordReply: return "record.reply"
         case .ping: return "ping"
@@ -202,6 +203,7 @@ enum LinkWire {
         case .app(.levels(let body)): return try pack(body)
         case .app(.summaryChoice(let body)): return try pack(body)
         case .app(.recordPermission(let body)): return try pack(body)
+        case .app(.recordingArrival(let body)): return try pack(body)
         case .recordRequest(let body): return try pack(body)
         case .recordReply(let body): return try pack(body)
         case .ping(let body), .pong(let body): return try pack(body)
@@ -243,6 +245,7 @@ enum LinkWire {
         case "levels": message = .app(.levels(try body(LinkLevels.self)))
         case "processing.choice": message = .app(.summaryChoice(try body(LinkSummaryChoice.self)))
         case "record.permission": message = .app(.recordPermission(try body(LinkRecordPermission.self)))
+        case "recording.arrival": message = .app(.recordingArrival(try body(LinkRecordingArrival.self)))
         case "record.request": message = .recordRequest(try body(LinkRecordRequest.self))
         case "record.reply": message = .recordReply(try body(LinkRecordReply.self))
         case "ping": message = .ping(try body(Heartbeat.self))
