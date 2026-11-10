@@ -423,10 +423,12 @@ public final class SoundcoreSession {
         if !live, commandsWaiting > 0 { throw SoundcoreError.preempted }
     }
 
-    /// A transfer waits, before asking for the link, while a Start or Pause is on its way (until it has confirmed or
-    /// given up), so it never takes the link from under one, nor spins against one that hasn't reached the queue yet.
+    /// A transfer waits, before asking for a free link, while a Start or Pause is on its way: that one hasn't reached the
+    /// link yet (it waits for another app's transfer), and the transfer would only take the link to give way, spinning.
+    /// While the link is held it queues instead: behind a command holding or waiting for the link, it starts again right
+    /// after it, ahead of anything asked for meanwhile (a shared recording's live audio holds the link until it ends).
     private func waitForCommands() async throws {
-        while commandsWaiting > 0 {
+        while commandsWaiting > 0, !busy {
             if isClosed { throw SoundcoreError.disconnected }
             try await Task.sleep(for: .milliseconds(20))
         }
