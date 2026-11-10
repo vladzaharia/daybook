@@ -100,6 +100,8 @@ targets:
         # Joining a Soundcore Work's own network for Wi-Fi Fast Transfer (NEHotspotConfiguration;
         # docs/direct-soundcore.md, "Wi-Fi Fast Transfer"). Enabled on the App ID by the account owner.
         com.apple.developer.networking.HotspotConfiguration: true
+        # Time-sensitive notifications ("Recording paused", PhoneNotices). Ticked on the App ID by the account owner.
+        com.apple.developer.usernotifications.time-sensitive: true
     info:
       path: DaybookPhone/Resources/Info.plist
       properties:
