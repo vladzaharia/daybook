@@ -15,7 +15,8 @@ enum DaybookStyle {
     /// Filled buttons with white labels (4.5:1 or better in both appearances).
     static let prominentFill = DaybookPalette.prominentFill
     /// The reading surface behind the page, the transcript, and floating notes: barely warmer than white.
-    /// In dark mode one step below the list column (`#1E1E1E`), so the page recedes and neon reads brighter.
+    /// In dark mode one step below the list column (`#18181B`, `DaybookPalette.paper`), so the page recedes and neon
+    /// reads brighter.
     static let paper = DaybookPalette.paper
     /// Bookmarks, and nothing else. Neon amber in dark mode.
     static let bookmark = DaybookPalette.bookmark

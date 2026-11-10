@@ -94,19 +94,16 @@ final class SettingsWordsTests: XCTestCase {
 
     // MARK: Models
 
-    func testTheModelsRowCountsTheSharedVoiceProfileModelOnce() throws {
+    func testTheModelsRowCountsWhatTranscribingHereNeedsAsWelcomeDoes() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("SettingsWordsTests-\(UUID())", isDirectory: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         let models = PhoneModels(root: root, defaults: makeTestDefaults("SettingsWordsTests"), fetcher: PhoneModelsTests.RecordingFetcher(),
                                  network: PhoneModelsTests.ScriptedNetwork().network, physicalMemory: 12 * 1_073_741_824)
-        let shared = try XCTUnwrap(models.choice(for: .speakerEmbedding))
-        XCTAssertTrue(models.missing.map(\.key).contains(shared.key) && models.processingMissing.map(\.key).contains(shared.key),
-                      "live captions and transcribing here both use the voice-profile model")
         let live = SettingsScreen.missingModelBytes(models, processesHere: false)
-        XCTAssertEqual(live, models.missingBytes)
-        let both = SettingsScreen.missingModelBytes(models, processesHere: true)
-        XCTAssertEqual(both, models.missingBytes + models.processingMissingBytes - shared.approximateBytes,
-                       "the row's figure is what Models' sections add up to, with the shared model once")
+        XCTAssertEqual(live, models.missingBytes, "live transcription's models, the only ones it uses")
+        let transcribing = SettingsScreen.missingModelBytes(models, processesHere: true)
+        XCTAssertEqual(transcribing, models.processingMissingBytes,
+                       "transcribing here: Welcome's figure (Transcription and speakers), live captions' models aside (uxf-18)")
     }
 
     // MARK: Library

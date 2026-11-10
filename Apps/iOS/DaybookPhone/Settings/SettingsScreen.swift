@@ -154,11 +154,11 @@ struct SettingsScreen: View {
         return model.processingCapabilities.transcribes ? "Transcribes on this iPhone" : "Live transcription on this iPhone"
     }
 
-    /// What's left to download for live captions and, while this iPhone transcribes its own recordings, for that:
-    /// each model once, as Models lists them, though the voice-profile model serves both.
+    /// What the row's figure counts (uxf-18): while this iPhone transcribes its own recordings, only what transcribing
+    /// still needs, the figure Welcome offered ("Transcription and speakers · 852 MB"); live captions' models are listed
+    /// inside Models with their own sizes. Otherwise, live transcription's, the only models it uses.
     static func missingModelBytes(_ models: PhoneModels, processesHere: Bool) -> Int64 {
-        let roles = models.roles + (processesHere ? [.transcription, .diarization, .speakerEmbedding] : [])
-        return models.missing(in: roles).reduce(0) { $0 + $1.approximateBytes }
+        processesHere ? models.processingMissingBytes : models.missingBytes
     }
 
     /// "12 built-in, 2 yours", as the Mac counts them.

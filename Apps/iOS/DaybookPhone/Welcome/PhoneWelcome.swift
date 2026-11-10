@@ -57,14 +57,13 @@ struct PhoneWelcome: View {
 
     private var readyMessage: String {
         let models = model.models
-        let downloading = models.processingRoles.compactMap(models.choice(for:)).contains {
-            if case .downloading = models.status(of: $0) { return true }
-            if case .waitingForWiFi = models.status(of: $0) { return true }
-            return false
-        }
-        return WelcomeWords.readyMessage(downloading: downloading && model.settings.processesOnThisIPhone,
+        let statuses = models.processingRoles.compactMap(models.choice(for:)).map { models.status(of: $0) }
+        let arriving = statuses.contains { if case .downloading = $0 { return true } else { return false } }
+        // Asked for and waiting for Wi‑Fi: the transcript waits for it too, and the line says so.
+        let waitsForWiFi = !arriving && statuses.contains(.waitingForWiFi)
+        return WelcomeWords.readyMessage(downloading: (arriving || waitsForWiFi) && model.settings.processesOnThisIPhone,
                                          canTranscribe: model.processingCapabilities.transcribes,
-                                         transcribesElsewhere: Self.macTranscribes(model.macPresence))
+                                         transcribesElsewhere: Self.macTranscribes(model.macPresence), waitsForWiFi: waitsForWiFi)
     }
 
     /// A Mac that transcribes this library is known: connected now, or by its last sync. Pairing alone doesn't say;

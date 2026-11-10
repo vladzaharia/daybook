@@ -69,11 +69,19 @@ public enum WelcomeWords {
     public static let importAudio = "Import Audio…"
     public static let recorderQuestion = "Use a wearable or handheld recorder?"
     public static let addDevice = "Add Device…"
+    /// The Mac's Ready page: Daybook as a login item, so calls are noticed after a restart; the one row on it that says why.
+    public static let openAtLogin = "Open Daybook at login"
+    public static let openAtLoginReason = "So Daybook can notice calls."
 
     /// The Ready page's line: what happens to a recording made now. `transcribesElsewhere`: a Mac known to transcribe
-    /// this library transcribes what this iPhone records.
-    public static func readyMessage(downloading: Bool, canTranscribe: Bool, transcribesElsewhere: Bool = false) -> String {
-        if downloading { return "Start a conversation now. It’s transcribed once the models download." }
+    /// this library transcribes what this iPhone records. `waitsForWiFi`: the download is asked for and waits for Wi‑Fi,
+    /// so the transcript waits for it too.
+    public static func readyMessage(downloading: Bool, canTranscribe: Bool, transcribesElsewhere: Bool = false,
+                                    waitsForWiFi: Bool = false) -> String {
+        if downloading {
+            return waitsForWiFi ? "Start a conversation now. It’s transcribed once the models download on Wi‑Fi."
+                : "Start a conversation now. It’s transcribed once the models download."
+        }
         if canTranscribe { return "Start a conversation now." }
         if transcribesElsewhere { return "Start a conversation now. Your Mac transcribes it." }
         return "Start a conversation now. Download models in Settings to transcribe it."
