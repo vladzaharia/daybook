@@ -18,15 +18,15 @@ final class ScrubberBookmarksTests: XCTestCase {
         let recording = track("placed", duration: 120)
         let meeting = Meeting(
             tracks: [recording],
-            alignmentReports: [.init(trackID: recording.id, method: .anchors, offset: 20, rate: 2)],
+            alignmentReports: [.init(trackID: recording.id, method: .anchors, offset: 20, rate: 1)],
             highlights: [
                 .init(time: 0), .init(time: 65), .init(trackID: recording.id, time: 15), .init(time: 1_000),
             ])
         XCTAssertEqual(
-            ScrubberBookmarks.fractions(in: meeting, trackID: recording.id, duration: 120), [15.0 / 120.0, 22.5 / 120.0],
-            "its own bookmark at its own time; the timeline's at (65 − 20) / 2; one before it starts or after it ends has none")
+            ScrubberBookmarks.fractions(in: meeting, trackID: recording.id, duration: 120), [15.0 / 120.0, 45.0 / 120.0],
+            "its own bookmark at its own time; the timeline's at 65 − 20; one before it starts or after it ends has none")
         XCTAssertEqual(
-            ScrubberBookmarks.fractions(in: meeting, trackID: recording.id, duration: 240), [15.0 / 240.0, 22.5 / 240.0],
+            ScrubberBookmarks.fractions(in: meeting, trackID: recording.id, duration: 240), [15.0 / 240.0, 45.0 / 240.0],
             "the player's length is the line's")
     }
 
@@ -48,12 +48,13 @@ final class ScrubberBookmarksTests: XCTestCase {
     }
 
     func testBehaviorAStoredPlacementWinsOverAStaleReport() {
-        let recording = track("manual", duration: 100, alignment: .init(method: .manual, offset: 20, rate: 2))
+        let recording = track("manual", duration: 100, alignment: .init(method: .manual, offset: 20, rate: 1))
         let meeting = Meeting(
             tracks: [recording],
             alignmentReports: [.init(trackID: recording.id, method: .anchors, offset: 5, rate: 1)],
             highlights: [.init(time: 50)])
-        XCTAssertEqual(ScrubberBookmarks.fractions(in: meeting, trackID: recording.id, duration: 100), [0.15])
+        XCTAssertEqual(ScrubberBookmarks.fractions(in: meeting, trackID: recording.id, duration: 100), [0.3],
+                       "the stored placement's 0:20, not the stale report's 0:05")
     }
 
     func testBehaviorUnalignedUnplacedAndRemovedRecordingsGiveNoInventedTicks() {
