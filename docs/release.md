@@ -445,6 +445,12 @@ A release ships only a commit whose tests passed, but it doesn't test the commit
 
 The signing jobs don't wait for the tests to start, so their channels ask for approval as soon as `prepare` is done, and the archives build meanwhile. Each job then waits at **Wait for the release commit's tests** (`scripts/ci/await-validation.sh`), before it exports or uploads anything, for that CI run to pass, or for this run's `validate` jobs. A test that fails fails the job there. If it was a flake, re-run the failed jobs of that CI run, then of the release.
 
+## Migrations
+
+Settings that moved, carried over once at launch by the version that moved them. A carry-over can be removed once every device that may still hold the old setting has launched a version with it.
+
+- **The transcription language** (2026-11-10, xdev-settings-08) moved from each Mac's preferences (`processingPreferences`' `transcriptionLanguage`) into the library, where both apps show it and every device routes by it ([sync](icloud-sync.md#the-librarys-choices)). At launch, once the library is open, a Mac with a stored language writes it into the library when the library has none (no device has chosen one, Automatic included), then clears it from its preferences, so it's carried once (`AppState.followLibraryLanguage`, `LibraryController.adoptTranscriptionLanguage`); from then on the Mac follows the library. Two Macs that each stored one end on the one carried last, as with any later change. The model for other languages and the speaker settings stay where they were. A Mac taken back to an earlier version transcribes Automatic until a language is chosen there again.
+
 ## One bundle ID
 
 The iPhone app and the Mac app are one app in App Store Connect, `local.daybook`, so TestFlight and the App Store can carry both, and one purchase covers both (universal purchase). Apple requires one bundle ID for every platform of a record ([App Store Connect Help: Add platforms](https://developer.apple.com/help/app-store-connect/create-an-app-record/add-platforms/); docs/research/one-bundle.md has the rest).

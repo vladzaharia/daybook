@@ -87,6 +87,8 @@ final class PhoneModels {
 
     /// Models were downloaded, removed, or chosen: what this iPhone can process may have changed.
     @ObservationIgnored var changed: (() -> Void)?
+    /// The library's transcription language (nil for Automatic), which a job here transcribes in (`transcriptionRoute`).
+    @ObservationIgnored var transcriptionLanguage: () -> String? = { nil }
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let fetcher: any ModelArtifactFetcher
     @ObservationIgnored private let network: PhoneNetwork

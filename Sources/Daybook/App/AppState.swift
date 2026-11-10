@@ -188,6 +188,9 @@ final class AppState {
         get { queue.awaitingModels }
         set { queue.awaitingModels = newValue }
     }
+    /// This Mac's own processing preferences, kept in its UserDefaults: the speaker settings and the model for other
+    /// languages. The transcription language is the library's (`transcriptionLanguage`); a stored one is carried into the
+    /// library once at launch (`followLibraryLanguage`).
     var processingPreferences: ProcessingPreferences {
         didSet {
             if let data = try? JSONEncoder().encode(processingPreferences.normalized) { preferences.set(data, forKey: Preference.processingPreferences) }
@@ -864,6 +867,7 @@ final class AppState {
         guard libraryMoveOffer?.holdsLibrary != true else { return }
         do {
             try await library.load()
+            followLibraryLanguage()
             // What this Mac owed when it last quit, restarted, or crashed, before anything is queued now.
             queue.loadOwedWork()
             recordReplicaIdentity()
