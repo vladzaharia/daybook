@@ -60,6 +60,34 @@ final class ProcessingWordsTests: XCTestCase {
         XCTAssertNil(ProcessingWords.pausedLine(.person), "Resume says it")
     }
 
+    /// Model downloads in one phrase over the whole set, everywhere (uxf-06, uxf-12): its figure and total, waiting for
+    /// Wi‑Fi in the words a model's row uses, and a download that stopped, by the model's name.
+    func testBehaviorModelDownloadsReadAsOneSet() {
+        let arriving = ModelDownloadState.downloading(done: 3_800_000_000, total: 7_600_000_000)
+        XCTAssertEqual(ProcessingWords.modelDownloadLine(arriving), "Downloading models · 50%")
+        XCTAssertEqual(ProcessingWords.modelDownloadDetail(arriving), "3.8 of 7.6 GB")
+        XCTAssertEqual(ProcessingWords.modelDownloadShort(arriving), "50%")
+        XCTAssertEqual(arriving.fraction, 0.5)
+        XCTAssertEqual(arriving.bytes, 3_800_000_000, "what's left")
+        XCTAssertFalse(arriving.needsAttention)
+        XCTAssertEqual(ProcessingWords.downloadingModels(0.999), "Downloading models · 99%", "100% only when it's done")
+        XCTAssertEqual(ModelDownloadState.downloading(done: 0, total: 0).fraction, 0)
+
+        let waiting = ModelDownloadState.waitingForWiFi(bytes: 852_000_000)
+        XCTAssertEqual(ProcessingWords.modelDownloadLine(waiting), "Downloading models · \(ModelStatus.waitingForWiFi.label)")
+        XCTAssertEqual(ProcessingWords.modelDownloadLine(waiting), "Downloading models · Waiting for Wi‑Fi")
+        XCTAssertEqual(ProcessingWords.modelDownloadDetail(waiting), "852 MB")
+        XCTAssertNil(waiting.fraction)
+
+        let failed = ModelDownloadState.failed(model: "Gemma 4 12B 4-bit", bytes: 7_600_000_000)
+        XCTAssertEqual(ProcessingWords.modelDownloadLine(failed), "Couldn’t download Gemma 4 12B 4-bit")
+        XCTAssertTrue(failed.needsAttention)
+        XCTAssertEqual(ProcessingWords.downloadStopped, "Couldn’t download")
+
+        XCTAssertEqual(ProcessingWords.download(900_000_000), "Download · 900 MB")
+        XCTAssertEqual(ProcessingWords.download(0), "Download")
+    }
+
     func testBehaviorDeviceWordsTellThisDeviceFromAnother() {
         let mac = DeviceWords.mac(id: "m"), phone = DeviceWords.iPhone(id: "p")
         let studio = ProcessingRequest.Device(id: "s", name: "Studio Mac")

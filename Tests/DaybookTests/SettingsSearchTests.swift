@@ -24,6 +24,24 @@ final class SettingsSearchTests: XCTestCase {
         XCTAssertTrue(found("zebra").isEmpty)
     }
 
+    /// What's on a page, or what its rows open, finds it (uxf-13): the library's own things on Library, where Models
+    /// keeps them too beside their models.
+    func testSearchFindsWhatEveryPageHolds() {
+        XCTAssertEqual(found("Speaker Profiles"), [.library, .models])
+        XCTAssertEqual(found("profiles"), [.library, .models])
+        XCTAssertEqual(found("voiceprint"), [.library, .models])
+        XCTAssertEqual(found("glossary"), [.library, .models])
+        XCTAssertEqual(found("vocabulary"), [.library, .models])
+        XCTAssertEqual(found("templates"), [.library, .models])
+        XCTAssertEqual(found("recovery"), [.library])
+        XCTAssertEqual(found("Recovery Key"), [.library])
+        XCTAssertEqual(found("notifications"), [.recording])
+        XCTAssertEqual(found("zoom"), [.recording])
+        XCTAssertEqual(found("synced recordings"), [.models])
+        XCTAssertEqual(found("login items"), [.general])
+        XCTAssertEqual(found("countdown"), [.cloud])
+    }
+
     func testPagesKeepTheNamesOtherPlacesOpenThemBy() {
         // Menus, pages, Floating Notes, and --open-settings name these; the window restores its page from them too.
         XCTAssertEqual(["general", "models", "cloud", "devices", "library"].compactMap(SettingsPane.init(rawValue:)).count, 5)

@@ -26,6 +26,18 @@ final class MenuBarStatusTests: XCTestCase {
         XCTAssertEqual(MenuBarStatus.lines(inputs, now: now), [], "a connected recorder, an idle iPhone, and iCloud up to date say nothing here")
     }
 
+    /// Model downloads in the words every surface uses: the whole set's figure, never a model at a time (uxf-12), and a
+    /// download that stopped or waits for Wi‑Fi, each opening Settings › Models.
+    func testBehaviorModelDownloadsSayTheWholeSet() {
+        var inputs = MenuBarStatus.Inputs()
+        inputs.models = .downloading(done: 3_800_000_000, total: 7_600_000_000)
+        XCTAssertEqual(MenuBarStatus.lines(inputs, now: now), [.init(id: "download", title: "Downloading models · 50%", opens: .modelSettings)])
+        inputs.models = .failed(model: "Gemma 4 12B 4-bit", bytes: 7_600_000_000)
+        XCTAssertEqual(MenuBarStatus.lines(inputs, now: now).map(\.title), ["Couldn’t download Gemma 4 12B 4-bit"])
+        inputs.models = .waitingForWiFi(bytes: 852_000_000)
+        XCTAssertEqual(MenuBarStatus.lines(inputs, now: now).map(\.title), ["Downloading models · Waiting for Wi‑Fi"])
+    }
+
     func testBehaviorThisMacsWorkNamesItsConversationButNeverAPersonalOne() {
         let id = UUID()
         var work = MenuBarStatus.Work(id: id, title: "Weekly product sync", stage: .transcribing, fraction: 0.4, waiting: 2)

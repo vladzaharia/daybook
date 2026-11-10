@@ -119,6 +119,43 @@ enum ModelPreset: String, CaseIterable, Identifiable {
         }
         return roles.compactMap { preset.model(for: $0) }
     }
+
+    // MARK: A fresh Mac
+
+    /// What a fresh Mac chooses before anyone has (ux-mac-14): its recommended preset's model for every role the preset
+    /// names, and its speaker effort, so Settings › Models opens on Balanced (Quick on a compact Mac), never "Custom",
+    /// whether or not Welcome's quality page was seen. Roles the preset doesn't name start from the catalog's initial
+    /// selection, which stays the iPhone's start and the migrations' from before the model system.
+    struct FirstLaunch: Equatable {
+        var selections: ModelSelections
+        var speakerQuality: SpeakerQuality
+    }
+
+    static func firstLaunch(tier: DeviceTier = .current, catalog: ModelCatalog = .builtIn) -> FirstLaunch {
+        let preset = recommended(tier: tier, catalog: catalog)
+        let models = ModelRecommendations.preset(preset.quality, tier: tier, catalog: catalog)
+        var selections = ModelRecommendations.initialSelections(for: tier, catalog: catalog)
+        for (role, keys) in models.choices { if let key = keys.first { selections[role] = key } }
+        return FirstLaunch(selections: selections, speakerQuality: preset.speakerQuality(models))
+    }
+
+    /// Whether this Mac has never had model choices: none stored, and nothing from before the model system (the
+    /// catalog IDs it migrates from, and processing preferences, which held the speaker model).
+    static func isFirstLaunch(_ defaults: UserDefaults) -> Bool {
+        [AppState.Preference.modelSelections, AppState.Preference.processingPreferences,
+         AppState.Preference.legacyTranscriptionModel, AppState.Preference.legacySummaryModel].allSatisfy { defaults.object(forKey: $0) == nil }
+    }
+
+    /// A fresh Mac's processing preferences: the recommended preset's speaker model and effort, stored at once, so the
+    /// next launch reads them as chosen.
+    static func firstLaunchPreferences(_ preferences: ProcessingPreferences, defaults: UserDefaults) -> ProcessingPreferences {
+        let fresh = firstLaunch()
+        var preferences = preferences
+        preferences.speakerModelID = fresh.selections[.diarization] ?? preferences.speakerModelID
+        preferences.speakerOptions.quality = fresh.speakerQuality
+        if let data = try? JSONEncoder().encode(preferences.normalized) { defaults.set(data, forKey: AppState.Preference.processingPreferences) }
+        return preferences
+    }
 }
 
 /// Model sizes and download progress, in the units people read ("2.4 GB", "1.2 of 2.4 GB").

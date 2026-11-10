@@ -21,7 +21,11 @@ final class SpeechRoutingTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookSpeechRouting-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         roots.append(root)
-        return AppState(libraryURL: root, defaults: makeTestDefaults("local.daybook.tests.routing"))
+        let state = AppState(libraryURL: root, defaults: makeTestDefaults("local.daybook.tests.routing"))
+        // Community-1 for speakers, which makes its own voice profiles (a fresh Mac's recommended preset may choose
+        // Nemotron 3 with it: ModelPreferenceMigrationTests).
+        state.processingPreferences.speakerModelID = "community-1/offline"
+        return state
     }
 
     func testAutomaticAddsAnOptionalLanguageCheck() throws {

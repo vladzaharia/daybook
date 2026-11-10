@@ -598,9 +598,9 @@ private struct EmptyLibraryView: View {
                 .buttonStyle(DaybookControlStyle(role: .standard, shape: .capsule))
             }
             .padding(.top, Space.s2)
-            if let id = state.downloadingID {
+            if let models = state.modelDownloadState {
                 ActivityReader {
-                    Text("Downloading \(state.modelCatalog.name(for: id)) · \(Int(state.downloadProgress.fraction * 100))%")
+                    Text(ProcessingWords.modelDownloadLine(models))
                         .font(TypeStyle.status)
                         .foregroundStyle(Ink.secondary)
                         .padding(.top, Space.s6)

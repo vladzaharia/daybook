@@ -225,8 +225,11 @@ final class LiveCaptionStoreTests: XCTestCase {
         XCTAssertEqual(offered.map(\.identifier), ["en_US", "de"], "a language only a downloaded recognizer covers can be chosen")
         let german = Locale(identifier: "de")
         let download = LiveCaptionAvailability.needsDownload(german)
-        XCTAssertNotNil(LiveCaptionLanguages.footer(systemCaptions: true, liveLanguages: [], liveCovers: false, enabled: true,
-                                                    locale: german, availability: download))
+        XCTAssertNil(LiveCaptionLanguages.footer(systemCaptions: true, liveLanguages: [], liveCovers: false, enabled: true,
+                                                 locale: german, availability: download),
+                     "the system fetching a language the first time it's recorded with is how it works, not a footer (VM-23)")
+        XCTAssertEqual(LiveCaptionLanguages.footer(systemCaptions: true, liveLanguages: [], liveCovers: false, enabled: true,
+                                                   locale: german, availability: .unavailable("Not here.")), "Not here.")
         XCTAssertNil(LiveCaptionLanguages.footer(systemCaptions: true, liveLanguages: ["de"], liveCovers: true, enabled: true,
                                                  locale: german, availability: download),
                      "a downloaded recognizer covers it: nothing to download, nothing to say")

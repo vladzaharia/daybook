@@ -63,6 +63,8 @@ public enum ModelStatus: Equatable, Sendable {
         default: return false
         }
     }
+    /// The last download stopped: Download reads Try Again.
+    public var isFailed: Bool { if case .failed = self { return true } else { return false } }
     /// Download is what to do next.
     public var canDownload: Bool {
         switch self {
@@ -261,6 +263,9 @@ public enum ModelDownloadSummary: Equatable, Sendable {
     case waiting(bytes: Int64, forWiFi: Bool)
     /// All of it is on its way: so much of the total is here.
     case downloading(done: Int64, total: Int64)
+    /// A download of some of it stopped: those models' names, and what downloading everything still missing takes
+    /// ("Couldn’t download Gemma 4 12B" with Try Again).
+    case failed(names: [String], bytes: Int64)
 
     /// How the rest of what's chosen stands beside the models still to download.
     public enum Rest: Equatable, Sendable {
@@ -293,6 +298,12 @@ public enum ModelDownloadSummary: Equatable, Sendable {
     public init?(chosen: [Item]) {
         let models = chosen.filter { $0.status.isAvailable }
         let missing = models.filter { $0.status.canDownload }
+        let failed = missing.filter { if case .failed = $0.status { return true } else { return false } }
+        if !failed.isEmpty {
+            // What stopped is said first; trying again downloads everything still missing.
+            self = .failed(names: failed.map(\.name), bytes: missing.reduce(0) { $0 + $1.stillToFetch })
+            return
+        }
         if !missing.isEmpty {
             let rest: Rest = models.contains { $0.status.isReady } ? .here : missing.count < models.count ? .onItsWay : .nothing
             self = .missing(names: missing.map(\.name), bytes: missing.reduce(0) { $0 + $1.stillToFetch }, rest: rest)
@@ -321,8 +332,12 @@ public enum ModelDownloadSummary: Equatable, Sendable {
         case .missing(_, _, let rest): return rest == .here ? "Partly downloaded" : "Not downloaded yet"
         case .waiting(_, let forWiFi): return (forWiFi ? ModelStatus.waitingForWiFi : .waiting).label
         case .downloading: return "Downloading"
+        case .failed(let names, _): return ProcessingWords.couldNotDownload(names.joined(separator: ", "))
         }
     }
+
+    /// A download stopped: the title is in the warning ink, and Download reads Try Again.
+    public var needsAttention: Bool { if case .failed = self { return true } else { return false } }
 
     /// "852 MB", "Parakeet Ultra, Community-1 · 654 MB", "0.4 of 1.6 GB", or what it needs when there isn't room.
     public func line(space: ModelSpace = .unknown) -> ModelLine {
@@ -330,6 +345,9 @@ public enum ModelDownloadSummary: Equatable, Sendable {
         case .missing(let names, let bytes, let rest):
             if let shortfall = space.shortfall(bytes) { return ModelLine(shortfall, needsAttention: true) }
             return ModelLine(((rest == .nothing ? [] : [names.joined(separator: ", ")]) + [ByteSize.format(bytes)]).joined(separator: " · "))
+        case .failed(_, let bytes):
+            if let shortfall = space.shortfall(bytes) { return ModelLine(shortfall, needsAttention: true) }
+            return ModelLine(ByteSize.format(bytes))
         case .waiting(let bytes, _):
             return ModelLine(ByteSize.format(bytes))
         case .downloading(let done, let total):
@@ -344,8 +362,10 @@ public enum ModelDownloadSummary: Equatable, Sendable {
     }
 
     public func canDownload(space: ModelSpace = .unknown) -> Bool {
-        guard case .missing(_, let bytes, _) = self else { return false }
-        return space.fits(bytes)
+        switch self {
+        case .missing(_, let bytes, _), .failed(_, let bytes): return space.fits(bytes)
+        case .waiting, .downloading: return false
+        }
     }
 }
 

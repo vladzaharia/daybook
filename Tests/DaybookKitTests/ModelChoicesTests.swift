@@ -121,6 +121,26 @@ final class ModelChoicesTests: XCTestCase {
         XCTAssertFalse(going.canDownload())
     }
 
+    /// A download that stopped is said first, by the model's name, and the row's button tries again everything still
+    /// missing (uxf-07).
+    func testBehaviorTheDownloadRowSaysADownloadStopped() throws {
+        let summary = try XCTUnwrap(ModelDownloadSummary(chosen: [
+            .init(name: "Parakeet Ultra", status: .downloaded, bytes: 632_000_000),
+            .init(name: "Gemma 4 12B 4-bit", status: .failed(ProcessingWords.downloadStopped), bytes: 6_770_000_000),
+            .init(name: "Nemotron 3", status: .notDownloaded, bytes: 200_000_000)
+        ]))
+        XCTAssertEqual(summary, .failed(names: ["Gemma 4 12B 4-bit"], bytes: 6_970_000_000))
+        XCTAssertEqual(summary.title, "Couldn’t download Gemma 4 12B 4-bit")
+        XCTAssertTrue(summary.needsAttention)
+        XCTAssertEqual(summary.line(), ModelLine("7.0 GB"))
+        XCTAssertTrue(summary.canDownload())
+        XCTAssertFalse(summary.canDownload(space: ModelSpace(free: 1_000_000_000)))
+        XCTAssertEqual(summary.line(space: ModelSpace(free: 1_000_000_000)), ModelLine("Needs 7.0 GB · 1.0 GB free", needsAttention: true))
+        XCTAssertFalse(ModelDownloadSummary.missing(names: [], bytes: 1, rest: .nothing).needsAttention)
+        XCTAssertTrue(ModelStatus.failed("x").isFailed)
+        XCTAssertFalse(ModelStatus.notDownloaded.isFailed)
+    }
+
     /// Asked for, with none of it arriving yet: the row says what it waits for, as each role's row does, with what it
     /// will download and no bar.
     func testBehaviorTheDownloadRowSaysWhatItWaitsFor() {
@@ -142,8 +162,10 @@ final class ModelChoicesTests: XCTestCase {
         func items(_ statuses: ModelStatus...) -> [Item] {
             zip(["Parakeet Ultra", "Community-1", "Gemma"], statuses).map { Item(name: $0, status: $1, bytes: 600_000_000) }
         }
-        XCTAssertEqual(ModelDownloadSummary(chosen: items(.notDownloaded, .notDownloaded, .failed("offline"))),
+        XCTAssertEqual(ModelDownloadSummary(chosen: items(.notDownloaded, .notDownloaded, .notDownloaded)),
                        .missing(names: ["Parakeet Ultra", "Community-1", "Gemma"], bytes: 1_800_000_000, rest: .nothing))
+        XCTAssertEqual(ModelDownloadSummary(chosen: items(.notDownloaded, .notDownloaded, .failed("offline"))),
+                       .failed(names: ["Gemma"], bytes: 1_800_000_000), "a download that stopped is said first; Try Again takes all that's missing")
         let beside = ModelDownloadSummary(chosen: items(.downloading(0.4), .notDownloaded, .notDownloaded))
         XCTAssertEqual(beside, .missing(names: ["Community-1", "Gemma"], bytes: 1_200_000_000, rest: .onItsWay),
                        "one on its way and none here: not partly downloaded")

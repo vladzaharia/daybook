@@ -275,8 +275,9 @@ final class DaybookDelegate: NSObject, NSApplicationDelegate {
     /// Before quitting: what runs stops, recorders and phones that recorded along hear it, and everything is saved.
     private static func finish(_ state: AppState) async {
         // Cancelling gives back requests this Mac held, so another Mac can take them over once
-        // this one syncs again, or when their lease runs out if it never does.
-        state.cancelDownload(); state.cancelProcessing()
+        // this one syncs again, or when their lease runs out if it never does. A model download stops with it and stays
+        // owed for the next launch (the person's Cancel is `cancelDownload`).
+        state.cancelProcessing()
         if state.isRecording || state.isStartingRecording { await state.stopRecording() }
         // Recorders and phones that recorded along hear the stop before the link goes (briefly).
         await state.sources.recorders.settle(within: .seconds(5))

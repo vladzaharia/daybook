@@ -8,6 +8,7 @@ import Foundation
 ///       preset:<quick|balanced|detailed>   choose a preset first
 ///       use:<role>=<key>                   then choose a model for a role (Custom)
 ///       downloading:<key>                  start a download that stops partway (nothing is fetched)
+///       failed:<key>  wifi:<key>           a download that stopped on its own, or one owed and waiting for Wi‑Fi
 ///       updates:<key>                      check for updates against a scripted Hugging Face that has
 ///                                          a newer revision of <key>
 ///       add                                open Add Model on a scripted repository and check it

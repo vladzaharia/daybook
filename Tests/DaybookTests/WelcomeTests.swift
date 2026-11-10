@@ -147,6 +147,26 @@ final class WelcomeTests: XCTestCase {
         XCTAssertEqual(permissions.computerAudio, .allowed)
     }
 
+    /// Ready's Open Daybook at login (uxf-08): on at first only while When a call starts isn't Off, and nothing is added
+    /// to Login Items until the person continues with it on.
+    func testBehaviorOpenAtLoginIsOfferedForCallsAndAddedOnlyWhenThePersonContinues() {
+        XCTAssertTrue(WelcomeLogin.initial(callPolicy: .ask, isOn: false), "calls are noticed only while Daybook is open")
+        XCTAssertTrue(WelcomeLogin.initial(callPolicy: .record, isOn: false))
+        XCTAssertFalse(WelcomeLogin.initial(callPolicy: .off, isOn: false))
+        XCTAssertTrue(WelcomeLogin.initial(callPolicy: .off, isOn: true), "already a login item: it shows so")
+
+        let service = OpenAtLoginTests.FakeService()
+        let item = LoginItem(service: service)
+        XCTAssertEqual(service.calls, [], "showing the page adds nothing")
+        WelcomeLogin.apply(false, to: item)
+        XCTAssertEqual(service.calls, [], "continuing with it off adds nothing")
+        WelcomeLogin.apply(true, to: item)
+        XCTAssertEqual(service.calls, ["register"])
+        XCTAssertTrue(item.isOn)
+        XCTAssertEqual(WelcomeWords.openAtLogin, "Open Daybook at login")
+        XCTAssertEqual(WelcomeWords.openAtLoginReason, "So Daybook can notice calls.")
+    }
+
     func testBehaviorPermissionStatesMatchSettings() {
         XCTAssertEqual(CapturePermissions.state(microphone: .authorized), .allowed)
         XCTAssertEqual(CapturePermissions.state(microphone: .notDetermined), .askable)

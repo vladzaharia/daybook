@@ -561,9 +561,11 @@ Code: `Sources/Daybook/Captions/` (the Mac's controller, echo rule, and settings
   too: "Show while recording" (on by default, as on the iPhone) and the language ("Same as This Mac",
   any `SpeechTranscriber` locale, and those only the downloaded live recognizers cover,
   `LiveModelSet.languages`: the Latin model's six, the multilingual model's 35; on macOS 15 only
-  those), with a footer, only while captions are on, that says whether the language downloads the
-  first time (never asking triggers a download), or, on macOS 15, that live transcription doesn't
-  cover the chosen language; none when a downloaded recognizer covers it. A language chosen before
+  those), with a footer, only while captions are on, that says why they can't run in the chosen
+  language (the system says it isn't offered, or, on macOS 15, live transcription doesn't cover it);
+  none when they can, including a language the system fetches the first time it's recorded with,
+  which is how it works rather than something to do (never asking triggers a download), and none
+  when a downloaded recognizer covers it. A language chosen before
   its model was removed stays chosen and listed, so the choice still reads, and captions return when
   a model covers it again (`LiveCaptionLanguages`, DaybookCaptions). It's in General, beside the other recording choices, rather than Models: captions use
   the system's speech assets, which Daybook doesn't download or manage, and they never feed the

@@ -429,6 +429,8 @@ final class AppState {
         queue = ProcessingQueue(owedURL: libraryURL.appendingPathComponent("local-queue.json"))
         let storedPreferences = defaults.data(forKey: Preference.processingPreferences).flatMap { try? JSONDecoder().decode(ProcessingPreferences.self, from: $0) }
         var processingPreferences = storedPreferences ?? .init()
+        // A fresh Mac starts on its recommended preset, speaker effort included (ux-mac-14).
+        if ModelPreset.isFirstLaunch(defaults) { processingPreferences = ModelPreset.firstLaunchPreferences(processingPreferences, defaults: defaults) }
         let selections = Self.loadModelSelections(defaults: defaults, speakerModel: storedPreferences?.speakerModelID)
         processingPreferences.speakerModelID = selections[.diarization] ?? processingPreferences.speakerModelID
         modelSelections = selections
@@ -687,7 +689,8 @@ final class AppState {
 
     /// Selections from `modelSelections`, or, on the first launch after the model system arrived,
     /// migrated from the catalog IDs Daybook stored before ("whisper-base", "qwen-7b",
-    /// "speaker-community-1"). The old keys are left in place for an older build.
+    /// "speaker-community-1"). The old keys are left in place for an older build. A fresh Mac starts on its recommended
+    /// preset (`ModelPreset.firstLaunch`).
     static func loadModelSelections(defaults: UserDefaults, speakerModel: String?) -> ModelSelections {
         if let data = defaults.data(forKey: Preference.modelSelections), var stored = try? JSONDecoder().decode(ModelSelections.self, from: data) {
             // Small tasks arrived after the model system: once, a selection without that role takes the initial one.
@@ -714,10 +717,12 @@ final class AppState {
             }
             return stored
         }
-        let migrated = ModelSelections.migrating(
-            legacy: [.transcription: defaults.string(forKey: Preference.legacyTranscriptionModel), .summarization: defaults.string(forKey: Preference.legacySummaryModel),
-                     .diarization: speakerModel],
-            catalog: .builtIn, defaults: LiveModelChoices.addingDefaults(to: ModelRecommendations.initialSelections(), platform: .macOS))
+        let legacy: [ModelRole: String?] = [.transcription: defaults.string(forKey: Preference.legacyTranscriptionModel),
+                                            .summarization: defaults.string(forKey: Preference.legacySummaryModel), .diarization: speakerModel]
+        // Nothing to migrate is a fresh Mac: its recommended preset (ux-mac-14). A migration starts from the initial selection.
+        let fresh = legacy.values.allSatisfy { ($0 ?? "").isEmpty }
+        let initial = fresh ? ModelPreset.firstLaunch().selections : ModelRecommendations.initialSelections()
+        let migrated = ModelSelections.migrating(legacy: legacy, catalog: .builtIn, defaults: LiveModelChoices.addingDefaults(to: initial, platform: .macOS))
         defaults.set(true, forKey: Preference.liveModelsAdded)
         if let data = try? JSONEncoder().encode(migrated) { defaults.set(data, forKey: Preference.modelSelections) }
         return migrated

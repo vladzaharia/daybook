@@ -102,9 +102,10 @@ public enum LiveCaptionLanguages {
         return options
     }
 
-    /// The footer, only while captions are on: why they can't run here, why they won't in the chosen
-    /// language, or what the Speech framework still has to download. Nil when a downloaded recognizer
-    /// covers the language, or there's nothing to say.
+    /// The footer, only while captions are on: why they can't run here, or why they won't in the chosen
+    /// language. Nil when they can, including a language the Speech framework fetches the first time it's
+    /// recorded with (that's how it works, not something to do: docs/interface.md, principle 7), when a
+    /// downloaded recognizer covers the language, or when there's nothing to say.
     public static func footer(systemCaptions: Bool, liveLanguages: [String], liveCovers: Bool, enabled: Bool, locale: Locale,
                               availability: LiveCaptionAvailability?) -> String? {
         guard supported(systemCaptions: systemCaptions, liveLanguages: liveLanguages) else {
@@ -113,10 +114,8 @@ public enum LiveCaptionLanguages {
         guard enabled, !liveCovers else { return nil }
         guard systemCaptions else { return "Live transcription doesn’t cover \(LiveCaptionAvailability.name(locale))." }
         switch availability {
-        case .needsDownload(let locale)?:
-            return "Captions for \(LiveCaptionAvailability.name(locale)) download the first time you record with them on."
         case .unavailable(let reason)?: return reason
-        case .ready?, nil: return nil
+        case .needsDownload?, .ready?, nil: return nil
         }
     }
 }

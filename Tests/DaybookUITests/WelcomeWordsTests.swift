@@ -26,6 +26,9 @@ final class WelcomeWordsTests: XCTestCase {
     func testBehaviorTheReadyLineSaysWhatHappensToARecordingMadeNow() {
         XCTAssertEqual(WelcomeWords.readyMessage(downloading: true, canTranscribe: false),
                        "Start a conversation now. It’s transcribed once the models download.")
+        // Asked for and waiting for Wi‑Fi on cellular: the transcript waits for it too (uxf-17).
+        XCTAssertEqual(WelcomeWords.readyMessage(downloading: true, canTranscribe: false, waitsForWiFi: true),
+                       "Start a conversation now. It’s transcribed once the models download on Wi‑Fi.")
         XCTAssertEqual(WelcomeWords.readyMessage(downloading: false, canTranscribe: true), "Start a conversation now.")
         XCTAssertEqual(WelcomeWords.readyMessage(downloading: false, canTranscribe: false, transcribesElsewhere: true),
                        "Start a conversation now. Your Mac transcribes it.")

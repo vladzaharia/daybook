@@ -14,6 +14,7 @@ import Foundation
 /// | Transcribed | line: "Not summarized yet" + Summarize | the preview |
 /// | Queued here | line: "Waiting to transcribe after “Roadmap review”" + Cancel | "Waiting to transcribe" + clock |
 /// | Waiting for models | box (accent): "Download models to transcribe this conversation" + Choose Models…, Download | "Waiting for models" |
+/// | … while they download | line: "Downloading models · 40%" + "3.0 of 7.6 GB", bar, Cancel; "Downloading models · Waiting for Wi‑Fi" + Download; box (problem): "Couldn’t download Gemma 4 12B" + Try Again | "Waiting for models" |
 /// | Paused here | line: "Paused" + Resume, or why ("Continues when Daybook is open") | "Paused" + pause glyph |
 /// | Requested, waiting for a Mac | line: "Waiting for your Mac" + "Last seen 2 h ago", Cancel for its own | the same |
 /// | Requested, this iPhone could do it | box (accent): "Download models to transcribe this conversation" + Download | the same |
@@ -53,8 +54,8 @@ public struct ConversationStatusPresentation: Equatable, Sendable {
         case dontWait
         /// Stop the model download the work waits for.
         case cancelDownload
-        /// Download the models the work needs (this many bytes).
-        case downloadModels(bytes: Int64)
+        /// Download the models the work needs (this many bytes); `again` after a download stopped ("Try Again").
+        case downloadModels(bytes: Int64, again: Bool = false)
         case chooseModels
         case cloudSettings
         /// Summarize on this device instead ("This Mac", "This iPhone"), or ask your Mac.
@@ -78,7 +79,7 @@ public struct ConversationStatusPresentation: Equatable, Sendable {
             case .resume: return "Resume"
             case .cancel, .cancelRequest, .cancelDownload: return "Cancel"
             case .dontWait: return "Don’t Wait"
-            case .downloadModels: return "Download"
+            case .downloadModels(_, let again): return again ? "Try Again" : "Download"
             case .chooseModels: return "Choose Models…"
             case .cloudSettings: return "Cloud Settings…"
             case .summarizeHere(let device): return "Summarize on \(device)"
@@ -150,6 +151,9 @@ extension ConversationStatusPresentation {
         public var missingModelBytes: Int64
         /// The download the work waits for, under way.
         public var download: Download?
+        /// How the downloads this device manages stand (a Mac's queue): the whole set arriving, waiting for Wi‑Fi, or
+        /// stopped. Said for the work that waits for them before `download`.
+        public var models: ModelDownloadState?
 
         public struct Download: Equatable, Sendable {
             public var name: String
@@ -158,16 +162,16 @@ extension ConversationStatusPresentation {
         }
 
         public init(processesHere: Bool, transcribes: Bool, summarizes: Bool, controlsQueue: Bool, managesModels: Bool,
-                    missingModelBytes: Int64 = 0, download: Download? = nil) {
+                    missingModelBytes: Int64 = 0, download: Download? = nil, models: ModelDownloadState? = nil) {
             self.processesHere = processesHere; self.transcribes = transcribes; self.summarizes = summarizes
             self.controlsQueue = controlsQueue; self.managesModels = managesModels
-            self.missingModelBytes = missingModelBytes; self.download = download
+            self.missingModelBytes = missingModelBytes; self.download = download; self.models = models
         }
 
         /// A Mac: it does it all.
-        public static func mac(missingModelBytes: Int64 = 0, download: Download? = nil) -> LocalCapabilities {
+        public static func mac(missingModelBytes: Int64 = 0, download: Download? = nil, models: ModelDownloadState? = nil) -> LocalCapabilities {
             LocalCapabilities(processesHere: true, transcribes: true, summarizes: true, controlsQueue: true, managesModels: true,
-                              missingModelBytes: missingModelBytes, download: download)
+                              missingModelBytes: missingModelBytes, download: download, models: models)
         }
 
         /// An iPhone: its own recordings when processing here is on, and summaries when its model is here.
@@ -391,6 +395,7 @@ extension ConversationStatusPresentation {
                                                   actions: local.controlsQueue ? [.cancel] : [])
 
         case .requested(.models):
+            if local.managesModels, let models = local.models { return modelsHere(models) }
             if local.download != nil { return downloadHere(local) }
             guard local.managesModels else {
                 return ConversationStatusPresentation(kind: .line, symbol: "arrow.down.circle", title: "Waiting for models")
@@ -528,12 +533,31 @@ extension ConversationStatusPresentation {
     /// "Needs your Mac to summarize": no device this one can reach summarizes, and no cloud model is on offer.
     public static let needsMacToSummarize = "Needs your Mac to summarize"
 
+    /// The downloads a Mac's work waits for, in the words every surface says them with (`ProcessingWords`): the whole
+    /// set arriving ("Downloading models · 40%", with what's here of the total) and Cancel; waiting for Wi‑Fi, with
+    /// Download to go on over this network now; or a download that stopped on its own ("Couldn’t download Gemma 4 12B")
+    /// with Try Again.
+    static func modelsHere(_ models: ModelDownloadState) -> ConversationStatusPresentation {
+        let title = ProcessingWords.modelDownloadLine(models)
+        switch models {
+        case .downloading:
+            return ConversationStatusPresentation(kind: .line, symbol: "arrow.down.circle", title: title,
+                                                  detail: ProcessingWords.modelDownloadDetail(models), progress: models.fraction,
+                                                  actions: [.cancelDownload])
+        case .waitingForWiFi(let bytes):
+            return ConversationStatusPresentation(kind: .line, symbol: "wifi", title: title, detail: ProcessingWords.modelDownloadDetail(models),
+                                                  actions: [.downloadModels(bytes: bytes)])
+        case .failed(_, let bytes):
+            return ConversationStatusPresentation(kind: .box(.problem), symbol: "exclamationmark.triangle.fill", title: title,
+                                                  actions: [.downloadModels(bytes: bytes, again: true)])
+        }
+    }
+
     /// A download this device makes to do the work itself: under way, a line with its figure and Cancel; else a box
     /// with Download and its size.
     static func downloadHere(_ local: LocalCapabilities) -> ConversationStatusPresentation {
         if let download = local.download {
-            return ConversationStatusPresentation(kind: .line, symbol: "arrow.down.circle",
-                                                  title: "Downloading \(download.name) · \(ProcessingWords.percentText(download.fraction))",
+            return ConversationStatusPresentation(kind: .line, symbol: "arrow.down.circle", title: ProcessingWords.downloadingModels(download.fraction),
                                                   progress: download.fraction, actions: [.cancelDownload])
         }
         return ConversationStatusPresentation(kind: .box(.accent), symbol: "arrow.down.circle.fill",
