@@ -66,6 +66,24 @@ public struct ElapsedClock: View {
     }
 }
 
+extension TimelineSchedule where Self == PeriodicTimelineSchedule {
+    /// Once a second on a countdown's own phase: each tick lands as the whole seconds left to `deadline` change, so
+    /// every view counting down to the same moment says the same number, whenever each began ("Summarizing in 7 s"
+    /// never sits beside "6 s").
+    public static func countdown(to deadline: Date, now: Date = Date()) -> PeriodicTimelineSchedule {
+        .periodic(from: CountdownPhase.tick(before: deadline, at: now), by: 1)
+    }
+}
+
+/// Where a countdown's ticks fall: a whole number of seconds before its deadline, where its seconds left, rounded
+/// up as every countdown says them, change.
+public enum CountdownPhase {
+    /// The countdown's latest tick at or before `now` (the deadline itself once it has passed).
+    public static func tick(before deadline: Date, at now: Date) -> Date {
+        deadline.addingTimeInterval(-max(0, deadline.timeIntervalSince(now)).rounded(.up))
+    }
+}
+
 extension View {
     /// Text whose number changes on its own (a countdown, a percent): its digits roll as the clock's do, a fade
     /// under Reduce Motion. The roll is keyed to `value`, so it plays however the change arrives (a TimelineView's

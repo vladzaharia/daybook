@@ -70,7 +70,8 @@ struct LibraryView: View {
                 if state.place.isDevice && !state.isSearching { DeviceRecordingsList(state: state) }
                 else { ConversationList(state: state) }
             }
-            .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 380)
+            // A wide window gives the list room for two lines of gist (`ConversationRowView.twoLineGistWidth`).
+            .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 440)
         } detail: {
             // The inspector puts the page and itself in a split view of their own, and gives each a
             // new split item when its view's identity changes. Swapping the page's item takes the
@@ -572,23 +573,30 @@ private struct RecordingPill: View {
 private struct EmptyLibraryView: View {
     @Bindable var state: AppState
     @State private var isDropTargeted = false
+    /// Record's and Import's words.
+    private static let controlText: CGFloat = 13
     var body: some View {
         VStack(spacing: Space.s4) {
             DaybookMark(size: 64)
                 .padding(.bottom, Space.s2)
             Text("No Conversations Yet").font(TypeStyle.docTitleSmall).foregroundStyle(Ink.title)
             Text("Record a conversation, or drop audio files here.").foregroundStyle(Ink.secondary)
+            // One shape for both: capsules of one height, Import the quieter.
             HStack(spacing: Space.s3) {
                 // The red dot, as on the toolbar's Record and Floating Notes': the one red control.
                 Button { Task { await state.startRecording() } } label: {
-                    RecordControlLabel(size: 13).padding(.horizontal, 14).padding(.vertical, 6)
+                    RecordControlLabel(size: Self.controlText).padding(.horizontal, 14).padding(.vertical, 6)
                 }
                 .buttonStyle(DaybookControlStyle(role: .standard, shape: .capsule))
                 .disabled(!state.isReady || state.isStartingRecording)
-                Button("Import Audio…") { state.chooseImport() }
-                    .buttonStyle(.bordered)
+                Button { state.chooseImport() } label: {
+                    Text("Import Audio…")
+                        .font(.system(size: Self.controlText, weight: .medium))
+                        .foregroundStyle(DaybookPalette.Ink.body)
+                        .padding(.horizontal, 14).padding(.vertical, 6)
+                }
+                .buttonStyle(DaybookControlStyle(role: .standard, shape: .capsule))
             }
-            .controlSize(.large)
             .padding(.top, Space.s2)
             if let id = state.downloadingID {
                 ActivityReader {

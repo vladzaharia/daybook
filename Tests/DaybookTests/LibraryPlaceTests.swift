@@ -1,6 +1,7 @@
 import AVFoundation
 import DaybookCaptions
 import DaybookCore
+import DaybookIntelligence
 @testable import DaybookKit
 import DaybookTestSupport
 import DaybookUI
@@ -143,6 +144,34 @@ final class LibraryPlaceTests: XCTestCase {
         XCTAssertEqual(MacRowStatus.make(state, meeting)?.kind, .recording)
         XCTAssertEqual(MacRowStatus.make(state, meeting)?.text, "Recording now")
         state.recordingID = nil
+    }
+
+    /// VM-06: the list's subtitle says this Mac's queue in the shared words: the step that runs, by the name its page
+    /// gives it, and how many wait; nothing while nothing works, and nothing in the Trash.
+    func testBehaviorTheListSubtitleNamesTheStepThatRunsAndSaysNothingInTheTrash() async throws {
+        let (state, root, defaults) = try await makeState()
+        defer { cleanUp(root, defaults) }
+        let running = state.newMeeting(title: "Roadmap review")
+        let waiting = state.newMeeting(title: "Northwind call")
+        XCTAssertEqual(MacListSubtitle.text(state, results: 0), "", "nothing works: nothing to say")
+
+        state.processingID = running
+        state.processingProgress = IntelligenceProgress(0.4, "Transcribing", stage: .transcribing)
+        state.processingQueue = [state.makeJob(meetingID: waiting, mode: .newAudio)]
+        XCTAssertEqual(MacListSubtitle.text(state, results: 0), "Transcribing · 1 waiting", "the figure is the row's")
+        state.processingProgress = IntelligenceProgress(0, "Summarizing", stage: .summarizing)
+        XCTAssertEqual(MacListSubtitle.text(state, results: 0), "Summarizing · 1 waiting", "the step that runs, not always Transcribing")
+        XCTAssertNil(MacListSubtitle.countdown(state), "no countdown: it doesn't tick")
+
+        state.place = .trash
+        XCTAssertEqual(MacListSubtitle.text(state, results: 0), "", "the Trash's rows don't work")
+        state.search = "roadmap"
+        XCTAssertEqual(MacListSubtitle.text(state, results: 1), "1 result", "a search counts its results anywhere")
+        state.search = ""
+        state.place = .section(.all)
+        state.processingQueue = []
+        state.processingID = nil
+        XCTAssertEqual(MacListSubtitle.text(state, results: 0), "")
     }
 
     func testBehaviorASearchResultOpensWhereThisMacShowsWhatItFound() async throws {

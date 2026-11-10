@@ -3,7 +3,8 @@ import Foundation
 
 /// This device's processing queue in one line, the same on both apps: Floating Notes' home and chip on a Mac, the
 /// iPhone's status sheet when it processes its own recordings. "This Mac  Transcribing · 40% · 1 waiting",
-/// "This iPhone  Paused · Continues when iPhone is charging". Nil while there's no work.
+/// "This iPhone  Paused · Continues when iPhone is charging". Nil while there's no work. The Mac's list says it in
+/// fewer words over its column (`subtitle`).
 public enum QueueStatusWords {
     public struct Queue: Equatable, Sendable {
         /// The step the running conversation is in; nil when nothing runs.
@@ -64,5 +65,20 @@ public enum QueueStatusWords {
             return line("\(queue.waiting) waiting to transcribe", .calm, short: "\(queue.waiting) waiting")
         }
         return line("Waiting for models", .attention)
+    }
+
+    /// The same queue in the fewest words, for the subtitle over a window's list: the step that runs and how many
+    /// wait, without the figure the running row's line shows ("Transcribing · 1 waiting", "Summarizing in 12 s · 1
+    /// waiting"), or a download with its percent, which no row shows. Nil while nothing runs, counts down, or
+    /// downloads: a subtitle speaks only while work is happening.
+    public static func subtitle(_ queue: Queue, now: Date = Date()) -> String? {
+        let waiting = queue.waiting > 0 ? " · \(queue.waiting) waiting" : ""
+        if let until = queue.countdown {
+            return "Summarizing in \(max(1, Int(until.timeIntervalSince(now).rounded(.up)))) s" + waiting
+        }
+        if queue.cloudModel != nil { return ProcessingWords.verb(.summarizing) + waiting }
+        if let stage = queue.running { return ProcessingWords.verb(stage) + waiting }
+        if let download = queue.download { return "Downloading \(download.name) · \(ProcessingWords.percentText(download.fraction))" }
+        return nil
     }
 }

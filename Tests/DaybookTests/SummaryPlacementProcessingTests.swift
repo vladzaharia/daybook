@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookDesign
 @testable import DaybookKit
 import DaybookLink
 import DaybookTestSupport
@@ -150,6 +151,14 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         XCTAssertEqual(row.kind, .waiting)
         XCTAssertNotNil(row.countdownUntil, "The row counts down")
         XCTAssertEqual(row.text?.hasPrefix("Summarizing in "), true)
+        // VM-16: the list's subtitle counts down to the same moment, on the same ticks, so the two say the same number.
+        let until = try XCTUnwrap(row.countdownUntil)
+        XCTAssertEqual(MacListSubtitle.countdown(rig.state), until, "the subtitle ticks on the row's deadline")
+        let tick = CountdownPhase.tick(before: until, at: Date())
+        for offset in [0.0, 1, 2.5, 7] {
+            let moment = tick.addingTimeInterval(offset)
+            XCTAssertEqual(MacListSubtitle.text(rig.state, results: 0, at: moment), row.text(at: moment), "\(offset) s on")
+        }
         guard case .summaryCountdown(_, let cloud)? = FloatingStatusInputs.work(for: meeting, state: rig.state) else {
             return XCTFail("Floating Notes shows the countdown")
         }

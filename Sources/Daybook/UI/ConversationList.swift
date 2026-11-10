@@ -13,6 +13,8 @@ struct ConversationList: View {
     @State private var tagging: ConversationIDs?
     /// Matches in saved live captions, which the results list and the subtitle's count share.
     @State private var captionHits: [LibraryCaptionSearch.Hit] = []
+    /// The column is wide enough for two lines of gist (`ConversationRowView.twoLineGistWidth`).
+    @State private var isWide = false
     @Environment(\.undoManager) private var undoManager
 
     private var selection: Binding<Set<UUID>> {
@@ -31,8 +33,10 @@ struct ConversationList: View {
             else { browsing }
         }
         .navigationTitle(title)
-        // The subtitle follows a download's percent without redrawing the list.
-        .modifier(ListSubtitle(placements: state.placements) { subtitle(at: $0) })
+        // The subtitle follows the queue and a download's percent without redrawing the list.
+        .modifier(ListSubtitle { MacListSubtitle.countdown(state) } text: {
+            MacListSubtitle.text(state, results: state.searchHits.count + captionHits.count, at: $0)
+        })
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
                 SyncAttention(state: state)
@@ -73,6 +77,9 @@ struct ConversationList: View {
         }
         .listStyle(.inset)
         .softTopScrollEdge()
+        // A wide column gives its rows two lines of gist, as Mail's two-line preview.
+        .onGeometryChange(for: Bool.self) { $0.size.width >= ConversationRowView.twoLineGistWidth } action: { isWide = $0 }
+        .environment(\.conversationListIsWide, isWide)
         // ⌘C copies the selection: inside Daybook the conversations, elsewhere their Markdown or their words.
         .copyable(state.meetings.filter { selection.wrappedValue.contains($0.id) }.map(ConversationTransfer.init))
         .motion(state.isReady ? Motion.state : .linear(duration: 0), value: meetings.map(\.id))
@@ -98,24 +105,6 @@ struct ConversationList: View {
         case .device(let id): return state.devices.session(id)?.device.name ?? "Device"
         case .trash: return LibraryWords.trash
         }
-    }
-
-    /// Says something only while work is happening (a selection's count is on the page). While the running job's
-    /// summary counts down, or runs in the cloud, it says that: "Summarizing in 12 s".
-    private func subtitle(at now: Date) -> String {
-        if state.isSearching {
-            let count = state.searchHits.count + captionHits.count
-            return count == 1 ? "1 result" : "\(count) results"
-        }
-        if state.isStoppingRecording { return "Saving recording…" }
-        if state.isRecording { return "Recording" }
-        if let id = state.processingID {
-            if let placing = state.placements[id]?.shortLine(at: now) { return placing }
-            let total = state.queuedIDs.count + 1
-            return total > 1 ? "Transcribing 1 of \(total)" : "Transcribing"
-        }
-        if state.downloadingID != nil { return "Downloading models · \(Int(state.downloadProgress.fraction * 100))%" }
-        return ""
     }
 
     private func importAudio(_ urls: [URL]) -> Bool {
@@ -147,15 +136,54 @@ enum MacRowStatus {
     }
 }
 
-/// The list's subtitle, redrawn by a download's progress and a summary's countdown on their own (what `text` reads
-/// redraws only it): a countdown's seconds once a second.
+/// What the list's subtitle says on this Mac. Only a search, a recording, and work happening give it words (a
+/// selection's count is on the page): a search's count, the recording, then this Mac's queue in the words Floating
+/// Notes' home uses for it, without the figure the running row shows (`QueueStatusWords.subtitle`): "Transcribing · 1
+/// waiting", "Summarizing in 12 s", the step named as the page names it. Nothing in the Trash, where nothing works.
+@MainActor
+enum MacListSubtitle {
+    static func text(_ state: AppState, results: Int, at now: Date = Date()) -> String {
+        if state.isSearching { return results == 1 ? "1 result" : "\(results) results" }
+        if state.place.isTrash { return "" }
+        if state.isStoppingRecording { return "Saving recording…" }
+        if state.isRecording { return "Recording" }
+        return QueueStatusWords.subtitle(queue(state), now: now) ?? ""
+    }
+
+    /// When the running conversation's summary starts, while it counts down.
+    static func countdown(_ state: AppState) -> Date? {
+        state.processingID.flatMap { state.placements[$0]?.deadline }
+    }
+
+    /// This Mac's queue as the shared words take it, as Floating Notes' home reads it: the step the page and the
+    /// claim say (`AppState.runningStage`), where the summary runs, what waits, and a download.
+    static func queue(_ state: AppState) -> QueueStatusWords.Queue {
+        var queue = QueueStatusWords.Queue(waiting: state.processingQueue.count)
+        if let id = state.processingID, state.meetings.contains(where: { $0.id == id }) {
+            queue.running = state.runningStage
+            switch state.placements[id]?.phase {
+            case .countingDown(_, let until)?: queue.countdown = until
+            case .started(.cloud(let model))?: queue.cloudModel = model.name
+            default: break
+            }
+        }
+        if let id = state.downloadingID {
+            queue.download = .init(name: state.modelCatalog.name(for: id), fraction: state.downloadProgress.fraction)
+        }
+        return queue
+    }
+}
+
+/// The list's subtitle, redrawn by what `text` reads (the queue, a download's percent) on its own, and while the
+/// running summary counts down, once a second on the countdown's own phase (`.countdown(to:)`), as its row ticks, so
+/// the two never say different seconds.
 private struct ListSubtitle: ViewModifier {
-    let placements: SummaryPlacements
+    let countdown: () -> Date?
     let text: (Date) -> String
 
     func body(content: Content) -> some View {
-        let counting = placements.planners.values.contains { $0.deadline != nil }
-        TimelineView(.periodic(from: .now, by: counting ? 1 : 3_600)) { context in
+        let schedule: PeriodicTimelineSchedule = countdown().map { .countdown(to: $0) } ?? .periodic(from: .now, by: 3_600)
+        TimelineView(schedule) { context in
             content.navigationSubtitle(text(context.date))
         }
     }
