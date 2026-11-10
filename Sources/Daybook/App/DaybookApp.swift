@@ -1,5 +1,6 @@
 import AppKit
 import DaybookCore
+import DaybookIntelligence
 import DaybookKit
 import SwiftUI
 
@@ -314,6 +315,8 @@ final class DaybookDelegate: NSObject, NSApplicationDelegate {
         // What a share left behind (`ExportFiles`), as the iPhone clears it at launch. A run on a library of its own
         // (`--library`) may sit beside the app mid-share, so it leaves them.
         if LaunchOptions.libraryURL == nil { Task.detached(priority: .utility) { ExportFiles.clear() } }
+        // Audio copies a crashed run's processing left (`ProcessingScratch`); a run still going keeps its own.
+        Task.detached(priority: .utility) { ProcessingScratch.clear() }
         #if DEBUG
         PerfProbe.start()
         switch LaunchOptions.value(after: "--appearance") {

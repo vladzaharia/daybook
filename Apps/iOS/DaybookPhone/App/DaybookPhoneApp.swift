@@ -1,3 +1,4 @@
+import DaybookIntelligence
 import DaybookKit
 import SwiftUI
 import UIKit
@@ -13,8 +14,9 @@ struct DaybookPhoneApp: App {
         // Hosting unit tests, the app reaches nothing real: the tests build their own models.
         let hostsTests = options.isRunningTests
         let environment: PhoneAppEnvironment = hostsTests ? .inert : .live(options)
-        // Exports a share sheet never finished with (the app quit first).
+        // Exports a share sheet never finished with (the app quit first), and audio copies processing left when it crashed.
         ExportFiles.clear()
+        ProcessingScratch.clear()
         // Synthetic audio in tests and simulator demos, so nothing ever opens a real microphone there.
         let recorderEnvironment: PhoneRecorderEnvironment = options.syntheticAudio || hostsTests ? .synthetic() : .live()
         let root = options.libraryPath.map { URL(fileURLWithPath: $0, isDirectory: true) }

@@ -110,11 +110,12 @@ final class ParakeetTranscriber: Transcribing, @unchecked Sendable {
         // Too short to decode (FluidAudio needs about a third of a second): no words.
         guard duration >= 0.35 else { return RecognitionResult(segments: [], language: code, duration: duration) }
 
-        // FluidAudio's file reader keeps only the first channel; mix others in first.
+        // FluidAudio's file reader keeps only the first channel; mix others in first. The copy is the conversation's
+        // audio, so it's made where a crash leaves nothing for long (`ProcessingScratch`).
         var source = url
         var temporary: URL?
         if channels > 1 {
-            let mono = FileManager.default.temporaryDirectory.appendingPathComponent("daybook-parakeet-\(UUID().uuidString).caf")
+            let mono = try ProcessingScratch.file(extension: "caf")
             try MonoAudioReader.writeMonoCopy(of: url, to: mono)
             source = mono; temporary = mono
         }
