@@ -29,7 +29,8 @@ struct RecordingNotification: Equatable {
 enum RecordingNotificationResponse: Equatable {
     /// The notification itself: open what it's about.
     case open(RecordingNotification.Kind, UUID)
-    case recordAgain
+    /// "Recording stopped"'s Record Again: into the conversation that stopped.
+    case recordAgain(UUID)
 }
 
 /// Posts and removes notifications. The system's center in the app; tests keep a list.
@@ -160,15 +161,16 @@ final class RecordingNotifications {
         center.remove([identifier])
     }
 
-    /// A click: Record Again records a new conversation once the library is open; the notification itself opens what
+    /// A click: Record Again records into the conversation that stopped, after what was saved, once the library is open,
+    /// as Floating Notes' Record Again does, so a call cut short isn't split in two; the notification itself opens what
     /// it's about.
     func respond(_ response: RecordingNotificationResponse) {
         guard let state else { return }
         switch response {
-        case .recordAgain:
+        case .recordAgain(let id):
             Task { @MainActor in
                 guard await LibraryOpening.opens(state) else { return }
-                await state.startRecording()
+                await state.recordAgain(into: id)
             }
         case .open(.stopped, let id):
             if state.meetings.contains(where: { $0.id == id }) { state.showConversation(id) }
@@ -227,8 +229,8 @@ final class SystemRecordingNotifications: NSObject, RecordingNotificationPosting
         let id = (info["conversation"] as? String).flatMap(UUID.init(uuidString:))
         let action = response.actionIdentifier
         Task { @MainActor in
-            if action == RecordingNotifications.recordAgainAction {
-                self.respond?(.recordAgain)
+            if action == RecordingNotifications.recordAgainAction, let id {
+                self.respond?(.recordAgain(id))
             } else if let kind, let id {
                 self.respond?(.open(kind, id))
             } else {

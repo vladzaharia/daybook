@@ -98,6 +98,73 @@ final class RecorderSurfaceTests: XCTestCase {
         XCTAssertNil(StatusChip.accessibilityValue(progress: still.progress))
     }
 
+    // MARK: After Stop
+
+    /// One rule on both apps for recording more once a recording ends: Keep Recording into the same conversation for two
+    /// minutes after a Stop, then Record for a new one; Record Again into the same one after a recording that stopped on
+    /// its own, however long ago.
+    func testBehaviorAfterStopKeepRecordingLastsTwoMinutesThenRecordStartsANewConversation() {
+        let stop = Date(timeIntervalSince1970: 1_000)
+        XCTAssertEqual(RecordMore.window, 120)
+        XCTAssertEqual(RecordMore.windowEnds(after: stop), stop.addingTimeInterval(120))
+
+        let justAfter = RecordMore(stoppedShort: false, stoppedAt: stop, now: stop.addingTimeInterval(5))
+        XCTAssertEqual(justAfter, .keepRecording)
+        XCTAssertEqual(justAfter.title, "Keep Recording")
+        XCTAssertTrue(justAfter.recordsIntoSameConversation)
+        XCTAssertEqual(RecordMore(stoppedShort: false, stoppedAt: stop, now: stop.addingTimeInterval(119)), .keepRecording)
+
+        let later = RecordMore(stoppedShort: false, stoppedAt: stop, now: stop.addingTimeInterval(120))
+        XCTAssertEqual(later, .record, "two minutes on, it's for the next call")
+        XCTAssertEqual(later.title, "Record")
+        XCTAssertFalse(later.recordsIntoSameConversation)
+        XCTAssertEqual(RecordMore(stoppedShort: false, stoppedAt: nil, now: stop), .record,
+                       "nothing to go on from: the moment ended early (another recording, the meeting over, the next one starting)")
+
+        let again = RecordMore(stoppedShort: true, stoppedAt: stop, now: stop.addingTimeInterval(3600))
+        XCTAssertEqual(again, .recordAgain, "a recording that stopped on its own is recorded into again, however long ago")
+        XCTAssertEqual(again.title, "Record Again")
+        XCTAssertTrue(again.recordsIntoSameConversation)
+        XCTAssertEqual(RecordMore(stoppedShort: true, stoppedAt: nil), .recordAgain)
+
+        XCTAssertEqual(RecorderAfterStopState(title: "Design review").recordMore, .record, "nothing said: a new conversation")
+        XCTAssertEqual(RecorderAfterStopState(title: "Design review", recordMore: .keepRecording).recordMore.title, "Keep Recording")
+    }
+
+    /// After Stop the iPhone says what becomes of the recording, as the Mac's panel does: its processing in a chip, in
+    /// the words its library row says, filling as it goes; nothing when the row has nothing to say.
+    func testBehaviorAfterStopTheProcessingChipSaysWhatTheRowSays() throws {
+        let working = try XCTUnwrap(RecordingStatusWords.processingChip(
+            ConversationRowStatus(kind: .processing, text: "Transcribing on this iPhone · 40%", fraction: 0.4)))
+        XCTAssertEqual(working.target, .processing)
+        XCTAssertEqual(working.label, "Transcribing on this iPhone · 40%")
+        XCTAssertEqual(working.shortLabel, "40%")
+        XCTAssertEqual(working.progress, 0.4)
+        XCTAssertEqual(working.tone, .working)
+        XCTAssertTrue(working.isProminent, "what's becoming of it keeps its words longest")
+        XCTAssertNil(RecordingStatusWords.processingChip(ConversationRowStatus(kind: .processing, text: "Transcribing", fraction: 0))?.shortLabel,
+                     "no figure yet: the glyph alone when narrow")
+
+        let mac = try XCTUnwrap(RecordingStatusWords.processingChip(ConversationRowStatus(kind: .waiting, text: "Waiting for your Mac")))
+        XCTAssertEqual(mac.label, "Waiting for your Mac")
+        XCTAssertEqual(mac.shortLabel, "Waiting")
+        XCTAssertEqual(mac.tone, .calm)
+        XCTAssertNil(mac.progress)
+
+        let until = Date(timeIntervalSince1970: 1_012)
+        let countdown = try XCTUnwrap(RecordingStatusWords.processingChip(
+            ConversationRowStatus(kind: .waiting, text: "Summarizing in 12 s", countdownUntil: until)))
+        XCTAssertEqual(countdown.shortLabel, "12 s")
+        XCTAssertEqual(countdown.at(Date(timeIntervalSince1970: 1_004)).label, "Summarizing in 8 s", "its seconds move with it")
+
+        XCTAssertEqual(RecordingStatusWords.processingChip(ConversationRowStatus(kind: .waitingForModels, text: "Waiting for models"))?.tone,
+                       .attention)
+        XCTAssertEqual(RecordingStatusWords.processingChip(ConversationRowStatus(kind: .paused, text: "Paused"))?.shortLabel, "Paused")
+        XCTAssertNil(RecordingStatusWords.processingChip(nil), "done: the row shows its preview, the chips say nothing")
+        XCTAssertNil(RecordingStatusWords.processingChip(ConversationRowStatus(kind: .justFinished, text: nil)))
+        XCTAssertNil(RecordingStatusWords.processingChip(ConversationRowStatus(kind: .recording, text: "Recording now")))
+    }
+
     // MARK: Levels
 
     /// The iPhone feeds its microphone's trail itself, at its recorder's pace: the meters draw that trail, it counts

@@ -185,8 +185,10 @@ final class SystemEntryPointsTests: XCTestCase {
         XCTAssertEqual(DeviceNotifications.authorizationOptions, [.alert, .sound])
     }
 
-    /// The stop's notification opens its conversation; Record Again records a new one.
-    func testBehaviorAClickOpensTheConversationAndRecordAgainRecords() async throws {
+    /// The stop's notification opens its conversation; its Record Again records into that same conversation, as the
+    /// panel's does, so a call cut short isn't split in two, and leaves the window on what it showed.
+    /// Regression: it started a new conversation.
+    func testBehaviorAClickOpensTheConversationAndRecordAgainRecordsIntoIt() async throws {
         let microphone = FakeCaptureSource(method: "microphone")
         let state = await state(capture: Self.fakeCapture(microphone))
         let center = FakeNotificationCenter()
@@ -199,9 +201,12 @@ final class SystemEntryPointsTests: XCTestCase {
         XCTAssertEqual(state.selectedID, id)
         XCTAssertEqual(opened, 1)
 
-        notifier.respond(.recordAgain)
-        try await waitUntil("a new recording") { state.recordingID != nil }
-        XCTAssertNotEqual(state.recordingID, id)
+        let other = state.newMeeting(title: "Other")
+        notifier.respond(.recordAgain(id))
+        try await waitUntil("the recording") { state.recordingID != nil }
+        XCTAssertEqual(state.recordingID, id, "into the conversation that stopped")
+        XCTAssertEqual(state.meetings.count, 2, "no new conversation")
+        XCTAssertEqual(state.selectedID, other, "the window is left as it was")
         XCTAssertTrue(microphone.started)
         await state.stopRecording()
         await state.flush()

@@ -284,6 +284,33 @@ public enum RecordingStatusWords {
         }
     }
 
+    // MARK: Processing
+
+    /// After Stop, what's becoming of the conversation, as a chip in the words its library row says
+    /// (`ConversationStatusPresentation.row`): "Transcribing · 40%" filling as it goes, "Waiting for your Mac", "Waiting
+    /// for models", a summary's countdown. Nil when the row has nothing to say.
+    public static func processingChip(_ row: ConversationRowStatus?) -> RecorderChip? {
+        guard let row, let text = row.text else { return nil }
+        func chip(_ symbol: String, _ tone: StatusTone, short: String?, progress: Double? = nil) -> RecorderChip {
+            RecorderChip(target: .processing, symbol: symbol, label: text, shortLabel: short, tone: tone, progress: progress, detail: text,
+                         countdownUntil: row.countdownUntil)
+        }
+        switch row.kind {
+        case .processing:
+            return chip("quote.bubble", .working, short: row.fraction.flatMap { $0 > 0 ? ProcessingWords.percentText($0) : nil },
+                        progress: row.fraction)
+        case .waiting:
+            // A countdown's short words are its seconds ("12 s"), which move with it.
+            let seconds = row.countdownUntil == nil ? nil : text.range(of: #"\d+ s$"#, options: .regularExpression).map { String(text[$0]) }
+            return chip("clock", .calm, short: seconds ?? "Waiting")
+        case .waitingForModels: return chip("arrow.down.circle", .attention, short: "Models")
+        case .paused: return chip("pause.circle", .calm, short: "Paused")
+        case .failed: return chip("exclamationmark.triangle.fill", .attention, short: nil)
+        case .notTranscribed: return chip("quote.bubble", .calm, short: nil)
+        case .recording, .playing, .justFinished: return nil
+        }
+    }
+
     // MARK: Meters
 
     /// The recording's meters, one per source it has now: the microphone, call audio when it's included, then each

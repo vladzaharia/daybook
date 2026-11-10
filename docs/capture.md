@@ -652,8 +652,9 @@ notifications (`DeviceNotifications`):
 - **Recording stopped**, when a recording ends without Stop (`AppState.unexpectedStops`: a
   microphone that went, sleep, a disk that couldn't keep up). It names the conversation, unless
   it's Personal, as the menu bar extra never does, says the recorder's one sentence for why, and
-  offers Record Again. A click opens the conversation. It goes once the stop has been seen in the
-  app (`dismissUnexpectedStop`) or the next recording starts.
+  offers Record Again, into that conversation, as Floating Notes' does. A click opens the
+  conversation. It goes once the stop has been seen in the app (`dismissUnexpectedStop`) or the
+  next recording starts.
 - **Recording**, when a call starts recording on its own while Floating Notes isn't showing,
   naming the call ("Zoom call"). A click shows Floating Notes. It goes when that recording ends.
 
@@ -772,7 +773,7 @@ Spotlight index:
 - an automatic start said only while Floating Notes is hidden, taken back when it ends, and an
   earlier stop taken back by the next recording; permission asked once, at the first recording or
   When a call starts (Record Automatically);
-- a click opening the conversation, and Record Again recording with a fake microphone;
+- a click opening the conversation, and Record Again recording into it with a fake microphone;
 - the intents waiting for the app and its library, and Start, Bookmark, Stop, New Note, and Open
   Conversation on the app's state;
 - Spotlight and Shortcuts' suggestions without Personal conversations, following renames, moves to

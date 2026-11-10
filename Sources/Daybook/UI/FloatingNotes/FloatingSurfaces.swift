@@ -94,8 +94,8 @@ private struct PanelCaptions: View {
 // MARK: - After Stop
 
 /// After a Stop seen in the panel: the conversation and your notes; the chips say what's becoming of it. Open is
-/// where Bookmark was, and Record where Stop was, for the next call. A recording that stopped short says why, with
-/// Record Again into the same conversation.
+/// where Bookmark was, and where Stop was, Keep Recording into the same conversation for two minutes, then Record for
+/// the next call (`RecordMore`). A recording that stopped short says why, with Record Again into the same conversation.
 struct FloatingAfterStop: View {
     let context: PanelContext
     let meeting: Meeting
@@ -105,13 +105,15 @@ struct FloatingAfterStop: View {
     private var stoppedShort: Bool { inputs.phase == .stopped }
 
     var body: some View {
-        RecorderAfterStop(state: afterState, actions: actions,
+        // Read once, so the words and what the press does agree; the moment ending redraws it.
+        let more = state.recordMore(after: meeting.id)
+        RecorderAfterStop(state: afterState(more), actions: actions(more),
                           notes: AnyView(PanelNotes(state: state, meeting: meeting, isRecording: false, showsLane: true)),
                           menu: { [context] chip in AnyView(ChipMenuItems(context: context, chip: chip)) })
             .environment(\.surfaceLayout, context.compact ? .compact : .column)
     }
 
-    private var afterState: RecorderAfterStopState {
+    private func afterState(_ more: RecordMore) -> RecorderAfterStopState {
         RecorderAfterStopState(
             title: meeting.title,
             rename: { [state, id = meeting.id] title in state.update(id) { $0.title = title } },
@@ -120,18 +122,18 @@ struct FloatingAfterStop: View {
             meta: PanelMeta.text(meeting, showsDuration: inputs.phase != .saved),
             problem: problem,
             openTitle: meeting.summary != nil ? "Open Summary" : "Open",
-            recordTitle: stoppedShort ? "Record Again" : "Record",
+            recordMore: more,
             canRecord: state.isReady && !state.isStoppingRecording && !state.isRecording,
             isStartingRecording: state.isStartingRecording,
             topInset: context.band,
             keyboardShortcuts: true)
     }
 
-    private var actions: RecorderAfterStopActions {
-        let state = self.state, id = meeting.id, again = stoppedShort
+    private func actions(_ more: RecordMore) -> RecorderAfterStopActions {
+        let state = self.state, id = meeting.id
         return RecorderAfterStopActions(
             open: context.open,
-            record: { Task { again ? await state.recordAgain(into: id) : await state.startRecording() } },
+            record: { Task { await state.record(more, after: id) } },
             metaLink: (title: "Recent", help: "Show recent conversations", action: context.goHome))
     }
 
@@ -149,24 +151,6 @@ struct FloatingAfterStop: View {
                                actionTitle: retries ? "Try Again" : nil,
                                actionEnabled: !state.queuedIDs.contains(meeting.id) && state.processingID != meeting.id,
                                action: retries ? { [state, meeting] in state.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting)) } : nil)
-    }
-}
-
-extension AppState {
-    /// Record Again after a recording stopped short: into the same conversation, after what was saved. The
-    /// processing its first part queued waits for the whole.
-    func recordAgain(into id: UUID) async {
-        if processingID == id { pauseProcessing(id) } else if queuedIDs.contains(id) { cancelQueued(id) }
-        // A job that was running lets go of the conversation once its work notices.
-        for _ in 0..<40 where processingID == id { try? await Task.sleep(for: .milliseconds(50)) }
-        // The first part is still being added: its capture holds the conversation's folder until it's in the library.
-        let session = storageURL.appendingPathComponent("Staging").appendingPathComponent(id.uuidString)
-            .appendingPathComponent("capture-session.json").path
-        for _ in 0..<60 where FileManager.default.fileExists(atPath: session) { try? await Task.sleep(for: .milliseconds(50)) }
-        // One that couldn't be added is kept there for recovery: record anew rather than fail.
-        let held = FileManager.default.fileExists(atPath: session)
-        dismissUnexpectedStop(id)
-        await startRecording(into: held ? nil : id)
     }
 }
 
@@ -457,7 +441,8 @@ private struct PanelControls<Leading: View, Trailing: View>: View {
     }
 }
 
-/// Record: a new conversation, or into the focused one while it has only notes.
+/// Record: a new conversation, in All Conversations with the library window left as it was, or into the focused one
+/// while it has only notes.
 private struct RecordButton: View {
     let state: AppState
     let title: String
@@ -467,7 +452,7 @@ private struct RecordButton: View {
     let shape: DaybookControlShape
 
     var body: some View {
-        Button { Task { await state.startRecording(into: into) } } label: {
+        Button { Task { await state.startRecording(into: into, from: .elsewhere) } } label: {
             RecordControlLabel(title: state.isStartingRecording ? "Starting…" : title, size: size)
                 .frame(maxWidth: .infinity, minHeight: height)
                 .contentShape(Rectangle())
