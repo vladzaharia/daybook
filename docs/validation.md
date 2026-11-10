@@ -231,6 +231,20 @@ not Daybook's.
   a Mac sighting. PhoneWelcomeTests, PhoneModelsTests, ReadingTests, SettingsWordsTests,
   ConversationStatusPresentationTests, WelcomeWordsTests, and 18 Pro screenshots of Welcome and the needs-Mac page (a
   capable phone simulated with `--demo-iphone-memory 12`).
+- **W3-S, the transcription language is a library setting (xdev-settings-08).** The language is a synced library
+  choice (`LibraryMetadata.choices`, merged like folders, Automatic stored as a choice with nothing selected, unknown
+  shapes kept and written back), shown as Settings › Models › Transcription › Language on both apps (DaybookUI's
+  `TranscriptionLanguageSettings`, the whole catalog's languages). Both apps route by it through
+  `TranscriptionRouting.route(selected:language:otherLanguagesChoice:…)` and each job freezes it; the iPhone passes a
+  language Parakeet doesn't cover as a hint, and the Apple Speech stand-in steps in only for a language it covers. A
+  Mac carries a language stored in UserDefaults into the library once at launch, only if the library has none, then
+  clears it. Speaker settings and the Other languages model stay per Mac (`OtherLanguagesSetting`).
+  `ProcessingPreferences`, `SpeakerAnalysisOptions`, and `SpeakerQuality` moved to DaybookKit. LibraryMetadataTests,
+  LibrarySyncReplicaTests, TranscriptionLanguageSettingTests, TranscriptionLanguageSettingsTests, SpeechRoutingTests,
+  ModelPreferenceMigrationTests, ProcessingPreferencesTests, ShippedFormatTests; the iPhone's PhoneModelsTests,
+  PhoneProcessingTests, and SettingsWordsTests (54); Mac snapshots of Settings › Models with Automatic and with
+  Japanese in the library's file (routing picks Whisper), and an iPhone 18 Pro snapshot with German. Not checked:
+  the pushed language list on the iPhone; a Mac taken back to an earlier version reads Automatic after the carry-over.
 - **W2-O, microphone choice.** Mac: `MicrophoneChoice` resolves the input (Automatic leaves an idle Bluetooth headset
   for the built-in microphone, records one a call app already uses; a chosen input is used when it's there);
   `MicrophoneSource` sets it on the engine before start and follows input changes, the input in use dying, and new

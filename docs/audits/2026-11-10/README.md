@@ -36,7 +36,7 @@ The previous audit left eight decisions to the owner; the owner delegated them t
 | ux-mac-14 | A fresh Mac starts on its recommended preset, never "Custom"; the first recordings transcribe with the system's speech model while the preset downloads. |
 | ui-iphone-23 | One search entry, the system's minimized bottom-bar search; the custom Search circle is gone. |
 | xdev-settings-03 | Each platform keeps its own Settings structure (the Mac's sidebar, the iPhone's list). "Library" means the library's own things on both: the Mac's Library page gained Summary templates, Vocabulary, and Speaker profiles, and Settings search covers what each page holds. |
-| xdev-settings-08 | Transcription language becomes a synced library setting shown on both apps; speaker settings stay per device, on the Mac. (Scheduled after this pass's merges; see "Still to do".) |
+| xdev-settings-08 | Transcription language is a synced library setting shown on both apps under Settings › Models › Transcription; speaker settings and the Other languages model stay per device, on the Mac. |
 | MSCQ-09 | The unreachable SNR weighting and the stored-alignment writer were deleted; stored alignments from v0.2.2 are still read and fused. Per-source quality weighting, if it returns, comes from data that already syncs, behind a fusion version. |
 | MSCQ-25 | Closed. The iCloud account token is compared as bytes or a digest and never decoded, so secure coding on archiving is moot. |
 | hig-ios-14 | Add the Time Sensitive capability to `local.daybook` (owner action); the app already marks "Recording stopped" and the new "Recording paused" time sensitive and they are delivered as ordinary notices until the capability exists. |
