@@ -297,6 +297,19 @@ not Daybook's.
   a USB headset unplugged and replugged; the Floating Notes menu mid-recording; the iPhone's table recording with
   AirPods in, then picked (`farFieldCapture.isEnabled`); a USB microphone; AirPods connecting mid-recording.
 
+**Final runs on the quiet machine (27 packages merged, `design-pass-2026-11`).** `swift build --build-tests` with no
+first-party warning; the whole package's `swift test`: all ten bundles passed (DaybookCaptions, DaybookCore,
+DaybookDesign, DaybookDevices, DaybookIntelligence, DaybookKit, DaybookLink, DaybookLive, DaybookTests, DaybookUI),
+1,861 tests, 0 failures, the two `SpeakerProfileProcessingTests` idle-voicing tests included; the whole
+DaybookPhoneTests bundle on a private iPhone 17 clone, every suite passing (490 tests, 0 failures). Final captures of
+the merged apps for the record: the Mac at 760, 1440, and 2560 pt in light and dark (the document page, the spread at
+2560, the transcript, the locked Personal page, the download and inspector states, Floating Notes recording and after
+Stop, Settings › Library, Recording, and Transcription, Welcome, and the empty library; 32 sets) and the iPhone 18 Pro
+and the Duo (library, page, transcript, recorder, after Stop, Version History, Settings › Models and Recording, the
+status sheet; the open Duo's library, page, and recorder; the closed Duo's library and page; 28). One small thing seen
+in them and left for the next pass: a bookmark without words shows as a bare amber mark on the iPhone's after-Stop
+notes, where the Mac writes "Bookmark".
+
 ## Audit and fixes (2026-11-01)
 
 A whole-app audit of the Mac and iPhone apps found 340 issues (21 high, 105 medium, 214 low) across 17 review areas:
