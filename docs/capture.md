@@ -37,7 +37,11 @@ Code: `Sources/Daybook/Capture/` (capture, devices, finalizing) and `Sources/Day
      `org.mozilla.plugincontainer`, so those are included too. A browser tap records the whole
      browser, not just one tab.
    - During the call, the tap does three things:
-     - It re-reads the process list every three seconds and adds any new audio helper.
+     - It re-reads the process list every three seconds and adds any new audio helper. On macOS 26
+       the tap also names the processes' bundle IDs with process restore (`CATapDescription.bundleIDs`,
+       `isProcessRestoreEnabled`), so Core Audio itself adds a helper that starts or restarts under one
+       of them, and the tap is rewritten only for a helper with a bundle ID it doesn't name yet. On
+       macOS 15 any change rewrites it.
      - It rebuilds its aggregate device when the default output device changes.
      - It runs a silence watchdog (see Permissions).
 2. **ScreenCaptureKit (fallback).** This records everything the Mac plays except Daybook. The
@@ -736,7 +740,8 @@ decaying tail, with added noise. They cover:
 
 - tap versus ScreenCaptureKit selection with fakes: known app, unknown app, creation or start
   failure, an old OS, and both paths failing;
-- helper and own-process filtering, and the manual call-app choice;
+- helper and own-process filtering, when the tap is rewritten (any change on macOS 15, a new bundle
+  ID on 26), and the manual call-app choice;
 - route classification;
 - the controller end to end with fake sources:
   - levels and the call-detected signal;
@@ -780,7 +785,7 @@ Spotlight index:
 - the intents waiting for the app and its library, and Start, Bookmark, Stop, New Note, and Open
   Conversation on the app's state;
 - Spotlight and Shortcuts' suggestions without Personal conversations, following renames, moves to
-  Personal, and the Trash.
+  Personal, and the Trash; Spotlight's items carry the title and dates, never the summary.
 
 **`Tests/DaybookTests/WelcomeTests.swift`** covers Welcome's Record waiting for the library (and
 stopping for a library move or a library that can't open), the free-space check, and the Allow

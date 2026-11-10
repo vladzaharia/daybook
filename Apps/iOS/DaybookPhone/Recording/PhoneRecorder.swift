@@ -323,10 +323,11 @@ final class PhoneRecorder {
 
     // MARK: Notes and bookmarks (exactly as the Mac)
 
-    /// Replaces the notes. New paragraphs get the conversation time; edited ones keep theirs.
+    /// Replaces the notes. New paragraphs get the conversation time (none from Writing Tools' rewrite); edited ones keep theirs.
     func editNotes(_ text: String) {
         guard text != notes else { return }
-        timedNotes = NoteTimeline.reconcile(previous: timedNotes, text: text, captureTime: isCapturing ? elapsedTime : nil)
+        timedNotes = NoteTimeline.reconcile(previous: timedNotes, text: text,
+                                            captureTime: NoteTimeline.captureTime(recording: isCapturing ? elapsedTime : nil))
         notes = text
         saveNotesSoon()
     }

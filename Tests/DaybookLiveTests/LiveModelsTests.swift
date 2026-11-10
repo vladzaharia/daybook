@@ -1,3 +1,4 @@
+import AVFoundation
 import DaybookCaptions
 import DaybookKit
 @testable import DaybookLive
@@ -154,6 +155,29 @@ final class LiveModelsTests: XCTestCase {
         XCTAssertTrue(chosen === system)
         XCTAssertNil(captioners.captioner(models: LiveModelSet(), locale: .current, backlog: 8, fallback: { nil }),
                      "no captions where the system has none and nothing is downloaded")
+    }
+
+    /// The system's recognizer, where it gives the words, leans toward the library's approved vocabulary as the local
+    /// one does, and follows it as it changes.
+    func testTheSystemsCaptionsAreBiasedTowardTheVocabulary() {
+        final class Biased: LiveCaptioning, VocabularyBiasing, @unchecked Sendable {
+            let updates = AsyncStream<[LiveCaptionSegment]> { $0.finish() }
+            let states = AsyncStream<LiveCaptionState> { $0.finish() }
+            var vocabulary: (@Sendable () -> (terms: [String], version: Int))?
+            func start(locale: Locale, sourceFormat: AVAudioFormat?) async {}
+            func append(_ buffer: AVAudioPCMBuffer, at time: AVAudioTime?) {}
+            func finish() async {}
+            func bias(toward vocabulary: @escaping @Sendable () -> (terms: [String], version: Int)) { self.vocabulary = vocabulary }
+        }
+        let vocabulary = LiveVocabulary(terms: ["Daybook", "Priya"])
+        let captioners = LiveCaptioners(host: LiveModelHost(idleRelease: .zero), policy: .mac, vocabulary: vocabulary)
+        let system = Biased()
+        XCTAssertTrue(captioners.captioner(models: LiveModelSet(), locale: .current, backlog: 8, fallback: { system }) === system)
+        XCTAssertEqual(system.vocabulary?().terms, ["Daybook", "Priya"])
+        let before = system.vocabulary?().version
+        vocabulary.update(["Daybook", "Priya", "OKR"])
+        XCTAssertEqual(system.vocabulary?().terms, ["Daybook", "Priya", "OKR"])
+        XCTAssertNotEqual(system.vocabulary?().version, before, "a running capture sees the change")
     }
 
     func testASpeakerModelAloneLabelsTheSystemsWords() throws {

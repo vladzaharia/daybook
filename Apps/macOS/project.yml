@@ -53,6 +53,9 @@ targets:
       # The app icon, layered (Icon Composer), shared with the iPhone app. Its layers come from scripts/make-icon.swift,
       # the same drawing as DaybookMark. Xcode compiles it into Assets.car with Daybook.icns for macOS 15.
       - path: ../../Resources/Daybook.icon
+      # The privacy manifest: no tracking, nothing collected, and why the app reads defaults, file dates, and free space.
+      - path: ../../Resources/PrivacyInfo.xcprivacy
+        buildPhase: resources
       - path: ../../Resources/Info.plist
         buildPhase: none
       - path: ../../Resources/Daybook.entitlements

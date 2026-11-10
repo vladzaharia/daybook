@@ -1,3 +1,4 @@
+import CoreSpotlight
 import DaybookCore
 import DaybookKit
 import XCTest
@@ -197,6 +198,18 @@ final class AppDestinationTests: XCTestCase {
         let entity = ConversationEntity(ConversationIndex.Entry(id: UUID(), title: "Design review", date: date))
         XCTAssertEqual(entity.title, "Design review")
         XCTAssertEqual(entity.date, date)
+    }
+
+    /// Spotlight's item has a description (its date, as Shortcuts' subtitle says it) beside the title and dates,
+    /// as on the Mac, and nothing more: never what was said.
+    func testBehaviorSpotlightDescribesAConversationByItsDate() {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let attributes = ConversationEntity(ConversationIndex.Entry(id: UUID(), title: "Design review", date: date)).attributeSet
+        XCTAssertEqual(attributes.title, "Design review")
+        XCTAssertEqual(attributes.contentDescription, date.formatted(date: .abbreviated, time: .shortened))
+        XCTAssertEqual(attributes.contentCreationDate, date)
+        XCTAssertEqual(attributes.metadataModificationDate, date)
+        XCTAssertNil(attributes.textContent)
     }
 
     // MARK: Siri and Shortcuts

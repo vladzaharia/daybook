@@ -23,6 +23,14 @@ public protocol LiveCaptioning: AnyObject, Sendable {
     func finish() async
 }
 
+/// A captioner that can lean toward the library's approved vocabulary: names, products, and jargon it would otherwise
+/// spell as it hears them.
+public protocol VocabularyBiasing: AnyObject {
+    /// `vocabulary` gives the terms and a number that changes whenever they do. It's read as captioning starts and
+    /// again as audio arrives, so a term approved during a recording helps the rest of it. Call before `start`.
+    func bias(toward vocabulary: @escaping @Sendable () -> (terms: [String], version: Int))
+}
+
 extension AVAudioTime {
     /// Seconds on the source's timeline: sample time at its rate when valid, else host time. Every
     /// captioner reads a buffer's time this way.
@@ -139,8 +147,10 @@ struct CaptionAudio: @unchecked Sendable {
 ///   `allowsDownload` (a person turned captions on and is recording), never in tests or demos.
 /// - `finish` never waits for a start still under way (a download, the analyzer starting): it ends
 ///   the captions, and the start, once it gets that far, stops its analyzer and goes no further.
+/// - Biased toward the approved vocabulary (`bias(toward:)`), it gives the terms to the analyzer as
+///   its context (`AnalysisContext.contextualStrings`), as the live models take them.
 @available(macOS 26, iOS 26, *)
-public final class SpeechCaptioner: LiveCaptioning, Sendable {
+public final class SpeechCaptioner: LiveCaptioning, VocabularyBiasing, Sendable {
     public let updates: AsyncStream<[LiveCaptionSegment]>
     public let states: AsyncStream<LiveCaptionState>
     private let updatesContinuation: AsyncStream<[LiveCaptionSegment]>.Continuation
@@ -163,6 +173,7 @@ public final class SpeechCaptioner: LiveCaptioning, Sendable {
         var analyzer: SpeechAnalyzer?
         var feeding: Task<Void, Never>?
         var listening: Task<Void, Never>?
+        var vocabulary: (@Sendable () -> (terms: [String], version: Int))?
     }
 
     /// `asksForAuthorization`: if the analyzer fails before any result while speech-recognition
@@ -186,6 +197,28 @@ public final class SpeechCaptioner: LiveCaptioning, Sendable {
 
     public func append(_ buffer: AVAudioPCMBuffer, at time: AVAudioTime?) {
         inputContinuation.yield(CaptionAudio(buffer: buffer, time: time?.captionSeconds))
+    }
+
+    public func bias(toward vocabulary: @escaping @Sendable () -> (terms: [String], version: Int)) {
+        state.withLock { $0.vocabulary = vocabulary }
+    }
+
+    /// The analyzer's context for `terms`: words it should expect, whatever the conversation is about.
+    static func context(_ terms: [String]) -> AnalysisContext {
+        let context = AnalysisContext()
+        context.contextualStrings[.general] = terms
+        return context
+    }
+
+    /// Gives the analyzer the vocabulary when it changed since `applied` (a version), and returns the version it has
+    /// now. No terms at the start need no context; a context the analyzer won't take leaves the captions as they are.
+    private static func lean(_ analyzer: SpeechAnalyzer, toward vocabulary: (@Sendable () -> (terms: [String], version: Int))?,
+                             since applied: Int?) async -> Int? {
+        guard let vocabulary else { return nil }
+        let current = vocabulary()
+        guard current.version != applied else { return applied }
+        if applied != nil || !current.terms.isEmpty { try? await analyzer.setContext(context(current.terms)) }
+        return current.version
     }
 
     private var isFinishing: Bool { state.withLock { $0.finishing } }
@@ -242,6 +275,8 @@ public final class SpeechCaptioner: LiveCaptioning, Sendable {
             let analyzer = SpeechAnalyzer(modules: modules, options: SpeechAnalyzer.Options(priority: .utility, modelRetention: .whileInUse))
             let (analyzerInputs, analyzerContinuation) = AsyncStream<AnalyzerInput>.makeStream(bufferingPolicy: .unbounded)
             try await analyzer.prepareToAnalyze(in: analyzerFormat)
+            let vocabulary = state.withLock { $0.vocabulary }
+            let leaning = await Self.lean(analyzer, toward: vocabulary, since: nil)
             try await analyzer.start(inputSequence: analyzerInputs)
             let times = self.times, input = self.input
             // What runs is kept in one step with the check for `finish`, so it either sees all of it or
@@ -251,7 +286,10 @@ public final class SpeechCaptioner: LiveCaptioning, Sendable {
                 state.analyzer = analyzer
                 state.feeding = Task.detached(priority: .utility) {
                     let converter = CaptionConverter(output: analyzerFormat)
+                    var applied = leaning
                     for await item in input {
+                        // A term approved meanwhile applies from here on.
+                        applied = await Self.lean(analyzer, toward: vocabulary, since: applied)
                         times.feed(sourceTime: item.time, duration: Double(item.buffer.frameLength) / item.buffer.format.sampleRate)
                         // A buffer that won't convert is skipped; the capture has it regardless.
                         if let converted = converter.convert(item.buffer) { analyzerContinuation.yield(AnalyzerInput(buffer: converted)) }

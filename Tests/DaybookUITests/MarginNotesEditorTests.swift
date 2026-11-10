@@ -45,6 +45,62 @@ final class MarginNotesEditorTests: XCTestCase {
         XCTAssertEqual(NoteParagraphs.matches(of: "  ", in: text), [], "no query, no marks")
     }
 
+    // MARK: Writing Tools
+
+    /// The notes as the app keeps them while recording: each change reconciled against the anchors, with the
+    /// recording's time for new paragraphs (`AppState.editNotes`, `PhoneRecorder.editNotes`).
+    private final class RecordingNotes {
+        var text: String
+        var anchors: [TimedNote]
+        let elapsed: TimeInterval
+
+        init(_ text: String, at time: TimeInterval, elapsed: TimeInterval) {
+            self.text = text
+            anchors = NoteTimeline.reconcile(previous: [], text: text, captureTime: time)
+            self.elapsed = elapsed
+        }
+
+        var binding: Binding<String> {
+            Binding(get: { self.text }, set: { text in
+                self.anchors = NoteTimeline.reconcile(previous: self.anchors, text: text,
+                                                      captureTime: NoteTimeline.captureTime(recording: self.elapsed))
+                self.text = text
+            })
+        }
+    }
+
+    /// Regression: during a recording, Writing Tools' rewrite (Key Points, a list) came back as new paragraphs, each
+    /// stamped with the moment of the rewrite. A rewrite is the notes reworded, not notes taken then: what it adds
+    /// gets no time, and a paragraph it rewords keeps its own. Typing afterwards is timed again.
+    func testBehaviorAWritingToolsRewriteDuringARecordingTimesNothingNew() {
+        let notes = RecordingNotes("Launch is two weeks out", at: 30, elapsed: 95)
+        let coordinator = MarginNotesEditor(text: notes.binding, times: []).makeCoordinator()
+
+        coordinator.hand("Launch is two weeks out, on the 24th\nAnnual plan leads the pricing page", rewriting: true)
+        XCTAssertEqual(notes.anchors.map(\.time), [30, nil], "the reworded paragraph keeps its time; the new one gets none")
+        XCTAssertFalse(NoteTimeline.isRewriting, "only while the rewrite is handed on")
+
+        coordinator.hand(notes.text + "\nShip the beta Friday", rewriting: false)
+        XCTAssertEqual(notes.anchors.map(\.time), [30, nil, 95], "typing is timed")
+    }
+
+    /// Writing Tools leaves attachments alone (the iPhone's handwriting blocks); the Mac's plain notes have none.
+    func testBehaviorWritingToolsLeavesAttachmentsAlone() {
+        let text = NSMutableAttributedString(string: "Before\n")
+        text.append(NSAttributedString(attachment: NSTextAttachment()))
+        text.append(NSAttributedString(string: "\nAfter"))
+        let all = NSRange(location: 0, length: text.length)
+        XCTAssertEqual(NoteParagraphs.attachments(in: text, within: all), [NSRange(location: 7, length: 1)])
+        XCTAssertEqual(NoteParagraphs.attachments(in: text, within: NSRange(location: 8, length: 6)), [], "outside the range")
+        XCTAssertEqual(NoteParagraphs.attachments(in: text, within: NSRange(location: 4, length: 400)), [NSRange(location: 7, length: 1)],
+                       "a range past the end is clipped")
+
+        let view = editor("Launch is two weeks out\nAnnual plan", times: [])
+        let coordinator = MarginNotesEditor(text: .constant(view.string), times: []).makeCoordinator()
+        let enclosing = NSRange(location: 0, length: (view.string as NSString).length)
+        XCTAssertEqual(coordinator.textView(view, writingToolsIgnoredRangesInEnclosingRange: enclosing), [])
+    }
+
     // MARK: The Mac's lane
 
     private func editor(_ text: String, times: [TimeInterval?], marks: [NoteMark] = [], plays: ((TimeInterval) -> Void)? = nil) -> MarginTextView {

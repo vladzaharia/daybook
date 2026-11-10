@@ -11,8 +11,8 @@ import Synchronization
 ///   else from `fallback` (the system's speech recognizer, as before live models existed).
 /// - With a live speaker model installed, captions are labelled with speakers, and named when a
 ///   voice matches a known voice in the voice-profile model's space.
-/// - The local recognizer is biased toward `vocabulary` (the library's approved terms), following it
-///   as it changes.
+/// - The recognizer, local or the system's, is biased toward `vocabulary` (the library's approved
+///   terms), following it as it changes.
 ///
 /// Models load when a capture starts, are shared between captures (You and Call), and go when the
 /// last capture using them ends (`LiveModelHost`). Each capture backs off under load on its own
@@ -49,6 +49,8 @@ public struct LiveCaptioners: Sendable {
                                             }, onEnd: { await use.release() })
         } else {
             words = fallback()
+            // The system's recognizer leans toward the vocabulary too.
+            if let vocabulary, let biased = words as? any VocabularyBiasing { biased.bias { vocabulary.current } }
         }
         guard let words else { return nil }
         guard let speakers = models.diarization else { return words }

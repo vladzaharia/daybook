@@ -1,3 +1,4 @@
+import CoreSpotlight
 import DaybookCore
 import DaybookDevices
 import DaybookTestSupport
@@ -313,6 +314,34 @@ final class SystemEntryPointsTests: XCTestCase {
         try await waitUntil("a conversation in the Trash to leave Spotlight") { index.indexed[work] == nil }
         spotlight.stop()
         await spotlight.settled()
+        await state.flush()
+    }
+
+    /// Regression (F-11): Spotlight was given the summary's overview, a copy of what was said outside the library's
+    /// encryption. It gets the title and dates, as on the iPhone; Shortcuts reads the title and date as properties.
+    func testBehaviorSpotlightGetsTheTitleAndDatesNeverTheSummary() async throws {
+        let state = await state()
+        let id = state.newMeeting(title: "Pricing review")
+        state.update(id) { $0.summary = MeetingSummary(title: "Pricing", overview: "Priya wants the annual plan first.") }
+        let meeting = try XCTUnwrap(state.meetings.first { $0.id == id })
+        XCTAssertFalse(meeting.summary?.overview.isEmpty ?? true)
+        let entity = ConversationEntity(meeting)
+        let attributes = entity.attributeSet
+        XCTAssertEqual(attributes.title, "Pricing review")
+        XCTAssertEqual(attributes.contentDescription, meeting.date.formatted(date: .abbreviated, time: .shortened), "its date says what it is")
+        XCTAssertEqual(attributes.contentCreationDate, meeting.date)
+        XCTAssertNil(attributes.textContent)
+        let indexed = [attributes.title, attributes.displayName, attributes.contentDescription, attributes.textContent].compactMap { $0 }
+        XCTAssertFalse(indexed.contains { $0.contains("Priya") }, "nothing that was said")
+        XCTAssertEqual(String(localized: entity.$title.title), "Title")
+        XCTAssertEqual(String(localized: entity.$date.title), "Date")
+
+        state.update(id) { $0.summary?.overview = "Changed." }
+        let summarized = try XCTUnwrap(state.meetings.first { $0.id == id })
+        XCTAssertEqual(ConversationEntity(summarized), entity, "a new summary isn't a change for Spotlight")
+        state.update(id) { $0.title = "Pricing decision" }
+        let renamed = try XCTUnwrap(state.meetings.first { $0.id == id })
+        XCTAssertNotEqual(ConversationEntity(renamed), entity, "a rename is")
         await state.flush()
     }
 }

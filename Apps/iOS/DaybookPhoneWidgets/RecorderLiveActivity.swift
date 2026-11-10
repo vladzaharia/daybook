@@ -4,11 +4,12 @@ import SwiftUI
 import WidgetKit
 
 /// A recorder's recording on the Lock Screen and in the Dynamic Island: Soundcore Work recording what
-/// this iPhone started, or Listen Live with Stop Listening. Red means recording; cyan, listening.
+/// this iPhone started, or Listen Live with Stop Listening. Red means recording; cyan, listening. The
+/// small family (the Watch's Smart Stack, CarPlay) is the state, the clock, and Stop Listening's glyph.
 struct RecorderLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: RecorderActivityAttributes.self) { context in
-            LockScreenRecorder(context: context)
+            RecorderActivityContent(context: context)
                 .activityBackgroundTint(nil)
                 .activitySystemActionForegroundColor(PhoneStyle.Ink.record)
         } dynamicIsland: { context in
@@ -35,7 +36,7 @@ struct RecorderLiveActivity: Widget {
             } compactLeading: {
                 RecorderGlyph(context: context)
             } compactTrailing: {
-                RecorderClock(context: context)
+                CompactRecorderClock(context: context)
                     .font(.caption.weight(.semibold).monospacedDigit())
                     .frame(maxWidth: 52)
             } minimal: {
@@ -45,6 +46,63 @@ struct RecorderLiveActivity: Widget {
             }
             .keylineTint(recorderTint(context))
         }
+        .supplementalActivityFamilies([.small])
+    }
+}
+
+/// The Lock Screen's presentation, or the small family's where the system asks for it.
+private struct RecorderActivityContent: View {
+    let context: ActivityViewContext<RecorderActivityAttributes>
+    @Environment(\.activityFamily) private var family
+
+    var body: some View {
+        if family == .small {
+            SmallRecorder(context: context)
+        } else {
+            LockScreenRecorder(context: context)
+        }
+    }
+}
+
+/// The Watch's Smart Stack and CarPlay: what the recorder is doing, the clock, and Stop Listening as a glyph.
+private struct SmallRecorder: View {
+    let context: ActivityViewContext<RecorderActivityAttributes>
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 4) {
+                RecorderDot(context: context, size: 8)
+                Text(context.state.title(isStale: context.isStale)).font(.caption.weight(.semibold)).lineLimit(1)
+                Spacer(minLength: 4)
+                RecorderClock(context: context)
+                    .font(.headline.weight(.semibold).monospacedDigit())
+            }
+            StopListeningButton(context: context)
+                .labelStyle(.iconOnly)
+        }
+    }
+}
+
+/// The compact clock: whole minutes ("12m") where iOS 27 says the island has less width than usual, else the clock.
+private struct CompactRecorderClock: View {
+    let context: ActivityViewContext<RecorderActivityAttributes>
+
+    var body: some View {
+        if #available(iOS 27.0, *) {
+            NarrowableRecorderClock(context: context)
+        } else {
+            RecorderClock(context: context)
+        }
+    }
+}
+
+@available(iOS 27.0, *)
+private struct NarrowableRecorderClock: View {
+    let context: ActivityViewContext<RecorderActivityAttributes>
+    @Environment(\.isDynamicIslandLimitedInWidth) private var isLimited
+
+    var body: some View {
+        RecorderClock(context: context, minutesOnly: isLimited)
     }
 }
 
@@ -79,14 +137,22 @@ private struct RecorderDot: View {
 }
 
 /// Counts from the recording's start; a dash when the start isn't known or it's no longer confirmed.
+/// `minutesOnly` says whole minutes ("12m").
 private struct RecorderClock: View {
     let context: ActivityViewContext<RecorderActivityAttributes>
+    var minutesOnly = false
 
     var body: some View {
         if let start = context.state.startedAt, !context.isStale, context.state.phase != .ended {
-            Text(timerInterval: start...Date.distantFuture, countsDown: false, showsHours: true)
-                .multilineTextAlignment(.trailing)
-                .foregroundStyle(recorderTint(context))
+            Group {
+                if minutesOnly {
+                    Text(.durationOffset(to: start), format: ActivityClock.minutes)
+                } else {
+                    Text(timerInterval: start...Date.distantFuture, countsDown: false, showsHours: true)
+                        .multilineTextAlignment(.trailing)
+                }
+            }
+            .foregroundStyle(recorderTint(context))
         } else {
             Text("–")
         }

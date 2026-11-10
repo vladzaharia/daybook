@@ -25,8 +25,10 @@ final class ContinuedProcessing {
 
     /// Submits a request and starts its task (the system's scheduler, or a test's).
     protocol Scheduler {
-        /// Throws when the system won't run it now; `launch` gets the task once the system starts it.
-        func submit(identifier: String, title: String, subtitle: String, launch: @escaping @MainActor (any ContinuedTask) -> Void) throws
+        /// Throws when the system won't run it now, at once or (iOS 27) once it has answered; `launch` gets the task
+        /// once the system starts it.
+        func submit(identifier: String, title: String, subtitle: String,
+                    launch: @escaping @MainActor (any ContinuedTask) -> Void) async throws
     }
 
     /// The identifiers' common start, listed (with ".*") in Info.plist's `BGTaskSchedulerPermittedIdentifiers`.
@@ -51,22 +53,27 @@ final class ContinuedProcessing {
     var isRunning: Bool { task != nil }
 
     /// Asks the system to let `job` go on in the background. Call while Daybook is on the screen; once
-    /// per job (again for the same job does nothing). Returns whether the request was accepted.
+    /// per job (again for the same job does nothing). The job is this one from now on; the result is the
+    /// system's answer, whether it accepted the request, which on iOS 27 comes a moment later. A refusal
+    /// forgets the request, so the work pauses when Daybook leaves the screen.
     @discardableResult
-    func begin(job id: UUID, title: String, subtitle: String) -> Bool {
-        guard job != id else { return true }
+    func begin(job id: UUID, title: String, subtitle: String) -> Task<Bool, Never> {
+        guard job != id else { return Task { true } }
         end(success: false)
-        guard let scheduler else { return false }
+        guard let scheduler else { return Task { false } }
         self.title = title; self.subtitle = subtitle; fraction = 0
-        do {
-            job = id
-            try scheduler.submit(identifier: "\(Self.prefix).\(UUID().uuidString)", title: title, subtitle: subtitle) { [weak self] task in
-                self?.started(task, for: id)
+        job = id
+        let identifier = "\(Self.prefix).\(UUID().uuidString)"
+        return Task { [weak self] in
+            do {
+                try await scheduler.submit(identifier: identifier, title: title, subtitle: subtitle) { [weak self] task in
+                    self?.started(task, for: id)
+                }
+                return true
+            } catch {
+                if self?.job == id { self?.job = nil }
+                return false
             }
-            return true
-        } catch {
-            job = nil
-            return false
         }
     }
 
@@ -113,10 +120,13 @@ final class ContinuedProcessing {
 
 /// The system's scheduler: `BGTaskScheduler` with a continued-processing request that fails at once
 /// when it can't run now, rather than waiting in a queue (the work has already started on the screen).
+/// On iOS 27 the request goes through `submitTaskRequest(_:)`, which answers off the main thread with
+/// every reason it refuses; on 26, `submit(_:)`, which says at once.
 struct SystemContinuedProcessingScheduler: ContinuedProcessing.Scheduler {
     struct Refused: Error {}
 
-    func submit(identifier: String, title: String, subtitle: String, launch: @escaping @MainActor (any ContinuedProcessing.ContinuedTask) -> Void) throws {
+    func submit(identifier: String, title: String, subtitle: String,
+                launch: @escaping @MainActor (any ContinuedProcessing.ContinuedTask) -> Void) async throws {
         let registered = BGTaskScheduler.shared.register(forTaskWithIdentifier: identifier, using: .main) { task in
             guard let task = task as? BGContinuedProcessingTask else { task.setTaskCompleted(success: false); return }
             MainActor.assumeIsolated { launch(SystemContinuedTask(task)) }
@@ -124,7 +134,11 @@ struct SystemContinuedProcessingScheduler: ContinuedProcessing.Scheduler {
         guard registered else { throw Refused() }
         let request = BGContinuedProcessingTaskRequest(identifier: identifier, title: title, subtitle: subtitle)
         request.strategy = .fail
-        try BGTaskScheduler.shared.submit(request)
+        if #available(iOS 27.0, *) {
+            try await BGTaskScheduler.shared.submitTaskRequest(request)
+        } else {
+            try BGTaskScheduler.shared.submit(request)
+        }
     }
 }
 

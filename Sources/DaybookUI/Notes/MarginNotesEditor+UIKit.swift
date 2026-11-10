@@ -121,9 +121,25 @@ extension MarginNotesEditor: UIViewRepresentable {
             guard let view = textView as? MarginTextView else { return }
             if let text = view.textToWriteBack() {
                 lastWritten = text
-                parent.text = text
+                hand(text, rewriting: view.isWritingToolsActive)
             }
             view.textDidChange()
+        }
+
+        /// Hands the text on. Writing Tools' rewrite goes as one (`NoteTimeline.rewriting`), so a recording doesn't
+        /// stamp the paragraphs it wrote with the moment of the rewrite.
+        func hand(_ text: String, rewriting: Bool) {
+            if rewriting {
+                NoteTimeline.rewriting { parent.text = text }
+            } else {
+                parent.text = text
+            }
+        }
+
+        /// Writing Tools leaves the handwriting alone: each block is an attachment character, which a rewrite over it
+        /// would drop.
+        public func textView(_ textView: UITextView, writingToolsIgnoredRangesInEnclosingRange enclosingRange: NSRange) -> [NSValue] {
+            NoteParagraphs.attachments(in: textView.textStorage, within: enclosingRange).map { NSValue(range: $0) }
         }
 
         public func textViewDidChangeSelection(_ textView: UITextView) {

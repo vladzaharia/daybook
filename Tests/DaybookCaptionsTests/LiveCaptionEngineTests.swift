@@ -127,6 +127,16 @@ final class LiveCaptionEngineTests: XCTestCase {
         XCTAssertEqual(LiveCaptionAvailability.name(english).isEmpty, false)
     }
 
+    /// The system's captioner gets the approved vocabulary as the words Speech should expect, as the live models do.
+    func testTheSystemsCaptionerExpectsTheApprovedVocabulary() throws {
+        guard #available(macOS 26, iOS 26, *) else { throw XCTSkip("Live captions need macOS 26.") }
+        let context = SpeechCaptioner.context(["Daybook", "Priya", "OKR"])
+        XCTAssertEqual(context.contextualStrings[.general], ["Daybook", "Priya", "OKR"])
+        XCTAssertEqual(SpeechCaptioner.context([]).contextualStrings[.general], [], "taking every term away clears them")
+        let captioner: AnyObject = SpeechCaptioner(allowsDownload: false)
+        XCTAssertTrue(captioner is any VocabularyBiasing, "the live models' fallback hands it the vocabulary")
+    }
+
     /// This machine's real answer, where it has speech recognition: it comes back promptly.
     func testAskingThisMachineAboutAvailabilityAnswersPromptly() async throws {
         guard #available(macOS 26, iOS 26, *) else { throw XCTSkip("Live captions need macOS 26.") }
