@@ -410,7 +410,7 @@ enum StatusSheetInputs {
   static func pauseReason(_ pause: PhoneProcessor.Pause) -> ProcessingWords.PauseReason {
     switch pause {
     case .recording: return .recording
-    case .background: return .background
+    case .background, .locked: return .background
     case .heat: return .heat
     case .lowPowerMode: return .lowPowerMode
     case .lowBattery: return .lowBattery

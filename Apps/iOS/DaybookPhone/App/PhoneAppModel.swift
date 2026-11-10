@@ -158,6 +158,13 @@ final class PhoneAppModel: RecordingCommandHandling {
     @ObservationIgnored private(set) var stopsNoted = 0
     /// What Spotlight lists of the library.
     @ObservationIgnored private(set) var conversationIndex: ConversationIndex?
+    /// "Protect while iPhone is locked": the library's files' classes, switched in the background
+    /// (`PhoneAppModel+Protection.swift`).
+    let protector: LibraryProtector
+    /// What waits for the library to be readable again (the widgets' snapshots), by what it is.
+    @ObservationIgnored var publishesAfterUnlock: [String: @MainActor () -> Void] = [:]
+    /// Backups' rules were asked for while the library couldn't be read: they're applied once it can.
+    @ObservationIgnored var backupExclusionWaits = false
 
     init(recorder: PhoneRecorder, library: PhoneLibrary, posture: DevicePosture, options: DebugLaunch,
          environment: PhoneAppEnvironment? = nil, settings: PhoneSettings? = nil, link: PhoneLink? = nil, devices: PhoneDevices? = nil) {
@@ -202,6 +209,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         captions = LiveCaptionsController(store: LiveCaptionStore(libraryRoot: library.rootURL),
                                           makeCaptioner: Self.captioner(settings: settings, options: options, models: models,
                                                                         makesCaptioners: environment.makesCaptioners))
+        protector = LibraryProtector(libraryRoot: library.rootURL, widgets: environment.widgetCache, defaults: environment.defaults)
         models.voices.metadata = { [weak library] in library?.controller.metadata ?? LibraryMetadata() }
         // A job here transcribes in the library's language, which any device may change.
         models.transcriptionLanguage = { [weak library] in library?.controller.transcriptionLanguage }
@@ -248,19 +256,21 @@ final class PhoneAppModel: RecordingCommandHandling {
         // Spotlight lists the library's conversations, Personal ones never, from when the library has loaded: a
         // background launch (app refresh, a download's events, a recorder) never loads it, and leaves the list be.
         if environment.spotlight.isActive {
-            let index = ConversationIndex(indexer: environment.spotlight)
+            let index = ConversationIndex(indexer: spotlightIndexer)
             conversationIndex = index
             watches.append(ObservationWatch.distinctValues(of: { controller.isLoaded ? SpotlightPlan.entries(controller.meetings) : nil }) { entries in
                 if let entries { index.update(entries) }
             })
         }
         // A background launch may not load the library at all; leave the last valid widget snapshot
-        // in place until it has. The projection changes only when one of the six visible rows does.
+        // in place until it has. The projection changes only when one of the six visible rows does. While the library
+        // can't be read ("Protect while iPhone is locked"), neither can the snapshot: it's written once it can.
         let publishRecentConversations = environment.publishRecentConversations
         watches.append(ObservationWatch.distinctValues(of: {
             controller.isLoaded ? SharedRecentConversations(meetings: controller.meetings) : nil
-        }) { snapshot in
-            if let snapshot { publishRecentConversations(snapshot) }
+        }) { [weak self] snapshot in
+            guard let snapshot else { return }
+            self?.whenLibraryReadable(SharedRecentConversations.widgetKind) { publishRecentConversations(snapshot) }
         })
         // The Recorder widget's last conversation follows the library: one made Personal leaves it at once.
         watches.append(ObservationWatch.distinctValues(of: {
@@ -269,10 +279,16 @@ final class PhoneAppModel: RecordingCommandHandling {
         let publishNextSteps = environment.publishNextSteps
         watches.append(ObservationWatch.distinctValues(of: {
             controller.isLoaded ? SharedNextSteps(meetings: controller.meetings) : nil
-        }) { snapshot in
-            if let snapshot { publishNextSteps(snapshot) }
+        }) { [weak self] snapshot in
+            guard let snapshot else { return }
+            self?.whenLibraryReadable(SharedNextSteps.widgetKind) { publishNextSteps(snapshot) }
         })
         wireProcessing()
+        // While "Protect while iPhone is locked" is on, what a save made with another class gets the library's, shortly after.
+        watches.append(ObservationWatch.distinctValues(of: { controller.revision }, initial: false) { [weak self] _ in
+            self?.protector.keep()
+        })
+        wireProtection()
     }
 
     /// The recorder's news reaches the Live Activity, the widgets, the Macs, and the person.
@@ -532,6 +548,8 @@ final class PhoneAppModel: RecordingCommandHandling {
             speakerPass = nil
             sync.scheduleBackgroundRefresh()
             sync.finishOnLeavingForeground()
+            // What the saves on leaving made gets the library's class, if it's protected while locked.
+            protector.keep()
             remindMeetings()
             Task { await link.setActivity(recorder.isActive || multipoints.recorderOnly != nil ? .backgroundRecording : .background) }
         default:
@@ -671,8 +689,9 @@ final class PhoneAppModel: RecordingCommandHandling {
     func startRecording(into requestedID: UUID?, title requestedTitle: String?, multipoint session: MultipointSession?,
                         trigger: LinkCascade.Trigger = .person, leadRecorder: String? = nil, asksMacs: Bool = true) async throws {
         guard !recorder.isActive else { return }
-        // Intents can start before the first scene loads. Never record into an unopenable library.
-        do { try await library.reload() }
+        // Intents can start before the first scene loads. Never record into an unopenable library. One kept locked while
+        // the iPhone is ("Protect while iPhone is locked") loads once it's unlocked: the recording only needs its staging.
+        do { try await library.prepareToRecord() }
         catch { say(Self.libraryUnavailable, details: error.localizedDescription); throw error }
         // Another start won while the library loaded (an intent and a Mac at once): leave its recording
         // be. Asked for that same recording, this one is it; asked for another, it can't start.
@@ -973,8 +992,14 @@ final class PhoneAppModel: RecordingCommandHandling {
         sync.encryption.isOn || sync.encryption == .waitingForKey || LibrarySyncEngine.hasSyncedEncryptedLibrary(localRoot: library.rootURL)
     }
 
-    /// Keeps what Settings › Storage says out of iPhone backups (`BackupExclusion`).
+    /// Keeps what Settings › Storage says out of iPhone backups (`BackupExclusion`). While the library can't be read
+    /// ("Protect while iPhone is locked"), once it can.
     func applyBackupExclusion() {
+        guard libraryReadable else {
+            backupExclusionWaits = true
+            return
+        }
+        backupExclusionWaits = false
         BackupExclusion.apply(to: library, BackupExclusion.library(
             includesLibrary: settings.includesLibraryInBackups, encrypted: libraryIsEncrypted,
             includesEncryptedLibrary: settings.includesEncryptedLibraryInBackups))
@@ -1192,7 +1217,13 @@ final class PhoneAppModel: RecordingCommandHandling {
             state.pausedElapsed = recorder.isPaused ? recorder.pausedAt : nil
             state.canResume = recorder.isPaused ? recorder.canResume : nil
         }
-        if let latest = Self.lastRecording(in: library.controller.meetings) {
+        if !library.controller.isLoaded,
+           let known = sharedState.published ?? (options.isRunningTests ? nil : SharedRecordingState.load()) {
+            // Not loaded (a background launch, or kept locked while the iPhone is): the last recording stays as it was said.
+            state.lastRecordingTitle = known.lastRecordingTitle
+            state.lastRecordingDate = known.lastRecordingDate
+            state.lastRecordingDuration = known.lastRecordingDuration
+        } else if let latest = Self.lastRecording(in: library.controller.meetings) {
             state.lastRecordingTitle = latest.title
             state.lastRecordingDate = latest.date
             state.lastRecordingDuration = latest.duration

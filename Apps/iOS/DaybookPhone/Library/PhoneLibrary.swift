@@ -59,10 +59,35 @@ final class PhoneLibrary {
 
     var installationID: String { installation }
 
+    /// Whether the library's files can be read now: always, unless "Protect while iPhone is locked" keeps them and the
+    /// iPhone is locked (`PhoneAppModel.libraryReadable`).
+    @ObservationIgnored var isReadable: @MainActor () -> Bool = { true }
+    /// Returns once they can.
+    @ObservationIgnored var untilReadable: @MainActor () async -> Void = {}
+
+    /// Loads the library, or what changed in it, once its files can be read: never while they can't, which would read a
+    /// conversation that's there as one that isn't.
     func reload() async throws {
-        try FileManager.default.createDirectory(at: stagingURL, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        await untilReadable()
+        try makeStaging()
         try await controller.load()
         if broughtInUnsaved { await saveBroughtIn() }
+    }
+
+    /// Ready to record: the library loaded, or, while its files can't be read (kept locked, and the iPhone is), only the
+    /// staging folder, which a locked iPhone writes; the library loads once it's unlocked.
+    func prepareToRecord() async throws {
+        guard isReadable() else { return try makeStaging() }
+        try await reload()
+    }
+
+    /// Recordings in progress are kept until unlock whatever the library's class (`StagingProtection`), so what's made in
+    /// their folder never takes the library's.
+    private func makeStaging() throws {
+        // The library's folder first, without the class: a folder made on the way would take it too.
+        try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try FileManager.default.createDirectory(at: stagingURL, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700, .protectionKey: StagingProtection.type])
     }
 
     // MARK: Filing a recording
