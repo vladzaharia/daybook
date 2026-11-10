@@ -135,7 +135,13 @@ not Daybook's.
   not heard from in 14 days asks for attention. Verified against `SimulatedSoundcore` (SoundcoreRecordCommandTests,
   CascadeDuringImportTests, SoundcoreSharedRecordingTests, DeviceHubTests, RecorderHandoffTests,
   RecorderStatusWordsTests, the iPhone's DeviceOwnershipTests, and all 442 iPhone tests on a private simulator); the
-  twelve hardware checks are in docs/direct-soundcore.md, "Not yet verified on hardware".
+  twelve hardware checks are in docs/direct-soundcore.md, "Not yet verified on hardware". One regression surfaced on
+  the integration branch: after a Start pre-empted an import, the restarted import polled for the link instead of
+  queueing behind the Start, so the cascade's live audio took the link first and held it, and
+  `CascadeDuringImportTests` timed out on every run. Traced with temporary logging of the link's queue; the restarted
+  transfer now polls only while the link is free and queues behind a pending command otherwise, which the trace and
+  three isolated runs confirmed, and a temporary probe showed the poll is still needed to keep a Start waiting on
+  another app's transfer from spinning.
 - **W2-D, one clock per recording and fusion version 2.** `Meeting.clock(of:)` is the only placement. Rates are held
   to 1000 ppm; a derived copy runs at its own rate; one origin per conversation; fusion v2 (a banded alignment, a
   four-word duplicate guard, rank confidences across recognizers, names only where they stood); upkeep re-fuses at a
