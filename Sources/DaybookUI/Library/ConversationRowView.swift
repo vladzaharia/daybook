@@ -15,6 +15,9 @@ import SwiftUI
 /// touch and in a panel it sits on paper, in the Ink scale, with its tags on a line of their own when they fit, one
 /// line of gist in a panel and two under touch (three at accessibility sizes, where the title wraps too and the
 /// time stacks over the gist).
+///
+/// While the Personal lock hides it (`PersonalLock.hides`, from the environment), a Personal conversation's row says
+/// only "Personal conversation" in secondary ink, with its time: no gist and no tags.
 public struct ConversationRowView: View {
     private let meeting: Meeting
     private let status: ConversationRowStatus?
@@ -26,6 +29,7 @@ public struct ConversationRowView: View {
     @Environment(\.dynamicTypeSize) private var dynamicType
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.conversationListIsWide) private var listIsWide
+    @Environment(PersonalLock.self) private var personalLock: PersonalLock?
 
     /// - Parameters:
     ///   - status: What it says while it isn't ready; nil shows its gist.
@@ -43,14 +47,15 @@ public struct ConversationRowView: View {
 
     private var onPaper: Bool { density != .window }
     private var large: Bool { density == .touch && dynamicType.isAccessibilitySize }
-    private var tags: [String] { meeting.tags ?? [] }
+    private var hidden: Bool { personalLock?.hides(meeting) == true }
+    private var tags: [String] { hidden ? [] : meeting.tags ?? [] }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: density == .touch ? 3 : 2) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(Self.title(meeting))
+                Text(hidden ? PersonalLockWords.hiddenTitle : Self.title(meeting))
                     .font(DaybookFont.rowTitle.font(density))
-                    .foregroundStyle(onPaper ? AnyShapeStyle(DaybookPalette.Ink.title) : AnyShapeStyle(.primary))
+                    .foregroundStyle(hidden ? secondary : onPaper ? AnyShapeStyle(DaybookPalette.Ink.title) : AnyShapeStyle(.primary))
                     .lineLimit(large ? 3 : 1)
                 Spacer(minLength: 4)
                 RowGlyph(kind: shownKind, fraction: status?.fraction ?? 0)
@@ -84,7 +89,7 @@ public struct ConversationRowView: View {
             withAnimation(DaybookMotion.resolved(DaybookMotion.fade, reduceMotion: reduceMotion)) { justFinished = false }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(Self.spokenLabel(meeting, status: status, timeLabel: timeLabel))
+        .accessibilityLabel(Self.spokenLabel(meeting, status: status, timeLabel: timeLabel, hidden: hidden))
     }
 
     /// The glyph shown: the status's, or the checkmark while it holds.
@@ -149,7 +154,7 @@ public struct ConversationRowView: View {
                     .lineLimit(reserves ? lines : 1, reservesSpace: reserves)
             }
         } else {
-            Text(status?.text ?? RowPreview.text(for: meeting))
+            Text(status?.text ?? (hidden ? "" : RowPreview.text(for: meeting)))
                 .foregroundStyle(secondary)
                 .lineLimit(lines, reservesSpace: reserves)
                 .contentTransition(.opacity)
@@ -178,8 +183,13 @@ public struct ConversationRowView: View {
     }
 
     /// What VoiceOver reads for the row: what it shows, in order. The title, when, how long, then the words in
-    /// the gist's place (what's happening, or the gist itself), and its tags, all of them, whatever fits.
-    public static func spokenLabel(_ meeting: Meeting, status: ConversationRowStatus?, timeLabel: String) -> String {
+    /// the gist's place (what's happening, or the gist itself), and its tags, all of them, whatever fits. Hidden by
+    /// the Personal lock: "Personal conversation", when, and "Locked".
+    public static func spokenLabel(_ meeting: Meeting, status: ConversationRowStatus?, timeLabel: String, hidden: Bool = false) -> String {
+        if hidden {
+            return [PersonalLockWords.hiddenTitle, timeLabel, status?.text(at: Date()), PersonalLockWords.locked]
+                .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ", ")
+        }
         var parts = [title(meeting), timeLabel]
         if let duration = meeting.duration { parts.append(SpokenTime.format(duration)) }
         switch status?.kind {
