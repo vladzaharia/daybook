@@ -11,6 +11,23 @@ final class SharedNameTests: XCTestCase {
 
     /// Every app's sources: the Mac, the iPhone, and the iPhone's widgets.
     private static let appFolders = ["Sources/Daybook", "Apps/iOS/DaybookPhone", "Apps/iOS/Shared", "Apps/iOS/DaybookPhoneWidgets"]
+    private static let iPhoneFolders = ["Apps/iOS/DaybookPhone", "Apps/iOS/Shared", "Apps/iOS/DaybookPhoneWidgets"]
+
+    /// Types both apps declare by the same name. Each is a seam to name for its platform (`MacPageHeader`), or the same
+    /// thing written twice, to lift into DaybookKit or DaybookUI. Take a name off once only one app declares it (the
+    /// test says when); never add one.
+    private static let declaredInBothApps: Set<String> = [
+        // App Intents reads an intent, an entity, its query, a Focus filter, and the phrases from the target that
+        // declares them, so each app keeps its own; what they decide is shared (`SpotlightPlan`, `PersonalLock`), and
+        // `ShortcutPhrasesTests` holds the phrases together.
+        "AddBookmarkIntent", "ConversationEntity", "ConversationQuery", "DaybookFocusFilter", "DaybookShortcuts",
+        "NewNoteIntent", "OpenConversationIntent", "StartRecordingIntent", "StopRecordingIntent",
+        // Each app's own model behind a shared screen or rule.
+        "LaunchOptions", "LiveCaptionStore", "LiveCaptionsController", "LocalPasteboard", "LocalPasteboardWriting", "PhoneLink",
+        // Drawn by each app, around shared parts; to lift, or to name for their platform.
+        "AddDeviceSheet", "ConversationMoreMenu", "DevicePage", "DevicePageContent", "PageColophon", "PageHeader",
+        "PersonalLockSection", "RowMenu", "SummaryPage"
+    ]
 
     private func swiftFiles(_ path: String) -> [URL] {
         let folder = Self.root.appendingPathComponent(path)
@@ -100,6 +117,23 @@ final class SharedNameTests: XCTestCase {
         }
         XCTAssertEqual(app.intersection(shared).sorted(), [],
                        "An app declares a type the shared libraries export; use the shared one, or name a typealias to it")
+    }
+
+    /// Two apps that each write a type of the same name have usually written one thing twice, and it drifts (two level
+    /// meters, two Version Histories, two device glyphs). The known ones are listed; the list only shrinks.
+    func testNoNewTypeIsDeclaredInBothApps() throws {
+        let mac = Set(try declaredTypes(in: "Sources/Daybook", publicOnly: false))
+        var phone: Set<String> = []
+        for folder in Self.iPhoneFolders {
+            phone.formUnion(try declaredTypes(in: folder, publicOnly: false))
+        }
+        XCTAssertTrue(mac.contains("AppState") && phone.contains("PhoneAppModel"), "The reader finds both apps' types")
+        let both = mac.intersection(phone)
+        XCTAssertEqual(both.subtracting(Self.declaredInBothApps).sorted(), [],
+                       "Both apps declare it: lift it into DaybookKit or DaybookUI, or name each for its platform")
+        // A pair that's gone comes off the list, so the list only shrinks.
+        XCTAssertEqual(Self.declaredInBothApps.subtracting(both).sorted(), [],
+                       "Only one app declares it now: take it off declaredInBothApps")
     }
 
     func testNoAppMemberShadowsASharedOne() throws {
