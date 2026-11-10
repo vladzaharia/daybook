@@ -12,14 +12,6 @@ final class SharedNameTests: XCTestCase {
     /// Every app's sources: the Mac, the iPhone, and the iPhone's widgets.
     private static let appFolders = ["Sources/Daybook", "Apps/iOS/DaybookPhone", "Apps/iOS/Shared", "Apps/iOS/DaybookPhoneWidgets"]
 
-    /// App types that still shadow a shared one, each until the screens that use it move to the library.
-    /// Remove a name here once its app copy is gone (the test says when); never add one.
-    private static let movingOver: Set<String> = [
-        // The Mac's page geometry (ConversationPage.swift). It lays out as DaybookUI's in all four places it's used,
-        // so swapping it for the shared one finishes the move.
-        "MarginRow"
-    ]
-
     private func swiftFiles(_ path: String) -> [URL] {
         let folder = Self.root.appendingPathComponent(path)
         guard let walker = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: nil) else { return [] }
@@ -100,17 +92,14 @@ final class SharedNameTests: XCTestCase {
         XCTAssertEqual(designMembers.intersection(uiMembers).sorted(), [], "Added twice across DaybookDesign and DaybookUI")
     }
 
-    func testNoAppTypeShadowsASharedOneBeyondTheMovesInProgress() throws {
+    func testNoAppTypeShadowsASharedOne() throws {
         let shared = Set(try declaredTypes(in: "Sources/DaybookDesign", publicOnly: true) + declaredTypes(in: "Sources/DaybookUI", publicOnly: true))
         var app: Set<String> = []
         for folder in Self.appFolders {
             app.formUnion(try declaredTypes(in: folder, publicOnly: false))
         }
-        let shadowing = app.intersection(shared)
-        XCTAssertEqual(shadowing.subtracting(Self.movingOver).sorted(), [],
+        XCTAssertEqual(app.intersection(shared).sorted(), [],
                        "An app declares a type the shared libraries export; use the shared one, or name a typealias to it")
-        // A move that's done comes off the list, so the list only shrinks.
-        XCTAssertEqual(Self.movingOver.subtracting(shadowing).sorted(), [], "Its app copy is gone: take the name off movingOver")
     }
 
     func testNoAppMemberShadowsASharedOne() throws {

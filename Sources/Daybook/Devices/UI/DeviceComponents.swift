@@ -94,22 +94,6 @@ struct DeviceStatusDot: View {
     }
 }
 
-/// A state that needs the person, as a conversation's status box (`StatusBox`): a problem (warning),
-/// or something to know (quiet), spanning the column, its actions under the message when it's narrow.
-struct DeviceAttentionBox<Actions: View>: View {
-    var kind: StatusBoxKind = .info
-    let symbol: String
-    let title: String
-    var message: String?
-    @ViewBuilder var actions: Actions
-
-    var body: some View {
-        StatusBox(kind: kind, symbol: symbol, title: title, message: message, actions: actions)
-            .padding(.top, Space.s4)
-            .transition(.opacity)
-    }
-}
-
 /// The one prominent action in a box.
 struct DeviceBoxPrimaryButton: View {
     let title: String

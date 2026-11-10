@@ -1,4 +1,5 @@
 import AppKit
+import DaybookDesign
 import DaybookKit
 import DaybookLink
 import DaybookUI
@@ -95,10 +96,10 @@ struct PhonePairingStep: View {
             // The title says who paired, and the list below shows it connected.
             EmptyView()
         case .unavailable(let message):
-            DeviceAttentionBox(kind: .problem, symbol: "exclamationmark.triangle.fill", title: message) {
+            AttentionBox(kind: .problem, title: message, message: nil) {
                 DeviceBoxPrimaryButton(title: PairingWords.showNewCode) { state.beginPhonePairing() }
             }
-            .padding(.top, -Space.s4)
+            .transition(.opacity)
         }
     }
 }
