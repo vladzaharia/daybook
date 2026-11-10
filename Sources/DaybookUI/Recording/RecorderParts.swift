@@ -287,6 +287,8 @@ public struct RecorderControlMetrics: Equatable, Sendable {
     public static let pocket = RecorderControlMetrics(height: 64, radius: DaybookRadius.control, size: nil, spacing: DaybookSpacing.s3)
     /// The open iPhone Duo's recorder page.
     public static let page = RecorderControlMetrics(height: 56, radius: DaybookRadius.control, size: nil, spacing: DaybookSpacing.s3)
+    /// The glyph-sized controls in the iPhone's smallest sheet.
+    public static let glyph = RecorderControlMetrics(height: 44, radius: 22, size: nil, spacing: DaybookSpacing.s3)
 }
 
 /// Bookmark, the shapes it takes, and its feedback: it bounces (and, on the iPhone, taps the hand) for the person's
@@ -416,20 +418,23 @@ public struct StopControl: View {
     private let height: CGFloat
     private let radius: CGFloat
     private let size: CGFloat?
+    private let glyph: Bool
     private let shortcut: Bool
     private let elapsed: (() -> TimeInterval)?
     private let action: () -> Void
     @State private var pressed = 0
 
     /// - Parameters:
+    ///   - glyph: The symbol alone, a square target `metrics.height` wide (the iPhone's smallest sheet).
     ///   - shortcut: ⇧⌘R, with its tooltip (the Mac's panel).
     ///   - elapsed: The recording's length now, which VoiceOver reads with Stop.
-    public init(isSaving: Bool, metrics: RecorderControlMetrics, shortcut: Bool = false, elapsed: (() -> TimeInterval)? = nil,
-                action: @escaping () -> Void) {
+    public init(isSaving: Bool, metrics: RecorderControlMetrics, glyph: Bool = false, shortcut: Bool = false,
+                elapsed: (() -> TimeInterval)? = nil, action: @escaping () -> Void) {
         self.isSaving = isSaving
         height = metrics.height
         radius = metrics.radius
         size = metrics.size
+        self.glyph = glyph
         self.shortcut = shortcut
         self.elapsed = elapsed
         self.action = action
@@ -440,11 +445,9 @@ public struct StopControl: View {
             pressed += 1
             action()
         } label: {
-            StopControlLabel(isSaving: isSaving, size: size)
-                .frame(maxWidth: .infinity, minHeight: height)
-                .contentShape(Rectangle())
+            label.contentShape(Rectangle())
         }
-        .daybookControl(.stop, shape: .roundedRectangle(radius: radius))
+        .daybookControl(.stop, shape: glyph ? .capsule : .roundedRectangle(radius: radius))
         .disabled(isSaving)
         .modifier(RecorderShortcut(enabled: shortcut, key: "r", modifiers: [.command, .shift], help: "Stop Recording (⇧⌘R)"))
         .modifier(RecorderPressFeedback(trigger: pressed, heavy: false))
@@ -452,6 +455,22 @@ public struct StopControl: View {
         .accessibilityValue(elapsed.map { SpokenTime.format($0()) } ?? "")
         .accessibilityShowsLargeContentViewer {
             Label(isSaving ? "Saving…" : "Stop", systemImage: "stop.fill")
+        }
+    }
+
+    @ViewBuilder private var label: some View {
+        if glyph {
+            Group {
+                if isSaving {
+                    ProgressView().controlSize(.small).tint(.white).environment(\.colorScheme, .dark)
+                } else {
+                    Image(systemName: "stop.fill").font(.headline).foregroundStyle(.white)
+                }
+            }
+            .frame(width: height, height: height)
+        } else {
+            StopControlLabel(isSaving: isSaving, size: size)
+                .frame(maxWidth: .infinity, minHeight: height)
         }
     }
 }

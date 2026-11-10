@@ -1,3 +1,4 @@
+import DaybookUI
 import Foundation
 import SwiftUI
 
@@ -19,6 +20,7 @@ import SwiftUI
 ///     --interface-orientation portrait|landscape|preview-portrait   turn the interface in table mode, and the library
 ///                                (the simulator can't turn the device)
 ///     --write-notes              table mode opens with Write Notes on (notes on the standing half, the keyboard below)
+///     --recorder-sheet mini|collapsed|expanded|full   open the recorder's sheet expanded to this level (without it: at rest)
 ///     --caption-probe [file]     log what live captions can do here (and, if ready, caption the file); never downloads
 ///     --device-simulator         Soundcore runs against DaybookDevices' simulated recorder
 ///     --device-autopilot         with --device-simulator: add the recorder, connect, and import
@@ -94,6 +96,9 @@ struct DebugLaunch {
     var showImporter = false
     var demoCaptions = false
     var writeNotes = false
+    var recorderSheet: RecorderSheetSize?
+    var demoInk = false
+    var demoInkWriting = false
     var interfaceOrientation: String?
     var captionProbe: String?
     var settingsPage: SettingsPage?
@@ -219,6 +224,9 @@ struct DebugLaunch {
         showImporter = has("--show-importer")
         demoCaptions = has("--demo-captions")
         writeNotes = has("--write-notes")
+        recorderSheet = value("--recorder-sheet").flatMap(RecorderSheetSize.init(rawValue:))
+        demoInk = has("--demo-ink")
+        demoInkWriting = has("--demo-ink-writing")
         interfaceOrientation = value("--interface-orientation")
         if has("--caption-probe") { captionProbe = value("--caption-probe") ?? "" }
         stopAfter = value("--stop-after").flatMap(TimeInterval.init)

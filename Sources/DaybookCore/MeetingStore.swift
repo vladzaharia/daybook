@@ -250,6 +250,10 @@ public actor MeetingStore {
         let photoIDs = Set((result.photos ?? []).map(\.id))
         let missingPhotos = (stored.photos ?? []).filter { !photoIDs.contains($0.id) }
         if !missingPhotos.isEmpty { result.photos = (result.photos ?? []) + missingPhotos }
+        // So is handwriting: a stale snapshot can't take strokes back.
+        let inkIDs = Set((result.ink ?? []).map(\.id))
+        let missingInk = (stored.ink ?? []).filter { !inkIDs.contains($0.id) }
+        if !missingInk.isEmpty { result.ink = (result.ink ?? []) + missingInk }
         return result
     }
 

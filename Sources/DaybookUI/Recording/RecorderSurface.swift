@@ -12,7 +12,7 @@ import SwiftUI
 // - compact: Floating Notes under 380 pt tall. The clock and small meters, a line for a note, the newest caption,
 //   and the controls.
 // - column: Floating Notes, and the iPhone in the hand. The panel puts the meters beside its 34 pt clock; the
-//   iPhone puts them under its 64 pt one, with the camera beside it.
+//   iPhone has your notes on top and the recorder below in a sheet of four sizes (`RecorderSheetColumn`).
 // - spread: the open iPhone Duo. Your notes on the left page; the recorder on the right.
 // - stage: table mode. The clock, level, and large captions on one half; a large Bookmark, Stop, and the tools
 //   on the other.
@@ -56,15 +56,17 @@ public struct RecorderSurfaceState {
     public var keyboardShortcuts: Bool
     /// Table mode is dimmed: a touch only wakes it, so Stop and the tools don't take it. Bookmark always does.
     public var asleep: Bool
+    /// A notice is showing in `RecorderSlots.notice`: the iPhone's sheet won't draw a size too small to show it.
+    public var hasNotice: Bool
 
     public init(phase: RecorderPhase? = nil, title: String, rename: ((String) -> Void)? = nil, byline: String? = nil,
                 chips: [RecorderChip] = [], meters: [RecorderMeter] = [], clock: RecorderTime, isLive: Bool, bookmarkCount: Int,
                 canBookmark: Bool = true, isSaving: Bool = false, pause: RecorderPause? = nil, topInset: CGFloat = 0,
-                keyboardShortcuts: Bool = false, asleep: Bool = false) {
+                keyboardShortcuts: Bool = false, asleep: Bool = false, hasNotice: Bool = false) {
         self.phase = phase; self.title = title; self.rename = rename; self.byline = byline; self.chips = chips; self.meters = meters
         self.clock = clock; self.isLive = isLive; self.bookmarkCount = bookmarkCount; self.canBookmark = canBookmark
         self.isSaving = isSaving; self.pause = pause; self.topInset = topInset; self.keyboardShortcuts = keyboardShortcuts
-        self.asleep = asleep
+        self.asleep = asleep; self.hasNotice = hasNotice
     }
 
     /// Whether a touch on Stop reaches it. Dimmed, the touch only wakes the screen: it never ends the recording.
@@ -96,19 +98,22 @@ public struct RecorderSlots {
     public var captions: AnyView
     /// Beside the clock (the iPhone's camera).
     public var accessory: AnyView?
-    /// Under the meters on a spread's recorder page (the iPhone's live timeline).
+    /// Under the meters on a spread's recorder page and in the iPhone's largest sheet (the iPhone's live timeline).
     public var details: AnyView?
     /// One line when something needs saying while recording.
     public var notice: AnyView?
+    /// The rest of the iPhone's largest sheet (the bookmarks).
+    public var log: AnyView?
     /// Table mode's Write Notes and camera, beside Stop.
     public var tools: AnyView?
     /// What a chip's menu offers.
     public var menu: (RecorderChip) -> AnyView
 
     public init(notes: AnyView, captions: AnyView = AnyView(EmptyView()), accessory: AnyView? = nil, details: AnyView? = nil,
-                notice: AnyView? = nil, tools: AnyView? = nil, menu: @escaping (RecorderChip) -> AnyView = { _ in AnyView(EmptyView()) }) {
+                notice: AnyView? = nil, log: AnyView? = nil, tools: AnyView? = nil,
+                menu: @escaping (RecorderChip) -> AnyView = { _ in AnyView(EmptyView()) }) {
         self.notes = notes; self.captions = captions; self.accessory = accessory; self.details = details; self.notice = notice
-        self.tools = tools; self.menu = menu
+        self.log = log; self.tools = tools; self.menu = menu
     }
 }
 
@@ -120,34 +125,38 @@ public struct RecorderSurface: View {
     private let slots: RecorderSlots
     private let writing: Binding<Bool>
     private let clockFocus: AccessibilityFocusState<Bool>.Binding?
+    private let sheetExpansion: Binding<RecorderSheetSize?>
     @Environment(\.surfaceLayout) private var layout
     @Environment(\.daybookDensity) private var density
 
     /// - Parameters:
     ///   - writing: Table mode's Write Notes: the notes take the clock's half until Done.
     ///   - clockFocus: Where VoiceOver goes as the recorder appears: the clock, which says it's recording and for how long.
+    ///   - sheetExpansion: How far the person has expanded the iPhone's sheet; nil rests it at its posture's size.
     public init(state: RecorderSurfaceState, levels: RecorderLevels, actions: RecorderSurfaceActions, slots: RecorderSlots,
-                writing: Binding<Bool> = .constant(false), clockFocus: AccessibilityFocusState<Bool>.Binding? = nil) {
+                writing: Binding<Bool> = .constant(false), clockFocus: AccessibilityFocusState<Bool>.Binding? = nil,
+                sheetExpansion: Binding<RecorderSheetSize?> = .constant(nil)) {
         self.state = state
         self.levels = levels
         self.actions = actions
         self.slots = slots
         self.writing = writing
         self.clockFocus = clockFocus
+        self.sheetExpansion = sheetExpansion
     }
 
     public var body: some View {
         let parts = RecorderPieces(state: state, levels: levels, actions: actions, slots: slots, clockFocus: clockFocus)
         switch layout {
         case .compact: CompactRecorder(parts: parts)
-        case .column: ColumnRecorder(parts: parts, touch: density == .touch)
+        case .column: ColumnRecorder(parts: parts, touch: density == .touch, sheetExpansion: sheetExpansion)
         case .spread(let crease):
             PageSpread(crease: crease) {
                 SpreadNotesPage(parts: parts)
             } trailing: {
-                SpreadRecorderPage(parts: parts)
+                SpreadRecorderPage(parts: parts, expansion: sheetExpansion)
             } single: {
-                ColumnRecorder(parts: parts, touch: density == .touch)
+                ColumnRecorder(parts: parts, touch: density == .touch, sheetExpansion: sheetExpansion)
             }
             .overlay(alignment: .leading) { CreaseLine(crease: crease) }
         case .stage: StageRecorder(parts: parts, writing: writing)
@@ -201,8 +210,8 @@ struct RecorderPieces {
                         action: actions.bookmark)
     }
 
-    func stop(_ metrics: RecorderControlMetrics) -> some View {
-        StopControl(isSaving: state.isSaving, metrics: metrics, shortcut: state.keyboardShortcuts, elapsed: { state.clock.now },
+    func stop(_ metrics: RecorderControlMetrics, glyph: Bool = false) -> some View {
+        StopControl(isSaving: state.isSaving, metrics: metrics, glyph: glyph, shortcut: state.keyboardShortcuts, elapsed: { state.clock.now },
                     action: actions.stop)
             .allowsHitTesting(state.stopTakesTouch)
     }
@@ -212,16 +221,6 @@ struct RecorderPieces {
             bookmark(.tile(metrics))
         } trailing: {
             stop(metrics)
-        }
-    }
-
-    @ViewBuilder
-    func pauseOrMeters(_ stack: MeterStack, metrics: RecorderControlMetrics) -> some View {
-        if let pause = state.pause {
-            RecorderPauseBox(pause, metrics: metrics, resume: actions.resume)
-                .daybookTransition(.opacity.combined(with: .move(edge: .top)))
-        } else {
-            meters(stack)
         }
     }
 }
@@ -256,86 +255,49 @@ private struct CompactRecorder: View {
 
 // MARK: - Column
 
-/// One column: Floating Notes at full size, and the iPhone in the hand.
+/// One column: Floating Notes at full size, and the iPhone in the hand (`RecorderSheetColumn`).
 private struct ColumnRecorder: View {
     let parts: RecorderPieces
     let touch: Bool
-    @Environment(\.dynamicTypeSize) private var typeSize
-    /// A line of notes at the person's text size.
-    @ScaledMetric(relativeTo: .body) private var notesLine: CGFloat = 22
-
-    /// In the hand at the accessibility sizes, a pause's box takes the captions' room: nothing is heard while it's
-    /// paused, and the notes keep theirs.
-    private var showsCaptions: Bool { !(touch && typeSize.isAccessibilitySize && parts.state.pause != nil) }
+    let sheetExpansion: Binding<RecorderSheetSize?>
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-            RecorderRule()
-                .padding(.horizontal, touch ? RecorderInsets.touch : RecorderInsets.panel)
-                .opacity(touch ? 0.6 : 1)
-            parts.slots.notes
-                // In the hand, at least two lines of notes. Laid out last, as the most flexible piece, they take what
-                // the rest leaves; a higher priority would squeeze a notice to its first line instead.
-                .frame(maxWidth: .infinity, minHeight: touch ? notesLine * 2 : nil, maxHeight: .infinity)
-            if touch {
-                VStack(spacing: DaybookSpacing.s3) {
-                    if showsCaptions { parts.slots.captions }
-                    parts.slots.notice
-                    parts.controls(.pocket)
-                }
-                .padding(.horizontal, DaybookSpacing.s4)
-                .padding(.top, DaybookSpacing.s2)
-                .padding(.bottom, DaybookSpacing.s3)
-            } else {
+        if touch {
+            RecorderSheetColumn(parts: parts, expansion: sheetExpansion)
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                panelHeader
+                RecorderRule().padding(.horizontal, RecorderInsets.panel)
+                parts.slots.notes
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 parts.slots.captions
                 PanelControlPadding(compact: false) { parts.controls(.panel) }
             }
+            .daybookMotion(DaybookMotion.state, value: parts.state.pause)
         }
-        .daybookMotion(DaybookMotion.state, value: parts.state.pause)
     }
 
-    @ViewBuilder private var header: some View {
-        if touch {
-            VStack(alignment: .leading, spacing: 10) {
-                parts.phase()
-                parts.chips
-                RecorderTitle(parts.state.title, rename: parts.state.rename)
-                HStack(alignment: .center) {
-                    parts.clock(64)
-                    Spacer(minLength: 8)
-                    parts.slots.accessory
-                }
-                parts.pauseOrMeters(.pocket, metrics: .pocket)
+    private var panelHeader: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            parts.phase()
+            if !parts.state.chips.isEmpty {
+                // Spacing 10 plus this: the same gap to the title as after Stop.
+                parts.chips.padding(.bottom, 2)
             }
-            // The header holds its size past this, so it never squeezes the notes away: during a call the notes,
-            // Bookmark, and Stop come first.
-            .dynamicTypeSize(...DynamicTypeSize.accessibility1)
-            .padding(.horizontal, RecorderInsets.touch)
-            .padding(.top, DaybookSpacing.s3)
-            .padding(.bottom, DaybookSpacing.s2)
-        } else {
-            VStack(alignment: .leading, spacing: 10) {
-                parts.phase()
-                if !parts.state.chips.isEmpty {
-                    // Spacing 10 plus this: the same gap to the title as after Stop.
-                    parts.chips.padding(.bottom, 2)
-                }
-                RecorderTitle(parts.state.title, rename: parts.state.rename)
-                if let pause = parts.state.pause {
-                    HStack(alignment: .center, spacing: 14) { parts.clock(34) }
-                    RecorderPauseBox(pause, metrics: .panel, resume: parts.actions.resume)
-                } else {
-                    HStack(alignment: .center, spacing: 14) {
-                        parts.clock(34)
-                        parts.meters(.full)
-                    }
+            RecorderTitle(parts.state.title, rename: parts.state.rename)
+            if let pause = parts.state.pause {
+                HStack(alignment: .center, spacing: 14) { parts.clock(34) }
+                RecorderPauseBox(pause, metrics: .panel, resume: parts.actions.resume)
+            } else {
+                HStack(alignment: .center, spacing: 14) {
+                    parts.clock(34)
+                    parts.meters(.full)
                 }
             }
-            .padding(.horizontal, RecorderInsets.panel)
-            .padding(.top, parts.state.topInset + (parts.state.chips.isEmpty ? 4 : 10))
-            .padding(.bottom, 12)
         }
+        .padding(.horizontal, RecorderInsets.panel)
+        .padding(.top, parts.state.topInset + (parts.state.chips.isEmpty ? 4 : 10))
+        .padding(.bottom, 12)
     }
 }
 
@@ -370,39 +332,27 @@ private struct SpreadNotesPage: View {
     }
 }
 
-/// The open Duo's right page: the recorder.
+/// The open Duo's right page: what the notebook's slots show (live captions when they're on, else the bookmark log),
+/// over the recorder's sheet at the foot, clear of the crease; it expands within the page, and the largest size takes
+/// it.
 private struct SpreadRecorderPage: View {
     let parts: RecorderPieces
+    let expansion: Binding<RecorderSheetSize?>
+    @Environment(\.creaseEdge) private var creaseEdge
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DaybookSpacing.s4) {
-            HStack(alignment: .top) {
-                parts.phase()
-                Spacer(minLength: 0)
-                parts.slots.accessory
-            }
-            parts.chips
-            parts.clock(76)
-            parts.pauseOrMeters(.page, metrics: .page)
-            parts.slots.details
+        RecorderSheetLayout(parts: parts, expansion: expansion, rest: RecorderSheetSize.resting(in: .spread(crease: nil), isWide: false), look: .page) {
             // The captions take what's left and give way first, newest lines kept: Bookmark and Stop always fit.
             parts.slots.captions
                 .frame(minHeight: 0, maxHeight: .infinity, alignment: .bottom)
                 .clipped()
                 .layoutPriority(-1)
-            parts.slots.notice
-                .fixedSize(horizontal: false, vertical: true)
-                .layoutPriority(1)
-            parts.controls(.page)
-                .fixedSize(horizontal: false, vertical: true)
-                .layoutPriority(1)
+                .padding(.horizontal, DaybookSpacing.s5)
+                .padding(.top, DaybookSpacing.s5)
+                .padding(.bottom, DaybookSpacing.s3)
         }
         .dynamicTypeSize(...DynamicTypeSize.accessibility3)
-        .padding(.horizontal, DaybookSpacing.s5)
-        .padding(.top, DaybookSpacing.s5)
-        .padding(.bottom, DaybookSpacing.s3)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .daybookMotion(DaybookMotion.state, value: parts.state.pause)
+        .padding(.leading, creaseEdge == .leading ? ReadingGeometry.creaseClearance - DaybookSpacing.s2 : 0)
     }
 }
 

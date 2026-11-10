@@ -82,6 +82,8 @@ final class PhoneRecorder {
     private(set) var sharedBookmarks: [UUID: Highlight] = [:]
     /// Photos taken during this recording, kept in the staging folder.
     private(set) var photos: [CapturePhoto] = []
+    /// Handwriting in this recording's notes: one paragraph of `notes` per block.
+    private(set) var ink: [NoteInk] = []
     private(set) var inputRoute: AudioInputRoute?
     /// The interruption ended; recording can continue.
     private(set) var canResume = false
@@ -177,7 +179,7 @@ final class PhoneRecorder {
         cancelStart = false
         lastError = nil; lastFailure = nil; unexpectedStop = nil; unfinishedFolder = nil; canResume = false; pauseMessage = nil
         captureID = id; self.recordingID = recordingID; self.title = title; startedAt = nil
-        notes = ""; timedNotes = []; highlights = []; photos = []; sharedNotes = [:]; sharedBookmarks = [:]
+        notes = ""; timedNotes = []; ink = []; highlights = []; photos = []; sharedNotes = [:]; sharedBookmarks = [:]
         level = .silent; isMicrophoneSilent = false
         do {
             guard !FileManager.default.fileExists(atPath: PhoneCaptureJournal.url(in: directory).path) else {
@@ -326,13 +328,49 @@ final class PhoneRecorder {
         guard text != notes else { return }
         timedNotes = NoteTimeline.reconcile(previous: timedNotes, text: text, captureTime: isCapturing ? elapsedTime : nil)
         notes = text
-        journal?.notes = text
+        saveNotesSoon()
+    }
+
+    private func saveNotesSoon() {
+        journal?.notes = notes
         journal?.timedNotes = timedNotes
+        journal?.ink = ink.isEmpty ? nil : ink
         notesSave?.cancel()
         notesSave = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(400))
             guard !Task.isCancelled else { return }
             self?.persistJournal()
+        }
+    }
+
+    /// The recording's notes as a conversation's, for the edits handwriting shares with one (`NoteInk.swift`).
+    private func editingInk(_ change: (inout Meeting) -> Void) {
+        var scratch = Meeting(title: title, notes: notes, timedNotes: timedNotes)
+        scratch.ink = ink
+        change(&scratch)
+        notes = scratch.notes
+        timedNotes = scratch.timedNotes ?? []
+        ink = scratch.ink ?? []
+        saveNotesSoon()
+    }
+
+    /// A new block of handwriting, as a new paragraph at this moment of the recording.
+    func addInk(_ block: NoteInk, after index: Int?) {
+        let time = isCapturing ? elapsedTime : nil
+        editingInk { $0.addInk(block, after: index, time: time) }
+    }
+
+    /// New strokes, size, or words for a block.
+    func updateInk(_ block: NoteInk) {
+        editingInk { $0.updateInk(block) }
+    }
+
+    /// Takes a block out, its paragraph going or staying as typed words. Returns what puts it back.
+    func removeInk(_ id: UUID, keepingWords: Bool) -> (() -> Void)? {
+        var removal: InkRemoval?
+        editingInk { removal = $0.removeInk(id, keepingWords: keepingWords) }
+        return removal.map { removal in
+            { [weak self] in self?.editingInk { $0.restoreInk(removal) } }
         }
     }
 

@@ -84,6 +84,10 @@ public enum DaybookMotion {
     public static let dim = Animation.easeInOut(duration: 0.6)
     /// Something small arriving: a bookmark landing in the log.
     public static let land = Animation.spring(response: 0.32, dampingFraction: 0.6)
+    /// A sheet let go from a drag: a spring that carries the finger's speed, in sheet lengths a second.
+    public static func settle(initialVelocity: Double) -> Animation {
+        Animation.interpolatingSpring(duration: 0.32, bounce: 0.12, initialVelocity: initialVelocity)
+    }
     /// What every curve becomes under Reduce Motion.
     public static let reduced = Animation.easeOut(duration: 0.15)
     /// How long a done mark stays before it fades.

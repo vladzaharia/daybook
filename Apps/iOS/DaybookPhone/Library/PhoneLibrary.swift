@@ -153,6 +153,7 @@ final class PhoneLibrary {
                                      shift: join?.estimatedOffset ?? 0)
             for note in shared { meeting.applySharedNote(note) }
             for mark in sharedMarks { meeting.addSharedBookmark(mark) }
+            meeting.adoptInk(recording.ink)
         }
         try await addCapturedPhotos(recording, track: track.id)
         let request = requestTranscription ? controller.requestProcessing(id, mode: .newAudio) : nil

@@ -283,6 +283,7 @@ enum UnrecordedCapture {
             meeting.addRecordingWork(trackID: journal.recordingID ?? id, notes: notes, bookmarks: bookmarks, joining: false)
             for note in shared { meeting.applySharedNote(note) }
             for mark in sharedMarks { _ = meeting.addSharedBookmark(mark) }
+            meeting.adoptInk(journal.ink ?? [])
         }
         for photo in journal.photos ?? [] {
             let url = folder.appendingPathComponent(photo.fileName)

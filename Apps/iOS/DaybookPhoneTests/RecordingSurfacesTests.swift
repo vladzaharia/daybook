@@ -519,24 +519,213 @@ final class RecorderScreenTests: XCTestCase {
    notes: AnyView(Color.clear), captions: AnyView(captions),
    accessory: AnyView(Circle().frame(width: 44, height: 44)),
    details: AnyView(Capsule().frame(height: 24)))
+  for expansion in [nil, RecorderSheetSize.collapsed, .expanded, .full] {
+   let surface = RecorderSurface(
+    state: state, levels: RecorderLevels(), actions: RecorderSurfaceActions(bookmark: {}, stop: {}),
+    slots: slots, sheetExpansion: .constant(expansion)
+   )
+   .daybookSurface(.spread(crease: 475.5), density: .touch)
+   .dynamicTypeSize(.accessibility5)
+   let host = UIHostingController(rootView: surface)
+   host.safeAreaRegions = []
+   let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+   let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow()
+   window.frame = CGRect(origin: .zero, size: size)
+   window.rootViewController = host
+   window.isHidden = false
+   defer { window.isHidden = true }
+   host.view.frame = CGRect(origin: .zero, size: size)
+   host.view.layoutIfNeeded()
+   XCTAssertLessThanOrEqual(
+    host.sizeThatFits(in: size).height, size.height + 0.5,
+    "nothing pushed off the page (expansion: \(String(describing: expansion)))")
+  }
+ }
+
+ // MARK: The recorder's sheet
+
+ private func hosted(
+  expansion: RecorderSheetSize?, paused: Bool = false, notice: Bool = false, size: CGSize,
+  layout: SurfaceLayout = .column, notes measuring: AnyView
+ ) -> (host: UIHostingController<AnyView>, window: UIWindow) {
+  let pause =
+   paused
+   ? RecorderPause(
+    title: "Paused for a call", message: "The call has ended. Everything so far is saved.",
+    canResume: true) : nil
+  let state = RecorderSurfaceState(
+   phase: RecorderPhase(phase: paused ? .paused : .recording, title: paused ? "Paused" : "Recording"),
+   title: "Conversation at 4:07 AM", clock: .since(Date()), isLive: !paused, bookmarkCount: 2,
+   pause: pause, hasNotice: notice)
+  let slots = RecorderSlots(
+   notes: measuring,
+   captions: AnyView(Text("Then everything waits for the Mac to finish").font(.system(size: 26)).lineLimit(1)),
+   accessory: AnyView(Circle().frame(width: 44, height: 44)),
+   notice: notice ? AnyView(Text("The Mac declined to record too.").font(.footnote)) : nil)
   let surface = RecorderSurface(
    state: state, levels: RecorderLevels(), actions: RecorderSurfaceActions(bookmark: {}, stop: {}),
-   slots: slots
+   slots: slots, sheetExpansion: .constant(expansion)
   )
-  .daybookSurface(.spread(crease: 475.5), density: .touch)
+  .daybookSurface(layout, density: .touch)
   .dynamicTypeSize(.accessibility5)
-  let host = UIHostingController(rootView: surface)
+  let host = UIHostingController(rootView: AnyView(surface))
   host.safeAreaRegions = []
   let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
   let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow()
   window.frame = CGRect(origin: .zero, size: size)
   window.rootViewController = host
   window.isHidden = false
-  defer { window.isHidden = true }
   host.view.frame = CGRect(origin: .zero, size: size)
   host.view.layoutIfNeeded()
-  XCTAssertLessThanOrEqual(
-   host.sizeThatFits(in: size).height, size.height + 0.5, "nothing pushed off the page")
+  return (host, window)
+ }
+
+ /// At every level on the cover at the largest text size the sheet and two lines of notes fit, so Stop, the sheet's
+ /// foot, is on screen; at the full level the sheet takes the whole column and the notes leave the layout.
+ func testBehaviorEverySheetSizeFitsTheCoverAtTheLargestTextSizeWithStopOnScreen() throws {
+  final class Measured { var height: CGFloat = 0 }
+  let size = CGSize(width: 466, height: 636)
+  let line = UIFont.preferredFont(
+   forTextStyle: .body,
+   compatibleWith: UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge)
+  ).lineHeight
+  for expansion in [nil, RecorderSheetSize.mini, .collapsed, .expanded, .full] {
+   for paused in [true, false] {
+    let measured = Measured()
+    let notes = GeometryReader { proxy in
+     Color.clear
+      .onAppear { measured.height = proxy.size.height }
+      .onChange(of: proxy.size.height) { _, height in measured.height = height }
+    }
+    let (host, window) = hosted(expansion: expansion, paused: paused, size: size, notes: AnyView(notes))
+    defer { window.isHidden = true }
+    XCTAssertLessThanOrEqual(
+     host.sizeThatFits(in: size).height, size.height + 0.5,
+     "nothing pushed off the screen (\(String(describing: expansion)), paused: \(paused))")
+    if expansion != .full {
+     XCTAssertGreaterThanOrEqual(
+      measured.height, line * 2, "two lines of notes (\(String(describing: expansion)), paused: \(paused))")
+    }
+   }
+  }
+ }
+
+ /// Regression: over the keyboard the sheet is one row whatever its level, with Stop above the keyboard and the
+ /// notes given the room, and it comes back when the keyboard goes. A notice is never folded away.
+ func testBehaviorTheKeyboardFoldsTheSheetToOneRowAndANoticeHoldsItOpen() throws {
+  XCTAssertEqual(RecorderSheetSize.expanded.rendered(keyboardUp: true, hasNotice: false), .mini)
+  XCTAssertEqual(RecorderSheetSize.full.rendered(keyboardUp: true, hasNotice: false), .mini)
+  XCTAssertEqual(
+   RecorderSheetSize.mini.rendered(keyboardUp: true, hasNotice: true), .collapsed,
+   "a notice is never hidden, even over a keyboard")
+  XCTAssertEqual(RecorderSheetSize.mini.rendered(keyboardUp: false, hasNotice: true), .collapsed)
+  XCTAssertEqual(RecorderSheetSize.expanded.rendered(keyboardUp: false, hasNotice: true), .expanded)
+  XCTAssertEqual(RecorderSheetSize.expanded.rendered(keyboardUp: false, hasNotice: false), .expanded)
+  XCTAssertTrue(RecorderSheetSize.keyboardTakesTheScreen(height: 336))
+  XCTAssertFalse(RecorderSheetSize.keyboardTakesTheScreen(height: 55), "a hardware keyboard's bar")
+
+  final class Measured { var height: CGFloat = 0 }
+  let measured = Measured()
+  let notes = GeometryReader { proxy in
+   Color.clear
+    .onAppear { measured.height = proxy.size.height }
+    .onChange(of: proxy.size.height) { _, height in measured.height = height }
+  }
+  let size = CGSize(width: 466, height: 636)
+  let (host, window) = hosted(expansion: .expanded, size: size, notes: AnyView(notes))
+  defer { window.isHidden = true }
+  let beforeKeyboard = measured.height
+  let info: [AnyHashable: Any] = [
+   UIResponder.keyboardFrameEndUserInfoKey: NSValue(cgRect: CGRect(x: 0, y: 300, width: 466, height: 336)),
+   UIResponder.keyboardAnimationDurationUserInfoKey: 0.0,
+  ]
+  NotificationCenter.default.post(name: UIResponder.keyboardWillShowNotification, object: nil, userInfo: info)
+  RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+  host.view.layoutIfNeeded()
+  XCTAssertGreaterThan(
+   measured.height, beforeKeyboard + 100, "with the keyboard up the notes take what the sheet gives back")
+  NotificationCenter.default.post(name: UIResponder.keyboardWillHideNotification, object: nil, userInfo: info)
+  RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+  host.view.layoutIfNeeded()
+  XCTAssertEqual(measured.height, beforeKeyboard, accuracy: 1, "the sheet comes back, its level untouched")
+ }
+
+ func testBehaviorTheSheetRestsAtTheSizeItsPostureCallsFor() {
+  XCTAssertEqual(RecorderSheetSize.resting(in: .column, isWide: false), .collapsed, "closed, upright")
+  XCTAssertEqual(RecorderSheetSize.resting(in: .column, isWide: true), .mini, "closed, on its side")
+  XCTAssertEqual(RecorderSheetSize.resting(in: .spread(crease: 475.5), isWide: true), .mini, "open")
+ }
+
+ func testBehaviorAnExpansionSurvivesFoldingAndNilRestsAtEachPosturesSize() {
+  // The person's level stays through a fold or a turn; only at rest does the posture choose.
+  let open = RecorderSheetSize.resting(in: .spread(crease: 475.5), isWide: false)
+  let closed = RecorderSheetSize.resting(in: .column, isWide: false)
+  let turned = RecorderSheetSize.resting(in: .column, isWide: true)
+  XCTAssertEqual(RecorderSheetSize.selected(expansion: nil, rest: open, hasNotice: false), .mini)
+  XCTAssertEqual(RecorderSheetSize.selected(expansion: nil, rest: closed, hasNotice: false), .collapsed)
+  for expansion in [RecorderSheetSize.expanded, .full] {
+   XCTAssertEqual(RecorderSheetSize.selected(expansion: expansion, rest: open, hasNotice: false), expansion, "unfolded")
+   XCTAssertEqual(RecorderSheetSize.selected(expansion: expansion, rest: closed, hasNotice: false), expansion, "folded")
+   XCTAssertEqual(RecorderSheetSize.selected(expansion: expansion, rest: turned, hasNotice: false), expansion, "turned")
+  }
+  XCTAssertEqual(
+   RecorderSheetSize.selected(expansion: .mini, rest: closed, hasNotice: false), .collapsed, "rest is the floor")
+  XCTAssertEqual(
+   RecorderSheetSize.selected(expansion: nil, rest: turned, hasNotice: true), .collapsed,
+   "a notice holds mini open")
+ }
+
+ func testBehaviorEachWayOfDismissingReturnsTheSheetToRest() {
+  let heights: [RecorderSheetSize: CGFloat] = [.mini: 64, .collapsed: 190, .expanded: 430, .full: 640]
+  // A tap: up one size, and at the top back to rest.
+  XCTAssertEqual(RecorderSheetSize.expansionAfterTap(drawn: .mini), .collapsed)
+  XCTAssertEqual(RecorderSheetSize.expansionAfterTap(drawn: .expanded), .full)
+  XCTAssertNil(RecorderSheetSize.expansionAfterTap(drawn: .full), "a tap at full dismisses")
+  // A downward flick, from any level.
+  for start in [RecorderSheetSize.collapsed, .expanded, .full] {
+   XCTAssertNil(
+    RecorderSheetSize.expansionAfterDrag(from: start, translation: 40, velocity: 1_400, floor: .mini, heights: heights),
+    "a flick from \(start)")
+  }
+  // A drag that lands at or below rest.
+  XCTAssertNil(
+   RecorderSheetSize.expansionAfterDrag(from: .expanded, translation: 260, velocity: 0, floor: .collapsed, heights: heights),
+   "landing on the floor")
+  XCTAssertNil(
+   RecorderSheetSize.expansionAfterDrag(from: .expanded, translation: 400, velocity: 0, floor: .collapsed, heights: heights),
+   "dragged past it")
+  // Collapse steps down, at the floor back to rest.
+  XCTAssertEqual(RecorderSheetSize.expansionAfterCollapse(drawn: .full, floor: .collapsed), .expanded)
+  XCTAssertNil(RecorderSheetSize.expansionAfterCollapse(drawn: .expanded, floor: .collapsed), "one step is the floor")
+ }
+
+ func testBehaviorADragLandsOnTheNearestSizeAndRestIsTheFloor() {
+  let heights: [RecorderSheetSize: CGFloat] = [.mini: 64, .collapsed: 190, .expanded: 430, .full: 640]
+  let drag = { (from: RecorderSheetSize, by: CGFloat, floor: RecorderSheetSize) in
+   RecorderSheetSize.expansionAfterDrag(from: from, translation: by, velocity: 0, floor: floor, heights: heights)
+  }
+  XCTAssertEqual(drag(.expanded, 30, .mini), .expanded, "a short drag down stays on a level above rest")
+  XCTAssertEqual(drag(.full, 90, .collapsed), .full, "still nearest where it started")
+  XCTAssertEqual(drag(.full, 120, .collapsed), .expanded, "one level down, above rest")
+  XCTAssertEqual(drag(.expanded, 160, .mini), .collapsed, "a long drag down to the size under it")
+  XCTAssertEqual(drag(.collapsed, -300, .mini), .expanded, "up to the nearest")
+  XCTAssertEqual(drag(.collapsed, -560, .mini), .full, "a long drag jumps sizes")
+  XCTAssertEqual(drag(.mini, -130, .mini), .collapsed, "from rest")
+  XCTAssertNil(drag(.collapsed, -20, .collapsed), "a drag back to rest is rest")
+  // A release's speed counts for a little.
+  XCTAssertEqual(
+   RecorderSheetSize.expansionAfterDrag(from: .collapsed, translation: -60, velocity: -800, floor: .mini, heights: heights),
+   .expanded, "thrown upward")
+  // The sheet tracks the finger exactly between its ends and resists past them.
+  XCTAssertEqual(RecorderSheetSize.trackedHeight(300, minimum: 64, maximum: 640), 300)
+  let past = RecorderSheetSize.trackedHeight(640 + 100, minimum: 64, maximum: 640)
+  XCTAssertGreaterThan(past, 640)
+  XCTAssertLessThan(past, 640 + 40, "past the end it hardly moves")
+  let under = RecorderSheetSize.trackedHeight(64 - 100, minimum: 64, maximum: 640)
+  XCTAssertLessThan(under, 64)
+  XCTAssertGreaterThan(under, 64 - 40)
+  XCTAssertEqual(RecorderSheetSize.nearest(to: 200, floor: .collapsed, heights: heights), .collapsed)
+  XCTAssertEqual(RecorderSheetSize.nearest(to: 60, floor: .collapsed, heights: heights), .collapsed, "never under the floor")
  }
 
  // MARK: The notes editor

@@ -128,6 +128,8 @@ public struct MarginNotesEditor {
     /// A fixed size for the times. Nil scales them with the text, as the page does.
     var timeFontSize: CGFloat?
     #else
+    /// Handwriting between the typed paragraphs; nil leaves it out.
+    var ink: NotesInkModel?
     var textStyle: UIFont.TextStyle
     /// The lane at the default text size; it grows with Dynamic Type to 1.9 times. Zero hides the times.
     var lane: CGFloat

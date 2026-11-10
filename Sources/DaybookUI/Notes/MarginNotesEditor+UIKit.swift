@@ -12,8 +12,9 @@ extension MarginNotesEditor: UIViewRepresentable {
     public init(text: Binding<String>, times: [TimeInterval?], marks: [NoteMark] = [], placeholder: String = MarginNotesEditor.placeholder,
                 textStyle: UIFont.TextStyle = .body, lane: CGFloat = ReadingGeometry.lane, scrolls: Bool = false, isEditable: Bool = true,
                 focusOnAppear: Bool = false, bottomInset: CGFloat = 0, findQuery: String = "", playTime: ((TimeInterval) -> Void)? = nil,
-                onFocusChange: ((Bool) -> Void)? = nil) {
+                onFocusChange: ((Bool) -> Void)? = nil, ink: NotesInkModel? = nil) {
         binding = text
+        self.ink = ink
         self.times = times
         self.marks = marks
         self.placeholder = placeholder
@@ -61,8 +62,9 @@ extension MarginNotesEditor: UIViewRepresentable {
             view.contentInset.bottom = bottomInset
             view.verticalScrollIndicatorInsets.bottom = bottomInset
         }
+        view.syncInk(with: text)
         // While typing, only a change from elsewhere (a Mac's paragraph during a shared recording) is taken.
-        if view.text != text && (!context.coordinator.isEditing || text != context.coordinator.lastWritten) {
+        if view.serializedText != text && (!context.coordinator.isEditing || text != context.coordinator.lastWritten) {
             view.setText(text)
             context.coordinator.lastWritten = text
             view.invalidateIntrinsicContentSize()
@@ -84,6 +86,7 @@ extension MarginNotesEditor: UIViewRepresentable {
         view.isEditable = isEditable
         view.playTime = playTime
         view.findQuery = findQuery
+        view.ink = ink
     }
 
     @MainActor
@@ -94,8 +97,14 @@ extension MarginNotesEditor: UIViewRepresentable {
         var lastWritten: String?
         init(_ parent: MarginNotesEditor) { self.parent = parent }
 
+        /// While a finger is writing, a touch on the words doesn't bring the keyboard back.
+        public func textViewShouldBeginEditing(_ textView: UITextView) -> Bool {
+            (textView as? MarginTextView)?.ink?.session.isWriting != true
+        }
+
         public func textViewDidBeginEditing(_ textView: UITextView) {
             isEditing = true
+            (textView as? MarginTextView)?.textTookFocus()
             parent.onFocusChange?(true)
         }
 
@@ -104,10 +113,16 @@ extension MarginNotesEditor: UIViewRepresentable {
             parent.onFocusChange?(false)
         }
 
+        public func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+            (textView as? MarginTextView)?.allowsEdit(in: range, replacing: text) ?? true
+        }
+
         public func textViewDidChange(_ textView: UITextView) {
             guard let view = textView as? MarginTextView else { return }
-            lastWritten = view.text
-            parent.text = view.text
+            if let text = view.textToWriteBack() {
+                lastWritten = text
+                parent.text = text
+            }
             view.textDidChange()
         }
 
@@ -144,7 +159,7 @@ public final class NotesContainerView: UIView {
     public override var intrinsicContentSize: CGSize { textView.intrinsicContentSize }
 
     public override var accessibilityElements: [Any]? {
-        get { [textView] + textView.gutter.accessibilityItems }
+        get { [textView] + textView.inkAccessibilityItems + textView.gutter.accessibilityItems }
         set {}
     }
 }
@@ -162,6 +177,34 @@ public final class MarginTextView: UITextView {
 
     let gutter = MarginGutterView()
     private let placeholderLabel = UILabel()
+
+    /// Handwriting: nil leaves it out.
+    public var ink: NotesInkModel? { didSet { inkModelChanged() } }
+    /// The canvases over the attachments, by block.
+    var inkViews: [UUID: InkBlockView] = [:]
+    /// The empty canvas past the last paragraph, where the next block starts.
+    var tailView: InkBlockView?
+    var observedSession: InkSession?
+    var pendingRecognition: [UUID: Task<Void, Never>] = [:]
+    /// Blocks nothing could read just now, so they aren't tried at every update.
+    var unreadable = Set<UUID>()
+    /// What puts back each block an edit took out of the text, for when Undo brings its attachment back.
+    var undoVanishedInk: [UUID: () -> Void] = [:]
+    /// Whether the writing tools were up at the last look, so blocks give back their room only as the writing ends.
+    var wasShowingInkTools = false
+    /// Whether a finger was writing at the last look, so the space at the caret opens as the writing starts.
+    var wasWritingByHand = false
+    /// The words have had the focus, so going back to them returns to the caret rather than the end.
+    var hadWordsFocus = false
+    /// The space opened after the caret's paragraph, which isn't in the notes until something is written in it.
+    var inkGap: (view: InkBlockView, attachment: InkAttachment, after: Int)?
+    /// Room under the text for the canvas past the last paragraph.
+    private var tailInset: CGFloat = 0
+
+    func updateTailInset(_ inset: CGFloat) {
+        tailInset = inset
+        textContainerInset.bottom = inset
+    }
 
     public init() {
         let storage = NSTextStorage()
@@ -197,7 +240,7 @@ public final class MarginTextView: UITextView {
                    UIFontMetrics(forTextStyle: .footnote).scaledValue(for: baseLane, compatibleWith: traitCollection))
     }
 
-    private var bodyFont: UIFont { UIFont.preferredFont(forTextStyle: textStyle, compatibleWith: traitCollection) }
+    var bodyFont: UIFont { UIFont.preferredFont(forTextStyle: textStyle, compatibleWith: traitCollection) }
 
     private func paragraph(spacingBefore: CGFloat = 0) -> NSParagraphStyle {
         let paragraph = NSMutableParagraphStyle()
@@ -207,7 +250,7 @@ public final class MarginTextView: UITextView {
         return paragraph
     }
 
-    private var attributes: [NSAttributedString.Key: Any] {
+    var attributes: [NSAttributedString.Key: Any] {
         [.font: bodyFont, .foregroundColor: DaybookPalette.Shade.body.uiColor, .paragraphStyle: paragraph()]
     }
 
@@ -216,10 +259,11 @@ public final class MarginTextView: UITextView {
 
     public func setText(_ value: String) {
         let selection = selectedRange
-        textStorage.setAttributedString(NSAttributedString(string: value, attributes: attributes))
+        inkGap = nil
+        textStorage.setAttributedString(displayString(for: value))
+        syncInkViews()
         applied = nil
-        let length = (value as NSString).length
-        selectedRange = NSRange(location: min(selection.location, length), length: 0)
+        selectedRange = NSRange(location: min(selection.location, textStorage.length), length: 0)
         textDidChange()
     }
 
@@ -230,7 +274,7 @@ public final class MarginTextView: UITextView {
             .scaledValue(for: 13, compatibleWith: traitCollection), weight: .regular)
         if textStorage.length > 0 {
             textStorage.beginEditing()
-            textStorage.setAttributes(attributes, range: NSRange(location: 0, length: textStorage.length))
+            textStorage.addAttributes(attributes, range: NSRange(location: 0, length: textStorage.length))
             textStorage.endEditing()
         }
         applied = nil
@@ -272,7 +316,7 @@ public final class MarginTextView: UITextView {
                 .map(\.element.location)
         }
         // The first paragraph's room is the text's top inset: TextKit gives the first line no space before it.
-        let insets = UIEdgeInsets(top: wanted.headers.first == 0 ? headerHeight : 0, left: lane, bottom: 0, right: 0)
+        let insets = UIEdgeInsets(top: wanted.headers.first == 0 ? headerHeight : 0, left: lane, bottom: tailInset, right: 0)
         if textContainerInset != insets { textContainerInset = insets }
         let plain = wanted.headers.isEmpty && wanted.matches.isEmpty
         guard markedTextRange == nil, applied.map({ $0 != wanted }) ?? !plain else { return }
@@ -307,6 +351,11 @@ public final class MarginTextView: UITextView {
         return CGSize(width: UIView.noIntrinsicMetric, height: height(forWidth: bounds.width > 0 ? bounds.width : 320))
     }
 
+    public override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil { applySession() }
+    }
+
     public override func layoutSubviews() {
         super.layoutSubviews()
         let placeholderWidth = max(40, bounds.width - lane)
@@ -314,6 +363,7 @@ public final class MarginTextView: UITextView {
         placeholderLabel.frame = CGRect(x: lane, y: textContainerInset.top, width: placeholderWidth, height: size.height)
         placeholderLabel.isHidden = !text.isEmpty
         layoutGutter()
+        layoutInk()
     }
 
     /// Places each timed paragraph's time on its first line's baseline, right-aligned in the lane (or on its own
@@ -328,7 +378,8 @@ public final class MarginTextView: UITextView {
         }
         layoutManager.ensureLayout(for: textContainer)
         let text = self.text as NSString
-        let ranges = NoteParagraphs.ranges(in: text)
+        let gap = inkGap.flatMap { open in inkAttachments.first { $0.attachment === open.attachment }?.location }
+        let ranges = NoteParagraphs.ranges(in: text).filter { $0.location != gap }
         var labels: [MarginGutterView.Label] = []
         // Each paragraph's top and its first line, in this view's coordinates.
         var tops: [(top: CGFloat, line: CGRect)?] = []
@@ -339,15 +390,14 @@ public final class MarginTextView: UITextView {
             let top = above && range.location == 0 ? 0 : line.minY
             tops.append((top, line))
             if index < times.count, let time = times[index] {
-                let baseline = above ? top + gutter.font.ascender + 2 : line.minY + layoutManager.location(forGlyphAt: glyph).y
+                let onInk = textStorage.attribute(.attachment, at: range.location, effectiveRange: nil) is InkAttachment
+                let baseline = above ? top + gutter.font.ascender + 2
+                    : onInk ? line.minY + gutter.font.ascender + 4 : line.minY + layoutManager.location(forGlyphAt: glyph).y
                 labels.append(.init(text: TimeLabel.short(time), baseline: baseline, time: time))
             }
         }
-        let used = layoutManager.usedRect(for: textContainer)
         let lineHeight = bodyFont.lineHeight
-        let next: CGRect = text.length == 0 ? CGRect(x: 0, y: textContainerInset.top, width: 0, height: lineHeight)
-            : layoutManager.extraLineFragmentRect.height > 0 ? layoutManager.extraLineFragmentRect.offsetBy(dx: 0, dy: textContainerInset.top)
-            : CGRect(x: 0, y: used.maxY + textContainerInset.top + bodyFont.pointSize * 0.45, width: 0, height: lineHeight)
+        let next = nextLineRect
         var ticks: [MarginGutterView.Tick] = []
         for (mark, before) in NoteParagraphs.placement(of: marks, times: Array(times.prefix(ranges.count))) {
             let place = before < tops.count ? tops[before] : nil
@@ -360,6 +410,15 @@ public final class MarginTextView: UITextView {
             }
         }
         gutter.update(labels: labels, ticks: ticks, above: above)
+    }
+
+    /// Where the next paragraph would start, in this view's coordinates.
+    var nextLineRect: CGRect {
+        let lineHeight = bodyFont.lineHeight
+        if textStorage.length == 0 { return CGRect(x: 0, y: textContainerInset.top, width: 0, height: lineHeight) }
+        if layoutManager.extraLineFragmentRect.height > 0 { return layoutManager.extraLineFragmentRect.offsetBy(dx: 0, dy: textContainerInset.top) }
+        let used = layoutManager.usedRect(for: textContainer)
+        return CGRect(x: 0, y: used.maxY + textContainerInset.top + bodyFont.pointSize * 0.45, width: 0, height: lineHeight)
     }
 
     /// The times drawn in the lane, top to bottom, with their baselines (for tests and diagnostics).

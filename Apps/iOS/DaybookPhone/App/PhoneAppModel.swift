@@ -762,6 +762,26 @@ final class PhoneAppModel: RecordingCommandHandling {
         sharing.editNotes(text)
     }
 
+    /// Handwriting in the recording's notes. Macs recording along get its paragraph, as they do a typed one.
+    func addInk(_ block: NoteInk, after index: Int?) {
+        recorder.addInk(block, after: index)
+        sharing.scheduleNotesShare()
+    }
+
+    func updateInk(_ block: NoteInk) {
+        recorder.updateInk(block)
+        sharing.scheduleNotesShare()
+    }
+
+    func removeInk(_ id: UUID, keepingWords: Bool) -> (() -> Void)? {
+        let undo = recorder.removeInk(id, keepingWords: keepingWords)
+        sharing.scheduleNotesShare()
+        return undo.map { undo in { [weak self] in
+            undo()
+            self?.sharing.scheduleNotesShare()
+        } }
+    }
+
     /// A photo from the camera opened during recording `id`. While that recording runs, the photo
     /// goes with it. If it ended while the camera was open (a Mac's Stop, a failure), the photo joins
     /// the conversation it's filed as, once filing (which holds the library's lock) is done.
