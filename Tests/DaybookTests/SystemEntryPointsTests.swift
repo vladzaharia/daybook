@@ -123,7 +123,7 @@ final class SystemEntryPointsTests: XCTestCase {
         let center = FakeNotificationCenter()
         let notifier = notifications(state, center: center)
         let id = state.newMeeting(title: "Therapy")
-        state.setPlacement([id], .personal)
+        state.library.setPlacement([id], .personal)
         notifier.update(to: .init(stops: [id: "Recording stopped because the Mac went to sleep. Everything up to then is saved."]))
         XCTAssertEqual(center.showing.count, 1)
         XCTAssertNil(center.showing.first?.subtitle, "Personal: unnamed")
@@ -328,8 +328,8 @@ final class SystemEntryPointsTests: XCTestCase {
         let work = state.newMeeting(title: "Roadmap")
         let personal = state.newMeeting(title: "Therapy")
         let unsorted = state.newMeeting(title: "Conversation at 9:00 AM")
-        state.setPlacement([work], .work)
-        state.setPlacement([personal], .personal)
+        state.library.setPlacement([work], .work)
+        state.library.setPlacement([personal], .personal)
         let index = FakeConversationIndex()
         let spotlight = ConversationSpotlight(state: state, index: index, delay: .milliseconds(10))
         spotlight.start()
@@ -339,7 +339,7 @@ final class SystemEntryPointsTests: XCTestCase {
 
         state.update(work) { $0.title = "Roadmap review" }
         try await waitUntil("the rename to reach Spotlight") { index.indexed[work]?.title == "Roadmap review" }
-        state.setPlacement([unsorted], .personal)
+        state.library.setPlacement([unsorted], .personal)
         try await waitUntil("a conversation moved to Personal to leave Spotlight") { index.indexed[unsorted] == nil }
         XCTAssertNil(index.indexed[personal])
 

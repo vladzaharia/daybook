@@ -359,6 +359,8 @@ private struct PocketStack: View {
   var body: some View {
     NavigationStack(path: $path) {
       LibraryPage(library: library, rootURL: rootURL)
+        // A row's Copy Summary says "Copied" over the list; an open conversation says it over its own page.
+        .confirmationBeat(session.reading ? .constant(nil) : Bindable(session).confirmation)
         .navigationDestination(for: UUID.self) { id in
           ConversationScreen(library: library, id: id)
         }

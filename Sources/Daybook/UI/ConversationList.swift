@@ -417,13 +417,18 @@ private struct RowMenu: View {
                 return group
             }
             ConversationActionMenuItems(groups, platform: .mac,
-                                        perform: { MacActions.perform($0, on: [only.id], state: state, undoManager: undoManager, tag: tag) },
-                                        custom: { MacActions.custom($0, ids: [only.id], state: state, undoManager: undoManager) })
+                                        perform: { MacActions.perform($0, on: [only.id], state: state, undoManager: undoManager, window: window) },
+                                        custom: { MacActions.custom($0, ids: [only.id], state: state) })
         } else if !meetings.isEmpty {
             ConversationActionMenuItems(ConversationActions.batch(ids, in: state.meetings, context: .init(platform: .mac)), platform: .mac,
-                                        perform: { MacActions.perform($0, on: ids, state: state, undoManager: undoManager, tag: tag) },
-                                        custom: { MacActions.custom($0, ids: ids, state: state, undoManager: undoManager) })
+                                        perform: { MacActions.perform($0, on: ids, state: state, undoManager: undoManager, window: window) },
+                                        custom: { MacActions.custom($0, ids: ids, state: state) })
         }
+    }
+
+    /// Tags… opens the chooser over the list.
+    private func window(_ id: ConversationAction.ID, _ ids: [UUID]) {
+        if id == .tags { tag(ids) }
     }
 }
 
@@ -441,7 +446,7 @@ struct BatchActionButtons: View {
         VStack(spacing: Space.s3) {
             HStack {
                 ForEach(actions.filter { $0.role != .destructive }) { action in
-                    if let custom = MacActions.custom(action, ids: ids, state: state, undoManager: undoManager) {
+                    if let custom = MacActions.custom(action, ids: ids, state: state) {
                         custom.fixedSize()
                     } else {
                         Button(action.title) { perform(action.id) }.disabled(!action.isAvailable)
@@ -464,11 +469,15 @@ struct BatchActionButtons: View {
     }
 
     private func perform(_ id: ConversationAction.ID) {
-        MacActions.perform(id, on: ids, state: state, undoManager: undoManager) { tagging = ConversationIDs(ids: $0) }
+        MacActions.perform(id, on: ids, state: state, undoManager: undoManager) { action, ids in
+            if action == .tags { tagging = ConversationIDs(ids: ids) }
+        }
     }
 }
 
-/// What the Mac does for each of `ConversationActions`.
+/// What the Mac does for each of `ConversationActions`, from a row's menu, the selection's buttons, and the toolbar's
+/// More alike: the library's actions through DaybookUI's `ConversationActionPerformer`, as the iPhone does them, and
+/// the Mac's own here.
 @MainActor
 enum MacActions {
     /// What the Mac knows about a conversation for its actions: recording here, or being processed here.
@@ -478,49 +487,58 @@ enum MacActions {
                                            status: state.processingStatus(for: meeting))
     }
 
-    static func perform(_ id: ConversationAction.ID, on ids: [UUID], state: AppState, undoManager: UndoManager?, tag: ([UUID]) -> Void) {
-        let meetings = state.meetings.filter { ids.contains($0.id) }
-        guard let first = meetings.first else { return }
-        switch id {
-        case .copySummary: state.copySummary(first.id)
-        case .exportMarkdown: state.export(first.id)
-        case .exportJSON: state.export(first.id, json: true)
-        case .showFloatingNotes: state.showNotes(for: first.id)
-        case .addPhotos: state.chooseAddPhoto(to: first.id)
-        case .addRecordingFromFile: state.chooseImport(attachTo: first.id)
-        case .process(let mode):
-            for meeting in meetings where mode != .summaryOnly || !meeting.unifiedTranscript.isEmpty { state.enqueue(meeting.id, mode: mode) }
-        case .versionHistory:
-            state.selectedID = first.id
-            state.activeSheet = .versionHistory
-        case .rename:
-            state.selectedID = first.id
-            state.focusTitle(first.id)
-        case .tags: tag(meetings.map(\.id))
-        case .moveTo(let placement): state.library.setPlacement(meetings.map(\.id), placement, undoManager: undoManager)
-        case .moveToFolder: break // A menu of the folders (`custom`).
-        case .showInFinder: state.showInFinder(first.id)
-        case .moveToTrash: state.trashRequestIDs = meetings.map(\.id)
-        case .export, .share, .shareMarkdown, .shareJSON, .shareAudio, .addRecording, .reprocess, .takePhoto:
-            break // Menus (a row shares through its own Share…; More through the window's picker), or the iPhone's.
-        case .play, .adjustTiming, .showOriginalTranscript, .moveToNewConversation, .removeRecording:
-            break // A recording's, in the inspector.
+    /// Carries out `id` on the conversations `ids`. `window` answers what needs the window: Tags… (the chooser over the
+    /// list, or from More the inspector) and Share ▸ (the sharing picker under More).
+    static func perform(_ id: ConversationAction.ID, on ids: [UUID], state: AppState, undoManager: UndoManager?,
+                        window: @escaping (ConversationAction.ID, [UUID]) -> Void) {
+        let performer = ConversationActionPerformer(
+            library: state.library,
+            // A menu in the toolbar acts on the key window, the library's.
+            undoManager: undoManager ?? NSApp.keyWindow?.undoManager,
+            process: { state.enqueue($0, mode: $1) },
+            show: { request in
+                switch request {
+                case .tags(let ids): window(.tags, ids)
+                case .versionHistory(let id):
+                    state.selectedID = id
+                    state.activeSheet = .versionHistory
+                case .moveToFolder: break // A menu of the folders (`custom`).
+                case .moveToTrash(let ids): state.trashRequestIDs = ids
+                }
+            },
+            copy: { LocalPasteboard.copy($0) },
+            confirm: { state.confirmation = $0 })
+        performer.perform(id, on: ids) { meetings in
+            guard let first = meetings.first else { return }
+            switch id {
+            case .exportMarkdown: state.export(first.id)
+            case .exportJSON: state.export(first.id, json: true)
+            case .showFloatingNotes: state.showNotes(for: first.id)
+            case .addPhotos: state.chooseAddPhoto(to: first.id)
+            case .addRecordingFromFile: state.chooseImport(attachTo: first.id)
+            case .rename:
+                state.selectedID = first.id
+                state.focusTitle(first.id)
+            case .showInFinder: state.showInFinder(first.id)
+            case .shareMarkdown, .shareAudio: window(id, meetings.map(\.id))
+            case .export, .share, .addRecording, .reprocess:
+                break // Menus.
+            case .shareJSON, .takePhoto:
+                break // The iPhone's.
+            case .play, .adjustTiming, .showOriginalTranscript, .moveToNewConversation, .removeRecording:
+                break // A recording's, in the inspector.
+            case .copySummary, .process, .versionHistory, .moveToFolder, .tags, .moveTo, .moveToTrash:
+                break // The library's (`ConversationActionPerformer`).
+            }
         }
     }
 
-    /// The actions the Mac draws its own way: Move to Folder lists the folders, and Add Recording each recorder too.
-    static func custom(_ action: ConversationAction, ids: [UUID], state: AppState, undoManager: UndoManager?) -> AnyView? {
+    /// The actions the Mac draws its own way: Move to Folder lists the folders (`FolderMenuItems`, as Conversation ›
+    /// Move to Folder does), and Add Recording each recorder beside a file.
+    static func custom(_ action: ConversationAction, ids: [UUID], state: AppState) -> AnyView? {
         switch action.id {
         case .moveToFolder:
-            return AnyView(Menu {
-                Button("None") { state.library.moveToFolder(ids, nil, undoManager: undoManager) }
-                if !state.folders.isEmpty { Divider() }
-                ForEach(state.folders) { folder in
-                    Button(folder.name) { state.library.moveToFolder(ids, folder.id, undoManager: undoManager) }
-                }
-                Divider()
-                Button("New Folder") { state.requestNewFolder(moving: ids) }
-            } label: {
+            return AnyView(Menu { FolderMenuItems(state: state, meetingIDs: ids) } label: {
                 Label(action.title, systemImage: action.symbol)
             }
             .disabled(!action.isAvailable))
@@ -532,7 +550,8 @@ enum MacActions {
             } label: {
                 Label(action.title, systemImage: action.symbol)
             }
-            .disabled(!action.isAvailable))
+            .disabled(!action.isAvailable)
+            .help({ if case .unavailable(let why) = action.availability { return why } else { return "" } }()))
         default:
             return nil
         }

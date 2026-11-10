@@ -112,7 +112,7 @@ final class PlaybackControllerTests: XCTestCase {
         let track = RecordingTrack(source: .microphone, relativePath: "Originals/a.m4a", fileName: "a.m4a", duration: 60)
         var meeting = Meeting(title: "Weekly product sync", tracks: [track])
         meeting.summary = MeetingSummary(overview: "Shipping")
-        let groups = ConversationActionMenuItems.shown(ConversationMoreActions.groups(meeting), on: .iPhone)
+        let groups = ConversationActionMenuItems.shown(PhoneActions.groups(for: meeting), on: .iPhone)
         let titles = groups.flatMap { $0.actions.map(\.title) }
         XCTAssertEqual(groups.first?.actions.map(\.title), ["Copy Summary", "Share"])
         XCTAssertTrue(titles.contains("Add Recording…"))

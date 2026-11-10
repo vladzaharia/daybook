@@ -11,27 +11,8 @@ extension AppState {
     /// Creates a folder and moves any requested conversations into it.
     func createFolder(named name: String, moving ids: [UUID]) { library.createFolder(named: name, moving: ids) }
 
-    /// Files conversations in a folder, or in none. With `undoManager`, Edit › Undo takes it back ("Undo Move to Folder").
-    func moveToFolder(_ ids: [UUID], _ folder: UUID?, undoManager: UndoManager? = nil) {
-        guard let undoManager else { library.moveToFolder(ids, folder); return }
-        for id in ids { library.update(id, actionName: "Move to Folder", undoManager: undoManager) { $0.folderID = folder } }
-    }
-
-    /// Shows conversations in Work or Personal, or where their kind puts them (nil). With `undoManager`, Edit › Undo
-    /// takes it back, named as the menu item was ("Undo Move to Personal").
-    func setPlacement(_ ids: [UUID], _ placement: LibraryPlacement?, undoManager: UndoManager? = nil) {
-        guard let undoManager else { library.setPlacement(ids, placement); return }
-        for id in ids { library.update(id, actionName: Self.placementActionName(placement), undoManager: undoManager) { $0.placement = placement } }
-    }
-
-    /// The Undo menu's name for a change of placement.
-    nonisolated static func placementActionName(_ placement: LibraryPlacement?) -> String {
-        switch placement {
-        case .work?: return "Move to Work"
-        case .personal?: return "Move to Personal"
-        case nil: return "Show Automatically"
-        }
-    }
+    // Moving to a folder and into Work or Personal are the library's, with their undo on both apps
+    // (`LibraryController.moveToFolder(_:_:undoManager:)`, `setPlacement(_:_:undoManager:)`).
 
     /// Where Floating Notes opens from a menu (Window › Floating Notes, the menu bar extra, the Dock), one rule for all:
     /// on the recording, else the conversation the library window shows, else its home.
@@ -74,7 +55,8 @@ extension AppState {
         NSWorkspace.shared.activateFileViewerSelecting([folder])
     }
 
-    /// Copies the summary for this Mac only, and says "Copied" over the page, from the toolbar's More, Edit, or a row.
+    /// Copies the summary for this Mac only, and says "Copied" over the page, from Edit › Copy Summary, as More and a
+    /// row's menu do (`MacActions`).
     func copySummary(_ id: UUID, to pasteboard: some LocalPasteboardWriting = NSPasteboard.general) {
         guard let meeting = meetings.first(where: { $0.id == id }) else { return }
         LocalPasteboard.copy(MeetingExport.summaryMarkdown(meeting), to: pasteboard)
