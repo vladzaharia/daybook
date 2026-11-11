@@ -126,7 +126,8 @@ public enum MeetingExport {
     }
 
     private static func plainSourceName(_ track: RecordingTrack) -> String {
-        var name = track.deviceKind == DaybookPhoneIntegration.id ? "iPhone" : track.source.title
+        var name = track.deviceKind == DaybookPhoneIntegration.id ? "iPhone"
+            : track.deviceKind == AppleWatchIntegration.id ? "Apple Watch" : track.source.title
         if track.derivedFrom != nil {
             name += track.processing == RecordingTrack.echoCancelledProcessing ? ", echo removed" : ", processed"
         }

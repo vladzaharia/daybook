@@ -17,7 +17,7 @@ belongs to, and enhancing a conversation when a source is added. The sound align
 | Record control | Starts and stops recorders with this Mac; one status line. Devices that answer each command (Daybook on iPhone, `AnsweringRecordControl`) report the answer directly | `CompanionRecorders` in [MultiSourceCoordinator.swift](../Sources/Daybook/App/MultiSourceCoordinator.swift) |
 | Daybook on iPhone | Record control both ways over the local link, recording state and following the leader, the clock prior, and the phone's synced recordings joining conversations | [AppState+Phone.swift](../Sources/Daybook/App/AppState+Phone.swift), [PhoneLinkConnection.swift](../Sources/Daybook/App/PhoneLinkConnection.swift); on the phone, [PhoneAppModel.swift](../Apps/iOS/DaybookPhone/App/PhoneAppModel.swift) and [PhoneLibrary.swift](../Apps/iOS/DaybookPhone/Library/PhoneLibrary.swift) |
 | Another device's work | A joining recording's notes and bookmarks, added once and held by its track (`Meeting.addRecordingWork`); recorders on the link and through their owner (`RecorderRemoteControl`) | [MultiSource.swift](../Sources/DaybookCore/MultiSource.swift), [LinkRecorders.swift](../Sources/DaybookKit/LinkRecorders.swift) |
-| Starting anywhere | The recorders a device manages recording along with its shared recording, their live audio, and stopping them with it (`RecorderCascade`); the Mac's cascading start and stop (`CompanionRecorders`, `AppState.recorderButton`); the iPhone's (`PhoneAppModel+Cascade`) | [RecorderCascade.swift](../Sources/DaybookKit/RecorderCascade.swift), [MultiSourceCoordinator.swift](../Sources/Daybook/App/MultiSourceCoordinator.swift), [PhoneAppModel+Cascade.swift](../Apps/iOS/DaybookPhone/App/PhoneAppModel+Cascade.swift) |
+| Starting anywhere | The recorders a device manages recording along with its shared recording, their live audio, and stopping them with it (`RecorderCascade`); the Mac's cascading start and stop (`CompanionRecorders`, `AppState.recorderButton`); the iPhone's (`MultipointCoordinator+Cascade`), Apple Watch among its recorders (`WatchConnection`, `PhoneWatch`) | [RecorderCascade.swift](../Sources/DaybookKit/RecorderCascade.swift), [MultiSourceCoordinator.swift](../Sources/Daybook/App/MultiSourceCoordinator.swift), [MultipointCoordinator+Cascade.swift](../Apps/iOS/DaybookPhone/App/MultipointCoordinator+Cascade.swift), [WatchConnection.swift](../Sources/DaybookDevices/AppleWatch/WatchConnection.swift), [PhoneWatch.swift](../Apps/iOS/DaybookPhone/Devices/PhoneWatch.swift) |
 | Notes and bookmarks shared live | Paragraphs and bookmarks by ID (`SharedNote`, `Meeting.applySharedNote`), what was shared so nothing echoes (`SharedNotesTracker`) | [SharedNotes.swift](../Sources/DaybookCore/SharedNotes.swift), [SharedNotesTracker.swift](../Sources/DaybookKit/SharedNotesTracker.swift), [AppState+SharedNotes.swift](../Sources/Daybook/App/AppState+SharedNotes.swift) |
 | A recorder's live audio | A live portion replaced by the recorder's own file (`Meeting.supersededLivePortions`) | [LivePortions.swift](../Sources/DaybookCore/LivePortions.swift) |
 | Orchestration | Arrival planning, attach and enhancement, the processing steps, suggestions, interface words | [AppState+Sources.swift](../Sources/Daybook/App/AppState+Sources.swift) |
@@ -415,9 +415,10 @@ conversation ID, however many ways it's asked.
 | Started on | What else starts |
 | --- | --- |
 | This Mac (by hand or a detected meeting) | Each connected iPhone (as above); the recorders this Mac manages; a recorder a phone manages, through that phone |
-| An iPhone (by hand, a Shortcut, the control, the Action button) | Each connected Mac, on its own (`LinkRecordRequest.cascade`); the recorders the phone manages |
-| An iPhone, because a Mac asked | Its recorders; no Mac is asked back |
+| An iPhone (by hand, a Shortcut, the control, the Action button) | Each connected Mac, on its own (`LinkRecordRequest.cascade`); the recorders the phone manages, its Apple Watch among them |
+| An iPhone, because a Mac asked | Its recorders, its Apple Watch among them; no Mac is asked back |
 | A recorder's own button | The device that manages it records (a new conversation), and so everything that device reaches |
+| Apple Watch (Record on the watch, or Daybook opening there and joining) | The iPhone, as a recorder's button does, and so everything it reaches |
 
 **Asked on its own.** The request a starting device sends carries `cascade` (what started it: the
 person, a recorder's button, a detected meeting, or another device), so the receiver joins the same
@@ -484,6 +485,16 @@ including with Daybook in the background (docs/devices.md, "Holding the recorder
 On a Mac that manages the recorder, its button starts and stops this Mac the same way while the Mac
 is connected to it (a Mac lets the recorder go when idle, so the iPhone is where this matters), and
 never asks for the microphone for it.
+
+**Apple Watch.** The iPhone manages its Apple Watch as one of its recorders (docs/devices.md, "Apple Watch"): the
+cascade starts it with the shared recording's conversation and stops it with it, and its Record and Stop on the wrist
+(or Daybook opening on it and joining the recording the iPhone records now) are its button, taken the same three ways
+as above; a join of any other recording is stopped instead. A Start needs Daybook open on the watch; a watch a Start
+can't reach that isn't recording sits the shared recording out quietly, with no chip and no line. A Stop it can't hear
+yet is queued and owed, and the watch also follows the iPhone's context, so it ends either way. Its audio isn't live:
+it arrives in segments, joined on the iPhone and imported once every one is here, into the conversation the watch
+recorded it for, whether or not the iPhone still remembers the shared recording (it relaunched since, say). A Mac
+reaches the watch only through the iPhone.
 
 ## A recorder's audio while it records
 

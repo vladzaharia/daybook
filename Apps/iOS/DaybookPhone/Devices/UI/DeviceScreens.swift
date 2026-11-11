@@ -441,8 +441,8 @@ private struct RecorderKinds: View {
     var body: some View {
         List {
             Section {
-                // Daybook on iPhone is this app: a recorder the Mac adds, not one the iPhone adds.
-                ForEach(DeviceCatalog.kinds.filter { $0.id != DaybookPhoneIntegration.id }) { kind in
+                // Daybook on iPhone is this app: a recorder the Mac adds, not one the iPhone adds. Apple Watch adds itself.
+                ForEach(DeviceCatalog.kindsAddedByHand.filter { $0.id != DaybookPhoneIntegration.id }) { kind in
                     let isChosen = chosen == kind
                     Button { choose(kind) } label: {
                         RecorderKindRow(kind: kind, isSetUp: !kind.allowsMultiple && model.devices.hub.session(kind: kind.id) != nil,

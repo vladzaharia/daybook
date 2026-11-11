@@ -289,6 +289,11 @@ extension PhoneAppModel {
                 say("Couldn’t recover a recording. Daybook tries again the next time it opens.", details: error.localizedDescription)
             }
         }
+        // Apple Watch's recordings of conversations this iPhone might have filed into import now.
+        if !recoveryWaitsForUnlock, !leftoversRecovered {
+            leftoversRecovered = true
+            devices.ownRecordingsFiled()
+        }
     }
 
     // MARK: Stopped while the iPhone was locked

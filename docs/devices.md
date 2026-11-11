@@ -1,7 +1,7 @@
 # Devices
 
-Daybook brings recordings in from recorders: Soundcore Work today, Daybook on iPhone, a generic
-"Other Recorder" that saves audio files, and in future other hardware such as Plaud NotePin. This document
+Daybook brings recordings in from recorders: Soundcore Work today, Daybook on iPhone, Daybook on Apple Watch (on the
+iPhone), a generic "Other Recorder" that saves audio files, and in future other hardware such as Plaud NotePin. This document
 describes the hardware-agnostic device framework and how to add a new kind of recorder.
 
 The framework and kinds are the `DaybookDevices` library (`Sources/DaybookDevices/`, macOS and iOS); the screens both apps
@@ -15,6 +15,8 @@ show for a recorder are DaybookUI's (`Sources/DaybookUI/Devices/`), and each app
 | `DaybookDevices/Soundcore/` | Soundcore Work: protocol, crypto, Opus decoder, transport, protocol session, connection, simulator |
 | `DaybookDevices/OtherRecorder/` | A kind with only the files method |
 | `DaybookDevices/DaybookPhone/` | Daybook on iPhone: the kind, its synced recordings (`SyncedPhoneRecordings`), and the hooks the app fills in (`DaybookPhoneHooks`) |
+| `DaybookDevices/AppleWatch/` | Daybook on Apple Watch, managed by the iPhone: the kind, the link it speaks through (`WatchTransport`, `AppleWatchHooks`), its connection (`WatchConnection`), segment staging (`WatchStaging`), and `SimulatedWatch`; the messages themselves are `DaybookWatchLink`'s |
+| `DaybookPhone/Devices/PhoneWatch.swift`, `WatchSessionTransport.swift` | The iPhone's side: adding the watch, what it's told, joining its segments, and WatchConnectivity |
 | `Daybook/App/PhoneLink*.swift` | The phone's direct method over DaybookLink (`PhoneLinkConnection`) and the Mac's end of the link (`PhoneLink`) |
 | `DaybookUI/Devices/` | A recorder's page (`RecorderDevicePage`), its recordings (`DeviceRecordingsView`, `DeviceRecordingActions`, `ConversationChooser`), Listen Live (`ListenLiveView`), its handoff (`RecorderHandoffView`), options (`RecorderPreferencesSection`), menu items (`RecorderMenuItems`), and Add Device's steps (`AddRecorderFlow`), reaching each app through `RecorderServices` |
 | `Daybook/Devices/UI/` | The Mac's hosting of them: sidebar section, list column, detail column, Add Device's sheet, Device Details, Settings › Devices, menus |
@@ -39,8 +41,9 @@ DeviceHub (@MainActor @Observable)       │  configured devices, persisted as [
 - **Device kind** (`DeviceKind`): identity (`id` such as `soundcore.work`, name, short name,
   vendor, SF Symbol), the connection methods it supports in order of preference, the audio
   source label, whether more than one can be added, and its copy (discovery tips, technical
-  notes). Each kind has a glyph of its own, the same on both apps: Soundcore Work's tape
-  (`recordingtape`), Other Recorder's `waveform.and.mic`, Daybook on iPhone's `iphone`. Copy that names
+  notes), and whether Add Device offers it (`isAddedByHand`; `DeviceCatalog.kindsAddedByHand`: Apple Watch adds
+  itself). Each kind has a glyph of its own, the same on both apps: Soundcore Work's tape
+  (`recordingtape`), Other Recorder's `waveform.and.mic`, Daybook on iPhone's `iphone`, Apple Watch's `applewatch`. Copy that names
   the device it's on is written once for both apps in their own words (`DevicePlatform`: "this Mac", "this
   iPhone"; `SoundcoreIssue.problem(on:)`, `SoundcoreWorkIntegration.deviceKind(on:)`): on the iPhone the
   Soundcore app is on the same phone and audio comes in with Import Audio, so its tips and problems say
@@ -564,6 +567,97 @@ that kind, the phone's device ID as serial, and the phone's recording ID.
   Unpair…, confirmed in the page's words. Pair with iPhone… sits beside Add Device…, and in the empty state.
 - **Bluetooth ownership** of a Soundcore shared with the phone is a synced device setting, moved
   between them by the handoff above.
+
+## Apple Watch
+
+Daybook on Apple Watch is a recorder the iPhone manages (`daybook.watch`, "Apple Watch", vendor Apple; the watch app
+itself is docs/watch.md). What the two say to each other is `DaybookWatchLink` (`WatchLink.swift`: messages, the
+iPhone's context, the watch's state, segments, the clock), shared with the watch app. Its tracks carry that kind, the
+watch app's installation ID as serial, and the watch's recording ID; their source is `.microphone`, as Daybook on
+iPhone's own, and the kind names them ("Apple Watch") everywhere a track's device is named, on the Mac too
+(`RecordingWords`, `MeetingExport`). The Mac knows the kind but never manages a watch: it reaches it only through the
+iPhone, whose recorders record along when the Mac starts it.
+
+| Method | What it is |
+| --- | --- |
+| `direct`, "From Daybook on Apple Watch" (the only one) | `WatchConnection`, over the app's `WatchTransport` (`WatchSessionTransport`: `WCSession`), supplied through `DeviceEnvironment.watch`. Connected while WatchConnectivity is activated and the paired watch has Daybook; unavailable otherwise, with what to do ("Install Daybook on your Apple Watch to record there."). Reachability (Daybook open on the watch) isn't the connection: segments and queued messages arrive while it's in the background |
+
+- **Added by itself.** `PhoneWatch` (iPhone) activates WatchConnectivity at launch with the devices, in `App.init`
+  before the first scene (a message from the watch can launch Daybook in the background), and adds the watch under
+  one ID (`apple-watch`) once `isPaired && isWatchAppInstalled`. Never removed by itself; removed by the person, it
+  comes back at the next launch while the watch has Daybook. Never in Add Device on either app (`isAddedByHand`
+  false), and nothing about it syncs.
+- **What the watch is told.** The iPhone's context (`PhoneContext`): the shared recording it records now (the
+  cascade's conversation, also when only its recorder records), the watch's Record Along (its device's
+  `recordsAlongsideMac`), and the phone's name; published with `updateApplicationContext` whenever any changes, and
+  the answer to the watch's `.context`. Each is stamped as it's sent (`sentAt`; one that waited for activation is
+  stamped when it goes): the watch joins or adopts a shared recording only from a fresh one.
+- **Record control.** A Start carries the shared recording (`WatchStart`: conversation, title, start), or no
+  conversation for the device page's Record with nothing recording here (a recording of the watch's own: it can adopt
+  a shared recording that starts later, which the cascade records along as already recording, but only a Stop ends
+  it). It needs Daybook open on the watch: a watch a Start can't reach, or one that's unavailable, sits a shared recording out
+  quietly unless it's recording already (`RecordControlConnection.canRecordAlong`): no member, no chip, no line. A
+  Start the watch refuses keeps its words for the line (`recordCommandIssue`: "Apple Watch storage is full."). A
+  Start answered too late is stopped again, only the recording it made. A Stop the watch can't hear now is queued
+  (`transferUserInfo`) and counted as done, never one that names no recording: the watch also follows the context,
+  which no longer names the recording, and a watch app ended while recording recovers it as finished, so the
+  recording ends whatever happens and only its audio is owed.
+- **Its button.** A state the watch pushes saying it started (`startedOnWatch`) or stopped (`stoppedOnWatch`) on the
+  wrist, fresh and while no command of the iPhone's waits, is `onButton`, which `MultipointCoordinator.recorderButton`
+  takes as for any recorder: join the iPhone's recording, start one, or record with the watch only. A join
+  (`joined`, Daybook opening on the watch) is the button only when it joined the conversation the iPhone records now
+  (the cascade's, also when only its recorder records). One that joined another (a context that waited while the watch
+  was away) starts nothing here: that recording alone is stopped (`WatchStop(recordingID:)`), asked now or owed.
+  Messages that arrive before the watch's device exists wait in the transport and reach it on the turn after it's
+  made, once its session has wired the button; past twenty, the oldest are answered (refused) and dropped.
+- **Segments and receipts.** The watch sends each segment (AAC, two minutes) with `transferFile` as it closes. The
+  iPhone's delegate moves it, inside the callback, to `<staging>/Watch/<recordingID>/<file>` with its metadata beside
+  it (`WatchStaging`), and the connection records it in a `WatchSegmentLedger` kept with the device, so a relaunch
+  keeps what arrived. Receipts are delivery: after staging, the iPhone sends `.received` (not imported) naming every
+  segment it holds of that recording, what arrives together in one (`sendMessage` when the watch is reachable,
+  `transferUserInfo` otherwise, `WatchTransport.tell`); the watch counts a segment delivered only from one. Those ask
+  for nothing (a later segment may simply not have arrived yet). A finished recording still missing segments (one that
+  never reached the ledger: staging failed, only logged) asks for them with the same receipt marked `requestsMissing`,
+  on a refresh and when the watch comes within reach, at most once a minute each, and not until 30 seconds after
+  activation (`AppleWatchHooks.asksForMissingAfter`), so what WatchConnectivity hands over as Daybook launches arrives
+  first. The watch sends again only what such an ask leaves out, and not a segment on its way or whose transfer
+  finished in the last two minutes. Segments the ledger has whose files are gone are forgotten at activation, and asked
+  for the same way.
+- **Import.** The recording in progress, and every one not yet imported, are listed; one finished on the watch but
+  missing segments is listed as in progress, so nothing imports early. A complete one is joined into one M4A
+  (`PhoneWatch.join`: `RecordingAssembler`, each segment at its offset, packets copied, never encoded again; one whole
+  segment is used as it is) and imported, by the watch that made it (`WatchState.watchID` as first reported, kept
+  with the ledger) whichever is paired now, and whatever the transport's state: unpaired, or Daybook deleted from the
+  watch, complete recordings still import (`DeviceConnection.importsWithoutConnection`). A recording with a
+  conversation (started by the iPhone, joined, or adopted on the watch) imports into that conversation
+  (`TransferredAudio.conversationID`, ahead of what the import was queued with), made as the importer makes the
+  cascade's pending one if the library doesn't have it yet, whether or not the cascade still remembers it: after a
+  relaunch mid-recording, a join known only from the context, or a Start confirmed too late. While that conversation
+  isn't in the library and the app may still file its own recording of it (its launch recovery hasn't filed what an
+  ended run left: `AppleWatchHooks.holdsImport`, `PhoneDevices.mayFileOwnRecording`), the recording waits, so after a
+  relaunch mid-recording this iPhone's recording makes the conversation (its title, date, and timeline) and the
+  watch's joins it. If the watch's import made the conversation first anyway, this iPhone's recording filed into it
+  later gives it its title and date (`PhoneLibrary.isWatchPlaceholder`: only the watch's recordings, made along with
+  this one), and the watch's recording stays the origin, as a recorder's does in a conversation it began
+  (multipoint.md, "The timeline"). One without a conversation imports as a conversation of its own, dated by its start
+  on the iPhone's clock. Each imports once: the queue, the library's
+  links, and the cascade's `importWhenFinished` all name it by its ID. Only once it's in the library are its segments
+  deleted and the watch told it may delete its copies (`.received`, imported). What a join or an import left in
+  staging when the app was ended under it (the joined file, `.join-…` links, the assembler's `.joining-…`) goes at the
+  next activation.
+- **Removing it.** Forgets what the iPhone knew of the watch (its state, clock, owed stop), not its recordings: the
+  ledger, which watch made each, and the staged segments stay, so the watch, added again under the same ID (it comes
+  back by itself), imports what wasn't in the library yet.
+- **Clock.** Round-trip samples (`WatchClock`) taken whenever the watch comes into reach place its times on the
+  iPhone's clock: the recording's start, the device page, and the track's `startedAt`.
+- **Tests** (`AppleWatchTests`, `WatchCascadeTests`, and on the iPhone `PhoneWatchTests`) run against `SimulatedWatch`,
+  which records on `.start`, pushes its own Record and Stop, sends segments (in any order, or losing some on arrival),
+  sends again what an ask for a finished recording's missing segments leaves out, answers `.clock`, and goes out of
+  reach on demand. The
+  iPhone's join is also checked on parts written as the watch writes them (`AVAudioFile`, its settings): packets copied,
+  each at its offset. Nothing has run on a real Apple Watch yet: WatchConnectivity's delivery while the watch app
+  is in the background, background launches for its messages, and segment transfers of a long recording are
+  unverified on hardware.
 
 ## Debugging without hardware
 
