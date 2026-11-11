@@ -34,7 +34,7 @@ The previous audit left eight decisions to the owner; the owner delegated them t
 |---|---|
 | ux-mac-10 | Personal is never sent to the cloud on its own. Under Always it counts down as Offer First does, with Use the Cloud as a tap, and it gets no cloud Upgrade offers. The same rule covers every surface outside the app. |
 | ux-mac-14 | A fresh Mac starts on its recommended preset, never "Custom"; the first recordings transcribe with the system's speech model while the preset downloads. |
-| ui-iphone-23 | One search entry, the system's minimized bottom-bar search; the custom Search circle is gone. |
+| ui-iphone-23 | One search entry, the system's minimized bottom-bar search; the custom Search circle is gone. Reversed 2026-11-11 by the owner: the standing sheet is back, with its Search. |
 | xdev-settings-03 | Each platform keeps its own Settings structure (the Mac's sidebar, the iPhone's list). "Library" means the library's own things on both: the Mac's Library page gained Summary templates, Vocabulary, and Speaker profiles, and Settings search covers what each page holds. |
 | xdev-settings-08 | Transcription language is a synced library setting shown on both apps under Settings › Models › Transcription; speaker settings and the Other languages model stay per device, on the Mac. |
 | MSCQ-09 | The unreachable SNR weighting and the stored-alignment writer were deleted; stored alignments from v0.2.2 are still read and fused. Per-source quality weighting, if it returns, comes from data that already syncs, behind a fusion version. |

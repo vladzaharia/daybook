@@ -61,7 +61,7 @@ Nothing here does it: the build script never passes `-allowProvisioningUpdates`.
 | `DaybookPhone/Library` | `PhoneLibrary` (DaybookKit's `LibraryController`, filing, imports), `SyncAudioProvider` (audio on demand), `CloudAvailability` |
 | `DaybookPhone/Link` | `PhoneLink`, the DaybookLink client: pairing, connections, live progress, record control; Settings › Macs and pairing |
 | `DaybookPhone/Devices` | `PhoneDevices`, DaybookDevices on iPhone (Soundcore with background Bluetooth and state restoration), the recorder handoff (`handoff`, DaybookKit's `RecorderHandoff`); recorder screens and `RecorderHandoffCard` |
-| `DaybookPhone/Status` | The status sheet (pocket) and panel (notebook): `StatusSheetModel` (the words, tested) and `StatusSheet` (the views) |
+| `DaybookPhone/Status` | The standing status sheet: the system's sheet over the one-column library, `StatusSheetFoot` at the library page's foot on two pages and on its side, and a card on the right page for more; `StatusSheetModel` (where it stands, its sizes, where a line leads; tested) and `StatusSheet` (the views) |
 | `DaybookPhone/Settings` | `SettingsScreen`: iCloud, Macs, recorders, recording, storage, templates, vocabulary, About |
 | `DaybookPhone/Posture` | `DevicePosture` (closed, partly open, open, angle) fed by `onHingeChange` |
 | `DaybookPhone/App` | the app model (`PhoneAppModel`) that ties recorder, library, sync (`PhoneSync`), the link, recorders, Live Activity, and widgets together, with what it reaches in the system injected (`PhoneAppEnvironment`: `.live` in the app, inert in tests); recording with Macs and recorders (`MultipointCoordinator`), what goes to the Macs while recording (`LinkSharing`), filing (`PhoneAppModel+Filing`), and the debug scripts (`PhoneAppModel+Demos`, debug builds only); `MacPresence`, `LiveProgress`; the debug launch arguments (`DebugLaunch`); notifications (`PhoneNotices`) and where opening one goes (`AppDestination`); Siri phrases, Open Conversation, New Note, and Spotlight (`ConversationEntity`) |
@@ -145,7 +145,7 @@ xcrun simctl launch <udid> local.daybook --device-simulator --device-autopilot -
 xcrun simctl launch <udid> local.daybook --synthetic-audio --start-recording --demo-notes --demo-captions  # scripted captions
 xcrun simctl launch <udid> local.daybook --synthetic-audio --start-recording --demo-notes --posture partial --interface-orientation preview-portrait --write-notes   # table mode, writing (fold to book first)
 xcrun simctl launch <udid> local.daybook --caption-probe /path/to/audio.m4a   # Documents/caption-probe.json; never downloads
-xcrun simctl launch <udid> local.daybook --device-simulator --device-autopilot --demo-link --status-detent medium   # the status sheet (or panel) at a size
+xcrun simctl launch <udid> local.daybook --device-simulator --device-autopilot --demo-link --status-detent medium   # the status sheet at a size (open: the card on the right page)
 xcrun simctl launch <udid> local.daybook --device-simulator --device-autopilot --demo-link --handoff-demo waiting --open-settings device   # a handoff state
 xcrun simctl launch <udid> local.daybook --device-simulator --device-autopilot --demo-link --demo-live-captions --status-detent medium   # captions while the recorder streams
 xcrun simctl launch <udid> local.daybook --synthetic-audio --demo-recorder-only "Soundcore Work"   # only the recorder records; this iPhone's microphone didn't start

@@ -139,13 +139,17 @@ struct HingeObserver: ViewModifier {
             }
             .task {
                 // `--interface-orientation landscape` (debug): the library on its side, as the person would
-                // turn it (the simulator has no command to). The scene takes it once it allows landscape.
+                // turn it (the simulator has no command to). The scene takes it once it allows landscape. A list
+                // ("landscape,portrait") turns it each way in turn, three seconds apart, to watch the turn itself.
                 guard
-                    let orientation = LaunchOptions.value(
+                    let orientations = LaunchOptions.value(
                         after: "--interface-orientation", in: CommandLine.arguments)
                 else { return }
                 try? await Task.sleep(for: .seconds(1.5))
-                InterfaceOrientation.apply(orientation)
+                for (index, orientation) in orientations.split(separator: ",").map(String.init).enumerated() {
+                    if index > 0 { try? await Task.sleep(for: .seconds(3)) }
+                    InterfaceOrientation.apply(orientation)
+                }
             }
     }
 

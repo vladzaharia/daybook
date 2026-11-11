@@ -7,8 +7,9 @@ import XCTest
 
 @testable import DaybookPhone
 
-/// What the status sheet adds to the overview both apps draw (docs/iphone.md, "Status sheet"): its sizes, where a
-/// line leads, and its rows' own words. What each line says is DaybookKitTests' `StatusOverviewModelTests`.
+/// What the status sheet adds to the overview both apps draw (docs/iphone.md, "Status sheet"): where it stands, its
+/// sizes and what each holds, where a line leads, and its rows' own words. What each line says is DaybookKitTests'
+/// `StatusOverviewModelTests`.
 @MainActor
 final class StatusSheetModelTests: XCTestCase {
   private let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
@@ -26,16 +27,168 @@ final class StatusSheetModelTests: XCTestCase {
     StatusOverviewModel.recorderLine(recorder, here: "this iPhone", now: now)
   }
 
+  // MARK: Where it stands
+
+  /// The owner's call (2026-11-11): the standing sheet is back. In one column it's the system's sheet over the library;
+  /// on two pages, and in one column on its side, it's drawn at the library page's foot; over a conversation, search,
+  /// selection, or the Trash, nowhere.
+  func testBehaviorTheSheetStandsWhileTheLibraryIsWhatsOnScreen() {
+    func placement(
+      twoPages: Bool = false, compactHeight: Bool = false, reading: Bool = false, searching: Bool = false,
+      selecting: Bool = false, inTrash: Bool = false
+    ) -> StatusSheetModel.Placement {
+      StatusSheetModel.placement(
+        twoPages: twoPages, compactHeight: compactHeight, reading: reading, searching: searching,
+        selecting: selecting, inTrash: inTrash)
+    }
+    XCTAssertEqual(placement(), .sheet, "an 18 Pro upright, or the Duo closed: the system's sheet")
+    XCTAssertEqual(placement(reading: true), .none, "a conversation pushed over the library")
+    XCTAssertEqual(placement(searching: true), .none, "search has the keyboard")
+    XCTAssertEqual(placement(selecting: true), .none, "selection has its own bar")
+    XCTAssertEqual(placement(inTrash: true), .none, "nothing records into the Trash or searches it")
+
+    // Turned: never the system's sheet, which iOS would show over the whole window; the same sheet at its compact
+    // size at the foot, so Record, Import, and Search stay at the thumb through the turn.
+    XCTAssertEqual(placement(compactHeight: true), .foot, "the Duo's cover on its side")
+    XCTAssertEqual(placement(twoPages: true, compactHeight: true), .foot, "an 18 Pro on its side: two pages")
+    XCTAssertEqual(placement(twoPages: true), .foot, "the open Duo's left page")
+    XCTAssertEqual(placement(twoPages: true, inTrash: true), .none)
+    XCTAssertEqual(placement(twoPages: true, searching: true), .none)
+    XCTAssertEqual(placement(twoPages: true, selecting: true), .none)
+  }
+
+  /// More › Devices, a line's tap, or a recorder's notification drags the standing sheet up to the request's size while
+  /// it stands; anywhere else it's shown on its own (a sheet over a conversation, the card on two pages). Back from a
+  /// conversation or search, or turned, it's minimized, not wherever it was left.
+  func testBehaviorAskingForMoreDragsTheStandingSheetUpElseShowsItOnItsOwn() {
+    var state = StatusSheetState()
+    XCTAssertEqual(state.size, .compact, "at rest it's minimized")
+    let devices = StatusRequest()
+    state.show(devices, standing: true)
+    XCTAssertEqual(state.size, .medium, "More › Devices drags it up to medium")
+    XCTAssertEqual(state.asked, devices)
+    XCTAssertNil(state.request, "the same sheet, not another over it")
+    let icloud = StatusRequest(.open(.icloud))
+    state.show(icloud, standing: true)
+    XCTAssertEqual(state.size, .large, "a screen opens at full height")
+    XCTAssertEqual(state.asked?.route, .icloud)
+
+    state.stepAside()
+    XCTAssertEqual(state.size, .compact, "back from a conversation or search: minimized again")
+    XCTAssertNil(state.asked)
+
+    state.show(devices, standing: false)
+    XCTAssertEqual(state.request, devices, "over a conversation, or on two pages: on its own")
+    XCTAssertEqual(state.size, .compact, "the standing sheet stays minimized behind it")
+  }
+
   // MARK: Sizes
 
-  /// Medium shows the cards; large, the cards with what can be done there.
+  /// Minimized (compact) is the row; medium shows the lines and the cards; large, the cards with what can be done there.
   func testBehaviorTheSheetsSizesSetHowDeepTheOverviewGoes() {
+    XCTAssertEqual(StatusDetent.allCases, [.compact, .medium, .large])
+    XCTAssertEqual(StatusDetent.compact.density, .lines)
     XCTAssertEqual(StatusDetent.medium.density, .cards)
     XCTAssertEqual(StatusDetent.large.density, .manage)
+    XCTAssertFalse(StatusSheetModel.showsManagement(.compact))
     XCTAssertFalse(StatusSheetModel.showsManagement(.medium))
     XCTAssertTrue(
       StatusSheetModel.showsManagement(.large),
       "the recorder cards grow their storage, actions, and waiting recordings")
+    XCTAssertEqual(StatusQuickActions.spacing, 8, "one gap between Record, Import, and Search")
+  }
+
+  /// Compact holds no groups; medium and large the overview's, less iCloud's line, which the lines above them say.
+  func testBehaviorEachSizeAddsTheGroupsOfWhatExists() {
+    var inputs = StatusOverviewInputs(words: .iPhone())
+    XCTAssertEqual(StatusSheetModel.groups(for: .compact, inputs, now: now), [])
+    XCTAssertEqual(
+      StatusSheetModel.groups(for: .medium, inputs, now: now), [.iphone],
+      "nothing added: this iPhone alone, no Recorders or Macs cards")
+    inputs.recording.recorders = [recorder()]
+    inputs.syncTone = .attention
+    inputs.syncLine = "Sync paused"
+    XCTAssertEqual(StatusOverviewModel.sections(inputs, now: now), [.lines, .recorders, .iphone])
+    XCTAssertEqual(StatusSheetModel.groups(for: .medium, inputs, now: now), [.recorders, .iphone])
+    XCTAssertEqual(StatusSheetModel.groups(for: .large, inputs, now: now), [.recorders, .iphone])
+    XCTAssertEqual(StatusSheetModel.groups(for: .compact, inputs, now: now), [])
+  }
+
+  /// The owner's call (2026-11-11): at rest the sheet is minimized, and small. With nothing to say it's Record, Import,
+  /// and Search alone; with something to say, the one line that says it under them (what the strip said); dragged up,
+  /// every line, one for each thing there is, and nothing of what isn't.
+  func testBehaviorMinimizedIsTheRowAndTheLineWithSomethingToSay() {
+    var inputs = StatusOverviewInputs(words: .iPhone())
+    inputs.syncTone = .upToDate
+    inputs.syncLine = "Up to date"
+    XCTAssertEqual(StatusOverviewModel.lines(inputs, now: now), [], "no “None added”, no “Hasn’t synced”, no “Up to date”")
+    XCTAssertEqual(StatusSheetModel.lines(for: .compact, []), [], "nothing to say: the row alone")
+
+    // A connected recorder and an idle Mac exist, so dragged up they have lines; minimized they say nothing.
+    inputs.recording.recorders = [recorder()]
+    inputs.mac = .seen(name: "Studio Mac", lastSeen: now)
+    let calm = StatusOverviewModel.lines(inputs, now: now)
+    XCTAssertEqual(calm.map(\.id), ["recorder-sc", StatusOverviewModel.macID], "the devices that exist")
+    XCTAssertEqual(StatusSheetModel.lines(for: .compact, calm), [], "calm: the row alone")
+    XCTAssertEqual(StatusSheetModel.lines(for: .medium, calm), calm)
+
+    // iCloud a problem: its line exists, and it's the one minimized says.
+    inputs.syncTone = .attention
+    inputs.syncLine = "Sync paused"
+    let lines = StatusOverviewModel.lines(inputs, now: now)
+    XCTAssertEqual(
+      lines.map(\.id), ["recorder-sc", StatusOverviewModel.macID, StatusOverviewModel.syncID],
+      "and iCloud only when it's a problem")
+    XCTAssertEqual(StatusSheetModel.lines(for: .compact, lines).map(\.id), [StatusOverviewModel.syncID])
+    XCTAssertEqual(StatusSheetModel.lines(for: .medium, lines), lines)
+    XCTAssertEqual(StatusSheetModel.lines(for: .large, lines), lines)
+
+    // A recorder recording has something to say; the idle Mac beside it doesn't.
+    inputs.syncTone = .upToDate
+    inputs.recording.recorders = [recorder { $0.isRecording = true }]
+    XCTAssertEqual(
+      StatusSheetModel.lines(for: .compact, StatusOverviewModel.lines(inputs, now: now)).map(\.id), ["recorder-sc"])
+  }
+
+  /// Minimized is small: the grabber's room and the row at a toolbar's size, measured from the fonts, never a share of
+  /// the screen, but never so short that iOS floats the system's sheet as a tight capsule instead of a sheet; a notice
+  /// over Record (an import under way) and the line with something to say make room for themselves while they're there.
+  func testBehaviorMinimizedIsSmallButStillASheet() {
+    let screen: CGFloat = 874  // an iPhone 18 Pro, upright
+    let row = StatusCompactDetent.recordTop + StatusCompactDetent.rowHeight(at: .large) + StatusCompactDetent.bottomRoom
+    let minimized = StatusCompactDetent.height(for: .large, maximum: screen)
+    XCTAssertLessThan(row, StatusCompactDetent.sheetMinimum, "the row alone is shorter than a sheet")
+    XCTAssertEqual(minimized, StatusCompactDetent.sheetMinimum, "so minimized is the shortest sheet, not a capsule")
+    XCTAssertEqual(StatusCompactDetent.control, 44, "a toolbar button's touch target")
+    XCTAssertEqual(StatusCompactDetent.rowHeight(at: .large), 52, "44 pt controls and their glass")
+    XCTAssertLessThan(minimized, screen * 0.15, "never the quarter to a third of the list it once took")
+    let withLine = StatusCompactDetent.height(for: .large, maximum: screen, line: true)
+    XCTAssertEqual(
+      withLine, row + StatusCompactDetent.recordGap + StatusCompactDetent.lineHeight(at: .large),
+      "a line and the gap over it")
+    XCTAssertGreaterThan(withLine, minimized)
+    XCTAssertLessThan(withLine, screen * 0.15)
+    XCTAssertGreaterThan(
+      StatusCompactDetent.height(for: .large, maximum: screen, notice: true, line: true), withLine, "a notice over Record")
+
+    // It grows with the text size up to the row's largest, then stops: Record's label would break beside the round
+    // buttons, and each control shows the large content viewer instead. The line keeps growing: at the accessibility
+    // sizes its title and words share four rows.
+    var previous: CGFloat = 0
+    for size in DynamicTypeSize.allCases {
+      let height = StatusCompactDetent.height(for: size, maximum: 2_000)
+      XCTAssertGreaterThanOrEqual(height, previous, "\(size) is no shorter than the size before")
+      previous = height
+    }
+    XCTAssertEqual(
+      StatusCompactDetent.rowHeight(at: .accessibility5), StatusCompactDetent.rowHeight(at: .accessibility1))
+    XCTAssertLessThan(StatusCompactDetent.height(for: .accessibility5, maximum: 678), 678 * 0.25, "small on the Duo's cover too")
+    XCTAssertGreaterThanOrEqual(
+      StatusCompactDetent.lineHeight(at: .accessibility1),
+      CGFloat(StatusMetrics.stackedRows) * StatusCompactDetent.lineHeight(.subheadline, at: .accessibility1))
+    XCTAssertLessThanOrEqual(
+      StatusCompactDetent.height(for: .accessibility5, maximum: 874, line: true), 874 * 0.55,
+      "past the cap the line scrolls")
   }
 
   // MARK: This iPhone
@@ -186,11 +339,11 @@ final class StatusSheetModelTests: XCTestCase {
     XCTAssertEqual(waiting.first?.item(under: "Studio Mac").note, "Requested from this iPhone")
   }
 
-  // MARK: The strip
+  // MARK: Asking for more
 
-  /// The strip's tap: a line that needs the person opens where it's fixed, inside the sheet; any other line, the sheet
-  /// at medium.
-  func testBehaviorTappingTheStripAsksForTheSheetWhereTheLineLeads() {
+  /// A line's tap at the foot (or More › Devices): a line that needs the person opens where it's fixed, inside the
+  /// sheet at full height; any other line, the sheet at medium (the card on the right page, on two pages).
+  func testBehaviorTappingALineAsksForTheSheetWhereTheLineLeads() {
     XCTAssertEqual(StatusRequest(.open(.icloud)).route, .icloud)
     XCTAssertEqual(StatusRequest(.open(.icloud)).detent, .large, "a full screen opens at full height")
     XCTAssertEqual(StatusRequest(.showFix(.macs)).fix, .macs)
