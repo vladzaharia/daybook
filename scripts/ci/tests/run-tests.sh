@@ -23,6 +23,8 @@
 #   github-release.sh     draft, re-run, publish, and refusal to touch a published release (fake gh)
 #   prune-caches.sh       which caches go and which stay, against a fake gh
 #   xcresult-retries.sh   passes on retry and flaky iterations, from xcresulttool fixtures
+#   changes.sh            which jobs a pull request's files need, in a throwaway repository
+#   test-lanes.sh         lanes side by side, failures named, and a test bundle in no lane refused (stand-in xctest)
 #   own-warnings.sh       a warning in Sources/ or Apps/iOS/ fails, coloured or not; a dependency's or a test's doesn't
 #   check-ios-archive.sh  synthetic archives: export compliance, icon, versions (macOS: needs plutil)
 #   setup-github.sh       the dry run prints the plan and never calls gh
@@ -689,24 +691,87 @@ commit_changes() { git -C "$changes_repo" add -A && git -C "$changes_repo" -c us
 printf 'one\n' > "$changes_repo/docs/guide.md"
 printf 'let a = 1\n' > "$changes_repo/Sources/App/A.swift"
 commit_changes base
-changes() { (cd "$changes_repo" && "$ci/changes.sh" "$@" 2>/dev/null); }
+# The four outputs on one line: "package=… iphone=… mac=… code=…".
+changes() { (cd "$changes_repo" && "$ci/changes.sh" "$@" 2>/dev/null) | paste -sd ' ' -; }
+# A pull request's change, as its own commit: change_files FILE... writes to each and commits them.
+change_files() {
+    local file
+    for file in "$@"; do mkdir -p "$changes_repo/$(dirname "$file")"; printf '%s\n' "$RANDOM" >> "$changes_repo/$file"; done
+    commit_changes "change $*"
+}
+all="package=true iphone=true mac=true code=true"
+none="package=false iphone=false mac=false code=false"
 printf 'two\n' >> "$changes_repo/docs/guide.md"
 printf '# Notes\n' > "$changes_repo/CHANGELOG.md"
 commit_changes docs
-expect_eq "a pull request that changes only documentation skips the builds" "code=false" "$(changes --event pull_request)"
-expect_eq "a push never does" "code=true" "$(changes --event push)"
-expect_eq "nor a release's validation" "code=true" "$(changes --event workflow_call)"
+expect_eq "a pull request that changes only documentation skips the builds" "$none" "$(changes --event pull_request)"
+expect_eq "a push never does" "$all" "$(changes --event push)"
+expect_eq "nor a release's validation" "$all" "$(changes --event workflow_call)"
 printf 'Licenses\n' > "$changes_repo/THIRD_PARTY_NOTICES.md"
 commit_changes notices
-expect_eq "the notices the apps bundle are code" "code=true" "$(changes --event pull_request)"
+expect_eq "the notices the apps bundle are code, for every job" "$all" "$(changes --event pull_request)"
 printf 'Read me\n' > "$changes_repo/Sources/App/README.md"
 commit_changes source-markdown
-expect_eq "so is Markdown among the sources" "code=true" "$(changes --event pull_request)"
+expect_eq "so is Markdown among the sources" "$all" "$(changes --event pull_request)"
 printf 'let a = 2\n' > "$changes_repo/Sources/App/A.swift"
 commit_changes code
-expect_eq "and code is" "code=true" "$(changes --event pull_request)"
-expect_eq "a base it can't compare with checks everything" "code=true" "$(changes --event pull_request --base no-such-ref)"
+expect_eq "and a shared library's code is" "$all" "$(changes --event pull_request)"
+change_files Apps/iOS/DaybookPhone/Shell.swift Apps/iOS/README.md docs/iphone.md
+expect_eq "the iPhone app alone builds only the iPhone" "package=false iphone=true mac=false code=true" "$(changes --event pull_request)"
+change_files Apps/macOS/project.yml Resources/Info.plist
+expect_eq "the Mac project and resources build only the Mac app" "package=false iphone=false mac=true code=true" "$(changes --event pull_request)"
+change_files Resources/Daybook.icon/icon.json
+expect_eq "the icon both apps use builds both" "package=false iphone=true mac=true code=true" "$(changes --event pull_request)"
+change_files Sources/Daybook/App.swift
+expect_eq "the Mac app's sources build the package and the Mac app" "package=true iphone=false mac=true code=true" "$(changes --event pull_request)"
+change_files Tests/DaybookTests/AppTests.swift
+expect_eq "the Mac app's tests run in the package" "package=true iphone=false mac=false code=true" "$(changes --event pull_request)"
+change_files Sources/DaybookCore/Store.swift
+expect_eq "a library named like the app is shared" "$all" "$(changes --event pull_request)"
+change_files Apps/iOS/DaybookPhone/Shell.swift Sources/Daybook/App.swift
+expect_eq "both apps' own files build both, and the package" "$all" "$(changes --event pull_request)"
+change_files Tests/DaybookTestSupport/Wait.swift
+expect_eq "the shared test support builds everything" "$all" "$(changes --event pull_request)"
+change_files scripts/build-ios.sh
+expect_eq "so does anything else" "$all" "$(changes --event pull_request)"
+expect_eq "a base it can't compare with checks everything" "$all" "$(changes --event pull_request --base no-such-ref)"
 expect_fail "--event is required" "$ci/changes.sh"
+
+# --- test-lanes.sh, with a stand-in xctest and swift -------------------------------------------------------
+echo "test-lanes.sh"
+lanes_products="$work/lanes/Products"
+mkdir -p "$lanes_products/CoreTests.xctest" "$lanes_products/KitTests.xctest" "$lanes_products/AppTests.xctest"
+lanes() {
+    local vars=()
+    while [[ "$1" != -- ]]; do vars+=("$1"); shift; done
+    shift
+    : > "$work/stub.log"
+    rm -rf "$work/lanes/logs"
+    env PATH="$stubs:$PATH" STUB_LOG="$work/stub.log" GITHUB_STEP_SUMMARY="$work/lanes/summary.md" ${vars[@]+"${vars[@]}"} \
+        "$ci/test-lanes.sh" --products "$lanes_products" --logs "$work/lanes/logs" "$@" > "$work/lanes/out" 2>&1
+}
+: > "$work/lanes/summary.md"
+expect_ok "every bundle passes in two lanes" lanes -- --skip CoreTests 'Aligner/testBudget$' 'AppTests' 'CoreTests KitTests'
+expect_eq "a bundle with a skip runs through swift test, the others straight from their bundles" \
+    "swift test --skip-build --ignore-lock --filter ^CoreTests\\. --skip Aligner/testBudget$|xcrun xctest $lanes_products/AppTests.xctest|xcrun xctest $lanes_products/KitTests.xctest" \
+    "$(sort "$work/stub.log" | paste -sd '|' -)"
+expect_ok "each bundle has its log" test -s "$work/lanes/logs/KitTests.log"
+expect_ok "and a row in the run summary" grep -q '^| KitTests | 2 | passed |' "$work/lanes/summary.md"
+expect_fail "a failed bundle fails the step" lanes STUB_XCTEST_FAIL=AppTests -- 'AppTests' 'CoreTests KitTests'
+expect_ok "naming its failed test" grep -q '^::error title=Tests failed::AppTests: AppTests.StubTests.testFails$' "$work/lanes/out"
+expect_ok "while the other lane's bundles still ran" grep -q '^| KitTests | 2 | passed |' "$work/lanes/out"
+expect_fail "so does one that fails behind --skip" lanes STUB_XCTEST_FAIL=CoreTests -- --skip CoreTests 'x$' 'AppTests' 'CoreTests KitTests'
+expect_ok "(named too)" grep -q '^::error title=Tests failed::CoreTests: CoreTests.StubTests.testFails$' "$work/lanes/out"
+expect_fail "and one that crashes" lanes STUB_XCTEST_CRASH=KitTests -- 'AppTests' 'CoreTests KitTests'
+expect_ok "(said so)" grep -q '^::error title=Tests failed::KitTests: exit 134, no failed test named' "$work/lanes/out"
+lanes STUB_XCTEST_FAIL=CoreTests -- 'AppTests' 'CoreTests KitTests' || true
+expect_ok "the next bundle in a lane runs after one fails" grep -q 'xctest .*/KitTests.xctest' "$work/stub.log"
+expect_fail "a built bundle in no lane fails before anything runs" lanes -- 'AppTests' 'CoreTests'
+expect_ok "naming it" grep -q '^::error title=Test bundle in no lane:: KitTests' "$work/lanes/out"
+expect_eq "(nothing ran)" "" "$(cat "$work/stub.log")"
+expect_fail "a bundle that wasn't built fails" lanes -- 'AppTests' 'CoreTests KitTests MissingTests'
+expect_fail "so does one in two lanes" lanes -- 'AppTests KitTests' 'CoreTests KitTests'
+expect_fail "and no lanes" lanes --
 
 # --- build-ios.sh upload retry, with a stand-in xcodebuild --------------------------------------------
 echo "build-ios.sh upload retry"
@@ -993,18 +1058,25 @@ if macos; then
     expect_ok "--test without an iPhone Duo tests on the iPhone 18 Pro" build_ios STUB_SIMULATORS="$work/simulators.json" -- --test
     expect_ok "(by its UDID)" grep -q -- '-destination id=AAAAAAAA-0000-0000-0000-000000000018 test-without-building$' <<< "$(xcb ' test')"
     # One build, the same every time: the generic destination for this Mac's architecture only.
-    sim_build="-destination generic/platform=iOS Simulator ARCHS=$(uname -m)"
+    sim_build="-destination generic/platform=iOS Simulator ARCHS=$(uname -m) COMPILER_INDEX_STORE_ENABLE=NO"
     expect_eq "after building for testing once, for this Mac's architecture" \
         "-resolvePackageDependencies|$sim_build build-for-testing|-destination id=AAAAAAAA-0000-0000-0000-000000000018 test-without-building" \
         "$(grep '^xcodebuild' "$work/stub.log" | sed -E 's/.*(-resolvePackageDependencies).*/\1/; s/.*(-destination .*)/\1/' | paste -sd '|' -)"
     expect_ok "--build-for-testing builds" build_ios -- --build-for-testing
     expect_eq "and tests nothing" "$sim_build build-for-testing" \
         "$(grep '^xcodebuild .*-destination' "$work/stub.log" | sed -E 's/.*(-destination .*)/\1/')"
+    ios_products="$ios_repo/Apps/iOS/build/DerivedData/Build/Products"
+    expect_fail "--test --skip-build with nothing built fails" build_ios -- --test --skip-build --simulator "iPhone 18 Pro"
+    expect_ok "and says so" grep -q "needs an earlier --build-for-testing (no .xctestrun" "$work/build-ios.out"
+    mkdir -p "$ios_products"
+    : > "$ios_products/DaybookPhone_iphonesimulator27.0-arm64.xctestrun"
+    touch -t 202601010000 "$ios_products/DaybookPhone_iphonesimulator27.0-arm64.xctestrun"
+    : > "$ios_products/DaybookPhone_iphonesimulator27.1-arm64.xctestrun"
     expect_ok "--test --skip-build tests what was built" build_ios -- --test --skip-build --simulator "iPhone 18 Pro" \
         --test-arg -only-testing:DaybookPhoneTests/ShellTests
-    expect_eq "without generating, resolving, or building" \
-        "xcodebuild -destination platform=iOS Simulator,name=iPhone 18 Pro test-without-building -only-testing:DaybookPhoneTests/ShellTests" \
-        "$(grep -E '^(xcodebuild|xcodegen)' "$work/stub.log" | sed -E 's/^(xcodebuild).*(-destination .*)/\1 \2/')"
+    expect_eq "from the newest build's test run, without generating, resolving, building, or opening the project" \
+        "xcodebuild -xctestrun $ios_products/DaybookPhone_iphonesimulator27.1-arm64.xctestrun -destination platform=iOS Simulator,name=iPhone 18 Pro test-without-building -only-testing:DaybookPhoneTests/ShellTests" \
+        "$(grep -E '^(xcodebuild|xcodegen)' "$work/stub.log")"
     expect_ok "a plain build is the same simulator build" build_ios -- --simulator unused
     expect_eq "(no tests)" "$sim_build build" "$(grep '^xcodebuild .*-destination' "$work/stub.log" | sed -E 's/.*(-destination .*)/\1/')"
     expect_fail "--skip-build without --test" build_ios -- --skip-build
