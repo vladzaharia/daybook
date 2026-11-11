@@ -443,7 +443,7 @@ The channels are independent: the GitHub Release doesn't wait for TestFlight, an
 
 A release ships only a commit whose tests passed, but it doesn't test the commit again when `main` already has. A tag points at a commit on `main`, and the push that brought it there ran CI on it: `prepare` finds that run, and the signing jobs wait for it. Only when `main` has none (it was cancelled, say) does `validate` run CI's jobs in the release run itself.
 
-The signing jobs don't wait for the tests to start, so their channels ask for approval as soon as `prepare` is done, and the archives build meanwhile. Each job then waits at **Wait for the release commit's tests** (`scripts/ci/await-validation.sh`), before it exports or uploads anything, for that CI run to pass, or for this run's `validate` jobs. A test that fails fails the job there. If it was a flake, re-run the failed jobs of that CI run, then of the release.
+The signing jobs don't wait for the tests to start, so their channels ask for approval as soon as `prepare` is done, and the archives build meanwhile. Each job then waits at **Wait for the release commit's tests** (`scripts/ci/await-validation.sh`), before it exports or uploads anything, for that CI run to pass, or for this run's `validate` jobs. A test that fails fails the job there. A check that can't reach GitHub for a moment is tried again at the next interval (v0.8.0's first Mac attempt ended on one such error before this was so); only the wait's timeout ends it. If it was a flake, re-run the failed jobs of that CI run, then of the release.
 
 ## Migrations
 
