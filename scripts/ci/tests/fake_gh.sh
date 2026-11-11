@@ -12,7 +12,8 @@
 #   gh api -X POST .../actions/runs/<id>/pending_deployments --input -   appends the body to $GH_STATE/reviews
 #   gh run list ...  $GH_STATE/waiting-run (a run ID, or nothing) as [{"databaseId": ID}]
 #   gh api .../actions/runs/<id> and .../actions/runs/<id>/jobs?...   the next line of $GH_STATE/run-<id>.seq
-#                    or $GH_STATE/jobs-<id>.seq (one JSON document a line; the last one repeats)
+#                    or $GH_STATE/jobs-<id>.seq (one JSON document a line; the last one repeats; a line
+#                    that reads `error` fails that call as gh does when it can't reach GitHub)
 set -euo pipefail
 dir="${GH_STATE:?}"
 printf '%s\n' "$*" >> "$dir/calls"
@@ -48,8 +49,11 @@ if [[ "${1-}" == api ]]; then
         "GET "*/actions/runs/*/jobs\?*|"GET "*/actions/runs/[0-9]*)
             if [[ "$path" == */jobs\?* ]]; then id="${path%/jobs\?*}"; seq="$dir/jobs-${id##*/}.seq"; else seq="$dir/run-${path##*/}.seq"; fi
             [[ -s "$seq" ]] || { echo "fake gh: no $seq" >&2; exit 2; }
-            head -1 "$seq" | jq -r "$jq_filter"
+            answer="$(head -1 "$seq")"
             if [[ "$(wc -l < "$seq")" -gt 1 ]]; then tail -n +2 "$seq" > "$seq.next"; mv "$seq.next" "$seq"; fi
+            # A line that reads `error` is a call that couldn't reach GitHub, as gh reports it.
+            if [[ "$answer" == error ]]; then echo "error connecting to api.github.com" >&2; exit 1; fi
+            jq -r "$jq_filter" <<< "$answer"
             ;;
         "POST "*/actions/runs/*/pending_deployments)
             [[ "$input" == - ]] || { echo "fake gh: pending_deployments needs --input -" >&2; exit 2; }
