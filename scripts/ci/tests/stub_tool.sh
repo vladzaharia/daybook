@@ -23,6 +23,7 @@
 #   STUB_SIMULATORS=FILE       `xcrun simctl list -j devices available` prints FILE (default: no devices)
 #   STUB_XCTEST_FAIL="A B"     `xcrun xctest .../A.xctest` (and `swift test --filter '^A\.'`) fails one named test
 #   STUB_XCTEST_CRASH="A"      `xcrun xctest .../A.xctest` exits 134 without naming a test
+#   STUB_XCTEST_FLAKY="A"      `xcrun xctest .../A.xctest` fails its first run (as STUB_XCTEST_FAIL), then passes
 # `security cms -D -i FILE` prints FILE as it is: the tests' profiles are their plists, unsigned.
 # `security -i` reads commands from standard input: each line goes to $STUB_LOG as "security-stdin
 # <line>", and its arguments, split as security splits them, to $STUB_LOG.args as a JSON array.
@@ -103,7 +104,12 @@ case "$tool" in
             xctest)
                 bundle="$(basename "${@: -1}" .xctest)"
                 if [[ " ${STUB_XCTEST_CRASH:-} " == *" $bundle "* ]]; then exit 134; fi
-                if [[ " ${STUB_XCTEST_FAIL:-} " == *" $bundle "* ]]; then
+                flaky=0
+                if [[ " ${STUB_XCTEST_FLAKY:-} " == *" $bundle "* && ! -e "$STUB_LOG.ran-$bundle" ]]; then
+                    : > "$STUB_LOG.ran-$bundle"
+                    flaky=1
+                fi
+                if [[ " ${STUB_XCTEST_FAIL:-} " == *" $bundle "* || "$flaky" == 1 ]]; then
                     echo "Test Case '-[$bundle.StubTests testFails]' failed (0.010 seconds)."
                     exit 1
                 fi

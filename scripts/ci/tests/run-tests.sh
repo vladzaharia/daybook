@@ -773,6 +773,18 @@ expect_fail "and one that crashes" lanes STUB_XCTEST_CRASH=KitTests -- 'AppTests
 expect_ok "(said so)" grep -q '^::error title=Tests failed::KitTests: exit 134, no failed test named' "$work/lanes/out"
 lanes STUB_XCTEST_FAIL=CoreTests -- 'AppTests' 'CoreTests KitTests' || true
 expect_ok "the next bundle in a lane runs after one fails" grep -q 'xctest .*/KitTests.xctest' "$work/stub.log"
+rm -f "$work"/stub.log.ran-*
+expect_ok "with --retry-alone, a bundle that fails beside the other lane and passes alone passes" \
+    lanes STUB_XCTEST_FLAKY=KitTests -- --retry-alone 'AppTests' 'CoreTests KitTests'
+expect_eq "(it ran twice)" "2" "$(grep -c 'xctest .*/KitTests.xctest' "$work/stub.log")"
+expect_ok "with a warning naming what failed beside the other lane" \
+    grep -q '^::warning title=Passed alone::KitTests failed beside the other lanes (KitTests.StubTests.testFails) and passed on its own$' "$work/lanes/out"
+expect_ok "(and in the summary)" grep -q '^| KitTests | 2 | passed alone' "$work/lanes/summary.md"
+expect_fail "one that fails alone too fails the step" lanes STUB_XCTEST_FAIL=KitTests -- --retry-alone 'AppTests' 'CoreTests KitTests'
+expect_ok "(naming the tests that failed alone)" grep -q '^::error title=Tests failed::KitTests: KitTests.StubTests.testFails$' "$work/lanes/out"
+rm -f "$work"/stub.log.ran-*
+expect_fail "without --retry-alone, a failure beside the other lane fails" lanes STUB_XCTEST_FLAKY=KitTests -- 'AppTests' 'CoreTests KitTests'
+expect_eq "(run once)" "1" "$(grep -c 'xctest .*/KitTests.xctest' "$work/stub.log")"
 expect_fail "a test target in no lane fails before anything runs" lanes -- 'AppTests' 'CoreTests'
 expect_ok "naming it" grep -q '^::error title=Test target in no lane:: KitTests' "$work/lanes/out"
 expect_eq "(nothing ran)" "" "$(cat "$work/stub.log")"

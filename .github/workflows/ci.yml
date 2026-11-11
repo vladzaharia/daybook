@@ -163,8 +163,9 @@ jobs:
       # DaybookCoreTests through `swift test`, to skip the timing-budget test, which runs on its own afterwards.
       # DAYBOOK_TEST_TIMEOUT_SCALE doubles every test wait (Tests/DaybookTestSupport): hosted runners are small
       # shared VMs. The timing-budget step keeps its own budget.
-      # The logs print when every lane is done, so a hung test fails the step at its timeout (and the logs upload)
-      # rather than running out the job's.
+      # A bundle that fails beside the other lane runs again on its own (--retry-alone), as it ran before there were
+      # lanes; a pass then leaves a "Passed alone" warning. The logs print when every lane is done, so a hung test
+      # fails the step at its timeout (and the logs upload) rather than running out the job's.
       - name: Test, in two lanes
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         timeout-minutes: 30
@@ -173,7 +174,7 @@ jobs:
         run: |
           targets="$(swift package dump-package | jq -r '.targets[] | select(.type == "test") | .name')"
           scripts/ci/test-lanes.sh --expect "$(paste -sd ' ' - <<< "$targets")" \
-            --products "$(swift build --show-bin-path)" --logs build/test-results \
+            --products "$(swift build --show-bin-path)" --logs build/test-results --retry-alone \
             --skip DaybookCoreTests 'AudioAlignerTests/testThirtyMinutePairAlignsWithinBudget$' \
             'DaybookTests DaybookIntelligenceTests DaybookLinkTests DaybookUITests DaybookDesignTests DaybookCaptionsTests' \
             'DaybookCoreTests DaybookKitTests DaybookDevicesTests DaybookLiveTests'
