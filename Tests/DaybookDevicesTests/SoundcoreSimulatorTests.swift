@@ -1108,13 +1108,17 @@ final class SoundcoreSimulatorTests: XCTestCase {
         var made = 0
         hooks.makeCaptioner = { made += 1; return captioner }
         hooks.locale = { Locale(identifier: "en_GB") }
-        let rig = rig(device, captions: hooks)
+        // The quiet spell isn't a stall: with the harness's 400 ms, a starved machine's 250 ms became one, the stream
+        // ended, and the audio after it never came (docs/release.md, "CI under load").
+        let rig = rig(device, configure: { $0.stall = .seconds(10) }, captions: hooks)
         try await connectThroughSetup(rig)
         XCTAssertFalse(rig.session.isListeningLive)
 
         rig.connection.startListening()
         try await waitUntil("listening") { rig.session.isListeningLive }
-        try await waitUntil("audio from before and after the pause") { captioner.fed.count >= 120 }
+        try await waitUntil("audio from before and after the pause", state: {
+            "\(captioner.fed.count) buffers; listening \(rig.connection.live.isListening); technical \(rig.connection.lastTechnicalProblem ?? "none")"
+        }) { captioner.fed.count >= 120 }
         XCTAssertEqual(made, 1)
         XCTAssertEqual(captioner.startedLocale?.identifier, "en_GB")
         XCTAssertEqual(captioner.sourceFormat?.sampleRate, 16_000)

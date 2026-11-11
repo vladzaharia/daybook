@@ -99,6 +99,8 @@ A test that waits the whole stretched timeout for something that normally takes 
 
 The rig's deadlines (request, stall, scan, connect, reconnect, record confirmation, live tail) now stretch by the same scale. The ones no test there runs out on purpose are seconds long before the stretch: 5 s for the stall, request, and record confirmation, and 10 s for the live tail. Under heavier load a stretched 3 s stall still ran out, and so did a stretched 10 s tail.
 
+`SoundcoreSimulatorTests` had one of these too. In its test of captions across a recorder's bursts and gaps, the recorder goes quiet for 250 ms on purpose, and a starved runner turned that into the harness's 400 ms stall. The stream ended, and the audio after the gap never came. That test now gives the stall 10 s. Its other tests run their deadlines out on purpose, so the harness keeps them.
+
 Every wait in the rig says what it last saw: the link, the recorder and the commands it got, the live save, and the imports. Two of its waits also timed out on CI without that: the one for a Start to be confirmed, and the one for the button's second press. Their cause isn't known yet; their next failure shows their state.
 
 **Artifacts.** On failure, CI uploads the swift test logs, the iPhone `.xcresult` bundles and Xcode logs, or the Mac build logs. They're kept for 14 days.
