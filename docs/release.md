@@ -90,6 +90,17 @@ The main runs skip just these tests (`--skip` and `-skip-testing`), and the iPho
 
 A red night isn't a broken build. It names the tests whose timing assumptions don't hold under load; compare with `docs/validation.md`, and fix the test or its budget before an ordinary CI run starts failing on it.
 
+A test that waits the whole stretched timeout for something that normally takes a second is stuck, not slow. Look for a deadline inside the code under test that the test shortened and the scale doesn't reach.
+
+`SoundcoreSharedRecordingTests` failed most nights this way, a different test each night. Its rig gave the simulated recorder a 600 ms stall and a 400 ms live tail. On a starved machine, both ran out, and the code then did what it should:
+
+- The stall ran out before a transfer's audio came. The import gave up after its retry, and the test waited for a file that never came.
+- The tail ran out with live audio still on its way, so the saved part came up short.
+
+The rig's deadlines (request, stall, scan, connect, reconnect, record confirmation, live tail) now stretch by the same scale. The ones no test there runs out on purpose are seconds long: the stall and request 5 s, the live tail the app's own 2 s. Stretched only, a 3 s stall still ran out under heavier load.
+
+Every wait in the rig says what it last saw: the link, the recorder and the commands it got, the live save, and the imports. Two of its waits also timed out on CI without that: the one for a Start to be confirmed, and the one for the button's second press. Their cause isn't known yet; their next failure shows their state.
+
 **Artifacts.** On failure, CI uploads the swift test logs, the iPhone `.xcresult` bundles and Xcode logs, or the Mac build logs. They're kept for 14 days.
 
 **The release check in CI.** The `iphone-archive` job runs `check-ios-archive.sh` on an unsigned archive with `continue-on-error`. Problems that would block a release then show up on every run without failing it.

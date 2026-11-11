@@ -47,13 +47,19 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
         hooks.makeCaptioner = captioners ?? { captioner }
         environment.liveCaptions = hooks
         var timing = SoundcoreTiming()
-        timing.request = .seconds(3)
-        timing.stall = .milliseconds(600)
+        // To the code under test, a deadline a starved machine misses is a real failure: a transfer that stalls isn't
+        // tried again, a status reply that comes after its request gave up is dropped, live audio still on its way when
+        // the tail runs out is cut. The test would then wait for what never comes (docs/release.md, "CI under load").
+        // So every deadline stretches with the tests' waits (DAYBOOK_TEST_TIMEOUT_SCALE), and the ones no test here
+        // runs out on purpose are seconds long, the live tail as long as the app's. The test of a stream going quiet
+        // shortens the stall.
+        timing.request = Self.stretched(.seconds(5))
+        timing.stall = Self.stretched(.seconds(5))
         timing.settle = .milliseconds(20)
-        timing.scan = .milliseconds(300)
-        timing.connect = .milliseconds(600)
-        timing.reconnect = .milliseconds(300)
-        timing.recordConfirm = .milliseconds(1_500)
+        timing.scan = Self.stretched(.milliseconds(300))
+        timing.connect = Self.stretched(.milliseconds(600))
+        timing.reconnect = Self.stretched(.milliseconds(300))
+        timing.recordConfirm = Self.stretched(.seconds(5))
         timing.backoff = [.milliseconds(40), .milliseconds(80)]
         // The link stays up between a test's steps: a short idle release could let it go first on a busy machine, and a
         // press or a Start would then reach nobody. The test of holding the link shortens it.
@@ -61,7 +67,7 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
         timing.idleRelease = .seconds(600)
         timing.automaticCooldown = .seconds(60)
         timing.holdRetry = .milliseconds(150)
-        timing.liveTail = .milliseconds(400)
+        timing.liveTail = Self.stretched(.seconds(2))
         configure?(&timing)
         environment.soundcoreTiming = timing
         let configured = ConfiguredDevice(id: "sim", kind: SoundcoreWorkIntegration().kind)
@@ -88,8 +94,23 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
 
     private func connected(_ rig: Rig) async throws {
         if !rig.connection.state.isConnected { rig.connection.connect() }
-        try await waitUntil("the connection") { rig.connection.state == .connected }
-        try await waitUntil("the recording list") { rig.connection.isInventoryCurrent }
+        try await waitUntil("the connection", state: seen(rig)) { rig.connection.state == .connected }
+        try await waitUntil("the recording list", state: seen(rig)) { rig.connection.isInventoryCurrent }
+    }
+
+    private static func stretched(_ deadline: Duration) -> Duration { deadline * TestTiming.scale }
+
+    /// What a wait that times out last saw of the rig: the link, the recorder, and the shared recording.
+    private func seen(_ rig: Rig) -> () -> String {
+        { [connection = rig.connection, device = rig.device, transport = rig.transport, session = rig.session, library = rig.library] in
+            let commands = device.received.suffix(8).map { String(format: "%02x%02x", $0.type, $0.command) }.joined(separator: " ")
+            return "phase \(connection.phase); linked \(transport.connected); recording \(connection.info.map { "\($0.isRecording)" } ?? "unknown")"
+                + ", command pending \(connection.recordCommandPending); problem \(connection.problem?.id ?? "none")"
+                + ", technical \(connection.lastTechnicalProblem ?? "none"); recorder recording \(device.isRecording)"
+                + " with \(device.activeRecording?.frames.count ?? 0) frames, \(device.recordings.count) finished; last commands [\(commands)]"
+                + "; listening \(connection.live.isListening); live save \(session.lastLiveSave.map { "\($0.seconds) s" } ?? "none")"
+                + "; imports \(library.imports.count), queue active \(session.queue.isActive)"
+        }
     }
 
     // MARK: The button
@@ -102,16 +123,16 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
         try await connected(rig)
 
         device.pressButton()
-        try await waitUntil("the press is heard") { presses == [true] }
+        try await waitUntil("the press is heard", state: { "presses \(presses); " + self.seen(rig)() }) { presses == [true] }
         XCTAssertEqual(rig.connection.status?.isRecording, true)
         device.pressButton()
-        try await waitUntil("and the second") { presses == [true, false] }
+        try await waitUntil("and the second", state: { "presses \(presses); " + self.seen(rig)() }) { presses == [true, false] }
 
         // Daybook's own Start and Pause aren't the button.
         rig.connection.startRecording()
-        try await waitUntil("its own start") { rig.connection.status?.isRecording == true && !rig.connection.recordCommandPending }
+        try await waitUntil("its own start", state: seen(rig)) { rig.connection.status?.isRecording == true && !rig.connection.recordCommandPending }
         rig.connection.pauseRecording()
-        try await waitUntil("its own pause") { rig.connection.status?.isRecording == false && !rig.connection.recordCommandPending }
+        try await waitUntil("its own pause", state: seen(rig)) { rig.connection.status?.isRecording == false && !rig.connection.recordCommandPending }
         try await Task.sleep(for: .milliseconds(100))
         XCTAssertEqual(presses, [true, false], "only the button")
     }
@@ -124,12 +145,12 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
             timing.automaticIdleRelease = .milliseconds(200)
             timing.idleRelease = .milliseconds(200)
         })
-        try await waitUntil("it connects on its own, holding the link") { rig.connection.state == .connected }
+        try await waitUntil("it connects on its own, holding the link", state: seen(rig)) { rig.connection.state == .connected }
         try await Task.sleep(for: .milliseconds(500))
         XCTAssertEqual(rig.connection.state, .connected, "never let go when idle (automatic and personal releases are 200 ms here)")
 
         rig.transport.dropLink()
-        try await waitUntil("it comes back on its own, without the 60 s cooldown") { rig.connection.state == .connected }
+        try await waitUntil("it comes back on its own, without the 60 s cooldown", state: seen(rig)) { rig.connection.state == .connected }
 
         // The person disconnects: holding waits like automatic import does.
         rig.connection.disconnect()
@@ -145,7 +166,7 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
         XCTAssertEqual(rig.transport.scans, 0, "no scan, in the background or not")
         XCTAssertNotEqual(rig.connection.state, .connected)
         rig.transport.isKnown = true
-        try await waitUntil("the system's record of it, tried again shortly") { rig.connection.state == .connected }
+        try await waitUntil("the system's record of it, tried again shortly", state: seen(rig)) { rig.connection.state == .connected }
         XCTAssertEqual(rig.transport.scans, 0)
     }
 
@@ -157,24 +178,24 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
         let rig = rig(device, holds: true)
         var presses: [Bool] = []
         rig.session.onRecorderButton = { _, on in presses.append(on) }
-        try await waitUntil("held") { rig.connection.isInventoryCurrent }
+        try await waitUntil("held", state: seen(rig)) { rig.connection.isInventoryCurrent }
 
         device.advertises = false
         rig.transport.dropLink()
-        try await waitUntil("away") { rig.connection.state != .connected }
+        try await waitUntil("away", state: seen(rig)) { rig.connection.state != .connected }
         device.pressButton()
         rig.transport.comeIntoRange()
-        try await waitUntil("back, and the press heard") { presses == [true] }
+        try await waitUntil("back, and the press heard", state: { "presses \(presses); " + self.seen(rig)() }) { presses == [true] }
 
         // Away again; the person stops it and, ten minutes on the recorder's clock later, starts another.
         device.advertises = false
         rig.transport.dropLink()
-        try await waitUntil("away again") { rig.connection.state != .connected }
+        try await waitUntil("away again", state: seen(rig)) { rig.connection.state != .connected }
         device.pressButton()
         device.clockOffset = -600
         device.pressButton()
         rig.transport.comeIntoRange()
-        try await waitUntil("back") { rig.connection.isInventoryCurrent }
+        try await waitUntil("back", state: seen(rig)) { rig.connection.isInventoryCurrent }
         try await Task.sleep(for: .milliseconds(200))
         XCTAssertEqual(presses, [true], "a recording it didn't see start just now isn't a press")
     }
@@ -186,17 +207,17 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
         let rig = rig(device, holds: true)
         var presses: [Bool] = []
         rig.session.onRecorderButton = { _, on in presses.append(on) }
-        try await waitUntil("held") { rig.connection.isInventoryCurrent }
+        try await waitUntil("held", state: seen(rig)) { rig.connection.isInventoryCurrent }
 
         device.advertises = false
         rig.transport.dropLink()
-        try await waitUntil("away") { rig.connection.state != .connected }
+        try await waitUntil("away", state: seen(rig)) { rig.connection.state != .connected }
         // Another device starts it for its conversation, then hands the recorder over with that recording.
         device.pressButton()
         let id = String(try XCTUnwrap(device.activeRecording).id)
         rig.session.adoptHandedOffImports([DeviceHandedOffImport(recordingID: id, attachTo: UUID(), isAutomatic: true)], alreadyImported: [])
         rig.transport.comeIntoRange()
-        try await waitUntil("back") { rig.connection.isInventoryCurrent }
+        try await waitUntil("back", state: seen(rig)) { rig.connection.isInventoryCurrent }
         try await Task.sleep(for: .milliseconds(200))
         XCTAssertEqual(presses, [], "a recording this device expects isn't its button")
     }
@@ -207,14 +228,19 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
     /// (20 ms a packet), so what follows keeps its time, and the live portion is saved into the conversation.
     func testLiveAudioThatLosesAPacketKeepsWhatArrivedWithTheGapAsSilence() async throws {
         let device = SimulatedSoundcore(recordings: [])
-        let rig = rig(device)
+        // What arrived, as decoded: what the recorder sent can still be on its way when the capture ends, and a busy
+        // machine leaves more of it there.
+        let arrived = FeedRecordingCaptioner()
+        let rig = rig(device, captioner: arrived)
         try await connected(rig)
         rig.connection.startRecording()
-        try await waitUntil("it records") { rig.connection.status?.isRecording == true && !rig.connection.recordCommandPending }
+        try await waitUntil("it records", state: seen(rig)) { rig.connection.status?.isRecording == true && !rig.connection.recordCommandPending }
         device.fault = .skipSlice(at: 30)
         let conversation = UUID()
         XCTAssertTrue(rig.session.captureLive(into: conversation))
-        try await waitUntil("past the gap") { device.notificationsSent > 40 }
+        try await waitUntil("past the gap, as it arrived", state: seen(rig)) {
+            arrived.fed.last.map { $0.time + Double($0.frames) / $0.rate } ?? 0 > 0.8
+        }
         let ended = await rig.session.endLiveCapture()
         let saved = try XCTUnwrap(ended)
         XCTAssertNil(saved.failure)
@@ -247,19 +273,19 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
         follower.follow({ [rig.session] }, conversation: { conversation }) { heard.updates.append($0) }
 
         rig.connection.startRecording()
-        try await waitUntil("it records") { rig.connection.status?.isRecording == true && !rig.connection.recordCommandPending }
+        try await waitUntil("it records", state: seen(rig)) { rig.connection.status?.isRecording == true && !rig.connection.recordCommandPending }
         XCTAssertTrue(rig.session.captureLive(into: conversation))
-        try await waitUntil("its audio is captioned") { captioners.first?.fed.isEmpty == false }
+        try await waitUntil("its audio is captioned", state: seen(rig)) { captioners.first?.fed.isEmpty == false }
 
         rig.transport.dropLink()
-        try await waitUntil("what arrived is saved") { rig.session.lastLiveSave != nil }
+        try await waitUntil("what arrived is saved", state: seen(rig)) { rig.session.lastLiveSave != nil }
         XCTAssertEqual(rig.session.lastLiveSave?.meetingID, conversation)
-        try await waitUntil("captured again once it's back", timeout: 10) { rig.session.liveCaptureConversation == conversation }
-        try await waitUntil("captioned again") { captioners.count == 2 && captioners[1].fed.isEmpty == false }
+        try await waitUntil("captured again once it's back", timeout: 10, state: seen(rig)) { rig.session.liveCaptureConversation == conversation }
+        try await waitUntil("captioned again", state: seen(rig)) { captioners.count == 2 && captioners[1].fed.isEmpty == false }
         let started = try XCTUnwrap(rig.session.liveStreamStartedAt)
         XCTAssertLessThanOrEqual(started, Date(), "where the stream starts, on this device's clock")
         captioners[1].post([LiveCaptionSegment(start: 0.2, end: 1.0, text: "After the gap", isTentative: false)])
-        try await waitUntil("the shared recording hears it") { heard.updates.last?.segments.map(\.text) == ["After the gap"] }
+        try await waitUntil("the shared recording hears it", state: seen(rig)) { heard.updates.last?.segments.map(\.text) == ["After the gap"] }
         XCTAssertNotNil(heard.updates.last?.startedAt)
 
         let saved = await rig.session.endLiveCapture()
@@ -267,7 +293,7 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
         XCTAssertEqual(rig.library.imports.filter { $0.attachTo == conversation }.count, 2, "both live portions, in the conversation")
         // Captured again only while the shared recording wants it: once ended, a drop and return start nothing.
         rig.transport.dropLink()
-        try await waitUntil("back") { rig.connection.isInventoryCurrent }
+        try await waitUntil("back", state: seen(rig)) { rig.connection.isInventoryCurrent }
         try await Task.sleep(for: .milliseconds(200))
         XCTAssertNil(rig.session.liveCaptureConversation)
     }
@@ -281,16 +307,16 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
         let conversation = UUID()
 
         rig.connection.startRecording()
-        try await waitUntil("it records") { rig.connection.status?.isRecording == true && !rig.connection.recordCommandPending }
+        try await waitUntil("it records", state: seen(rig)) { rig.connection.status?.isRecording == true && !rig.connection.recordCommandPending }
         XCTAssertTrue(rig.session.captureLive(into: conversation))
         XCTAssertEqual(rig.session.liveCaptureConversation, conversation)
         XCTAssertFalse(rig.session.captureLive(into: UUID()), "one shared recording at a time")
         // Recorded, not slept: a busy runner paces the simulated recorder more slowly.
-        try await waitUntil("most of a second recorded") { (device.activeRecording?.frames.count ?? 0) >= 40 }
+        try await waitUntil("most of a second recorded", state: seen(rig)) { (device.activeRecording?.frames.count ?? 0) >= 40 }
 
         // The person presses the button: the stream ends with the recording, every frame received.
         device.pressButton()
-        try await waitUntil("the live audio is saved", timeout: 10) { rig.session.lastLiveSave != nil && rig.session.liveCaptureConversation == nil }
+        try await waitUntil("the live audio is saved", timeout: 10, state: seen(rig)) { rig.session.lastLiveSave != nil && rig.session.liveCaptureConversation == nil }
         let ended = await rig.session.endLiveCapture()
         let saved = try XCTUnwrap(ended)
         XCTAssertEqual(saved.meetingID, conversation, "into the shared recording's conversation")
@@ -303,8 +329,8 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
         // track, now named for the whole recording.
         let recordingID = String(device.recordings[0].id)
         rig.session.importWhenFinished(recordingID, into: conversation)
-        try await waitUntil("the recorder's file is in", timeout: 15) { rig.library.imports.count == 2 && !rig.session.queue.isActive }
-        try await waitUntil("its link") { rig.session.links.imported[recordingID] == conversation }
+        try await waitUntil("the recorder's file is in", timeout: 15, state: seen(rig)) { rig.library.imports.count == 2 && !rig.session.queue.isActive }
+        try await waitUntil("its link", state: seen(rig)) { rig.session.links.imported[recordingID] == conversation }
         let meeting = try XCTUnwrap(rig.library.meetings[conversation])
         XCTAssertEqual(meeting.tracks.count, 1, "no duplicate track")
         XCTAssertEqual(meeting.tracks[0].deviceRecordingID, recordingID)
@@ -326,12 +352,12 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
         other.follow({ [rig.session] }, conversation: { UUID() }) { elsewhere.updates.append($0) }
 
         rig.connection.startRecording()
-        try await waitUntil("it records") { rig.connection.status?.isRecording == true && !rig.connection.recordCommandPending }
+        try await waitUntil("it records", state: seen(rig)) { rig.connection.status?.isRecording == true && !rig.connection.recordCommandPending }
         XCTAssertTrue(rig.session.captureLive(into: conversation))
-        try await waitUntil("its live audio reaches the captioner") { !captioner.fed.isEmpty }
+        try await waitUntil("its live audio reaches the captioner", state: seen(rig)) { !captioner.fed.isEmpty }
         captioner.post([LiveCaptionSegment(start: 0.2, end: 1.4, text: "Heard by the recorder", isTentative: false,
                                            speaker: LiveCaptionSpeaker(slot: "S1", name: "Priya"))])
-        try await waitUntil("the shared recording hears it") { heard.updates.last?.segments.map(\.text) == ["Heard by the recorder"] }
+        try await waitUntil("the shared recording hears it", state: seen(rig)) { heard.updates.last?.segments.map(\.text) == ["Heard by the recorder"] }
         let update = try XCTUnwrap(heard.updates.last)
         XCTAssertEqual(update.recorderID, rig.session.id)
         XCTAssertEqual(update.name, "Soundcore", "labelled with the recorder where no person was recognized")
@@ -353,10 +379,10 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
         XCTAssertNil(rig.session.liveLevel(into: conversation), "nothing captured yet")
 
         rig.connection.startRecording()
-        try await waitUntil("it records") { rig.connection.status?.isRecording == true && !rig.connection.recordCommandPending }
+        try await waitUntil("it records", state: seen(rig)) { rig.connection.status?.isRecording == true && !rig.connection.recordCommandPending }
         XCTAssertTrue(rig.session.captureLive(into: conversation))
         // The simulated recorder records a steady tone.
-        try await waitUntil("its live audio has a level") { (rig.session.liveLevel(into: conversation) ?? 0) > 0.3 }
+        try await waitUntil("its live audio has a level", state: seen(rig)) { (rig.session.liveLevel(into: conversation) ?? 0) > 0.3 }
         XCTAssertNil(rig.session.liveLevel(into: UUID()), "only the conversation it records into")
         XCTAssertNil(rig.session.liveLevel(into: conversation, at: Date().addingTimeInterval(LiveCapture.levelLifetime + 1)),
                      "audio that stops arriving leaves no level")
@@ -373,9 +399,9 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
         try await connected(rig)
         let conversation = UUID()
         rig.connection.startRecording()
-        try await waitUntil("it records") { rig.connection.status?.isRecording == true && !rig.connection.recordCommandPending }
+        try await waitUntil("it records", state: seen(rig)) { rig.connection.status?.isRecording == true && !rig.connection.recordCommandPending }
         rig.session.captureLive(into: conversation)
-        try await waitUntil("some audio recorded") { (device.activeRecording?.frames.count ?? 0) >= 25 }
+        try await waitUntil("some audio recorded", state: seen(rig)) { (device.activeRecording?.frames.count ?? 0) >= 25 }
 
         // A device stopping it ends the live audio first (its list can't be read while it streams), so
         // the recorder records a little more than the live audio has: waited for, not left to the time the
@@ -383,12 +409,12 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
         let ended = await rig.session.endLiveCapture()
         let saved = try XCTUnwrap(ended)
         let liveFrames = Int((saved.seconds / 0.02).rounded())
-        try await waitUntil("a little more recorded") { (device.activeRecording?.frames.count ?? 0) >= liveFrames + 3 }
+        try await waitUntil("a little more recorded", state: seen(rig)) { (device.activeRecording?.frames.count ?? 0) >= liveFrames + 3 }
         rig.connection.pauseRecording()
-        try await waitUntil("it stops") { rig.connection.status?.isRecording == false && !rig.connection.recordCommandPending }
+        try await waitUntil("it stops", state: seen(rig)) { rig.connection.status?.isRecording == false && !rig.connection.recordCommandPending }
         let recordingID = String(try XCTUnwrap(device.recordings.first).id)
         rig.session.importWhenFinished(recordingID, into: conversation)
-        try await waitUntil("the recorder's file is in", timeout: 15) { rig.library.imports.count == 2 && !rig.session.queue.isActive }
+        try await waitUntil("the recorder's file is in", timeout: 15, state: seen(rig)) { rig.library.imports.count == 2 && !rig.session.queue.isActive }
 
         let meeting = try XCTUnwrap(rig.library.meetings[conversation])
         XCTAssertEqual(meeting.tracks.count, 2, "the live audio stays (provenance, playback)")
@@ -400,14 +426,14 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
 
     func testLiveAudioThatGoesQuietKeepsWhatArrived() async throws {
         let device = SimulatedSoundcore(recordings: [])
-        let rig = rig(device)
+        let rig = rig(device, configure: { timing in timing.stall = Self.stretched(.milliseconds(600)) })
         try await connected(rig)
         rig.connection.startRecording()
-        try await waitUntil("it records") { rig.connection.status?.isRecording == true && !rig.connection.recordCommandPending }
+        try await waitUntil("it records", state: seen(rig)) { rig.connection.status?.isRecording == true && !rig.connection.recordCommandPending }
         device.fault = .stall(afterSlices: 60)
         let conversation = UUID()
         rig.session.captureLive(into: conversation)
-        try await waitUntil("what arrived is kept after the stream goes quiet", timeout: 10) { rig.session.lastLiveSave != nil }
+        try await waitUntil("what arrived is kept after the stream goes quiet", timeout: 10, state: seen(rig)) { rig.session.lastLiveSave != nil }
         XCTAssertEqual(rig.session.lastLiveSave?.meetingID, conversation)
         XCTAssertEqual(rig.session.lastLiveSave?.seconds ?? 0, 1.2, accuracy: 0.05, "60 slices of 20 ms")
     }
@@ -416,7 +442,8 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
 
     /// Live audio at the recorder's own pace (20 ms Opus frames, three to a notification) arrives whole, and
     /// costs the link what each second of audio should, whatever pace a busy machine runs the recorder at:
-    /// counted per second of audio, not of the clock, and waiting on what's recorded rather than on time.
+    /// counted per second of the audio it carried, not of the clock, and waiting on what's recorded rather than
+    /// on time.
     func testBehaviorLiveAudioForASharedRecordingArrivesWholeAtItsCostOnTheLink() async throws {
         let device = SimulatedSoundcore(recordings: [])
         device.recordsInRealTime = true
@@ -425,17 +452,18 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
         let rig = rig(device)
         try await connected(rig)
         rig.connection.startRecording()
-        try await waitUntil("it records") { rig.connection.status?.isRecording == true && !rig.connection.recordCommandPending }
-        let before = (bytes: device.bytesSent, notifications: device.notificationsSent)
+        try await waitUntil("it records", state: seen(rig)) { rig.connection.status?.isRecording == true && !rig.connection.recordCommandPending }
+        let before = device.bytesSent
         XCTAssertTrue(rig.session.captureLive(into: UUID()))
-        try await waitUntil("a second recorded", timeout: 20) { (device.activeRecording?.frames.count ?? 0) >= 50 }
-        let bytes = Double(device.bytesSent - before.bytes), notifications = Double(device.notificationsSent - before.notifications)
+        try await waitUntil("a second recorded", timeout: 20, state: seen(rig)) { (device.activeRecording?.frames.count ?? 0) >= 50 }
         device.pressButton()
-        try await waitUntil("saved", timeout: 20) { rig.session.lastLiveSave != nil }
+        try await waitUntil("saved", timeout: 20, state: seen(rig)) { rig.session.lastLiveSave != nil }
         let audioSeconds = try XCTUnwrap(rig.session.lastLiveSave?.seconds)
 
-        // 166 bytes a slice (160 of Opus), 10 of framing a notification of three: 508 bytes every 60 ms.
-        let perSecond = bytes / (notifications * Double(device.slicesPerPacket) * 0.02)
+        // 166 bytes a slice (160 of Opus), 10 of framing a notification of three: 508 bytes every 60 ms. Over the
+        // whole stream: the few replies around it (the list, the keys, the file's head and end) add a few hundred
+        // bytes, which part way through, with less audio sent, weigh more on a busier machine.
+        let perSecond = Double(device.bytesSent - before) / audioSeconds
         XCTAssertEqual(perSecond, 8_467, accuracy: 1_500, "about 68 kbit/s")
         XCTAssertEqual(audioSeconds, Double(device.recordings[0].frames.count) * 0.02, accuracy: 0.05, "all of it")
     }
@@ -454,7 +482,7 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
         let rig = rig(device)
         try await connected(rig)
         rig.connection.startRecording()
-        try await waitUntil("it records") { rig.connection.status?.isRecording == true && !rig.connection.recordCommandPending }
+        try await waitUntil("it records", state: seen(rig)) { rig.connection.status?.isRecording == true && !rig.connection.recordCommandPending }
         let conversation = UUID()
         let before = (bytes: device.bytesSent, notifications: device.notificationsSent)
         let started = ContinuousClock.now
@@ -466,7 +494,7 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
         let bytes = Double(device.bytesSent - before.bytes), notifications = Double(device.notificationsSent - before.notifications)
         device.pressButton()
         let stopped = ContinuousClock.now
-        try await waitUntil("saved", timeout: 10) { rig.session.lastLiveSave != nil }
+        try await waitUntil("saved", timeout: 10, state: seen(rig)) { rig.session.lastLiveSave != nil }
         let ready = ContinuousClock.now - stopped
         let audioSeconds = try XCTUnwrap(rig.session.lastLiveSave?.seconds)
 
