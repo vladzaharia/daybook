@@ -1,5 +1,41 @@
 # Validation record
 
+## Apple Watch recording (2026-11-11)
+
+Daybook for Apple Watch, a recorder the iPhone manages (docs/watch.md; docs/devices.md, "Apple Watch"), built on
+`feature/apple-watch` and rebased onto #67. Nothing has run on a physical Apple Watch: what's verified is the build, the
+protocol and rules on the Mac, the iPhone side against a simulated watch, and the watch app launching in the watchOS
+27.2 Simulator.
+
+- **Tests.** The package: 2,679 tests, 2,675 passed, 2 skipped, 2 failed. The iPhone bundle: 506 tests, 499 passed, 7
+  failed. Every failure is a file-protection check that fails the same way on unmodified `main` (b8a4b342) on this Mac
+  (macOS 27.0): `LiveCaptionStoreTests` (2 tests, 5 assertions) in the package, and `LibraryProtectionTests` (6) and
+  `StagingProtectionTests` (1) on the iPhone (37 assertions); CI on `main` passes them. The watch's own suites, all
+  passing: WatchLinkTests 11, WatchFollowingTests 23, WatchRecordingJournalTests 15 (the protocol, following the
+  iPhone, the segment journal and ledger, the clock, lenient decoding), AppleWatchTests 21 and WatchCascadeTests 7
+  (`WatchConnection` and the cascade against `SimulatedWatch`: start and stop, the button, receipts and resend requests,
+  import into the recording's own conversation after a relaunch, a stale `.joined`, import while unpaired, no chip when
+  the watch can't be reached), and PhoneWatchTests 9 (the iPhone glue, the relaunch race with the iPhone's recovery, and
+  joining segments written with the watch's `AVAudioFile` settings by packet copy, not by encoding again).
+- **Builds.** The watch app for the watchOS Simulator; the iPhone app for the simulator with `Watch/DaybookWatch.app`
+  embedded; `build-ios.sh --device --no-sign` (the watch binary is arm64 and arm64_32); an unsigned archive, which
+  `check-ios-archive.sh` passes with the watch app's bundle ID, versions, and companion. MotionAuditTests allows the
+  watch app's own copy of the motion tokens (`WatchMotion`), since it doesn't link DaybookDesign.
+- **Reviews.** Three independent reviews (the watch app, the iPhone side, and both sides traced end to end) and a
+  verification pass. What they found and was fixed: a stale context could put a wrist recording into an ended
+  conversation; a segment lost on the iPhone was never sent again (receipts are now delivery, with throttled resend
+  requests); a watch recording could import into a new conversation after the iPhone relaunched (it imports into its
+  own); a stale `.joined` could start the iPhone; start and stop raced during the microphone prompt; a configuration
+  change merged two runs; an "Apple Watch didn't start recording" chip on nearly every recording; the Mac's
+  `trackStart` regressed for iPhone tracks; and the watch's import could take over the iPhone's conversation while it
+  recovered after a relaunch.
+- **Owner steps.** Register `local.daybook.watchkitapp` on the developer account before the next signed build
+  (docs/release.md); the App Store listing will want watch screenshots.
+- **Needs a real watch.** docs/watch.md, "Needs a real watch": an hour or more with the wrist down (the `audio`
+  background mode, the CPU limit, battery per hour), the watch microphone's format, calls, Siri, and AirPods mid-recording,
+  the Live Activity tap opening the watch app, background WatchConnectivity (transfers, reachability, the reply to
+  `.start` across the first microphone prompt), and killing either app mid-recording.
+
 ## After v0.8.0
 
 - **The standing status sheet is back on the iPhone (the owner's call, 2026-11-11).** On the v0.8.0 TestFlight build
