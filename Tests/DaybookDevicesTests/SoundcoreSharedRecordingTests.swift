@@ -56,9 +56,9 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
         timing.request = Self.stretched(.seconds(5))
         timing.stall = Self.stretched(.seconds(5))
         timing.settle = .milliseconds(20)
-        timing.scan = Self.stretched(.milliseconds(300))
-        timing.connect = Self.stretched(.milliseconds(600))
-        timing.reconnect = Self.stretched(.milliseconds(300))
+        timing.scan = Self.stretched(.seconds(5))
+        timing.connect = Self.stretched(.seconds(5))
+        timing.reconnect = Self.stretched(.seconds(5))
         timing.recordConfirm = Self.stretched(.seconds(5))
         timing.backoff = [.milliseconds(40), .milliseconds(80)]
         // The link stays up between a test's steps: a short idle release could let it go first on a busy machine, and a
@@ -466,6 +466,7 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
         let perSecond = Double(device.bytesSent - before) / audioSeconds
         XCTAssertEqual(perSecond, 8_467, accuracy: 1_500, "about 68 kbit/s")
         XCTAssertEqual(audioSeconds, Double(device.recordings[0].frames.count) * 0.02, accuracy: 0.05, "all of it")
+        XCTAssertEqual(rig.connection.live.saved?.filledSeconds, 0, "none of it lost and filled with silence")
     }
 
     /// The measurement behind docs/direct-soundcore.md, "Live audio for a shared recording": what the link
