@@ -2,10 +2,10 @@ import DaybookDesign
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Starting a recording from the library: Record, the leading item of the library's toolbar, in its own glass (its
-/// New menu holds Import Audio…). `LibraryPage` places it, and `RecordStartNotices` above the toolbar says what Record
-/// has to say. When a recording is saved while it's on screen, it says so for a moment (the accent checkmark drawn on,
-/// "Saved"), then reads Record again.
+/// Starting a recording from the library: Record, wide, at the thumb, the first of the status sheet's row with Import
+/// and Search beside it, at a toolbar's size (`StatusQuickActions`, which says what Record has to say above it). When a
+/// recording is saved while it's on screen, it says so for a moment (the accent checkmark drawn on, "Saved"), then reads
+/// Record again.
 struct RecordStartButton: View {
     @Environment(PhoneAppModel.self) private var model
     /// The person's own presses of Record, for the tap that answers them.
@@ -32,16 +32,19 @@ struct RecordStartButton: View {
                     .font(.body.weight(.semibold))
                     .contentTransition(.interpolate)
                     .lineLimit(1)
+                    // On a narrow page at the row's largest size (the left page on its side), smaller, never "Rec…".
+                    .minimumScaleFactor(0.7)
             }
             .foregroundStyle(DaybookPalette.Ink.title)
-            .padding(.horizontal, DaybookSpacing.s3)
+            .frame(maxWidth: .infinity, minHeight: StatusCompactDetent.control)
             .contentShape(Capsule())
         }
+        .daybookControl(.standard, shape: .capsule)
         .disabled(model.recorder.state != .idle || model.isFiling)
         .sensoryFeedback(.impact(weight: .medium), trigger: presses)
         .accessibilityLabel(savedBeat ? "Record. Saved." : "Record")
         .accessibilityHint(model.recorderOnly != nil ? "Records on this iPhone too" : "Starts recording with the microphone")
-        // A toolbar item stops growing with the text; past it, a long press shows the label large.
+        // The row stops growing at the sheet's largest size; past it, a long press shows the label large.
         .accessibilityShowsLargeContentViewer { Label("Record", systemImage: "record.circle") }
         .daybookMotion(DaybookMotion.fade, value: savedBeat)
         .onChange(of: model.lastFiling) { _, filing in
@@ -61,7 +64,7 @@ struct RecordStartButton: View {
     static let audioTypes: [UTType] = [.audio, .mpeg4Audio, .mp3, .wav, .aiff]
 }
 
-/// What Record has to say, above the library's toolbar, only while there's something: a notice (a recording that
+/// What Record has to say, over the status sheet's row, only while there's something: a notice (a recording that
 /// couldn't be added, the microphone not allowed), only a recorder recording the shared recording, and an import
 /// under way.
 struct RecordStartNotices: View {

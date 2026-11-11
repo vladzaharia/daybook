@@ -1,5 +1,34 @@
 # Validation record
 
+## After v0.8.0
+
+- **The standing status sheet is back on the iPhone (the owner's call, 2026-11-11).** On the v0.8.0 TestFlight build
+  the library's foot "is no longer a sheet, it's once again a weird tight background. It doesn't slide up or down, it
+  just stays minimized. The search button popped off it when switching between landscape and portrait." W2-K's bottom
+  toolbar (Record, the system's minimized search, "+") and floating status strip are gone, and ui-iphone-23 is
+  reversed: the foot is the standing sheet again (`StatusSheetHost`), dragged between compact, medium, and large, with
+  `presentationBackgroundInteraction(.enabled(upThrough: .medium))` and `interactiveDismissDisabled`, minimized again
+  back from a conversation or search (`StatusSheetState`). Minimized it's Record, Import, and Search at the thumb (44 pt
+  controls, one glass container) and, only while a line has something to say, that line under them, in the strip's
+  order; with nothing to say, the row alone. Search is the sheet's, opening the system's field at the thumb only while
+  it's used, so nothing leaves a bar when the iPhone turns; New Note moved to More. What the pass improved stays: the
+  shared `StatusOverviewModel` over `StatusOverviewInputs` (`StatusSheetInputs.make`), lines only for what exists,
+  iCloud only when it's a problem. On two pages (the open Duo, an 18 Pro on its side) and the Duo's cover turned, the
+  same sheet stands minimized at the left page's foot (`StatusSheetFoot`, no navigation stack of its own) and expands
+  into the right page's `PageCard`. Found on the simulators: iOS 26 draws a sheet shorter than about 100 pt as a
+  capsule floating over the list, which the row overflowed (98 pt a capsule, 106 pt a sheet on the 18 Pro), so
+  minimized is never under 110 pt (`StatusCompactDetent.sheetMinimum`); turning an 18 Pro kept the system's sheet laid
+  out across both pages for a moment before it jumped to the left page, so it now fades out alongside the turn
+  (`StandingSheetEdge`); and on its side at accessibility sizes the foot's line stacked up into the bar, so there it
+  stays one row. `xcrun simctl` (Xcode 27.2) can't rotate a simulator, so the turn was checked with
+  `--interface-orientation landscape,portrait,landscape,portrait` (which now turns a running app each way, three
+  seconds apart) recorded with `simctl io recordVideo` and read frame by frame, both ways. All 497 iPhone tests pass on
+  the 18 Pro (StatusSheetModelTests: where it stands, each size, the minimized line and height, asking for more;
+  LibraryChromeTests: More, and on two pages the left page's bar kept and no system sheet across the crease).
+  Captures on the 18 Pro upright and on its side, light and dark: nothing to say, iCloud signed out, this iPhone
+  working, medium, large, a line tapped, searching, the Trash, selection, and accessibility XXXL; the open Duo's left
+  page with the sheet minimized and the right page as it was, and its card; the closed Duo upright and turned.
+
 ## Design pass follow-ups (2026-11-10)
 
 The items the design pass deferred (docs/audits/2026-11-10/README.md, "Still to do"), each on its own worktree from

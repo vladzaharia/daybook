@@ -5,32 +5,27 @@ import XCTest
 
 @testable import DaybookPhone
 
-/// The library's chrome (docs/iphone.md, "Scope" and "iPhone Duo"): the same bars on one page and two, what More
+/// The library's chrome (docs/iphone.md, "Scope" and "iPhone Duo"): the same bar on one page and two, what More
 /// offers in each place, and, hosted the way the open Duo lays it out, a left page that keeps its navigation bar with
-/// the place's menu (VI-01: a stack nested in the page's stack once hid it).
+/// the place's menu while the standing sheet stands at its foot (VI-01: the status tray's stack, nested in the page's
+/// stack, once hid it).
 @MainActor
 final class LibraryChromeTests: XCTestCase {
+  /// The bar holds the place's menu, More, and Settings; Record, Import, and Search are the status sheet's, at the foot,
+  /// so More holds New Note (the bottom toolbar's "+" did).
   func testBehaviorTheLibraryOffersItsPlacesMoreAndSettingsInEveryPlace() {
     XCTAssertEqual(LibraryChrome.topBar(selecting: false), [.titleMenu, .more, .settings])
     XCTAssertEqual(LibraryChrome.topBar(selecting: true), [], "selection has its own bar")
     XCTAssertEqual(
-      LibraryChrome.more(in: .section(.all), isEmpty: false), [.select, .newFolder, .devices])
+      LibraryChrome.more(in: .section(.all), isEmpty: false), [.newNote, .select, .newFolder, .devices])
     XCTAssertEqual(
-      LibraryChrome.more(in: .section(.all), isEmpty: true), [.newFolder, .devices],
+      LibraryChrome.more(in: .section(.all), isEmpty: true), [.newNote, .newFolder, .devices],
       "no Select with nothing to select")
-    XCTAssertEqual(LibraryChrome.more(in: .trash, isEmpty: false), [.newFolder, .devices])
+    XCTAssertEqual(
+      LibraryChrome.more(in: .trash, isEmpty: false), [.newFolder, .devices], "nothing is written into the Trash")
+    XCTAssertEqual(LibraryChrome.MoreItem.newNote.title, "New Note")
     XCTAssertEqual(LibraryChrome.MoreItem.devices.title, "Devices")
     XCTAssertEqual(LibraryChrome.MoreItem.select.title, "Select Conversations")
-
-    // The toolbar at the foot: Record, search, and New, everywhere but the Trash and selection.
-    XCTAssertTrue(LibraryChrome.showsToolbar(in: .section(.work), selecting: false))
-    XCTAssertFalse(LibraryChrome.showsToolbar(in: .section(.work), selecting: true))
-    XCTAssertFalse(LibraryChrome.showsToolbar(in: .trash, selecting: false))
-    XCTAssertTrue(LibraryChrome.offersSearch(in: .section(.all), selecting: false))
-    XCTAssertFalse(LibraryChrome.offersSearch(in: .trash, selecting: false))
-    XCTAssertFalse(
-      LibraryChrome.offersSearch(in: .section(.all), selecting: true),
-      "no search button under the selection's bar")
   }
 
   /// VI-01: on two pages the library's left page has its navigation bar, with the place's menu as its title.
@@ -74,6 +69,9 @@ final class LibraryChromeTests: XCTestCase {
     XCTAssertLessThan(
       left.view.convert(left.view.bounds, to: window).width, 951,
       "it's the left page's, not the whole display's")
+    XCTAssertNil(
+      host.presentedViewController,
+      "on two pages the status sheet stands at the left page's foot, never the system's sheet across the crease")
   }
 
   private static func navigationControllers(in root: UIViewController) -> [UINavigationController] {
