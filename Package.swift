@@ -51,7 +51,7 @@ let package = Package(
         .package(url: "https://github.com/ml-explore/mlx-swift", exact: "0.32.3"),
         // Diarizer only: since 0.18.0 speaker detection (Community-1, Nemotron 3, Sortformer) is a trait, so `[]` would
         // compile it out. TTS and the NeMo text-normalization binary stay off; Daybook uses neither.
-        .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.18.0", traits: ["Diarizer"]),
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.18.2", traits: ["Diarizer"]),
         // Hub: the model store's downloads. Tokenizers: MLX's tokenizer and chat templates (MLXTokenizerAdapter).
         .package(url: "https://github.com/huggingface/swift-transformers.git", exact: "1.3.5")
     ],
