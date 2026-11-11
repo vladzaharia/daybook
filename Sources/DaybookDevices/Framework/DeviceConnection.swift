@@ -120,11 +120,15 @@ public struct TransferredAudio {
     public let isStaged: Bool
     /// The recorder's serial number, when it reports one.
     public var serial: String?
+    /// The conversation the recording was made for, when the recorder says (Apple Watch's recordings carry it): it
+    /// imports there, made if the library doesn't have it yet, whatever it was queued with.
+    public var conversationID: UUID?
 
-    public init(url: URL, isStaged: Bool, serial: String? = nil) {
+    public init(url: URL, isStaged: Bool, serial: String? = nil, conversationID: UUID? = nil) {
         self.url = url
         self.isStaged = isStaged
         self.serial = serial
+        self.conversationID = conversationID
     }
 }
 
@@ -317,10 +321,14 @@ public protocol DeviceConnection: AnyObject, Observable {
     func automaticImports(links: DeviceLibraryLinks, since: Date, excluding: Set<String>) -> [DeviceRecording]
     /// The recording is in the library now.
     func didImport(_ recording: DeviceRecording)
+    /// Its recordings are on this device already (Apple Watch's arrive on their own), so they import whatever the
+    /// connection's state: the watch unpaired, or without Daybook. False for most, whose imports wait for it.
+    var importsWithoutConnection: Bool { get }
 }
 
 extension DeviceConnection {
     public var isInventoryCurrent: Bool { !isRefreshing }
+    public var importsWithoutConnection: Bool { false }
     public var isWaitingForOtherApp: Bool { false }
     public func refreshIfStale() {
         guard state.isConnected, !isRefreshing else { return }
@@ -371,6 +379,13 @@ public protocol RecordControlConnection: DeviceConnection {
     /// the recorder confirms late is undone where that's safe (a Start nobody waits for any more is paused again).
     /// A nil deadline waits as long as it takes.
     func recordCommand(_ command: RecordCommand, deadline: Duration?) async -> RecordCommandOutcome
+    /// Why the last Start came to nothing, in the device's own words when it refused one ("Apple Watch storage is
+    /// full."). Nil for most: the cascade's own words say it.
+    var recordCommandIssue: String? { get }
+    /// Whether it can take part in a shared recording now. False leaves it out of one quietly, with no member and no
+    /// line: Apple Watch when a Start can't reach it (Daybook isn't open there, or it's unavailable) and it isn't
+    /// recording. True for most, which the cascade tries and reports on.
+    var canRecordAlong: Bool { get }
 }
 
 /// Start or Pause.
@@ -392,6 +407,9 @@ public enum RecordCommandOutcome: Equatable, Sendable {
 }
 
 extension RecordControlConnection {
+    public var recordCommandIssue: String? { nil }
+    public var canRecordAlong: Bool { true }
+
     /// For a device that answers on its own terms (Daybook on iPhone over the link): asks, then watches its state
     /// until `deadline` (15 seconds when there's none).
     public func recordCommand(_ command: RecordCommand, deadline: Duration?) async -> RecordCommandOutcome {

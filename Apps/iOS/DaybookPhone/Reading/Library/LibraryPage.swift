@@ -5,11 +5,11 @@ import DaybookUI
 import SwiftUI
 
 /// The library: a place (All, Work, Personal, a folder, or the Trash) as a date-grouped list, or search results.
-/// The same on one page and two (docs/iphone.md, "Scope"): places are the title's menu; More holds Select
-/// Conversations, New Folder…, and Devices, beside Settings; the toolbar at the foot holds Record, the system's
-/// search (minimized to its button until it's used, then the field at the thumb, with tag and speaker suggestions),
-/// and New (New Note, Import Audio…); and the status strip says, above it, the one thing worth saying, if anything
-/// (`StatusStrip`). Select turns on multi-select for what `ConversationActions.batch` offers. The rows, results,
+/// The same on one page and two (docs/iphone.md, "Scope"): places are the title's menu; More (New Note, Select
+/// Conversations, New Folder…, Devices) beside Settings; and at the foot the status sheet stands, Record, Import, and
+/// Search at the thumb (`StatusSheetHost` presents it in one column; on two pages this page draws it at its compact
+/// size, `StatusSheetFoot`). Search opens from the sheet's Search, its field at the thumb while it's up, with tag and
+/// speaker suggestions. Select turns on multi-select for what `ConversationActions.batch` offers. The rows, results,
 /// empty places, and the Trash's rows are DaybookUI's, the Mac's too.
 ///
 /// It reads the `LibraryController` directly, which is `@Observable`, as the player is: the list redraws for the
@@ -23,13 +23,15 @@ struct LibraryPage: View {
   @Environment(PhoneAppModel.self) private var model
   @Environment(\.liveCaptionStore) private var captionStore
   @Environment(\.showStatus) private var showStatus
+  /// The standing sheet's compact room, while it stands over this page (one column).
+  @Environment(\.statusSheetInset) private var statusSheetInset
+  @Environment(\.verticalSizeClass) private var heightClass
   @Environment(\.creaseEdge) private var creaseEdge
   @Environment(\.undoManager) private var undoManager
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   /// What the Personal lock hides and what a Focus leaves out (`PersonalLock`).
   @Environment(PersonalLock.self) private var personalLock: PersonalLock?
   @State private var showingSettings = false
-  @State private var importing = false
   @State private var naming: FolderNaming?
   @State private var folderName = ""
   @State private var deletingFolder: LibraryFolder?
@@ -48,32 +50,20 @@ struct LibraryPage: View {
 
   var body: some View {
     content
-    // The list fades hard under the strip and the toolbar: no row reads under them.
-    .scrollEdgeEffectStyle(.hard, for: .bottom)
+    // The list fades hard under the selection's bar and the mini player; under the sheet drawn at the foot, which is
+    // its own glass, softly, so what scrolls past its rounded corners blurs away.
+    .scrollEdgeEffectStyle(footSheet ? .soft : .hard, for: .bottom)
     .safeAreaBar(edge: .bottom, spacing: 0) { foot }
     .navigationTitle(title)
     .toolbarTitleDisplayMode(.inline)
     // The place's menu stands in for the title, leading in every place, the Trash too (`placesTitle`); selection
     // keeps the system's title, "2 Selected".
     .toolbar(removing: session.isSelecting ? nil : .title)
-    // One way into search, the system's at the thumb: its button in the toolbar, the field there while it's used.
-    .modifier(
-      LibrarySearchField(
-        library: library,
-        offered: LibraryChrome.offersSearch(in: place, selecting: session.isSelecting)))
-    .toolbar {
-      topBar
-      bottomBar
-    }
+    // One way into search, at the thumb: the sheet's Search opens it, and its field is there only while it's up.
+    .modifier(SearchWhilePresented(library: library))
+    .toolbar { topBar }
     .environment(\.editMode, .constant(session.isSelecting ? .active : .inactive))
     .settingsSheet(isPresented: $showingSettings)
-    .fileImporter(
-      isPresented: $importing, allowedContentTypes: RecordStartButton.audioTypes,
-      allowsMultipleSelection: true
-    ) { result in
-      guard case .success(let urls) = result else { return }
-      Task { await model.importFiles(urls) }
-    }
     .task { await openRequestedAtLaunch() }
     // A conversation opened from Settings (a recorder's Recent imports) shows once Settings steps aside.
     .onChange(of: session.openID) { _, id in
@@ -393,8 +383,8 @@ struct LibraryPage: View {
         .fontWeight(.semibold)
       }
     } else {
-      // Only what works here (`LibraryChrome.more`): no Select with nothing to select. Glyphs in the title's ink, as
-      // the system's back chevron; teal is for what confirms.
+      // Only what works here (`LibraryChrome.more`): no New Note in the Trash, no Select with nothing to select.
+      // Glyphs in the title's ink, as the system's back chevron; teal is for what confirms.
       ToolbarItem(placement: .topBarTrailing) {
         Menu {
           ForEach(LibraryChrome.more(in: place, isEmpty: meetings.isEmpty), id: \.self) { item in
@@ -421,35 +411,15 @@ struct LibraryPage: View {
     }
   }
 
-  /// The toolbar at the foot, on one page and two: Record in its own glass, then the system's search and New
-  /// (New Note, Import Audio…). Selection has its own bar, and the Trash records nothing.
-  @ToolbarContentBuilder private var bottomBar: some ToolbarContent {
-    if LibraryChrome.showsToolbar(in: place, selecting: session.isSelecting) {
-      ToolbarItem(placement: .bottomBar) {
-        RecordStartButton()
-      }
-      ToolbarSpacer(.flexible, placement: .bottomBar)
-      DefaultToolbarItem(kind: .search, placement: .bottomBar)
-      ToolbarSpacer(.fixed, placement: .bottomBar)
-      ToolbarItem(placement: .bottomBar) {
-        Menu {
-          Button(action: newNote) { Label("New Note", systemImage: "square.and.pencil") }
-          Button {
-            importing = true
-          } label: {
-            Label("Import Audio…", systemImage: "square.and.arrow.down")
-          }
-        } label: {
-          Label("New", systemImage: "plus")
-        }
-        .tint(DaybookPalette.Ink.title)
-        .accessibilityHint("New Note, or Import Audio from Files")
-      }
-    }
+  /// The standing sheet is drawn at this page's foot (two pages, or one column on its side), not the system's over it.
+  private var footSheet: Bool {
+    StatusSheetModel.placement(
+      twoPages: twoPage, compactHeight: heightClass == .compact, reading: false,
+      searching: session.isSearchPresented, selecting: session.isSelecting, inTrash: place.isTrash) == .foot
   }
 
-  /// Above the toolbar: the selection's bar while selecting; else what's playing, what Record has to say (a notice,
-  /// an import under way), and the status strip, each only while it has something to say.
+  /// At the foot: the selection's bar while selecting; else what's playing, then the standing sheet, drawn here at its
+  /// compact size (`StatusSheetFoot`), or the room the system's leaves above itself, so the last rows scroll clear.
   @ViewBuilder private var foot: some View {
     if session.isSelecting {
       SelectionBar(library: library, ids: Array(session.selection))
@@ -461,22 +431,23 @@ struct LibraryPage: View {
       let playing = session.player.meetingID.flatMap { id in
         twoPage && session.openID == id ? nil : library.meeting(id)
       }
-      let notices = !place.isTrash && RecordStartNotices.isShowing(model)
-      let strip = StatusStrip.shown(model)
-      if playing != nil || notices || strip != nil {
+      let footSheet = footSheet
+      if playing != nil || footSheet || statusSheetInset != nil {
         VStack(spacing: DaybookSpacing.s2) {
           if let playing {
             MiniPlayer(player: session.player, meeting: playing) {
               twoPage ? session.select(playing.id) : session.open(playing.id)
             }
           }
-          if notices { RecordStartNotices() }
-          if let strip { strip.transition(.opacity) }
+          if footSheet {
+            StatusSheetFoot()
+          } else if let statusSheetInset {
+            Color.clear.frame(height: statusSheetInset).accessibilityHidden(true)
+          }
         }
         .padding(.leading, barInset(.leading))
         .padding(.trailing, barInset(.trailing))
-        .padding(.bottom, DaybookSpacing.s2)
-        .daybookMotion(DaybookMotion.state, value: strip?.line.id)
+        .padding(.bottom, footSheet || statusSheetInset != nil ? 0 : DaybookSpacing.s2)
       }
     }
   }
@@ -499,6 +470,7 @@ struct LibraryPage: View {
 
   private func perform(_ item: LibraryChrome.MoreItem) {
     switch item {
+    case .newNote: newNote()
     case .select:
       withAnimation(DaybookMotion.resolved(DaybookMotion.state, reduceMotion: reduceMotion)) {
         session.isSelecting = true
@@ -509,12 +481,8 @@ struct LibraryPage: View {
     }
   }
 
-  /// `--show-importer` and `--open-settings` (debug): Import Audio's picker, or Settings, at launch, for screenshots.
+  /// `--open-settings` (debug): Settings at launch, for screenshots. (`--show-importer` is the sheet's Import's.)
   private func openRequestedAtLaunch() async {
-    if model.options.showImporter {
-      try? await Task.sleep(for: .milliseconds(600))
-      importing = true
-    }
     if model.options.openSettings != nil, !showingSettings {
       try? await Task.sleep(for: .milliseconds(400))
       showingSettings = true
@@ -535,20 +503,18 @@ struct LibraryPage: View {
   }
 }
 
-/// The library's search: the system's, minimized to its button in the toolbar (`DefaultToolbarItem(kind: .search)`)
-/// until it's used, then the field at the thumb above the keyboard, on one page and two. The scopes are the results'
-/// first row (`SearchScopePicker`), as on the Mac. It's attached to the page's background, so opening and closing it
-/// never rebuilds the list or loses its place; in the Trash, which offers no search, it's there only while a search
-/// begun elsewhere is.
-private struct LibrarySearchField: ViewModifier {
+/// The search field, only while search is up: the status sheet's Search opens it, and the system keeps it at the thumb
+/// above the keyboard, on one page and two. The scopes are the results' first row (`SearchScopePicker`), as on the
+/// Mac. It's attached to the page's background, so opening and closing it never rebuilds the list or loses its place,
+/// and there's no search button of its own to move when the iPhone turns.
+private struct SearchWhilePresented: ViewModifier {
   let library: LibraryController
-  let offered: Bool
   @Environment(ReadingSession.self) private var session
 
   func body(content: Content) -> some View {
     @Bindable var session = session
     content.background {
-      if offered || session.isSearchPresented || session.isSearching {
+      if session.isSearchPresented || session.isSearching {
         Color.clear
           .searchable(
             text: $session.searchText, tokens: $session.searchTokens,
@@ -557,25 +523,26 @@ private struct LibrarySearchField: ViewModifier {
                 for: session.searchText, tags: library.allTags,
                 meetings: library.meetings, chosen: session.searchTokens)),
             isPresented: $session.isSearchPresented,
+            placement: .navigationBarDrawer(displayMode: .always),
             prompt: LibraryWords.searchPrompt
           ) { token in
             Label(token.text, systemImage: token.symbol)
           }
-          .searchToolbarBehavior(.minimize)
       }
     }
   }
 }
 
 /// What the library's chrome offers in a place, on one page and two alike (the open Duo's left page draws the same
-/// bars as the 18 Pro). Plain values, so tests read it.
+/// bar as the 18 Pro, and the same standing sheet at its foot). Plain values, so tests read it.
 enum LibraryChrome {
   /// The More menu's items, in order.
   enum MoreItem: Hashable, CaseIterable {
-    case select, newFolder, devices
+    case newNote, select, newFolder, devices
 
     var title: String {
       switch self {
+      case .newNote: return "New Note"
       case .select: return "Select Conversations"
       case .newFolder: return "New Folder…"
       case .devices: return StatusSheetModel.title
@@ -584,6 +551,7 @@ enum LibraryChrome {
 
     var symbol: String {
       switch self {
+      case .newNote: return "square.and.pencil"
       case .select: return "checkmark.circle"
       case .newFolder: return "folder.badge.plus"
       case .devices: return "macbook.and.iphone"
@@ -591,27 +559,18 @@ enum LibraryChrome {
     }
   }
 
-  /// The top bar, outside selection: the place's menu as the title, More, and Settings.
+  /// The top bar, outside selection: the place's menu as the title, More, and Settings. Record, Import, and Search
+  /// are the status sheet's, at the foot.
   enum TopItem: Hashable { case titleMenu, more, settings }
 
   static func topBar(selecting: Bool) -> [TopItem] {
     selecting ? [] : [.titleMenu, .more, .settings]
   }
 
-  /// More: Select Conversations when there's something to select (never in the Trash, whose rows restore one at a
-  /// time), New Folder…, and Devices.
+  /// More: New Note (not in the Trash, which nothing is written into), Select Conversations when there's something to
+  /// select (never in the Trash, whose rows restore one at a time), New Folder…, and Devices.
   static func more(in place: LibraryPlace, isEmpty: Bool) -> [MoreItem] {
-    (place.isTrash || isEmpty ? [] : [.select]) + [.newFolder, .devices]
-  }
-
-  /// The toolbar at the foot: everywhere but the Trash and selection (which has its own bar).
-  static func showsToolbar(in place: LibraryPlace, selecting: Bool) -> Bool {
-    !place.isTrash && !selecting
-  }
-
-  /// Search is offered wherever the toolbar is: the Trash's rows aren't searched, and selection has its own bar.
-  static func offersSearch(in place: LibraryPlace, selecting: Bool) -> Bool {
-    showsToolbar(in: place, selecting: selecting)
+    (place.isTrash ? [] : [.newNote]) + (place.isTrash || isEmpty ? [] : [.select]) + [.newFolder, .devices]
   }
 }
 

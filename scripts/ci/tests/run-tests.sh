@@ -26,7 +26,7 @@
 #   changes.sh            which jobs a pull request's files need, in a throwaway repository
 #   test-lanes.sh         lanes side by side, failures named, and a test bundle in no lane refused (stand-in xctest)
 #   own-warnings.sh       a warning in Sources/ or Apps/iOS/ fails, coloured or not; a dependency's or a test's doesn't
-#   check-ios-archive.sh  synthetic archives: export compliance, icon, versions (macOS: needs plutil)
+#   check-ios-archive.sh  synthetic archives: export compliance, icon, versions, the watch app (macOS: needs plutil)
 #   setup-github.sh       the dry run prints the plan and never calls gh
 #   approve-release.sh    approves every waiting channel at once, rejects skipped ones, and checks first
 #   select-xcode.sh       version and exact-build checks, SDKs, and the summary, with stand-in tools
@@ -488,6 +488,7 @@ echo "check-ios-archive.sh"
 if macos; then
     make_archive() {
         # make_archive DIR ENCRYPTION(true|false|none) ICON(yes|no) WIDGET_BUILD [DEVICE_FAMILY JSON] [INTENT DESCRIPTION]
+        # The watch app's build is WIDGET_BUILD too; STUB_NO_WATCH=1 leaves it out.
         local app="$1/Products/Applications/DaybookPhone.app"
         mkdir -p "$app/PlugIns/DaybookPhoneWidgets.appex"
         plutil -create xml1 "$app/Info.plist"
@@ -507,6 +508,15 @@ if macos; then
         plutil -insert CFBundleIdentifier -string "${STUB_APP_ID:-local.daybook}.widgets" "$widget"
         plutil -insert CFBundleShortVersionString -string 1.4.0 "$widget"
         plutil -insert CFBundleVersion -string "$4" "$widget"
+        if [[ "${STUB_NO_WATCH:-0}" != 1 ]]; then
+            local watch="$app/Watch/DaybookWatch.app/Info.plist"
+            mkdir -p "$(dirname "$watch")"
+            plutil -create xml1 "$watch"
+            plutil -insert CFBundleIdentifier -string "${STUB_APP_ID:-local.daybook}.watchkitapp" "$watch"
+            plutil -insert CFBundleShortVersionString -string 1.4.0 "$watch"
+            plutil -insert CFBundleVersion -string "$4" "$watch"
+            plutil -insert WKCompanionAppBundleIdentifier -string "${STUB_COMPANION:-${STUB_APP_ID:-local.daybook}}" "$watch"
+        fi
         return 0
     }
     make_archive "$work/good.xcarchive" false yes 1057
@@ -522,6 +532,10 @@ if macos; then
     make_archive "$work/skew.xcarchive" false yes 1056
     expect_fail "an extension build number mismatch fails" "$ci/check-ios-archive.sh" "$work/skew.xcarchive" --build 1057
     expect_fail "a version mismatch fails" "$ci/check-ios-archive.sh" "$work/good.xcarchive" --version 1.5.0
+    STUB_NO_WATCH=1 make_archive "$work/no-watch.xcarchive" false yes 1057
+    expect_fail "an archive without the watch app fails" "$ci/check-ios-archive.sh" "$work/no-watch.xcarchive"
+    STUB_COMPANION=local.daybook.phone make_archive "$work/watch-companion.xcarchive" false yes 1057
+    expect_fail "a watch app naming another companion fails" "$ci/check-ios-archive.sh" "$work/watch-companion.xcarchive"
     make_archive "$work/ipad.xcarchive" false yes 1057 '[1,2]'
     expect_fail "an archive that also runs on iPad fails" "$ci/check-ios-archive.sh" "$work/ipad.xcarchive"
     make_archive "$work/intent.xcarchive" false yes 1057 '[1]' "Records a conversation with the iPhone's microphone."
@@ -614,14 +628,17 @@ await_validation() {
 run_state() {
     local id="$1" state
     shift
-    for state in "$@"; do jq -cn --arg s "${state%%:*}" --arg c "${state#*:}" '{status: $s, conclusion: (if $c == $s then null else $c end)}'; done \
-        > "$work/approve-gh/run-$id.seq"
+    for state in "$@"; do
+        if [[ "$state" == error ]]; then echo error; continue; fi
+        jq -cn --arg s "${state%%:*}" --arg c "${state#*:}" '{status: $s, conclusion: (if $c == $s then null else $c end)}'
+    done > "$work/approve-gh/run-$id.seq"
 }
 # jobs_state ID 'STATUS:CONCLUSION:NAME|…'...: the run's jobs, one listing per call.
 jobs_state() {
     local id="$1" listing
     shift
     for listing in "$@"; do
+        if [[ "$listing" == error ]]; then echo error; continue; fi
         jq -cn --arg l "$listing" '{jobs: [$l | split("|")[] | select(length > 0) | split(":")
             | {status: .[0], conclusion: (if .[1] == "" then null else .[1] end), name: .[2]}]}'
     done > "$work/approve-gh/jobs-$id.seq"
@@ -633,6 +650,10 @@ expect_ok "and says so" grep -qF 'CI passed on this commit: https://github.com/e
 run_state 6 in_progress completed:failure
 expect_fail "CI on main that failed fails" await_validation --ci-run 6
 expect_ok "naming the run" grep -qF "CI on main didn't pass on this commit (failure): https://github.com/example/daybook/actions/runs/6" "$work/await.out"
+run_state 8 error in_progress error completed:success
+expect_ok "a call that can't reach GitHub is tried again, not the end of the wait" await_validation --ci-run 8
+expect_eq "(every answer asked for)" "4" "$(grep -c 'actions/runs/8' "$work/approve-gh/calls")"
+expect_ok "saying so" grep -qF "Couldn't read CI's run (https://github.com/example/daybook/actions/runs/8): error connecting to api.github.com; trying again in 0 s" "$work/await.out"
 run_state 7 in_progress
 expect_fail "gives up when the time runs out" await_validation --ci-run 7 --timeout 0
 expect_ok "saying what it waited for" grep -qF 'gave up after 0 minutes: CI on main is in_progress' "$work/await.out"
@@ -643,6 +664,9 @@ expect_ok "waits for this run's validation" await_validation --run 9
 expect_ok "(its jobs alone, not the signing jobs)" grep -qF 'Validation passed: 3 jobs' "$work/await.out"
 expect_ok "having waited for it to start" grep -qF "Waiting: validation hasn't started" "$work/await.out"
 expect_ok "then to finish" grep -qF 'Waiting: 2 of 2 validation jobs still running' "$work/await.out"
+jobs_state 11 error "completed:success:$validate / Lint"
+expect_ok "a jobs listing that can't be read is asked for again" await_validation --run 11
+expect_ok "and then passes" grep -qF 'Validation passed: 1 jobs' "$work/await.out"
 jobs_state 10 "completed:success:$validate / Lint|completed:failure:$validate / iPhone app|in_progress::$validate / Mac app"
 expect_fail "a failed validation job fails at once" await_validation --run 10
 expect_ok "naming it" grep -qF "validation didn't pass: $validate / iPhone app (failure)" "$work/await.out"

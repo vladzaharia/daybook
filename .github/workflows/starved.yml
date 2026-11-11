@@ -73,7 +73,7 @@ jobs:
           trap 'kill "${pids[@]}" 2>/dev/null || true' EXIT
           echo "${#pids[@]} busy loops at background priority; load average $(sysctl -n vm.loadavg)"
           status=0
-          for bundle in DaybookCoreTests DaybookDevicesTests DaybookKitTests DaybookLinkTests \
+          for bundle in DaybookCoreTests DaybookDevicesTests DaybookKitTests DaybookLinkTests DaybookWatchLinkTests \
                         DaybookIntelligenceTests DaybookCaptionsTests DaybookLiveTests DaybookDesignTests DaybookUITests \
                         DaybookTests; do
             echo "::group::$bundle"
@@ -108,7 +108,7 @@ jobs:
       - name: Date the files by their content
         run: scripts/ci/stable-mtimes.sh
       - name: Select Xcode
-        run: scripts/ci/select-xcode.sh --sdk iphoneos27.1 --sdk iphonesimulator27.1
+        run: scripts/ci/select-xcode.sh --sdk iphoneos27.1 --sdk iphonesimulator27.1 --sdk watchsimulator27.0
       - name: Install XcodeGen
         run: scripts/ci/install-xcodegen.sh
       - name: Cache key

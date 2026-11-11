@@ -120,7 +120,8 @@ final class PhoneLibrary {
     /// conversation keeps its title, date, and timeline: the phone's track is a source the Mac places
     /// (offset unknown), and its bookmarks and notes stay with that track until it's placed
     /// (`Meeting.addRecordingWork`). The conversation's status and message are left to the device
-    /// leading it.
+    /// leading it. One Apple Watch's import made for this recording's conversation before it was filed
+    /// (`isWatchPlaceholder`) takes this recording's title and date.
     @discardableResult
     func file(_ recording: PhoneRecording) async throws -> Meeting {
         try await fileRecording(recording).meeting
@@ -144,6 +145,16 @@ final class PhoneLibrary {
             // Mac's to set.
             controller.add(Meeting(id: id, title: join?.title ?? recording.title, date: join?.date ?? recording.startedAt,
                                    status: joining ? .draft : .imported))
+        } else if join == nil, let meeting = controller.meeting(id),
+                  Self.isWatchPlaceholder(meeting, along: recording.startedAt, duration: recording.duration) {
+            // Apple Watch's recording of it, made along with this one, was imported first (this iPhone filed its own only
+            // after a relaunch): the import made the conversation, named for the watch. It's this iPhone's conversation,
+            // so it takes this recording's title and date. The watch's recording stays the timeline's origin, as a
+            // recorder's does in a conversation it began (docs/multipoint.md, "The timeline").
+            controller.update(id) { meeting in
+                meeting.title = recording.title
+                meeting.date = recording.startedAt
+            }
         }
         var track = controller.meeting(id)?.tracks.first { $0.device == identity }
         if track == nil {
@@ -190,6 +201,22 @@ final class PhoneLibrary {
         guard let meeting = controller.meeting(id) else { throw DaybookError.libraryUnavailable }
         return Filed(meeting: meeting, request: request)
     }
+
+    /// A conversation Apple Watch's import made before this iPhone filed its own recording of it (from `start`, for
+    /// `duration`): it holds only the watch's recordings, each made along with this one (overlapping it in time). One the
+    /// watch began on its own and this iPhone recorded into later holds a recording that ended before this one started.
+    static func isWatchPlaceholder(_ meeting: Meeting, along start: Date, duration: TimeInterval) -> Bool {
+        let tracks = meeting.tracks.filter { !$0.isLivePortion }
+        let end = start.addingTimeInterval(duration)
+        return !tracks.isEmpty && tracks.allSatisfy { track in
+            guard track.deviceKind == AppleWatchIntegration.id, let began = track.startedAt else { return false }
+            let ended = began.addingTimeInterval(track.duration ?? 0)
+            return began < end.addingTimeInterval(watchClockSlack) && start < ended.addingTimeInterval(watchClockSlack)
+        }
+    }
+
+    /// How far apart the watch's times (on this iPhone's clock, from its samples) and this iPhone's may be.
+    private static let watchClockSlack: TimeInterval = 5
 
     /// Photos taken while recording, anchored to the phone's track so they follow its placement. One
     /// that isn't a readable image is left out rather than holding up the recording.
@@ -275,8 +302,11 @@ final class PhoneLibrary {
         var target = attachTo.flatMap { controller.meeting($0) != nil ? $0 : nil }
         if target == nil { target = try await controller.existingMeeting(containingAudioAt: url)?.id }
         let id = target ?? controller.newMeeting(title: Self.deviceTitle(identity, fallback: url), date: Self.deviceStart(identity) ?? Date())
-        let ingested = try await controller.ingest(url, into: id, provenance: .file(source: source, device: identity, duration: duration,
-                                                                                   recorderClock: DeviceRecordingStart.clock(of: identity)))
+        var provenance = RecordingProvenance.file(source: source, device: identity, duration: duration,
+                                                  recorderClock: DeviceRecordingStart.clock(of: identity))
+        // Apple Watch's recordings carry their start, on this iPhone's clock: the prior that places them (its IDs don't say it).
+        if identity.kind == AppleWatchIntegration.id { provenance.startedAt = DeviceRecordingStart.date(of: identity) }
+        let ingested = try await controller.ingest(url, into: id, provenance: provenance)
         await noteBroughtIn(ingested.track)
         let request = requestTranscription ? controller.requestProcessing(id, mode: .newAudio) : nil
         claimIfProcessedHere(request, in: id)

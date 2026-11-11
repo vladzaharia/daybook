@@ -176,7 +176,7 @@ jobs:
           scripts/ci/test-lanes.sh --expect "$(paste -sd ' ' - <<< "$targets")" \
             --products "$(swift build --show-bin-path)" --logs build/test-results --retry-alone \
             --skip DaybookCoreTests 'AudioAlignerTests/testThirtyMinutePairAlignsWithinBudget$' \
-            'DaybookTests DaybookIntelligenceTests DaybookLinkTests DaybookUITests DaybookDesignTests DaybookCaptionsTests' \
+            'DaybookTests DaybookIntelligenceTests DaybookLinkTests DaybookWatchLinkTests DaybookUITests DaybookDesignTests DaybookCaptionsTests' \
             'DaybookCoreTests DaybookKitTests DaybookDevicesTests DaybookLiveTests'
       # A 30-minute synthetic pair must align within 15 s. Hosted runners are small shared VMs, so the
       # test runs alone, after the others, with one retry; a pass on the retry leaves a warning.
@@ -215,7 +215,7 @@ jobs:
       - name: Date the files by their content
         run: scripts/ci/stable-mtimes.sh
       - name: Select Xcode
-        run: scripts/ci/select-xcode.sh --sdk iphoneos27.1 --sdk iphonesimulator27.1
+        run: scripts/ci/select-xcode.sh --sdk iphoneos27.1 --sdk iphonesimulator27.1 --sdk watchsimulator27.0
       - name: Install XcodeGen
         run: scripts/ci/install-xcodegen.sh
       - name: Cache key
@@ -324,7 +324,7 @@ jobs:
       - name: Date the files by their content
         run: scripts/ci/stable-mtimes.sh
       - name: Select Xcode
-        run: scripts/ci/select-xcode.sh --sdk iphoneos27.1
+        run: scripts/ci/select-xcode.sh --sdk iphoneos27.1 --sdk watchos27.0
       - name: Install XcodeGen
         run: scripts/ci/install-xcodegen.sh
       - name: Cache key

@@ -21,7 +21,8 @@ import SwiftUI
 ///     --demo-recorder-only <name>  only that recorder records a shared recording; this iPhone's microphone didn't start
 ///                                (use with --synthetic-audio; nothing is recorded)
 ///     --interface-orientation portrait|landscape|preview-portrait   turn the interface in table mode, and the library
-///                                (the simulator can't turn the device)
+///                                (the simulator can't turn the device); for the library, a list (landscape,portrait)
+///                                turns it each way in turn, three seconds apart
 ///     --write-notes              table mode opens with Write Notes on (notes on the standing half, the keyboard below)
 ///     --recorder-sheet mini|collapsed|expanded|full   open the recorder's sheet expanded to this level (without it: at rest)
 ///     --caption-probe [file]     log what live captions can do here (and, if ready, caption the file); never downloads
@@ -71,11 +72,11 @@ import SwiftUI
 ///                                network, no keychain); open it with --open-settings cloud (failed: cloud-key)
 ///     --profile-name <name>, --merge-into <name>, --confirm-merge   a speaker profile's page, its Merge Into, and the
 ///                                merge's confirmation
-///     --status-detent medium|large   open the status sheet at this size (on the right page when open)
+///     --status-detent medium|large   the standing status sheet dragged to this size (open: the card on the right page)
 ///     --status-scroll-end        the status sheet's content scrolled to its foot
 ///     --status-open device|mac|storage|icloud|add-recorder   the status sheet at full height, showing that screen
-///     --status-demo phone-working|phone-paused   this iPhone's own work in the status strip and sheet (`StatusSheetDemo`)
-///     --status-choose mac|sync|recorder   tap that line as the status strip would, for screenshots of where it leads
+///     --status-demo phone-working|phone-paused   this iPhone's own work in the status sheet (`StatusSheetDemo`)
+///     --status-choose mac|sync|recorder   tap that line of the status sheet's, for screenshots of where it leads
 ///
 /// The device:
 ///
@@ -209,7 +210,7 @@ struct DebugLaunch {
     var openSettings: String? { settingsPage?.argument }
     /// `statusOpen` as a string, likewise.
     var statusOpen: String? { statusPage?.rawValue }
-    /// `--status-choose mac|sync|recorder`: the compact status sheet's line to tap.
+    /// `--status-choose mac|sync|recorder`: the status sheet's line to tap.
     var statusChoose: String?
 
     init(arguments: [String] = CommandLine.arguments, environment: [String: String] = ProcessInfo.processInfo.environment) {

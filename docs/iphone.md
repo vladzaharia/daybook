@@ -27,7 +27,7 @@ Everything below is in v1:
   - A recording started here (Record, the Lock Screen, Siri) is named after the meeting going on, or starting within 10 minutes, that the person hasn't declined and isn't all day. A Mac's request keeps the Mac's title.
   - A meeting with other people sends a notification as it starts: its title, "Starting now · 4 people. Tap to record." Tapping it, or its Record, opens Daybook, which starts recording once it's in front (iOS starts the microphone only there), named after the meeting. One arriving while Daybook already records isn't shown.
   - iOS doesn't let an app look at the calendar as each meeting starts, so the reminders are scheduled ahead (`remindMeetings`): the next 20 meetings within two days, in place of those scheduled before, whenever Daybook comes to the front or leaves it, the calendar changes while it runs, and on each background refresh. A meeting moved or added while Daybook hasn't run since is reminded of at its old time, or not at all, until then.
-- **Library.** Places (All, Work, Personal), folders, tags, search (titles, notes, transcripts, summaries), Trash, and multi-select, drawn with the Mac's list rows, results, empty places, and Trash rows (DaybookUI's `Library/`; docs/interface.md, "Window structure"). Its chrome is the same on one page and two (`LibraryChrome`): the place's menu is the title, "All Conversations ⌄", leading in every place, the Trash too (the system's inline title moves between leading and centred with what the bar holds, and its large inline form shows no chevron and doesn't fit a long name beside More and Settings); More (⋯: Select Conversations, New Folder…, Devices) and Settings trail it, each its own glass; and the toolbar at the foot holds Record (a wide capsule with the red dot, in its own glass), the system's search, and New (+: New Note, Import Audio…). Search is the one entry the system gives (`DefaultToolbarItem(kind: .search)`, minimized): its button in the toolbar, and while it's used the field there, at the thumb above the keyboard; the results start with the scopes, as on the Mac. Above the toolbar, only while there's something to say, the status strip says it (Status sheet, below). The Trash has no toolbar: nothing records into it or searches it. A row's menu, its swipes, and the selection bar offer what `ConversationActions` lists for an iPhone (a selection: Summarize, Move, Tags, Work or Personal, Trash). An empty library that this install's first sync pass is still bringing in says "Getting your conversations…" with a spinner, then "No Conversations Yet" if it's still empty. Open on the Duo, a tap shows a conversation on the right page, and Open (with the open book, beside Info and More) or a second tap on the row opens it across both pages. Beside the Trash, the right page shows one of its conversations read only with Restore, the newest until another is tapped, as the Mac's page beside its Trash. The list's rows, search's results, the Trash's rows, the shown row's wash, and the strip above the toolbar keep clear of the crease. New Note starts a conversation that's only your notes (and any photos), titled "Note at 10:15 AM", as on the Mac. Its byline says "Notes only", as on the Mac, and the page offers Record, which records into it; the recording joins after the notes.
+- **Library.** Places (All, Work, Personal), folders, tags, search (titles, notes, transcripts, summaries), Trash, and multi-select, drawn with the Mac's list rows, results, empty places, and Trash rows (DaybookUI's `Library/`; docs/interface.md, "Window structure"). Its chrome is the same on one page and two (`LibraryChrome`): the place's menu is the title, "All Conversations ⌄", leading in every place, the Trash too (the system's inline title moves between leading and centred with what the bar holds, and its large inline form shows no chevron and doesn't fit a long name beside More and Settings); More (⋯: New Note, Select Conversations, New Folder…, Devices) and Settings trail it, each its own glass; and at the foot the status sheet stands, minimized, and small: Record (a wide capsule with the red dot), Import, and Search at the thumb in one layer of glass, at a toolbar's size, and under them only the line with something to say, if any; dragged up, it expands to the status (Status sheet, below). Search opens from the sheet's Search: its field is there only while search is up, at the thumb above the keyboard, and there's no search button of the system's to move when the iPhone turns; the results start with the scopes, as on the Mac. The Trash has no sheet and no New Note: nothing records into it, is written into it, or searches it. A row's menu, its swipes, and the selection bar offer what `ConversationActions` lists for an iPhone (a selection: Summarize, Move, Tags, Work or Personal, Trash). An empty library that this install's first sync pass is still bringing in says "Getting your conversations…" with a spinner, then "No Conversations Yet" if it's still empty. Open on the Duo, a tap shows a conversation on the right page, and Open (with the open book, beside Info and More) or a second tap on the row opens it across both pages. Beside the Trash, the right page shows one of its conversations read only with Restore, the newest until another is tapped, as the Mac's page beside its Trash. The list's rows, search's results, the Trash's rows, the shown row's wash, and the sheet at the left page's foot keep clear of the crease. New Note starts a conversation that's only your notes (and any photos), titled "Note at 10:15 AM", as on the Mac. Its byline says "Notes only", as on the Mac, and the page offers Record, which records into it; the recording joins after the notes.
 - **Reading.**
   - The summary page: lede, next steps, sections, your notes, bookmarks, colophon. Its blocks are the Mac's, from DaybookUI (`ConversationHeader`, `StatusBlock`, `SummaryBody`, `YourNotes`, `Colophon`): the same words, order, and behaviour, at the iPhone's size. A title or a bookmark label is saved once editing ends, and an emptied title puts the old one back; ticking a next step, editing a label, deleting a bookmark, and Don't Wait can be undone (shake, or three-finger swipe), each on its own item, as on the Mac.
   - Next steps are laid out alike at every width and text size: the step on the full measure, and under it one line with its owner's chip and the time it was said ("Daniel · 0:27"), which shows the passage; a done step keeps its owner's name there (`SummaryMarkdownMetrics.stepMetaLine`). The Mac's window keeps the time in its margin's lane.
@@ -114,8 +114,8 @@ preferences give the policy and the countdown; docs/cloud.md, "For callers").
 | Summarize, Summarize Again, a template, with no Mac reachable and a key | "Waiting for a Mac to summarize" · Use the Cloud | The request waits for a Mac; Use the Cloud takes it |
 | No key | As before | A request for a Mac, at once |
 
-The list row says "Summarizing in 12 s" or "Waiting for a Mac to summarize", the Mac's status line, in the library's
-strip, counts down too ("Studio Mac · Summarizing in 12 s"), and the status sheet's Macs card lists it under the Mac it counts down to (or
+The list row says "Summarizing in 12 s" or "Waiting for a Mac to summarize", the Mac's line on the status sheet
+counts down too ("Studio Mac · Summarizing in 12 s"), and the status sheet's Macs card lists it under the Mac it counts down to (or
 on its own while it waits), with the same choices. A first summary waiting for a Mac says "Waiting for your Mac to
 summarize"; Summarize Again's, "… to summarize again". In the
 background, where a countdown can't run, each countdown's default happens as the app leaves the screen, and a
@@ -307,13 +307,15 @@ recording, is carried through both placements, and only when the loaded recordin
 recording, or in an unaligned recording, has no tick.
 
 **The library across the spread.** The left page is the library as the 18 Pro draws it, in its own navigation
-stack: the place's menu, More, and Settings at the top, and the same toolbar at its foot, Record, search, and New, the
-list scrolling under it with a hard edge, and the status strip above it. Nothing on the page nests a stack of its own
-(the status tray once did, and its stack hid the page's bar). Every sheet on two pages goes on the right page, clear
-of the crease, and leaves the left page as it was: one card drawn on that page (`PageCard`: the panel radius,
-`secondarySystemBackground`, a dim over its page only, a grabber to drag it away, VoiceOver's escape). The status
-sheet, Info, Version History, Move, Tags, and what a Settings screen shows over itself all use it; Settings itself and
-pairing take the display as two pages. iOS 27's `presentationPlacement(.trailing)` was tried for a system sheet there
+stack: the place's menu, More, and Settings at the top, and at its foot the standing status sheet minimized, Record,
+Import, and Search at the thumb and the line with something to say, if any (Status sheet, below), the list scrolling
+under it. Its grabber or a drag up expands it into a card on the right page, the right page otherwise as it was.
+Nothing on the page nests a stack of its own (the status tray once did, and its stack hid the page's bar;
+`LibraryChromeTests` hosts the open Duo's layout and fails if the bar goes or a system sheet stands across the crease).
+Every sheet on two pages goes on the right page, clear of the crease, and leaves the left page as it was: one card drawn
+on that page (`PageCard`: the panel radius, `secondarySystemBackground`, a dim over its page only, a grabber to drag it
+away, VoiceOver's escape). The status sheet's cards, Info, Version History, Move, Tags, and what a Settings screen shows
+over itself all use it; Settings itself and pairing take the display as two pages. iOS 27's `presentationPlacement(.trailing)` was tried for a system sheet there
 (Duo, iOS 27.1): it aligns a form sheet about 650 pt wide to the display's trailing edge, across the crease, keeps its
 detents, and dims both pages, so the card stays. The bars' items keep the system's margin, about 20 pt from the crease.
 
@@ -350,13 +352,15 @@ Measured in the iPhone Duo simulator (iOS 27.1, 24A94425; model iPhone19,4) with
 
 ## Status sheet
 
-What the recorders, the Macs, this iPhone's own work, and iCloud are doing (`DaybookPhone/Status/`). It speaks only
-of what exists and, at rest, only when there's something to say (docs/interface.md, principle 2). The words come from
-the status overview both apps draw (DaybookKit's `StatusOverviewModel`, from the facts `StatusSheetInputs.make` gathers;
+What the recorders, the Macs, this iPhone's own work, and iCloud are doing, standing at the foot of the library like
+Maps' sheet: minimized at rest, small, Record, Import, and Search at the thumb and the one line with something to say,
+if any, and expanding, as it's dragged up, to what each device is doing and what can be done with it
+(`DaybookPhone/Status/`). It speaks only of what exists (docs/interface.md, principle 2). The words come from the
+status overview both apps draw (DaybookKit's `StatusOverviewModel`, from the facts `StatusSheetInputs.make` gathers;
 Floating Notes' home says the same), plain values from plain inputs, so tests read what each state says; a recorder's
 line is in the words both apps give a recorder (`RecorderStatusWords`), this iPhone's in the words a Mac's home gives
 its own queue (`QueueStatusWords`). The views are the status overview both apps share (DaybookUI's `StatusOverview`,
-docs/interface.md).
+docs/interface.md), at a depth per size (`StatusDetent`): lines, cards, and cards with what can be done.
 
 **Which lines exist.** As on Floating Notes' home: a line for each recorder added ("Connected · 80% · 2 new",
 "Recording · 80%", "Importing 1 of 3", "Managed by Studio Mac", a handoff under way); one for each Mac paired over the
@@ -365,55 +369,90 @@ the Mac the library synced with in the last 30 days or that's doing this iPhone'
 gradient line, "Connected · 2 waiting", "Summarizing in 12 s" counting down); this iPhone's while it has work of its own
 ("Transcribing · 40% · 1 waiting", "Paused · Continues when iPhone is charging"); and iCloud's only while it's a problem
 ("Signed out", "iCloud storage is full", "Sync paused"). With no recorder there's no recorder line, with no Mac no Mac
-line, and up to date or syncing iCloud has none. The three lines the compact sheet once always showed, fine or not, so
-Record wouldn't move under the thumb, are gone: Record is the toolbar's, and nothing here moves it.
+line, and up to date or syncing iCloud has none. The three lines the sheet's smallest size once always showed, fine
+or not ("None added", "Hasn't synced this library yet"), are gone: minimized, it says only the line with something to
+say, and with nothing to say it's the row alone.
 
-**The strip.** One line above the library's toolbar, on one page and two, only when one of the lines has something to
-say (`StatusOverviewModel.strip`), in this order: what needs the person, in warning ink ("iCloud · Signed out"); what's
-recording elsewhere, with the red dot ("Studio Mac · Recording"); what's working, with the gradient line ("Studio Mac ·
-Transcribing · 55%"), or counting down. Otherwise there's no strip: a connected recorder, an idle Mac, and a queue
-paused until it can continue say nothing at rest. It's the line's own words, ink, and progress line on glass, the
-panel radius, with a chevron (at the accessibility sizes the words take the chevron's room). Tapping it goes where its fix is: iCloud's to Settings › iCloud, a recorder's problem to
-its page, a paired Mac that can't connect to its page, a Mac not set up to transcribe (or one that couldn't finish) to
-the sheet's Macs card; any other line shows the sheet. While everything is calm, More › Devices shows it.
+| Size | What it shows |
+|---|---|
+| **Minimized** (at rest; `StatusDetent.compact`) | Small: the grabber, and Record (a wide capsule with the red dot), Import, and Search at the thumb, one layer of glass at a toolbar's size (`StatusQuickActions`: 44 pt controls), with what Record has to say over them while there's something (a notice, only a recorder recording, "Importing 2 recordings…"). Under them, only while one of the lines has something to say, that line (`StatusSheetModel.lines`, by `StatusOverviewModel.strip`'s order: what needs the person, in warning ink, "iCloud · Signed out"; what's recording elsewhere, with the red dot; what's working, with the gradient line, or counting down), what the status strip once said; tapping it goes where its fix is, as below. With nothing to say (a connected recorder, an idle Mac, a queue paused until it can continue) it's the row alone. Its height is measured from the fonts the person uses (`StatusCompactDetent`: the grabber's room, a notice, the row, which stops growing at accessibility 1, and the line), never a share of the screen, but never under 110 pt: iOS 26 draws a sheet shorter than about 100 pt as a capsule floating over the list, inset from the edges and the home indicator, a tight band the row overflows (98 pt was a capsule and 106 pt a sheet on the 18 Pro, iOS 27.1; the Duo's cover draws 110 pt as a sheet), and the row alone is shorter than that |
+| **Medium** | The row stays where it was; under it every line (as Floating Notes' home says them: a line that needs you leads to its fix, iCloud's to Settings › iCloud, a recorder's problem to its page, a paired Mac that can't connect to its page, a Mac not set up to transcribe or one that couldn't finish to the Macs card, whose row says what to do), then a group for each kind of thing there is (below), each a sentence-case heading and one card |
+| **Large** | The cards grow what can be done with each device: a recorder's storage, its actions, and the recordings waiting on it |
 
-**The sheet.** Titled Devices, with the system's close button. In the hand an ordinary sheet, at medium and then large,
-dismissed as any sheet is; open on the Duo, a card on the right page ("iPhone Duo"), the left page in reach. It doesn't
-repeat the strip's lines: each card's header says what they did. Top to bottom, only what exists:
+Under the lines (iCloud's among them while it's a problem, opening Settings › iCloud), only what exists:
 
 | Group | What it shows |
 |---|---|
-| **iCloud** | Its line, while it's a problem (no card says it), opening Settings › iCloud |
 | **Live captions** | While a recorder streams (`DeviceSession.liveCaptions`, tentative), first |
 | **Recorders** | A card per recorder added: its tile, name, and status opening its page, then its handoff as a row (Use on This iPhone / Use on Studio Mac, progress, Take Over Anyway). At large it adds its storage to its status ("About 2,170 hours left"), its actions as one row of equal-width buttons (Connect, Record or Pause on Soundcore, Import N New, Listen Live or Stop Listening: only what can be done now, never a disabled button), and the recordings waiting on it with Import, then All Recordings. No card when there's no recorder: Add Recorder… is in Settings |
-| **Macs** | While there's a Mac or work for one. Every paired Mac as a row opening its details, and one the library synced with lately ("Not set up to transcribe" in warning ink with "Finish in Daybook › Settings on Studio Mac." under it, when it isn't); the queue as rows under the Mac doing it (summaries counting down or waiting for a Mac first, with their choices: "Summarizing in 12 s" · Use the Cloud · Start Now; then running with progress, waiting oldest first with "Requested from this iPhone", then conversations waiting for a recording made alongside, "Waiting for Soundcore Work audio", oldest first and not counted in the Mac's "2 waiting", then what couldn't finish in the last seven days, with the page's plain sentence, Try Again, and the Mac's words behind Details; never "No speech in this recording", which its row and page say; the Mac isn't named again). Work no Mac has taken yet starts at the card's edge. Pair with Your Mac… last, while none is paired. A row opens its conversation, and the sheet goes |
+| **Macs** | While there's a Mac or work for one. Every paired Mac as a row opening its details, and one the library synced with lately ("Not set up to transcribe" in warning ink with "Finish in Daybook › Settings on Studio Mac." under it, when it isn't); the queue as rows under the Mac doing it (summaries counting down or waiting for a Mac first, with their choices: "Summarizing in 12 s" · Use the Cloud · Start Now; then running with progress, waiting oldest first with "Requested from this iPhone", then conversations waiting for a recording made alongside, "Waiting for Soundcore Work audio", oldest first and not counted in the Mac's "2 waiting", then what couldn't finish in the last seven days, with the page's plain sentence, Try Again, and the Mac's words behind Details; never "No speech in this recording", which its row and page say; the Mac isn't named again). Work no Mac has taken yet starts at the card's edge. Pair with Your Mac… last, while none is paired. A row opens its conversation, and the sheet steps back to compact behind it |
 | **This iPhone** | Its queue in the same rows while it has work (running, a summary counting down to it, waiting, paused and why, what couldn't finish here), and the audio kept on it ("1.2 GB of audio", as Settings says it), opening Storage |
 
 Links open the full screens inside the sheet (the device page, a Mac, Settings › iCloud, Storage), in its own
-navigation stack, never copies of them; a screen opens with the sheet at full height. A recorder's notification
-(imported, almost full) opens the sheet at its page. Debug builds open the sheet with `--status-detent medium|large`,
-at a screen with `--status-open device|mac|storage|icloud|add-recorder`, as a line's tap would with
-`--status-choose mac|sync|recorder`, and show this iPhone's work without models with
-`--status-demo phone-working|phone-paused`.
+navigation stack, never copies of them; a screen opens with the sheet at full height, and collapsing it goes back to
+the overview. A recorder's notification (imported, almost full) opens the sheet at its page, and More › Devices raises
+it to medium.
 
-**While recording** there's no strip: `RecorderScreen` replaces the library and already shows the recorder's
-essentials (clock, level, bookmarks, captions); during a call there's one thing on screen (docs/interface.md,
-principle 1), and table mode needs the whole display.
+**Where it stands, and why** (`StatusSheetModel.placement`):
+
+- **In one column, upright (an 18 Pro, the Duo closed): the system's sheet.** `.sheet` over the library with
+  `.presentationDetents([compact, .medium, .large])`, dragged between them; compact, the minimized sheet, is a height
+  measured from the fonts (above). `.presentationBackgroundInteraction(.enabled(upThrough: .medium))` keeps the list usable,
+  `.interactiveDismissDisabled()` keeps it from being swiped away, and it's the system's Liquid Glass with nothing
+  painted over it. The list leaves compact's room free above the home indicator (`statusSheetInset`), so its last rows
+  scroll clear. Other sheets and alerts (Settings, Move, Tags, Import's picker) open above it, as over Maps' sheet.
+- **On two pages (open, partly open in the library, any iPhone on its side), and in one column on its side (the Duo's
+  cover turned): the same sheet minimized, at the foot of the library's page.** `StatusSheetFoot` draws it there: the
+  sheet's grabber, the row, and the line with something to say, as small, glass reaching past the home indicator to
+  just short of the display's edge, corners concentric with the display's, and the 24 pt crease clearance sheets keep;
+  the list blurs softly under it (the soft scroll edge effect), as it does around the system's floating sheet. It nests
+  no navigation stack, so the page keeps its bar. Its grabber, a drag up, its line, or More › Devices expands it into a
+  card on the right page (`PageCard`, titled Devices with the system's close button: the lines and the groups, as the
+  sheet says them dragged up); in one column on its side, an ordinary sheet. A system sheet can't stand there: on its
+  side iOS lays one out across the whole width, and on two pages it would straddle the crease and cover the right
+  page's foot.
+- **Turning an 18 Pro.** It's one column upright and two pages on its side (`DevicePosture.layout`), so as it turns the
+  system's sheet hands over to the foot, and back: Record, Import, and Search stay at the bottom, in a sheet, minimized,
+  both ways. A system sheet kept on its side would stand across both pages (iOS keeps a presented sheet through the turn
+  and lays it out the whole width: Record about 650 pt wide, a third of the height, over the right page's foot), so on
+  its side the sheet is the left page's foot at its compact size only. The handover crossfades with the turn: the sheet
+  fades out alongside it as the foot comes in with the new layout (`StandingSheetEdge`; without it the wide sheet stood
+  for a moment after the turn and then jumped to the left page), and back upright the sheet is there minimized, not
+  sliding up. A sheet dragged up when it turns is minimized on the other side. Search is the sheet's button, so nothing
+  moves out of a bar when it turns.
+- **It steps aside** for a conversation pushed over the library, search (the keyboard), selection (its bar), and the
+  Trash, which nothing records into or searches; back from them it's minimized again. Asked for there (More › Devices, a
+  recorder's notification), it's an ordinary sheet at medium in one column, and the card on two pages.
+- **While recording: none.** `RecorderScreen` replaces the library and already shows the recorder's essentials (clock,
+  level, bookmarks, captions); during a call there's one thing on screen (docs/interface.md, principle 1), and table
+  mode needs the whole display. After Stop the sheet is back, minimized.
+
+Debug builds drag the sheet to a size with `--status-detent medium|large` (on two pages, the card), open a screen in it
+with `--status-open device|mac|storage|icloud|add-recorder`, tap a line with `--status-choose mac|sync|recorder`, show
+this iPhone's work without models with `--status-demo phone-working|phone-paused`, and turn the library with
+`--interface-orientation landscape` (a list, `landscape,portrait`, turns it each way in turn, three seconds apart).
 
 Every status card has the same quiet fill, 16 pt radius, and 12 pt padding (DaybookDesign's `StatusCard` and
 `StatusRow`); symbols sit in a column that grows with Dynamic Type so text in sibling rows lines up.
 
-Accessibility: the strip is one element ("Studio Mac, Transcribing · 55%") with what tapping it does ("Shows more",
-"Opens iCloud settings", "Shows how to fix it"); its glyph column grows with Dynamic Type up to 44 pt and its glyph up
-to accessibility 2, and at the accessibility sizes its title takes up to two lines and its words the rest of four, the
-strip growing to hold them, so nothing is drawn over or cut to a letter. Record stops growing at the toolbar's size,
-and a long press shows its label in the large content viewer. The sheet's content scrolls at both sizes, and Reduce
-Motion drops its animations; a countdown's digits fade rather than roll.
+Accessibility: each line is one element ("Studio Mac, Transcribing · 55%") with what tapping it does ("Shows more",
+"Opens iCloud settings", "Shows how to fix it"); a line's glyph column grows with Dynamic Type up to 44 pt and its
+glyph up to accessibility 2, and at the accessibility sizes its title takes up to two lines and its words the rest of
+four, so nothing is drawn over or cut to a letter. The row stops growing at
+accessibility 1, where Record's label would break beside the round buttons, and a long press on each control shows its
+label in the large content viewer. The sheet's grabber cycles its sizes for VoiceOver; the foot's grabber is a button
+("Devices", "Shows more"), and the foot offers Show More. Medium and large scroll. Reduce Motion drops the content animations; a countdown's digits fade rather than roll.
 
-*Superseded (2026-11-10):* the standing sheet with a compact detent (Record, Import, and Search at the thumb above
-three or four lines, its height measured from the fonts up to 55% of the screen) and the open Duo's combined tray on
-the left page. They covered a quarter to a third of the list, said "None added" and "Hasn't synced this library yet"
-of things that weren't there, and the tray's stack hid the left page's bar.
+*Superseded (2026-11-11, the owner's call):* the bottom toolbar (Record, the system's minimized search, and "+" with
+New Note and Import Audio…) with a status strip above it that showed only while something was happening, and a sheet
+shown only from the strip or More › Devices (the design pass, 2026-11-10: ui-iphone-23, W2-K). On the v0.8.0 TestFlight
+build it wasn't a sheet: a tight pill of glass that didn't slide up or down, and the system's search button moved out
+of the toolbar when the iPhone turned. What the pass improved stays: the lines say only what exists and iCloud only
+what's wrong, in the overview's shared words, and the open Duo's left page keeps its bar. The pre-pass sheet doesn't
+come back wholesale: at rest it's minimized and small, the row at a toolbar's size and only the line the strip would
+have said, not 60 pt controls over three or four lines. *Superseded before that (2026-11-10):* the compact size's three
+always-shown lines, its height up to a quarter or a third of the list, and the open Duo's combined tray, whose own
+navigation stack hid the left page's bar.
 
 ## Lock Screen, widgets, and the control
 

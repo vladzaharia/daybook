@@ -11,7 +11,8 @@
 #            attempt succeeded or was skipped
 # --timeout  give up after this many minutes (default 150); --interval  seconds between checks (default 30)
 #
-# Exits 0 once the tests have passed, and 1 as soon as one fails or is cancelled, or when the time runs out.
+# Exits 0 once the tests have passed, and 1 as soon as one fails or is cancelled, or when the time runs out. A
+# check that can't reach GitHub is tried again at the next interval; only the timeout ends the wait for that.
 # Needs gh with GH_TOKEN (actions: read).
 set -euo pipefail
 
@@ -46,15 +47,22 @@ deadline=$(( $(date +%s) + timeout * 60 ))
 while :; do
     if [[ -n "$ci_run" ]]; then
         url="https://github.com/$repo/actions/runs/$ci_run"
-        state="$(gh api "repos/$repo/actions/runs/$ci_run" --jq '"\(.status) \(.conclusion // "")"')"
+        # A call that fails (the API unreachable for a moment) is tried again at the next check, not the end of the wait.
+        if ! state="$(gh api "repos/$repo/actions/runs/$ci_run" --jq '"\(.status) \(.conclusion // "")"' 2>&1)"; then
+            echo "Couldn't read CI's run ($url): ${state//$'\n'/ }; trying again in $interval s"
+            sleep "$interval"; continue
+        fi
         case "$state" in
             "completed success") echo "CI passed on this commit: $url"; exit 0 ;;
             completed*) fail "CI on main didn't pass on this commit (${state#completed }): $url. Re-run its failed jobs, then this one." ;;
         esac
         waiting="CI on main is ${state% *} ($url)"
     else
-        jobs="$(gh api --paginate "repos/$repo/actions/runs/$run/jobs?filter=latest&per_page=100" \
-            --jq '.jobs[] | select(.name | startswith("Validate the release commit / ")) | "\(.status)\t\(.conclusion // "-")\t\(.name)"')"
+        if ! jobs="$(gh api --paginate "repos/$repo/actions/runs/$run/jobs?filter=latest&per_page=100" \
+            --jq '.jobs[] | select(.name | startswith("Validate the release commit / ")) | "\(.status)\t\(.conclusion // "-")\t\(.name)"' 2>&1)"; then
+            echo "Couldn't read the run's jobs: ${jobs//$'\n'/ }; trying again in $interval s"
+            sleep "$interval"; continue
+        fi
         failed="$(awk -F'\t' '$1 == "completed" && $2 != "success" && $2 != "skipped" { print $3 " (" $2 ")" }' <<< "$jobs")"
         [[ -z "$failed" ]] || fail "validation didn't pass: ${failed//$'\n'/, }"
         total="$(grep -c . <<< "$jobs" || true)"

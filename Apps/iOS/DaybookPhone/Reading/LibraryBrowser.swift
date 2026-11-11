@@ -5,8 +5,9 @@ import DaybookUI
 import SwiftUI
 
 /// The library and reading while nothing is being recorded, in one column (pocket) or two pages
-/// (notebook). Owned by the library and reading work (docs/iphone.md, phase 2). Its library page places
-/// `RecordStartButton` and the status strip and presents `SettingsScreen`; it presents the status sheet.
+/// (notebook). Owned by the library and reading work (docs/iphone.md, phase 2). Its library page presents
+/// `SettingsScreen`; it hosts the status sheet, which holds `RecordStartButton` (standing over the list in one column,
+/// at the left page's foot on two).
 ///
 /// - Pocket (closed, or a regular iPhone): the list, and a conversation pushed over it with a
 ///   Summary | Transcript switch.
@@ -70,7 +71,8 @@ private struct ReadingLayout: View {
         .environment(session)
         .tint(DaybookPalette.accent)
     }
-    // Today's status, in the hand a sheet, open on the right page; the library's strip and More ask for it.
+    // The status: in the hand the standing sheet over the library, open at the left page's foot with more on the right
+    // page.
     .statusSheet(onPage: style != .pocket)
     .fullScreenCover(
       isPresented: Binding(

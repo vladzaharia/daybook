@@ -18,13 +18,20 @@ scripts/build-ios.sh --test --skip-build --test-arg -only-testing:DaybookPhoneTe
 scripts/build-ios.sh --generate-only      # just regenerate, then open Apps/iOS/Daybook.xcodeproj
 scripts/build-ios.sh --device             # a signed build for a physical iPhone (never installs it)
 scripts/build-ios.sh --device --no-sign   # compile for a device without signing
+xcodebuild -project Apps/iOS/Daybook.xcodeproj -scheme DaybookWatch \
+  -destination 'generic/platform=watchOS Simulator' build
+                                          # the watch app alone
 ```
+
+Every build of the `DaybookPhone` scheme includes Daybook for Apple Watch (`DaybookWatch`, docs/watch.md),
+embedded in `DaybookPhone.app/Watch` and built for the watch (or its simulator) beside the app.
 
 The script copies the repository's `Package.resolved` into the generated project, so Xcode resolves
 the same package versions as `swift build`.
 
-Requirements: Xcode with the iOS 27.1 SDK (the hinge APIs), XcodeGen. The app runs on iOS 26.0 and
-later; the hinge features turn on with iOS 27.1.
+Requirements: Xcode with the iOS 27.1 SDK (the hinge APIs) and the watchOS SDK, XcodeGen. The app runs
+on iOS 26.0 and later; the hinge features turn on with iOS 27.1. The watch app runs on watchOS 26.0 and
+later; building it needs no watchOS simulator runtime.
 
 ### Signing and iCloud
 
@@ -34,7 +41,8 @@ command line, export it. From Xcode, which doesn't see shell variables, create
 builds need no team.
 
 Identifiers: `local.daybook` (app, the Mac app's bundle ID too: docs/release.md, "One bundle ID"),
-`local.daybook.widgets` (widget extension), app group `group.local.daybook`, iCloud container `$(DAYBOOK_ICLOUD_CONTAINER)` (default
+`local.daybook.widgets` (widget extension), `local.daybook.watchkitapp` (the watch app, registered with no capabilities,
+docs/release.md, "The owner's steps"), app group `group.local.daybook`, iCloud container `$(DAYBOOK_ICLOUD_CONTAINER)` (default
 `iCloud.local.daybook`, set in `Config/Signing.xcconfig` and overridable in the local file).
 
 Sync uses the app's own iCloud ubiquity container, not a folder picked in Files. The app's
@@ -61,12 +69,13 @@ Nothing here does it: the build script never passes `-allowProvisioningUpdates`.
 | `DaybookPhone/Library` | `PhoneLibrary` (DaybookKit's `LibraryController`, filing, imports), `SyncAudioProvider` (audio on demand), `CloudAvailability` |
 | `DaybookPhone/Link` | `PhoneLink`, the DaybookLink client: pairing, connections, live progress, record control; Settings › Macs and pairing |
 | `DaybookPhone/Devices` | `PhoneDevices`, DaybookDevices on iPhone (Soundcore with background Bluetooth and state restoration), the recorder handoff (`handoff`, DaybookKit's `RecorderHandoff`); recorder screens and `RecorderHandoffCard` |
-| `DaybookPhone/Status` | The status sheet (pocket) and panel (notebook): `StatusSheetModel` (the words, tested) and `StatusSheet` (the views) |
+| `DaybookPhone/Status` | The standing status sheet: the system's sheet over the one-column library, `StatusSheetFoot` at the library page's foot on two pages and on its side, and a card on the right page for more; `StatusSheetModel` (where it stands, its sizes, where a line leads; tested) and `StatusSheet` (the views) |
 | `DaybookPhone/Settings` | `SettingsScreen`: iCloud, Macs, recorders, recording, storage, templates, vocabulary, About |
 | `DaybookPhone/Posture` | `DevicePosture` (closed, partly open, open, angle) fed by `onHingeChange` |
 | `DaybookPhone/App` | the app model (`PhoneAppModel`) that ties recorder, library, sync (`PhoneSync`), the link, recorders, Live Activity, and widgets together, with what it reaches in the system injected (`PhoneAppEnvironment`: `.live` in the app, inert in tests); recording with Macs and recorders (`MultipointCoordinator`), what goes to the Macs while recording (`LinkSharing`), filing (`PhoneAppModel+Filing`), and the debug scripts (`PhoneAppModel+Demos`, debug builds only); `MacPresence`, `LiveProgress`; the debug launch arguments (`DebugLaunch`); notifications (`PhoneNotices`) and where opening one goes (`AppDestination`); Siri phrases, Open Conversation, New Note, and Spotlight (`ConversationEntity`) |
 | `DaybookPhone/UI` | the shell's interface |
 | `DaybookPhoneWidgets` | the Live Activity and Dynamic Island, the Control Center control, the Recorder, Recent Conversations, Next Steps, and New Note widgets |
+| `DaybookWatch` | Daybook for Apple Watch (docs/watch.md): `WatchModel` (the recorder, the recordings it holds, and the iPhone's word, tied together), `WatchRecorder` and `SegmentWriter` (the microphone into AAC segments), `WatchStore` (folders, journals, recovery), `PhoneLink` (WatchConnectivity), `RecorderView` (the one screen). The decisions it makes are the package's `DaybookWatchLink` (`WatchFollowing`, `WatchRecordingJournal`), tested on the Mac |
 | `Shared` | compiled into both app and extension: App Intents, Live Activity attributes, app-group recording state and backup-excluded widget snapshots, design tokens |
 | `DaybookPhoneTests` | XCTest, hosted in the app |
 | `Tools/duo-fold` | folds and unfolds an iPhone Duo simulator from the command line (simulator-only, private SpringBoard SPI) |
@@ -145,7 +154,7 @@ xcrun simctl launch <udid> local.daybook --device-simulator --device-autopilot -
 xcrun simctl launch <udid> local.daybook --synthetic-audio --start-recording --demo-notes --demo-captions  # scripted captions
 xcrun simctl launch <udid> local.daybook --synthetic-audio --start-recording --demo-notes --posture partial --interface-orientation preview-portrait --write-notes   # table mode, writing (fold to book first)
 xcrun simctl launch <udid> local.daybook --caption-probe /path/to/audio.m4a   # Documents/caption-probe.json; never downloads
-xcrun simctl launch <udid> local.daybook --device-simulator --device-autopilot --demo-link --status-detent medium   # the status sheet (or panel) at a size
+xcrun simctl launch <udid> local.daybook --device-simulator --device-autopilot --demo-link --status-detent medium   # the status sheet at a size (open: the card on the right page)
 xcrun simctl launch <udid> local.daybook --device-simulator --device-autopilot --demo-link --handoff-demo waiting --open-settings device   # a handoff state
 xcrun simctl launch <udid> local.daybook --device-simulator --device-autopilot --demo-link --demo-live-captions --status-detent medium   # captions while the recorder streams
 xcrun simctl launch <udid> local.daybook --synthetic-audio --demo-recorder-only "Soundcore Work"   # only the recorder records; this iPhone's microphone didn't start

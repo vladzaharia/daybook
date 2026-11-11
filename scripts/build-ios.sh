@@ -1,6 +1,8 @@
 #!/bin/bash
 # Builds Daybook for iPhone (Apps/iOS). Generates the Xcode project from Apps/iOS/project.yml with
-# XcodeGen, then builds with xcodebuild. It never installs anything on a device.
+# XcodeGen, then builds with xcodebuild. It never installs anything on a device. Every build is the
+# DaybookPhone scheme: the app with its widget extension and Daybook for Apple Watch (DaybookWatch, in
+# DaybookPhone.app/Watch, built for the watch or its simulator alongside; docs/watch.md).
 #
 #   scripts/build-ios.sh                    generate, then build for the iOS Simulator (no team needed)
 #   scripts/build-ios.sh --test             ... build for testing instead, and run the unit tests on a simulator
@@ -13,15 +15,16 @@
 #   scripts/build-ios.sh --device           build for a physical iPhone with automatic signing;
 #                                           needs DAYBOOK_TEAM_ID (or Apps/iOS/Config/Signing.local.xcconfig)
 #                                           and profiles that already exist: the script never registers
-#                                           identifiers, the app group, or the iCloud container
-#                                           (no -allowProvisioningUpdates). Do that once, deliberately,
-#                                           in Xcode's Signing & Capabilities.
-#   scripts/build-ios.sh --device --no-sign compile for a device without signing (a CI check)
+#                                           identifiers (the watch app's local.daybook.watchkitapp too), the
+#                                           app group, or the iCloud container (no -allowProvisioningUpdates).
+#                                           Do that once, deliberately, in Xcode's Signing & Capabilities.
+#   scripts/build-ios.sh --device --no-sign compile for a device without signing (a CI check); the watch app
+#                                           compiles for the watch's architectures (arm64_32, arm64)
 #   scripts/build-ios.sh --generate-only    just regenerate Apps/iOS/Daybook.xcodeproj
 #   scripts/build-ios.sh --resolve          regenerate it and fetch the packages at Package.resolved's versions
 #   scripts/build-ios.sh --archive          xcodebuild archive (Release) to Apps/iOS/build/DaybookPhone.xcarchive,
-#                                           with the widget extension; signed like --device. Add --no-sign
-#                                           for an unsigned archive (a local or CI check).
+#                                           with the widget extension and the watch app; signed like --device.
+#                                           Add --no-sign for an unsigned archive (a local or CI check).
 #   scripts/build-ios.sh --archive --export upload
 #                                           ... then -exportArchive with the app-store-connect method:
 #                                           `upload` sends it to App Store Connect (TestFlight), `export`
@@ -32,8 +35,8 @@
 #   --simulator <name or UDID>   simulator for --test (default: scripts/ci/pick-simulator.sh's choice, an iPhone
 #                                Duo, then an iPhone 18 Pro, then any iPhone, on the newest runtime with one)
 #   --configuration <Debug|Release>   default Debug (Release for --archive)
-#   --marketing-version <X.Y.Z>  MARKETING_VERSION (CFBundleShortVersionString of app and extension)
-#   --build-number <N>           CURRENT_PROJECT_VERSION (CFBundleVersion of app and extension)
+#   --marketing-version <X.Y.Z>  MARKETING_VERSION (CFBundleShortVersionString of app, extension, and watch app)
+#   --build-number <N>           CURRENT_PROJECT_VERSION (CFBundleVersion of app, extension, and watch app)
 #   --archive-path <path>        default Apps/iOS/build/DaybookPhone.xcarchive
 #   --test-arg <argument>        pass an argument to the `xcodebuild test` invocation only (repeatable),
 #                                e.g. --test-arg -only-testing:DaybookPhoneTests/ShellTests
@@ -177,7 +180,7 @@ if [[ "$MODE" == device ]]; then
     else
         xcodebuild "${COMMON[@]}" -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build
     fi
-    echo "Built $DERIVED/Build/Products/$CONFIGURATION-iphoneos/DaybookPhone.app (not installed)."
+    echo "Built $DERIVED/Build/Products/$CONFIGURATION-iphoneos/DaybookPhone.app, with Watch/DaybookWatch.app (not installed)."
     exit 0
 fi
 
@@ -241,12 +244,13 @@ fi
 
 # Every simulator build is the same one, for this Mac's architecture, so each reuses what the last made. The
 # generic destination alone would add x86_64, and alternating it with a simulator's own destination recompiles
-# every target that imports a C module (MLX, Tokenizers) each time. No index store: nothing here reads it (Xcode's
-# editor keeps its own), and writing it costs every compile time and the CI cache about 200 MB.
+# every target that imports a C module (MLX, Tokenizers) each time. The watch app builds for the watchOS
+# Simulator with the same architecture. No index store: nothing here reads it (Xcode's editor keeps its own), and
+# writing it costs every compile time and the CI cache about 200 MB.
 SIMULATOR_BUILD=(-destination 'generic/platform=iOS Simulator' "ARCHS=$(uname -m)" COMPILER_INDEX_STORE_ENABLE=NO)
 if [[ "$RUN_TESTS" == 0 && "$BUILD_FOR_TESTING" == 0 ]]; then
     xcodebuild "${COMMON[@]}" "${SIMULATOR_BUILD[@]}" build
-    echo "Built $DERIVED/Build/Products/$CONFIGURATION-iphonesimulator/DaybookPhone.app"
+    echo "Built $DERIVED/Build/Products/$CONFIGURATION-iphonesimulator/DaybookPhone.app, with Watch/DaybookWatch.app"
     exit 0
 fi
 if [[ "$SKIP_BUILD" == 0 ]]; then

@@ -833,7 +833,7 @@ struct RecorderPageFooter: View {
     var body: some View {
         let details = session.direct is any DetailedConnection && (session.status != nil || session.isLinked)
         let disconnect = session.isLinked && session.managedElsewhere == nil && session.direct?.method == .direct
-            && session.kind.id != DaybookPhoneIntegration.id
+            && session.kind.id != DaybookPhoneIntegration.id && session.kind.id != AppleWatchIntegration.id
         if details || disconnect {
             HStack(spacing: DaybookSpacing.s5) {
                 if details, let services {
