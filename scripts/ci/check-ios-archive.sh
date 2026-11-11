@@ -15,9 +15,11 @@
 #   - an App Intent's title, description, short title, or phrase names an Apple product (iPhone,
 #     iPad, iPod, Apple, Siri). Processing rejects such a build after the upload (ITMS-90626), so it
 #     never reaches TestFlight.
-#   - CFBundleShortVersionString or CFBundleVersion of the app or any extension differs from
-#     --version / --build (an extension must match its app).
-#   - a bundle identifier isn't the expected one (local.daybook, local.daybook.widgets).
+#   - CFBundleShortVersionString or CFBundleVersion of the app, any extension, or the watch app differs from
+#     --version / --build (each must match its app).
+#   - a bundle identifier isn't the expected one (local.daybook, local.daybook.widgets, local.daybook.watchkitapp).
+#   - the app has no watch app in its Watch folder (Daybook for Apple Watch, docs/watch.md), or the watch app doesn't
+#     name local.daybook as its companion (WKCompanionAppBundleIdentifier).
 #   - the archive is signed and the app lacks the app group or iCloud container entitlements, or its keychain groups
 #     aren't its own and then the shared one (library keys for an encrypted library).
 set -euo pipefail
@@ -120,6 +122,22 @@ while IFS= read -r appex; do
     esac
 done < <(find "$app/PlugIns" "$app/Extensions" -maxdepth 1 -name '*.appex' 2>/dev/null)
 (( extensions > 0 )) || problem "no app extensions in $(basename "$app"): the widget extension should be embedded"
+
+# Daybook for Apple Watch, in the app's Watch folder (Embed Watch Content).
+watch_apps=0
+while IFS= read -r watch_app; do
+    [[ -n "$watch_app" ]] || continue
+    watch_apps=$(( watch_apps + 1 ))
+    case "$(basename "$watch_app")" in
+        DaybookWatch.app) check_bundle "$watch_app" local.daybook.watchkitapp ;;
+        *) check_bundle "$watch_app" "" ;;
+    esac
+    companion="$(plist_value "$watch_app/Info.plist" WKCompanionAppBundleIdentifier)"
+    if [[ "$companion" != local.daybook ]]; then
+        problem "$(basename "$watch_app") names '${companion}' as its companion app (WKCompanionAppBundleIdentifier), expected local.daybook"
+    fi
+done < <(find "$app/Watch" -maxdepth 1 -name '*.app' 2>/dev/null)
+(( watch_apps > 0 )) || problem "no watch app in $(basename "$app")/Watch: Daybook for Apple Watch (DaybookWatch) should be embedded"
 
 if codesign --verify --strict "$app" >/dev/null 2>&1; then
     entitlements="$(codesign -d --entitlements - --xml "$app" 2>/dev/null || true)"

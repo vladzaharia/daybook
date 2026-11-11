@@ -24,7 +24,7 @@
 #   prune-caches.sh       which caches go and which stay, against a fake gh
 #   xcresult-retries.sh   passes on retry and flaky iterations, from xcresulttool fixtures
 #   own-warnings.sh       a warning in Sources/ or Apps/iOS/ fails, coloured or not; a dependency's or a test's doesn't
-#   check-ios-archive.sh  synthetic archives: export compliance, icon, versions (macOS: needs plutil)
+#   check-ios-archive.sh  synthetic archives: export compliance, icon, versions, the watch app (macOS: needs plutil)
 #   setup-github.sh       the dry run prints the plan and never calls gh
 #   approve-release.sh    approves every waiting channel at once, rejects skipped ones, and checks first
 #   select-xcode.sh       version and exact-build checks, SDKs, and the summary, with stand-in tools
@@ -486,6 +486,7 @@ echo "check-ios-archive.sh"
 if macos; then
     make_archive() {
         # make_archive DIR ENCRYPTION(true|false|none) ICON(yes|no) WIDGET_BUILD [DEVICE_FAMILY JSON] [INTENT DESCRIPTION]
+        # The watch app's build is WIDGET_BUILD too; STUB_NO_WATCH=1 leaves it out.
         local app="$1/Products/Applications/DaybookPhone.app"
         mkdir -p "$app/PlugIns/DaybookPhoneWidgets.appex"
         plutil -create xml1 "$app/Info.plist"
@@ -505,6 +506,15 @@ if macos; then
         plutil -insert CFBundleIdentifier -string "${STUB_APP_ID:-local.daybook}.widgets" "$widget"
         plutil -insert CFBundleShortVersionString -string 1.4.0 "$widget"
         plutil -insert CFBundleVersion -string "$4" "$widget"
+        if [[ "${STUB_NO_WATCH:-0}" != 1 ]]; then
+            local watch="$app/Watch/DaybookWatch.app/Info.plist"
+            mkdir -p "$(dirname "$watch")"
+            plutil -create xml1 "$watch"
+            plutil -insert CFBundleIdentifier -string "${STUB_APP_ID:-local.daybook}.watchkitapp" "$watch"
+            plutil -insert CFBundleShortVersionString -string 1.4.0 "$watch"
+            plutil -insert CFBundleVersion -string "$4" "$watch"
+            plutil -insert WKCompanionAppBundleIdentifier -string "${STUB_COMPANION:-${STUB_APP_ID:-local.daybook}}" "$watch"
+        fi
         return 0
     }
     make_archive "$work/good.xcarchive" false yes 1057
@@ -520,6 +530,10 @@ if macos; then
     make_archive "$work/skew.xcarchive" false yes 1056
     expect_fail "an extension build number mismatch fails" "$ci/check-ios-archive.sh" "$work/skew.xcarchive" --build 1057
     expect_fail "a version mismatch fails" "$ci/check-ios-archive.sh" "$work/good.xcarchive" --version 1.5.0
+    STUB_NO_WATCH=1 make_archive "$work/no-watch.xcarchive" false yes 1057
+    expect_fail "an archive without the watch app fails" "$ci/check-ios-archive.sh" "$work/no-watch.xcarchive"
+    STUB_COMPANION=local.daybook.phone make_archive "$work/watch-companion.xcarchive" false yes 1057
+    expect_fail "a watch app naming another companion fails" "$ci/check-ios-archive.sh" "$work/watch-companion.xcarchive"
     make_archive "$work/ipad.xcarchive" false yes 1057 '[1,2]'
     expect_fail "an archive that also runs on iPad fails" "$ci/check-ios-archive.sh" "$work/ipad.xcarchive"
     make_archive "$work/intent.xcarchive" false yes 1057 '[1]' "Records a conversation with the iPhone's microphone."

@@ -870,6 +870,12 @@ public final class LibraryController {
                         current.tracks[index].capture = capture
                     }
                 }
+                // A recorder's file whose start its device knows (Apple Watch's: its IDs don't say it) has it as the
+                // clock prior multipoint matching uses. The first one recorded is kept.
+                if let startedAt = provenance.startedAt, let device = provenance.device {
+                    for index in current.tracks.indices where current.tracks[index].device == device && current.tracks[index].startedAt == nil
+                        && imported.tracks.contains(where: { $0.id == current.tracks[index].id }) { current.tracks[index].startedAt = startedAt }
+                }
                 for highlight in imported.highlights where !current.highlights.contains(where: { $0.id == highlight.id }) { current.highlights.append(highlight) }
             }
             if let date = provenance.conversationDate { current.date = date }

@@ -272,8 +272,11 @@ extension AppState {
             }
             return recorderClock(for: track, link: link)?.macDate(fromRecorder: startedAt) ?? startedAt
         }
-        // Capture sets a Mac recording's creation date to when its first sample arrived.
-        if track.source == .microphone || track.source == .systemAudio { return track.createdAt }
+        // Capture sets a Mac recording's creation date to when its first sample arrived. Not Apple Watch's microphone track:
+        // it was created when it was imported, which says nothing of when it started.
+        if track.deviceKind != AppleWatchIntegration.id, track.source == .microphone || track.source == .systemAudio {
+            return track.createdAt
+        }
         return track.device.flatMap(deviceRecordingStart)
     }
 

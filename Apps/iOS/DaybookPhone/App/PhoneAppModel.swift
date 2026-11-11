@@ -155,6 +155,10 @@ final class PhoneAppModel: RecordingCommandHandling {
     @ObservationIgnored var recoveryWaitsForUnlock = false
     /// Recovery is running: one pass at a time.
     @ObservationIgnored var recoveringLeftovers = false
+    /// Recovery has run since launch and left nothing waiting for an unlock: what a previous run left is filed, or can't
+    /// be. Until then Apple Watch's recording for a conversation not in the library waits, since this iPhone's own
+    /// recording of it may be among the leftovers (`PhoneDevices.mayFileOwnRecording`).
+    @ObservationIgnored var leftoversRecovered = false
     /// Stops noted so far (`noteStopped`): a recording finished after an unlock says where it went only if no stop
     /// came after its own.
     @ObservationIgnored private(set) var stopsNoted = 0
@@ -236,6 +240,7 @@ final class PhoneAppModel: RecordingCommandHandling {
             Task { await self?.sync.synchronize(.linkFinished) }
         }
         self.devices.onImported = { [weak self] filed in self?.filedElsewhere(filed) }
+        self.devices.mayFileOwnRecording = { [weak self] _ in self?.leftoversRecovered == false }
         // Macs hear what the recorders this iPhone manages are doing, when that changes.
         watches.append(self.devices.hub.watchRecorders { [weak self] in
             guard let self else { return }

@@ -13,7 +13,8 @@
 #              DAYBOOK_RELEASE_XCODE_BUILD, default 27A9275), so a release never ships from an Xcode
 #              build that CI and the development Macs haven't used
 #   --sdk      fail unless this SDK is installed (repeatable). The iPhone app needs iphoneos27.1 and
-#              iphonesimulator27.1 for the iPhone Duo hinge APIs.
+#              iphonesimulator27.1 for the iPhone Duo hinge APIs, and the watch app inside it watchos27.0
+#              (devices, archives) or watchsimulator27.0 (simulator builds): Xcode 27.1 has no watchOS 27.1 SDK.
 #   --metal    make sure the Metal toolchain is installed (MLX compiles Metal shaders). The runner
 #              image doesn't include it; this downloads it with xcodebuild -downloadComponent. Apple
 #              doesn't let the download be pinned, so its version goes to the run summary.

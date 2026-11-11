@@ -31,7 +31,11 @@ enum PhoneRecorderStatus {
         let conversation = recorder.captureID
         if recorder.isActive {
             let cascade = model.devices.cascade
-            inputs.recorders = model.devices.sessions.filter { $0.direct != nil || cascade.member($0.id) != nil }.map { session in
+            // Apple Watch only while it's part of this recording: left out (Daybook not open on it, unavailable), it
+            // has nothing to say here.
+            inputs.recorders = model.devices.sessions.filter { session in
+                session.kind.id == AppleWatchIntegration.id ? cascade.member(session.id) != nil : session.direct != nil || cascade.member(session.id) != nil
+            }.map { session in
                 RecorderFacts(session: session, handoff: model.devices.handoffState(session),
                               along: cascade.conversation?.id == conversation ? cascade.member(session.id).map { along($0.state, role: $0.role) } : nil)
             }

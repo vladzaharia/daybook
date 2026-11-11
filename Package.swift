@@ -14,6 +14,8 @@ import PackageDescription
 //   DaybookIntelligence  local models: the processing engines and ProcessingEngine (no AppKit; on iOS without
 //                        WhisperKit and MLXVLM, which the iPhone doesn't use)
 //   DaybookLink          the Mac <-> iPhone local-network channel: pairing, control, status (macOS + iOS)
+//   DaybookWatchLink     what Daybook on iPhone and Daybook on Apple Watch say over WatchConnectivity, and the
+//                        iPhone's record of the watch's segments (Foundation only; macOS + iOS + watchOS)
 //   DaybookCaptions      tentative on-device live captions for any audio source (Speech framework; macOS + iOS)
 //   DaybookDesign        the design both apps share: tokens (colour, type, spacing, radii, motion), buttons,
 //                        progress, chips, boxes, tiles, the rolling meter, the clock, caption strip, status
@@ -24,7 +26,7 @@ import PackageDescription
 //   Daybook              the Mac app
 let package = Package(
     name: "Daybook",
-    platforms: [.macOS(.v15), .iOS(.v26)],
+    platforms: [.macOS(.v15), .iOS(.v26), .watchOS(.v26)],
     products: [
         .executable(name: "Daybook", targets: ["Daybook"]),
         .library(name: "DaybookCore", targets: ["DaybookCore"]),
@@ -34,6 +36,7 @@ let package = Package(
         .library(name: "DaybookLive", targets: ["DaybookLive"]),
         .library(name: "DaybookIntelligence", targets: ["DaybookIntelligence"]),
         .library(name: "DaybookLink", targets: ["DaybookLink"]),
+        .library(name: "DaybookWatchLink", targets: ["DaybookWatchLink"]),
         .library(name: "DaybookCaptions", targets: ["DaybookCaptions"]),
         .library(name: "DaybookDesign", targets: ["DaybookDesign"]),
         .library(name: "DaybookUI", targets: ["DaybookUI"])
@@ -57,11 +60,13 @@ let package = Package(
         // warning, not silence.
         .target(name: "DaybookCore", swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]),
         .target(name: "DaybookLink"),
+        // The watch app links only this, so it stays Foundation only. Complete checking, as Core's.
+        .target(name: "DaybookWatchLink", swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]),
         // Foundation, AVFoundation, and Speech only, so the device framework can use it too. Complete checking, as Core's.
         .target(name: "DaybookCaptions", swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]),
         // SwiftUI only, no models: either app's views can use it without the other's code. Complete checking, as Core's.
         .target(name: "DaybookDesign", swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]),
-        .target(name: "DaybookDevices", dependencies: ["DaybookCore", "DaybookCaptions"]),
+        .target(name: "DaybookDevices", dependencies: ["DaybookCore", "DaybookCaptions", "DaybookWatchLink"]),
         // Shared screens over the library's models; not the model store or the engines, so it stays light
         // for the iPhone. macOS 26 API behind availability checks: the Mac deploys to macOS 15.
         .target(name: "DaybookUI", dependencies: ["DaybookDesign", "DaybookKit", "DaybookCaptions", "DaybookLink"]),
@@ -155,6 +160,7 @@ let package = Package(
         .testTarget(name: "DaybookDesignTests", dependencies: ["DaybookDesign", "DaybookKit"]),
         .testTarget(name: "DaybookUITests", dependencies: ["DaybookUI", "DaybookDesign", "DaybookKit"]),
         .testTarget(name: "DaybookLinkTests", dependencies: ["DaybookLink", "DaybookTestSupport"]),
+        .testTarget(name: "DaybookWatchLinkTests", dependencies: ["DaybookWatchLink"]),
         .testTarget(name: "DaybookCaptionsTests", dependencies: ["DaybookCaptions", "DaybookTestSupport"]),
         .testTarget(name: "DaybookLiveTests", dependencies: ["DaybookLive", "DaybookCaptions", "DaybookKit", "DaybookCore",
                                                              "DaybookModelStore", "DaybookTestSupport"])
