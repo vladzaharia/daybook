@@ -97,7 +97,7 @@ A test that waits the whole stretched timeout for something that normally takes 
 - The stall ran out before a transfer's audio came. The import gave up after its retry, and the test waited for a file that never came.
 - The tail ran out with live audio still on its way, so the saved part came up short.
 
-The rig's deadlines (request, stall, scan, connect, reconnect, record confirmation, live tail) now stretch by the same scale. The ones no test there runs out on purpose are seconds long: the stall and request 5 s, the live tail the app's own 2 s. Stretched only, a 3 s stall still ran out under heavier load.
+The rig's deadlines (request, stall, scan, connect, reconnect, record confirmation, live tail) now stretch by the same scale. The ones no test there runs out on purpose are seconds long before the stretch: 5 s for the stall, request, and record confirmation, and 10 s for the live tail. Under heavier load a stretched 3 s stall still ran out, and so did a stretched 10 s tail.
 
 Every wait in the rig says what it last saw: the link, the recorder and the commands it got, the live save, and the imports. Two of its waits also timed out on CI without that: the one for a Start to be confirmed, and the one for the button's second press. Their cause isn't known yet; their next failure shows their state.
 

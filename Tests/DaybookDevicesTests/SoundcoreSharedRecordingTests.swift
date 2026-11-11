@@ -51,8 +51,8 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
         // tried again, a status reply that comes after its request gave up is dropped, live audio still on its way when
         // the tail runs out is cut. The test would then wait for what never comes (docs/release.md, "CI under load").
         // So every deadline stretches with the tests' waits (DAYBOOK_TEST_TIMEOUT_SCALE), and the ones no test here
-        // runs out on purpose are seconds long, the live tail as long as the app's. The test of a stream going quiet
-        // shortens the stall.
+        // runs out on purpose are seconds long: every live capture here ends with its stream or the test, never the tail.
+        // The test of a stream going quiet shortens the stall.
         timing.request = Self.stretched(.seconds(5))
         timing.stall = Self.stretched(.seconds(5))
         timing.settle = .milliseconds(20)
@@ -67,7 +67,7 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
         timing.idleRelease = .seconds(600)
         timing.automaticCooldown = .seconds(60)
         timing.holdRetry = .milliseconds(150)
-        timing.liveTail = Self.stretched(.seconds(2))
+        timing.liveTail = Self.stretched(.seconds(10))
         configure?(&timing)
         environment.soundcoreTiming = timing
         let configured = ConfiguredDevice(id: "sim", kind: SoundcoreWorkIntegration().kind)
