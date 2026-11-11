@@ -101,7 +101,9 @@ The rig's deadlines (request, stall, scan, connect, reconnect, record confirmati
 
 `SoundcoreSimulatorTests` had one of these too. In its test of captions across a recorder's bursts and gaps, the recorder goes quiet for 250 ms on purpose, and a starved runner turned that into the harness's 400 ms stall. The stream ended, and the audio after the gap never came. That test now gives the stall 10 s. Some of the class's other tests run the harness's short deadlines out on purpose (a stalled transfer, a reconnect that falls back to a scan), so the harness keeps them.
 
-Every wait in the rig says what it last saw: the link, the recorder and the commands it got, the live save, and the imports. Two of its waits also timed out on CI without that: the one for a Start to be confirmed, and the one for the button's second press. Their cause isn't known yet; their next failure shows their state.
+Every wait in the rig says what it last saw: the link, the recorder and the commands it got, the live save, and the imports. Two of its waits also timed out on CI without that: the one for a Start to be confirmed, and the one for the button's second press. Their cause isn't known yet; if they fail again, the failure shows their state.
+
+For now, `package` skips the five `Soundcore…Tests` classes in `DaybookDevicesTests` (`--skip '^DaybookDevicesTests\.Soundcore'`). CI still runs them on every push. To bring them back, remove the `--skip` from `starved.yml`.
 
 **Artifacts.** On failure, CI uploads the swift test logs, the iPhone `.xcresult` bundles and Xcode logs, or the Mac build logs. They're kept for 14 days.
 
