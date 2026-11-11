@@ -129,14 +129,14 @@ jobs:
           udid="$(scripts/ci/pick-simulator.sh 2> "$RUNNER_TEMP/simulator.txt")"
           cat "$RUNNER_TEMP/simulator.txt"
           echo "udid=$udid" >> "$GITHUB_OUTPUT"
-      # Built first and booted after, as in CI: a first boot beside the build slows it by minutes (ci.yml).
+          # Booting while the app builds, as in CI: its first boot's work mustn't run beside the tests (ci.yml).
+          xcrun simctl boot "$udid" || true
       - name: Build for testing
         run: scripts/build-ios.sh --build-for-testing
-      - name: Boot the simulator
+      - name: Wait for the simulator
         env:
           UDID: ${{ steps.simulator.outputs.udid }}
         run: |
-          xcrun simctl boot "$UDID" || true
           xcrun simctl bootstatus "$UDID" -b > "$RUNNER_TEMP/bootstatus.txt" 2>&1 || { cat "$RUNNER_TEMP/bootstatus.txt"; exit 1; }
           tail -1 "$RUNNER_TEMP/bootstatus.txt"
       # Every test, the timing ones included, three times in a row: a test that fails any iteration

@@ -216,6 +216,18 @@ jobs:
         run: scripts/ci/stable-mtimes.sh
       - name: Select Xcode
         run: scripts/ci/select-xcode.sh --sdk iphoneos27.1 --sdk iphonesimulator27.1
+      # Started first, so its first boot plays out beside the cache restore and the build, which only wait on it,
+      # and not beside the tests. A first boot starts all of iOS (wallpapers, system widgets, Apple Intelligence,
+      # Siri, Maps…), which holds the load average in the hundreds for minutes on this three-core runner; tests run
+      # beside it failed in 6 of 11 runs, each time a different timing or file test (docs/release.md, "The simulator").
+      - name: Pick a simulator and start booting it
+        id: simulator
+        run: |
+          udid="$(scripts/ci/pick-simulator.sh 2> "$RUNNER_TEMP/simulator.txt")"
+          cat "$RUNNER_TEMP/simulator.txt"
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
+          { echo "### iPhone simulator"; tail -1 "$RUNNER_TEMP/simulator.txt"; } >> "$GITHUB_STEP_SUMMARY"
+          xcrun simctl boot "$udid" || true
       - name: Install XcodeGen
         run: scripts/ci/install-xcodegen.sh
       - name: Cache key
@@ -232,25 +244,14 @@ jobs:
             !Apps/iOS/build/DerivedData/Index.noindex
           key: ${{ steps.key.outputs.build }}
           restore-keys: ios-dd-${{ runner.os }}-${{ env.DAYBOOK_XCODE_BUILD }}-
-      - name: Pick a simulator
-        id: simulator
-        run: |
-          udid="$(scripts/ci/pick-simulator.sh 2> "$RUNNER_TEMP/simulator.txt")"
-          cat "$RUNNER_TEMP/simulator.txt"
-          echo "udid=$udid" >> "$GITHUB_OUTPUT"
-          { echo "### iPhone simulator"; tail -1 "$RUNNER_TEMP/simulator.txt"; } >> "$GITHUB_STEP_SUMMARY"
       # Once, for the runner's architecture; both test steps run on what it made.
       - name: Build for testing
         id: build
         run: scripts/build-ios.sh --build-for-testing
-      # After the build, not beside it: a first boot starts all of iOS (wallpapers, system widgets, Apple
-      # Intelligence, Siri, Maps…), which held the load average in the hundreds for minutes on this three-core
-      # runner and made every xcodebuild beside it start minutes late (docs/release.md, "The simulator").
-      - name: Boot the simulator
+      - name: Wait for the simulator
         env:
           UDID: ${{ steps.simulator.outputs.udid }}
         run: |
-          xcrun simctl boot "$UDID" || true
           xcrun simctl bootstatus "$UDID" -b > "$RUNNER_TEMP/bootstatus.txt" 2>&1 || { cat "$RUNNER_TEMP/bootstatus.txt"; exit 1; }
           tail -1 "$RUNNER_TEMP/bootstatus.txt"
       # xcodebuild hands TEST_RUNNER_-prefixed variables to the test runner without the prefix: every
