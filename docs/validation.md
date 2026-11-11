@@ -29,8 +29,8 @@ protocol and rules on the Mac, the iPhone side against a simulated watch, and th
   change merged two runs; an "Apple Watch didn't start recording" chip on nearly every recording; the Mac's
   `trackStart` regressed for iPhone tracks; and the watch's import could take over the iPhone's conversation while it
   recovered after a relaunch.
-- **Owner steps.** Register `local.daybook.watchkitapp` on the developer account before the next signed build
-  (docs/release.md); the App Store listing will want watch screenshots.
+- **Owner steps.** `local.daybook.watchkitapp` is registered on the developer account (2026-11-11, docs/release.md);
+  the App Store listing will want watch screenshots.
 - **Needs a real watch.** docs/watch.md, "Needs a real watch": an hour or more with the wrist down (the `audio`
   background mode, the CPU limit, battery per hour), the watch microphone's format, calls, Siri, and AirPods mid-recording,
   the Live Activity tap opening the watch app, background WatchConnectivity (transfers, reachability, the reply to

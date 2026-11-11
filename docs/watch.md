@@ -214,8 +214,8 @@ bundle ID, versions that differ from the app's, or another companion.
 
 The icon is the Icon Composer document the other apps use (`Resources/Daybook.icon`); Xcode builds it for watchOS.
 
-Signing is automatic. The owner registers `local.daybook.watchkitapp` on the developer account before the first signed
-build ([release.md](release.md), "The owner's steps").
+Signing is automatic. `local.daybook.watchkitapp` is registered on the developer account, with no capabilities
+([release.md](release.md), "The owner's steps").
 
 ## Needs a real watch
 

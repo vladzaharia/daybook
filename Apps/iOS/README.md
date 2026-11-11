@@ -41,7 +41,7 @@ command line, export it. From Xcode, which doesn't see shell variables, create
 builds need no team.
 
 Identifiers: `local.daybook` (app, the Mac app's bundle ID too: docs/release.md, "One bundle ID"),
-`local.daybook.widgets` (widget extension), `local.daybook.watchkitapp` (the watch app; the owner registers it,
+`local.daybook.widgets` (widget extension), `local.daybook.watchkitapp` (the watch app, registered with no capabilities,
 docs/release.md, "The owner's steps"), app group `group.local.daybook`, iCloud container `$(DAYBOOK_ICLOUD_CONTAINER)` (default
 `iCloud.local.daybook`, set in `Config/Signing.xcconfig` and overridable in the local file).
 
