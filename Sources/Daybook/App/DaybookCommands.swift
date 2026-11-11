@@ -56,13 +56,13 @@ private struct FileCommands: Commands {
         CommandGroup(replacing: .newItem) {
             // A conversation that's only your notes so far, as on the iPhone; Record records into it.
             Button("New Note") {
-                if state.place.isDevice { state.place = .section(.all) }
+                if state.window.place.isDevice { state.window.place = .section(.all) }
                 state.newNote()
                 openWindow(id: WindowID.library)
             }
             .keyboardShortcut("n")
             Button("New Folder") {
-                if state.place.isDevice { state.place = .section(.all) }
+                if state.window.place.isDevice { state.window.place = .section(.all) }
                 state.requestNewFolder()
                 openWindow(id: WindowID.library)
             }
@@ -93,7 +93,7 @@ private struct FileCommands: Commands {
                 .keyboardShortcut("r", modifiers: [.command, .option])
                 .disabled(meeting == nil)
             Divider()
-            Button("Move to Trash…") { state.trashRequestID = meeting?.id }
+            Button("Move to Trash…") { state.window.confirmingTrash = meeting.map { [$0.id] } ?? [] }
                 .disabled(meeting.map { state.isBusy($0.id) } ?? true)
         }
     }
@@ -159,18 +159,19 @@ private struct ViewCommands: Commands {
             // The toolbar's Summary | Transcript, ticked as it's lit: where the window has room for two pages, both
             // while both show, and choosing one keeps it alone or puts the other back beside it (`PageSides`).
             ForEach(PageMode.allCases) { side in
-                Toggle(side.title, isOn: Binding(get: { meeting.map { state.pageSides($0).shows(side) } ?? false },
-                                                 set: { _ in if let meeting { state.choosePage(side, for: meeting) } }))
+                let hasTranscript = meeting.map { state.hasTranscriptPage($0) } ?? false
+                Toggle(side.title, isOn: Binding(get: { meeting != nil && state.window.pageSides(hasTranscript: hasTranscript).shows(side) },
+                                                 set: { _ in if meeting != nil { state.window.choosePage(side, hasTranscript: hasTranscript) } }))
                     .keyboardShortcut(side == .summary ? "1" : "2")
-                    .disabled(side == .summary ? meeting == nil : meeting.map { state.hasTranscriptPage($0) } != true)
+                    .disabled(side == .summary ? meeting == nil : !hasTranscript)
             }
             Divider()
             // The reading surface scales in every window that shows it, Floating Notes too.
-            Button("Make Text Bigger") { state.readingScale = ReadingScale.bigger(state.readingScale) }
+            Button("Make Text Bigger") { state.window.readingScale = ReadingScale.bigger(state.window.readingScale) }
                 .keyboardShortcut("+")
-            Button("Make Text Smaller") { state.readingScale = ReadingScale.smaller(state.readingScale) }
+            Button("Make Text Smaller") { state.window.readingScale = ReadingScale.smaller(state.window.readingScale) }
                 .keyboardShortcut("-")
-            Button("Actual Size") { state.readingScale = 1 }
+            Button("Actual Size") { state.window.readingScale = 1 }
                 .keyboardShortcut("0")
             Divider()
         }
@@ -202,19 +203,19 @@ private struct ConversationCommands: Commands {
     var body: some Commands {
         let meeting = state.shownMeeting(shownID)
         let locked = meeting.map { state.isBusy($0.id) } ?? true
-        let queued = meeting.map { state.queuedIDs.contains($0.id) } ?? false
+        let queued = meeting.map { state.processor.queue.queuedIDs.contains($0.id) } ?? false
         CommandMenu("Conversation") {
-            if let meeting, state.processingID == meeting.id {
+            if let meeting, state.processor.queue.runningID == meeting.id {
                 Button("Pause Transcription") { state.pauseProcessing(meeting.id) }
-            } else if let meeting, state.pausedIDs.contains(meeting.id) {
-                Button("Resume Transcription") { state.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting)) }
+            } else if let meeting, state.processor.queue.paused.contains(meeting.id) {
+                Button("Resume Transcription") { state.processor.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting)) }
             } else {
-                Button("Transcribe") { if let meeting { state.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting)) } }
+                Button("Transcribe") { if let meeting { state.processor.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting)) } }
                     .disabled(meeting?.hasUntranscribedAudio != true || locked || queued)
             }
             Divider()
             ForEach([ProcessingRequest.Mode.summaryOnly, .speakerRefresh, .newAudio, .fullRetranscription]) { mode in
-                Button(mode.title) { if let id = meeting?.id { state.enqueue(id, mode: mode) } }
+                Button(mode.title) { if let id = meeting?.id { state.processor.enqueue(id, mode: mode) } }
                     .disabled(meeting?.tracks.isEmpty != false || locked || queued)
             }
             Menu("Template") {
@@ -227,9 +228,9 @@ private struct ConversationCommands: Commands {
             Button("Add Bookmark") { state.addBookmark(in: meeting?.id) }
                 .keyboardShortcut("d")
                 .disabled(!state.canAddBookmark(in: meeting?.id))
-            Button("Adjust Timing…") { state.activeSheet = .adjustTiming(nil) }
+            Button("Adjust Timing…") { state.window.sheet = .adjustTiming(nil) }
                 .disabled(meeting.map { $0.tracks.count < 2 } ?? true)
-            Button("Review Earlier Corrections…") { state.activeSheet = .reviewCorrections }
+            Button("Review Earlier Corrections…") { state.window.sheet = .reviewCorrections }
                 .disabled(meeting?.correctionTransferIssues?.isEmpty != false)
             Divider()
             Menu("Move to Folder") {
@@ -238,7 +239,7 @@ private struct ConversationCommands: Commands {
             .disabled(meeting == nil)
             PlacementMenuItem(state: state, meeting: meeting)
             Divider()
-            Button("Version History…") { state.activeSheet = .versionHistory }
+            Button("Version History…") { state.window.sheet = .versionHistory }
                 .disabled(meeting?.revisions.isEmpty != false)
         }
     }
@@ -340,7 +341,7 @@ struct TemplateMenuItems: View {
     @Environment(\.openWindow) private var openWindow
     var body: some View {
         Picker("Template", selection: state.templateSelection(for: meetingID)) {
-            Text(automaticTitle).tag("auto")
+            Text(TemplateWords.automatic(for: state.meetings.first { $0.id == meetingID })).tag("auto")
             Divider()
             ForEach(state.templates.filter(\.isBuiltIn)) { template in Text(template.name).tag(template.id) }
             let custom = state.templates.filter { !$0.isBuiltIn }
@@ -352,10 +353,6 @@ struct TemplateMenuItems: View {
         .pickerStyle(.inline)
         Divider()
         Button("Edit Templates…") { openWindow(id: WindowID.templates) }
-    }
-    private var automaticTitle: String {
-        guard let kind = state.meetings.first(where: { $0.id == meetingID })?.summary?.kind, kind != .auto else { return "Automatic" }
-        return "Automatic (\(kind.title))"
     }
 }
 

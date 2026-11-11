@@ -5,8 +5,9 @@ import Foundation
 
 /// What goes to the Macs over the local link while this iPhone records (docs/iphone.md, "Every
 /// source"): the recording's state on every change and every 15 seconds; its captions, a second at a time
-/// and only what changed; its level, a few readings at a time about five times a second; and the notes
-/// and bookmarks of a shared recording, both ways, filed as the device that made them files them.
+/// and only what changed; its level, a few readings at a time about five times a second, and the Macs' levels
+/// back for its meters; and the notes and bookmarks of a shared recording, both ways, filed as the device that
+/// made them files them.
 @MainActor
 final class LinkSharing {
     /// Notes and bookmarks of the shared recording, kept in step with the Macs recording it too.
@@ -19,6 +20,8 @@ final class LinkSharing {
     private var captionSharing: Task<Void, Never>?
     /// This iPhone's level readings on their way to the Macs recording with it that draw them (`shareLevel`).
     private var levelShare = LevelShare()
+    /// The levels the Macs recording with it send, for the recorder's meters to play back (`macLevel`).
+    private var macLevels = LevelPlayback()
     private var lastStateSent = Date.distantPast
 
     private let recorder: PhoneRecorder
@@ -136,6 +139,20 @@ final class LinkSharing {
         let macs = macsShowingLevels(id)
         guard !macs.isEmpty else { return }
         link.sendLevels(LinkLevels(conversationID: id, values: values, interval: PhoneRecorder.levelInterval, sentAt: now), to: macs)
+    }
+
+    /// A Mac recording this conversation too sent its level (its microphone and computer audio, the louder each
+    /// tick): the recorder's meter for it plays the readings back, a reading a tick (`LevelPlayback`).
+    func macLevelled(_ message: LinkLevels, from mac: UUID, at now: Date = Date()) {
+        guard recorder.isActive, recorder.captureID == message.conversationID else { return }
+        macLevels.receive(message, from: mac, at: now)
+    }
+
+    /// The Mac's next reading for this recording; nil when it hasn't sent one lately (an older Mac, one that stopped,
+    /// or one out of reach): its meter rests.
+    func macLevel(_ mac: UUID, at now: Date = Date()) -> Double? {
+        guard let id = recorder.captureID else { return nil }
+        return macLevels.next(mac, conversation: id, at: now)
     }
 
     // MARK: Notes and bookmarks

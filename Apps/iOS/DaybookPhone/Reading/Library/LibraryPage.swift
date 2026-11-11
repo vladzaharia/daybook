@@ -1,3 +1,4 @@
+import DaybookCaptions
 import DaybookDesign
 import DaybookKit
 import DaybookUI
@@ -163,7 +164,7 @@ struct LibraryPage: View {
         } header: {
           Text(group.title)
             .font(.subheadline.weight(.semibold))
-            .foregroundStyle(PhoneStyle.Ink.secondary)
+            .foregroundStyle(DaybookPalette.Ink.secondary)
             .textCase(nil)
         }
       }
@@ -181,8 +182,8 @@ struct LibraryPage: View {
     // Through PhoneSync, so a pull joins a pass already running instead of being dropped, and the status follows.
     .refreshable { await model.sync.synchronize(.manual) }
     .overlay { if meetings.isEmpty && library.isLoaded { emptyPlace } }
-    .motion(
-      library.isLoaded ? PhoneStyle.Motion.state : .linear(duration: 0), value: meetings.map(\.id))
+    .daybookMotion(
+      library.isLoaded ? DaybookMotion.state : .linear(duration: 0), value: meetings.map(\.id))
   }
 
   /// A row's swipes, from its actions: Move to Trash and Move to Folder to the trailing edge, Work or Personal to
@@ -207,7 +208,7 @@ struct LibraryPage: View {
         } label: {
           Label(ConversationActionMenuItems.shortTitle(move), systemImage: move.symbol)
         }
-        .tint(PhoneStyle.prominentFill)
+        .tint(DaybookPalette.prominentFill)
       }
     } else if let filing = ConversationActionMenuItems.action(.moveTo(.work), in: groups)
       ?? ConversationActionMenuItems.action(.moveTo(.personal), in: groups),
@@ -252,7 +253,7 @@ struct LibraryPage: View {
       SearchScopePicker(scope: $session.searchScope, folder: viewedFolder)
         .listRowSeparator(.hidden)
         .pageRowInsets(twoPage: twoPage)
-        .listRowBackground(PhoneStyle.paper)
+        .listRowBackground(DaybookPalette.paper)
       ForEach(hits) { hit in
         if let meeting = library.meetings.first(where: { $0.id == hit.meetingID }) {
           Button {
@@ -262,7 +263,7 @@ struct LibraryPage: View {
           }
           .buttonStyle(.plain)
           .pageRowInsets(twoPage: twoPage)
-          .listRowBackground(PhoneStyle.paper)
+          .listRowBackground(DaybookPalette.paper)
         }
       }
       // Saved live captions of conversations the text search didn't find, labelled as such.
@@ -275,7 +276,7 @@ struct LibraryPage: View {
         }
         .buttonStyle(.plain)
         .pageRowInsets(twoPage: twoPage)
-        .listRowBackground(PhoneStyle.paper)
+        .listRowBackground(DaybookPalette.paper)
       }
     }
     .listStyle(.plain)
@@ -383,7 +384,7 @@ struct LibraryPage: View {
       ToolbarItem(placement: .topBarTrailing) {
         Button("Done") {
           withAnimation(
-            PhoneStyle.Motion.resolved(PhoneStyle.Motion.state, reduceMotion: reduceMotion)
+            DaybookMotion.resolved(DaybookMotion.state, reduceMotion: reduceMotion)
           ) {
             session.isSelecting = false
             session.selection = []
@@ -406,7 +407,7 @@ struct LibraryPage: View {
         } label: {
           Label("More", systemImage: "ellipsis")
         }
-        .tint(PhoneStyle.Ink.title)
+        .tint(DaybookPalette.Ink.title)
       }
       ToolbarSpacer(.fixed, placement: .topBarTrailing)
       ToolbarItem(placement: .topBarTrailing) {
@@ -415,7 +416,7 @@ struct LibraryPage: View {
         } label: {
           Label("Settings", systemImage: "gearshape")
         }
-        .tint(PhoneStyle.Ink.title)
+        .tint(DaybookPalette.Ink.title)
       }
     }
   }
@@ -441,7 +442,7 @@ struct LibraryPage: View {
         } label: {
           Label("New", systemImage: "plus")
         }
-        .tint(PhoneStyle.Ink.title)
+        .tint(DaybookPalette.Ink.title)
         .accessibilityHint("New Note, or Import Audio from Files")
       }
     }
@@ -454,7 +455,7 @@ struct LibraryPage: View {
       SelectionBar(library: library, ids: Array(session.selection))
         .padding(.leading, barInset(.leading))
         .padding(.trailing, barInset(.trailing))
-        .padding(.bottom, PhoneStyle.Space.s2)
+        .padding(.bottom, DaybookSpacing.s2)
         .daybookTransition(.move(edge: .bottom).combined(with: .opacity))
     } else if !session.isSearchPresented {
       let playing = session.player.meetingID.flatMap { id in
@@ -463,7 +464,7 @@ struct LibraryPage: View {
       let notices = !place.isTrash && RecordStartNotices.isShowing(model)
       let strip = StatusStrip.shown(model)
       if playing != nil || notices || strip != nil {
-        VStack(spacing: PhoneStyle.Space.s2) {
+        VStack(spacing: DaybookSpacing.s2) {
           if let playing {
             MiniPlayer(player: session.player, meeting: playing) {
               twoPage ? session.select(playing.id) : session.open(playing.id)
@@ -474,15 +475,15 @@ struct LibraryPage: View {
         }
         .padding(.leading, barInset(.leading))
         .padding(.trailing, barInset(.trailing))
-        .padding(.bottom, PhoneStyle.Space.s2)
-        .daybookMotion(PhoneStyle.Motion.state, value: strip?.line.id)
+        .padding(.bottom, DaybookSpacing.s2)
+        .daybookMotion(DaybookMotion.state, value: strip?.line.id)
       }
     }
   }
 
   /// The bar's side padding: 16 pt, and on the side that meets the Duo's crease, clear of it.
   private func barInset(_ edge: Edge) -> CGFloat {
-    creaseEdge == edge ? PhoneStyle.Page.creaseClearance : PhoneStyle.Space.s4
+    creaseEdge == edge ? ReadingGeometry.creaseClearance : DaybookSpacing.s4
   }
 
   // MARK: Actions
@@ -499,7 +500,7 @@ struct LibraryPage: View {
   private func perform(_ item: LibraryChrome.MoreItem) {
     switch item {
     case .select:
-      withAnimation(PhoneStyle.Motion.resolved(PhoneStyle.Motion.state, reduceMotion: reduceMotion)) {
+      withAnimation(DaybookMotion.resolved(DaybookMotion.state, reduceMotion: reduceMotion)) {
         session.isSelecting = true
         session.selection = []
       }
@@ -753,6 +754,18 @@ enum PhoneActions {
         canTakePhoto: CameraPicker.isAvailable))
   }
 
+  /// How this iPhone processes a conversation in a mode, from its menus, its status, and Info alike: a summary goes where
+  /// its placement puts it; the rest is a request a Mac takes up.
+  static func process(
+    _ id: UUID, _ mode: ProcessingRequest.Mode, library: LibraryController, placement: PhoneSummaryPlacement?
+  ) {
+    if mode == .summaryOnly {
+      library.summarize(id, placement: placement)
+    } else {
+      library.requestProcessing(id, mode: mode)
+    }
+  }
+
   /// Carries out `id` on the conversations `ids`.
   static func perform(
     _ id: ConversationAction.ID, on ids: [UUID], library: LibraryController,
@@ -761,14 +774,7 @@ enum PhoneActions {
   ) {
     let performer = ConversationActionPerformer(
       library: library, undoManager: undoManager,
-      process: { conversation, mode in
-        // A summary goes where this iPhone's placement puts it; the rest is a request a Mac takes up.
-        if mode == .summaryOnly {
-          library.summarize(conversation, placement: placement)
-        } else {
-          library.requestProcessing(conversation, mode: mode)
-        }
-      },
+      process: { process($0, $1, library: library, placement: placement) },
       show: { request in
         switch request {
         case .tags(let ids): session.sheet = .tags(ids)
@@ -796,6 +802,49 @@ enum PhoneActions {
       case .copySummary, .process, .versionHistory, .moveToFolder, .tags, .moveTo, .moveToTrash:
         break  // The library's (`ConversationActionPerformer`).
       }
+    }
+  }
+}
+
+/// What this iPhone does for what a conversation's status offers, from the page and Info's Now row alike: the library's
+/// half through DaybookKit's `ConversationStatusActionHandler`, as the Mac does it, with its work processed as its menus
+/// process it (`PhoneActions.process`), and this iPhone's own here: Details, its downloads, Settings, where its summaries
+/// run, and upgrades. A Mac's queue isn't this iPhone's to pause, resume, or cancel.
+@MainActor
+struct PhoneStatusActions: ConversationStatusActionHandler {
+  let library: LibraryController
+  let undoManager: UndoManager?
+  let session: ReadingSession
+  /// Its downloads; nil where none is offered (Info's Now row offers where the summary runs, Stop, and the waits).
+  var model: PhoneAppModel? = nil
+  let placement: PhoneSummaryPlacement?
+  var upgrades: PhoneUpgrades? = nil
+  /// Opens a Settings screen over the page (Models, Cloud).
+  var openSettings: (@MainActor (SettingsRoute) -> Void)? = nil
+
+  func process(_ id: UUID, _ mode: ProcessingRequest.Mode) {
+    PhoneActions.process(id, mode, library: library, placement: placement)
+  }
+
+  func performHere(_ action: ConversationStatusPresentation.Action, on id: UUID) {
+    switch action {
+    case .details(let words): session.sheet = .details(words)
+    case .pause, .resume, .cancel: break  // A Mac's queue.
+    case .cancelDownload: model?.models.cancelProcessingDownloads()
+    case .downloadModels: model?.models.downloadProcessingSet()
+    case .downloadSummaryModel:
+      guard let models = model?.models, let summary = models.summaryModel else { return }
+      models.downloadIfItFits(summary)
+    case .chooseModels: openSettings?(.models)
+    case .cloudSettings: openSettings?(.cloud)
+    case .summarizeHere: placement?.placements.beginHere(id)
+    case .useYourMac: library.requestProcessing(id, mode: .summaryOnly)
+    case .placement(let choice): placement?.perform(choice, for: id)
+    case .stopSummary: placement?.stop(id)
+    case .upgrade(let offer): Task { await upgrades?.accept(offer, for: id) }
+    case .dismissUpgrade(let offer): upgrades?.dismiss(offer, for: id)
+    case .transcribe, .summarize, .tryAgain, .cancelRequest, .dontWait, .waitAgain, .dismiss:
+      break  // The library's (`ConversationStatusActionHandler.perform`).
     }
   }
 }
@@ -867,7 +916,7 @@ private struct SelectionBar: View {
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
-    .foregroundStyle(role == .destructive ? PhoneStyle.Ink.error : PhoneStyle.Ink.link)
+    .foregroundStyle(role == .destructive ? DaybookPalette.Ink.error : DaybookPalette.Ink.link)
   }
 }
 
@@ -876,7 +925,7 @@ private struct SelectionBar: View {
 enum PageRows {
   static func inset(_ edge: Edge, twoPage: Bool, creaseEdge: Edge?) -> CGFloat? {
     guard twoPage else { return nil }
-    return creaseEdge == edge ? PhoneStyle.Page.readingCreaseClearance : pageInset
+    return creaseEdge == edge ? ReadingGeometry.readingCreaseClearance : pageInset
   }
 
   static let pageInset: CGFloat = 20
@@ -915,7 +964,7 @@ struct PageRowBackground: View {
 
   var body: some View {
     if shown {
-      RoundedRectangle(cornerRadius: 14, style: .continuous).fill(PhoneStyle.accent.opacity(0.14))
+      RoundedRectangle(cornerRadius: 14, style: .continuous).fill(DaybookPalette.accent.opacity(0.14))
         .padding(
           .leading,
           PageRows.washInset(.leading, creaseEdge: creaseEdge)
@@ -924,7 +973,7 @@ struct PageRowBackground: View {
           .trailing,
           PageRows.washInset(.trailing, creaseEdge: creaseEdge))
     } else {
-      PhoneStyle.paper
+      DaybookPalette.paper
     }
   }
 }

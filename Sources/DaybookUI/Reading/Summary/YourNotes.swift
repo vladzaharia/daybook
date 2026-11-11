@@ -69,6 +69,10 @@ public struct YourNotes<Editor: View>: View {
 /// What a bookmark's label shows, the same on both apps: labels an earlier version wrote by itself read as none, so
 /// the placeholder shows; a typed one is saved once editing ends, trimmed.
 public enum BookmarkLabel {
+    /// A bookmark with no words of its own, in placeholder ink: its row in the summary, and the notes' line after the
+    /// last paragraph when one sits there (`NoteParagraphs.isWordless`).
+    public static let untitled = "Bookmark"
+
     /// The label as the field shows it.
     public static func shown(_ text: String) -> String {
         BookmarkMarks.automaticLabels.contains(text) ? "" : text
@@ -83,7 +87,7 @@ public enum BookmarkLabel {
     /// "Bookmark", or "Bookmark from Soundcore" for one a Soundcore button made.
     public static func placeholder(for highlight: Highlight, in meeting: Meeting) -> String {
         let source = highlight.trackID.flatMap { id in meeting.tracks.first { $0.id == id } }
-        return source?.source == .soundcore ? "Bookmark from Soundcore" : "Bookmark"
+        return source?.source == .soundcore ? "\(untitled) from Soundcore" : untitled
     }
 }
 
@@ -157,9 +161,7 @@ struct BookmarkRow: View {
                     .foregroundStyle(DaybookPalette.Ink.body)
                     .textFieldStyle(.plain)
                     .focused($editing)
-                    #if os(iOS)
-                    .submitLabel(.done)
-                    #endif
+                    .touchKeyboard(submit: .done)
                     .onSubmit { editing = false }
                     .accessibilityLabel("Bookmark at \(SpokenTime.format(time))")
             }

@@ -28,16 +28,16 @@ struct SummaryPage: View {
     }
 
     private var isRecording: Bool { state.recordingID == meeting.id }
-    private var passages: PassageLinks { PassageLinks(onTap: besideTranscript) { [state] in state.showPassage($0) } }
+    private var passages: PassageLinks { PassageLinks(onTap: besideTranscript) { [state] in state.window.showPassage($0) } }
 
     var body: some View {
         PageScroll(bottomInset: player.meetingID == meeting.id && player.duration > 0 ? 56 : 0) {
             PageHeader(state: state, player: player, meeting: meeting, play: play)
             ConversationStatus(state: state, meeting: meeting)
             if let summary = meeting.summary {
-                SummaryBody(meeting: meeting, summary: summary, library: state.library, query: state.search,
+                SummaryBody(meeting: meeting, summary: summary, library: state.library, query: state.window.searchText,
                             revealing: arrival.reveals(summary, in: meeting), passages: passages,
-                            blockID: { $0 == .notesHeading ? SummaryJump.notes : nil }) { section in
+                            blockID: { $0 == .notesHeading ? SummaryBlockID.notes : nil }) { section in
                     let pictures = meeting.photos(in: section)
                     if !pictures.isEmpty { SectionPhotos(state: state, meeting: meeting, photos: pictures) }
                 }
@@ -48,21 +48,21 @@ struct SummaryPage: View {
             } else if meeting.tracks.isEmpty && !isRecording {
                 // The byline already says "Notes only"; this line offers the ways to add audio.
                 MarginRow {
-                    HStack(spacing: Space.s4) {
+                    HStack(spacing: DaybookSpacing.s4) {
                         Button("Record") { Task { await state.startRecording(into: meeting.id) } }
                             .disabled(state.isRecording || state.isStartingRecording)
                             .help("Record into this conversation")
                         Button("Add Recording…") { state.chooseImport(attachTo: meeting.id) }
                     }
                     .buttonStyle(.daybookLink)
-                    .font(TypeStyle.status)
+                    .font(DaybookFont.status.font(.window))
                 }
-                .padding(.top, Space.s5)
+                .padding(.top, DaybookSpacing.s5)
             }
             NotesSection(state: state, meeting: meeting, play: play, passages: passages)
-                .padding(.top, meeting.summary == nil ? Space.s5 : Space.s2)
+                .padding(.top, meeting.summary == nil ? DaybookSpacing.s5 : DaybookSpacing.s2)
                 // Without a summary there's no "Your notes" heading: the notes are where Show in Your Notes goes.
-                .id(meeting.summary == nil ? SummaryJump.notes : "notes-body")
+                .id(meeting.summary == nil ? SummaryBlockID.notes : "notes-body")
             // Every photo, in the order taken; the summary's sections show the ones they illustrate.
             PhotoStrip(state: state, meeting: meeting)
             // Tentative captions while recording; after the notes, so arriving words never move what
@@ -75,12 +75,12 @@ struct SummaryPage: View {
             }
         }
         // Show in Your Notes on the transcript, and a search result found in the notes, move the page there once.
-        .summaryJumps(in: meeting.id)
-        .environment(\.findQuery, state.search)
+        .summaryJumps(in: meeting.id, window: state.window)
+        .environment(\.findQuery, state.window.searchText)
         .macReadingContext(state)
         .onChange(of: meeting.id) { arrival = SummaryArrival(opening: meeting) }
-        .daybookMotion(Motion.page, value: meeting.summary?.createdAt)
-        .daybookMotion(Motion.dim, value: meeting.status == .summarizing)
+        .daybookMotion(DaybookMotion.page, value: meeting.summary?.createdAt)
+        .daybookMotion(DaybookMotion.dim, value: meeting.status == .summarizing)
     }
 }
 
@@ -104,9 +104,9 @@ private struct NotesSection: View {
                 text: Binding(get: { meeting.notes }, set: { state.editNotes(meeting.id, text: $0) }),
                 times: times,
                 placeholder: "Add a note…",
-                fontSize: DaybookFont.body.size(.window) * scale, lineSpacing: TypeStyle.bodyLineSpacing(scale),
+                fontSize: DaybookFont.body.size(.window) * scale, lineSpacing: DaybookFont.bodyLineSpacing(.window, scale: scale),
                 // Narrow, the times keep a lane as the bookmarks and Floating Notes do, rather than disappearing.
-                margin: narrow ? (times.contains { $0 != nil } ? FloatingLayout.textLeading : 0) : DaybookStyle.margin,
+                margin: narrow ? (times.contains { $0 != nil } ? FloatingLayout.textLeading : 0) : ReadingGeometry.margin,
                 timeFontSize: DaybookFont.marginTime.size(.window) * scale,
                 focusOnAppear: isRecording && meeting.notes.isEmpty,
                 playTime: state.isRecording ? nil : { play(.timeline($0)) })
@@ -126,7 +126,8 @@ private struct PageColophon: View {
         let deviceClass = origin.deviceID.flatMap { id in state.syncDevices.first { $0.id == id }?.deviceClass }
         Colophon(SummaryColophon(summary, thisDeviceID: state.library.thisDevice.id, words: state.statusWords,
                                  catalog: state.modelCatalog, deviceClass: deviceClass),
-                 arrived: summary.createdAt, template: templateTitle, summarizeAgain: summarizeAgain) {
+                 arrived: summary.createdAt, template: TemplateWords.title(for: meeting, resolved: state.resolvedTemplate(for: meeting)),
+                 summarizeAgain: summarizeAgain) {
             TemplateMenuItems(state: state, meetingID: meeting.id)
         }
     }
@@ -135,13 +136,6 @@ private struct PageColophon: View {
     private var summarizeAgain: (() -> Void)? {
         guard !meeting.unifiedTranscript.isEmpty, !state.processingStatus(for: meeting).isPending,
               state.recordingID != meeting.id else { return nil }
-        return { [state, id = meeting.id] in state.enqueue(id, mode: .summaryOnly) }
-    }
-
-    private var templateTitle: String {
-        if let template = state.resolvedTemplate(for: meeting) { return template.name }
-        // The inspector's words for the same choice.
-        if let kind = meeting.summary?.kind, kind != .auto { return "Automatic (\(kind.title))" }
-        return "Automatic"
+        return { [state, id = meeting.id] in state.processor.enqueue(id, mode: .summaryOnly) }
     }
 }

@@ -1,6 +1,7 @@
 import AppKit
 import DaybookCaptions
 import DaybookCore
+import DaybookDesign
 import DaybookKit
 import DaybookUI
 import SwiftUI
@@ -19,17 +20,17 @@ struct ConversationList: View {
 
     private var selection: Binding<Set<UUID>> {
         Binding(get: {
-            !state.multiSelection.isEmpty ? state.multiSelection : Set(state.selectedID.map { [$0] } ?? [])
+            !state.window.selection.isEmpty ? state.window.selection : Set(state.window.openID.map { [$0] } ?? [])
         }, set: { ids in
-            if ids.count > 1 { state.multiSelection = ids }
-            else { state.multiSelection = []; state.selectedID = ids.first }
+            if ids.count > 1 { state.window.selection = ids }
+            else { state.window.selection = []; state.window.openID = ids.first }
         })
     }
 
     var body: some View {
         Group {
-            if state.isSearching { SearchResults(state: state, captionHits: $captionHits) }
-            else if state.place.isTrash { MacTrashList(state: state) }
+            if state.window.isSearching { SearchResults(state: state, captionHits: $captionHits) }
+            else if state.window.place.isTrash { MacTrashList(state: state) }
             else { browsing }
         }
         .navigationTitle(title)
@@ -45,7 +46,7 @@ struct ConversationList: View {
         }
         .overlay { if isDropTargeted { DropOutline(label: "Import Audio") } }
         .dropDestination(for: URL.self) { urls, _ in importAudio(urls) } isTargeted: { isDropTargeted = $0 }
-        .onDeleteCommand { if !state.place.isTrash { state.trashRequestIDs = Array(selection.wrappedValue) } }
+        .onDeleteCommand { if !state.window.place.isTrash { state.window.confirmingTrash = Array(selection.wrappedValue) } }
         .sheet(item: $tagging) { request in
             ConversationTagsChooser(library: state.library, ids: request.ids) { tagging = nil }
         }
@@ -82,15 +83,15 @@ struct ConversationList: View {
         .environment(\.conversationListIsWide, isWide)
         // ⌘C copies the selection: inside Daybook the conversations, elsewhere their Markdown or their words.
         .copyable(state.meetings.filter { selection.wrappedValue.contains($0.id) && !state.personalLock.hides($0) }.map(ConversationTransfer.init))
-        .motion(state.isReady ? Motion.state : .linear(duration: 0), value: meetings.map(\.id))
+        .daybookMotion(state.isReady ? DaybookMotion.state : .linear(duration: 0), value: meetings.map(\.id))
         .contextMenu(forSelectionType: UUID.self) { ids in
             RowMenu(state: state, ids: Array(ids), undoManager: undoManager) { tagging = ConversationIDs(ids: $0) }
         } primaryAction: { ids in
-            if let id = ids.first { state.selectedID = id; state.focusTitle(id) }
+            if let id = ids.first { state.window.openID = id; state.focusTitle(id) }
         }
         .overlay {
             if meetings.isEmpty && state.isReady,
-               let words = LibraryWords.emptyPlace(state.place, libraryIsEmpty: state.meetings.isEmpty, platform: .mac) {
+               let words = LibraryWords.emptyPlace(state.window.place, libraryIsEmpty: state.meetings.isEmpty, platform: .mac) {
                 LibraryEmptyPlaceView(words)
             }
         }
@@ -99,7 +100,7 @@ struct ConversationList: View {
     // MARK: Title and status
 
     private var title: String {
-        switch state.place {
+        switch state.window.place {
         case .section(let section): return section.rawValue
         case .folder(let id): return state.folders.first { $0.id == id }?.name ?? "Folder"
         case .device(let id): return state.devices.session(id)?.device.name ?? "Device"
@@ -130,7 +131,7 @@ enum MacRowStatus {
             words: .mac(id: state.library.thisDevice.id), local: .mac(),
             isRecording: state.recordingID == meeting.id,
             placement: .init(planner: state.placements[meeting.id]),
-            queuedMode: state.processingQueue.first { $0.meetingID == meeting.id }?.mode,
+            queuedMode: state.processor.queue.jobs.first { $0.meetingID == meeting.id }?.mode,
             isPlaying: state.playback.meetingID == meeting.id && state.playback.isPlaying)
         return ConversationStatusPresentation.row(state.processingStatus(for: meeting), meeting: meeting, inputs: inputs, now: now)
     }
@@ -143,8 +144,8 @@ enum MacRowStatus {
 @MainActor
 enum MacListSubtitle {
     static func text(_ state: AppState, results: Int, at now: Date = Date()) -> String {
-        if state.isSearching { return results == 1 ? "1 result" : "\(results) results" }
-        if state.place.isTrash { return "" }
+        if state.window.isSearching { return results == 1 ? "1 result" : "\(results) results" }
+        if state.window.place.isTrash { return "" }
         if state.isStoppingRecording { return "Saving recording…" }
         if state.isRecording { return "Recording" }
         return QueueStatusWords.subtitle(queue(state), now: now) ?? ""
@@ -152,14 +153,14 @@ enum MacListSubtitle {
 
     /// When the running conversation's summary starts, while it counts down.
     static func countdown(_ state: AppState) -> Date? {
-        state.processingID.flatMap { state.placements[$0]?.deadline }
+        state.processor.queue.runningID.flatMap { state.placements[$0]?.deadline }
     }
 
     /// This Mac's queue as the shared words take it, as Floating Notes' home reads it: the step the page and the
     /// claim say (`AppState.runningStage`), where the summary runs, what waits, and a download.
     static func queue(_ state: AppState) -> QueueStatusWords.Queue {
-        var queue = QueueStatusWords.Queue(waiting: state.processingQueue.count)
-        if let id = state.processingID, state.meetings.contains(where: { $0.id == id }) {
+        var queue = QueueStatusWords.Queue(waiting: state.processor.queue.jobs.count)
+        if let id = state.processor.queue.runningID, state.meetings.contains(where: { $0.id == id }) {
             queue.running = state.runningStage
             switch state.placements[id]?.phase {
             case .countingDown(_, let until)?: queue.countdown = until
@@ -229,11 +230,11 @@ private struct SearchResults: View {
     var body: some View {
         let hits = state.searchHits
         let byID = Dictionary(state.meetings.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        List(selection: Binding(get: { state.selectedID }, set: { id in MacSearch.open(id, hits: hits, captionHits: captionHits, state: state) })) {
-            SearchScopePicker(scope: $state.searchScope, folder: viewedFolder)
+        List(selection: Binding(get: { state.window.openID }, set: { id in MacSearch.open(id, hits: hits, captionHits: captionHits, state: state) })) {
+            SearchScopePicker(scope: Bindable(state.window).searchScope, folder: viewedFolder)
             .controlSize(.small)
             .frame(maxWidth: .infinity)
-            .padding(.bottom, Space.s3)
+            .padding(.bottom, DaybookSpacing.s3)
             .selectionDisabled()
             .listRowSeparator(.hidden)
             // The control's edges line up with the result rows' highlight.
@@ -245,18 +246,18 @@ private struct SearchResults: View {
                 }
             }
             ForEach(captionHits.filter { state.personalLock.lists($0.meeting) }) { hit in
-                CaptionHitRowView(meeting: hit.meeting, segment: hit.segment, query: state.search)
+                CaptionHitRowView(meeting: hit.meeting, segment: hit.segment, query: state.window.searchText)
                     .tag(hit.meeting.id)
                     .listRowSeparator(.hidden)
             }
         }
         .listStyle(.inset)
         .softTopScrollEdge()
-        .overlay { if hits.isEmpty && captionHits.isEmpty { ContentUnavailableView.search(text: state.search) } }
-        .task(id: CaptionQuery(text: state.search, tokens: state.searchTokens, scope: state.searchScope, revision: state.libraryRevision)) {
+        .overlay { if hits.isEmpty && captionHits.isEmpty { ContentUnavailableView.search(text: state.window.searchText) } }
+        .task(id: CaptionQuery(text: state.window.searchText, tokens: state.window.searchTokens, scope: state.window.searchScope, revision: state.libraryRevision)) {
             // The conversations the search could list (its scope and tokens), less those the text search found.
-            let scoped = Set(LibrarySearch.hits(in: state.meetings, text: "", tokens: state.searchTokens, scope: state.searchScope).map(\.meetingID))
-            let found = await LibraryCaptionSearch.hits(in: state.meetings.filter { scoped.contains($0.id) }, query: state.search,
+            let scoped = Set(LibrarySearch.hits(in: state.meetings, text: "", tokens: state.window.searchTokens, scope: state.window.searchScope).map(\.meetingID))
+            let found = await LibraryCaptionSearch.hits(in: state.meetings.filter { scoped.contains($0.id) }, query: state.window.searchText,
                                                         excluding: Set(hits.map(\.meetingID)), libraryRoot: state.library.rootURL)
             guard !Task.isCancelled else { return }
             captionHits = found
@@ -265,7 +266,7 @@ private struct SearchResults: View {
 
     /// The folder being viewed, which the scopes offer too.
     private var viewedFolder: LibraryFolder? {
-        guard case .folder(let id) = state.place else { return nil }
+        guard case .folder(let id) = state.window.place else { return nil }
         return state.folders.first { $0.id == id }
     }
 }
@@ -275,23 +276,23 @@ private struct SearchResults: View {
 enum MacSearch {
     /// Opens a result at what it found: a transcript passage, or a saved live caption, on the transcript's page, where
     /// both read until a newer transcript replaces the captions (`SavedCaptions`, as on the iPhone); a note at Your
-    /// notes on the summary page (`SummaryJump`); the page's top for a title or a summary.
+    /// notes on the summary page (`LibraryWindowModel.showOnSummary`); the page's top for a title or a summary.
     static func open(_ id: UUID?, hits: [SearchHit], captionHits: [LibraryCaptionSearch.Hit], state: AppState) {
-        state.multiSelection = []
-        state.selectedID = id
+        state.window.selection = []
+        state.window.openID = id
         if let caption = captionHits.first(where: { $0.meeting.id == id }) {
-            state.turnPage(to: .transcript)
-            state.pageScrollTarget = caption.segment.id
+            state.window.turnPage(to: .transcript)
+            state.window.pageScrollTarget = caption.segment.id
             return
         }
         guard let id, let hit = hits.first(where: { $0.meetingID == id }) else { return }
         if hit.field == .transcript, let segment = hit.segmentID {
-            state.turnPage(to: .transcript)
-            state.pageScrollTarget = segment
+            state.window.turnPage(to: .transcript)
+            state.window.pageScrollTarget = segment
         } else {
-            state.turnPage(to: .summary)
-            state.pageScrollTarget = nil
-            if hit.field == .notes { SummaryJump.window.show(SummaryJump.notes, in: id) }
+            state.window.turnPage(to: .summary)
+            state.window.pageScrollTarget = nil
+            if hit.field == .notes { state.window.showOnSummary(SummaryBlockID.notes, in: id) }
         }
     }
 }
@@ -306,7 +307,7 @@ private struct MacTrashList: View {
     @State private var loaded = false
 
     var body: some View {
-        List(selection: $state.selectedID) {
+        List(selection: Bindable(state.window).openID) {
             ForEach(trashed) { meeting in
                 TrashRowView(meeting: meeting) { MacTrash.restore([meeting.id], state: state) }
                     .tag(meeting.id)
@@ -322,7 +323,7 @@ private struct MacTrashList: View {
         }
         // ⌘⌫ puts the selected one back, as Put Back does in Finder's Trash.
         .onKeyPress(.delete, phases: .down) { press in
-            guard press.modifiers.contains(.command), let id = state.selectedID, trashed.contains(where: { $0.id == id }) else { return .ignored }
+            guard press.modifiers.contains(.command), let id = state.window.openID, trashed.contains(where: { $0.id == id }) else { return .ignored }
             MacTrash.restore([id], state: state)
             return .handled
         }
@@ -351,11 +352,11 @@ struct TrashDetail: View {
             if let meeting {
                 TrashedConversationPage(meeting: meeting) { MacTrash.restore([meeting.id], state: state) }
             } else {
-                DaybookStyle.paper
+                DaybookPalette.paper
             }
         }
-        .task(id: [state.selectedID, state.libraryRevision] as [AnyHashable?]) {
-            guard let id = state.selectedID else { meeting = nil; return }
+        .task(id: [state.window.openID, state.libraryRevision] as [AnyHashable?]) {
+            guard let id = state.window.openID else { meeting = nil; return }
             meeting = await state.library.trashedMeeting(id)
         }
     }
@@ -367,8 +368,8 @@ enum MacTrash {
     /// left the Trash, or is searching, while it read: the selection belongs to what they're looking at now.
     /// Whether it took it.
     static func adopt(_ read: [Meeting], state: AppState) -> Bool {
-        guard state.place.isTrash, !state.isSearching else { return false }
-        if !read.contains(where: { $0.id == state.selectedID }) { state.selectedID = read.first?.id }
+        guard state.window.place.isTrash, !state.window.isSearching else { return false }
+        if !read.contains(where: { $0.id == state.window.openID }) { state.window.openID = read.first?.id }
         return true
     }
 
@@ -379,9 +380,9 @@ enum MacTrash {
                 do {
                     let meeting = try await state.library.restoreFromTrash(id)
                     state.post(LibraryWords.restored(meeting), action: LibraryNoticeAction(title: "Show") {
-                        state.place = .section(.all)
-                        state.multiSelection = []
-                        state.selectedID = meeting.id
+                        state.window.place = .section(.all)
+                        state.window.selection = []
+                        state.window.openID = meeting.id
                     })
                 } catch {
                     state.report("Couldn’t Restore", "Try again.", error)
@@ -405,7 +406,7 @@ private struct RowMenu: View {
         let meetings = state.meetings.filter { ids.contains($0.id) }
         if let only = meetings.first, meetings.count == 1, state.personalLock.hides(only) {
             // Locked: nothing that shows or shares it until the person unlocks.
-            Button(PersonalLockWords.unlock) { state.selectedID = only.id }
+            Button(PersonalLockWords.unlock) { state.window.openID = only.id }
         } else if let only = meetings.first, meetings.count == 1 {
             ShareLink(item: ConversationShareItem(only), preview: SharePreview(ConversationRowView.title(only))) {
                 Label("Share…", systemImage: "square.and.arrow.up")
@@ -443,7 +444,7 @@ struct BatchActionButtons: View {
     var body: some View {
         let groups = ConversationActions.batch(ids, in: state.meetings, context: .init(platform: .mac))
         let actions = groups.flatMap(\.actions)
-        VStack(spacing: Space.s3) {
+        VStack(spacing: DaybookSpacing.s3) {
             HStack {
                 ForEach(actions.filter { $0.role != .destructive }) { action in
                     if let custom = MacActions.custom(action, ids: ids, state: state) {
@@ -459,7 +460,7 @@ struct BatchActionButtons: View {
             ForEach(actions.filter { $0.role == .destructive }) { action in
                 Button(action.title, role: .destructive) { perform(action.id) }
                     .buttonStyle(.plain)
-                    .foregroundStyle(Ink.error)
+                    .foregroundStyle(DaybookPalette.Ink.error)
                     .disabled(!action.isAvailable)
             }
         }
@@ -483,8 +484,13 @@ enum MacActions {
     /// What the Mac knows about a conversation for its actions: recording here, or being processed here.
     static func context(_ state: AppState, _ meeting: Meeting) -> ConversationActions.Context {
         let recording = state.recordingID == meeting.id && (state.isRecording || state.isStartingRecording || state.isStoppingRecording)
-        return ConversationActions.Context(platform: .mac, isRecording: recording, isProcessingHere: state.processingID == meeting.id,
+        return ConversationActions.Context(platform: .mac, isRecording: recording, isProcessingHere: state.processor.queue.runningID == meeting.id,
                                            status: state.processingStatus(for: meeting))
+    }
+
+    /// How the Mac processes a conversation in a mode, from its menus and its status alike: its queue.
+    static func process(_ id: UUID, _ mode: ProcessingRequest.Mode, state: AppState) {
+        state.processor.enqueue(id, mode: mode)
     }
 
     /// Carries out `id` on the conversations `ids`. `window` answers what needs the window: Tags… (the chooser over the
@@ -495,19 +501,19 @@ enum MacActions {
             library: state.library,
             // A menu in the toolbar acts on the key window, the library's.
             undoManager: undoManager ?? NSApp.keyWindow?.undoManager,
-            process: { state.enqueue($0, mode: $1) },
+            process: { process($0, $1, state: state) },
             show: { request in
                 switch request {
                 case .tags(let ids): window(.tags, ids)
                 case .versionHistory(let id):
-                    state.selectedID = id
-                    state.activeSheet = .versionHistory
+                    state.window.openID = id
+                    state.window.sheet = .versionHistory
                 case .moveToFolder: break // A menu of the folders (`custom`).
-                case .moveToTrash(let ids): state.trashRequestIDs = ids
+                case .moveToTrash(let ids): state.window.confirmingTrash = ids
                 }
             },
             copy: { LocalPasteboard.copy($0) },
-            confirm: { state.confirmation = $0 })
+            confirm: { state.window.confirmation = $0 })
         performer.perform(id, on: ids) { meetings in
             guard let first = meetings.first else { return }
             switch id {
@@ -517,7 +523,7 @@ enum MacActions {
             case .addPhotos: state.chooseAddPhoto(to: first.id)
             case .addRecordingFromFile: state.chooseImport(attachTo: first.id)
             case .rename:
-                state.selectedID = first.id
+                state.window.openID = first.id
                 state.focusTitle(first.id)
             case .showInFinder: state.showInFinder(first.id)
             case .shareMarkdown, .shareAudio: window(id, meetings.map(\.id))
@@ -554,6 +560,46 @@ enum MacActions {
             .help({ if case .unavailable(let why) = action.availability { return why } else { return "" } }()))
         default:
             return nil
+        }
+    }
+}
+
+/// What the Mac does for what a conversation's status offers, from the page and the inspector's Now row alike: the
+/// library's half through DaybookKit's `ConversationStatusActionHandler`, as the iPhone does it, with its work through
+/// the queue its menus use (`MacActions.process`), and the Mac's own here: its queue's Pause, Resume, and Cancel, its
+/// downloads, Settings, where the summary runs, and upgrades. Details is the status's own popover.
+@MainActor
+struct MacStatusActions: ConversationStatusActionHandler {
+    let state: AppState
+    let undoManager: UndoManager?
+    /// Opens Settings on a pane (Models, Cloud).
+    let openSettings: @MainActor (SettingsPane) -> Void
+
+    var library: LibraryController { state.library }
+
+    func process(_ id: UUID, _ mode: ProcessingRequest.Mode) { MacActions.process(id, mode, state: state) }
+
+    func performHere(_ action: ConversationStatusPresentation.Action, on id: UUID) {
+        switch action {
+        case .details: break // The status's popover.
+        case .useYourMac: process(id, .summaryOnly)
+        case .pause, .stopSummary: state.pauseProcessing(id)
+        case .resume:
+            guard let meeting = library.meeting(id) else { return }
+            process(id, state.defaultProcessingMode(for: meeting))
+        case .cancel: state.cancelQueued(id)
+        case .cancelDownload: state.cancelDownload()
+        case .downloadModels, .downloadSummaryModel:
+            state.processor.enqueue(id)
+            state.downloadModels(state.missingSelectedModels)
+        case .chooseModels: openSettings(.models)
+        case .cloudSettings: openSettings(.cloud)
+        case .summarizeHere: state.summarizeHere(id)
+        case .placement(let choice): state.chooseSummaryPlacement(choice, for: id)
+        case .upgrade(let offer): state.acceptUpgrade(offer, for: id)
+        case .dismissUpgrade(let offer): state.dismissUpgrade(offer, for: id)
+        case .transcribe, .summarize, .tryAgain, .cancelRequest, .dontWait, .waitAgain, .dismiss:
+            break // The library's (`ConversationStatusActionHandler.perform`).
         }
     }
 }
@@ -626,11 +672,11 @@ private struct LibraryNotice: View {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(Array(state.noticeLines.enumerated()), id: \.offset) { _, line in
                         LibraryNoticeLine(text: line, action: state.noticeAction(on: line)) {
-                            withAnimation(Motion.resolved(Motion.fade, reduceMotion: reduceMotion)) { state.performNoticeAction() }
+                            withAnimation(DaybookMotion.resolved(DaybookMotion.fade, reduceMotion: reduceMotion)) { state.performNoticeAction() }
                         }
                     }
                 }
-                Button { withAnimation(Motion.resolved(Motion.fade, reduceMotion: reduceMotion)) { state.notice = nil } } label: {
+                Button { withAnimation(DaybookMotion.resolved(DaybookMotion.fade, reduceMotion: reduceMotion)) { state.notice = nil } } label: {
                     Image(systemName: "xmark")
                 }
                 .buttonStyle(.plain).foregroundStyle(.secondary)
@@ -655,7 +701,7 @@ private struct LibraryNoticeLine: View {
                 words
                 Button(action.title, action: perform)
                     .buttonStyle(.daybookLink)
-                    .font(TypeStyle.status)
+                    .font(DaybookFont.status.font(.window))
                     .fixedSize()
             }
             // Heard as one: the line, then what it offers.
@@ -669,7 +715,7 @@ private struct LibraryNoticeLine: View {
     /// The words take the room the link leaves, which keeps its own at the trailing edge. They wrap in that width;
     /// a fixed vertical size made the window's split view taller than the window once a line wrapped.
     private var words: some View {
-        Text(text).font(TypeStyle.status).textSelection(.enabled).lineLimit(4)
+        Text(text).font(DaybookFont.status.font(.window)).textSelection(.enabled).lineLimit(4)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -681,11 +727,11 @@ struct DropOutline: View {
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(DaybookStyle.accent.opacity(0.06))
-                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(DaybookStyle.accent, style: StrokeStyle(lineWidth: 2, dash: [7, 5])))
+                .fill(DaybookPalette.accent.opacity(0.06))
+                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(DaybookPalette.accent, style: StrokeStyle(lineWidth: 2, dash: [7, 5])))
                 .padding(6)
             VStack(spacing: 6) {
-                Image(systemName: "tray.and.arrow.down").font(.system(size: 20)).foregroundStyle(DaybookStyle.accent)
+                Image(systemName: "tray.and.arrow.down").font(.system(size: 20)).foregroundStyle(DaybookPalette.accent)
                 Text(label).font(.headline)
             }
             .padding(16)
@@ -694,7 +740,7 @@ struct DropOutline: View {
         .scaleEffect(shown || reduceMotion ? 1 : 0.98)
         .opacity(shown ? 1 : 0)
         .onAppear { shown = true }
-        .motion(.easeOut(duration: 0.15), value: shown)
+        .daybookMotion(.easeOut(duration: 0.15), value: shown)
         .allowsHitTesting(false)
     }
 }

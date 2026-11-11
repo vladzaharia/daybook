@@ -23,9 +23,9 @@ final class ProcessingRequestQueueTests: XCTestCase {
         rig.inference.blockPhotos(true)
         rig.state.readPhotosWhenIdle(id)
         try await waitUntil("photo reading") { rig.inference.readingPhotos }
-        rig.state.enqueue(id)
-        XCTAssertNil(rig.state.processingID)
-        XCTAssertEqual(rig.state.queuedIDs, [id])
+        rig.state.processor.enqueue(id)
+        XCTAssertNil(rig.state.processor.queue.runningID)
+        XCTAssertEqual(rig.state.processor.queue.queuedIDs, [id])
         XCTAssertTrue(rig.inference.summarized.isEmpty)
         rig.inference.blockPhotos(false)
         try await waitUntil("photo reading to finish") { rig.state.readingPhotoID == nil }
@@ -67,7 +67,7 @@ final class ProcessingRequestQueueTests: XCTestCase {
         let claimed = try XCTUnwrap(request(rig, id)?.claim)
         XCTAssertEqual(claimed.device, me)
         XCTAssertEqual(claimed.expiresAt.timeIntervalSince(claimed.claimedAt), 600, accuracy: 1, "Claimed with the lease")
-        XCTAssertEqual(rig.state.runningJob?.requestID, request(rig, id)?.id)
+        XCTAssertEqual(rig.state.processor.queue.running?.requestID, request(rig, id)?.id)
         XCTAssertEqual(rig.state.requestOrigin(for: try XCTUnwrap(rig.meeting(id))), "Requested from Pocket iPhone")
         // What the phone sees through sync: this Mac is transcribing it.
         if case .processing(let progress) = ProcessingStatus(try XCTUnwrap(rig.meeting(id))) {
@@ -99,7 +99,7 @@ final class ProcessingRequestQueueTests: XCTestCase {
         rig.state.library.requestProcessing(id, mode: .summaryOnly, by: .phone)
 
         // Queued on this Mac for its own reasons (new audio from sync): it takes the request on.
-        rig.state.enqueue(id)
+        rig.state.processor.enqueue(id)
         try await answered(rig, id)
         let requests = try XCTUnwrap(rig.meeting(id)?.processingRequests)
         XCTAssertEqual(requests.count, 2)
@@ -176,8 +176,8 @@ final class ProcessingRequestQueueTests: XCTestCase {
         try rig.inference.block(taken)
         rig.state.pickUpRequests()
         try await waitUntil("the job to start") { rig.inference.isWaiting(on: taken) }
-        rig.state.enqueue(ownID)
-        XCTAssertNil(rig.state.processingQueue.first { $0.meetingID == ownID }?.requestID, "queued for this Mac's own reasons")
+        rig.state.processor.enqueue(ownID)
+        XCTAssertNil(rig.state.processor.queue.jobs.first { $0.meetingID == ownID }?.requestID, "queued for this Mac's own reasons")
 
         // A sync pass brings another Mac's newer claim (`ProcessingRequest.isLost`).
         let studio = ProcessingRequest.Device(id: "studio-mac", name: "Studio Mac")
@@ -186,9 +186,9 @@ final class ProcessingRequestQueueTests: XCTestCase {
         let theirs = try XCTUnwrap(released.claimed(by: studio, at: Date()))
         rig.state.library.update(takenID) { $0.upsertProcessingRequest(theirs) }
         rig.state.reconcileClaims()
-        try await waitUntil("the lost job to stop") { rig.state.processingID != takenID }
+        try await waitUntil("the lost job to stop") { rig.state.processor.queue.runningID != takenID }
         XCTAssertEqual(rig.state.notice, "Studio Mac is transcribing “Taken over”.")
-        XCTAssertFalse(rig.state.pausedIDs.contains(takenID), "Losing a claim isn't a pause")
+        XCTAssertFalse(rig.state.processor.queue.paused.contains(takenID), "Losing a claim isn't a pause")
         XCTAssertEqual(request(rig, takenID)?.claim?.device, studio, "The request is the other Mac's, untouched")
         XCTAssertEqual(request(rig, takenID)?.isOpen, true)
 
@@ -211,20 +211,20 @@ final class ProcessingRequestQueueTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(request(rig, id)).isClaimed(by: me, at: Date()))
 
         rig.state.pauseProcessing(id)
-        try await waitUntil("the pause") { rig.state.processingID == nil }
+        try await waitUntil("the pause") { rig.state.processor.queue.runningID == nil }
         let paused = try XCTUnwrap(request(rig, id))
         XCTAssertTrue(paused.isOpen)
         XCTAssertNil(paused.activeClaim(at: Date()), "Given back: any Mac may take it")
-        XCTAssertTrue(rig.state.pausedIDs.contains(id))
+        XCTAssertTrue(rig.state.processor.queue.paused.contains(id))
         rig.state.pickUpRequests()
-        XCTAssertFalse(rig.state.queuedIDs.contains(id), "Paused here: not claimed again until resumed")
+        XCTAssertFalse(rig.state.processor.queue.queuedIDs.contains(id), "Paused here: not claimed again until resumed")
 
         // Resume claims it again; Cancel gives it back again.
-        rig.state.enqueue(id)
+        rig.state.processor.enqueue(id)
         try await waitUntil("the job to run again") { rig.inference.isWaiting(on: audio) }
         XCTAssertTrue(try XCTUnwrap(request(rig, id)).isClaimed(by: me, at: Date()))
         rig.state.cancelProcessing()
-        try await waitUntil("the cancel") { rig.state.processingID == nil }
+        try await waitUntil("the cancel") { rig.state.processor.queue.runningID == nil }
         XCTAssertNil(try XCTUnwrap(request(rig, id)).activeClaim(at: Date()))
         XCTAssertTrue(try XCTUnwrap(request(rig, id)).isOpen, "Cancelling isn't failing")
         try rig.inference.unblock(audio)
@@ -255,7 +255,7 @@ final class ProcessingRequestQueueTests: XCTestCase {
         XCTAssertEqual(held.claim?.device, busy)
         XCTAssertEqual(rig.inference.transcribed.count, 1, "Only the stale one ran here")
         // Queueing it by hand on this Mac doesn't take it from the Mac that holds it.
-        rig.state.enqueue(live)
+        rig.state.processor.enqueue(live)
         try await rig.processed()
         XCTAssertEqual(request(rig, live)?.claim?.device, busy)
     }
@@ -275,7 +275,7 @@ final class ProcessingRequestQueueTests: XCTestCase {
         let waiting = try XCTUnwrap(request(rig, id))
         XCTAssertTrue(waiting.isOpen)
         XCTAssertNil(waiting.claim, "No models: left for a Mac that has them")
-        XCTAssertFalse(rig.state.queuedIDs.contains(id))
+        XCTAssertFalse(rig.state.processor.queue.queuedIDs.contains(id))
         XCTAssertEqual(rig.state.sync.replica.device?.canProcess, false)
         await phone.synchronize()
         let seen = await phone.sync.knownDevices()
@@ -324,9 +324,9 @@ final class ProcessingRequestQueueTests: XCTestCase {
         await a.state.synchronizeLibrary()
         await b.state.synchronizeLibrary()
         await a.state.synchronizeLibrary()
-        try await waitUntil("Mac A to stop") { a.state.processingID == nil }
+        try await waitUntil("Mac A to stop") { a.state.processor.queue.runningID == nil }
         XCTAssertEqual(request(a, id)?.claim?.device, b.state.library.thisDevice)
-        XCTAssertFalse(a.state.pausedIDs.contains(id), "Losing a claim isn't a pause")
+        XCTAssertFalse(a.state.processor.queue.paused.contains(id), "Losing a claim isn't a pause")
         XCTAssertTrue(request(a, id)?.isOpen == true, "Mac A neither completes nor fails it")
 
         try a.inference.unblock(audio); try b.inference.unblock(audio)
@@ -355,8 +355,8 @@ final class ProcessingRequestQueueTests: XCTestCase {
         // A pass during the work publishes Mac A's claim.
         await a.state.synchronizeLibrary()
         await b.state.synchronizeLibrary()
-        XCTAssertFalse(b.state.queuedIDs.contains(id))
-        XCTAssertNil(b.state.processingID, "Mac B sees Mac A's claim and leaves it")
+        XCTAssertFalse(b.state.processor.queue.queuedIDs.contains(id))
+        XCTAssertNil(b.state.processor.queue.runningID, "Mac B sees Mac A's claim and leaves it")
         if case .processing(let progress) = b.state.processingStatus(for: try XCTUnwrap(b.meeting(id))) {
             XCTAssertEqual(progress.device, a.state.library.thisDevice)
         } else { XCTFail("Mac B shows it processing on Mac A") }
@@ -385,8 +385,8 @@ final class ProcessingRequestQueueTests: XCTestCase {
         await phone.synchronize()
 
         await mac.state.synchronizeLibrary()
-        XCTAssertFalse(mac.state.queuedIDs.contains(id))
-        XCTAssertNil(mac.state.processingID, "the iPhone's recording, claimed as it was filed, is the iPhone's")
+        XCTAssertFalse(mac.state.processor.queue.queuedIDs.contains(id))
+        XCTAssertNil(mac.state.processor.queue.runningID, "the iPhone's recording, claimed as it was filed, is the iPhone's")
         if case .processing(let progress) = mac.state.processingStatus(for: try XCTUnwrap(mac.meeting(id))) {
             XCTAssertEqual(progress.device?.id, phone.device.id)
         } else { XCTFail("The Mac shows it processing on the iPhone") }
@@ -432,7 +432,7 @@ final class ProcessingRequestQueueTests: XCTestCase {
         let renewed = try XCTUnwrap(request(rig, id)?.claim)
         XCTAssertEqual(renewed.claimedAt, claimed.claimedAt)
         XCTAssertGreaterThan(renewed.expiresAt, Date())
-        XCTAssertEqual(rig.state.processingID, id)
+        XCTAssertEqual(rig.state.processor.queue.runningID, id)
 
         // Another Mac took it over while this one slept: waking stops the work, without pausing it.
         let other = ProcessingRequest.Device(id: "other-mac", name: "Studio Mac")
@@ -441,8 +441,8 @@ final class ProcessingRequestQueueTests: XCTestCase {
         rig.state.update(id) { $0.upsertProcessingRequest(takenOver) }
         XCTAssertEqual(request(rig, id)?.claim?.device, other)
         await rig.state.systemDidWake()
-        try await waitUntil("the job to stop") { rig.state.processingID == nil }
-        XCTAssertFalse(rig.state.pausedIDs.contains(id))
+        try await waitUntil("the job to stop") { rig.state.processor.queue.runningID == nil }
+        XCTAssertFalse(rig.state.processor.queue.paused.contains(id))
         XCTAssertEqual(request(rig, id)?.claim?.device, other)
         XCTAssertTrue(request(rig, id)?.isOpen == true)
         try rig.inference.unblock(audio)
@@ -469,7 +469,7 @@ final class ProcessingRequestQueueTests: XCTestCase {
         relaunched.sources.alignAudio = { _, _, _, _ in nil }
         relaunched.installedModels = [relaunched.transcriptionModel, relaunched.summaryModel, relaunched.processingPreferences.speakerModelID]
         try await waitUntil("the job to finish") {
-            relaunched.meetings.first { $0.id == id }?.processingRequests?.first?.outcome != nil && relaunched.processingID == nil
+            relaunched.meetings.first { $0.id == id }?.processingRequests?.first?.outcome != nil && relaunched.processor.queue.runningID == nil
         }
         XCTAssertEqual(relaunched.meetings.first { $0.id == id }?.processingRequests?.first?.outcome?.result, .completed)
         await relaunched.flush()
@@ -489,7 +489,7 @@ final class ProcessingRequestQueueTests: XCTestCase {
         rig.state.pickUpRequests()
         try await waitUntil("the transcript") {
             rig.meeting(id)?.processingRequests?.contains { $0.mode == .newAudio && $0.outcome != nil } == true
-                && rig.state.processingID == nil && rig.state.queuedIDs.isEmpty
+                && rig.state.processor.queue.runningID == nil && rig.state.processor.queue.queuedIDs.isEmpty
         }
         await rig.state.flush()
         let me = rig.state.library.thisDevice
@@ -500,7 +500,7 @@ final class ProcessingRequestQueueTests: XCTestCase {
         XCTAssertNil(summarize.claim, "Left for whichever Mac summarizes first")
         XCTAssertEqual(summarize.requestedBy, me)
         XCTAssertTrue(rig.inference.summarized.isEmpty)
-        XCTAssertFalse(rig.state.queue.isOwed(id), "The library keeps it, not this Mac's queue")
+        XCTAssertFalse(rig.state.processor.queue.isOwed(id), "The library keeps it, not this Mac's queue")
 
         // What the phone reads through sync, and what this Mac's own page and row say.
         let meeting = try XCTUnwrap(rig.meeting(id))

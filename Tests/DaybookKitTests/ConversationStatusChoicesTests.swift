@@ -154,7 +154,7 @@ final class ConversationStatusChoicesTests: XCTestCase {
         XCTAssertEqual(page(.requested(.device(request)), recorded(transcribed: true), inputs)?.title, "Waiting for your Mac to summarize")
         inputs.mac = .noMac
         inputs.placement.cloudOffered = true
-        XCTAssertEqual(page(.requested(.device(request)), recorded(transcribed: true), inputs)?.title, "Waiting for a Mac to summarize")
+        XCTAssertEqual(page(.requested(.device(request)), recorded(transcribed: true), inputs)?.title, SummaryPlacementWords.waitingForMac)
         XCTAssertEqual(page(.requested(.device(request)), recorded(transcribed: true), inputs)?.actions,
                        [.placement(.useCloud), .cancelRequest(request.id)])
         inputs.placement.cloudOffered = false

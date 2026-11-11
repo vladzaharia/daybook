@@ -1,11 +1,8 @@
+import DaybookDesign
 import DaybookKit
 import DaybookUI
 import SwiftUI
 import UIKit
-
-/// Closes a reading sheet however it shows: presented, or on the notebook's right page (DaybookUI's, which the shared
-/// sheets use too).
-typealias SheetDismiss = DaybookUI.SheetDismiss
 
 /// Which recordings heard a passage, as a sheet of its own (`--sheet heard`): the transcript shows the same thing as a
 /// popover at the passage, which becomes a sheet in the hand.
@@ -38,11 +35,11 @@ struct DetailsSheet: View {
             ScrollView {
                 Text(text).font(.callout.monospaced()).textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(PhoneStyle.Page.gutter)
+                    .padding(ReadingGeometry.gutters(density: .touch, hangs: false).leading)
             }
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button(role: .close) { dismiss() }.tint(PhoneStyle.Ink.title) } }
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button(role: .close) { dismiss() }.tint(DaybookPalette.Ink.title) } }
         }
         .presentationDetents([.medium])
     }

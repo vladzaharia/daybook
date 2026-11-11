@@ -7,9 +7,6 @@ import DaybookUI
 import Foundation
 import Observation
 
-/// Where this Mac keeps the live captions it made: DaybookCaptions' store, the iPhone's too.
-typealias LiveCaptionStore = DaybookCaptions.LiveCaptionStore
-
 /// The Mac's live captions while it records, on the shared DaybookCaptions engine the iPhone uses:
 /// one captioner for You (the microphone) and one for Call (the call or system track), fed by the
 /// recorder's caption tap (docs/capture.md, "Live captions").
@@ -293,16 +290,17 @@ enum MacCaptioners {
                                backlog: backlog(for: source), timelineOrigin: 0)
     }
 
-    /// Recordings' captioners: none when captions are off or in tests (they inject their own); a
-    /// script for `--demo-captions`; the live models when they're downloaded (`MacLiveModels`, any
+    /// Recordings' captioners: none when captions are off, or without `makesCaptioners` (`MacEnvironment`: tests inject
+    /// their own); a script for `--demo-captions`; the live models when they're downloaded (`MacLiveModels`, any
     /// macOS), else the Speech framework (macOS 26).
-    static func recordingFactory(settings: LiveCaptionSettings, live: MacLiveModels? = nil) -> (LiveCaptionSource) -> (any LiveCaptioning)? {
+    static func recordingFactory(settings: LiveCaptionSettings, live: MacLiveModels? = nil,
+                                 makesCaptioners: Bool) -> (LiveCaptionSource) -> (any LiveCaptioning)? {
         { [weak settings, weak live] source in
             guard let settings, settings.isEnabled else { return nil }
             #if DEBUG
             if DemoCaptions.isRequested { return DemoCaptions.captioner(for: source) }
             #endif
-            guard !isRunningTests else { return nil }
+            guard makesCaptioners else { return nil }
             let speech = { speechCaptioner(for: source, allowsDownload: !isDemo) }
             // Demos and the device simulator never load models.
             guard let live, !isDemo else { return speech() }
@@ -311,20 +309,19 @@ enum MacCaptioners {
     }
 
     /// Listen Live's captioner for a recorder: the same setting, language, and live models as recordings.
-    static func recorderFactory(settings: LiveCaptionSettings, live: MacLiveModels? = nil) -> () -> (any LiveCaptioning)? {
+    static func recorderFactory(settings: LiveCaptionSettings, live: MacLiveModels? = nil,
+                                makesCaptioners: Bool) -> () -> (any LiveCaptioning)? {
         { [weak settings, weak live] in
             guard let settings, settings.isEnabled else { return nil }
             #if DEBUG
             if DemoCaptions.isRequested { return DemoCaptions.captioner(for: nil) }
             #endif
-            guard !isRunningTests else { return nil }
+            guard makesCaptioners else { return nil }
             let speech = { LiveCaptionHooks.speechCaptioner(allowsDownload: !isDemo, asksForAuthorization: !isDemo) }
             guard let live, !isDemo else { return speech() }
             return live.captioner(locale: settings.locale, backlog: LiveCaptionHooks.backlog, timelineOrigin: 0, fallback: speech)
         }
     }
-
-    static let isRunningTests = NSClassFromString("XCTestCase") != nil
 
     /// Device demos and the simulator never download a language or ask for permission.
     private static var isDemo: Bool {

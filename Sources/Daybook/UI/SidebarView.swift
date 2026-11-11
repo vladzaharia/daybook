@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookDesign
 import DaybookKit
 import DaybookUI
 import SwiftUI
@@ -16,7 +17,7 @@ struct SidebarView: View {
     @Environment(\.undoManager) private var undoManager
 
     var body: some View {
-        List(selection: Binding(get: { state.place }, set: { if let place = $0 { select(place) } })) {
+        List(selection: Binding(get: { state.window.place }, set: { if let place = $0 { select(place) } })) {
             ForEach(state.personalLock.sections) { section in
                 Label(section.rawValue, systemImage: state.personalLock.symbol(section))
                     .accessibilityValue(state.personalLock.symbol(section) == section.systemImage ? "" : PersonalLockWords.locked)
@@ -50,7 +51,7 @@ struct SidebarView: View {
                             .buttonStyle(.plain)
                             .foregroundStyle(.secondary)
                             .opacity(hoveringFolders ? 1 : 0)
-                            .motion(Motion.hover, value: hoveringFolders)
+                            .daybookMotion(DaybookMotion.hover, value: hoveringFolders)
                             .help("New Folder")
                             .accessibilityLabel("New Folder")
                     }
@@ -59,7 +60,7 @@ struct SidebarView: View {
                 }
             }
             // After the folders, once something is in it (and while it's open).
-            if hasTrash || state.place.isTrash {
+            if hasTrash || state.window.place.isTrash {
                 Section {
                     Label(LibraryWords.trash, systemImage: "trash")
                         .tag(LibraryPlace.trash)
@@ -83,7 +84,7 @@ struct SidebarView: View {
             Button("Delete Folder", role: .destructive) {
                 if let folder = folderToDelete {
                     state.library.removeFolder(folder.id, undoManager: undoManager)
-                    if state.place == .folder(folder.id) { state.place = .section(.all) }
+                    if state.window.place == .folder(folder.id) { state.window.place = .section(.all) }
                 }
                 folderToDelete = nil
             }
@@ -94,11 +95,11 @@ struct SidebarView: View {
     }
 
     private func select(_ place: LibraryPlace) {
-        guard place != state.place else { return }
-        state.place = place
-        state.multiSelection = []
+        guard place != state.window.place else { return }
+        state.window.place = place
+        state.window.selection = []
         // The Trash selects what it lists itself, once it has read them.
-        if !place.isDevice, !place.isTrash, let selected = state.selectedID, !state.visibleMeetings.contains(where: { $0.id == selected }) {
+        if !place.isDevice, !place.isTrash, let selected = state.window.openID, !state.visibleMeetings.contains(where: { $0.id == selected }) {
             state.selectQuietly(state.visibleMeetings.first?.id)
         }
         // Personal, locked: choosing it asks to unlock, and then its newest opens.
@@ -115,13 +116,13 @@ struct SidebarView: View {
     /// Files dropped conversations in a place, one step for Edit › Undo; the Trash asks first. A row dragged from a
     /// selection of several brings the selection along.
     private func drop(_ items: [ConversationTransfer], on place: LibraryPlace) -> Bool {
-        let meetings = ConversationDrop.filed(items.map(\.id), selection: state.multiSelection, in: state.meetings)
+        let meetings = ConversationDrop.filed(items.map(\.id), selection: state.window.selection, in: state.meetings)
         guard !meetings.isEmpty else { return false }
         switch place {
         case .section(.work): state.library.setPlacement(meetings, .work, undoManager: undoManager)
         case .section(.personal): state.library.setPlacement(meetings, .personal, undoManager: undoManager)
         case .folder(let id): state.library.moveToFolder(meetings, id, undoManager: undoManager)
-        case .trash: state.trashRequestIDs = meetings
+        case .trash: state.window.confirmingTrash = meetings
         default: return false
         }
         return true

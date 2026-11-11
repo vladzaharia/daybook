@@ -26,14 +26,14 @@ struct MeetingDetailView: View {
             // Saved live captions turn to the Transcript side until a transcript replaces them, as on the iPhone
             // (`AppState.hasTranscriptPage`, from the captions read off the main actor).
             let hasTranscript = state.hasTranscriptPage(meeting)
-            let mode: PageMode = hasTranscript ? state.pageMode : .summary
+            let mode: PageMode = hasTranscript ? state.window.pageMode : .summary
             // Two pages where the column has room for them (`PageSpread`, from 1120 pt): the summary under the title,
             // and beside it, past a hairline, the transcript, scrolling and following the playhead on its own. The
             // person can collapse it to one page from the toolbar.
-            let pairs = hasTranscript && state.pageSpreadChosen
+            let pairs = hasTranscript && state.window.pageSpreadChosen
             Group {
                 if pairs {
-                    PageSpread(twoPagesFit: state.pageSpreadFits) {
+                    PageSpread(twoPagesFit: state.window.pageSpreadFits) {
                         SummaryPage(state: state, player: state.playback, meeting: meeting, besideTranscript: true, play: play)
                             .pageOfSpread(PageMode.summary.title)
                     } trailing: {
@@ -48,10 +48,10 @@ struct MeetingDetailView: View {
             }
             .animation(DaybookMotion.resolved(DaybookMotion.pageTurn, reduceMotion: reduceMotion), value: pairs)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(DaybookStyle.paper)
+            .background(DaybookPalette.paper)
             // The toolbar's switch and the View menu follow the room the column has (`PageSides`).
             .onGeometryChange(for: Bool.self) { PageSpreadLayout.split(width: $0.size.width, crease: nil) != nil } action: {
-                if state.pageSpreadFits != $0 { state.pageSpreadFits = $0 }
+                if state.window.pageSpreadFits != $0 { state.window.pageSpreadFits = $0 }
             }
             .bottomBar {
                 PlayerBar(player: state.playback, meeting: meeting, isRecording: state.isRecording) { trackID, seconds in
@@ -98,10 +98,10 @@ struct MeetingDetailView: View {
 
     private func requestPlayback(_ track: RecordingTrack, at seconds: Double) {
         playbackRequest?.cancel()
-        let animation = DaybookMotion.resolved(Motion.state, reduceMotion: reduceMotion)
+        let animation = DaybookMotion.resolved(DaybookMotion.state, reduceMotion: reduceMotion)
         playbackRequest = Task {
             guard let url = await state.audioURL(for: track, meetingID: meetingID), !Task.isCancelled,
-                  state.selectedID == meetingID || state.place.isDevice else { return }
+                  state.window.openID == meetingID || state.window.place.isDevice else { return }
             withAnimation(animation) { state.playback.play(url: url, at: seconds, trackID: track.id, meetingID: meetingID) }
         }
     }
@@ -147,7 +147,7 @@ struct DetailToolbar: ToolbarContent {
 
     /// The device whose page shows, when no conversation does: its items fill More.
     private var device: DeviceSession? {
-        guard meeting == nil, state.place.isDevice, !state.isSearching else { return nil }
+        guard meeting == nil, state.window.place.isDevice, !state.window.isSearching else { return nil }
         return state.selectedDevice
     }
 
@@ -187,11 +187,11 @@ private struct PageSwitch: View {
         let recording = meeting.map { state.recordingID == $0.id } ?? false
         // Saved live captions count, as the page reads them (`AppState.hasTranscriptPage`).
         let hasTranscript = meeting.map { state.hasTranscriptPage($0) } ?? false
-        let pairs = meeting.map { state.pairsPages($0) } ?? false
+        let pairs = state.window.pairsPages(hasTranscript: hasTranscript)
         let help = help(hasTranscript: hasTranscript)
         // Laid out always, so the slot is the switch's width whatever shows in it: the toggles where the column has room
         // for two pages, and Bookmark while recording, cover it.
-        Picker("View", selection: hasTranscript ? $state.pageMode : .constant(.summary)) {
+        Picker("View", selection: hasTranscript ? Bindable(state.window).pageMode : .constant(.summary)) {
             ForEach(PageMode.allCases) { mode in Text(mode.title).tag(mode) }
         }
         .pickerStyle(.segmented)
@@ -201,8 +201,10 @@ private struct PageSwitch: View {
         .accessibilityHidden(recording || pairs)
         .help(help)
         .overlay {
-            if let meeting, pairs, !recording {
-                PageToggles(sides: state.pageSides(meeting), help: help) { state.choosePage($0, for: meeting) }
+            if meeting != nil, pairs, !recording {
+                PageToggles(sides: state.window.pageSides(hasTranscript: hasTranscript), help: help) {
+                    state.window.choosePage($0, hasTranscript: hasTranscript)
+                }
             }
         }
         .overlay {
@@ -212,7 +214,7 @@ private struct PageSwitch: View {
                         Text("Bookmark")
                     } icon: {
                         Image(systemName: "bookmark.fill")
-                            .foregroundStyle(DaybookStyle.bookmark)
+                            .foregroundStyle(DaybookPalette.bookmark)
                             .daybookBounce(value: meeting.highlights.count)
                     }
                     .labelStyle(.titleAndIcon)
@@ -226,12 +228,12 @@ private struct PageSwitch: View {
     }
 
     private func help(hasTranscript: Bool) -> String {
-        guard let meeting else { return "Choose a conversation" }
+        guard meeting != nil else { return "Choose a conversation" }
         guard hasTranscript else { return "Not transcribed yet" }
-        guard state.pairsPages(meeting) else { return "Show the summary (⌘1) or the transcript (⌘2)" }
-        if state.showsPageSpread(meeting) { return "Show only the summary (⌘1) or only the transcript (⌘2)" }
-        let other: PageMode = state.pageMode == .summary ? .transcript : .summary
-        return "Show the \(other.title.lowercased()) beside the \(state.pageMode.title.lowercased()) (⌘\(other == .summary ? 1 : 2))"
+        guard state.window.pairsPages(hasTranscript: true) else { return "Show the summary (⌘1) or the transcript (⌘2)" }
+        if state.window.showsPageSpread(hasTranscript: true) { return "Show only the summary (⌘1) or only the transcript (⌘2)" }
+        let other: PageMode = state.window.pageMode == .summary ? .transcript : .summary
+        return "Show the \(other.title.lowercased()) beside the \(state.window.pageMode.title.lowercased()) (⌘\(other == .summary ? 1 : 2))"
     }
 }
 

@@ -8,9 +8,10 @@ import SwiftUI
 import XCTest
 @testable import Daybook
 
-/// What Floating Notes' status bar and home lines say in each state (`FloatingStatus`), read from plain inputs as
-/// the iPhone's status-sheet tests do. The recording's words are the ones the iPhone's recorder says too
-/// (`RecordingStatusWords`), and recorders and iPhones read as they do everywhere else.
+/// What Floating Notes' status bar and home lines say in each state (`FloatingStatus`, and the overview both apps draw,
+/// `StatusOverviewModel`), read from plain inputs as the iPhone's status-sheet tests do. The recording's words are the
+/// ones the iPhone's recorder says too (`RecordingStatusWords`), recorders and iPhones read as they do everywhere else,
+/// and the shown conversation's chip says what its list row does (`ConversationStatusPresentation.row`).
 final class FloatingNotesStatusTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
@@ -36,6 +37,55 @@ final class FloatingNotesStatusTests: XCTestCase {
     private func recorderChip(_ facts: RecorderFacts, recording: Bool, now: Date = Date()) -> RecorderChip? {
         RecordingStatusWords.recorderChip(facts, recording: recording, here: "this Mac", now: now)
     }
+
+    private let words = DeviceWords.mac(id: "this-mac")
+    private let studio = ProcessingRequest.Device(id: "studio", name: "Studio Mac")
+
+    /// A conversation with a recording not transcribed yet.
+    private func recorded(_ title: String = "Design review") -> Meeting {
+        Meeting(title: title, tracks: [RecordingTrack(id: UUID(), source: .microphone, relativePath: "m.caf", fileName: "m.caf", offset: 0,
+                                                      sha256: title)])
+    }
+
+    /// The shown conversation as the gatherer has it: its status, and what its list row says on this Mac.
+    private func shown(_ status: ProcessingStatus, meeting: Meeting? = nil, planner: SummaryPlacementPlanner? = nil, ready: Bool? = nil,
+                       summaryWaits: String? = nil) -> FloatingStatusInputs.Conversation {
+        let inputs = ConversationStatusPresentation.Inputs(words: words, local: .mac(), placement: .init(planner: planner))
+        let row = ConversationStatusPresentation.row(status, meeting: meeting ?? recorded(), inputs: inputs, now: now)
+        return FloatingStatusInputs.Conversation(status: status, row: row, ready: ready, summaryWaits: summaryWaits)
+    }
+
+    private func workChip(_ status: ProcessingStatus, meeting: Meeting? = nil, planner: SummaryPlacementPlanner? = nil, ready: Bool? = nil,
+                          summaryWaits: String? = nil, models: ModelDownloadState? = nil, now: Date? = nil) -> RecorderChip? {
+        FloatingStatus.workChip(shown(status, meeting: meeting, planner: planner, ready: ready, summaryWaits: summaryWaits), words: words,
+                                models: models, now: now ?? self.now)
+    }
+
+    private func transcribing(_ fraction: Double?, on device: ProcessingRequest.Device? = nil) -> ProcessingStatus {
+        .processing(ProcessingStatus.Progress(stage: .transcribing, fraction: fraction, device: device))
+    }
+
+    /// This Mac's queue in the overview both apps draw.
+    private func overview(_ queue: QueueStatusWords.Queue) -> StatusOverviewInputs {
+        var overview = StatusOverviewInputs(words: .mac())
+        overview.local = queue
+        return overview
+    }
+
+    private func queueLine(_ queue: QueueStatusWords.Queue, now: Date = Date()) -> StatusLineWords? {
+        StatusOverviewModel.localLine(overview(queue), now: now)
+    }
+
+    /// A summary due on this Mac with the cloud on offer, counting down 15 s from `start`.
+    private func countdown(from start: Date) -> SummaryPlacementPlanner {
+        var preferences = CloudSummaryPreferences()
+        preferences.countdownSeconds = 15
+        let options = SummaryOptions(thisDeviceCanSummarize: true, reachableMacs: [], cloud: sonnet)
+        return SummaryPlacementPlanner(options: options, preferences: preferences, at: start)
+    }
+
+    private let sonnet = CloudModel(provider: .anthropic, id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", tier: .balanced, inputPrice: 2,
+                                    outputPrice: 10, priceIsEstimated: false, contextTokens: 200_000, rank: 1)
 
     // MARK: Phase
 
@@ -168,7 +218,7 @@ final class FloatingNotesStatusTests: XCTestCase {
         XCTAssertEqual(chip?.detail, "Soundcore Work · Managed by Alex’s iPhone")
         var inputs = FloatingStatusInputs()
         inputs.recording.recorders = [recorder]
-        XCTAssertEqual(FloatingStatus.lines(inputs).first?.text, "Managed by Alex’s iPhone")
+        XCTAssertEqual(StatusOverviewModel.lines(inputs.overview).first?.text, "Managed by Alex’s iPhone")
     }
 
     func testHandoffUnderWayWinsOverEverythingElse() {
@@ -180,7 +230,7 @@ final class FloatingNotesStatusTests: XCTestCase {
         XCTAssertEqual(chip?.detail, "Asking Alex’s iPhone to let go of Soundcore Work…")
         var inputs = FloatingStatusInputs()
         inputs.recording.recorders = [recorder]
-        XCTAssertEqual(FloatingStatus.lines(inputs).first?.text, "Asking Alex’s iPhone to let go…")
+        XCTAssertEqual(StatusOverviewModel.lines(inputs.overview).first?.text, "Asking Alex’s iPhone to let go…")
     }
 
     func testDisconnectedRecorderSaysWhenItWasLastSeen() {
@@ -241,7 +291,7 @@ final class FloatingNotesStatusTests: XCTestCase {
         XCTAssertEqual(RecorderChipFit.allCases.first, .full)
 
         // Processing keeps its whole words until only short labels are left.
-        let work = try XCTUnwrap(FloatingStatus.workChip(.transcribing(0.4)))
+        let work = try XCTUnwrap(workChip(transcribing(0.4)))
         XCTAssertFalse(work.shortensFirst)
         XCTAssertEqual([RecorderChipFit.shortFirst, .shortOthers, .glyphOthers].map { $0.label(work) }, Array(repeating: work.label, count: 3))
         XCTAssertEqual(RecorderChipFit.short.label(work), work.shortLabel)
@@ -251,94 +301,118 @@ final class FloatingNotesStatusTests: XCTestCase {
         XCTAssertNil(RecordingStatusWords.peerChip(phone(connected: false), recording: true))
         var inputs = FloatingStatusInputs()
         inputs.recording.peers = [phone(connected: false)]
-        XCTAssertEqual(FloatingStatus.lines(inputs).first?.text, "Not connected")
+        XCTAssertEqual(StatusOverviewModel.lines(inputs.overview).first?.text, "Not connected")
         XCTAssertEqual(RecordingStatusWords.peerChip(phone(), recording: false)?.tone, .linked)
     }
 
-    func testProcessingChipsUseTheSharedWords() {
-        let here = FloatingStatus.workChip(.transcribing(0.4))
+    /// The chip says what the conversation's list row says (`ConversationStatusPresentation.row`), with the step's glyph.
+    func testProcessingChipsUseTheSharedWords() throws {
+        let here = workChip(transcribing(0.4))
         XCTAssertEqual(here?.label, "Transcribing · 40%")
         XCTAssertEqual(here?.detail, "Transcribing · 40%", "This Mac doesn't name itself")
         XCTAssertEqual(here?.progress, 0.4)
-        XCTAssertEqual(FloatingStatus.workChip(.elsewhere(device: "Studio Mac", stage: .transcribing, fraction: 0.4))?.label,
-                       "Transcribing on Studio Mac · 40%", "Another device is named: which one works is the status")
-        XCTAssertEqual(FloatingStatus.workChip(.summarizing)?.label, "Summarizing…")
-        XCTAssertEqual(FloatingStatus.workChip(.waiting)?.label, "Waiting to transcribe")
-        XCTAssertEqual(FloatingStatus.workChip(.models(nil))?.label, "Waiting for models")
-        XCTAssertEqual(FloatingStatus.workChip(.requested(device: "Alex’s iPhone"))?.label, "Requested from Alex’s iPhone",
+        XCTAssertEqual(here?.symbol, "quote.bubble")
+        XCTAssertEqual(here?.shortLabel, "40%")
+        let elsewhere = workChip(transcribing(0.4, on: studio))
+        XCTAssertEqual(elsewhere?.label, "Transcribing on Studio Mac · 40%", "Another device is named: which one works is the status")
+        XCTAssertEqual(elsewhere?.symbol, "desktopcomputer")
+        let summarizing = workChip(.processing(ProcessingStatus.Progress(stage: .summarizing, fraction: nil)))
+        XCTAssertEqual(summarizing?.label, "Summarizing…")
+        XCTAssertEqual(summarizing?.shortLabel, "Summary…")
+        XCTAssertNil(summarizing?.progress, "No figure, no fill")
+        XCTAssertEqual(workChip(.requested(.queued(position: 0, after: nil)))?.label, "Waiting to transcribe")
+        XCTAssertEqual(workChip(.requested(.models))?.label, "Waiting for models")
+        XCTAssertEqual(workChip(.requested(.paused))?.label, "Paused")
+        let phone = ProcessingRequest.Device(id: "phone", name: "Alex’s iPhone")
+        let asked = ProcessingRequest(meetingID: UUID(), mode: .newAudio, requestedBy: phone, createdAt: now)
+        XCTAssertEqual(workChip(.requested(.device(asked)))?.label, "Requested from Alex’s iPhone",
                        "the iPhone asked; it isn't what the conversation waits for")
-        XCTAssertEqual(FloatingStatus.workChip(.ready(summary: true))?.label, "Summary ready")
+        XCTAssertNil(workChip(.recorded), "Nothing is happening to a recording not transcribed yet")
+        XCTAssertEqual(workChip(.done, ready: true)?.label, "Summary ready")
+        XCTAssertNil(workChip(.done), "Nothing ready, nothing to say")
         // Transcript first (uxf-01): the transcript is ready, and the menu's first line says what the summary waits for.
-        let transcript = FloatingStatus.workChip(.transcriptReady(waiting: "Waiting to summarize after the download · 38%"))
+        let transcript = workChip(.transcribed, ready: false, summaryWaits: "Waiting to summarize after the download · 38%")
         XCTAssertEqual(transcript?.label, "Transcript ready")
         XCTAssertEqual(transcript?.shortLabel, "Ready")
         XCTAssertEqual(transcript?.tone, .linked)
         XCTAssertNil(transcript?.progress, "A finished state, not a bar")
         XCTAssertEqual(transcript?.detail, "Transcript ready · Waiting to summarize after the download · 38%")
-        let failed = FailureWords(kind: .modelsMissing, reason: "", hadTranscripts: false, device: "this Mac")
-        let chip = FloatingStatus.workChip(.failed(failed))
-        XCTAssertEqual(chip?.tone, .attention)
-        XCTAssertEqual(chip?.detail, failed.message, "Its menu says it in the words both apps use")
+        let failure = ProcessingStatus.Failure(reason: "", hadTranscripts: false, kind: .modelsMissing)
+        let chip = try XCTUnwrap(workChip(.failed(failure)))
+        XCTAssertEqual(chip.label, "Couldn’t finish")
+        XCTAssertEqual(chip.tone, .attention)
+        XCTAssertEqual(chip.detail, FailureWords(failure, words: words).message, "Its menu says it in the words both apps use")
+        let silent = ProcessingStatus.Failure(reason: "", hadTranscripts: false, kind: .noSpeech)
+        XCTAssertEqual(workChip(.failed(silent))?.label, "No speech", "as its row says it")
     }
 
     /// Waiting for models is a wait, not a problem (uxf-06): calm while nothing downloads, the one phrase over the whole
     /// set with its bar while the download runs, and only a download that stopped in the warning tone. The home's line
     /// for this Mac says the same.
     func testBehaviorTheModelsChipIsCalmAndSaysTheDownloadInTheSharedWords() throws {
-        let waiting = try XCTUnwrap(FloatingStatus.workChip(.models(nil)))
+        let waiting = try XCTUnwrap(workChip(.requested(.models)))
         XCTAssertEqual(waiting.tone, .calm)
         XCTAssertEqual(waiting.shortLabel, "Models")
-        let arriving = try XCTUnwrap(FloatingStatus.workChip(.models(.downloading(done: 3_800_000_000, total: 7_600_000_000))))
+        let arriving = try XCTUnwrap(workChip(.requested(.models), models: .downloading(done: 3_800_000_000, total: 7_600_000_000)))
         XCTAssertEqual(arriving.label, "Downloading models · 50%")
         XCTAssertEqual(arriving.shortLabel, "50%")
         XCTAssertEqual(arriving.progress, 0.5)
         XCTAssertEqual(arriving.tone, .working)
         XCTAssertEqual(arriving.detail, "Downloading models · 50% · 3.8 of 7.6 GB", "its menu's first line has the total")
-        let wifi = try XCTUnwrap(FloatingStatus.workChip(.models(.waitingForWiFi(bytes: 852_000_000))))
+        let wifi = try XCTUnwrap(workChip(.requested(.models), models: .waitingForWiFi(bytes: 852_000_000)))
         XCTAssertEqual(wifi.label, "Downloading models · Waiting for Wi‑Fi")
         XCTAssertEqual(wifi.tone, .calm)
-        let failed = try XCTUnwrap(FloatingStatus.workChip(.models(.failed(model: "Gemma 4 12B 4-bit", bytes: 7_600_000_000))))
+        let failed = try XCTUnwrap(workChip(.requested(.models), models: .failed(model: "Gemma 4 12B 4-bit", bytes: 7_600_000_000)))
         XCTAssertEqual(failed.label, "Couldn’t download Gemma 4 12B 4-bit")
         XCTAssertEqual(failed.tone, .attention)
 
-        var queue = FloatingStatusInputs.Queue(awaitingModels: 1)
-        XCTAssertEqual(FloatingStatus.queueWords(queue)?.text, "Waiting for models")
-        XCTAssertEqual(FloatingStatus.queueWords(queue)?.tone, .calm)
+        var queue = QueueStatusWords.Queue(awaitingModels: 1)
+        XCTAssertEqual(queueLine(queue)?.text, "Waiting for models")
+        XCTAssertEqual(queueLine(queue)?.tone, .calm)
         queue.models = .downloading(done: 1, total: 4)
-        XCTAssertEqual(FloatingStatus.queueWords(queue)?.text, "Downloading models · 25%")
-        XCTAssertEqual(FloatingStatus.queueChip(queue)?.progress, 0.25)
-        XCTAssertNotNil(FloatingStatus.queueWords(.init(models: .downloading(done: 1, total: 4))), "a download alone is work to say")
+        XCTAssertEqual(queueLine(queue)?.text, "Downloading models · 25%")
+        XCTAssertEqual(FloatingStatus.queueChip(overview(queue))?.progress, 0.25)
+        XCTAssertNotNil(queueLine(.init(models: .downloading(done: 1, total: 4))), "a download alone is work to say")
     }
 
     /// Where a summary runs (docs/multipoint.md, "Where summaries run"): its countdown in the chip and the home's
     /// line for this Mac, a second at a time, and the cloud at work. Only the chip or the line redraws.
     func testBehaviorASummarysCountdownAndTheCloudShowInTheChipAndTheHome() throws {
+        typealias Words = SummaryPlacementWords
         let now = Date(timeIntervalSince1970: 1_800_000_000)
-        let countdown = try XCTUnwrap(FloatingStatus.workChip(.summaryCountdown(until: now.addingTimeInterval(11.2), cloud: true), now: now))
-        XCTAssertEqual(countdown.label, "Summarizing in 12 s")
-        XCTAssertEqual(countdown.shortLabel, "12 s")
-        XCTAssertEqual(countdown.detail, "Summarizing on this Mac in 12 s", "The menu's first line says it whole")
+        let planner = countdown(from: now.addingTimeInterval(-3.8))
+        let countdown = try XCTUnwrap(workChip(.transcribed, planner: planner, now: now))
+        XCTAssertEqual(countdown.label, Words.countdown(seconds: 12))
+        XCTAssertEqual(countdown.shortLabel, Words.seconds(12))
+        XCTAssertEqual(countdown.detail, Words.countdown(on: AppState.thisDeviceWords, seconds: 12), "The menu's first line says it whole")
         XCTAssertEqual(countdown.tone, .calm)
+        XCTAssertEqual(countdown.countdownUntil, planner.deadline)
         let later = countdown.at(now.addingTimeInterval(3))
-        XCTAssertEqual(later.label, "Summarizing in 9 s", "The chip moves on its own")
-        XCTAssertEqual(later.shortLabel, "9 s")
-        XCTAssertEqual(later.detail, "Summarizing on this Mac in 9 s")
-        XCTAssertNil(FloatingStatus.workChip(.summarizing)?.countdownUntil, "Nothing else ticks")
-        XCTAssertEqual(FloatingStatus.workChip(.summarizingWith("Claude Sonnet 5.5"))?.label, "Summarizing with Claude Sonnet 5.5")
-        var queue = FloatingStatusInputs.Queue(running: .summarizing, waiting: 1)
+        XCTAssertEqual(later.label, Words.countdown(seconds: 9), "The chip moves on its own")
+        XCTAssertEqual(later.shortLabel, Words.seconds(9))
+        XCTAssertEqual(later.detail, Words.countdown(on: AppState.thisDeviceWords, seconds: 9))
+        XCTAssertNil(workChip(.processing(ProcessingStatus.Progress(stage: .summarizing, fraction: nil)))?.countdownUntil, "Nothing else ticks")
+        var cloud = planner
+        XCTAssertTrue(cloud.perform(.useCloud, at: now))
+        let inCloud = try XCTUnwrap(workChip(.transcribed, planner: cloud, now: now))
+        XCTAssertEqual(inCloud.label, Words.inCloud("Claude Sonnet 5.5"))
+        XCTAssertEqual(inCloud.symbol, "cloud")
+        var queue = QueueStatusWords.Queue(running: .summarizing, waiting: 1)
         queue.countdown = now.addingTimeInterval(5)
-        let line = try XCTUnwrap(FloatingStatus.queueWords(queue, now: now))
-        XCTAssertEqual(line.text, "Summarizing in 5 s · 1 waiting")
-        XCTAssertEqual(FloatingStatus.item(line, at: now.addingTimeInterval(2)).text, "Summarizing in 3 s · 1 waiting")
-        XCTAssertEqual(FloatingStatus.item(line, at: now.addingTimeInterval(2)).shortText, "Summarizing in 3 s")
-        XCTAssertEqual(FloatingStatus.queueChip(queue, now: now)?.countdownUntil, queue.countdown)
+        let line = try XCTUnwrap(queueLine(queue, now: now))
+        XCTAssertEqual(line.text, Words.countdown(seconds: 5) + " · 1 waiting")
+        // The home draws it as the shared line, which ticks on its own.
+        let item = StatusLineItem(line)
+        XCTAssertEqual(item.text(at: now.addingTimeInterval(2)), Words.countdown(seconds: 3) + " · 1 waiting")
+        XCTAssertEqual(item.shortText(at: now.addingTimeInterval(2)), Words.countdown(seconds: 3))
+        XCTAssertEqual(FloatingStatus.queueChip(overview(queue), now: now)?.countdownUntil, queue.countdown)
         queue.countdown = nil
         queue.cloudModel = "Claude Sonnet 5.5"
-        XCTAssertEqual(FloatingStatus.queueWords(queue, now: now)?.text, "Summarizing with Claude Sonnet 5.5 · 1 waiting")
+        XCTAssertEqual(queueLine(queue, now: now)?.text, Words.inCloud("Claude Sonnet 5.5") + " · 1 waiting")
     }
 
     func testWorkChipShowsOnceTheConversationIsNotRecording() {
-        var inputs = recording { $0.work = .transcribing(0.4) }
+        var inputs = recording { $0.conversation = shown(transcribing(0.4)) }
         XCTAssertFalse(FloatingStatus.chips(inputs).contains { $0.target == .processing })
         inputs.phase = .saved
         XCTAssertEqual(FloatingStatus.chips(inputs).last?.target, .processing)
@@ -348,8 +422,8 @@ final class FloatingNotesStatusTests: XCTestCase {
         // Compact, the home shows the focused conversation's work beside this Mac's queue: two
         // chips with their own identities, so the bar never draws one of them twice.
         var inputs = FloatingStatusInputs()
-        inputs.work = .ready(summary: true)
-        inputs.queue = .init(running: .transcribing, fraction: 0.4, waiting: 1)
+        inputs.conversation = shown(.done, ready: true)
+        inputs.overview.local = .init(running: .transcribing, fraction: 0.4, waiting: 1)
         let chips = FloatingStatus.chips(inputs, including: [.work, .queue])
         XCTAssertEqual(chips.map(\.id), ["processing", "queue"])
         XCTAssertEqual(chips.map(\.label), ["Summary ready", "Transcribing · 40% · 1 waiting"])
@@ -442,23 +516,31 @@ final class FloatingNotesStatusTests: XCTestCase {
 
     // MARK: Home and multipoint
 
+    /// The home draws the overview both apps draw, at `.lines` (`StatusOverviewModel.lines`): recorders, iPhones, this
+    /// Mac's queue, then iCloud while sync needs the person. A recorder's or an iPhone's line opens its page; the rest
+    /// lead nowhere.
     func testHomeLinesListRecordersPhonesThenTheQueue() {
         var inputs = FloatingStatusInputs()
         inputs.recording.recorders = [soundcore()]
         inputs.recording.peers = [phone()]
-        inputs.queue = .init(running: .transcribing, fraction: 0.62, waiting: 2)
-        let lines = FloatingStatus.lines(inputs, now: now)
-        XCTAssertEqual(lines.map(\.title), ["Soundcore Work", "Alex’s iPhone", "This Mac"])
+        inputs.overview.local = .init(running: .transcribing, fraction: 0.62, waiting: 2)
+        inputs.overview.syncTone = .attention
+        inputs.overview.syncLine = "Not syncing"
+        let lines = StatusOverviewModel.lines(inputs.overview, now: now)
+        XCTAssertEqual(lines.map(\.title), ["Soundcore Work", "Alex’s iPhone", "This Mac", "iCloud"])
         XCTAssertEqual(lines[0].text, "Connected · 80%")
         XCTAssertEqual(lines[1].text, "Connected")
         XCTAssertEqual(lines[2].text, "Transcribing · 62% · 2 waiting")
         XCTAssertEqual(lines[2].progress, 0.62)
-        XCTAssertEqual(lines.map(\.id), ["recorder-sc", "phone-ph", "queue"], "a line opens its device's page by its ID")
+        XCTAssertEqual(lines[3].text, "Not syncing")
+        XCTAssertEqual(lines[3].tone, .attention)
+        XCTAssertEqual(lines.map(\.id), ["recorder-sc", "phone-ph", "queue", "sync"], "a line opens its device's page by its ID")
+        XCTAssertEqual(lines.map { HomeSurface.device(of: StatusLineItem($0)) }, ["sc", "ph", nil, nil])
     }
 
     func testIdleQueueHasNoLine() {
-        XCTAssertNil(FloatingStatus.queueWords(.init()))
-        XCTAssertEqual(FloatingStatus.queueWords(.init(waiting: 3))?.text, "3 waiting to transcribe")
+        XCTAssertNil(queueLine(.init()))
+        XCTAssertEqual(queueLine(.init(waiting: 3))?.text, "3 waiting to transcribe")
     }
 
     func testWhatRecordsAlongShowsOnceInTheChips() {
@@ -491,74 +573,5 @@ final class FloatingNotesStatusTests: XCTestCase {
         notes.tracks = [RecordingTrack(source: .microphone, relativePath: "Originals/mic.wav", fileName: "mic.wav", offset: 0)]
         XCTAssertNil(HomeSurface.recordTarget(notes), "one that already has a recording gets a new conversation instead")
         XCTAssertNil(HomeSurface.recordTarget(nil), "the home records a new conversation")
-    }
-}
-
-/// The shared design tokens stay the Mac's own values, so the two apps draw the same ink.
-final class DaybookDesignTokenTests: XCTestCase {
-    private func hex(_ color: Color, _ appearance: NSAppearance.Name) -> UInt32 {
-        var value: UInt32 = 0
-        NSAppearance(named: appearance)!.performAsCurrentDrawingAppearance {
-            guard let srgb = NSColor(color).usingColorSpace(.sRGB) else { return }
-            let r = UInt32((srgb.redComponent * 255).rounded()), g = UInt32((srgb.greenComponent * 255).rounded())
-            let b = UInt32((srgb.blueComponent * 255).rounded())
-            value = r << 16 | g << 8 | b
-        }
-        return value
-    }
-
-    func testSharedTokensMatchDaybookStyleInEveryAppearance() {
-        let pairs: [(String, Color, DaybookShade)] = [
-            ("accent", DaybookStyle.accent, DaybookPalette.Shade.accent),
-            ("prominentFill", DaybookStyle.prominentFill, DaybookPalette.Shade.prominentFill),
-            ("paper", DaybookStyle.paper, DaybookPalette.Shade.paper),
-            ("bookmark", DaybookStyle.bookmark, DaybookPalette.Shade.bookmark),
-            ("neonMint", DaybookStyle.neonMint, DaybookPalette.Shade.neonMint),
-            ("neonCyan", DaybookStyle.neonCyan, DaybookPalette.Shade.neonCyan),
-            ("neonViolet", DaybookStyle.neonViolet, DaybookPalette.Shade.neonViolet),
-            ("neonMagenta", DaybookStyle.neonMagenta, DaybookPalette.Shade.neonMagenta),
-            ("playFill", DaybookStyle.playFill, DaybookPalette.Shade.playFill),
-            ("onPlayFill", DaybookStyle.onPlayFill, DaybookPalette.Shade.onPlayFill),
-            ("title", Ink.title, DaybookPalette.Shade.title),
-            ("body", Ink.body, DaybookPalette.Shade.body),
-            ("secondary", Ink.secondary, DaybookPalette.Shade.secondary),
-            ("meta", Ink.meta, DaybookPalette.Shade.meta),
-            ("faint", Ink.faint, DaybookPalette.Shade.faint),
-            ("link", Ink.link, DaybookPalette.Shade.link),
-            ("warning", Ink.warning, DaybookPalette.Shade.warning),
-            ("error", Ink.error, DaybookPalette.Shade.error),
-            ("record", Ink.record, DaybookPalette.Shade.record),
-            ("recordFill", Ink.recordFill, DaybookPalette.Shade.recordFill)
-        ]
-        XCTAssertEqual(pairs.count, DaybookPalette.Shade.all.count, "Every shared token is checked")
-        for (name, mac, shade) in pairs {
-            for (appearance, dark) in [(NSAppearance.Name.aqua, false), (.darkAqua, true)] {
-                XCTAssertEqual(hex(mac, appearance), shade.hex(dark: dark, increasedContrast: false), "\(name) in \(appearance.rawValue)")
-                XCTAssertEqual(hex(shade.color, appearance), shade.hex(dark: dark, increasedContrast: false), "\(name)'s colour in \(appearance.rawValue)")
-            }
-            // The high-contrast appearances can't be made outside the system setting, so these
-            // resolve however the system does; the two copies must still agree.
-            for appearance in [NSAppearance.Name.accessibilityHighContrastAqua, .accessibilityHighContrastDarkAqua] {
-                XCTAssertEqual(hex(mac, appearance), hex(shade.color, appearance), "\(name) in \(appearance.rawValue)")
-            }
-        }
-    }
-
-    func testShadeKeepsStandardValuesWithoutContrastOnes() {
-        let shade = DaybookShade(light: 0x111111, dark: 0x222222)
-        XCTAssertEqual(shade.hex(dark: false, increasedContrast: true), 0x111111)
-        XCTAssertEqual(shade.hex(dark: true, increasedContrast: true), 0x222222)
-        XCTAssertEqual(DaybookPalette.Shade.paper.hex(dark: true, increasedContrast: true), 0x000000)
-    }
-
-    @MainActor
-    func testLevelTrailKeepsTheNewestAndFallsFlat() {
-        let trail = LevelTrail(capacity: 4)
-        for value in [0.1, 0.2, 0.3, 0.4, 1.5] { trail.append(value) }
-        XCTAssertEqual(trail.values, [0.2, 0.3, 0.4, 1], "Oldest first, clamped to 0...1")
-        trail.append(.nan)
-        XCTAssertEqual(trail.values.last, 0)
-        trail.reset()
-        XCTAssertEqual(trail.values, [0, 0, 0, 0])
     }
 }

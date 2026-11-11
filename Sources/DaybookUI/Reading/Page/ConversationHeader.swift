@@ -59,9 +59,7 @@ public struct ConversationHeader<Pill: View>: View {
                 // A long title shows whole; it never stops mid-phrase inside the field.
                 .lineLimit(readingWidth == .narrow ? 1...8 : 1...4)
                 .focused($editing)
-                #if os(iOS)
-                .submitLabel(.done)
-                #endif
+                .touchKeyboard(submit: .done)
                 .onSubmit { editing = false }
                 .accessibilityLabel("Title")
                 .onAppear {

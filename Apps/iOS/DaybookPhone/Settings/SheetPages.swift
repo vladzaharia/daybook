@@ -127,9 +127,9 @@ struct PageCard<Content: View>: View {
             .shadow(color: .black.opacity(0.12), radius: 18, y: 4)
             .offset(y: drag)
             .accessibilityAddTraits(isModal ? .isModal : [])
-            .padding(.leading, creaseEdge == .leading ? PhoneStyle.Page.creaseClearance : PhoneStyle.Space.s3)
-            .padding(.trailing, PhoneStyle.Space.s3)
-            .padding(.vertical, PhoneStyle.Space.s2)
+            .padding(.leading, creaseEdge == .leading ? ReadingGeometry.creaseClearance : DaybookSpacing.s3)
+            .padding(.trailing, DaybookSpacing.s3)
+            .padding(.vertical, DaybookSpacing.s2)
             // Its page steps back, as under a sheet; the other page doesn't.
             .background {
                 Color.black.opacity(Self.dim * PageSheetDrag.dimming(drag))

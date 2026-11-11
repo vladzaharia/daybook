@@ -43,7 +43,7 @@ struct RecorderScreen: View {
             }
         }
         .environment(\.recorderInputControl, PhoneInputButton.control)
-        .background(PhoneStyle.paper.ignoresSafeArea())
+        .background(DaybookPalette.paper.ignoresSafeArea())
         .onAppear {
             if let launch = model.options.recorderSheet { sheetExpansion = launch }
             levels.adopt(model.levels, for: .microphone)
@@ -151,15 +151,21 @@ struct RecorderScreen: View {
         }
     }
 
-    private var readers: RecorderLevels.Readers {
-        let model = self.model
-        return RecorderLevels.Readers(recorder: { id in
+    private var readers: RecorderLevels.Readers { Self.readers(model) }
+
+    /// Where the meters other than the microphone's read: each recorder's from the live audio it saves into the
+    /// recording, as the Mac meters it; each Mac's from the levels it sends over the link, a reading a tick, none once
+    /// it's been quiet for 1.5 s (its meter rests).
+    static func readers(_ model: PhoneAppModel, now: @escaping @MainActor () -> Date = Date.init) -> RecorderLevels.Readers {
+        RecorderLevels.Readers(recorder: { id in
             guard let conversation = model.recorder.captureID else { return nil }
             return model.devices.hub.session(id)?.liveLevel(into: conversation)
+        }, peer: { id in
+            UUID(uuidString: id).flatMap { model.macLevel($0, at: now()) }
         })
     }
 
-    /// Samples the recorders' levels while recording; the microphone's trail is fed by the app as levels arrive.
+    /// Samples the recorders' and Macs' levels while recording; the microphone's trail is fed by the app as levels arrive.
     private func runLevels() {
         levels.run(model.recorder.isActive, readers: readers)
     }
@@ -228,7 +234,7 @@ private struct TableRecording<Content: View>: View {
         // brightness, still readable from across the table.
         .environment(\.colorScheme, dimmed ? .dark : colorScheme)
         .opacity(dimmed ? RecordingStyle.dimmedOpacity : 1)
-        .background((dimmed ? Color.black : PhoneStyle.paper).ignoresSafeArea())
+        .background((dimmed ? Color.black : DaybookPalette.paper).ignoresSafeArea())
         .contentShape(Rectangle())
         .simultaneousGesture(TapGesture().onEnded { wake() })
         .animation(TableIdle.animation(dimming: dimmed, reduceMotion: reduceMotion), value: dimmed)

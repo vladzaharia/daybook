@@ -41,6 +41,9 @@ final class PhoneProcessor {
         case heat
         case lowPowerMode
         case lowBattery
+        /// The iPhone is locked: a recording kept until unlock can't be opened, and with "Protect while iPhone is locked"
+        /// nothing in the library can be read or written.
+        case locked
     }
 
     /// The conversation being processed here.
@@ -58,6 +61,11 @@ final class PhoneProcessor {
         var screen: Screen = .active
         var isRecording = false
         var live = LiveConditions()
+        /// Files kept until unlock can be read: false while the iPhone is locked.
+        var protectedDataAvailable = true
+        /// "Protect while iPhone is locked" keeps the library: work under way stops at the lock too, since what it writes
+        /// can't be saved.
+        var keepsLibraryLocked = false
     }
 
     /// What it works with: this iPhone's models, its audio, and what it may run.
@@ -82,6 +90,9 @@ final class PhoneProcessor {
         var summaryDue: @MainActor (_ meetingID: UUID, _ templateID: String?, _ askedFor: Bool) -> Void = { _, _, _ in }
         /// Just before a job starts: other heavy work (the live speaker pass) gives way.
         var willStart: @MainActor () -> Void = {}
+        /// Whether files kept until unlock can be read now: a job that fails while they can't paused for the unlock,
+        /// rather than failed.
+        var protectedDataAvailable: @MainActor () -> Bool = { true }
     }
 
     /// How long a claim lasts and how often it's renewed while the work runs (the Mac's).
@@ -222,9 +233,12 @@ final class PhoneProcessor {
         conversations <= 1 ? "1 conversation" : "\(conversations) conversations"
     }
 
-    /// Why work can't run now; nil when it can. The summary also needs Daybook on the screen.
-    func blocking(summarizing: Bool) -> Pause? {
+    /// Why work can't run now; nil when it can. The summary also needs Daybook on the screen. While the iPhone is locked
+    /// nothing starts (its recording is kept until unlock), and with "Protect while iPhone is locked" work under way
+    /// stops too (`starting` false: whether it may go on).
+    func blocking(summarizing: Bool, starting: Bool = true) -> Pause? {
         if conditions.isRecording { return .recording }
+        if !conditions.protectedDataAvailable, starting || conditions.keepsLibraryLocked { return .locked }
         let live = conditions.live
         if live.thermal >= .serious { return .heat }
         if live.lowPowerMode { return .lowPowerMode }
@@ -283,6 +297,8 @@ final class PhoneProcessor {
                 }
             }
             if error is CancellationError { return .paused(.background) }
+            // Locked meanwhile: its recording, or the library, couldn't be read. It goes on once the iPhone is unlocked.
+            if !conditions.protectedDataAvailable || !services.protectedDataAvailable() { return .paused(.locked) }
             return .failed(error.localizedDescription, ProcessingRequest.FailureKind(error))
         }
     }
@@ -421,6 +437,8 @@ final class PhoneProcessor {
         await services.release()
         services.changed()
         if let summaryDue { services.summaryDue(id, summaryDue.templateID, summaryDue.askedFor) }
+        // Paused for a lock that's over by now: it goes on.
+        if case .paused(.locked) = outcome, conditions.protectedDataAvailable, services.protectedDataAvailable() { pickUp(); return }
         if case .paused(let reason) = outcome { pause = reason } else { pickUp() }
     }
 
@@ -504,7 +522,7 @@ final class PhoneProcessor {
     /// starts when nothing stops it any more.
     private func conditionsChanged() {
         if let current = running {
-            if let reason = blocking(summarizing: current.stage == .summarizing) { stop(.pause(reason)) }
+            if let reason = blocking(summarizing: current.stage == .summarizing, starting: false) { stop(.pause(reason)) }
         } else {
             pickUp()
         }

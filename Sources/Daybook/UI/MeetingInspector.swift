@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookDesign
 import DaybookIntelligence
 import DaybookKit
 import DaybookUI
@@ -11,6 +12,7 @@ struct MeetingInspector: View {
     let state: AppState
     let meetingID: UUID
     @Environment(\.undoManager) private var undoManager
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         if state.meetings.contains(where: { $0.id == meetingID }) {
@@ -27,7 +29,7 @@ struct MeetingInspector: View {
                 .menuStyle(.button)
                 .controlSize(.small)
                 .fixedSize()
-                .disabled(state.processingID == meeting.id || state.recordingID == meeting.id)
+                .disabled(state.processor.queue.runningID == meeting.id || state.recordingID == meeting.id)
             }
         } else {
             ContentUnavailableView("No Selection", systemImage: "sidebar.trailing")
@@ -49,7 +51,7 @@ struct MeetingInspector: View {
 
     static func context(_ state: AppState, _ meeting: Meeting) -> ConversationActions.Context {
         ConversationActions.Context(platform: .mac, isRecording: state.recordingID == meeting.id,
-                                    isProcessingHere: state.processingID == meeting.id || state.queuedIDs.contains(meeting.id),
+                                    isProcessingHere: state.processor.queue.runningID == meeting.id || state.processor.queue.queuedIDs.contains(meeting.id),
                                     status: state.processingStatus(for: meeting), isDeviceRecording: state.isRecording)
     }
 
@@ -66,10 +68,10 @@ struct MeetingInspector: View {
     /// until asked for too.
     static func processAgain(_ state: AppState, source: UUID? = nil) -> @MainActor (UUID, ProcessingRequest.Mode) -> Void {
         { [weak state] id, mode in
-            guard let state, state.processingID != id, !state.pausedIDs.contains(id),
-                  !(source.map(state.pausedIDs.contains) ?? false) else { return }
+            guard let state, state.processor.queue.runningID != id, !state.processor.queue.paused.contains(id),
+                  !(source.map(state.processor.queue.paused.contains) ?? false) else { return }
             state.cancelQueued(id)
-            state.enqueue(id, mode: mode)
+            state.processor.enqueue(id, mode: mode)
         }
     }
 
@@ -82,26 +84,19 @@ struct MeetingInspector: View {
             state.library.putBackRecording(track.id, in: id, phoneName: state.phoneName(track), undoManager: undoManager,
                                            changed: Self.processAgain(state))
         case .process(let mode):
-            state.enqueue(id, mode: mode)
+            state.processor.enqueue(id, mode: mode)
         case .summarize:
             // Choosing a different template summarizes again right away; the earlier summary stays in Version History.
-            guard state.processingID != id else { return }
+            guard state.processor.queue.runningID != id else { return }
             state.cancelQueued(id)
-            state.enqueue(id, mode: .summaryOnly)
+            state.processor.enqueue(id, mode: .summaryOnly)
         case .versionHistory:
-            state.activeSheet = .versionHistory
-        case .status(.placement(let choice)):
-            state.chooseSummaryPlacement(choice, for: id)
-        case .status(.stopSummary):
-            state.pauseProcessing(id)
-        case .status(.dontWait):
-            state.library.stopWaitingForRecordings(in: id, undoManager: undoManager)
-        case .status(.waitAgain):
-            state.library.waitAgainForMissingRecordings(in: id, undoManager: undoManager)
-        case .status:
-            break
+            state.window.sheet = .versionHistory
+        case .status(let action):
+            MacStatusActions(state: state, undoManager: undoManager) { $0.open(with: openWindow, activating: false) }
+                .perform(action, on: id)
         case .searchTag(let tag):
-            state.searchTokens = [.tag(tag)]
+            state.window.searchTokens = [.tag(tag)]
         }
     }
 
@@ -112,12 +107,12 @@ struct MeetingInspector: View {
             guard !state.isRecording else { return }
             Task {
                 guard let url = await state.audioURL(for: track, meetingID: id) else { return }
-                withAnimation(Motion.state) { state.playback.play(url: url, at: 0, trackID: track.id, meetingID: id) }
+                withAnimation(DaybookMotion.state) { state.playback.play(url: url, at: 0, trackID: track.id, meetingID: id) }
             }
         case .adjustTiming:
-            state.activeSheet = .adjustTiming(track.id)
+            state.window.sheet = .adjustTiming(track.id)
         case .showOriginalTranscript:
-            state.activeSheet = .originalTranscript(track.id)
+            state.window.sheet = .originalTranscript(track.id)
         case .showInFinder:
             state.showInFinder(id)
         case .removeRecording:

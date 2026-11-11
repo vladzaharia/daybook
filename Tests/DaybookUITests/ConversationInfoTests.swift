@@ -32,12 +32,12 @@ final class ConversationInfoTests: XCTestCase {
         let planner = SummaryPlacementPlanner(options: SummaryOptions(thisDeviceCanSummarize: true, reachableMacs: [], cloud: sonnet),
                                               preferences: preferences, at: start)
         let now = try? XCTUnwrap(InfoNow.make(.transcribed, meeting: meeting, inputs: inputs(placement: .init(planner: planner)), now: start))
-        XCTAssertEqual(now?.text(at: start.addingTimeInterval(3)), "Summarizing in 12 s")
+        XCTAssertEqual(now?.text(at: start.addingTimeInterval(3)), SummaryPlacementWords.countdown(seconds: 12))
         XCTAssertEqual(now?.countdownUntil, start.addingTimeInterval(15))
         XCTAssertEqual(now?.actions, [.placement(.useCloud), .placement(.startNow)])
 
         let running = InfoNow.make(.transcribed, meeting: meeting, inputs: inputs(placement: .init(run: .cloud(sonnet))), now: start)
-        XCTAssertEqual(running?.text, "Summarizing with Claude Sonnet 5.5")
+        XCTAssertEqual(running?.text, SummaryPlacementWords.inCloud(sonnet.name))
         XCTAssertEqual(running?.actions, [.stopSummary])
     }
 

@@ -162,12 +162,6 @@ private struct SettingsSidebarRow: View {
     }
 }
 
-// Settings' footers and problem lines are the ones both apps draw (DaybookUI's `SettingsFooter`, DaybookDesign's
-// `ProblemLine` and `DetailsButton`). These names reach the Mac's files that don't import those libraries.
-typealias SettingsFooter = DaybookUI.SettingsFooter
-typealias ProblemLine<Actions: View> = DaybookDesign.ProblemLine<Actions>
-typealias DetailsButton = DaybookDesign.DetailsButton
-
 extension DaybookDesign.ProblemLine where Actions == EmptyView {
     /// An `AppProblem` shown in place: its message, and its details behind Details….
     init(problem: AppProblem) { self.init(text: problem.message, details: problem.details) }
@@ -221,7 +215,7 @@ private struct RecordingSettings: View {
                 }
                 .controlSize(.regular)
                 LabeledContent {
-                    HStack(spacing: Space.s2) {
+                    HStack(spacing: DaybookSpacing.s2) {
                         Button { showingSupportedApps = true } label: {
                             Image(systemName: "info.circle")
                         }
@@ -453,7 +447,7 @@ private struct AllowedLabel: View {
         Label {
             Text("Allowed").foregroundStyle(.secondary)
         } icon: {
-            Image(systemName: "checkmark.circle.fill").foregroundStyle(Ink.link)
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(DaybookPalette.Ink.link)
         }
         .labelStyle(.titleAndIcon)
     }
@@ -472,13 +466,13 @@ private struct DetectionStatusLine: View {
     }
 
     private var recording: Bool { monitor.isMeetingActive && state.isRecording }
-    private var color: Color { recording ? Ink.record : DaybookStyle.neonMint }
+    private var color: Color { recording ? DaybookPalette.Ink.record : DaybookPalette.neonMint }
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 5) {
             Image(systemName: "circle.fill")
                 .font(.system(size: 6))
                 .foregroundStyle(color)
-                .neonGlow(color, radius: 3)
+                .daybookGlow(color, radius: 3)
                 .symbolEffect(.pulse, options: .repeating, isActive: !reduceMotion)
                 .accessibilityHidden(true)
             Text(monitor.statusText)
@@ -503,9 +497,9 @@ private struct SupportedCallsPopover: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.s2) {
+        VStack(alignment: .leading, spacing: DaybookSpacing.s2) {
             Text("Daybook notices calls in:").fontWeight(.semibold)
-            VStack(alignment: .leading, spacing: Space.s1) {
+            VStack(alignment: .leading, spacing: DaybookSpacing.s1) {
                 ForEach(apps + ["Google Meet, Zoom, or Teams calls in \(browsers)"], id: \.self) { line in
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text("•").foregroundStyle(.secondary)
@@ -514,7 +508,7 @@ private struct SupportedCallsPopover: View {
                 }
             }
         }
-        .padding(Space.s4)
+        .padding(DaybookSpacing.s4)
         .frame(width: 300, alignment: .leading)
     }
 }
@@ -579,7 +573,7 @@ private struct LibrarySettings: View {
                         .monospacedDigit()
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity)
-                        .padding(.top, Space.s2)
+                        .padding(.top, DaybookSpacing.s2)
                 }
             }
         }

@@ -1,3 +1,4 @@
+import DaybookDesign
 import DaybookKit
 import DaybookUI
 import SwiftUI
@@ -27,13 +28,13 @@ struct PhoneNotes: View {
                     placeholder: "Add a note…",
                     // The lane appears only when a note has a recording time; notes typed while reading have none. It's the
                     // bookmarks' lane, so their times line up.
-                    lane: timed ? PhoneStyle.Page.lane : 0,
+                    lane: timed ? ReadingGeometry.lane : 0,
                     focusOnAppear: session.focusNotesFor == meeting.id,
                     playTime: meeting.tracks.isEmpty ? nil : { play(.timeline($0)) },
                     onFocusChange: { focused in if focused, session.focusNotesFor == meeting.id { session.focusNotesFor = nil } },
                     ink: .conversation(meeting.id, library: library, session: inkSession))
             }
-            .padding(.top, PhoneStyle.Space.s2)
+            .padding(.top, DaybookSpacing.s2)
         }
         // Write by Hand from the More menu: a finger writes on these notes.
         .onChange(of: session.writeByHandFor, initial: true) { _, id in

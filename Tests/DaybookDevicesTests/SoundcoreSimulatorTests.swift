@@ -555,7 +555,8 @@ final class SoundcoreSimulatorTests: XCTestCase {
             XCTAssertEqual(rig.session.failures.count, 1)
             XCTAssertEqual(rig.session.transferProblem?.id, SoundcoreIssue.integrity.rawValue)
             XCTAssertEqual(device.received.filter { $0 == (0x1a, 0x07) }.count, 2, "\(fault): one retry, then it stops")
-            XCTAssertTrue(stagedFiles.isEmpty, "\(fault): partial files are removed")
+            // The partial files go after the queue has stopped, not with it.
+            try await waitUntil("\(fault): partial files to be removed") { stagedFiles.isEmpty }
             XCTAssertEqual(rig.connection.state, .connected, "The recorder stays connected")
             rig.connection.disconnect()
         }

@@ -292,7 +292,7 @@ final class ShippedFormatTests: XCTestCase {
         XCTAssertEqual(state.processingPreferences.otherLanguagesModelID, "whisper/small")
         XCTAssertFalse(state.processingPreferences.matchSpeakersAcrossSources)
         XCTAssertFalse(state.includeComputerAudio)
-        XCTAssertEqual(state.readingScale, 1.25)
+        XCTAssertEqual(state.window.readingScale, 1.25)
         try assertEveryFieldSurvives(XCTUnwrap(values["modelSelections"] as? Data), as: ModelSelections.self)
         try assertEveryFieldSurvives(XCTUnwrap(values["processingPreferences"] as? Data), as: ProcessingPreferences.self)
 

@@ -165,9 +165,7 @@ public struct CloudKeyEditor: View {
             Section {
                 SecureField(density == .touch ? (replacing ? "New Key" : "Key") : "Key", text: $text,
                             prompt: Text(provider == .anthropic ? "sk-ant-…" : "sk-…"))
-                    #if os(iOS)
-                    .textInputAutocapitalization(.never)
-                    #endif
+                    .touchKeyboard(capitalization: .never)
                     .autocorrectionDisabled()
                     .onSubmit(add)
                     .onChange(of: text) { _, _ in cloud.clearCheck(for: provider) }

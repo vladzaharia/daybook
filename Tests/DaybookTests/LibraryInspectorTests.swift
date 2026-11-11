@@ -19,7 +19,7 @@ final class LibraryInspectorTests: XCTestCase {
         await state.initialize()
         defaults.set(true, forKey: "isInspectorPresented")
         let id = state.newMeeting(title: "Vendor walkthrough")
-        state.selectedID = id
+        state.window.openID = id
 
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1400, height: 860), styleMask: [.titled, .resizable],
                               backing: .buffered, defer: false)
@@ -35,7 +35,7 @@ final class LibraryInspectorTests: XCTestCase {
 
         // The page changes while the inspector collapses and expands again, as a device page opening at launch does.
         for place in [LibraryPlace.device("demo-phone"), .section(.all), .device("demo-phone"), .section(.all)] {
-            state.place = place
+            state.window.place = place
             try await Task.sleep(for: .milliseconds(30))
             XCTAssertEqual(split.splitViewItems.map(ObjectIdentifier.init), items, "Showing \(place) keeps the split view's items")
         }
@@ -93,7 +93,7 @@ final class LibraryInspectorTests: XCTestCase {
         state.installedModels = []
         try await state.importFiles([try rig.audio("weekly-call.wav", frequency: 520)], source: .imported, attachTo: id)
         state.installedModels = installed
-        state.awaitingModels.remove(id)
+        state.processor.queue.awaitingModels.remove(id)
         let tracks = try XCTUnwrap(rig.meeting(id)?.tracks)
         XCTAssertEqual(tracks.count, 2)
         state.update(id) { meeting in
@@ -104,7 +104,7 @@ final class LibraryInspectorTests: XCTestCase {
             meeting.status = .ready
         }
         await state.library.realign(id)
-        state.pausedIDs = [id]
+        state.processor.queue.paused = [id]
         var heard: [UUID] = []
         func changed(_ source: UUID? = nil) -> @MainActor (UUID, ProcessingRequest.Mode) -> Void {
             let processAgain = MeetingInspector.processAgain(state, source: source)
@@ -114,20 +114,20 @@ final class LibraryInspectorTests: XCTestCase {
         let call = try XCTUnwrap(tracks.first { $0.source == .imported }), mic = try XCTUnwrap(tracks.first { $0.source == .microphone })
         XCTAssertTrue(state.library.removeRecording(call.id, from: id, undoManager: nil, changed: changed()))
         try await waitUntil("the change to be heard") { heard == [id] }
-        XCTAssertTrue(state.pausedIDs.contains(id), "still paused")
-        XCTAssertFalse(state.queuedIDs.contains(id))
-        XCTAssertNil(state.processingID)
+        XCTAssertTrue(state.processor.queue.paused.contains(id), "still paused")
+        XCTAssertFalse(state.processor.queue.queuedIDs.contains(id))
+        XCTAssertNil(state.processor.queue.runningID)
 
         let moved = try await state.library.moveRecordingToNewConversation(mic.id, from: id, audio: { track in
             try await state.library.audioURL(for: track, in: id)
         }, undoManager: nil, changed: changed(id))
         XCTAssertEqual(heard.last, moved, "its own conversation would be summarized where the paused one was")
-        XCTAssertFalse(state.queuedIDs.contains(moved), "and waits to be asked")
-        XCTAssertNil(state.processingID)
+        XCTAssertFalse(state.processor.queue.queuedIDs.contains(moved), "and waits to be asked")
+        XCTAssertNil(state.processor.queue.runningID)
         XCTAssertTrue(rig.inference.summarized.isEmpty)
 
         // Resumed, a change writes the summary again.
-        state.pausedIDs = []
+        state.processor.queue.paused = []
         XCTAssertTrue(state.library.putBackRecording(call.id, in: id, undoManager: nil, changed: changed()))
         try await waitUntil("the summary to be written again") { rig.inference.summarized.count == 1 }
         try await rig.processed(id)
@@ -154,11 +154,11 @@ final class LibraryInspectorTests: XCTestCase {
         defer { window.close() }
         try await settle()
 
-        state.place = .device("demo-phone")
+        state.window.place = .device("demo-phone")
         try await settle()
         state.showInspector()
         try await settle()
-        XCTAssertEqual(state.place, .device("demo-phone"), "nothing to open")
+        XCTAssertEqual(state.window.place, .device("demo-phone"), "nothing to open")
         XCTAssertFalse(defaults.bool(forKey: "isInspectorPresented"), "not stored for later")
 
         // The page shows an imported recording's conversation.
@@ -166,8 +166,8 @@ final class LibraryInspectorTests: XCTestCase {
         try await settle()
         state.showInspector()
         try await settle()
-        XCTAssertEqual(state.place, .section(.all))
-        XCTAssertEqual(state.selectedID, id)
+        XCTAssertEqual(state.window.place, .section(.all))
+        XCTAssertEqual(state.window.openID, id)
         XCTAssertTrue(defaults.bool(forKey: "isInspectorPresented"))
     }
 
@@ -179,7 +179,7 @@ final class LibraryInspectorTests: XCTestCase {
         let state = AppState(libraryURL: root, defaults: defaults)
         await state.initialize()
         defaults.set(true, forKey: "isInspectorPresented")
-        state.selectedID = state.newMeeting(title: "Weekly product sync with the design and research teams")
+        state.window.openID = state.newMeeting(title: "Weekly product sync with the design and research teams")
 
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 480), styleMask: [.titled, .resizable],
                               backing: .buffered, defer: false)

@@ -42,6 +42,13 @@ final class DesignTokenTests: XCTestCase {
         XCTAssertEqual(Shade.every.count, 20 + Shade.roles.count + 6 + 6 + 6, "Core, roles, speakers, owners, the Live Activity's")
     }
 
+    func testShadeKeepsStandardValuesWithoutContrastOnes() {
+        let shade = DaybookShade(light: 0x111111, dark: 0x222222)
+        XCTAssertEqual(shade.hex(dark: false, increasedContrast: true), 0x111111)
+        XCTAssertEqual(shade.hex(dark: true, increasedContrast: true), 0x222222)
+        XCTAssertEqual(Shade.paper.hex(dark: true, increasedContrast: true), 0x000000)
+    }
+
     func testEveryShadeResolvesToItsValuesInLightAndDark() {
         func hex(_ color: NSColor, _ appearance: NSAppearance.Name) -> UInt32 {
             var value: UInt32 = 0
@@ -430,5 +437,16 @@ final class DesignTokenTests: XCTestCase {
 
         XCTAssertEqual(layout.arrange([item(100), item(100)], width: nil).map(\.indices), [[0, 1]], "No width: one row")
         XCTAssertEqual(layout.arrange([item(100), item(100)], width: .infinity).map(\.indices), [[0, 1]])
+    }
+
+    @MainActor
+    func testLevelTrailKeepsTheNewestAndFallsFlat() {
+        let trail = LevelTrail(capacity: 4)
+        for value in [0.1, 0.2, 0.3, 0.4, 1.5] { trail.append(value) }
+        XCTAssertEqual(trail.values, [0.2, 0.3, 0.4, 1], "Oldest first, clamped to 0...1")
+        trail.append(.nan)
+        XCTAssertEqual(trail.values.last, 0)
+        trail.reset()
+        XCTAssertEqual(trail.values, [0, 0, 0, 0])
     }
 }

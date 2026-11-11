@@ -493,14 +493,14 @@ final class ModelManager {
         ModelManagerSnapshot(catalog: state.modelCatalog, engines: state.runtime.engines, installed: state.installedModels,
                              inventory: inventory, diskUsage: diskUsage, selections: state.modelSelections,
                              speakerQuality: state.processingPreferences.speakerOptions.quality,
-                             downloading: state.downloadingID, downloadFraction: state.downloadProgress.fraction,
-                             pending: state.pendingDownloads, waitingForWiFi: state.downloadsWaitingForWiFi,
-                             failed: Set(state.queue.downloadFailures.keys), updates: updates, protectedRevisions: protectedRevisions,
+                             downloading: state.processor.queue.downloadingID, downloadFraction: state.processor.queue.downloadActivity.value.fraction,
+                             pending: state.processor.queue.pendingDownloads, waitingForWiFi: state.downloadsWaitingForWiFi,
+                             failed: Set(state.processor.queue.downloadFailures.keys), updates: updates, protectedRevisions: protectedRevisions,
                              resultCounts: resultCounts, freeSpace: freeSpace, fetchedWhenRead: fetchedWhenRead)
     }
 
     /// Removing and old-revision cleanup wait for processing and downloads (the app refuses them meanwhile).
-    var canChangeFiles: Bool { state.processingID == nil && state.downloadingID == nil && !isWorking }
+    var canChangeFiles: Bool { state.processor.queue.runningID == nil && state.processor.queue.downloadingID == nil && !isWorking }
 
     /// Re-reads what's on disk and what protects it.
     func refresh() async {
@@ -509,9 +509,9 @@ final class ModelManager {
         diskUsage = await runtime.diskUsage()
         // Read with how far the download under way has got: what it has fetched is already out of what's free.
         freeSpace = readSpace(modelsFolder)
-        fetchedWhenRead = state.downloadingID.flatMap { state.modelCatalog.model(ModelReference($0).id) }
-            .map { [$0.key: state.downloadProgress.fraction] } ?? [:]
-        let jobs = state.processingQueue + [state.runningJob].compactMap { $0 }
+        fetchedWhenRead = state.processor.queue.downloadingID.flatMap { state.modelCatalog.model(ModelReference($0).id) }
+            .map { [$0.key: state.processor.queue.downloadActivity.value.fraction] } ?? [:]
+        let jobs = state.processor.queue.jobs + [state.processor.queue.running].compactMap { $0 }
         var protected = await runtime.store.pinned.union(await runtime.store.leasedKeys)
         for reference in jobs.flatMap(\.modelReferences) {
             let key = state.modelCatalog.model(reference.id)?.key ?? reference.id
@@ -557,7 +557,7 @@ final class ModelManager {
     /// queue, and another model's download carries on.
     func cancelSelected() {
         let keys = snapshot.transferringSelected(detectSpeakers: state.detectSpeakers)
-        if let current = state.downloadingID.map({ ModelReference($0).id }), keys.contains(current) { cancelDownloads() }
+        if let current = state.processor.queue.downloadingID.map({ ModelReference($0).id }), keys.contains(current) { cancelDownloads() }
         else { keys.forEach(cancelWaiting) }
     }
 
@@ -565,7 +565,7 @@ final class ModelManager {
 
     /// Cancels `key`'s download: the one under way, or its place in the queue.
     func cancel(_ key: String) {
-        if state.downloadingID.map({ ModelReference($0).id }) == key { cancelDownloads() } else { cancelWaiting(key) }
+        if state.processor.queue.downloadingID.map({ ModelReference($0).id }) == key { cancelDownloads() } else { cancelWaiting(key) }
     }
 
 
@@ -634,7 +634,7 @@ final class ModelManager {
         guard canChangeFiles else { return }
         isWorking = true
         defer { isWorking = false }
-        let references = (state.processingQueue + [state.runningJob].compactMap { $0 }).flatMap(\.modelReferences)
+        let references = (state.processor.queue.jobs + [state.processor.queue.running].compactMap { $0 }).flatMap(\.modelReferences)
             + state.modelSelections.allKeys.map { ModelReference($0) }
         await state.runtime.collectGarbage(protecting: references)
         await refresh()

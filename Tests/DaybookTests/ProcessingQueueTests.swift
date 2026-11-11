@@ -35,18 +35,18 @@ final class ProcessingQueueTests: XCTestCase {
         let second = try await rig.macConversation("Standup", at: start, seconds: 0.5, audio: rig.audio("two.wav", frequency: 500))
         let firstAudio = rig.root.appendingPathComponent("one.wav")
         try rig.inference.block(firstAudio)
-        state.enqueue(first)
-        state.enqueue(second)
+        state.processor.enqueue(first)
+        state.processor.enqueue(second)
         try await waitUntil("the first to be transcribing") { rig.inference.isWaiting(on: firstAudio) }
-        XCTAssertEqual(state.queuedIDs, [second])
+        XCTAssertEqual(state.processor.queue.queuedIDs, [second])
 
         // Quitting stops the running job and empties the queue, and keeps both owed.
         state.cancelProcessing()
-        try await waitUntil("the job to stop") { state.processingID == nil && state.processingTask == nil }
-        XCTAssertTrue(state.queue.isOwed(first) && state.queue.isOwed(second))
+        try await waitUntil("the job to stop") { state.processor.queue.runningID == nil && state.processor.queue.task == nil }
+        XCTAssertTrue(state.processor.queue.isOwed(first) && state.processor.queue.isOwed(second))
 
         let next = await relaunch(rig)
-        XCTAssertEqual(next.awaitingModels, [first, second], "Both are queued again, waiting for this Mac's models")
+        XCTAssertEqual(next.processor.queue.awaitingModels, [first, second], "Both are queued again, waiting for this Mac's models")
         guard case .requested(.models) = next.processingStatus(for: try XCTUnwrap(next.meetings.first { $0.id == first })) else {
             return XCTFail("Waiting for models, not 'Not transcribed yet'")
         }
@@ -59,7 +59,7 @@ final class ProcessingQueueTests: XCTestCase {
         state.sources.inference = rig.inference
         state.sources.alignAudio = { _, _, _, _ in nil }
         state.installedModels = [state.transcriptionModel, state.summaryModel, state.processingPreferences.speakerModelID]
-        for id in state.awaitingModels.sorted(by: { $0.uuidString < $1.uuidString }) { state.enqueue(id) }
+        for id in state.processor.queue.awaitingModels.sorted(by: { $0.uuidString < $1.uuidString }) { state.processor.enqueue(id) }
     }
 
     func testBehaviorWorkDaybookDidntComeBackFromTwiceIsLeftToThePerson() async throws {
@@ -67,27 +67,27 @@ final class ProcessingQueueTests: XCTestCase {
         let audio = try rig.audio("heavy.wav", frequency: 320)
         let id = try await rig.macConversation("All hands", at: Date(), seconds: 0.5, audio: audio)
         try rig.inference.block(audio)
-        rig.state.enqueue(id)
+        rig.state.processor.enqueue(id)
         try await waitUntil("it to be transcribing") { rig.inference.isWaiting(on: audio) }
 
         // Daybook crashes mid-run (nothing quit it): the next launch tries the work once more.
         let second = await relaunch(rig)
-        XCTAssertEqual(second.awaitingModels, [id], "Queued again after one crash")
+        XCTAssertEqual(second.processor.queue.awaitingModels, [id], "Queued again after one crash")
         modelsArrive(second, rig)
-        try await waitUntil("it to run again") { second.processingID == id }
+        try await waitUntil("it to run again") { second.processor.queue.runningID == id }
 
         // A quit ends that run as it stops it, so it doesn't count: the next launch queues it again.
         second.cancelProcessing()
-        try await waitUntil("the job to stop") { second.processingID == nil && second.processingTask == nil }
+        try await waitUntil("the job to stop") { second.processor.queue.runningID == nil && second.processor.queue.task == nil }
         let third = await relaunch(rig, after: second)
-        XCTAssertEqual(third.awaitingModels, [id], "A quit isn't a crash")
+        XCTAssertEqual(third.processor.queue.awaitingModels, [id], "A quit isn't a crash")
         modelsArrive(third, rig)
-        try await waitUntil("it to run again") { third.processingID == id }
+        try await waitUntil("it to run again") { third.processor.queue.runningID == id }
 
         // It crashes a second time: the next launch leaves it to the person.
         let fourth = await relaunch(rig, after: third)
-        XCTAssertTrue(fourth.awaitingModels.isEmpty && fourth.queuedIDs.isEmpty, "Not queued again")
-        XCTAssertFalse(fourth.queue.isOwed(id), "Settled")
+        XCTAssertTrue(fourth.processor.queue.awaitingModels.isEmpty && fourth.processor.queue.queuedIDs.isEmpty, "Not queued again")
+        XCTAssertFalse(fourth.processor.queue.isOwed(id), "Settled")
         ProcessingQueue.drainWrites()
         let saved = ProcessingQueue(owedURL: rig.root.appendingPathComponent("local-queue.json"))
         saved.loadOwedWork()
@@ -111,21 +111,21 @@ final class ProcessingQueueTests: XCTestCase {
         let paused = try await rig.macConversation("Paused", at: start, seconds: 0.5, audio: pausedAudio)
         let failing = try await rig.macConversation("Failing", at: start, seconds: 0.5, audio: failingAudio)
         try rig.inference.fail(failingAudio, with: AppError.libraryUnavailable)
-        state.enqueue(failing)
+        state.processor.enqueue(failing)
         try await rig.processed(failing)
         XCTAssertEqual(rig.meeting(failing)?.status, .failed)
-        XCTAssertFalse(state.queue.isOwed(failing), "A failure is settled: Try Again is the person's")
+        XCTAssertFalse(state.processor.queue.isOwed(failing), "A failure is settled: Try Again is the person's")
 
         try rig.inference.block(pausedAudio)
-        state.enqueue(paused)
+        state.processor.enqueue(paused)
         try await waitUntil("it to be transcribing") { rig.inference.isWaiting(on: pausedAudio) }
         state.pauseProcessing(paused)
-        try await waitUntil("it to pause") { state.pausedIDs.contains(paused) && state.processingID == nil }
-        XCTAssertFalse(state.queue.isOwed(paused), "Paused by the person: it resumes only when asked")
+        try await waitUntil("it to pause") { state.processor.queue.paused.contains(paused) && state.processor.queue.runningID == nil }
+        XCTAssertFalse(state.processor.queue.isOwed(paused), "Paused by the person: it resumes only when asked")
         state.cancelProcessing()
 
         let next = await relaunch(rig)
-        XCTAssertTrue(next.awaitingModels.isEmpty && next.queuedIDs.isEmpty, "Nothing is queued again")
+        XCTAssertTrue(next.processor.queue.awaitingModels.isEmpty && next.processor.queue.queuedIDs.isEmpty, "Nothing is queued again")
         try rig.inference.unblock(pausedAudio)
     }
 
@@ -133,10 +133,10 @@ final class ProcessingQueueTests: XCTestCase {
         let rig = try await rig()
         let id = try await rig.macConversation("Interview", at: Date(), seconds: 0.5, audio: rig.audio("talk.wav", frequency: 410))
         rig.state.installedModels = []
-        rig.state.enqueue(id)
-        XCTAssertEqual(rig.state.awaitingModels, [id])
+        rig.state.processor.enqueue(id)
+        XCTAssertEqual(rig.state.processor.queue.awaitingModels, [id])
         let next = await relaunch(rig)
-        XCTAssertEqual(next.awaitingModels, [id], "A download after the relaunch starts it")
+        XCTAssertEqual(next.processor.queue.awaitingModels, [id], "A download after the relaunch starts it")
     }
 
     func testBehaviorFinishedWorkIsntOwedAndAConversationQueuedAgainAsItFinishesStaysOwed() async throws {
@@ -145,10 +145,10 @@ final class ProcessingQueueTests: XCTestCase {
         let audio = try rig.audio("done.wav", frequency: 350)
         try rig.inference.script(audio, [(0, "We agreed on Friday.")])
         let id = try await rig.macConversation("Planning", at: Date(), seconds: 0.5, audio: audio)
-        state.enqueue(id)
+        state.processor.enqueue(id)
         try await rig.processed(id)
         XCTAssertEqual(rig.meeting(id)?.status, .ready)
-        XCTAssertFalse(state.queue.isOwed(id))
+        XCTAssertFalse(state.processor.queue.isOwed(id))
 
         // A job that queues its conversation again as it finishes (its notes changed meanwhile) leaves it owed.
         let queue = ProcessingQueue(owedURL: nil)
@@ -175,7 +175,7 @@ final class ProcessingQueueTests: XCTestCase {
         let audio = try rig.audio("odd.wav", frequency: 380)
         let id = try await rig.macConversation("Interview", at: Date(), seconds: 0.5, audio: audio)
         try rig.inference.fail(audio, with: EngineGaveUp())
-        rig.state.enqueue(id)
+        rig.state.processor.enqueue(id)
         try await rig.processed(id)
         let meeting = try XCTUnwrap(rig.meeting(id))
         guard case .failed(let failure) = rig.state.processingStatus(for: meeting) else { return XCTFail("Failed") }
@@ -194,9 +194,9 @@ final class ProcessingQueueTests: XCTestCase {
         let next = try await rig.macConversation("Standup", at: start, seconds: 0.5, audio: rig.audio("next.wav", frequency: 500))
         let later = try await rig.macConversation("Retro", at: start, seconds: 0.5, audio: rig.audio("later.wav", frequency: 700))
         try rig.inference.block(runningAudio)
-        state.enqueue(running)
-        state.enqueue(next)
-        state.enqueue(later, mode: .summaryOnly)
+        state.processor.enqueue(running)
+        state.processor.enqueue(next)
+        state.processor.enqueue(later, mode: .summaryOnly)
         try await waitUntil("the first to be transcribing") { rig.inference.isWaiting(on: runningAudio) }
         XCTAssertEqual(state.waitingWords(for: next)?.line, "Waiting to transcribe after “Roadmap review”")
         XCTAssertEqual(state.waitingWords(for: next)?.short, "Waiting to transcribe")
@@ -229,12 +229,12 @@ final class ProcessingQueueTests: XCTestCase {
         let older = try await rig.waitingConversation("Monday sync", audio: rig.audio("older.wav", frequency: 310), script: [(0, "Older agenda.")])
         let newer = try await rig.waitingConversation("Tuesday sync", audio: rig.audio("newer.wav", frequency: 520), script: [(0, "Newer agenda.")])
         state.update(older) { $0.date = Date().addingTimeInterval(-7200) }
-        state.enqueue(newer)
-        state.enqueue(older)
-        XCTAssertTrue(state.awaitingModels.isEmpty, "A transcript doesn't wait for the summary model")
+        state.processor.enqueue(newer)
+        state.processor.enqueue(older)
+        XCTAssertTrue(state.processor.queue.awaitingModels.isEmpty, "A transcript doesn't wait for the summary model")
         try await rig.processed(newer, older)
 
-        XCTAssertEqual(state.queue.awaitingSummaryModel, [older, newer])
+        XCTAssertEqual(state.processor.queue.awaitingSummaryModel, [older, newer])
         XCTAssertTrue(rig.inference.summarized.isEmpty, "Nothing summarized without the model")
         for id in [older, newer] {
             let meeting = try XCTUnwrap(rig.meeting(id))
@@ -243,17 +243,18 @@ final class ProcessingQueueTests: XCTestCase {
             XCTAssertEqual(meeting.status, .imported)
             XCTAssertEqual(state.processingStatus(for: meeting), .transcribed)
             XCTAssertTrue(state.summaryWaitsForModel(meeting))
-            XCTAssertEqual(state.queue.owedWork(id)?.mode, .summaryOnly, "A Summarize is owed")
+            XCTAssertEqual(state.processor.queue.owedWork(id)?.mode, .summaryOnly, "A Summarize is owed")
         }
         XCTAssertFalse(state.localCapabilities.summarizes)
         XCTAssertEqual(state.missingSelectedModels, [summaryModel])
         // While the summary model downloads, Floating Notes' chip says the transcript is ready, and what the summary waits for.
-        state.queue.downloadingID = summaryModel
-        guard case .transcriptReady(let waiting)? = FloatingStatusInputs.work(for: try XCTUnwrap(rig.meeting(newer)), state: state) else {
-            return XCTFail("Transcript ready, with the wait")
-        }
+        state.processor.queue.downloadingID = summaryModel
+        let shown = FloatingStatusInputs.conversation(try XCTUnwrap(rig.meeting(newer)), state: state)
+        XCTAssertEqual(shown.ready, false, "Transcript ready, with the wait")
+        let waiting = try XCTUnwrap(shown.summaryWaits)
         XCTAssertTrue(waiting.hasPrefix("Waiting to summarize after the download · "), waiting)
-        state.queue.downloadingID = nil
+        XCTAssertEqual(FloatingStatus.workChip(shown, words: state.statusWords, models: nil)?.detail, "Transcript ready · \(waiting)")
+        state.processor.queue.downloadingID = nil
 
         // Owed across a relaunch: the next launch waits for the model again.
         await state.flush()
@@ -262,9 +263,9 @@ final class ProcessingQueueTests: XCTestCase {
         saved.loadOwedWork()
         XCTAssertEqual(saved.owedWork(older)?.mode, .summaryOnly)
         // A Summarize asked for meanwhile waits for the model too, rather than running.
-        state.enqueue(newer, mode: .summaryOnly)
-        XCTAssertTrue(state.queuedIDs.isEmpty)
-        XCTAssertEqual(state.queue.awaitingSummaryModel, [older, newer])
+        state.processor.enqueue(newer, mode: .summaryOnly)
+        XCTAssertTrue(state.processor.queue.queuedIDs.isEmpty)
+        XCTAssertEqual(state.processor.queue.awaitingSummaryModel, [older, newer])
 
         // The model arrives: both are summarized, the oldest first, and nothing is owed.
         state.installedModels.insert(summaryModel)
@@ -273,12 +274,12 @@ final class ProcessingQueueTests: XCTestCase {
         try await rig.processed(older, newer)
         XCTAssertTrue(rig.inference.summarized[0].contains("Older agenda"), "Date order")
         XCTAssertTrue(rig.inference.summarized[1].contains("Newer agenda"))
-        XCTAssertTrue(state.queue.awaitingSummaryModel.isEmpty)
+        XCTAssertTrue(state.processor.queue.awaitingSummaryModel.isEmpty)
         for id in [older, newer] {
             let meeting = try XCTUnwrap(rig.meeting(id))
             XCTAssertNotNil(meeting.summary)
             XCTAssertEqual(state.processingStatus(for: meeting), .done)
-            XCTAssertFalse(state.queue.isOwed(id))
+            XCTAssertFalse(state.processor.queue.isOwed(id))
         }
     }
 
@@ -290,15 +291,15 @@ final class ProcessingQueueTests: XCTestCase {
         let installed = state.installedModels
         let id = try await rig.waitingConversation("First call", audio: rig.audio("first.wav", frequency: 360), script: [(0, "Kickoff notes.")])
         state.installedModels = []
-        state.enqueue(id)
-        XCTAssertEqual(state.awaitingModels, [id])
+        state.processor.enqueue(id)
+        XCTAssertEqual(state.processor.queue.awaitingModels, [id])
         // The models that transcribe arrive; the summary model is still on its way.
         state.installedModels = installed.subtracting([state.summaryModel])
-        state.queue.downloadingID = state.summaryModel
+        state.processor.queue.downloadingID = state.summaryModel
         state.takeUpWorkWaitingForModels()
         try await rig.processed(id)
         XCTAssertFalse(try XCTUnwrap(rig.meeting(id)).unifiedTranscript.isEmpty, "Transcribed beside the download")
-        XCTAssertEqual(state.queue.awaitingSummaryModel, [id])
-        state.queue.downloadingID = nil
+        XCTAssertEqual(state.processor.queue.awaitingSummaryModel, [id])
+        state.processor.queue.downloadingID = nil
     }
 }

@@ -20,14 +20,14 @@ enum PhotoDemo {
 
     static func apply(to state: AppState) {
         guard isRequested else { return }
-        if let existing = state.meetings.first(where: { $0.title == title }) { state.selectedID = existing.id; return }
+        if let existing = state.meetings.first(where: { $0.title == title }) { state.window.openID = existing.id; return }
         Task { await seed(state) }
     }
 
     private static func seed(_ state: AppState) async {
         let start = Date().addingTimeInterval(-3 * 3600)
         let id = state.library.newMeeting(title: title, date: start)
-        state.selectedID = id
+        state.window.openID = id
         let folder = DemoAudio.newFolder()
         defer { try? FileManager.default.removeItem(at: folder) }
         let audio = folder.appendingPathComponent("Microphone.wav")

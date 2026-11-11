@@ -16,7 +16,7 @@ struct ConversationSheet: View {
             case .versionHistory:
                 // A restore would be overwritten while the conversation records or is processed here.
                 VersionHistoryScreen(library: state.library, meetingID: meeting.id) {
-                    state.recordingID == $0.id || state.processingID == $0.id
+                    state.recordingID == $0.id || state.processor.queue.runningID == $0.id
                 }
             case .reviewCorrections:
                 ReviewCorrectionsSheet(library: state.library, meetingID: meeting.id)

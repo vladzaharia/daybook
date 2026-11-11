@@ -5,8 +5,8 @@ import AppKit
 import UIKit
 #endif
 
-// Daybook's colour tokens, the one palette both apps draw with (docs/interface.md, "Design tokens"). The
-// Mac's `DaybookStyle` and the iPhone's `PhoneStyle` name these values; neither keeps a copy. Colour has
+// Daybook's colour tokens, the one palette both apps draw with (docs/interface.md, "Design tokens"), by these
+// names in each app and in DaybookUI; neither app keeps a copy or a name of its own. Colour has
 // one job each: red is recording right now, amber is something you marked, teal is selected or
 // actionable, neon mint is playing now, and the brand gradient is Daybook itself or work in progress.
 //

@@ -1,14 +1,16 @@
 import AppKit
 import DaybookCore
+import DaybookDesign
 import DaybookKit
+import DaybookUI
 import SwiftUI
 
 // Building blocks for the Mac's own device surfaces: a selected recording's page, the paired iPhone's
 // page, and Add Device. A recorder's page, Listen Live, and its recordings are the screens both apps
 // share (DaybookUI's `Devices`). A device surface is content, not chrome: the paper surface, page
 // type, the paper inks (`Ink`), quiet fills, and no glass. Colour is reserved, as on the iPhone: teal
-// for a live link to a recorder and for what you can act on (`Ink.link`), the brand gradient for
-// progress, `Ink.warning` for warnings, and `Ink.record` for recording.
+// for a live link to a recorder and for what you can act on (`DaybookPalette.Ink.link`), the brand gradient for
+// progress, `DaybookPalette.Ink.warning` for warnings, and `DaybookPalette.Ink.record` for recording.
 
 /// The device page's column: a conversation page's (`PageScroll`: a 640 pt measure, centred, with a
 /// 56 pt margin hanging to its left), so titles line up when moving between a device and a
@@ -18,7 +20,7 @@ struct DevicePageScroll<Content: View>: View {
 
     var body: some View {
         PageScroll { DeviceColumn { content } }
-            .background(DaybookStyle.paper)
+            .background(DaybookPalette.paper)
     }
 }
 
@@ -30,7 +32,7 @@ private struct DeviceColumn<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) { content }
-            .padding(.leading, narrow ? 0 : DaybookStyle.margin)
+            .padding(.leading, narrow ? 0 : ReadingGeometry.margin)
     }
 }
 
@@ -42,16 +44,16 @@ struct DevicePageTitle<Glyph: View>: View {
     @Environment(\.pageIsNarrow) private var folded
 
     var body: some View {
-        Text(title).font(TypeStyle.docTitle()).monospacedDigit()
-            .foregroundStyle(Ink.title)
+        Text(title).font(DaybookFont.docTitle.font(.window)).monospacedDigit()
+            .foregroundStyle(DaybookPalette.Ink.title)
             .lineLimit(2)
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityAddTraits(.isHeader)
             .overlay(alignment: .topLeading) {
                 if !folded {
                     glyph
-                        .frame(width: DaybookStyle.margin - 8, height: 36, alignment: .trailing)
-                        .offset(x: -DaybookStyle.margin)
+                        .frame(width: ReadingGeometry.margin - 8, height: 36, alignment: .trailing)
+                        .offset(x: -ReadingGeometry.margin)
                 }
             }
     }
@@ -73,9 +75,9 @@ struct DeviceStatusDot: View {
 
     private var color: Color {
         switch state {
-        case .connected, .searching, .connecting, .reconnecting: return DaybookStyle.accent
-        case .unavailable: return Ink.warning
-        default: return Ink.meta
+        case .connected, .searching, .connecting, .reconnecting: return DaybookPalette.accent
+        case .unavailable: return DaybookPalette.Ink.warning
+        default: return DaybookPalette.Ink.meta
         }
     }
 }
@@ -87,7 +89,7 @@ struct DeviceBoxPrimaryButton: View {
     var body: some View {
         Button(title, action: action)
             .buttonStyle(.borderedProminent)
-            .tint(DaybookStyle.prominentFill)
+            .tint(DaybookPalette.prominentFill)
     }
 }
 

@@ -44,10 +44,10 @@ final class ConversationPageRulesTests: XCTestCase {
         XCTAssertNotEqual(StatusBlockLayout.motionKey(at40), StatusBlockLayout.motionKey(summarizing), "a new step does")
         XCTAssertNotEqual(StatusBlockLayout.motionKey(at40), StatusBlockLayout.motionKey(nil))
 
-        let countdown = ConversationStatusPresentation(kind: .line, symbol: "clock", title: "Summarizing on this Mac in 12 s",
+        let countdown = ConversationStatusPresentation(kind: .line, symbol: "clock", title: SummaryPlacementWords.countdown(on: "this Mac", seconds: 12),
                                                        countdownUntil: Date(), actions: [.placement(.useCloud), .placement(.startNow)])
         var later = countdown
-        later.title = "Summarizing on this Mac in 11 s"
+        later.title = SummaryPlacementWords.countdown(on: "this Mac", seconds: 11)
         XCTAssertEqual(StatusBlockLayout.motionKey(countdown), StatusBlockLayout.motionKey(later), "a tick isn't a change of state")
     }
 
@@ -65,9 +65,13 @@ final class ConversationPageRulesTests: XCTestCase {
     }
 
     func testBehaviorACountdownKeepsTheWidthOfItsWidestSecond() {
-        XCTAssertEqual(StatusBlockLayout.countdownWidth("Summarizing on this Mac in 12 s"), "Summarizing on this Mac in 00 s")
-        XCTAssertEqual(StatusBlockLayout.countdownWidth("Summarizing in 9 s"), "Summarizing in 0 s")
-        XCTAssertEqual(StatusBlockLayout.countdownWidth("Summarizing on Studio Mac in 30 s"), "Summarizing on Studio Mac in 00 s")
+        typealias Words = SummaryPlacementWords
+        // Every digit a zero, so "12 s" keeps the width of "00 s" as it reaches 9.
+        XCTAssertEqual(StatusBlockLayout.countdownWidth(Words.countdown(on: "this Mac", seconds: 12)),
+                       Words.countdown(on: "this Mac", seconds: 12).replacingOccurrences(of: "12", with: "00"))
+        XCTAssertEqual(StatusBlockLayout.countdownWidth(Words.countdown(seconds: 9)), Words.countdown(seconds: 0))
+        XCTAssertEqual(StatusBlockLayout.countdownWidth(Words.countdown(on: "Studio Mac", seconds: 30)),
+                       Words.countdown(on: "Studio Mac", seconds: 30).replacingOccurrences(of: "30", with: "00"))
     }
 
     func testBehaviorANewSummaryRevealsBlockByBlockUpToSix() {

@@ -8,7 +8,7 @@ import Foundation
 enum StatusSheetDemo {
     static var scenario: String? { LaunchOptions.value(after: "--status-demo", in: CommandLine.arguments) }
 
-    static func adjust(_ work: inout StatusSheetModel.PhoneWork, meetings: [Meeting]) {
+    static func adjust(_ work: inout StatusOverviewModel.LocalWork, meetings: [Meeting]) {
         guard let scenario, scenario.hasPrefix("phone-") else { return }
         let newest = meetings.sorted { $0.date > $1.date }.prefix(2)
         guard let first = newest.first else { return }

@@ -1,3 +1,4 @@
+import DaybookDesign
 import Foundation
 
 /// What the widgets and the Control Center control know about recording, shared through the app
@@ -129,7 +130,7 @@ extension SharedRecordingState {
         switch display {
         case .idle: return "Daybook ready"
         case .recording: return "Recording"
-        case .paused(let elapsed): return "Paused · \(TimeLabel.short(elapsed))"
+        case .paused(let elapsed): return "Paused · \(DaybookTime.short(elapsed))"
         case .unconfirmed: return unconfirmedLine
         }
     }

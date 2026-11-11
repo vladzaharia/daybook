@@ -11,9 +11,9 @@ final class MotionAuditTests: XCTestCase {
 
     /// Where an animation is chosen: the calls whose arguments are read for curves.
     static let animationCall = try! NSRegularExpression(
-        pattern: #"(?:\.animation|\bwithAnimation|\.motion|\.daybookMotion|\bDaybookMotion\.resolved)\("#)
+        pattern: #"(?:\.animation|\bwithAnimation|\.daybookMotion|\bDaybookMotion\.resolved)\("#)
     /// A curve by its implicit member, anywhere in those arguments: first, after `nil :`, or in either
-    /// arm of a ternary. A token's member (`Motion.hover`, `DaybookMotion.state`) isn't one.
+    /// arm of a ternary. A token's member (`DaybookMotion.state`) isn't one.
     static let implicitCurve = try! NSRegularExpression(pattern: #"(?<![\w.])\.(?:"# + curveNames + #")\b"#)
     /// A curve named on its type, wherever it's written.
     static let typedCurve = try! NSRegularExpression(pattern: #"\bAnimation\.(?:"# + curveNames + #")\b"#)
@@ -88,10 +88,9 @@ final class MotionAuditTests: XCTestCase {
         XCTAssertEqual(Self.rawCurves(in: ".animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: problem)"), 1)
         XCTAssertEqual(Self.rawCurves(in: "withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) { open.toggle() }"), 1)
         XCTAssertEqual(Self.rawCurves(in: "withAnimation(reduceMotion ? .easeOut(duration: 0.15) : .snappy(duration: 0.3)) { step = next }"), 2)
-        XCTAssertEqual(Self.rawCurves(in: ".animation(hovering ? Motion.hover : .easeOut(duration: 0.2), value: hovering)"), 1)
-        XCTAssertEqual(Self.rawCurves(in: ".animation(reduceMotion ? .easeOut(duration: 0.15) : Motion.page.delay(0.04), value: shown)"), 1)
+        XCTAssertEqual(Self.rawCurves(in: ".animation(hovering ? DaybookMotion.hover : .easeOut(duration: 0.2), value: hovering)"), 1)
+        XCTAssertEqual(Self.rawCurves(in: ".animation(reduceMotion ? .easeOut(duration: 0.15) : DaybookMotion.page.delay(0.04), value: shown)"), 1)
         // A token's modifier given a curve of its own.
-        XCTAssertEqual(Self.rawCurves(in: ".motion(.snappy(duration: 0.3), value: recorder.isPaused)"), 1)
         XCTAssertEqual(Self.rawCurves(in: ".daybookMotion(.easeOut(duration: 0.2), value: shown)"), 1)
         XCTAssertEqual(Self.rawCurves(in: "withAnimation(DaybookMotion.resolved(.snappy, reduceMotion: reduce)) { }"), 1)
         // Arguments over several lines, a curve inside a transition, and one named on its type.
@@ -102,12 +101,12 @@ final class MotionAuditTests: XCTestCase {
         XCTAssertEqual(Self.rawCurves(in: ".animation(DaybookMotion.hover, value: hovering)"), 0)
         XCTAssertEqual(Self.rawCurves(in: ".daybookMotion(DaybookMotion.state, value: status)"), 0)
         XCTAssertEqual(Self.rawCurves(in: "withAnimation(DaybookMotion.resolved(.state, reduceMotion: reduce)) { }"), 0)
-        XCTAssertEqual(Self.rawCurves(in: ".animation(reduceMotion ? nil : PhoneStyle.Motion.state, value: detent)"), 0)
-        XCTAssertEqual(Self.rawCurves(in: ".motion(isReady ? Motion.state : .linear(duration: 0), value: ids)"), 0)
+        XCTAssertEqual(Self.rawCurves(in: ".animation(reduceMotion ? nil : DaybookMotion.state, value: detent)"), 0)
+        XCTAssertEqual(Self.rawCurves(in: ".daybookMotion(isReady ? DaybookMotion.state : .linear(duration: 0), value: ids)"), 0)
         XCTAssertEqual(Self.rawCurves(in: ".animation(nil, value: x)"), 0)
         // Outside an animation call's arguments, `.linear` is something else.
         XCTAssertEqual(Self.rawCurves(in: "image.interpolation(.linear)"), 0)
-        XCTAssertEqual(Self.rawCurves(in: "withAnimation(Motion.state) { scale = .linear }"), 0)
+        XCTAssertEqual(Self.rawCurves(in: "withAnimation(DaybookMotion.state) { scale = .linear }"), 0)
 
         XCTAssertTrue(Self.isAllowed("Sources/DaybookDesign/Tokens.swift"))
         XCTAssertFalse(Self.isAllowed("Sources/Daybook/UI/ConversationList.swift"))

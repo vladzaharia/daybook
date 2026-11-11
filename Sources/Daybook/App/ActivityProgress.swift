@@ -100,7 +100,7 @@ final class ActivityProgress {
 }
 
 /// Draws `content` in a view of its own: what it reads of a job's or a download's progress
-/// (`AppState.processingProgress`, `downloadProgress`) redraws only it, never the view around it.
+/// (`ProcessingQueue.activity`, `downloadActivity`) redraws only it, never the view around it.
 struct ActivityReader<Content: View>: View {
     @ViewBuilder var content: () -> Content
 

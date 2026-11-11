@@ -83,7 +83,7 @@ private struct StatusSheetPresenter: ViewModifier {
         .environment(session)
         .presentationDetents([.medium, .large], selection: $detent)
         .presentationDragIndicator(.visible)
-        .tint(PhoneStyle.accent)
+        .tint(DaybookPalette.accent)
       }
       .overlay {
         if onPage, let shown = request {
@@ -100,7 +100,7 @@ private struct StatusSheetPresenter: ViewModifier {
           .daybookTransition(.move(edge: .bottom).combined(with: .opacity))
         }
       }
-      .daybookMotion(PhoneStyle.Motion.state, value: onPage ? request?.id : nil)
+      .daybookMotion(DaybookMotion.state, value: onPage ? request?.id : nil)
       .onChange(of: request?.id) { _, id in shownOnPage = id == nil ? nil : self.onPage }
       // Folded or opened while it shows: the same request, shown the other way.
       .onChange(of: self.onPage) { _, now in if request != nil { shownOnPage = now } }
@@ -145,7 +145,7 @@ private struct StatusSheetPresenter: ViewModifier {
     } else if let id = options.statusChoose {
       try? await Task.sleep(for: .milliseconds(1_500))
       let inputs = StatusSheetInputs.make(model, library: model.library.controller)
-      guard let line = StatusSheetModel.lines(inputs).first(where: { $0.id == id || $0.id.hasPrefix(id + "-") }) else { return }
+      guard let line = StatusOverviewModel.lines(inputs).first(where: { $0.id == id || $0.id.hasPrefix(id + "-") }) else { return }
       show(StatusRequest(StatusSheetModel.route(for: line, inputs)))
     }
   }
@@ -153,7 +153,7 @@ private struct StatusSheetPresenter: ViewModifier {
 
 // MARK: The strip
 
-/// The library's status strip, above its toolbar: the one line with something to say (`StatusSheetModel.strip`), in
+/// The library's status strip, above its toolbar: the one line with something to say (`StatusOverviewModel.strip`), in
 /// its own words, ink, and progress line; `LibraryPage` shows it only while there is one (`shown`). Tapping it leads
 /// where the line's fix is, else to the sheet.
 struct StatusStrip: View {
@@ -165,21 +165,21 @@ struct StatusStrip: View {
   /// The line the strip says now, and where it leads; nil when there's nothing to say.
   static func shown(_ model: PhoneAppModel, now: Date = Date()) -> StatusStrip? {
     let inputs = StatusSheetInputs.make(model, library: model.library.controller)
-    guard let line = StatusSheetModel.strip(StatusSheetModel.lines(inputs, now: now)) else { return nil }
-    return StatusStrip(line: line, route: StatusSheetModel.route(for: line, inputs))
+    guard let line = StatusOverviewModel.strip(StatusOverviewModel.lines(inputs, now: now)) else { return nil }
+    return StatusStrip(line: StatusLineItem(line), route: StatusSheetModel.route(for: line, inputs))
   }
 
   var body: some View {
     Button {
       showStatus(StatusRequest(route))
     } label: {
-      HStack(spacing: PhoneStyle.Space.s2) {
+      HStack(spacing: DaybookSpacing.s2) {
         StatusLineView(line)
         // At the accessibility sizes the words take the chevron's room: the strip is a button either way.
         if !typeSize.isAccessibilitySize { StatusChevron() }
       }
-      .padding(.horizontal, typeSize.isAccessibilitySize ? PhoneStyle.Space.s3 : PhoneStyle.Space.s4)
-      .padding(.vertical, PhoneStyle.Space.s3)
+      .padding(.horizontal, typeSize.isAccessibilitySize ? DaybookSpacing.s3 : DaybookSpacing.s4)
+      .padding(.vertical, DaybookSpacing.s3)
       .contentShape(DaybookRadius.shape(DaybookRadius.panel))
     }
     .buttonStyle(.plain)
@@ -218,7 +218,7 @@ struct StatusSheetView: View {
       .navigationTitle(StatusSheetModel.title)
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
-        ToolbarItem(placement: .topBarTrailing) { Button(role: .close) { dismiss() }.tint(PhoneStyle.Ink.title) }
+        ToolbarItem(placement: .topBarTrailing) { Button(role: .close) { dismiss() }.tint(DaybookPalette.Ink.title) }
       }
       .navigationDestination(for: SettingsRoute.self) { route in SettingsDestination(route: route) }
     }
@@ -233,7 +233,7 @@ struct StatusSheetView: View {
 }
 
 /// The groups, in a scroll view: iCloud's line while it's a problem, then a group per kind of device, each a heading
-/// and one card (`StatusSheetModel.sections`). It doesn't repeat the lines the cards say.
+/// and one card (`StatusOverviewModel.sections`). It doesn't repeat the lines the cards say.
 private struct StatusSections: View {
   let library: LibraryController
   let detent: StatusDetent
@@ -250,7 +250,7 @@ private struct StatusSections: View {
     ScrollViewReader { proxy in
       ScrollView {
         TimelineView(.periodic(from: .now, by: 30)) { context in
-          let sections = StatusSheetModel.sections(inputs, now: context.date)
+          let sections = StatusOverviewModel.sections(inputs, now: context.date)
           StatusOverview(lines: [], density: detent.density) {
             ForEach(sections, id: \.self) { section in
               view(for: section, inputs: inputs, now: context.date)
@@ -258,10 +258,10 @@ private struct StatusSections: View {
                 .transition(.opacity)
             }
           }
-          .padding(.horizontal, PhoneStyle.Space.s4)
-          .padding(.top, PhoneStyle.Space.s2)
-          .padding(.bottom, PhoneStyle.Space.s4)
-          .animation(reduceMotion ? nil : PhoneStyle.Motion.state, value: sections)
+          .padding(.horizontal, DaybookSpacing.s4)
+          .padding(.top, DaybookSpacing.s2)
+          .padding(.bottom, DaybookSpacing.s4)
+          .animation(reduceMotion ? nil : DaybookMotion.state, value: sections)
         }
       }
       .scrollBounceBehavior(.basedOnSize)
@@ -269,23 +269,24 @@ private struct StatusSections: View {
       .defaultScrollAnchor(model.options.statusScrollEnd ? .bottom : nil)
       .task { await reveal(in: proxy) }
     }
-    .animation(reduceMotion ? nil : PhoneStyle.Motion.state, value: detent)
+    .animation(reduceMotion ? nil : DaybookMotion.state, value: detent)
   }
 
   /// The group with a line's fix, scrolled to the top once the sheet has laid out.
   private func reveal(in proxy: ScrollViewProxy) async {
     guard let fix else { return }
     try? await Task.sleep(for: .milliseconds(350))
-    withAnimation(reduceMotion ? nil : PhoneStyle.Motion.state) { proxy.scrollTo(fix, anchor: .top) }
+    withAnimation(reduceMotion ? nil : DaybookMotion.state) { proxy.scrollTo(fix, anchor: .top) }
   }
 
   @ViewBuilder
-  private func view(for section: StatusSection, inputs: StatusInputs, now: Date) -> some View {
+  private func view(for section: StatusSection, inputs: StatusOverviewInputs, now: Date) -> some View {
     switch section {
     case .lines:
-      if let line = StatusSheetModel.syncLine(inputs) {
+      if let line = StatusOverviewModel.syncLine(inputs) {
         StatusLines(
-          [line], hint: { StatusSheetModel.hint(for: StatusSheetModel.route(for: $0, inputs)) },
+          [StatusLineItem(line)],
+          hint: { _ in StatusSheetModel.hint(for: StatusSheetModel.route(for: line, inputs)) },
           choose: { _ in open(.icloud) })
       }
     case .captions: StatusCaptions()
@@ -296,7 +297,7 @@ private struct StatusSections: View {
         perform: perform)
     case .iphone:
       StatusThisIPhone(
-        entries: inputs.phoneQueue, now: now, open: open, openConversation: openConversation,
+        entries: inputs.localQueue, now: now, open: open, openConversation: openConversation,
         perform: perform)
     }
   }
@@ -317,27 +318,28 @@ private struct StatusSections: View {
   }
 }
 
-/// Gathers the sheet's facts from the app model.
+/// The iPhone's gatherer: the overview's facts (DaybookKit's `StatusOverviewInputs`, the Mac's gathered by
+/// `StatusOverviewInputs.make`), from the app model. What each says is `StatusOverviewModel`'s.
 @MainActor
 enum StatusSheetInputs {
-  static func make(_ model: PhoneAppModel, library: LibraryController) -> StatusInputs {
+  static func make(_ model: PhoneAppModel, library: LibraryController) -> StatusOverviewInputs {
     let devices = model.devices
-    var inputs = StatusInputs()
-    inputs.recorders = devices.sessions.map { lineRecorder($0, model: model) }
+    let words = DeviceWords.iPhone(id: library.thisDevice.id)
+    var inputs = StatusOverviewInputs(words: words)
+    inputs.recording.recorders = devices.sessions.map { lineRecorder($0, model: model) }
     inputs.mac = model.macPresence
     inputs.liveProgress = model.liveProgress.values.sorted { $0.receivedAt > $1.receivedAt }
-    inputs.queue = StatusSheetModel.queue(
-      meetings: library.meetings, liveProgress: model.liveProgress,
-      thisDevice: library.thisDevice.id,
+    inputs.queue = StatusOverviewModel.queue(
+      meetings: library.meetings, liveProgress: model.liveProgress, words: words,
       planners: model.placement.planners, runs: model.placement.runs,
       cloudOffered: model.placement.cloudOffer != nil)
-    let work = phoneWork(model, library: library)
-    inputs.phone = work.line
-    inputs.phoneQueue = work.entries
+    let work = localWork(model, library: library)
+    inputs.local = work.line
+    inputs.localQueue = work.entries
     sync(model.sync, into: &inputs)
     inputs.hasLiveCaptions = devices.sessions.contains { $0.isListeningLive }
     inputs.pairedMacs = model.link.macs.map { mac in
-      StatusInputs.Mac(
+      StatusOverviewInputs.Mac(
         id: mac.id, name: mac.name, line: macLine(mac, model: model), isConnected: mac.isConnected,
         notProcessing: mac.isConnected && !mac.canProcess,
         isRecording: mac.isRecording || model.isRecordingBySync(mac), problem: mac.problem != nil)
@@ -348,7 +350,7 @@ enum StatusSheetInputs {
   /// iCloud's line: where sync stands in Settings' words, the reason in a few words when iCloud can't be
   /// used ("Signed out", narrowed to "Off"), and what needs the person in warning ink: a pass that failed,
   /// the library's key not here, iCloud full, or an older Daybook app syncing as this iPhone.
-  static func sync(_ sync: PhoneSync, into inputs: inout StatusInputs) {
+  static func sync(_ sync: PhoneSync, into inputs: inout StatusOverviewInputs) {
     inputs.syncLine = sync.statusLine
     switch sync.connection {
     case .checking: inputs.syncTone = .checking
@@ -392,13 +394,13 @@ enum StatusSheetInputs {
   }
 
   /// This iPhone's own work: its processor's queue, and summaries counting down to it or running in the cloud.
-  static func phoneWork(_ model: PhoneAppModel, library: LibraryController, now: Date = Date())
-    -> StatusSheetModel.PhoneWork
+  static func localWork(_ model: PhoneAppModel, library: LibraryController, now: Date = Date())
+    -> StatusOverviewModel.LocalWork
   {
     let processor = model.processor
-    var work = StatusSheetModel.phoneWork(
+    var work = StatusOverviewModel.localWork(
       meetings: library.meetings, local: { processor.queue(for: $0, at: now) },
-      pause: processor.pause.map(pauseReason), thisDevice: library.thisDevice.id,
+      pause: processor.pause.map(pauseReason), words: .iPhone(id: library.thisDevice.id),
       planners: model.placement.planners, runs: model.placement.runs, now: now)
     #if DEBUG
       StatusSheetDemo.adjust(&work, meetings: library.meetings)
@@ -410,7 +412,7 @@ enum StatusSheetInputs {
   static func pauseReason(_ pause: PhoneProcessor.Pause) -> ProcessingWords.PauseReason {
     switch pause {
     case .recording: return .recording
-    case .background: return .background
+    case .background, .locked: return .background
     case .heat: return .heat
     case .lowPowerMode: return .lowPowerMode
     case .lowBattery: return .lowBattery
@@ -418,49 +420,48 @@ enum StatusSheetInputs {
   }
 
   /// One recorder's facts for its line: `recorder(_:model:)`'s, and what its words need besides.
-  static func lineRecorder(_ session: DeviceSession, model: PhoneAppModel) -> StatusInputs.Recorder
-  {
+  static func lineRecorder(_ session: DeviceSession, model: PhoneAppModel) -> RecorderFacts {
     var recorder = recorder(session, model: model)
     let facts = RecorderFacts(session: session)
-    recorder.symbol = facts.symbol
     recorder.recordCommandPending = facts.recordCommandPending
     recorder.recordingAsOf = facts.recordingAsOf
     recorder.folder = facts.folder
     return recorder
   }
 
-  /// One recorder's facts.
-  static func recorder(_ session: DeviceSession, model: PhoneAppModel) -> StatusInputs.Recorder {
+  /// One recorder's facts, for its card: what its page offers (`RecorderActions`) and its room.
+  static func recorder(_ session: DeviceSession, model: PhoneAppModel) -> RecorderFacts {
     let control = session.direct as? any RecordControlConnection
-    return StatusInputs.Recorder(
+    var recorder = RecorderFacts(
       id: session.id, name: session.device.name, shortName: session.kind.shortName,
-      isDirect: session.direct != nil, state: session.state, isLinked: session.isLinked,
-      batteryLevel: session.status?.battery?.level,
-      batteryCharging: session.status?.battery?.charging == true,
-      newCount: session.managedElsewhere == nil ? session.newRecordings.count : 0,
-      importing: session.queue.isActive
-        ? .init(
-          position: session.queue.position, total: session.queue.total,
-          fraction: session.importProgress,
-          suspended: session.queue.isSuspended)
-        : nil,
-      managedBy: session.managedElsewhere?.ownerName,
-      lastKnown: StatusSheetInputs.lastKnown(session, link: model.link),
-      handoff: model.devices.handoffState(session),
-      isRecording: session.isLinked && session.status?.isRecording == true,
-      isListeningLive: session.isListeningLive,
-      problem: session.problem.map { RecorderStatusWords.problem($0, on: .iPhone).title },
-      lastConnected: session.direct?.lastConnectedAt ?? session.primary?.lastConnectedAt,
-      storageHours: session.status?.storage?.hoursLeft,
-      storageIsLow: session.status?.storage.map(StorageFormat.isLow) ?? false,
-      hasRecordControl: control != nil
-        && session.direct?.capabilities.contains(.recordControl) == true,
-      hasLiveListening: session.direct is any LiveListeningConnection,
-      canConnect: RecorderFacts.canConnect(session),
-      importRunning: session.queue.current != nil,
-      notListed: session.managedElsewhere == nil && session.listingState == .notListed,
-      otherAppWait: session.otherAppWait,
-      fastTransfer: session.fastTransferStage)
+      symbol: session.kind.systemImage, isDirect: session.direct != nil, state: session.state,
+      isLinked: session.isLinked)
+    recorder.batteryLevel = session.status?.battery?.level
+    recorder.batteryCharging = session.status?.battery?.charging == true
+    recorder.newCount = session.managedElsewhere == nil ? session.newRecordings.count : 0
+    if session.queue.isActive {
+      recorder.importing = .init(
+        position: session.queue.position, total: session.queue.total,
+        fraction: session.importProgress, suspended: session.queue.isSuspended,
+        running: session.queue.current != nil)
+    }
+    recorder.managedBy = session.managedElsewhere?.ownerName
+    recorder.lastKnown = StatusSheetInputs.lastKnown(session, link: model.link)
+    recorder.handoff = model.devices.handoffState(session)
+    recorder.isRecording = session.isLinked && session.status?.isRecording == true
+    recorder.isListeningLive = session.isListeningLive
+    recorder.problem = session.problem.map { RecorderStatusWords.problem($0, on: .iPhone).title }
+    recorder.lastConnected = session.direct?.lastConnectedAt ?? session.primary?.lastConnectedAt
+    recorder.storageHours = session.status?.storage?.hoursLeft
+    recorder.storageIsLow = session.status?.storage.map(StorageFormat.isLow) ?? false
+    recorder.hasRecordControl =
+      control != nil && session.direct?.capabilities.contains(.recordControl) == true
+    recorder.hasLiveListening = session.direct is any LiveListeningConnection
+    recorder.canConnect = RecorderFacts.canConnect(session)
+    recorder.notListed = session.managedElsewhere == nil && session.listingState == .notListed
+    recorder.otherAppWait = session.otherAppWait
+    recorder.fastTransfer = session.fastTransferStage
+    return recorder
   }
 
   /// A recorder that isn't live here: what the Mac managing it last said, or its last state here.
@@ -489,7 +490,7 @@ struct StatusLinkGlyph: View {
   var body: some View {
     Image(systemName: systemImage)
       .font(.body.weight(.medium))
-      .foregroundStyle(PhoneStyle.Ink.link)
+      .foregroundStyle(DaybookPalette.Ink.link)
       .accessibilityHidden(true)
   }
 }
@@ -503,11 +504,11 @@ struct StatusRowTitle<Subtitle: View>: View {
     VStack(alignment: .leading, spacing: 2) {
       Text(title.wrappingAsName)
         .font(.subheadline.weight(.semibold))
-        .foregroundStyle(PhoneStyle.Ink.title)
+        .foregroundStyle(DaybookPalette.Ink.title)
         .fixedSize(horizontal: false, vertical: true)
       subtitle
         .font(.footnote)
-        .foregroundStyle(PhoneStyle.Ink.secondary)
+        .foregroundStyle(DaybookPalette.Ink.secondary)
         .fixedSize(horizontal: false, vertical: true)
     }
   }
@@ -541,7 +542,7 @@ private struct StatusRecorders: View {
 
   var body: some View {
     StatusGroup(title: "Recorders") {
-      VStack(spacing: PhoneStyle.Space.s3) {
+      VStack(spacing: DaybookSpacing.s3) {
         ForEach(model.devices.sessions) { session in
           StatusRecorderCard(session: session, detent: detent, open: open)
         }
@@ -562,7 +563,7 @@ private struct StatusRecorderCard: View {
   var body: some View {
     let recorder = StatusSheetInputs.recorder(session, model: model)
     let manages = StatusSheetModel.showsManagement(detent)
-    let actions = manages ? StatusSheetModel.actions(for: recorder) : []
+    let actions = manages ? StatusOverviewModel.actions(for: recorder) : []
     let waiting =
       manages && session.managedElsewhere == nil ? Array(session.newRecordings.prefix(4)) : []
     StatusCard {
@@ -572,7 +573,7 @@ private struct StatusRecorderCard: View {
         StatusRow {
           DeviceGlyph(session: session).frame(width: glyph.value)
         } content: {
-          HStack(spacing: PhoneStyle.Space.s2) {
+          HStack(spacing: DaybookSpacing.s2) {
             StatusRowTitle(title: session.device.name) {
               status(storage: manages ? recorder.storageHours : nil, low: recorder.storageIsLow)
             }
@@ -592,10 +593,10 @@ private struct StatusRecorderCard: View {
       }
       ForEach(waiting) { recording in
         StatusRow {
-          HStack(spacing: PhoneStyle.Space.s2) {
+          HStack(spacing: DaybookSpacing.s2) {
             VStack(alignment: .leading, spacing: 2) {
-              Text(recording.title).font(.subheadline).foregroundStyle(PhoneStyle.Ink.body)
-              Text(recording.detail).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
+              Text(recording.title).font(.subheadline).foregroundStyle(DaybookPalette.Ink.body)
+              Text(recording.detail).font(.footnote).foregroundStyle(DaybookPalette.Ink.secondary)
             }
             .accessibilityElement(children: .combine)
             Spacer(minLength: 0)
@@ -606,10 +607,10 @@ private struct StatusRecorderCard: View {
                 Text("Import")
                   .font(.footnote.weight(.semibold))
                   // On the accent wash, the ink that keeps 4.5:1 there.
-                  .foregroundStyle(PhoneStyle.Ink.onWash)
-                  .padding(.horizontal, PhoneStyle.Space.s3)
+                  .foregroundStyle(DaybookPalette.Ink.onWash)
+                  .padding(.horizontal, DaybookSpacing.s3)
                   .padding(.vertical, 5)
-                  .background(PhoneStyle.accent.opacity(0.12), in: Capsule())
+                  .background(DaybookPalette.accent.opacity(0.12), in: Capsule())
               }
               .buttonStyle(.plain)
               .accessibilityLabel("Import \(recording.title)")
@@ -624,7 +625,7 @@ private struct StatusRecorderCard: View {
           StatusRow {
             HStack {
               Text("All Recordings").font(.subheadline.weight(.medium)).foregroundStyle(
-                PhoneStyle.Ink.link)
+                DaybookPalette.Ink.link)
               Spacer(minLength: 0)
               StatusChevron()
             }
@@ -639,11 +640,13 @@ private struct StatusRecorderCard: View {
   /// detent its room: "About 2,170 hours left" (orange when low), on the same line when it fits.
   @ViewBuilder
   private func status(storage hours: Double?, low: Bool) -> some View {
-    let line = StatusSheetModel.recorderLine(StatusSheetInputs.lineRecorder(session, model: model))
-      .text.keepingSeparators
+    let line = StatusOverviewModel.recorderLine(
+      StatusSheetInputs.lineRecorder(session, model: model), here: PhoneSummaryPlacement.thisDeviceWords
+    )
+    .text.keepingSeparators
     if let hours {
-      let storage = Text(StatusSheetModel.storageLeft(hours: hours))
-        .foregroundStyle(low ? PhoneStyle.Ink.warning : PhoneStyle.Ink.secondary)
+      let storage = Text(StatusOverviewModel.storageLeft(hours: hours))
+        .foregroundStyle(low ? DaybookPalette.Ink.warning : DaybookPalette.Ink.secondary)
       ViewThatFits(in: .horizontal) {
         Text("\(line) · \(storage)").lineLimit(1)
         VStack(alignment: .leading, spacing: 2) {
@@ -667,8 +670,8 @@ struct StatusRecorderActions: View {
     let stacked = typeSize.isAccessibilitySize
     let layout =
       stacked
-      ? AnyLayout(VStackLayout(spacing: PhoneStyle.Space.s2))
-      : AnyLayout(HStackLayout(spacing: PhoneStyle.Space.s2))
+      ? AnyLayout(VStackLayout(spacing: DaybookSpacing.s2))
+      : AnyLayout(HStackLayout(spacing: DaybookSpacing.s2))
     layout {
       ForEach(actions, id: \.self) { action in
         button(action, stacked: stacked)
@@ -742,14 +745,14 @@ private struct ActionTile: View {
     Button(action: action) {
       Group {
         if stacked {
-          HStack(spacing: PhoneStyle.Space.s3) {
+          HStack(spacing: DaybookSpacing.s3) {
             symbol
             Text(title).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
           }
-          .padding(.horizontal, PhoneStyle.Space.s3)
+          .padding(.horizontal, DaybookSpacing.s3)
         } else {
-          VStack(spacing: PhoneStyle.Space.s1) {
+          VStack(spacing: DaybookSpacing.s1) {
             symbol
             ViewThatFits(in: .horizontal) {
               Text(title).lineLimit(1)
@@ -758,16 +761,16 @@ private struct ActionTile: View {
                 horizontal: false, vertical: true)
             }
           }
-          .padding(.horizontal, PhoneStyle.Space.s1)
+          .padding(.horizontal, DaybookSpacing.s1)
         }
       }
       .font(.footnote.weight(.semibold))
       // On the accent wash, the ink that keeps 4.5:1 there (link ink falls under it).
-      .foregroundStyle(PhoneStyle.Ink.onWash)
+      .foregroundStyle(DaybookPalette.Ink.onWash)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .padding(.vertical, PhoneStyle.Space.s2 + 2)
+      .padding(.vertical, DaybookSpacing.s2 + 2)
       .background(
-        PhoneStyle.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        DaybookPalette.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous)
       )
       .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
@@ -800,9 +803,9 @@ private struct StatusCaptions: View {
   var body: some View {
     let locale = model.settings.captionLocale
     ForEach(model.devices.sessions.filter(\.isListeningLive)) { session in
-      VStack(alignment: .leading, spacing: PhoneStyle.Space.s2) {
+      VStack(alignment: .leading, spacing: DaybookSpacing.s2) {
         HStack(spacing: 6) {
-          Circle().fill(PhoneStyle.Ink.record).frame(width: 7, height: 7).accessibilityHidden(true)
+          Circle().fill(DaybookPalette.Ink.record).frame(width: 7, height: 7).accessibilityHidden(true)
           StatusHeading(text: "Listening to \(session.device.name)")
         }
         let segments = session.liveCaptions
@@ -812,8 +815,8 @@ private struct StatusCaptions: View {
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(PhoneStyle.Space.s3)
-      .background(PhoneStyle.quietFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+      .padding(DaybookSpacing.s3)
+      .background(DaybookPalette.quietFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
   }
 }
@@ -824,7 +827,7 @@ private struct StatusCaptions: View {
 /// Mac doing it, and Pair with Your Mac… while none is paired. Work no Mac here is doing yet starts at the
 /// card's edge.
 private struct StatusMacs: View {
-  let inputs: StatusInputs
+  let inputs: StatusOverviewInputs
   let now: Date
   let open: (SettingsRoute) -> Void
   let pair: () -> Void
@@ -832,7 +835,7 @@ private struct StatusMacs: View {
   let perform: (StatusQueueItem.Action, UUID) -> Void
 
   var body: some View {
-    let rows = StatusSheetModel.macRows(inputs, now: now)
+    let rows = StatusOverviewModel.macRows(inputs, now: now)
     StatusGroup(title: "Macs") {
       StatusCard {
         // Work no Mac here is doing yet (no Mac has synced): at the top, under none.
@@ -851,7 +854,7 @@ private struct StatusMacs: View {
               StatusLinkGlyph(systemImage: "plus")
             } content: {
               Text("Pair with Your Mac…").font(.subheadline.weight(.medium)).foregroundStyle(
-                PhoneStyle.Ink.link)
+                DaybookPalette.Ink.link)
             }
           }
           .buttonStyle(StatusRowButtonStyle())
@@ -875,11 +878,11 @@ private struct StatusMacs: View {
         symbol: "desktopcomputer",
         tone: row.needsYou ? .attention : row.isConnected ? .active : .neutral, size: .card)
     } content: {
-      HStack(spacing: PhoneStyle.Space.s2) {
+      HStack(spacing: DaybookSpacing.s2) {
         StatusRowTitle(title: row.name) {
           VStack(alignment: .leading, spacing: 2) {
             Text(row.text.keepingSeparators).foregroundStyle(
-              row.needsYou ? PhoneStyle.Ink.warning : PhoneStyle.Ink.secondary)
+              row.needsYou ? DaybookPalette.Ink.warning : DaybookPalette.Ink.secondary)
             if let fix = row.fix { Text(fix) }
           }
         }
@@ -931,10 +934,10 @@ private struct StatusThisIPhone: View {
           StatusRow {
             DaybookTile(symbol: "iphone", size: .card)
           } content: {
-            HStack(spacing: PhoneStyle.Space.s2) {
+            HStack(spacing: DaybookSpacing.s2) {
               Text(StatusSheetModel.audioOnThisIPhone(bytes: model.audio.usage.bytes))
                 .font(.subheadline)
-                .foregroundStyle(PhoneStyle.Ink.title)
+                .foregroundStyle(DaybookPalette.Ink.title)
                 .fixedSize(horizontal: false, vertical: true)
               Spacer(minLength: 0)
               StatusChevron()

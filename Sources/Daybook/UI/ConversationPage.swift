@@ -77,10 +77,10 @@ private struct MacReadingContext: ViewModifier {
         content.readingContext(ReadingContext(
             thisDevice: AppState.thisDeviceWords, macPlace: "This Mac", audio: { _ in .local }, player: nil,
             // The window widens for the inspector where it has no room, as for any other ask of it.
-            navigator: ReadingNavigator(open: { state.selectedID = $0 },
+            navigator: ReadingNavigator(open: { state.window.openID = $0 },
                                         showInfo: { _ in state.showInspector() },
-                                        search: { state.search = $0 },
-                                        showTranscript: { _, _ in state.turnPage(to: .transcript) })))
+                                        search: { state.window.searchText = $0 },
+                                        showTranscript: { _, _ in state.window.turnPage(to: .transcript) })))
     }
 }
 
@@ -103,8 +103,8 @@ struct PageHeader: View {
         MarginRow {
             ConversationHeader(meeting: meeting, library: state.library,
                                recording: state.recordingID == meeting.id ? "Recording" : nil,
-                               focusTitle: state.titleFocusRequest == meeting.id,
-                               titleFocused: { state.titleFocusRequest = nil }) {
+                               focusTitle: state.window.titleFocusRequest == meeting.id,
+                               titleFocused: { state.window.titleFocusRequest = nil }) {
                 if let duration = meeting.duration {
                     ConversationPlayPill(duration: duration, player: pillPlayer, unavailable: state.isRecording ? "Playback is off while recording" : nil)
                 }
@@ -126,7 +126,8 @@ struct PageHeader: View {
 // MARK: - Status line
 
 /// The one line that speaks when something is working or needs the person, and is absent otherwise: DaybookUI's
-/// `StatusBlock` drawing DaybookKit's `ConversationStatusPresentation`, as the iPhone does, from this Mac's queue.
+/// `StatusBlock` drawing DaybookKit's `ConversationStatusPresentation`, as the iPhone does, from what this Mac knows
+/// (`ConversationStatusPresentation.mac`), and carried out by `MacStatusActions`.
 struct ConversationStatus: View {
     let state: AppState
     let meeting: Meeting
@@ -153,27 +154,39 @@ struct ConversationStatus: View {
     }
 
     @ViewBuilder private var content: some View {
-        let shown = presentation(at: Date())
+        let shown = ConversationStatusPresentation.mac(state: state, meeting: meeting, now: Date())
         VStack(alignment: .leading, spacing: 0) {
             if let shown {
                 // A countdown's seconds tick in the block's own words; nothing else here redraws for them.
                 MarginRow { StatusBlock(shown, perform: perform) }
-                .padding(.top, Space.s5)
+                .padding(.top, DaybookSpacing.s5)
                 .daybookTransition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .daybookMotion(Motion.state, value: StatusBlockLayout.motionKey(shown))
+        .daybookMotion(DaybookMotion.state, value: StatusBlockLayout.motionKey(shown))
     }
 
-    /// Recording is this Mac's own state; everything else is the shared presentation of `ProcessingStatus`.
-    private func presentation(at now: Date) -> ConversationStatusPresentation? {
+    private func perform(_ action: ConversationStatusPresentation.Action) {
+        MacStatusActions(state: state, undoManager: undoManager) { pane in
+            settingsPane = pane.rawValue
+            openSettingsWindow.settings()
+        }
+        .perform(action, on: meeting.id)
+    }
+}
+
+extension ConversationStatusPresentation {
+    /// A conversation's status on this Mac's page (`ConversationStatus`): while this Mac records it, what its recorders
+    /// are doing; otherwise the shared presentation of its `ProcessingStatus` from what this Mac knows (`Inputs.mac`), with
+    /// the recording being added to a transcript under the step. Nil when there's nothing to say.
+    @MainActor static func mac(state: AppState, meeting: Meeting, now: Date = Date()) -> ConversationStatusPresentation? {
         if state.recordingID == meeting.id {
             return state.sources.recorders.status.map {
                 ConversationStatusPresentation(kind: .line, symbol: "dot.radiowaves.left.and.right", title: $0)
             }
         }
         let status = state.processingStatus(for: meeting)
-        var presentation = ConversationStatusPresentation.page(status, meeting: meeting, inputs: inputs(for: status), now: now)
+        var presentation = page(status, meeting: meeting, inputs: .mac(state: state, meeting: meeting, status: status), now: now)
         // Adding a recording to a transcript: which one, under the step.
         if case .processing(let progress) = status, progress.device == nil, presentation?.detail == nil,
            let adding = state.sourceActivity(meeting.id) {
@@ -181,15 +194,22 @@ struct ConversationStatus: View {
         }
         return presentation
     }
+}
 
-    private func inputs(for status: ProcessingStatus) -> ConversationStatusPresentation.Inputs {
+extension ConversationStatusPresentation.Inputs {
+    /// What this Mac knows about a conversation, for its page's status: how it calls itself, its queue (what runs, what's
+    /// ahead, a download it waits for), where the summary runs, a summary waiting for its summary model, an upgrade,
+    /// where an iPhone recording it waits for is, and the cloud model a cloud failure names. `status` is the
+    /// conversation's, when the caller has it.
+    @MainActor static func mac(state: AppState, meeting: Meeting, status: ProcessingStatus? = nil) -> Self {
+        let status = status ?? state.processingStatus(for: meeting)
         // What the choices still need to download, and how this Mac's downloads stand ("Downloading models · 40%").
-        var inputs = ConversationStatusPresentation.Inputs(words: state.statusWords, local: state.localCapabilities)
+        var inputs = Self(words: state.statusWords, local: state.localCapabilities)
         // The cloud at work on its job: "Summarizing with Claude Sonnet 5.5 · 35%", with Stop.
-        inputs.placement = .queue(placements[meeting.id], running: state.processingID == meeting.id)
-        inputs.runningTitle = state.processingID.flatMap { id in state.meetings.first { $0.id == id }?.title }
-        inputs.queueWaitsForDownload = state.downloadingID != nil && state.processingID == nil
-        inputs.queuedMode = state.processingQueue.first { $0.meetingID == meeting.id }?.mode
+        inputs.placement = .queue(state.placements[meeting.id], running: state.processor.queue.runningID == meeting.id)
+        inputs.runningTitle = state.processor.queue.runningID.flatMap { id in state.meetings.first { $0.id == id }?.title }
+        inputs.queueWaitsForDownload = state.processor.queue.downloadingID != nil && state.processor.queue.runningID == nil
+        inputs.queuedMode = state.processor.queue.jobs.first { $0.meetingID == meeting.id }?.mode
         // Transcript first: "Waiting to summarize after the download · 38%", with Use the Cloud when it's on offer.
         var summaryMayWait = status == .transcribed
         if case .requested(.device) = status { summaryMayWait = true }
@@ -204,39 +224,5 @@ struct ConversationStatus: View {
             inputs.cloudModel = state.cloud.resolved?.model.name
         }
         return inputs
-    }
-
-    private func perform(_ action: ConversationStatusPresentation.Action) {
-        let id = meeting.id
-        switch action {
-        case .transcribe: state.enqueue(id, mode: .newAudio)
-        case .summarize, .useYourMac: state.enqueue(id, mode: .summaryOnly)
-        case .tryAgain(let mode): state.enqueue(id, mode: mode)
-        case .details: break
-        case .pause, .stopSummary: state.pauseProcessing(id)
-        case .resume: state.enqueue(id, mode: state.defaultProcessingMode(for: meeting))
-        case .cancel: state.cancelQueued(id)
-        case .cancelRequest(let request):
-            let device = state.library.thisDevice
-            state.library.update(id) { $0.withdrawProcessingRequest(request, by: device, at: Date()) }
-        case .dontWait: state.library.stopWaitingForRecordings(in: id, undoManager: undoManager)
-        case .waitAgain: state.library.waitAgainForMissingRecordings(in: id, undoManager: undoManager)
-        case .cancelDownload: state.cancelDownload()
-        case .downloadModels, .downloadSummaryModel:
-            state.enqueue(id)
-            state.downloadModels(state.missingSelectedModels)
-        case .chooseModels: openSettingsPane("models")
-        case .cloudSettings: openSettingsPane("cloud")
-        case .summarizeHere: state.summarizeHere(id)
-        case .placement(let choice): state.chooseSummaryPlacement(choice, for: id)
-        case .upgrade(let offer): state.acceptUpgrade(offer, for: id)
-        case .dismissUpgrade(let offer): state.dismissUpgrade(offer, for: id)
-        case .dismiss: state.update(id) { $0.errorMessage = nil }
-        }
-    }
-
-    private func openSettingsPane(_ pane: String) {
-        settingsPane = pane
-        openSettingsWindow.settings()
     }
 }

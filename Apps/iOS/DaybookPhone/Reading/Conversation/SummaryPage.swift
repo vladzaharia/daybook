@@ -60,14 +60,14 @@ struct SummaryPage: View {
                     VStack(alignment: .leading, spacing: 0) {
                         if let status, !(twoPage && isRecordedOnly && !hasCaptions) {
                             StatusBlock(status, perform: perform)
-                                .padding(.top, PhoneStyle.Space.s4)
+                                .padding(.top, DaybookSpacing.s4)
                                 .daybookTransition(.opacity.combined(with: .move(edge: .top)))
                                 .id("status")
                         } else if meeting.tracks.isEmpty && !twoPage {
                             // Only notes so far: the byline says so, and Record records into it. Two pages offer it
                             // on the transcript's page.
                             RecordIntoButton(meeting: meeting)
-                                .padding(.top, PhoneStyle.Space.s4)
+                                .padding(.top, DaybookSpacing.s4)
                                 .id("status")
                         }
                     }
@@ -76,7 +76,7 @@ struct SummaryPage: View {
                         SummaryBody(meeting: meeting, summary: summary, library: library, query: query,
                                     revealing: arrival.reveals(summary, in: meeting), passages: passages,
                                     blockID: Self.blockID) { section in
-                            ForEach(meeting.photos(in: section)) { PhotoTile(meeting: meeting, photo: $0, large: true).padding(.top, PhoneStyle.Space.s2) }
+                            ForEach(meeting.photos(in: section)) { PhotoTile(meeting: meeting, photo: $0, large: true).padding(.top, DaybookSpacing.s2) }
                         }
                         // A new summary is a new block, so it reveals itself; the ID is a String, as the page's anchors are.
                         .id("summary:\(summary.createdAt.timeIntervalSinceReferenceDate)")
@@ -84,7 +84,7 @@ struct SummaryPage: View {
                         .daybookTransition(.opacity)
                     }
                     PhoneNotes(library: library, meeting: meeting, play: play, passages: passages)
-                        .padding(.top, meeting.summary == nil ? PhoneStyle.Space.s5 : 0)
+                        .padding(.top, meeting.summary == nil ? DaybookSpacing.s5 : 0)
                         .id(meeting.summary == nil ? SummaryBlockID.notes : "notes-body")
                     PhotoStrip(meeting: meeting)
                     if let summary = meeting.summary {
@@ -93,8 +93,8 @@ struct SummaryPage: View {
                 }
                 .scrollTargetLayout()
                 .pageColumn()
-                .padding(.top, PhoneStyle.Space.s3)
-                .padding(.bottom, PhoneStyle.Space.s8)
+                .padding(.top, DaybookSpacing.s3)
+                .padding(.bottom, DaybookSpacing.s8)
             }
             .scrollPosition(id: $session.summaryAnchor, anchor: .top)
             .scrollDismissesKeyboard(.interactively)
@@ -161,45 +161,19 @@ struct SummaryPage: View {
 
     // MARK: Status
 
-    /// The shared presentation of the conversation's processing, from what this iPhone knows: the library, its own
-    /// processing, where summaries run, a Mac's live progress over the link, and whether a Mac is around.
+    /// The shared presentation of the conversation's processing, from what this iPhone knows
+    /// (`ConversationStatusPresentation.phone`).
     private func status(at now: Date) -> ConversationStatusPresentation? {
-        let processing = ProcessingStatus.phone(meeting, now: now)
-        return ConversationStatusPresentation.page(processing, meeting: meeting, inputs: inputs(for: processing, now: now), now: now)
-    }
-
-    private func inputs(for processing: ProcessingStatus, now: Date) -> ConversationStatusPresentation.Inputs {
-        var inputs = ConversationStatusPresentation.Inputs(words: .iPhone(id: library.thisDevice.id), local: local)
-        let ownsTrack = model?.library.ownsTrack ?? { _ in false }
-        inputs.mac = ConversationStatusPresentation.MacStanding.phone(
-            presence: model?.macPresence,
-            sighting: sightingOverride ?? MacSighting.latest(in: library.meetings, excluding: library.thisDevice.id, owns: ownsTrack),
-            override: sightingOverride != nil, connected: model?.link.connectedMacs ?? [], liveProgress: model?.liveProgress ?? [:],
-            meetingID: meeting.id, now: now)
-        inputs.link = model?.liveProgress[meeting.id].map(ConversationStatusPresentation.LinkWork.init(live:))
-        inputs.placement = .init(planner: placement?.planners[meeting.id], run: placement?.runs[meeting.id],
-                                 cloudOffered: placement?.cloudOffer != nil)
-        inputs.pause = PhoneProcessor.current?.pause.map(ProcessingWords.PauseReason.init(phone:))
-        inputs.cloudModel = placement?.cloud?.resolved?.model.name
-        if let owns = model?.library.ownsTrack {
-            inputs.ownsUntranscribed = meeting.transcribableTracks
-                .filter { track in !meeting.transcripts.contains { $0.trackID == track.id } }
-                .allSatisfy(owns)
-        }
-        // A clearly better model within reach, when there's nothing else to say.
-        if processing == .done { inputs.upgrade = upgrades?.offer(for: meeting, now: now) }
-        // Its own recording a Mac waits for, not on its way yet: the line the Mac's page matches.
-        inputs.unsent = model?.multipoints.unsent(meeting.id)
-        return inputs
+        ConversationStatusPresentation.phone(meeting, library: library, model: model, placement: placement, upgrades: upgrades,
+                                             sighting: sightingOverride, now: now)
     }
 
     /// What this iPhone does itself: its own recordings when processing here is on, with what the models still need,
     /// how the whole set asked for is coming (one figure over all of it, as every surface says it), and the summary model
-    /// it could download where it has the memory for one and the room.
-    private var local: ConversationStatusPresentation.LocalCapabilities {
+    /// it could download where it has the memory for one and the room. Without the app's model (previews), nothing.
+    static func local(_ model: PhoneAppModel?) -> ConversationStatusPresentation.LocalCapabilities {
         guard let model else { return .iPhone() }
-        return Self.local(model.models, processesHere: model.settings.processesOnThisIPhone,
-                          summarizes: model.processingCapabilities.summarizes)
+        return local(model.models, processesHere: model.settings.processesOnThisIPhone, summarizes: model.processingCapabilities.summarizes)
     }
 
     static func local(_ models: PhoneModels, processesHere: Bool, summarizes: Bool) -> ConversationStatusPresentation.LocalCapabilities {
@@ -231,34 +205,54 @@ struct SummaryPage: View {
     }
 
     private func perform(_ action: ConversationStatusPresentation.Action) {
-        let id = meeting.id
-        switch action {
-        case .transcribe: library.requestProcessing(id, mode: .newAudio)
-        case .summarize: library.summarize(id, placement: placement)
-        case .tryAgain(let mode):
-            if mode == .summaryOnly { library.summarize(id, placement: placement) } else { library.requestProcessing(id, mode: mode) }
-        case .details(let words): session.sheet = .details(words)
-        case .pause, .resume, .cancel: break
-        case .cancelRequest(let request):
-            let device = library.thisDevice
-            library.update(id) { $0.withdrawProcessingRequest(request, by: device, at: Date()) }
-        case .dontWait: library.stopWaitingForRecordings(in: id, undoManager: undoManager)
-        case .waitAgain: library.waitAgainForMissingRecordings(in: id, undoManager: undoManager)
-        case .cancelDownload: model?.models.cancelProcessingDownloads()
-        case .downloadModels: model?.models.downloadProcessingSet()
-        case .downloadSummaryModel:
-            guard let models = model?.models, let summary = models.summaryModel else { return }
-            models.downloadIfItFits(summary)
-        case .chooseModels: settings = PageSettings(route: .models)
-        case .cloudSettings: settings = PageSettings(route: .cloud)
-        case .summarizeHere: placement?.placements.beginHere(id)
-        case .useYourMac: library.requestProcessing(id, mode: .summaryOnly)
-        case .dismiss: library.update(id) { $0.errorMessage = nil }
-        case .placement(let choice): placement?.perform(choice, for: id)
-        case .stopSummary: placement?.stop(id)
-        case .upgrade(let offer): Task { await upgrades?.accept(offer, for: id) }
-        case .dismissUpgrade(let offer): upgrades?.dismiss(offer, for: id)
+        PhoneStatusActions(library: library, undoManager: undoManager, session: session, model: model, placement: placement,
+                           upgrades: upgrades, openSettings: { settings = PageSettings(route: $0) })
+            .perform(action, on: meeting.id)
+    }
+}
+
+extension ConversationStatusPresentation {
+    /// A conversation's status on this iPhone's page (`SummaryPage`): the shared presentation of its `ProcessingStatus`
+    /// from what this iPhone knows (`Inputs.phone`). Nil when there's nothing to say.
+    @MainActor static func phone(_ meeting: Meeting, library: LibraryController, model: PhoneAppModel?, placement: PhoneSummaryPlacement?,
+                                 upgrades: PhoneUpgrades?, sighting: MacSighting? = nil, now: Date = Date()) -> ConversationStatusPresentation? {
+        let status = ProcessingStatus.phone(meeting, now: now)
+        return page(status, meeting: meeting, inputs: .phone(model: model, library: library, meeting: meeting, status: status,
+                                                            placement: placement, upgrades: upgrades, sighting: sighting, now: now), now: now)
+    }
+}
+
+extension ConversationStatusPresentation.Inputs {
+    /// What this iPhone knows about a conversation, for its page's status: what it does itself (`SummaryPage.local`),
+    /// whether a Mac is around and a Mac's live progress over the link, where its summaries run (`placement`), why its own
+    /// work is paused, whether the recordings still to transcribe are its own, an upgrade, and its own recording a Mac
+    /// waits for. `model` is nil only without the app's (previews); `sighting` stands in for the library's last sight of
+    /// a Mac (`\.macSighting`).
+    @MainActor static func phone(model: PhoneAppModel?, library: LibraryController, meeting: Meeting, status: ProcessingStatus,
+                                 placement: PhoneSummaryPlacement?, upgrades: PhoneUpgrades?, sighting: MacSighting? = nil,
+                                 now: Date = Date()) -> Self {
+        var inputs = Self(words: .iPhone(id: library.thisDevice.id), local: SummaryPage.local(model))
+        let ownsTrack = model?.library.ownsTrack ?? { _ in false }
+        inputs.mac = ConversationStatusPresentation.MacStanding.phone(
+            presence: model?.macPresence,
+            sighting: sighting ?? MacSighting.latest(in: library.meetings, excluding: library.thisDevice.id, owns: ownsTrack),
+            override: sighting != nil, connected: model?.link.connectedMacs ?? [], liveProgress: model?.liveProgress ?? [:],
+            meetingID: meeting.id, now: now)
+        inputs.link = model?.liveProgress[meeting.id].map(ConversationStatusPresentation.LinkWork.init(live:))
+        inputs.placement = .init(planner: placement?.planners[meeting.id], run: placement?.runs[meeting.id],
+                                 cloudOffered: placement?.cloudOffer != nil)
+        inputs.pause = PhoneProcessor.current?.pause.map(ProcessingWords.PauseReason.init(phone:))
+        inputs.cloudModel = placement?.cloud?.resolved?.model.name
+        if let owns = model?.library.ownsTrack {
+            inputs.ownsUntranscribed = meeting.transcribableTracks
+                .filter { track in !meeting.transcripts.contains { $0.trackID == track.id } }
+                .allSatisfy(owns)
         }
+        // A clearly better model within reach, when there's nothing else to say.
+        if status == .done { inputs.upgrade = upgrades?.offer(for: meeting, now: now) }
+        // Its own recording a Mac waits for, not on its way yet: the line the Mac's page matches.
+        inputs.unsent = model?.multipoints.unsent(meeting.id)
+        return inputs
     }
 }
 
@@ -320,7 +314,8 @@ private struct PageColophon: View {
         let deviceClass = summary.origin.deviceID.flatMap { id in model?.sync.devices.first { $0.id == id }?.deviceClass }
         Colophon(SummaryColophon(summary, thisDeviceID: library.thisDevice.id, words: .iPhone(id: library.thisDevice.id),
                                  deviceClass: deviceClass),
-                 arrived: summary.createdAt, template: templateTitle, summarizeAgain: summarizeAgain) {
+                 arrived: summary.createdAt, template: TemplateWords.title(for: meeting, resolved: library.resolvedTemplate(for: meeting)),
+                 summarizeAgain: summarizeAgain) {
             TemplatePicker(library: library, meeting: meeting)
         }
     }
@@ -329,12 +324,6 @@ private struct PageColophon: View {
     private var summarizeAgain: (() -> Void)? {
         guard !meeting.unifiedTranscript.isEmpty, !ProcessingStatus.phone(meeting).isPending else { return nil }
         return { [library, placement, id = meeting.id] in library.summarize(id, placement: placement) }
-    }
-
-    private var templateTitle: String {
-        if let template = library.resolvedTemplate(for: meeting) { return template.name }
-        if let kind = meeting.summary?.kind, kind != .auto { return "Automatic (\(kind.title))" }
-        return "Automatic"
     }
 }
 
@@ -347,7 +336,7 @@ struct TemplatePicker: View {
 
     var body: some View {
         Picker("Template", selection: Binding(get: { library.templateSelection(for: meeting.id) }, set: choose)) {
-            Text(automaticTitle).tag("auto")
+            Text(TemplateWords.automatic(for: meeting)).tag("auto")
             Divider()
             ForEach(library.templates.filter(\.isBuiltIn)) { Text($0.name).tag($0.id) }
             let custom = library.templates.filter { !$0.isBuiltIn }
@@ -356,11 +345,6 @@ struct TemplatePicker: View {
                 ForEach(custom) { Text($0.name).tag($0.id) }
             }
         }
-    }
-
-    private var automaticTitle: String {
-        guard let kind = meeting.summary?.kind, kind != .auto else { return "Automatic" }
-        return "Automatic (\(kind.title))"
     }
 
     private func choose(_ id: String) {

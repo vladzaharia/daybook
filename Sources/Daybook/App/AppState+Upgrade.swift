@@ -59,7 +59,7 @@ extension AppState {
     func acceptUpgrade(_ offer: UpgradeOffer, for id: UUID) {
         switch offer.place {
         case .thisDevice, .cloud:
-            enqueue(id, mode: offer.role.mode, upgrade: offer.request(by: library.thisDevice))
+            processor.enqueue(id, mode: offer.role.mode, upgrade: offer.request(by: library.thisDevice))
         case .mac:
             guard library.requestUpgrade(offer, in: id) != nil else { return }
             sync.requestSync()

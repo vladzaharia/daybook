@@ -58,9 +58,7 @@ public struct TranscriptTime: View {
         .onHover { hovering = $0 }
         .daybookMotion(DaybookMotion.hover, value: hovering)
         .accessibilityLabel("Play from \(SpokenTime.format(time))")
-        #if os(macOS)
-        .help("Play from here")
-        #endif
+        .macHelp("Play from here")
     }
 }
 
@@ -100,9 +98,7 @@ struct TurnHeaderRow: View {
                     .foregroundStyle(DaybookPalette.speakerInk(meeting.speakerIndex(speakerID)))
                     .disabled(speakerID == nil)
                     .accessibilityHint(speakerID == nil ? "" : "Renames this speaker")
-                    #if os(macOS)
-                    .help(speakerID == nil ? "" : "Rename this speaker")
-                    #endif
+                    .macHelp(speakerID == nil ? "" : "Rename this speaker")
                 if readingWidth == .narrow {
                     TranscriptTime(time: first.start) { actions.play(.segment(first)) }
                 }
@@ -149,9 +145,7 @@ struct PassageRow: View {
                     .daybookGlow(DaybookPalette.bookmark, radius: 3)
                     .frame(width: 8)
                     .accessibilityHidden(true)
-                    #if os(macOS)
-                    .help(bookmarks.map { $0.text.isEmpty ? "Bookmark" : $0.text }.joined(separator: "\n"))
-                    #endif
+                    .macHelp(bookmarks.map { $0.text.isEmpty ? BookmarkLabel.untitled : $0.text }.joined(separator: "\n"))
             }
             // A turn's first passage has its time above it; a bookmark there shows the glyph alone. Others show their
             // time while hovered, focused, or bookmarked; until then there's no button to Tab to. A time shown only
@@ -242,9 +236,7 @@ struct PassageRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Heard in \(segment.provenance.count) recordings")
-        #if os(macOS)
-        .help("Heard in \(segment.provenance.count) recordings")
-        #endif
+        .macHelp("Heard in \(segment.provenance.count) recordings")
     }
 
     @ViewBuilder private var menu: some View {

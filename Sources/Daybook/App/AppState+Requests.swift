@@ -62,16 +62,16 @@ extension AppState {
                 // this Mac left asked for when it transcribed without its summary model.
                 guard processSyncedAudio || meeting.hasAwaitedRecordingToAdd(now: now) || request.requestedBy.id == me.id,
                       hasModels(for: job, in: meeting), meeting.id != recordingID,
-                      !pausedIDs.contains(meeting.id), !movedPhoneRecordings.contains(meeting.id) else {
+                      !processor.queue.paused.contains(meeting.id), !movedPhoneRecordings.contains(meeting.id) else {
                     if held { library.releaseProcessingRequest(request.id, in: meeting.id, at: now) }
                     continue
                 }
                 // One job per conversation: one queued or running already takes the request on. The
                 // running one claims it now; a queued one when it starts.
-                if let running = runningJob, running.meetingID == meeting.id {
+                if let running = processor.queue.running, running.meetingID == meeting.id {
                     if running.requestID == nil, Self.covers(running.mode, request.mode), let claimed = claim(request) {
-                        runningJob = running.carrying(claimed)
-                        startClaimHeartbeat()
+                        processor.queue.running = running.carrying(claimed)
+                        processor.startClaimHeartbeat()
                         // Another device asked for its summary (its own countdown ran out): no second countdown here.
                         if request.mode != .newAudio, request.requestedBy.id != me.id, placements[meeting.id] != nil {
                             placements.begin(meeting.id, immediately: true)
@@ -79,18 +79,18 @@ extension AppState {
                     }
                     continue
                 }
-                if let index = processingQueue.firstIndex(where: { $0.meetingID == meeting.id }) {
-                    if processingQueue[index].requestID == nil, Self.covers(processingQueue[index].mode, request.mode) {
-                        processingQueue[index] = processingQueue[index].carrying(request)
+                if let index = processor.queue.jobs.firstIndex(where: { $0.meetingID == meeting.id }) {
+                    if processor.queue.jobs[index].requestID == nil, Self.covers(processor.queue.jobs[index].mode, request.mode) {
+                        processor.queue.jobs[index] = processor.queue.jobs[index].carrying(request)
                     }
                     continue
                 }
-                awaitingModels.remove(meeting.id)
-                processingQueue.append(job.carrying(request))
+                processor.queue.awaitingModels.remove(meeting.id)
+                processor.queue.jobs.append(job.carrying(request))
                 reportToPhones(meeting.id, phase: .queued)
             }
         }
-        if start { runQueue() }
+        if start { processor.runQueue() }
     }
 
     /// A job carrying out `request`, frozen with this Mac's models and preferences.
@@ -138,7 +138,7 @@ extension AppState {
 
     /// A job queued or running carries the request out already.
     private func isCarried(_ requestID: UUID) -> Bool {
-        runningJob?.requestID == requestID || processingQueue.contains { $0.requestID == requestID }
+        processor.queue.running?.requestID == requestID || processor.queue.jobs.contains { $0.requestID == requestID }
     }
 
     func request(_ requestID: UUID, in meetingID: UUID) -> ProcessingRequest? {
@@ -189,62 +189,19 @@ extension AppState {
     func releaseRequests(in meetingID: UUID) {
         guard let meeting = meetings.first(where: { $0.id == meetingID }) else { return }
         let me = library.thisDevice, now = Date()
-        for request in meeting.openProcessingRequests where request.isClaimed(by: me, at: now) && request.id != runningJob?.requestID {
+        for request in meeting.openProcessingRequests where request.isClaimed(by: me, at: now) && request.id != processor.queue.running?.requestID {
             library.releaseProcessingRequest(request.id, in: meetingID, at: now)
         }
-        if let running = runningJob, running.meetingID == meetingID, let requestID = running.requestID, currentRequest?.isCancelled != false {
+        if let running = processor.queue.running, running.meetingID == meetingID, let requestID = running.requestID, processor.queue.currentRequest?.isCancelled != false {
             library.releaseProcessingRequest(requestID, in: meetingID, at: now)
-        }
-    }
-
-    // MARK: The heartbeat
-
-    func startClaimHeartbeat() {
-        claimHeartbeat?.cancel()
-        claimHeartbeat = nil
-        lastRenewedStage = nil
-        guard runningJob?.requestID != nil else { return }
-        renewRunningClaim(force: true)
-        let interval = requestTiming.renewInterval
-        claimHeartbeat = Task { [weak self] in
-            while !Task.isCancelled {
-                do { try await Task.sleep(for: interval) } catch { return }
-                self?.renewRunningClaim(force: true)
-            }
-        }
-    }
-
-    func stopClaimHeartbeat() {
-        claimHeartbeat?.cancel()
-        claimHeartbeat = nil
-    }
-
-    /// Renews the running job's claim with its stage and fraction: at every change of stage, and
-    /// at least every `renewInterval`. The save asks for a sync pass, which publishes it. A renewal
-    /// refused because another device holds the request stops the job.
-    func renewRunningClaim(force: Bool) {
-        guard let job = runningJob, let requestID = job.requestID, currentRequest?.isCancelled != true else { return }
-        let stage = runningStage
-        let interval = Double(requestTiming.renewInterval.components.seconds) + Double(requestTiming.renewInterval.components.attoseconds) / 1e18
-        guard force || stage != lastRenewedStage || Date().timeIntervalSince(lastClaimRenewal) >= interval else { return }
-        lastClaimRenewal = Date()
-        lastRenewedStage = stage
-        if library.renewProcessingClaim(requestID, in: job.meetingID, stage: stage, fraction: processingProgress.fraction,
-                                        lease: requestTiming.lease) == nil {
-            reconcileClaims()
         }
     }
 
     /// What the running job is doing, as requests record it.
     var runningStage: ProcessingRequest.Stage {
-        guard let id = processingID, let meeting = meetings.first(where: { $0.id == id }),
+        guard let id = processor.queue.runningID, let meeting = meetings.first(where: { $0.id == id }),
               case .processing(let progress) = processingStatus(for: meeting) else { return .transcribing }
         return progress.stage
-    }
-
-    func processingProgressChanged() {
-        renewRunningClaim(force: false)
-        if let id = processingID { reportToPhones(id) }
     }
 
     // MARK: After a sync pass
@@ -258,18 +215,18 @@ extension AppState {
             guard let requestID = job.requestID else { return false }
             return request(requestID, in: job.meetingID)?.isLost(for: me, at: now) ?? true
         }
-        if let running = runningJob, lost(running), currentRequest?.isCancelled == false {
-            claimsLost.insert(running.meetingID)
-            currentRequest?.cancel()
+        if let running = processor.queue.running, lost(running), processor.queue.currentRequest?.isCancelled == false {
+            processor.queue.claimsLost.insert(running.meetingID)
+            processor.queue.currentRequest?.cancel()
             if let request = running.requestID.flatMap({ request($0, in: running.meetingID) }), request.isOpen,
                let holder = request.activeClaim(at: now)?.device, holder.id != me.id {
                 notice = "\(holder.name) is transcribing “\(meetings.first { $0.id == running.meetingID }?.title ?? "a conversation")”."
             }
         }
         // Another device has them now: they aren't owed here any more.
-        let dropped = queue.jobs.filter(lost)
-        queue.jobs.removeAll(where: lost)
-        for job in dropped { queue.settle(job.meetingID) }
+        let dropped = processor.queue.jobs.filter(lost)
+        processor.queue.jobs.removeAll(where: lost)
+        for job in dropped { processor.queue.settle(job.meetingID) }
     }
 
     // MARK: Presence
@@ -303,7 +260,7 @@ extension AppState {
 
     /// "Requested from Alex’s iPhone" while this Mac carries out a request another device made.
     func requestOrigin(for meeting: Meeting) -> String? {
-        let job = runningJob?.meetingID == meeting.id ? runningJob : processingQueue.first { $0.meetingID == meeting.id }
+        let job = processor.queue.running?.meetingID == meeting.id ? processor.queue.running : processor.queue.jobs.first { $0.meetingID == meeting.id }
         guard let requestID = job?.requestID, let request = meeting.processingRequests?.first(where: { $0.id == requestID }),
               request.requestedBy.id != library.thisDevice.id else { return nil }
         let name = request.requestedBy.name.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -11,23 +11,25 @@ import Observation
 
 // Where Floating Notes' status comes from: the device hub and every recorder session, the iPhone
 // link, recorder handoff, sync, and the few capture facts that change rarely (call audio detected,
-// a microphone that isn't hearing anything, the disk running out of room). The panel reads them through `FloatingStatusInputs.make`, and redraws for
-// what it read; the meters, which change 15 times a second, are sampled apart (`RecorderLevels`).
+// a microphone that isn't hearing anything, the disk running out of room). The panel reads them through
+// `FloatingStatusInputs.make`, and redraws for what it read; the meters, which change 15 times a second, are sampled
+// apart (`RecorderLevels`).
 
-extension FloatingStatusInputs {
-    /// Gathers the panel's facts. `meeting` is the conversation the panel shows; `afterStop` says
-    /// the panel watched it record and stop.
+extension StatusOverviewInputs {
+    /// The Mac's gatherer of the overview both apps draw (the iPhone's is `StatusSheetInputs.make`): the recording, with
+    /// this Mac's recorders and the iPhones paired with it, this Mac's queue, and iCloud while sync needs the person.
+    /// `meeting` is the conversation the panel shows; `afterStop` says the panel watched it record and stop.
     @MainActor
-    static func make(_ state: AppState, meeting: Meeting?, afterStop: Bool, inputDevice: String?) -> FloatingStatusInputs {
-        var inputs = FloatingStatusInputs()
+    static func make(_ state: AppState, meeting: Meeting?, afterStop: Bool, inputDevice: String?) -> StatusOverviewInputs {
+        var inputs = StatusOverviewInputs(words: .mac(id: state.library.thisDevice.id))
         let levels = state.recorder.levels
         let isRecording = meeting.map { state.recordingID == $0.id } ?? false
         if isRecording {
-            inputs.phase = state.isStoppingRecording ? .saving : .recording
+            inputs.recording.phase = state.isStoppingRecording ? .saving : .recording
         } else if state.isStartingRecording {
-            inputs.phase = .starting
+            inputs.recording.phase = .starting
         } else if afterStop, let meeting {
-            inputs.phase = stoppedShort(meeting, state: state) ? .stopped : .saved
+            inputs.recording.phase = FloatingStatusInputs.stoppedShort(meeting, state: state) ? .stopped : .saved
         }
         inputs.recording.here = AppState.thisDeviceWords
         inputs.recording.duration = meeting?.duration
@@ -56,21 +58,13 @@ extension FloatingStatusInputs {
                 inputs.recording.recorders.append(RecorderFacts(session: session, handoff: state.recorderHandoff.state(of: session), along: along))
             }
         }
-        // A recording that failed with nothing saved has nothing to process; the panel says what happened instead.
-        if let meeting, !isRecording, inputs.phase != .stopped || !meeting.tracks.isEmpty { inputs.work = work(for: meeting, state: state) }
-        inputs.queue = queue(state)
-        inputs.syncProblem = syncProblem(state.sync.status.problem)
-        #if DEBUG
-        FloatingNotesDemo.adjust(&inputs, meeting: meeting)
-        #endif
+        inputs.local = queue(state)
+        if state.sync.status.problem != nil {
+            // The line names iCloud sync; the chip's menu says what's wrong (`FloatingStatusInputs.syncProblem`).
+            inputs.syncTone = .attention
+            inputs.syncLine = "Not syncing"
+        }
         return inputs
-    }
-
-    /// The recording ended short: nothing reached the conversation, or this Mac's capture stopped on its own
-    /// (`AppState.unexpectedStops`), so what's saved ends early.
-    @MainActor
-    static func stoppedShort(_ meeting: Meeting, state: AppState) -> Bool {
-        (meeting.status == .failed && meeting.tracks.isEmpty) || state.unexpectedStops[meeting.id] != nil
     }
 
     @MainActor
@@ -89,60 +83,71 @@ extension FloatingStatusInputs {
         return phone
     }
 
+    /// This Mac's queue, as the line both apps use for a device's own work counts it.
     @MainActor
-    static func work(for meeting: Meeting, state: AppState) -> Work? {
-        if let planner = state.placements[meeting.id] {
-            switch planner.phase {
-            case .countingDown(_, let until): return .summaryCountdown(until: until, cloud: planner.cloud != nil)
-            case .started(.cloud(let model)): return .summarizingWith(model.name)
-            default: break
-            }
-        }
-        switch state.processingStatus(for: meeting) {
-        case .processing(let progress):
-            if let device = progress.device {
-                return .elsewhere(device: device.name, stage: progress.stage, fraction: progress.fraction)
-            }
-            switch progress.stage {
-            case .transcribing: return .transcribing(progress.fraction)
-            case .identifyingSpeakers: return .identifyingSpeakers
-            case .summarizing: return .summarizing
-            }
-        case .requested(.queued): return .waiting
-        case .requested(.models): return .models(state.modelDownloadState)
-        case .requested(.paused): return .paused
-        case .requested(.device(let request)): return .requested(device: request.requestedBy.name)
-        case .failed(let failure): return .failed(FailureWords(failure, words: .mac(id: state.library.thisDevice.id)))
-        case .recorded: return nil
-        case .transcribed:
-            // Transcript first: its summary waits for this Mac's summary model, as the page says.
-            guard state.summaryWaitsForModel(meeting), let models = state.modelDownloadState else { return .ready(summary: false) }
-            return .transcriptReady(waiting: ProcessingWords.summaryWaitsLine(models))
-        case .awaitingRecordings(let recordings): return .awaiting(ProcessingStatus.awaitingLine(recordings))
-        case .missingRecordings: return meeting.summary != nil ? .ready(summary: true) : nil
-        case .done:
-            if meeting.summary != nil { return .ready(summary: true) }
-            return meeting.unifiedTranscript.isEmpty ? nil : .ready(summary: false)
-        }
-    }
-
-    @MainActor
-    private static func queue(_ state: AppState) -> Queue {
-        var queue = Queue()
-        if let id = state.processingID, state.meetings.contains(where: { $0.id == id }) {
+    private static func queue(_ state: AppState) -> QueueStatusWords.Queue {
+        var queue = QueueStatusWords.Queue()
+        if let id = state.processor.queue.runningID, state.meetings.contains(where: { $0.id == id }) {
             // The step the page and the claim say (`AppState.runningStage`), never guessed from the engine's words.
             queue.running = state.runningStage
-            queue.fraction = state.processingProgress.fraction
+            queue.fraction = state.processor.queue.activity.value.fraction
             switch state.placements[id]?.phase {
             case .countingDown(_, let until)?: queue.countdown = until
             case .started(.cloud(let model))?: queue.cloudModel = model.name
             default: break
             }
         }
-        queue.waiting = state.processingQueue.count
-        queue.awaitingModels = state.awaitingModels.count
+        queue.waiting = state.processor.queue.jobs.count
+        queue.awaitingModels = state.processor.queue.awaitingModels.count
         queue.models = state.modelDownloadState
         return queue
+    }
+}
+
+extension FloatingStatusInputs {
+    /// Gathers the panel's facts: the overview (`StatusOverviewInputs.make`), and the conversation the panel shows once
+    /// that isn't recording.
+    @MainActor
+    static func make(_ state: AppState, meeting: Meeting?, afterStop: Bool, inputDevice: String?) -> FloatingStatusInputs {
+        var inputs = FloatingStatusInputs(overview: .make(state, meeting: meeting, afterStop: afterStop, inputDevice: inputDevice))
+        let isRecording = meeting.map { state.recordingID == $0.id } ?? false
+        // A recording that failed with nothing saved has nothing to process; the panel says what happened instead.
+        if let meeting, !isRecording, inputs.phase != .stopped || !meeting.tracks.isEmpty {
+            inputs.conversation = conversation(meeting, state: state)
+        }
+        inputs.syncProblem = syncProblem(state.sync.status.problem)
+        #if DEBUG
+        FloatingNotesDemo.adjust(&inputs, meeting: meeting)
+        #endif
+        return inputs
+    }
+
+    /// The recording ended short: nothing reached the conversation, or this Mac's capture stopped on its own
+    /// (`AppState.unexpectedStops`), so what's saved ends early.
+    @MainActor
+    static func stoppedShort(_ meeting: Meeting, state: AppState) -> Bool {
+        (meeting.status == .failed && meeting.tracks.isEmpty) || state.unexpectedStops[meeting.id] != nil
+    }
+
+    /// The shown conversation in the words its list row uses on this Mac (`MacRowStatus`), and, once its work is done,
+    /// what's ready: the summary, or the transcript with what the summary waits for, as the page says.
+    @MainActor
+    static func conversation(_ meeting: Meeting, state: AppState) -> Conversation {
+        let status = state.processingStatus(for: meeting)
+        var shown = Conversation(status: status, row: MacRowStatus.make(state, meeting))
+        switch status {
+        case .done:
+            shown.ready = meeting.summary != nil ? true : meeting.unifiedTranscript.isEmpty ? nil : false
+        case .transcribed:
+            // Transcript first: its summary waits for this Mac's summary model, as the page says.
+            shown.ready = false
+            if state.summaryWaitsForModel(meeting), let models = state.modelDownloadState {
+                shown.summaryWaits = ProcessingWords.summaryWaitsLine(models)
+            }
+        default:
+            break
+        }
+        return shown
     }
 
     /// What needs the person about sync, in a line that names iCloud sync (the panel has no section saying so). The

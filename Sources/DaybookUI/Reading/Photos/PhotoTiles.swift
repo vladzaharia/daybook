@@ -155,9 +155,7 @@ public struct PhotoTile: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(meeting.photoAccessibilityLabel(photo))
         .accessibilityAddTraits(.isButton)
-        #if os(macOS)
-        .help(photo.displayCaption ?? "Open Photo")
-        #endif
+        .macHelp(photo.displayCaption ?? "Open Photo")
     }
 }
 

@@ -1,5 +1,6 @@
 import AppKit
 import DaybookCore
+import DaybookDesign
 import DaybookKit
 import DaybookLink
 import DaybookUI
@@ -21,7 +22,7 @@ struct DevicesSettingsPane: View {
         Form {
             if hub.sessions.isEmpty {
                 Section {
-                    HStack(spacing: Space.s3) {
+                    HStack(spacing: DaybookSpacing.s3) {
                         Image(systemName: "recordingtape")
                             .font(.system(size: 22))
                             .foregroundStyle(.secondary)
@@ -30,14 +31,14 @@ struct DevicesSettingsPane: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("No devices yet")
                             Text("Soundcore Work, Daybook on iPhone, or any recorder that saves audio files.")
-                                .font(TypeStyle.status).foregroundStyle(.secondary)
+                                .font(DaybookFont.status.font(.window)).foregroundStyle(.secondary)
                         }
                         Spacer()
                         // The iPhone's pairing screen sends people here for this button.
                         AddDeviceButton(state: state, kind: DaybookPhoneIntegration.id, title: PairingWords.pairWithIPhone)
                         AddDeviceButton(state: state)
                     }
-                    .padding(.vertical, Space.s1)
+                    .padding(.vertical, DaybookSpacing.s1)
                 }
             } else {
                 ForEach(hub.sessions) { session in
@@ -47,7 +48,7 @@ struct DevicesSettingsPane: View {
                 // instead of alone in an otherwise empty group.
                 Section {
                 } footer: {
-                    HStack(alignment: .firstTextBaseline, spacing: Space.s4) {
+                    HStack(alignment: .firstTextBaseline, spacing: DaybookSpacing.s4) {
                         Spacer()
                         AddDeviceButton(state: state, kind: DaybookPhoneIntegration.id, title: PairingWords.pairWithIPhone)
                         AddDeviceButton(state: state)
@@ -106,10 +107,10 @@ private struct DeviceSettingsSection: View {
                 RecorderPreferencesSection(session: session, style: .form(.nameAndRemove))
             }
         } header: {
-            HStack(spacing: Space.s2) {
+            HStack(spacing: DaybookSpacing.s2) {
                 // One glyph column, so every recorder's name starts at the same x.
                 Image(systemName: kind.systemImage)
-                    .foregroundStyle(session.isLinked ? AnyShapeStyle(DaybookStyle.accent) : AnyShapeStyle(.secondary))
+                    .foregroundStyle(session.isLinked ? AnyShapeStyle(DaybookPalette.accent) : AnyShapeStyle(.secondary))
                     .frame(width: 20)
                     .accessibilityHidden(true)
                 Text(session.device.name)
@@ -144,12 +145,12 @@ private struct DeviceSettingsSection: View {
         RecorderOwnershipRow(state: state, session: session)
         LabeledContent("Recorder") {
             if let snapshot = (direct as? SoundcoreConnection)?.remembered {
-                HStack(spacing: Space.s2) {
+                HStack(spacing: DaybookSpacing.s2) {
                     Text(snapshot.displayName).foregroundStyle(.secondary).monospacedDigit()
                     Button("Forget…") { confirmingForget = true }
                 }
             } else {
-                HStack(spacing: Space.s2) {
+                HStack(spacing: DaybookSpacing.s2) {
                     Text("None").foregroundStyle(.secondary)
                     Button("Set Up…") {
                         openWindow(id: WindowID.library)
@@ -158,7 +159,7 @@ private struct DeviceSettingsSection: View {
                 }
             }
         }
-        .padding(.leading, Space.s5)
+        .padding(.leading, DaybookSpacing.s5)
     }
 }
 
@@ -171,7 +172,7 @@ private struct FolderRows: View {
     var body: some View {
         if let name = files.folderDisplayName {
             LabeledContent(session.kind.implementedMethods.count > 1 ? method.title : "Import folder") {
-                HStack(spacing: Space.s2) {
+                HStack(spacing: DaybookSpacing.s2) {
                     Text(name).lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
                         .help(files.folder?.path ?? "")
                     Button("Choose…") { state.chooseDeviceFolder(for: session) }
@@ -179,13 +180,13 @@ private struct FolderRows: View {
             }
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 if let problem = files.problem {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Ink.warning).accessibilityHidden(true)
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(DaybookPalette.Ink.warning).accessibilityHidden(true)
                     Text(problem.message).foregroundStyle(.secondary)
                     Spacer()
                     Button("Choose Folder…") { state.chooseDeviceFolder(for: session) }
                 } else {
                     Image(systemName: "circle.fill").font(.system(size: 6))
-                        .foregroundStyle(files.isWatching && files.waitingForICloud == 0 ? AnyShapeStyle(DaybookStyle.accent) : AnyShapeStyle(.secondary))
+                        .foregroundStyle(files.isWatching && files.waitingForICloud == 0 ? AnyShapeStyle(DaybookPalette.accent) : AnyShapeStyle(.secondary))
                         .accessibilityHidden(true)
                     Text(status).foregroundStyle(.secondary)
                     Spacer()
@@ -194,17 +195,17 @@ private struct FolderRows: View {
                     }
                 }
             }
-            .font(TypeStyle.status)
-            .padding(.leading, Space.s5)
+            .font(DaybookFont.status.font(.window))
+            .padding(.leading, DaybookSpacing.s5)
         } else {
             LabeledContent(session.kind.implementedMethods.count > 1 ? method.title : "Import folder") {
                 Button("Choose Folder…") { state.chooseDeviceFolder(for: session) }
             }
             if let problem = files.problem {
                 Label { Text(problem.message) } icon: {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Ink.warning)
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(DaybookPalette.Ink.warning)
                 }
-                .font(TypeStyle.status)
+                .font(DaybookFont.status.font(.window))
                 .foregroundStyle(.secondary)
             }
         }
@@ -237,7 +238,7 @@ struct PhoneSettingsRows: View {
         let direct = session.direct
         let phone = direct as? PhoneLinkConnection
         LabeledContent("Over Wi‑Fi") {
-            HStack(spacing: Space.s2) {
+            HStack(spacing: DaybookSpacing.s2) {
                 DeviceStatusDot(state: direct?.state ?? .notSetUp)
                 Text(Self.overWiFi(isSetUp: direct?.isSetUp == true, isConnected: direct?.state.isConnected == true,
                                    recording: phone?.recordingPhase, lastSeen: direct?.lastConnectedAt))
@@ -251,11 +252,11 @@ struct PhoneSettingsRows: View {
         Toggle(PairingWords.canStartRecording,
                isOn: Binding(get: { session.device.recordsAlongsideMac }, set: { on in session.update { $0.alsoRecordsWithMac = on } }))
             .controlSize(.regular)
-            .padding(.leading, Space.s5)
+            .padding(.leading, DaybookSpacing.s5)
             .disabled(direct?.isSetUp != true)
         if sync.folder == nil {
             LabeledContent("Recordings") {
-                HStack(spacing: Space.s2) {
+                HStack(spacing: DaybookSpacing.s2) {
                     Text("Sync is off").foregroundStyle(.secondary)
                     Button("Library Settings…") { LaunchOptions.defaults.set(SettingsPane.library.rawValue, forKey: SettingsPane.storageKey) }
                 }

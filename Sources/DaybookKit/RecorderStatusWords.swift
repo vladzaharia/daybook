@@ -49,8 +49,7 @@ public struct StatusLineWords: Equatable, Identifiable, Sendable {
     /// The words at a moment: a countdown's seconds move with them ("Summarizing in 11 s · 1 waiting").
     public func text(at now: Date) -> String {
         guard let until = countdownUntil else { return text }
-        let seconds = max(1, Int(until.timeIntervalSince(now).rounded(.up)))
-        return text.replacingOccurrences(of: #"in \d+ s"#, with: "in \(seconds) s", options: .regularExpression)
+        return SummaryPlacementWords.ticking(text, until: until, at: now)
     }
 }
 
@@ -142,6 +141,9 @@ public struct RecorderFacts: Equatable {
     /// Connected, but it didn't list its recordings (it didn't answer, or refused): the new ones shown are from its
     /// remembered list.
     public var notListed = false
+    /// The room it has left, in hours of recording, and whether that's low: its card at the iPhone sheet's large size.
+    public var storageHours: Double?
+    public var storageIsLow = false
 
     public init(id: String, name: String, shortName: String, symbol: String, isDirect: Bool, state: ConnectionState, isLinked: Bool) {
         self.id = id; self.name = name; self.shortName = shortName; self.symbol = symbol

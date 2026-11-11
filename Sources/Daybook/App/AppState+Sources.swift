@@ -311,7 +311,7 @@ extension AppState {
     /// This Mac can record into a conversation that isn't being processed or waiting to be. One that
     /// already holds recordings gains this one as another source on its timeline.
     func canRecordInto(_ id: UUID) -> Bool {
-        meetings.contains { $0.id == id } && processingID != id && !queuedIDs.contains(id)
+        meetings.contains { $0.id == id } && processor.queue.runningID != id && !processor.queue.queuedIDs.contains(id)
     }
 
     /// Before this Mac records into a conversation: what it already holds. Devices that kept recording while this
@@ -483,7 +483,7 @@ extension AppState {
                 }
             } else { lowerToSuggestion(suggestion, in: id) }
         }
-        for other in meetings where other.id != id && processingID != other.id && !queuedIDs.contains(other.id) {
+        for other in meetings where other.id != id && processor.queue.runningID != other.id && !processor.queue.queuedIDs.contains(other.id) {
             guard let suggestion = other.sourceSuggestions?.first(where: { $0.reason == .checkingTranscript && $0.candidateMeetingIDs.first == id }),
                   let candidate = meetings.first(where: { $0.id == id }),
                   let result = transcriptCheck(suggestion, in: other, against: candidate) else { continue }
@@ -524,7 +524,7 @@ extension AppState {
     func confirmSourceSuggestion(_ suggestionID: UUID, in meetingID: UUID, into target: UUID) async -> Bool {
         guard let meeting = meetings.first(where: { $0.id == meetingID }),
               let suggestion = meeting.sourceSuggestions?.first(where: { $0.id == suggestionID }),
-              suggestion.candidateMeetingIDs.contains(target), processingID != meetingID, processingID != target,
+              suggestion.candidateMeetingIDs.contains(target), processor.queue.runningID != meetingID, processor.queue.runningID != target,
               recordingID != meetingID, canMoveSource(into: target) else { return false }
         cancelQueued(meetingID)
         return await moveSource(from: meetingID, suggestion: suggestion, into: target, placement: nil, askedFor: true)
@@ -586,7 +586,7 @@ extension AppState {
     func trashWhenIdle(_ id: UUID, addedTo target: String) {
         Task { [weak self] in
             guard let self else { return }
-            await ObservationWatch.until { [weak self] in self?.processingID != id }
+            await ObservationWatch.until { [weak self] in self?.processor.queue.runningID != id }
             // Take in what other devices added meanwhile (notes or photos from the phone) before deciding. Sync keeps
             // anything that still arrives after the deletion as a new conversation.
             await self.synchronizeLibrary()
@@ -604,14 +604,14 @@ extension AppState {
 
     /// "Adding Soundcore Work recording…" while a conversation gains a source, or "Waiting to add …".
     func sourceActivity(_ id: UUID) -> String? {
-        guard processingID == id || queuedIDs.contains(id), let meeting = meetings.first(where: { $0.id == id }),
+        guard processor.queue.runningID == id || processor.queue.queuedIDs.contains(id), let meeting = meetings.first(where: { $0.id == id }),
               meeting.transcripts.contains(where: { !$0.segments.isEmpty }) else { return nil }
         let replaced = Set(meeting.tracks.compactMap(\.derivedFrom))
         guard let adding = meeting.tracks.first(where: { track in
             !replaced.contains(track.id) && (track.alignment?.isPending == true || !meeting.transcripts.contains { $0.trackID == track.id })
         }) else { return nil }
         let name = sourceName(adding)
-        return processingID == id ? "Adding \(name)…" : "Waiting to add \(name)"
+        return processor.queue.runningID == id ? "Adding \(name)…" : "Waiting to add \(name)"
     }
 
     /// "Soundcore Work recording", "iPhone recording", "recording from this Mac", "“Interview.m4a”".
@@ -657,6 +657,6 @@ extension AppState {
     }
 
     private func pendingTiming(_ meeting: Meeting) -> String {
-        processingID == meeting.id ? "Lining up…" : "Lines up when it’s processed"
+        processor.queue.runningID == meeting.id ? "Lining up…" : "Lines up when it’s processed"
     }
 }

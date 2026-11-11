@@ -133,7 +133,7 @@ private struct DetailsRows: View {
         } label: { InfoRowLabel("Shows in", symbol: "rectangle.stack") }
             .infoControl()
         Picker(selection: Binding(get: { library.templateSelection(for: meeting.id) }, set: chooseTemplate)) {
-            Text(meeting.automaticTemplateTitle).tag("auto")
+            Text(TemplateWords.automatic(for: meeting)).tag("auto")
             Divider()
             ForEach(library.templates.filter(\.isBuiltIn)) { template in Text(template.name).tag(template.id) }
             let custom = library.templates.filter { !$0.isBuiltIn }
@@ -390,11 +390,5 @@ private struct InfoLabeled: View {
 
 extension View {
     /// A picker or menu in Info: the Mac's small control (its values stay the row's size); unchanged under touch.
-    @ViewBuilder func infoControl() -> some View {
-        #if os(macOS)
-        controlSize(.small)
-        #else
-        self
-        #endif
-    }
+    func infoControl() -> some View { macControlSize(.small) }
 }

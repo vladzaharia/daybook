@@ -1,5 +1,128 @@
 # Validation record
 
+## Design pass follow-ups (2026-11-10)
+
+The items the design pass deferred (docs/audits/2026-11-10/README.md, "Still to do"), each on its own worktree from
+`design-pass-2026-11-followups` (stacked on PR #62), merged here with the touched suites rerun after every merge and
+the whole package and the whole iPhone bundle after each wave. One more load-sensitive test showed up in these runs:
+`RecorderHandoffTests.testARecordingBothDevicesImportBeforeSyncEndsUpInOneConversation` paces a transfer at 15 ms a
+step against a sync, and under a build running alongside the transfer finished first (two conversations instead of
+one); it passes alone and on the quiet machine.
+
+- **F1, the countdown words once, and the wordless bookmark (CQ-19).** The summary countdown's words ("Summarizing in
+  12 s" and its siblings, the one rounding rule, the tick, a summary under way here, on a Mac, or in the cloud,
+  "Waiting for a Mac to summarize", and the choices) are written once in DaybookKit's `SummaryPlacementWords`; every
+  surface on both apps says them from there (the planner, the page, rows, a Mac's countdown over the link, the queue
+  words, the status block, the recorder chip, Floating Notes, the menu bar, the iPhone's `MacPresence` and status
+  sheet; the Live Activity and widgets say none). `DaybookDesign.StatusLineItem` keeps its own tick because
+  DaybookDesign can't import DaybookKit, and StatusLineTests proves it ticks the same. SummaryPlacementWordsTests
+  (every variant, 1 s against many, rounding, ticking, Personal under Always per ux-mac-10), and the 17 other suites
+  that asserted the literals now assert the shared words (237 tests). After Stop on the iPhone, a bookmark with
+  nothing written after it says "Bookmark" beside its mark in placeholder ink (`BookmarkLabel.untitled`,
+  `NoteParagraphs.isWordless`; the summary's placeholder and the Mac transcript's tooltip use the same word), in every
+  posture since the editor is shared; RecorderScreenTests at default and accessibility sizes, MarginNotesEditorTests,
+  and 18 Pro (pocket) and open Duo (notebook) captures. iPhone suites 122 + 24. The Mac's AppKit editor (Floating
+  Notes and the page's notes) draws the same word beside a trailing wordless bookmark, from the same rule
+  (MarginNotesEditorTests' Mac case: after the last paragraph, not beside one, not under the placeholder); no Mac
+  demo state has such a bookmark, so that one is checked by the test alone.
+- **F3, one status overview on both apps (code-quality P6, CQ-20).** The iPhone's `StatusSheetModel` moved to
+  DaybookKit as `StatusOverviewModel` over one `StatusOverviewInputs` (the recording with its recorders and the other
+  Daybooks, the Macs as an iPhone knows them, this device's own work, iCloud; `MacPresence`, `LiveProgress`, and
+  `RecordingStatusInputs` moved with it), each app keeping only its gatherer (`StatusSheetInputs.make`, the Mac's
+  `StatusOverviewInputs.make`). Floating Notes' home draws DaybookUI's `StatusOverview` at `.lines` (`leads` keeps the
+  queue and iCloud lines words only), and the shown conversation's chip says what its list row says
+  (`ConversationStatusPresentation.row`: "Paused", "No speech", "Waiting to summarize", the iPhone-audio warning),
+  retiring `FloatingStatusInputs.Work` and `FloatingStatus.lines`; the countdowns tick in F1's
+  `SummaryPlacementWords`. The menu bar extra keeps `MenuBarStatus` (a `.menu` style renders items, not views, and it
+  lists folder recorders Floating Notes leaves out). `--placement-demo countdown` now counts down on any Mac.
+  StatusOverviewModelTests (22, now under `swift test`), the new StatusOverviewParityTests (ReadingDemo's library
+  through the Mac gatherer and the Kit calls the iPhone gatherer makes reads with the same lines in the same order),
+  FloatingNotesStatusTests (30), FloatingNotesMetersTests (5); after reconciling with F1, F2, and F4: 769 Mac tests
+  across the Kit and the selected Mac suites, 91 across six iPhone suites. Mac snapshots before and after of the home,
+  recording with four sources, and a countdown after Stop at 360×560, 340×228, and 280×196, light and dark, the same
+  layout; the 18 Pro's status sheet unchanged at medium and large.
+- **F7, one token vocabulary (code-quality P5, CQ-11).** Both apps and the widgets write DaybookDesign's names
+  (`DaybookPalette`, `DaybookSpacing`, `DaybookMotion`, `DaybookFont`, `ReadingGeometry`); the Mac's
+  DaybookStyle/TypeStyle/Space/Motion/Ink aliases, the iPhone's `PhoneStyle`, and 23 typealias shims are gone (files
+  that used a shim import the library). The iPhone's notebook placeholder draws its mark corner to corner (`.mark`),
+  as the Mac does; the iPhone's serif title at a text style is `DaybookType.title(_:)`; DaybookUI's 29 single-modifier
+  `#if os` shims are four DaybookDesign helpers (`touchInlineTitle`, `touchKeyboard`, `macHelp`, `macControlSize`).
+  `TokenVocabularyTests` reads both apps' sources and fails on an alias or a second name for a shared type (it caught a
+  leftover `TimeLabel` typealias mid-way); `DaybookDesignTokenTests` is deleted, its two non-alias cases moved to
+  DesignTokenTests. `swift build` with no first-party warning; `swift test` (2,599 tests; one paced Soundcore timing
+  test failed under load and passes alone); `scripts/build-ios.sh --test` (492, 0 failures); before and after snapshots
+  of the Mac's library window, Floating Notes while recording, and Settings › Recording at 1440×900 in light and dark,
+  and of the 18 Pro's library, page, and recorder, matching apart from clock times, live meters, and Liquid Glass's
+  blur; the open Duo's empty notebook shows the mark corner to corner. The widgets have no snapshot path and were
+  checked by build.
+- **F6, `AppState` split along its seams (code-quality P8, CQ-21).** Four commits: the library window's navigation
+  is `LibraryWindowModel` (`AppState.window`, named as the iPhone's `ReadingSession`: `openID`, `place`, `pageMode`,
+  `searchText`, `selection`, `sheet`, `confirmation`, `confirmingTrash`; the spread helpers and `turnPage(to:)` with it;
+  the `SummaryJump.window` singleton replaced by the token request the iPhone uses, with `ScrollRequest` and
+  `SummaryBlockID` shared in DaybookUI's `PageJumps.swift`); this Mac's processing is `MacProcessor`
+  (`AppState.processor`, owning `ProcessingQueue` with `enqueue`, `runQueue`, `process`, and the claim heartbeat; the
+  18 queue forwarders deleted); the library's launch check and move offer are `LibraryLaunchCheck`; and the XCTest
+  checks are an injected `MacEnvironment` (`.live` in the app, `.inert` in tests). `swift test` (2,592 tests, 0
+  failures), `WindowInvalidationTests.testWhereThePersonIsDoesntRedrawForTheQueue` (reading every navigation property
+  redraws nothing for job progress, pauses, awaiting models, or a download), CalendarCallTests' environment case,
+  `scripts/build-ios.sh` with ReadingTests and TranscriptPageTests (41), and library-window snapshots (1440×900
+  summary, transcript, search, and the 2560 spread) before, after each step, and at the end, identical by pixel diff
+  apart from the demo's clock times; the move sheet still draws.
+- **F5, a level per source on the iPhone's recorder.** `levels` now goes both ways: a Mac recording with an iPhone
+  sends the louder of its microphone and computer audio each meter tick (`RecordingController.onLevelsRead`,
+  `AppState.shareLevel`), a few readings at a time, only to an iPhone recording the same conversation that lists
+  `liveLevels` (the iPhone now lists it); a new `sharesLevels` feature says a device sends its own, so the iPhone gives
+  a Mac a row only when it lists it (an older Mac, which draws an iPhone's level but sends none, gets no row).
+  `LevelShare` and `LevelPlayback` (a reading a tick, fading between messages, none after 1.5 s) moved to DaybookLink
+  for both apps. On touch the recorder's lone microphone meter is unlabelled; with a recorder or a Mac along each row
+  has its glyph (mic, the recorder's symbol, `desktopcomputer`), the glyphs growing with Dynamic Type up to the first
+  accessibility size (`MeterStack.scaled`), in every posture and on the Duo's resting recorder; Floating Notes is
+  unchanged. `--demo-levels` with `--demo-multipoint` gives a stand-in Mac's levels. LinkLevelsTests (the features, an
+  older iPhone and an older Mac, the round trip over a loopback session, batching, playback and the drop),
+  FloatingNotesMetersTests (the Mac sends only to an iPhone along that lists the feature), RecorderSurfaceTests (the
+  labelling rule and the scaled stack), CascadingRecordingTests (a loopback Mac's row with its glyph, playback, resting
+  after 1.5 s, none for an older Mac), RecorderScreenTests (three rows fit the Duo cover and the open page at
+  accessibility5), RecordingSurfacesTests, LinkServicesTests; captures on the 18 Pro of recording alone (one
+  unlabelled meter), a Mac along (collapsed and expanded, light and dark), a recorder and a Mac along (three rows,
+  `--device-simulator --device-autopilot`), and a Mac along at accessibility-extra-large, the Duo cover with a Mac,
+  and the open Duo's resting recorder alone and with a Mac. Still needs hardware: a Mac's level reaching an iPhone
+  over real Wi‑Fi during a call (latency, dropped sends), a real Soundcore's row on the iPhone, VoiceOver reading the
+  rows, and the cost of receiving levels while the iPhone records in the background.
+- **F4, Protect while iPhone is locked (security F-08, P4 step 2).** Settings › Storage › Protect While iPhone Is
+  Locked (off by default; its footer, "Syncs and transcribes while unlocked.", from `SettingsWords`). On, the library's
+  text is class A and its audio and photos class B, and Spotlight moves to a class A index of Daybook's own; off puts
+  back the earlier classes. Recordings in progress and the few files read while locked (sealing, owed stops,
+  brought-in recordings, the courier's ledgers) are never touched (`LibraryProtection`). Switching re-protects the
+  library in the background a conversation at a time, recorded in preferences so a killed run resumes, and a sweep
+  gives later saves their class (`LibraryProtector`). While locked, loading the library, sync (sealing, the courier),
+  processing (`Pause.locked`), recovery, Spotlight, the widgets' snapshots (a locked snapshot shows the heading alone),
+  and the backup rules wait for the unlock through `PhoneAppEnvironment.protectedData`; a recording still starts and
+  stops without the library. Saved captions are filed class A (`LiveCaptionStore.filedProtection`). The whole
+  DaybookPhoneTests bundle on a private simulator (507, 0 failures), with the new LibraryProtectionTests (classes
+  given and read through `F_SETPROTECTIONCLASS`/`F_GETPROTECTIONCLASS`, a pretend lock, a killed run resumed, backup
+  exclusion kept), two PhoneProcessingTests cases, LiveCaptionStoreTests on macOS, and iPhone 18 Pro captures of
+  Settings › Storage off and on, light and dark. Still needs a passcode-locked device: the classes of a switched library
+  and of later saves, sync and processing waiting and resuming across a real lock, a pass running when the phone locks,
+  Spotlight from the named index, the widgets across a lock, a cold Lock Screen recording, and an encrypted library's
+  backups with the mode on.
+- **F2, the page's status out of the views (code-quality P7).** The page's status is gathered in one function per
+  app (`ConversationStatusPresentation.mac` with `Inputs.mac`, `.phone` with `Inputs.phone`), and what it offers is
+  carried out by DaybookKit's `ConversationStatusActionHandler`, which `MacStatusActions` and `PhoneStatusActions`
+  implement through `MacActions.process` and `PhoneActions.process`, from the page and Info's Now row alike. A
+  conversation's template is named once, in `TemplateWords.title(for:resolved:)` and `automatic(for:)`, replacing five
+  copies. PageStatusTests and PhonePageStatusTests check the page over the demo library (a download running,
+  processing off, Personal under Always per ux-mac-10, waiting for another device's audio, failures); TemplateWordsTests
+  and ConversationStatusActionHandlerTests. `swift test` whole package (2,556, only the two load-sensitive
+  SpeakerProfileProcessingTests timing out at a load average of 150–800); the three touched iPhone suites (51). Mac
+  and iPhone page captures before and after are unchanged. Row and Info inputs (`MeetingInspector.inputs`,
+  `MacRowStatus.make`, the iPhone's `ConversationRow`) stay in place; P7 covers the page.
+
+**Final runs (7 packages merged, `design-pass-2026-11-followups`).** `swift build --build-tests` with no first-party
+warning; the whole package's `swift test`: all ten bundles passed, 1,916 tests, 0 failures; the whole DaybookPhoneTests
+bundle on the iPhone 18 Pro simulator with no first-party warning: 492 tests, 0 failures. Captures of the merged app
+for the record: the iPhone recorder alone, with a Mac along, with a recorder and a Mac, and at an accessibility size,
+and the open Duo's recorder alone and with a Mac (`(scratch)/final/f5`).
+
 ## Design pass (2026-11-10)
 
 A whole-app design pass with the owner's authority to redesign (docs/audits/2026-11-10/README.md): eight reviews, 219

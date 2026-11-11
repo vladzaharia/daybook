@@ -19,7 +19,7 @@ extension AppState {
     func makeSpeakerProfileCoordinator() -> SpeakerProfileCoordinator {
         let coordinator = SpeakerProfileCoordinator(library: library,
                                                     options: { [weak self] in self?.speakerProfileOptions ?? SpeakerProfileOptions(recognizes: false) },
-                                                    skipping: { [weak self] in Set([self?.processingID, self?.recordingID, self?.voicingID].compactMap { $0 }) })
+                                                    skipping: { [weak self] in Set([self?.processor.queue.runningID, self?.recordingID, self?.voicingID].compactMap { $0 }) })
         coordinator.didRefresh = { [weak self] in self?.giveVoicesWhenIdle() }
         return coordinator
     }
@@ -50,7 +50,7 @@ extension AppState {
     /// newest first, that this Mac can give voices now: its audio is here, and it isn't being recorded,
     /// processed, or waiting to be.
     func nextConversationWithoutVoices() -> (id: UUID, runs: [(track: RecordingTrack, run: TrackTranscript)])? {
-        let busy = Set([recordingID, processingID].compactMap { $0 } + queuedIDs)
+        let busy = Set([recordingID, processor.queue.runningID].compactMap { $0 } + processor.queue.queuedIDs)
         for meeting in meetings.sorted(by: { $0.date > $1.date }) where !busy.contains(meeting.id) {
             let runs = meeting.runsWithoutVoices.filter { !voicedRuns.contains($0.run.id) }
             if !runs.isEmpty { return (meeting.id, runs.map { ($0.track, $0.run) }) }
@@ -67,8 +67,8 @@ extension AppState {
     /// Real work comes first: queuing a job stops it, and it starts again when the queue is idle.
     /// Audio that isn't on this Mac is left for later, and nothing is downloaded for it.
     func giveVoicesWhenIdle() {
-        guard library.isLoaded, isReady, !library.isApplyingSync, voicingID == nil, processingTask == nil, processingQueue.isEmpty,
-              downloadingID == nil, readingPhotoID == nil, recordingID == nil, !isStartingRecording, detectSpeakers,
+        guard library.isLoaded, isReady, !library.isApplyingSync, voicingID == nil, processor.queue.task == nil, processor.queue.jobs.isEmpty,
+              processor.queue.downloadingID == nil, readingPhotoID == nil, recordingID == nil, !isStartingRecording, detectSpeakers,
               !library.speakerProfiles.isEmpty, let model = voiceProfileModel, let next = nextConversationWithoutVoices() else { return }
         let id = next.id
         let configuration = InferenceProcessingEngine.Configuration(
@@ -82,7 +82,7 @@ extension AppState {
             defer {
                 self.voicingID = nil
                 self.voicingTask = nil
-                self.runQueue()
+                self.processor.runQueue()
                 self.startPendingDownload()
                 self.readNextPhotosWhenIdle()
                 if again { self.giveVoicesWhenIdle() }

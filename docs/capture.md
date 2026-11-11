@@ -669,9 +669,10 @@ some other way first, and its Stop only ever stops the recording it asked about.
 call started (Record Automatically, Always Record, or Record in the prompt) stops 45 seconds after the
 call ends, as before.
 
-**Under test** the app's own monitor never starts (`MacCaptioners.isRunningTests`): an `AppState` in
-a test must not read this Mac's audio server or ask about a call the developer is on. The monitor's
-tests drive it with scripted looks.
+**Under test** the app's own monitor never starts: only the app's `AppState` is built with
+`MacEnvironment.live` (`watchesCalls`), and one a test builds is `.inert` unless it says otherwise, so it
+never reads this Mac's audio server or asks about a call the developer is on. The monitor's tests drive it
+with scripted looks.
 
 ## Calendar
 
@@ -698,8 +699,9 @@ leave it. Only a meeting's title is kept, as its conversation's title, as a type
 - **Once it's over** (its end time, while the recording it started still goes on), the prompt asks
   "Weekly product sync ended · Stop recording?" once, and keeps recording without an answer.
 
-`AppState.checkCalendar(at:)` is the whole of it, called every 30 seconds while Use Calendar is on
-and never under XCTest. Tests stand in their own calendar (`MeetingCalendarReading`). The calendars
+`AppState.checkCalendar(at:)` is the whole of it, called every 30 seconds while Use Calendar is on,
+in the app only (`MacEnvironment.watchesCalendar`). Tests stand in their own calendar
+(`MeetingCalendarReading`) and call it themselves. The calendars
 entitlement (`com.apple.security.personal-information.calendars`) is in all three entitlements files,
 since the hardened runtime needs it as much as the App Sandbox does.
 

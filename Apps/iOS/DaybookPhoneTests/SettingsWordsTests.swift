@@ -89,6 +89,16 @@ final class SettingsWordsTests: XCTestCase {
         XCTAssertEqual(StorageScreen.breakdown(bytes: 100, downloaded: 200), "Downloaded for playback")
     }
 
+    /// Protect While iPhone Is Locked: sentence case in the shared words, title case where the iPhone draws it, and one
+    /// footer line that says only what it costs.
+    func testProtectWhileLockedSaysItsCostAndNothingElse() {
+        XCTAssertEqual(SettingsWords.protectWhileLocked, "Protect while iPhone is locked")
+        XCTAssertEqual(SettingsWords.titleCased(SettingsWords.protectWhileLocked), "Protect While iPhone Is Locked")
+        XCTAssertEqual(SettingsWords.protectWhileLockedFooter, "Syncs and transcribes while unlocked.")
+        let settings = PhoneSettings(defaults: makeTestDefaults("SettingsWordsTests"))
+        XCTAssertFalse(settings.protectsWhileLocked, "off unless the person turns it on")
+    }
+
     // MARK: The open iPhone Duo
 
     func testASheetAcrossTheCreaseSplitsWhereTheCreaseFalls() {

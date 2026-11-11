@@ -76,15 +76,15 @@ enum FloatingNotesDemo {
         case .processing:
             let id = conversation(state, title: "Design review", notes: notes)
             state.update(id) { $0.status = .transcribing; $0.date = Date().addingTimeInterval(-900) }
-            state.processingID = id
-            state.processingProgress = IntelligenceProgress(0.4, "Transcribing")
+            state.processor.queue.runningID = id
+            state.processor.queue.activity.set(IntelligenceProgress(0.4, "Transcribing"))
             // `--placement-demo countdown|cloud`: its summary's countdown, or the cloud at work.
             PlacementDemo.apply(to: state, processing: id)
             show(state, id, afterStop: true)
         case .models, .modelsFailed, .modelsWiFi:
             let id = conversation(state, title: "Design review", notes: notes)
             state.update(id) { $0.date = Date().addingTimeInterval(-900) }
-            state.queue.awaitModels(id)
+            state.processor.queue.awaitModels(id)
             let demo: AppState.DownloadDemo = scenario == .models ? .downloading : scenario == .modelsFailed ? .failed : .waitingForWiFi
             state.demoDownloads(state.missingSelectedModels, demo)
             show(state, id, afterStop: true)
@@ -98,11 +98,11 @@ enum FloatingNotesDemo {
                 meeting.status = .imported
             }
             // The queue never runs, and the summary model isn't here, whatever the launch's own look at the models finds.
-            state.processingTask = Task { try? await Task.sleep(for: .seconds(86_400)) }
+            state.processor.queue.task = Task { try? await Task.sleep(for: .seconds(86_400)) }
             func waitForSummaryModel() {
                 state.installedModels.remove(state.summaryModel)
-                state.queue.removeJobs(for: id)
-                state.queue.awaitSummaryModel(id)
+                state.processor.queue.removeJobs(for: id)
+                state.processor.queue.awaitSummaryModel(id)
             }
             waitForSummaryModel()
             for delay in [1.0, 2.5] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { waitForSummaryModel() } }
@@ -117,9 +117,9 @@ enum FloatingNotesDemo {
             show(state, id, afterStop: true)
         case .home:
             if let busy = state.meetings.first(where: { $0.title == "Onboarding design review" })?.id {
-                state.processingID = busy
+                state.processor.queue.runningID = busy
                 state.update(busy) { $0.status = .transcribing }
-                state.processingProgress = IntelligenceProgress(0.62, "Transcribing")
+                state.processor.queue.activity.set(IntelligenceProgress(0.62, "Transcribing"))
             }
             FloatingNotesWindow.shared.show(state: state, focus: nil)
         }
@@ -151,7 +151,7 @@ enum FloatingNotesDemo {
     }
 
     private static func show(_ state: AppState, _ id: UUID, afterStop: Bool) {
-        state.selectedID = id
+        state.window.openID = id
         FloatingNotesWindow.shared.show(state: state, focus: id, afterStop: afterStop)
     }
 

@@ -119,9 +119,7 @@ struct AudioRow: View {
         .buttonStyle(.borderless)
         .disabled(!available(.play))
         .accessibilityLabel("Play \(name)")
-        #if os(macOS)
-        .help("Play this recording")
-        #endif
+        .macHelp("Play this recording")
     }
 
     private var menu: some View {

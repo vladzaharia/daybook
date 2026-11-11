@@ -36,20 +36,20 @@ final class LocalPasteboardTests: XCTestCase {
         await state.initialize()
         let id = state.newMeeting(title: "Weekly product sync")
         state.update(id) { $0.summary = MeetingSummary(overview: "We ship on Friday.") }
-        XCTAssertNil(state.confirmation)
+        XCTAssertNil(state.window.confirmation)
 
         let recorder = Recorder()
         state.copySummary(id, to: recorder)
         XCTAssertEqual(recorder.options, [.currentHostOnly])
         XCTAssertTrue(recorder.strings.first?.contains("We ship on Friday.") == true)
-        let first = state.confirmation
+        let first = state.window.confirmation
         XCTAssertEqual(first?.words, "Copied")
 
         state.copySummary(id, to: recorder)
-        XCTAssertNotEqual(state.confirmation?.id, first?.id, "copying again says it again")
-        state.confirmation = nil
+        XCTAssertNotEqual(state.window.confirmation?.id, first?.id, "copying again says it again")
+        state.window.confirmation = nil
         state.copySummary(UUID(), to: recorder)
-        XCTAssertNil(state.confirmation, "nothing copied, nothing said")
+        XCTAssertNil(state.window.confirmation, "nothing copied, nothing said")
     }
 
     func testTheTextArrivesOnAPasteboard() {

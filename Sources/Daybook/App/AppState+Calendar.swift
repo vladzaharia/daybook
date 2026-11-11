@@ -51,12 +51,12 @@ extension AppState {
         }
     }
 
-    /// Looks at the calendar every 30 seconds while Use Calendar is on and When a call starts isn't Off; never under
-    /// XCTest, whose tests call `checkCalendar(at:)` themselves.
+    /// Looks at the calendar every 30 seconds while Use Calendar is on and When a call starts isn't Off; only in the app
+    /// (`MacEnvironment.watchesCalendar`), since tests call `checkCalendar(at:)` themselves.
     func watchCalendar() {
         calendarWatch?.cancel()
         calendarWatch = nil
-        guard usesCalendar, callPolicy != .off, !MacCaptioners.isRunningTests else { return }
+        guard usesCalendar, callPolicy != .off, environment.watchesCalendar else { return }
         calendarWatch = Task { [weak self] in
             while !Task.isCancelled {
                 self?.checkCalendar()

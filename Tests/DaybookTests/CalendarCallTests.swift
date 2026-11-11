@@ -46,6 +46,26 @@ final class CalendarCallTests: XCTestCase {
                      attendees: people, callHost: host)
     }
 
+    func testBehaviorOnlyTheAppsEnvironmentLooksAtTheCalendarOnItsOwn() async {
+        // A test's state is inert unless it says otherwise (`MacEnvironment`): the test does the looking.
+        let inert = await state(FakeMeetingCalendar())
+        inert.callPolicy = .ask
+        inert.usesCalendar = true
+        XCTAssertNil(inert.calendarWatch, "a test calls checkCalendar(at:) itself")
+
+        var watching = MacEnvironment.inert
+        watching.watchesCalendar = true
+        let root = makeTemporaryFolder("CalendarCallTests")
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let app = AppState(libraryURL: root, defaults: makeTestDefaults("CalendarCallTests"), environment: watching)
+        app.meetingCalendar = FakeMeetingCalendar()
+        app.callPolicy = .ask
+        app.usesCalendar = true
+        XCTAssertNotNil(app.calendarWatch, "injected as the app's, it looks every 30 seconds")
+        app.usesCalendar = false
+        XCTAssertNil(app.calendarWatch)
+    }
+
     func testBehaviorTurningItOnAsksForTheCalendarAndARefusalLeavesItOff() async {
         let refused = FakeMeetingCalendar(access: .notAsked, grants: false)
         let state = await state(refused)

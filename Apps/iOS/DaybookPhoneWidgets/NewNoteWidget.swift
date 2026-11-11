@@ -1,3 +1,4 @@
+import DaybookDesign
 import SwiftUI
 import WidgetKit
 
@@ -6,7 +7,7 @@ struct NewNoteWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: "local.daybook.phone.new-note", provider: NewNoteTimeline()) { _ in
             NewNoteWidgetView()
-                .containerBackground(for: .widget) { PhoneStyle.paper }
+                .containerBackground(for: .widget) { DaybookPalette.paper }
         }
         .configurationDisplayName("New Note")
         .description("Start a note in Daybook.")
@@ -49,17 +50,17 @@ private struct NewNoteWidgetView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Daybook")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(PhoneStyle.Ink.secondary)
+                        .foregroundStyle(DaybookPalette.Ink.secondary)
                     Spacer(minLength: 0)
                     Image(systemName: "square.and.pencil")
                         .font(.title2)
-                        .foregroundStyle(PhoneStyle.Ink.title)
+                        .foregroundStyle(DaybookPalette.Ink.title)
                     Text("New Note")
-                        .font(PhoneStyle.Typeface.title(.headline))
-                        .foregroundStyle(PhoneStyle.Ink.title)
+                        .font(DaybookType.title(.headline))
+                        .foregroundStyle(DaybookPalette.Ink.title)
                     Text("Open a blank note")
                         .font(.caption)
-                        .foregroundStyle(PhoneStyle.Ink.secondary)
+                        .foregroundStyle(DaybookPalette.Ink.secondary)
                         .lineLimit(2)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)

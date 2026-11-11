@@ -1,3 +1,4 @@
+import DaybookCaptions
 import DaybookDesign
 import DaybookKit
 import DaybookUI
@@ -67,7 +68,7 @@ private struct ReadingLayout: View {
       sheet in
       ReadingSheetContent(sheet: sheet, library: library)
         .environment(session)
-        .tint(PhoneStyle.accent)
+        .tint(DaybookPalette.accent)
     }
     // Today's status, in the hand a sheet, open on the right page; the library's strip and More ask for it.
     .statusSheet(onPage: style != .pocket)
@@ -197,9 +198,9 @@ private struct ReadingLayout: View {
             .daybookTransition(.move(edge: .bottom).combined(with: .opacity))
           }
         }
-        .daybookMotion(PhoneStyle.Motion.state, value: session.sheet?.id)
+        .daybookMotion(DaybookMotion.state, value: session.sheet?.id)
     }
-    .daybookMotion(PhoneStyle.Motion.page, value: session.reading)
+    .daybookMotion(DaybookMotion.page, value: session.reading)
   }
 
   /// The sheet shows on the right page: two pages, and anything but the system's share sheet.
@@ -226,7 +227,7 @@ private struct ReadingLayout: View {
                 Label("Library", systemImage: "chevron.backward")
               }
               .labelStyle(.iconOnly)
-              .tint(PhoneStyle.Ink.title)
+              .tint(DaybookPalette.Ink.title)
               .accessibilityLabel("Library")
             }
             ConversationToolbar(library: library, meeting: meeting)
@@ -283,7 +284,7 @@ private struct ReadingLayout: View {
                 } label: {
                   Label("Open", systemImage: "book.pages").labelStyle(.titleAndIcon)
                 }
-                .tint(PhoneStyle.Ink.title)
+                .tint(DaybookPalette.Ink.title)
                 .accessibilityHint("Opens it across both pages")
               }
               ConversationToolbar(library: library, meeting: meeting)
@@ -330,18 +331,18 @@ private struct ReadingLayout: View {
 private struct NotebookPlaceholder: View {
   let isEmpty: Bool
   var body: some View {
-    VStack(spacing: PhoneStyle.Space.s3) {
+    VStack(spacing: DaybookSpacing.s3) {
       Image(systemName: "book.pages")
         .font(.system(size: 40, weight: .light))
-        .foregroundStyle(PhoneStyle.brandGradient)
+        .foregroundStyle(DaybookPalette.brandGradient(.mark))
         .accessibilityHidden(true)
       if !isEmpty {
         Text("Choose a Conversation")
-          .font(PhoneStyle.Typeface.title(.title2)).foregroundStyle(PhoneStyle.Ink.title)
+          .font(DaybookType.title(.title2)).foregroundStyle(DaybookPalette.Ink.title)
           .multilineTextAlignment(.center)
       }
     }
-    .padding(PhoneStyle.Space.s6)
+    .padding(DaybookSpacing.s6)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .paperBackground()
   }

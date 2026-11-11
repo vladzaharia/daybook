@@ -1,6 +1,7 @@
 import AVFoundation
 import DaybookKit
 import DaybookLink
+import DaybookUI
 import XCTest
 @testable import DaybookPhone
 
@@ -396,23 +397,6 @@ final class CascadingRecordingTests: XCTestCase {
 extension CascadingRecordingTests {
     // MARK: Levels
 
-    /// Readings gather as the meter takes them and go a few at a time, about five times a second, as a
-    /// meter shows them.
-    func testBehaviorLevelsGoAFewReadingsAtATime() {
-        var share = LevelShare()
-        let t0 = Date(timeIntervalSince1970: 1_000)
-        XCTAssertEqual(share.add(0.123, at: t0), [0.12], "the first at once")
-        var sent: [[Double]] = []
-        for tick in 1...15 {
-            if let values = share.add(1.4, at: t0.addingTimeInterval(Double(tick) / 15)) { sent.append(values) }
-        }
-        XCTAssertTrue((4...5).contains(sent.count), "about five times a second: \(sent.count)")
-        XCTAssertTrue(sent.allSatisfy { $0.count >= 2 && $0.count <= 4 }, "a few readings each: \(sent)")
-        XCTAssertEqual(Set(sent.joined()), [1], "kept to 0…1")
-        for tick in 0..<(LinkLevels.maximumValues + 10) { _ = share.add(0.5, at: t0.addingTimeInterval(1.1 + Double(tick) * 0.001)) }
-        XCTAssertLessThanOrEqual(share.pending.count, LinkLevels.maximumValues, "never more than one message carries")
-    }
-
     /// A Mac recording this conversation too that draws other devices' levels gets this iPhone's, a few
     /// readings at a time; one that doesn't list `liveLevels` (an older Mac) gets none.
     func testBehaviorAMacRecordingAlongGetsThisIPhonesLevelOnlyWhenItDrawsIt() async throws {
@@ -451,6 +435,66 @@ extension CascadingRecordingTests {
             rig.pump(1)
             try await model.stopRecording()
             try await eventually("the Mac stops too") { await macRecorder.recording == nil }
+            await link.setActivity(.background)
+        }
+    }
+
+    /// The other way: a Mac recording this conversation too that sends its level (`sharesLevels`) gets a meter on this
+    /// iPhone's recorder, with the Mac's glyph, beside the microphone's. Its readings play back a reading a tick, only
+    /// this recording's, and its meter rests once it's been quiet for 1.5 s. This iPhone lists `liveLevels`, so the Mac
+    /// knows to send them; an older Mac, which doesn't list `sharesLevels`, has no meter.
+    func testBehaviorAMacRecordingAlongIsMeteredFromTheLevelsItSends() async throws {
+        for sends in [true, false] {
+            let features = [LinkCapabilities.cascadeFeature, LinkCapabilities.liveLevelsFeature]
+                + (sends ? [LinkCapabilities.sharesLevelsFeature] : [])
+            let mac = try await makeMac(features: features)
+            let inbox = LinkServicesTests.MacInbox(mac.service.events())
+            let macRecorder = LinkServicesTests.RecordingMac()
+            await mac.service.setRecordControlHandler { _, request in await macRecorder.handle(request) }
+            let link = makeLink()
+            let rig = RecorderRig()
+            let model = try makeModel(link: link, rig: rig)
+            try await pair(link, with: mac)
+            XCTAssertEqual(link.macs.first?.sendsLevels, sends, "from its capabilities")
+            let phone = inbox.all.compactMap { if case .connected(let peer) = $0 { return peer } else { return nil } }.last
+            XCTAssertEqual(phone?.capabilities.showsLevels, true, "this iPhone tells the Mac it draws its level")
+
+            try await model.startRecording()
+            let id = try XCTUnwrap(model.recorder.captureID)
+            try await waitUntil("the Mac records too") { model.multipoint?.recordingMacs.map(\.id) == [mac.id] }
+            let row = RecorderMeter.Source.peer(mac.id.uuidString)
+            let meters = RecordingStatusWords.meters(PhoneRecorderStatus.inputs(model))
+            XCTAssertEqual(meters.map(\.source), [.microphone] + (sends ? [row] : []), "a meter for the Mac only when it sends")
+            XCTAssertEqual(meters.last?.symbol, sends ? "desktopcomputer" : "mic", "with the Mac's glyph")
+
+            try await mac.service.send(.levels(LinkLevels(conversationID: UUID(), values: [0.9])), to: link.deviceID)
+            try await mac.service.send(.levels(LinkLevels(conversationID: id, values: [0.3, 0.5, 0.6])), to: link.deviceID)
+            var now = Date()
+            let first = try await waitFor("the Mac's level here") { model.macLevel(mac.id, at: now) }
+            XCTAssertEqual(first, 0.3, "the oldest first, never another recording's")
+            if sends {
+                // The meters as the recorder samples them, on a clock the test moves; sampled here, never by its timer.
+                let levels = RecorderLevels()
+                levels.adopt(model.levels, for: .microphone)
+                levels.follow(meters.map(\.source))
+                levels.run(true, readers: RecorderScreen.readers(model, now: { now }))
+                defer { levels.run(false, readers: RecorderScreen.readers(model)) }
+                levels.sample()
+                XCTAssertEqual(levels.heard, [.microphone, row], "its meter moves")
+                XCTAssertEqual(levels.trail(row).values.last ?? 0, 0.5, accuracy: 0.001, "a reading a tick")
+                levels.sample()
+                XCTAssertEqual(levels.trail(row).values.last ?? 0, 0.6, accuracy: 0.001)
+                levels.sample()
+                XCTAssertEqual(levels.trail(row).values.last ?? 0, 0.48, accuracy: 0.001, "between messages it fades")
+                now = Date().addingTimeInterval(LevelPlayback.lifetime)
+                levels.sample()
+                XCTAssertEqual(levels.heard, [.microphone], "quiet for 1.5 s: its meter rests")
+                XCTAssertEqual(levels.trail(row).values.last, 0)
+            }
+            rig.pump(1)
+            try await model.stopRecording()
+            try await eventually("the Mac stops too") { await macRecorder.recording == nil }
+            XCTAssertNil(model.macLevel(mac.id), "nothing kept past the recording")
             await link.setActivity(.background)
         }
     }

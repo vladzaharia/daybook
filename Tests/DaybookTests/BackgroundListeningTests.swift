@@ -117,11 +117,11 @@ final class BackgroundListeningTests: XCTestCase {
         let fused = rig.meeting(id)?.unifiedTranscript
 
         // A download (any other work) runs first.
-        rig.state.downloadingID = "whisper/base"
+        rig.state.processor.queue.downloadingID = "whisper/base"
         rig.state.listenToEarlierRecordingsWhenIdle()
         try await Task.sleep(for: .milliseconds(200))
         XCTAssertEqual(deaf.listened, 0, "Nothing starts while other work runs")
-        rig.state.downloadingID = nil
+        rig.state.processor.queue.downloadingID = nil
         rig.state.listenToEarlierRecordingsWhenIdle()
         try await waitUntil("the recording to be tried") { deaf.listened == 1 && rig.state.backgroundListening == nil }
 

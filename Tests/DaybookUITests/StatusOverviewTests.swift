@@ -72,10 +72,11 @@ final class StatusOverviewTests: XCTestCase {
 
     func testBehaviorAQueueRowCountsDownAndOffersItsChoices() {
         let id = UUID()
-        let item = StatusQueueItem(id: id, title: "Weekly sync", line: "Summarizing in 12 s", countdownUntil: now.addingTimeInterval(12),
-                                   actions: [.placement(.useCloud), .placement(.startNow)])
-        XCTAssertEqual(item.line(at: now.addingTimeInterval(4)), "Summarizing in 8 s")
-        XCTAssertEqual(item.actions.map(\.title), ["Use the Cloud", "Start Now"])
+        let item = StatusQueueItem(id: id, title: "Weekly sync", line: SummaryPlacementWords.countdown(seconds: 12),
+                                   countdownUntil: now.addingTimeInterval(12), actions: [.placement(.useCloud), .placement(.startNow)])
+        XCTAssertEqual(item.line(at: now.addingTimeInterval(4)), SummaryPlacementWords.countdown(seconds: 8))
+        XCTAssertEqual(item.secondsLeft(at: now.addingTimeInterval(4)), 8)
+        XCTAssertEqual(item.actions.map(\.title), [SummaryPlacementWords.title(.useCloud), SummaryPlacementWords.title(.startNow)])
         XCTAssertEqual(StatusQueueItem.Action.tryAgain(.newAudio).title, "Try Again")
         let still = StatusQueueItem(id: id, title: "A", line: "Transcribing · 40%", progress: 0.4)
         XCTAssertEqual(still.line(at: now), "Transcribing · 40%")

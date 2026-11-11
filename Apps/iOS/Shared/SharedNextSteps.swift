@@ -25,8 +25,18 @@ struct SharedNextSteps: Codable, Equatable, Sendable {
         return Self(snapshot.items)
     }
 
+    /// The snapshot as the widget reads it: there, not there, or there but locked away until the iPhone is unlocked.
+    static func read(from container: URL? = SharedWidgetCache.groupContainer) -> SharedWidgetCache.Read<Self> {
+        switch cache.read(Self.self, from: container) {
+        case .value(let snapshot): return .value(Self(snapshot.items))
+        case .missing: return .missing
+        case .locked: return .locked
+        }
+    }
+
+    /// `protects`: "Protect while iPhone is locked" (`SharedWidgetCache.save`).
     @discardableResult
-    func save(to container: URL? = SharedWidgetCache.groupContainer) -> Bool {
-        Self.cache.save(Self(items), to: container)
+    func save(to container: URL? = SharedWidgetCache.groupContainer, protects: Bool = false) -> Bool {
+        Self.cache.save(Self(items), to: container, protects: protects)
     }
 }

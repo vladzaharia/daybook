@@ -103,7 +103,8 @@ struct DaybookApp: App {
     /// The app's state. The scenes only pass it on: every view, the menus, and the menu bar item read what they
     /// show, and redraw for that alone. Read here, each change would rebuild every scene and draw the library window
     /// twice, so the only thing the scenes read is whether a library move holds the library.
-    @State private var state = AppState(libraryURL: LaunchOptions.libraryURL ?? AppState.libraryURL, defaults: LaunchOptions.defaults)
+    @State private var state = AppState(libraryURL: LaunchOptions.libraryURL ?? AppState.libraryURL, defaults: LaunchOptions.defaults,
+                                        environment: .live)
     @AppStorage(AppState.Preference.showsMenuBarExtra, store: LaunchOptions.defaults) private var showsMenuBarExtra = true
     @AppStorage(AppState.Preference.onboardingCompleted, store: LaunchOptions.defaults) private var onboardingCompleted = false
 
@@ -131,7 +132,7 @@ struct DaybookApp: App {
             // Help › Show Welcome opens it; the Window menu doesn't list it as well.
             .commandsRemoved()
             // A library to move first (docs/sandbox.md) is asked about in the library window, which opens instead.
-            .defaultLaunchBehavior(onboardingCompleted || LaunchOptions.libraryURL != nil || state.libraryMoveOffer?.holdsLibrary == true
+            .defaultLaunchBehavior(onboardingCompleted || LaunchOptions.libraryURL != nil || state.launchCheck.offer?.holdsLibrary == true
                                    ? .suppressed : .presented)
 
         Window("Vocabulary", id: WindowID.vocabulary) { GlossaryView(state: state).defaultAppStorage(LaunchOptions.defaults) }
@@ -381,22 +382,22 @@ private struct DebugLaunchActions: ViewModifier {
             applied = true
             if let place = LaunchOptions.value(after: "--place") {
                 switch place {
-                case "work": state.place = .section(.work)
-                case "personal": state.place = .section(.personal)
-                case "trash": state.place = .trash
-                case "device": state.place = state.devices.sessions.first.map { .device($0.id) } ?? .section(.all)
+                case "work": state.window.place = .section(.work)
+                case "personal": state.window.place = .section(.personal)
+                case "trash": state.window.place = .trash
+                case "device": state.window.place = state.devices.sessions.first.map { .device($0.id) } ?? .section(.all)
                 default:
-                    if place.hasPrefix("device:"), let device = state.devices.sessions.first(where: { $0.device.name == place.dropFirst(7) }) { state.place = .device(device.id) }
-                    else if place.hasPrefix("folder:"), let folder = state.folders.first(where: { $0.name == place.dropFirst(7) }) { state.place = .folder(folder.id) }
-                    else { state.place = .section(.all) }
+                    if place.hasPrefix("device:"), let device = state.devices.sessions.first(where: { $0.device.name == place.dropFirst(7) }) { state.window.place = .device(device.id) }
+                    else if place.hasPrefix("folder:"), let folder = state.folders.first(where: { $0.name == place.dropFirst(7) }) { state.window.place = .folder(folder.id) }
+                    else { state.window.place = .section(.all) }
                 }
             }
-            if let title = LaunchOptions.value(after: "--select") { state.selectedID = state.meetings.first { $0.title == title }?.id }
+            if let title = LaunchOptions.value(after: "--select") { state.window.openID = state.meetings.first { $0.title == title }?.id }
             // `--page transcript`; `summary-only` and `transcript-only` collapse a wide window's two pages to one.
             switch LaunchOptions.value(after: "--page") {
-            case "transcript"?: state.pageMode = .transcript
-            case "summary-only"?: state.pageSpreadChosen = false
-            case "transcript-only"?: state.pageMode = .transcript; state.pageSpreadChosen = false
+            case "transcript"?: state.window.pageMode = .transcript
+            case "summary-only"?: state.window.pageSpreadChosen = false
+            case "transcript-only"?: state.window.pageMode = .transcript; state.window.pageSpreadChosen = false
             default: break
             }
             if CommandLine.arguments.contains("--inspector") { LaunchOptions.defaults.set(true, forKey: AppState.Preference.isInspectorPresented) }
@@ -404,7 +405,7 @@ private struct DebugLaunchActions: ViewModifier {
                 pane.open(with: openWindow, activating: false)
             }
             if let id = LaunchOptions.value(after: "--open-window") { openWindow(id: id) }
-            if CommandLine.arguments.contains("--show-notes") { state.showFloatingNotes(focus: state.selectedID) }
+            if CommandLine.arguments.contains("--show-notes") { state.showFloatingNotes(focus: state.window.openID) }
             if CommandLine.arguments.contains("--show-setup") { state.requestAddDevice() }
             DeviceDemo.apply(to: state)
             PhoneDemo.apply(to: state)
@@ -420,13 +421,13 @@ private struct DebugLaunchActions: ViewModifier {
                 state.post(Array(lines.dropLast()))
                 state.post(lines.last ?? notice, action: LibraryNoticeAction(title: title) {})
             }
-            if let query = LaunchOptions.value(after: "--search") { state.search = query }
+            if let query = LaunchOptions.value(after: "--search") { state.window.searchText = query }
             PerfProbe.stage = {
-                guard let id = state.processingID else { return "idle" }
+                guard let id = state.processor.queue.runningID else { return "idle" }
                 let status = state.meetings.first { $0.id == id }?.status.rawValue ?? ""
-                return "\(status): \(state.processingProgress.message)"
+                return "\(status): \(state.processor.queue.activity.value.message)"
             }
-            PerfProbe.driveProgress(state.processingActivity)
+            PerfProbe.driveProgress(state.processor.queue.activity)
             PerfProbe.driveTouches(state)
             // `DAYBOOK_IMPORT_AUDIO=<file>` imports a recording into a new conversation, which then processes. (A path
             // among the arguments would be opened as a document, and the window wouldn't open.)
@@ -438,9 +439,9 @@ private struct DebugLaunchActions: ViewModifier {
                 Task {
                     await LibraryDemo.seeding?.value
                     switch sheet {
-                    case "history": state.activeSheet = .versionHistory
-                    case "timing": state.activeSheet = .adjustTiming(nil)
-                    case "corrections": state.activeSheet = .reviewCorrections
+                    case "history": state.window.sheet = .versionHistory
+                    case "timing": state.window.sheet = .adjustTiming(nil)
+                    case "corrections": state.window.sheet = .reviewCorrections
                     default: break
                     }
                 }
@@ -449,7 +450,7 @@ private struct DebugLaunchActions: ViewModifier {
             // library doesn't have yet becomes a new conversation; `--demo-captions` scripts captions.
             if let title = LaunchOptions.value(after: "--simulate-recording") {
                 let id = state.meetings.first(where: { $0.title == title })?.id ?? state.newMeeting(title: title)
-                state.selectedID = id
+                state.window.openID = id
                 state.recordingID = id
                 state.recordingStartedAt = Date().addingTimeInterval(-761)
                 state.update(id) { $0.status = .recording }

@@ -238,7 +238,7 @@ DNS-SD's `PolicyDenied` (−65570); the client reads that as `localNetworkDenied
 | `bookmark.change` | `LinkBookmarkChange` | both | a shared bookmark's label changed, or it was deleted; changed-at |
 | `note` | `LinkNote` | both | a paragraph written, edited, or deleted during a shared recording: its anchor ID, text, the time its writer files it at, made-at, changed-at |
 | `captions` | `LinkCaptions` | both | the live captions a device makes of a shared recording, the lines that changed since it last sent (each with its ID, times in its recording, text, tentative, the voice and person live speakers heard, and the recorder that heard it, if not the sender: a recorder's lines are placed from where its live stream starts on the phone's clock, not from its recording's start), the IDs of lines it sent that its recognizer took back (`removed`, which the receiver drops; nil from an older build), and when its recording began on its clock; only to a device recording the same conversation that lists `liveCaptions`. An iPhone sends every line it and its recorders heard; a Mac sends only its Call lines |
-| `levels` | `LinkLevels` | iPhone → Mac | an iPhone's input level during a shared recording, for the Mac's meters: its meter's readings since it last sent (0…1, oldest first, `interval` apart, at most 30), about five times a second; only to a Mac recording the same conversation that lists `liveLevels`, and never queued behind other messages (one still on its way drops the next) |
+| `levels` | `LinkLevels` | both | a device's input level during a shared recording, for the other's meters: its meter's readings since it last sent (0…1, oldest first, `interval` apart, at most 30), about five times a second; only to a device recording the same conversation that lists `liveLevels`, and never queued behind other messages (one still on its way drops the next). An iPhone sends its microphone's readings; a Mac the louder of its microphone and computer audio each tick |
 | `processing.progress` | `LinkProcessingProgress` | Mac → phone | meeting, phase, fraction, Mac name, detail; while a summary counts down, phase `summaryCountdown` with `countdown` (seconds left as sent, whether Use the Cloud is on offer); in the cloud, `cloudModel` (both optional) |
 | `processing.nudge` | `LinkProcessingNudge` | phone → Mac | "I just wrote request X": the request itself travels through sync; the Mac syncs and asks the courier at once |
 | `recording.arrival` | `LinkRecordingArrival` | iPhone → Mac | where a recording of the iPhone's that the Mac waits for stands: `filing`, `sending` (with a fraction when known), `sent`, `storageFull`, `waitingForKey`; the conversation and the recording's ID; sent as it changes and as a Mac connects, only to a Mac listing `recordingArrival` (docs/multipoint.md, "Mac first") |
@@ -356,9 +356,15 @@ start reads as a start the person chose, and `sharedConversationID` isn't read.
   recording a conversation with it. `sharedNotes`: it takes `note`, `bookmark.change`, and `bookmark` in
   both directions. Both apps list both. `liveCaptions` (both apps list it; an iPhone since November
   2026): it shows another device's `captions` of a shared recording beside its own; an older device is
-  never sent them. `liveLevels` (the
-  Mac lists it): it draws another device's input level (`levels`) beside its own meters; an older Mac
-  is never sent them, and a Mac shows an older iPhone, which sends none, with a flat meter.
+  never sent them. `liveLevels` (both apps list it; an iPhone since November 2026): it draws another
+  device's input level (`levels`) beside its own meters; a device sends its level only to one that lists
+  it, so an older Mac is never sent an iPhone's and an older iPhone never a Mac's. `sharesLevels` (both
+  apps list it, since November 2026): it sends its own level to a device recording with it that lists
+  `liveLevels`. An iPhone gives a Mac a meter only when the Mac lists it, so an older Mac, which draws
+  an iPhone's level but sends none, has no meter there; a Mac gives every iPhone one, since iPhones sent
+  theirs before the feature was named, and shows an older iPhone, which sends none, with a flat meter.
+  An iPhone that gets `levels` from a Mac it isn't recording with, or for another conversation, drops
+  them, as an older iPhone drops every one.
   `recordingArrival` (the Mac lists it): it says where a recording of the iPhone's it waits for stands
   (`recording.arrival`); an older Mac is never sent it, and says the wait without the clause.
 - **Cascading start.** `LinkRecordRequest.cascade` says what started the requester's recording
@@ -649,9 +655,15 @@ the test process, and nothing is advertised.
   build that doesn't know them, and over a session both ways.
 - **Levels:** a round trip of `levels`, the feature, the type an older build reads as unknown, and a body read
   safely (readings kept to 0…1, at most 30, a nonsense interval read as 1/15 s)
-  (`LinkWireTests.testBehaviorLevelsAreAFeatureOlderBuildsIgnoreAndAreReadSafely`). Over a session: an iPhone
-  recording along sends its level to a Mac that lists `liveLevels` and none to one that doesn't
-  (`CascadingRecordingTests` on the iPhone); the Mac plays them back a reading a tick (`FloatingNotesMetersTests`).
+  (`LinkWireTests.testBehaviorLevelsAreAFeatureOlderBuildsIgnoreAndAreReadSafely`); both directions over a
+  session, `sharesLevels` beside `liveLevels` (an older Mac draws but doesn't send), a later build's feature
+  carried, and the shared rules: readings gathered a few at a time about five times a second (`LevelShare`) and
+  played back a reading a tick, fading between messages, none after 1.5 s of silence (`LevelPlayback`)
+  (`LinkLevelsTests`). Over a session with the apps: an iPhone recording along sends its level to a Mac that
+  lists `liveLevels` and none to one that doesn't, and meters a Mac that lists `sharesLevels` from the levels it
+  sends (`CascadingRecordingTests` on the iPhone); a Mac sends its level to an iPhone recording along that lists
+  `liveLevels` and none to one that doesn't, and plays an iPhone's back a reading a tick
+  (`FloatingNotesMetersTests`).
 - **Library keys:** a request and its grant over a loopback session, only the keys asked for; nothing for a device of
   another library, or without one (`LinkLibraryKeyTests`).
 - **Where summaries run:** round trips of capabilities with `processing`, a countdown and a cloud model in

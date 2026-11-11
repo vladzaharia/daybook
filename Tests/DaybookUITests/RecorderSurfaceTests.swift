@@ -92,11 +92,13 @@ final class RecorderSurfaceTests: XCTestCase {
 
     func testBehaviorACountdownChipMovesOnItsOwn() {
         let start = Date(timeIntervalSince1970: 1_000)
-        let chip = RecorderChip(target: .processing, symbol: "clock", label: "Summarizing in 12 s", shortLabel: "12 s", tone: .calm,
-                                detail: "Summarizing on this Mac in 12 s", countdownUntil: start.addingTimeInterval(12))
-        XCTAssertEqual(chip.at(start.addingTimeInterval(4.5)).label, "Summarizing in 8 s")
-        XCTAssertEqual(chip.at(start.addingTimeInterval(4.5)).shortLabel, "8 s")
-        XCTAssertEqual(chip.at(start.addingTimeInterval(30)).label, "Summarizing in 1 s", "never below a second")
+        typealias Words = SummaryPlacementWords
+        let chip = RecorderChip(target: .processing, symbol: "clock", label: Words.countdown(seconds: 12), shortLabel: Words.seconds(12), tone: .calm,
+                                detail: Words.countdown(on: "this Mac", seconds: 12), countdownUntil: start.addingTimeInterval(12))
+        XCTAssertEqual(chip.at(start.addingTimeInterval(4.5)).label, Words.countdown(seconds: 8))
+        XCTAssertEqual(chip.at(start.addingTimeInterval(4.5)).shortLabel, Words.seconds(8))
+        XCTAssertEqual(chip.at(start.addingTimeInterval(4.5)).detail, Words.countdown(on: "this Mac", seconds: 8))
+        XCTAssertEqual(chip.at(start.addingTimeInterval(30)).label, Words.countdown(seconds: 1), "never below a second")
         var plain = chip
         plain.countdownUntil = nil
         XCTAssertEqual(plain.at(start.addingTimeInterval(4)), plain, "a chip without a countdown never changes")
@@ -200,9 +202,11 @@ final class RecorderSurfaceTests: XCTestCase {
 
         let until = Date(timeIntervalSince1970: 1_012)
         let countdown = try XCTUnwrap(RecordingStatusWords.processingChip(
-            ConversationRowStatus(kind: .waiting, text: "Summarizing in 12 s", countdownUntil: until)))
-        XCTAssertEqual(countdown.shortLabel, "12 s")
-        XCTAssertEqual(countdown.at(Date(timeIntervalSince1970: 1_004)).label, "Summarizing in 8 s", "its seconds move with it")
+            ConversationRowStatus(kind: .waiting, text: SummaryPlacementWords.countdown(seconds: 12), countdownUntil: until),
+            now: Date(timeIntervalSince1970: 1_000)))
+        XCTAssertEqual(countdown.shortLabel, SummaryPlacementWords.seconds(12))
+        XCTAssertEqual(countdown.at(Date(timeIntervalSince1970: 1_004)).label, SummaryPlacementWords.countdown(seconds: 8), "its seconds move with it")
+        XCTAssertEqual(countdown.at(Date(timeIntervalSince1970: 1_004)).shortLabel, SummaryPlacementWords.seconds(8))
 
         XCTAssertEqual(RecordingStatusWords.processingChip(ConversationRowStatus(kind: .waitingForModels, text: "Waiting for models"))?.tone,
                        .attention)
@@ -245,6 +249,32 @@ final class RecorderSurfaceTests: XCTestCase {
             for count in 1...6 {
                 let row = stack.rowHeight(count), gap = stack.gap(count)
                 XCTAssertLessThanOrEqual(stack.glyphSize(row: row, gap: gap), stack.glyph)
+            }
+        }
+    }
+
+    /// The iPhone's rows (docs/iphone.md, "While recording"): alone, the microphone's meter takes the row unlabelled;
+    /// with a Mac or a recorder along each row has its glyph (the Mac's on the Mac always). At larger text the glyphs
+    /// grow and the rows keep room for them, the area growing for two or more; one source keeps its area.
+    func testBehaviorTheIPhonesRowsLabelMoreThanOneSourceAndGrowWithTheText() {
+        XCTAssertFalse(RecorderMeters.labels(1, density: .touch), "the phone alone: one large unlabelled meter")
+        XCTAssertTrue(RecorderMeters.labels(2, density: .touch))
+        XCTAssertTrue(RecorderMeters.labels(1, density: .panel), "Floating Notes labels even one")
+        XCTAssertEqual(MeterStack.pocket.scaled(1), .pocket, "the default size is the stack as drawn")
+        XCTAssertEqual(MeterStack.pocket.scaled(0.8), .pocket, "smaller text never shrinks it")
+
+        let accessibility = 28.0 / 17  // the first accessibility size, where the header stops growing
+        for base in [MeterStack.compact, .pocket, .page, .stage] {
+            let stack = base.scaled(accessibility)
+            XCTAssertEqual(stack.rowHeight(1), base.area, "one source keeps the area")
+            XCTAssertEqual(stack.glyph, base.glyph * accessibility, accuracy: 0.001)
+            for count in 2...4 {
+                let row = stack.rowHeight(count), gap = stack.gap(count)
+                XCTAssertGreaterThanOrEqual(row, base.rowHeight(count), "\(count) rows never thinner than at the default")
+                XCTAssertGreaterThan(stack.glyphSize(row: row, gap: gap), base.glyphSize(row: base.rowHeight(count), gap: gap),
+                                     "\(count) rows: the glyphs grow with the text")
+                XCTAssertLessThanOrEqual(stack.glyphSize(row: row, gap: gap), row + gap, "\(count) rows: glyphs don't overlap")
+                XCTAssertLessThanOrEqual(stack.height(count), stack.maximumArea + 0.001)
             }
         }
     }

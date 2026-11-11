@@ -234,7 +234,7 @@ shows processing shows it, on the Mac and the iPhone:
 - Sync passes run while this Mac processes (any job, not only one carrying another device's request), with the
   conversation being processed protected from remote deletion and status. So the phone's recording, notes, and
   request come in while this Mac transcribes its own audio, not after its summary. A recording the running job's
-  conversation waited for that lands before fusion joins that job (`AppState.process`, `foldsArrivalsInto`):
+  conversation waited for that lands before fusion joins that job (`MacProcessor.process`, `foldsArrivalsInto`):
   it's placed as it would have been and transcribed, then fused and summarized once with the rest. One that lands
   after that point gets a job of its own, as before.
 - The wait and the arrival don't depend on **Transcribe synced recordings on this Mac**. A recording the
@@ -489,8 +489,8 @@ never asks for the microphone for it.
 
 The device that manages a recorder recording along with a shared recording saves the recorder's audio
 into the conversation as it records, from the stream Listen Live uses (`DeviceSession.captureLive`),
-and captions it, beside the device's own captions (docs/capture.md, "Every source"), and Floating Notes meters it from
-the same audio. When the recording stops, the
+and captions it, beside the device's own captions (docs/capture.md, "Every source"), and its recorder (Floating Notes on
+a Mac) meters it from the same audio. When the recording stops, the
 recorder's audio is already in the conversation (in the library within a fraction of a second of the
 stop, against minutes to transfer the file afterwards), so multipoint processing has every source at
 once. It's a live portion: its recording ID ends with `~live`, it joins the conversation as a source
@@ -515,6 +515,18 @@ recorder saying it stopped ends the stream after a moment (`SoundcoreTiming.live
 end on its own. While it streams, the recorder's list can't be read nor Pause sent, so a device
 stopping it saves the live audio first. What it costs the link is in docs/direct-soundcore.md,
 "Live audio for a shared recording".
+
+## Levels during a shared recording
+
+While a Mac and an iPhone record one conversation, each meters the other beside its own sources:
+Floating Notes has a row for each iPhone recording along, and the iPhone's recorder a row for each Mac
+that sends its level (docs/interface.md, "Meters"; docs/iphone.md, "The meters"). Each sends its level over the local link
+(`levels`; docs/link.md) only to a device recording the same conversation that lists `liveLevels`: an
+iPhone its microphone's readings, a Mac the louder of its microphone and computer audio each tick, a few
+at a time about five times a second (`LevelShare`), never queued behind notes or captions. The receiver
+plays them back a reading a tick, fading between messages, and rests the row once a device has been
+quiet for 1.5 s (`LevelPlayback`). A recorder is metered only by the device that manages it, from its
+live audio. Like live captions, levels are feedback: never stored or synced.
 
 ## Notes and bookmarks during a shared recording
 
@@ -606,7 +618,8 @@ Waiting turns into a fresh countdown when somewhere to run it appears.
 transcript is ready and the summary is due, the job reads Settings › Cloud again (`AppState.cloud.reload`),
 counts down, then summarizes here, or in the cloud (`CloudSummarizer`, with the preferred effort) if the person
 chose it. The queue waits for the countdown, so a batch of imports counts down one at a time (Limits, below).
-Pause and Cancel during the countdown pause the job. It shows where processing status shows: the page's
+Pause and Cancel during the countdown pause the job. It shows where processing status shows, in the words both
+apps say it with (`SummaryPlacementWords`): the page's
 line ("Summarizing on this Mac in 12 s · Use the Cloud · Start Now", then "Summarizing with Claude Sonnet
 5.5" with Stop), the list row ("Summarizing in 12 s") and the list's subtitle, the inspector's Processing, and
 Floating Notes (the chip, whose menu has the choices, and the home's line for this Mac). Connected phones see the countdown too

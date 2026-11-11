@@ -45,8 +45,12 @@ enum PlacementDemo {
         case .countdown, .cloud:
             guard let id else { return }
             state.update(id) { $0.status = .summarizing }
-            state.processingID = id
-            state.processingProgress = IntelligenceProgress(scenario == .cloud ? 0.35 : 0, "Summarizing", stage: .summarizing)
+            state.processor.queue.runningID = id
+            state.processor.queue.activity.set(IntelligenceProgress(scenario == .cloud ? 0.35 : 0, "Summarizing", stage: .summarizing))
+            // A countdown is to this Mac's own summary model, with the cloud on offer: both, before it's placed, whatever
+            // this Mac has installed.
+            state.installedModels.insert(state.summaryModel)
+            state.placementOptionsChanged()
             state.placements.begin(id)
             if scenario == .cloud { state.placements.perform(.useCloud, for: id) }
         case .colophon, .colophonMac:

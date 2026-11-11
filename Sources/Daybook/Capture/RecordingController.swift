@@ -110,6 +110,11 @@ final class RecordingController {
     @ObservationIgnored private(set) var stoppedForSleep = false
     /// Live "You" and "Call" meters; see `CaptureLevelMonitor`.
     let levels = CaptureLevelMonitor()
+    /// Between meter readings while recording.
+    static let levelInterval: TimeInterval = 1.0 / 15
+    /// The meter read the levels, `levelInterval` apart while recording: iPhones recording along get them
+    /// (`AppState.shareLevel`).
+    @ObservationIgnored var onLevelsRead: (() -> Void)?
     var isRecording: Bool { state == .recording }
     /// Monotonic time shared with audio-track offsets, unaffected by wall-clock edits.
     var elapsedTime: TimeInterval {
@@ -449,7 +454,7 @@ final class RecordingController {
 
     private func startMetering() {
         meterTimer?.invalidate()
-        let timer = Timer(timeInterval: 1.0 / 15, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: Self.levelInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.updateLevels() }
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -464,6 +469,7 @@ final class RecordingController {
         levels.update(microphone: microphoneWriter?.meter.read(), call: system == nil ? nil : systemWriter?.meter.read(),
                       hostTime: now, elapsed: elapsedTime)
         if levels.isCallAudioDetected != isCallAudioDetected { isCallAudioDetected = levels.isCallAudioDetected }
+        onLevelsRead?()
         watchWriters()
         guard state == .recording else { return }
         watchSources(at: now)

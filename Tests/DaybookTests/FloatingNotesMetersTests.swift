@@ -1,4 +1,5 @@
 import DaybookLink
+import DaybookTestSupport
 import DaybookUI
 import Foundation
 import XCTest
@@ -128,5 +129,65 @@ final class FloatingNotesMetersTests: XCTestCase {
         XCTAssertNil(readers.peer(UUID().uuidString), "another iPhone sent none")
         XCTAssertNil(readers.recorder("missing"), "no such recorder: no level")
         state.recordingID = nil
+    }
+
+    // MARK: This Mac's level, to an iPhone
+
+    /// The other way: while this Mac records a conversation with an iPhone, its level (the louder of its microphone and
+    /// computer audio each tick) goes to the iPhone when it lists `liveLevels`, a few readings at a time; an older
+    /// iPhone, which doesn't, is never sent it. This Mac lists `sharesLevels`, so the iPhone gives it a meter.
+    func testBehaviorThisMacsLevelGoesOnlyToAnIPhoneRecordingAlongThatDrawsIt() async throws {
+        for draws in [true, false] {
+            let rig = try await MultiSourceRig.make(in: self, models: false)
+            let state = rig.state
+            XCTAssertTrue(state.phoneLink.identity.features.contains(LinkCapabilities.sharesLevelsFeature), "this Mac says it sends its level")
+            let features = [LinkCapabilities.cascadeFeature] + (draws ? [LinkCapabilities.liveLevelsFeature] : [])
+            let phone = try await PhoneLinkRig.connect(state, features: features)
+
+            // Not recording: nothing goes.
+            state.shareLevel(microphone: 0.5, call: nil)
+            let id = state.newMeeting(title: "Design review")
+            state.prepareSourceCapture(id)
+            state.recordingID = id
+            state.recordingStartedAt = Date()
+            state.update(id) { $0.status = .recording; $0.date = state.recordingStartedAt! }
+            state.recordingDidStart(id)
+            await state.sources.recorders.settle()
+            XCTAssertTrue(state.isRecording(id, with: phone.phoneID.uuidString), "the phone records along")
+            XCTAssertEqual(state.phonesShowingLevels(of: id), draws ? [phone.phoneID] : [])
+            XCTAssertEqual(state.phonesShowingLevels(of: UUID()), [], "only for the recording under way")
+
+            let t0 = Date()
+            for tick in 0..<12 {
+                // The call is louder every other tick: the louder of the two goes.
+                state.shareLevel(microphone: 0.2, call: tick.isMultiple(of: 2) ? 0.7 : nil, at: t0.addingTimeInterval(Double(tick) / 15))
+                // Each message on its way before the next (one still on its way drops the next).
+                try await Task.sleep(for: .milliseconds(30))
+            }
+            if draws {
+                try await waitUntil("this Mac's level at the phone") { phone.levels.contains { $0.values.count > 1 } }
+                let levels = phone.levels
+                XCTAssertEqual(levels.first?.values, [0.7], "the first at once, the louder of the two")
+                XCTAssertTrue(levels.allSatisfy { $0.conversationID == id })
+                XCTAssertTrue(levels.allSatisfy { $0.values.count <= 4 && Set($0.values).isSubset(of: [0.2, 0.7]) }, "a few readings each: \(levels)")
+                XCTAssertEqual(levels.first?.interval ?? 0, RecordingController.levelInterval, accuracy: 0.0001)
+            } else {
+                try await Task.sleep(for: .milliseconds(300))
+                XCTAssertTrue(phone.levels.isEmpty, "an older iPhone is never sent this Mac's level")
+            }
+
+            state.recordingWillFinish(id, at: Date())
+            state.recordingID = nil
+            state.recordingStartedAt = nil
+            await phone.tearDown(state)
+            await rig.tearDown()
+        }
+    }
+}
+
+private extension PhoneLinkRig {
+    /// The levels the Mac sent the phone, in order.
+    var levels: [LinkLevels] {
+        events.all.compactMap { if case .received(.levels(let levels), _) = $0 { return levels } else { return nil } }
     }
 }

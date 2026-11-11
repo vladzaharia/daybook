@@ -73,6 +73,11 @@ final class PhoneSync {
     @ObservationIgnored var onApplied: ((SyncApplied) -> Void)?
     /// Whether the scene is in the foreground; bounded passes continue right away only then.
     @ObservationIgnored var isForeground = true
+    /// Whether a pass may read and write the library now: always, unless "Protect while iPhone is locked" keeps its files
+    /// and the iPhone is locked (`PhoneAppModel.libraryReadable`). Then sealing, the pass, and the courier's sends wait.
+    @ObservationIgnored var libraryReadable: @MainActor () -> Bool = { true }
+    /// A pass asked for while the library couldn't be read, run once it can (`unlocked`).
+    @ObservationIgnored private(set) var waitingForUnlock: Trigger?
     @ObservationIgnored private var running: Task<Void, Never>?
     @ObservationIgnored private var rerun: Trigger?
     @ObservationIgnored private var continuation: Task<Void, Never>?
@@ -198,6 +203,12 @@ final class PhoneSync {
     /// while a pass runs is folded into one more pass after it. Returns when the work is done.
     func synchronize(_ trigger: Trigger) async {
         guard !Task.isCancelled, isConnected, library.isLoaded else { return }
+        // The library can't be read while the iPhone is locked: the pass waits for the unlock, rather than read a
+        // conversation that's there as one that isn't.
+        guard libraryReadable() else {
+            waitingForUnlock = waitingForUnlock ?? trigger
+            return
+        }
         if let running {
             rerun = rerun ?? trigger
             await running.value
@@ -264,10 +275,27 @@ final class PhoneSync {
         }
     }
 
-    /// The network came back or changed: what the courier holds goes now (docs/icloud-sync.md, "Courier (CloudKit)").
+    /// The network came back or changed: what the courier holds goes now (docs/icloud-sync.md, "Courier (CloudKit)"),
+    /// unless the library can't be read (its copies can't either).
     func networkChanged() {
-        guard isConnected else { return }
+        guard isConnected, libraryReadable() else { return }
         controller?.flushCourier()
+    }
+
+    /// The iPhone is locking while "Protect while iPhone is locked" keeps the library: a pass under way stops cleanly (as
+    /// at the end of background time: what it pulled and didn't acknowledge is offered again) and runs again once it's
+    /// unlocked.
+    func lockedOut() {
+        guard let running else { return }
+        waitingForUnlock = waitingForUnlock ?? .foreground
+        running.cancel()
+    }
+
+    /// The library can be read again: a pass asked for meanwhile runs now, under background time, and the courier sends.
+    func unlocked() {
+        guard libraryReadable(), let trigger = waitingForUnlock else { return }
+        waitingForUnlock = nil
+        synchronizeFinishing(trigger)
     }
 
     /// Lists the library's devices (presence) for "Waiting for your Mac · last seen 2 h ago".
@@ -320,7 +348,7 @@ final class PhoneSync {
 
     /// The person left a conversation: edits held back for a burst go now.
     func publishHeldEdits(of id: UUID) {
-        guard isConnected, let controller else { return }
+        guard isConnected, libraryReadable(), let controller else { return }
         Task { await controller.publishHeldEdits(of: id) }
     }
 
@@ -334,7 +362,7 @@ final class PhoneSync {
         let pass = Task {
             if publishingHeldEdits { await self.controller?.publishHeldEdits(requestingPass: false) }
             await self.synchronize(trigger)
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, self.libraryReadable() else { return }
             await self.controller?.finishCourierSends()
         }
         assertion = application.beginBackgroundTask(withName: "Daybook sync") {

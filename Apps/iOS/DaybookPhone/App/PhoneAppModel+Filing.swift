@@ -405,6 +405,8 @@ extension PhoneAppModel {
             recoveryWaitsForUnlock = false
             Task { await self.recoverLeftovers() }
         }
+        // Sync, processing, and the rest that wait for the library ("Protect while iPhone is locked").
+        libraryUnlocked()
     }
 
     /// Looks again in a while, and so on while something waits.
