@@ -15,8 +15,10 @@
 #   code=true|false      any of them
 # and, on standard error, the first file that selected each.
 #
-# Each changed file selects the jobs that build it; a file not placed here selects them all:
-#   Apps/iOS/                  iphone
+# Each changed file selects the jobs that build or read it; a file not placed here selects them all. A moved file counts
+# at both its old and its new path.
+#   Apps/iOS/                  iphone (its Swift sources: package too, whose tests read them: SharedNameTests,
+#                              ShortcutPhrasesTests, MotionAuditTests)
 #   Apps/macOS/, Resources/    mac (Resources/Daybook.icon is the iPhone app's icon too: iphone and mac)
 #   Sources/Daybook/           package and mac (the Mac app's own sources, which the package's Daybook target builds)
 #   Tests/DaybookTests/        package (the Mac app's tests run in the package job)
@@ -40,7 +42,7 @@ if [[ "$event" != pull_request ]]; then
     everything
     exit 0
 fi
-files="$(git diff --name-only "$base" HEAD)" || { echo "changes.sh: can't compare with $base; checking everything" >&2; everything; exit 0; }
+files="$(git diff --no-renames --name-only "$base" HEAD)" || { echo "changes.sh: can't compare with $base; checking everything" >&2; everything; exit 0; }
 if [[ -z "$files" ]]; then
     everything
     exit 0
@@ -60,6 +62,7 @@ while IFS= read -r file; do
         docs/*|*.md) continue ;;
     esac
     case "$file" in
+        Apps/iOS/*.swift) needs iphone package ;;
         Apps/iOS/*) needs iphone ;;
         Resources/Daybook.icon/*) needs iphone mac ;;
         Apps/macOS/*|Resources/*) needs mac ;;

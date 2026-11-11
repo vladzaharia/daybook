@@ -3,13 +3,15 @@
 # whatever the others did. CI's package job (docs/release.md, CI): the runner has three cores, and the tests mostly
 # keep one busy.
 #
-#   scripts/ci/test-lanes.sh --products DIR --logs DIR [--skip BUNDLE PATTERN]... LANE...
+#   scripts/ci/test-lanes.sh --expect "TARGET..." --products DIR --logs DIR [--skip BUNDLE PATTERN]... LANE...
 #
 # LANE        test bundles (test target names), separated by spaces: "DaybookCoreTests DaybookKitTests"
-# --products  where the built .xctest bundles are (`swift build --show-bin-path`). Every bundle there must be in a lane,
-#             so a new test target can't go unrun.
+# --expect    the package's test targets (`swift package dump-package`): each must be in exactly one lane, and a lane
+#             holds nothing else, so a new test target can't go unrun and a removed one's bundle, which a build leaves
+#             behind in the products folder, isn't run
+# --products  where the built .xctest bundles are (`swift build --show-bin-path`)
 # --logs      a folder for each bundle's log (BUNDLE.log)
-# --skip      leaves out BUNDLE's tests that match PATTERN (`swift test --skip`). Such a bundle runs through
+# --skip      leaves out BUNDLE's tests that match PATTERN (`swift test --skip`); BUNDLE must be in a lane. It runs through
 #             `swift test --skip-build --ignore-lock`; every other one straight from its bundle with xctest, which spares
 #             SwiftPM's start, about 15 s a bundle on a runner.
 #
@@ -19,6 +21,7 @@ set -euo pipefail
 
 usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
 
+expect=""
 products=""
 logs=""
 skip_bundles=()
@@ -26,6 +29,7 @@ skip_patterns=()
 lanes=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --expect) expect="${2-}"; shift ;;
         --products) products="${2-}"; shift ;;
         --logs) logs="${2-}"; shift ;;
         --skip) skip_bundles+=("${2-}"); skip_patterns+=("${3-}"); shift 2 ;;
@@ -36,6 +40,7 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 [[ -n "$products" && -n "$logs" ]] || { echo "test-lanes.sh: --products and --logs are required" >&2; exit 2; }
+[[ -n "${expect// /}" ]] || { echo "test-lanes.sh: --expect needs the package's test targets" >&2; exit 2; }
 (( ${#lanes[@]} )) || { echo "test-lanes.sh: no lanes" >&2; exit 2; }
 [[ -d "$products" ]] || { echo "test-lanes.sh: no products folder at $products" >&2; exit 2; }
 
@@ -44,22 +49,30 @@ for lane in "${lanes[@]}"; do
     for bundle in $lane; do
         [[ "$bundle" =~ ^[A-Za-z0-9_]+$ ]] || { echo "test-lanes.sh: not a test bundle name: $bundle" >&2; exit 2; }
         [[ "$assigned" != *" $bundle "* ]] || { echo "test-lanes.sh: $bundle is in two lanes" >&2; exit 2; }
-        [[ -d "$products/$bundle.xctest" ]] || { echo "test-lanes.sh: $bundle wasn't built (no $products/$bundle.xctest)" >&2; exit 2; }
         assigned+="$bundle "
     done
 done
 unassigned=""
-for path in "$products"/*.xctest; do
-    [[ -d "$path" ]] || continue
-    bundle="$(basename "$path" .xctest)"
+for bundle in $expect; do
     [[ "$assigned" == *" $bundle "* ]] || unassigned+=" $bundle"
 done
 if [[ -n "$unassigned" ]]; then
-    echo "::error title=Test bundle in no lane::$unassigned: add each to a lane in .github/workflows/ci.yml"
+    echo "::error title=Test target in no lane::$unassigned: add each to a lane in .github/workflows/ci.yml"
     exit 2
 fi
+for bundle in $assigned; do
+    if [[ " $expect " != *" $bundle "* ]]; then
+        echo "::error title=Not a test target::$bundle is in a lane but the package has no such test target"
+        exit 2
+    fi
+    [[ -d "$products/$bundle.xctest" ]] || { echo "test-lanes.sh: $bundle wasn't built (no $products/$bundle.xctest)" >&2; exit 2; }
+done
+for bundle in ${skip_bundles[@]+"${skip_bundles[@]}"}; do
+    [[ "$assigned" == *" $bundle "* ]] || { echo "test-lanes.sh: --skip names $bundle, which is in no lane" >&2; exit 2; }
+done
 
 mkdir -p "$logs"
+rm -f "$logs"/*.result
 
 # run_bundle BUNDLE: runs it, writing its log, then "STATUS SECONDS" to BUNDLE.result.
 run_bundle() {

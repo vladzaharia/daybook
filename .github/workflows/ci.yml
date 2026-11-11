@@ -159,16 +159,21 @@ jobs:
         run: scripts/ci/own-warnings.sh build/test-results/build.log
       # Every test bundle, in two lanes side by side (scripts/ci/test-lanes.sh): the runner has three cores, and the
       # tests mostly keep one busy. Every bundle runs whatever the others did, a failure names its bundle and tests,
-      # and a test bundle that's in no lane fails the step. Bundles run straight from xctest, sparing SwiftPM's start;
+      # and a test target that's in no lane fails the step. Bundles run straight from xctest, sparing SwiftPM's start;
       # DaybookCoreTests through `swift test`, to skip the timing-budget test, which runs on its own afterwards.
       # DAYBOOK_TEST_TIMEOUT_SCALE doubles every test wait (Tests/DaybookTestSupport): hosted runners are small
       # shared VMs. The timing-budget step keeps its own budget.
+      # The logs print when every lane is done, so a hung test fails the step at its timeout (and the logs upload)
+      # rather than running out the job's.
       - name: Test, in two lanes
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 30
         env:
           DAYBOOK_TEST_TIMEOUT_SCALE: "2"
         run: |
-          scripts/ci/test-lanes.sh --products "$(swift build --show-bin-path)" --logs build/test-results \
+          targets="$(swift package dump-package | jq -r '.targets[] | select(.type == "test") | .name')"
+          scripts/ci/test-lanes.sh --expect "$(paste -sd ' ' - <<< "$targets")" \
+            --products "$(swift build --show-bin-path)" --logs build/test-results \
             --skip DaybookCoreTests 'AudioAlignerTests/testThirtyMinutePairAlignsWithinBudget$' \
             'DaybookTests DaybookIntelligenceTests DaybookLinkTests DaybookUITests DaybookDesignTests DaybookCaptionsTests' \
             'DaybookCoreTests DaybookKitTests DaybookDevicesTests DaybookLiveTests'
@@ -179,6 +184,9 @@ jobs:
         run: |
           scripts/ci/retry.sh 2 xcrun xctest -XCTest 'DaybookCoreTests.AudioAlignerTests/testThirtyMinutePairAlignsWithinBudget' \
             "$(swift build --show-bin-path)/DaybookCoreTests.xctest" 2>&1 | tee build/test-results/timing-budget.log
+          # xctest passes a selector that matches nothing; a renamed test must fail here, not pass unrun.
+          grep -q 'Executed 1 test' build/test-results/timing-budget.log \
+            || { echo "::error title=Timing budget::no test ran: AudioAlignerTests/testThirtyMinutePairAlignsWithinBudget was renamed?"; exit 1; }
       - name: Upload test logs
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

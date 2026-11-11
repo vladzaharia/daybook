@@ -266,7 +266,7 @@ if [[ "$RUN_TESTS" == 1 ]]; then
             echo "--skip-build needs an earlier --build-for-testing (no .xctestrun in $DERIVED/Build/Products)" >&2
             exit 1
         fi
-        TESTS=(-xctestrun "$XCTESTRUN")
+        TESTS=(-xctestrun "$XCTESTRUN" -derivedDataPath "$DERIVED")
     fi
     xcodebuild "${TESTS[@]}" -destination "$DESTINATION" test-without-building ${TEST_ARGS[@]+"${TEST_ARGS[@]}"}
 fi

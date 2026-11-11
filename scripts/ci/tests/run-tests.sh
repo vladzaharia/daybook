@@ -716,8 +716,10 @@ expect_eq "so is Markdown among the sources" "$all" "$(changes --event pull_requ
 printf 'let a = 2\n' > "$changes_repo/Sources/App/A.swift"
 commit_changes code
 expect_eq "and a shared library's code is" "$all" "$(changes --event pull_request)"
-change_files Apps/iOS/DaybookPhone/Shell.swift Apps/iOS/README.md docs/iphone.md
-expect_eq "the iPhone app alone builds only the iPhone" "package=false iphone=true mac=false code=true" "$(changes --event pull_request)"
+change_files Apps/iOS/project.yml Apps/iOS/DaybookPhone/Info.plist Apps/iOS/README.md docs/iphone.md
+expect_eq "the iPhone app's project and resources build only the iPhone" "package=false iphone=true mac=false code=true" "$(changes --event pull_request)"
+change_files Apps/iOS/DaybookPhone/Shell.swift
+expect_eq "its Swift sources the package's tests too (they read them)" "package=true iphone=true mac=false code=true" "$(changes --event pull_request)"
 change_files Apps/macOS/project.yml Resources/Info.plist
 expect_eq "the Mac project and resources build only the Mac app" "package=false iphone=false mac=true code=true" "$(changes --event pull_request)"
 change_files Resources/Daybook.icon/icon.json
@@ -734,6 +736,10 @@ change_files Tests/DaybookTestSupport/Wait.swift
 expect_eq "the shared test support builds everything" "$all" "$(changes --event pull_request)"
 change_files scripts/build-ios.sh
 expect_eq "so does anything else" "$all" "$(changes --event pull_request)"
+change_files Sources/DaybookKit/Moved.swift
+git -C "$changes_repo" mv Sources/DaybookKit/Moved.swift Sources/Daybook/Moved.swift
+commit_changes "move into the Mac app"
+expect_eq "a file moved out of a shared library counts where it was too" "$all" "$(changes --event pull_request)"
 expect_eq "a base it can't compare with checks everything" "$all" "$(changes --event pull_request --base no-such-ref)"
 expect_fail "--event is required" "$ci/changes.sh"
 
@@ -748,7 +754,8 @@ lanes() {
     : > "$work/stub.log"
     rm -rf "$work/lanes/logs"
     env PATH="$stubs:$PATH" STUB_LOG="$work/stub.log" GITHUB_STEP_SUMMARY="$work/lanes/summary.md" ${vars[@]+"${vars[@]}"} \
-        "$ci/test-lanes.sh" --products "$lanes_products" --logs "$work/lanes/logs" "$@" > "$work/lanes/out" 2>&1
+        "$ci/test-lanes.sh" --expect "AppTests CoreTests KitTests" --products "$lanes_products" \
+            --logs "$work/lanes/logs" "$@" > "$work/lanes/out" 2>&1
 }
 : > "$work/lanes/summary.md"
 expect_ok "every bundle passes in two lanes" lanes -- --skip CoreTests 'Aligner/testBudget$' 'AppTests' 'CoreTests KitTests'
@@ -766,9 +773,16 @@ expect_fail "and one that crashes" lanes STUB_XCTEST_CRASH=KitTests -- 'AppTests
 expect_ok "(said so)" grep -q '^::error title=Tests failed::KitTests: exit 134, no failed test named' "$work/lanes/out"
 lanes STUB_XCTEST_FAIL=CoreTests -- 'AppTests' 'CoreTests KitTests' || true
 expect_ok "the next bundle in a lane runs after one fails" grep -q 'xctest .*/KitTests.xctest' "$work/stub.log"
-expect_fail "a built bundle in no lane fails before anything runs" lanes -- 'AppTests' 'CoreTests'
-expect_ok "naming it" grep -q '^::error title=Test bundle in no lane:: KitTests' "$work/lanes/out"
+expect_fail "a test target in no lane fails before anything runs" lanes -- 'AppTests' 'CoreTests'
+expect_ok "naming it" grep -q '^::error title=Test target in no lane:: KitTests' "$work/lanes/out"
 expect_eq "(nothing ran)" "" "$(cat "$work/stub.log")"
+mkdir -p "$lanes_products/RemovedTests.xctest"
+expect_ok "a removed target's bundle left in the products is no test target to run" lanes -- 'AppTests' 'CoreTests KitTests'
+expect_fail "and naming it in a lane fails" lanes -- 'AppTests RemovedTests' 'CoreTests KitTests'
+expect_ok "(saying so)" grep -q '^::error title=Not a test target::RemovedTests' "$work/lanes/out"
+expect_fail "so does a --skip for a bundle in no lane" lanes -- --skip CoreTest 'x$' 'AppTests' 'CoreTests KitTests'
+expect_fail "and no test targets to expect" env PATH="$stubs:$PATH" STUB_LOG="$work/stub.log" "$ci/test-lanes.sh" --expect ' ' \
+    --products "$lanes_products" --logs "$work/lanes/logs" 'AppTests' 'CoreTests KitTests'
 expect_fail "a bundle that wasn't built fails" lanes -- 'AppTests' 'CoreTests KitTests MissingTests'
 expect_fail "so does one in two lanes" lanes -- 'AppTests KitTests' 'CoreTests KitTests'
 expect_fail "and no lanes" lanes --
@@ -1075,7 +1089,7 @@ if macos; then
     expect_ok "--test --skip-build tests what was built" build_ios -- --test --skip-build --simulator "iPhone 18 Pro" \
         --test-arg -only-testing:DaybookPhoneTests/ShellTests
     expect_eq "from the newest build's test run, without generating, resolving, building, or opening the project" \
-        "xcodebuild -xctestrun $ios_products/DaybookPhone_iphonesimulator27.1-arm64.xctestrun -destination platform=iOS Simulator,name=iPhone 18 Pro test-without-building -only-testing:DaybookPhoneTests/ShellTests" \
+        "xcodebuild -xctestrun $ios_products/DaybookPhone_iphonesimulator27.1-arm64.xctestrun -derivedDataPath $ios_repo/Apps/iOS/build/DerivedData -destination platform=iOS Simulator,name=iPhone 18 Pro test-without-building -only-testing:DaybookPhoneTests/ShellTests" \
         "$(grep -E '^(xcodebuild|xcodegen)' "$work/stub.log")"
     expect_ok "a plain build is the same simulator build" build_ios -- --simulator unused
     expect_eq "(no tests)" "$sim_build build" "$(grep '^xcodebuild .*-destination' "$work/stub.log" | sed -E 's/.*(-destination .*)/\1/')"
