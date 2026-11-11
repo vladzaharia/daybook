@@ -242,6 +242,10 @@ jobs:
       VERSION: ${{ needs.prepare.outputs.marketing_version }}
       RUN_CREATED_AT: ${{ needs.prepare.outputs.run_created_at }}
     steps:
+      # Spotlight would index the checkout and the restored build cache as they land, beside the build: 20-45% of
+      # a core on the three-core runner (docs/release.md, "The simulator").
+      - name: Turn off Spotlight
+        run: sudo mdutil -i off /System/Volumes/Data || true
       - name: Check the configuration
         run: |
           if [[ ! "$DAYBOOK_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]; then
@@ -399,6 +403,10 @@ jobs:
       # build-app.sh reads it (--sandbox): the sandboxed entitlements and the container migration manifest.
       DAYBOOK_SANDBOX: ${{ needs.prepare.outputs.sandbox == 'true' && '1' || '0' }}
     steps:
+      # Spotlight would index the checkout and the restored build cache as they land, beside the build: 20-45% of
+      # a core on the three-core runner (docs/release.md, "The simulator").
+      - name: Turn off Spotlight
+        run: sudo mdutil -i off /System/Volumes/Data || true
       - name: Check the configuration
         run: |
           if [[ ! "$DAYBOOK_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]; then
@@ -573,6 +581,10 @@ jobs:
       VERSION: ${{ needs.prepare.outputs.marketing_version }}
       RUN_CREATED_AT: ${{ needs.prepare.outputs.run_created_at }}
     steps:
+      # Spotlight would index the checkout and the restored build cache as they land, beside the build: 20-45% of
+      # a core on the three-core runner (docs/release.md, "The simulator").
+      - name: Turn off Spotlight
+        run: sudo mdutil -i off /System/Volumes/Data || true
       - name: Check the configuration
         run: |
           if [[ ! "$DAYBOOK_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]; then

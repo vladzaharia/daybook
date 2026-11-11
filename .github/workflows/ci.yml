@@ -112,6 +112,10 @@ jobs:
     outputs:
       cache_key: ${{ steps.key.outputs.build }}
     steps:
+      # Spotlight would index the checkout and the restored build cache as they land, beside the build: 20-45% of
+      # a core on the three-core runner (docs/release.md, "The simulator").
+      - name: Turn off Spotlight
+        run: sudo mdutil -i off /System/Volumes/Data || true
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -209,6 +213,10 @@ jobs:
     outputs:
       cache_key: ${{ steps.key.outputs.build }}
     steps:
+      # Spotlight would index the checkout and the restored build cache as they land, beside the build: 20-45% of
+      # a core on the three-core runner (docs/release.md, "The simulator").
+      - name: Turn off Spotlight
+        run: sudo mdutil -i off /System/Volumes/Data || true
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -317,6 +325,10 @@ jobs:
     outputs:
       cache_key: ${{ steps.key.outputs.build }}
     steps:
+      # Spotlight would index the checkout and the restored build cache as they land, beside the build: 20-45% of
+      # a core on the three-core runner (docs/release.md, "The simulator").
+      - name: Turn off Spotlight
+        run: sudo mdutil -i off /System/Volumes/Data || true
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -384,6 +396,10 @@ jobs:
     env:
       CONFIGURATION: ${{ inputs.mac_configuration || 'Debug' }}
     steps:
+      # Spotlight would index the checkout and the restored build cache as they land, beside the build: 20-45% of
+      # a core on the three-core runner (docs/release.md, "The simulator").
+      - name: Turn off Spotlight
+        run: sudo mdutil -i off /System/Volumes/Data || true
       - name: Check the configuration
         run: |
           case "$CONFIGURATION" in
@@ -466,6 +482,10 @@ jobs:
     outputs:
       cache_key: ${{ steps.key.outputs.build }}
     steps:
+      # Spotlight would index the checkout and the restored build cache as they land, beside the build: 20-45% of
+      # a core on the three-core runner (docs/release.md, "The simulator").
+      - name: Turn off Spotlight
+        run: sudo mdutil -i off /System/Volumes/Data || true
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
