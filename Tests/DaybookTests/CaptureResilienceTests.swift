@@ -441,8 +441,7 @@ final class MicrophoneRestartTests: XCTestCase {
         engine.failures = 2
         try await change(engine, until: log, count: 1)
         XCTAssertEqual(pauses, [0.25, 0.5])
-        let usb = FakeMicrophoneDevices.usb.id
-        XCTAssertEqual(engine.starts, [usb, usb, usb, usb])
+        XCTAssertEqual(engine.starts, [nil, nil, nil, nil] as [String?], "the default input is the engine's own, never set")
         XCTAssertEqual(log.changes.count, 1)
         XCTAssertTrue(log.failures.isEmpty)
     }
@@ -455,8 +454,7 @@ final class MicrophoneRestartTests: XCTestCase {
         engine.failures = 100
         try await change(engine, until: log, count: 1)
         XCTAssertEqual(pauses, [0.25, 0.5, 1, 2])
-        let usb = FakeMicrophoneDevices.usb.id
-        XCTAssertEqual(engine.starts, [usb, usb, usb, usb, usb, usb, FakeMicrophoneDevices.builtIn.id])
+        XCTAssertEqual(engine.starts, [nil, nil, nil, nil, nil, nil, FakeMicrophoneDevices.builtIn.id])
         XCTAssertTrue(log.changes.first?.contains("built-in microphone") == true, "\(log.changes)")
 
         engine.builtInWorks = false
@@ -504,7 +502,27 @@ final class MicrophoneRestartTests: XCTestCase {
         devices.runningElsewhere = [FakeMicrophoneDevices.airPods.id]
         let microphone = source(engine, devices: devices)
         try await microphone.start(onBuffer: { _, _ in }, onEvent: { _ in })
-        XCTAssertEqual(engine.starts, [FakeMicrophoneDevices.airPods.id])
+        XCTAssertEqual(microphone.currentInput, FakeMicrophoneDevices.airPods)
+        XCTAssertEqual(engine.starts, [nil], "the default input, so nothing is set on the engine")
+    }
+
+    /// The system's default input is recorded as the engine's own input, with no device set on it: setting one, even
+    /// the default's, makes the engine reconfigure after it starts (macOS 27.0). An input that isn't the default is set.
+    func testBehaviorTheDefaultInputIsNeverSetOnTheEngineAndAnotherIs() async throws {
+        let engine = FakeMicrophoneEngine(), devices = FakeMicrophoneDevices()
+        let microphone = source(engine, devices: devices)
+        try await microphone.start(onBuffer: { _, _ in }, onEvent: { _ in })
+        XCTAssertEqual(engine.starts, [nil])
+        XCTAssertEqual(microphone.currentInput, FakeMicrophoneDevices.usb, "Automatic on the USB default")
+        await microphone.stop()
+
+        let chosen = FakeMicrophoneEngine()
+        devices.preference = .device(FakeMicrophoneDevices.builtIn)
+        let other = source(chosen, devices: devices)
+        try await other.start(onBuffer: { _, _ in }, onEvent: { _ in })
+        XCTAssertEqual(chosen.starts, [FakeMicrophoneDevices.builtIn.id])
+        XCTAssertEqual(other.currentInput, FakeMicrophoneDevices.builtIn)
+        await other.stop()
     }
 
     /// A chosen USB microphone is set before start; when it dies mid-recording (unplugged), the source moves to what
@@ -521,7 +539,7 @@ final class MicrophoneRestartTests: XCTestCase {
         engine.dead = [FakeMicrophoneDevices.usb.id]
         devices.change()
         try await waitUntil("the move") { log.events.count >= 1 }
-        XCTAssertEqual(engine.starts, [FakeMicrophoneDevices.usb.id, FakeMicrophoneDevices.builtIn.id])
+        XCTAssertEqual(engine.starts, [FakeMicrophoneDevices.usb.id, nil], "the built-in microphone is the default, so it isn't set")
         XCTAssertEqual(log.changes, ["The microphone changed to MacBook Pro Microphone (now 48000 Hz, 1 ch); recording continued."])
         XCTAssertEqual(microphone.currentInput, FakeMicrophoneDevices.builtIn)
         XCTAssertEqual(devices.followed, FakeMicrophoneDevices.builtIn.id)
@@ -539,14 +557,16 @@ final class MicrophoneRestartTests: XCTestCase {
     /// it lands on what's there rather than trying the dead one until it falls back.
     func testBehaviorARetryReadsTheInputsAgain() async throws {
         let engine = FakeMicrophoneEngine(), devices = FakeMicrophoneDevices(), log = EventLog()
+        devices.systemDefault = FakeMicrophoneDevices.builtIn.id
+        devices.preference = .device(FakeMicrophoneDevices.usb)
         let microphone = source(engine, devices: devices)
         try await microphone.start(onBuffer: { _, _ in }, onEvent: { log.add($0) })
         engine.dead = [FakeMicrophoneDevices.usb.id]
         // Gone from the list by the first retry.
         let gone = devices
-        pausesHook = { gone.devices = [FakeMicrophoneDevices.builtIn]; gone.systemDefault = FakeMicrophoneDevices.builtIn.id }
+        pausesHook = { gone.devices = [FakeMicrophoneDevices.builtIn] }
         try await change(engine, until: log, count: 1)
-        XCTAssertEqual(engine.starts, [FakeMicrophoneDevices.usb.id, FakeMicrophoneDevices.usb.id, FakeMicrophoneDevices.builtIn.id])
+        XCTAssertEqual(engine.starts, [FakeMicrophoneDevices.usb.id, FakeMicrophoneDevices.usb.id, nil])
         XCTAssertTrue(log.failures.isEmpty)
         XCTAssertEqual(microphone.currentInput, FakeMicrophoneDevices.builtIn)
     }
@@ -560,7 +580,7 @@ final class MicrophoneRestartTests: XCTestCase {
         devices.devices.append(FakeMicrophoneDevices.airPods)
         devices.change()
         await yieldToMain()
-        XCTAssertEqual(engine.starts, [FakeMicrophoneDevices.usb.id], "AirPods arriving don't move an Automatic recording off the default")
+        XCTAssertEqual(engine.starts, [nil], "AirPods arriving don't move an Automatic recording off the default")
         XCTAssertTrue(log.events.isEmpty)
 
         devices.preference = .device(FakeMicrophoneDevices.airPods)
@@ -574,10 +594,12 @@ final class MicrophoneRestartTests: XCTestCase {
     /// A chosen input that won't start at all records the built-in microphone rather than nothing.
     func testBehaviorAChosenInputThatWontStartRecordsTheBuiltInMicrophone() async throws {
         let engine = FakeMicrophoneEngine(), devices = FakeMicrophoneDevices()
+        devices.systemDefault = FakeMicrophoneDevices.builtIn.id
+        devices.preference = .device(FakeMicrophoneDevices.usb)
         engine.dead = [FakeMicrophoneDevices.usb.id]
         let microphone = source(engine, devices: devices)
         try await microphone.start(onBuffer: { _, _ in }, onEvent: { _ in })
-        XCTAssertEqual(engine.starts, [FakeMicrophoneDevices.usb.id, FakeMicrophoneDevices.builtIn.id])
+        XCTAssertEqual(engine.starts, [FakeMicrophoneDevices.usb.id, nil])
         XCTAssertEqual(microphone.currentInput, FakeMicrophoneDevices.builtIn)
     }
 
