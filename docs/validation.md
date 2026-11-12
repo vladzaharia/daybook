@@ -38,6 +38,27 @@ protocol and rules on the Mac, the iPhone side against a simulated watch, and th
 
 ## After v0.8.0
 
+- **The Mac's microphone records again (2026-11-12).** On v0.9.0 the owner's Mac was "only recording for one
+  second": since v0.8.0 every Mac recording ended after about two seconds. The design pass's microphone choice set
+  the chosen input on the engine's input unit before starting, and on macOS 27.0 AVAudioEngine then reconfigures
+  once after it starts: the tap, created at the node's stale output format (44.1 kHz for a 48 kHz device), was never
+  created ("Failed to create tap, config change pending"), so no audio arrived, and the engine posted a configuration
+  change while it kept running, which `MicrophoneSource` followed with a restart, which set the device and posted
+  again, ten times in two seconds, until the restart rate limit ended the recording ("The microphone kept
+  changing"). Found in the Mac's own log (`log show --predicate 'process == "Daybook"'`) and reproduced outside the
+  app with a standalone engine: the device set, 0 buffers in 3 s and one change; not set, 2.9 s and none. Now the
+  tap takes the input node's input format; the engine forwards a configuration change only once it has stopped for
+  it (what a device or format that really changed does); and the system's default input is recorded as the engine's
+  own input with no device set, so the common case never reconfigures, while an input that isn't the default (the
+  built-in microphone beside idle AirPods, a chosen one) is still set and the source rides out the one
+  reconfiguration. docs/capture.md "Choosing the microphone" says so. Checked: `MicrophoneRestartTests` (the default
+  input is never set, another is; the restart, fallback, and choice tests updated); `MicrophoneHardwareTests`
+  (owner-run with `DAYBOOK_HARDWARE_TESTS=1`; opens the microphone, keeps no audio): two seconds through the engine
+  on the default input with no change posted, 2.5 s through the source with the built-in microphone set explicitly,
+  five seconds through `RecordingController` with no warning, note, or stop, three runs each, all passing, where the
+  unfixed engine delivered 0.0 s and one change; the capture suites; the whole Mac package, 2,605 tests across ten
+  bundles, 0 failures. One Mac (built-in microphone, macOS 27.0); a chosen USB or Bluetooth input and AirPods
+  connecting mid-recording still need the owner's hardware check.
 - **The standing status sheet is back on the iPhone (the owner's call, 2026-11-11).** On the v0.8.0 TestFlight build
   the library's foot "is no longer a sheet, it's once again a weird tight background. It doesn't slide up or down, it
   just stays minimized. The search button popped off it when switching between landscape and portrait." W2-K's bottom
