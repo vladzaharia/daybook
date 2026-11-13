@@ -50,7 +50,7 @@ Hardening:
 - **SDKs and simulators:** the iOS 27.1 SDK is there; it has the iPhone Duo hinge APIs. The image preinstalls only the iOS 27.0 simulator runtime: iPhone 17, 17e, 18 Pro, 18 Pro Max, Air, and iPads, with **no iPhone Duo**. Apple's iOS 27.1 simulator runtime supports only the iPhone Duo device type ([#15000](https://github.com/actions/runner-images/issues/15000)). So CI tests on **iPhone 18 Pro with iOS 27.0**, built with the 27.1 SDK. The `#available(iOS 27.1, *)` hinge code compiles there but doesn't run. `scripts/ci/pick-simulator.sh` prefers an iPhone Duo, so CI moves to one with no change once an image ships it. Exercising the Duo on CI today would mean downloading the runtime in the job (`xcodebuild -downloadPlatform iOS`, several GB). The Duo checks stay local, as in `docs/iphone.md`. Daybook for Apple Watch, inside the iPhone app, builds with the watchOS SDK that comes with Xcode 27.1, which is 27.0 (`watchos27.0` for archives, `watchsimulator27.0` for the simulator build; there is no watchOS 27.1 SDK), which those jobs require as well; building needs no watchOS simulator runtime, and CI runs nothing on one ([docs/watch.md](watch.md)).
 - **Metal toolchain:** the image doesn't include it, so `select-xcode.sh --metal` runs `xcodebuild -downloadComponent MetalToolchain` (with retries) in the jobs that build MLX. Apple serves whatever toolchain matches the Xcode, and the download can't be pinned, so the job records its build (`xcodebuild -showComponent MetalToolchain`, e.g. 27A266a) and `metal --version` in the run summary.
 - **Packages:** every build uses only the versions `Package.resolved` pins. `swift build` runs with `--force-resolved-versions`, and CI then checks `git diff --exit-code -- Package.resolved`. `build-app.sh` and `build-ios.sh` copy the file into the generated project, resolve with `-onlyUsePackageVersionsFromResolvedFile` (as every build, test, and archive does), and fail if Xcode would change it. `build-app.sh --resolve-only` and `build-ios.sh --resolve` only fetch the packages.
-- **XcodeGen:** 2.45.4, the version the projects are developed with, installed by `scripts/ci/install-xcodegen.sh`. It downloads the release ZIP and checks its SHA-256.
+- **XcodeGen:** 2.45.4, the version the projects are developed with, installed by `scripts/ci/install-xcodegen.sh`. It downloads the release ZIP and checks its SHA-256. GitHub's release downloads can answer 504 for a while, so the download retries for about a minute, 10 s apart. Its earlier three retries, 1 to 4 s apart (curl's backoff), once ran out inside one such spell.
 
 ## CI details
 
@@ -89,6 +89,21 @@ The main runs skip just these tests (`--skip` and `-skip-testing`), and the iPho
 - `iphone` runs every iPhone test three times in a row (`-test-iterations 3`, no retry), the encoder tests included. A test that fails any iteration fails the job, and `xcresult-retries.sh` names each one that passed some iterations and failed others.
 
 A red night isn't a broken build. It names the tests whose timing assumptions don't hold under load; compare with `docs/validation.md`, and fix the test or its budget before an ordinary CI run starts failing on it.
+
+A test that waits the whole stretched timeout for something that normally takes a second is stuck, not slow. Look for a deadline inside the code under test that the test shortened and the scale doesn't reach.
+
+`SoundcoreSharedRecordingTests` failed most nights this way, a different test each night. Its rig gave the simulated recorder a 600 ms stall and a 400 ms live tail. On a starved machine, both ran out, and the code then did what it should:
+
+- The stall ran out before a transfer's audio came. The import gave up after its retry, and the test waited for a file that never came.
+- The tail ran out with live audio still on its way, so the saved part came up short.
+
+The rig's deadlines (request, stall, scan, connect, reconnect, record confirmation, live tail) now stretch by the same scale. The ones no test there runs out on purpose are seconds long before the stretch: 5 s for the stall, request, record confirmation, scan, connect, and reconnect, and 10 s for the live tail. Stretching alone wasn't enough. Under heavier load, the 600 ms stall stretched to 3 s still ran out, and so did a 2 s tail stretched to 10 s.
+
+`SoundcoreSimulatorTests` had one of these too. In its test of captions across a recorder's bursts and gaps, the recorder goes quiet for 250 ms on purpose, and a starved runner turned that into the harness's 400 ms stall. The stream ended, and the audio after the gap never came. That test now gives the stall 10 s. Some of the class's other tests run the harness's short deadlines out on purpose (a stalled transfer, a reconnect that falls back to a scan), so the harness keeps them.
+
+Every wait in the rig says what it last saw: the link, the recorder and the commands it got, the live save, and the imports. Two of its waits also timed out on CI without that: the one for a Start to be confirmed, and the one for the button's second press. Their cause isn't known yet; if they fail again, the failure shows their state.
+
+For now, `package` skips the five `Soundcore…Tests` classes in `DaybookDevicesTests` (`--skip '^DaybookDevicesTests\.Soundcore'`). CI still runs them on every push. To bring them back, remove the `--skip` from `starved.yml`.
 
 **Artifacts.** On failure, CI uploads the swift test logs, the iPhone `.xcresult` bundles and Xcode logs, or the Mac build logs. They're kept for 14 days.
 
