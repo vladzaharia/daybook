@@ -21,14 +21,18 @@
 #   STUB_IMPORT_FAILS=1        `security import` fails the way security -i reports it
 #   STUB_ENTITLEMENTS=FILE     `codesign -d --entitlements` prints FILE (default: just the iCloud container)
 #   STUB_SIMULATORS=FILE       `xcrun simctl list -j devices available` prints FILE (default: no devices)
+#   STUB_XCTEST_FAIL="A B"     `xcrun xctest .../A.xctest` (and `swift test --filter '^A\.'`) fails one named test
+#   STUB_XCTEST_CRASH="A"      `xcrun xctest .../A.xctest` exits 134 without naming a test
+#   STUB_XCTEST_FLAKY="A"      `xcrun xctest .../A.xctest` fails its first run (as STUB_XCTEST_FAIL), then passes
 # `security cms -D -i FILE` prints FILE as it is: the tests' profiles are their plists, unsigned.
 # `security -i` reads commands from standard input: each line goes to $STUB_LOG as "security-stdin
 # <line>", and its arguments, split as security splits them, to $STUB_LOG.args as a JSON array.
 set -euo pipefail
 tool="$(basename "$0")"
-printf '%s' "$tool" >> "${STUB_LOG:?}"
-printf ' %s' "$@" >> "$STUB_LOG"
-printf '\n' >> "$STUB_LOG"
+# One write per call, so calls made side by side (test-lanes.sh) don't interleave.
+line="$tool"
+for arg in "$@"; do line+=" $arg"; done
+printf '%s\n' "$line" >> "${STUB_LOG:?}"
 
 # value_of FLAG ARGS...: the argument after FLAG.
 value_of() {
@@ -84,9 +88,33 @@ case "$tool" in
         dir="$(value_of --project "$@")"
         mkdir -p "$dir/DaybookMac.xcodeproj" "$dir/Daybook.xcodeproj"
         ;;
+    swift)
+        # `swift test --filter '^A\.'` fails like xctest below for a bundle in STUB_XCTEST_FAIL.
+        filter="$(value_of --filter "$@")"
+        for bundle in ${STUB_XCTEST_FAIL:-}; do
+            if [[ "$filter" == "^$bundle\\." ]]; then
+                echo "Test Case '-[$bundle.StubTests testFails]' failed (0.010 seconds)."
+                exit 1
+            fi
+        done
+        ;;
     xcrun)
         case "${1-}" in
             metal) echo "Apple metal version 32023.921" ;;
+            xctest)
+                bundle="$(basename "${@: -1}" .xctest)"
+                if [[ " ${STUB_XCTEST_CRASH:-} " == *" $bundle "* ]]; then exit 134; fi
+                flaky=0
+                if [[ " ${STUB_XCTEST_FLAKY:-} " == *" $bundle "* && ! -e "$STUB_LOG.ran-$bundle" ]]; then
+                    : > "$STUB_LOG.ran-$bundle"
+                    flaky=1
+                fi
+                if [[ " ${STUB_XCTEST_FAIL:-} " == *" $bundle "* || "$flaky" == 1 ]]; then
+                    echo "Test Case '-[$bundle.StubTests testFails]' failed (0.010 seconds)."
+                    exit 1
+                fi
+                echo "Test Case '-[$bundle.StubTests testPasses]' passed (0.010 seconds)."
+                ;;
             simctl)
                 if [[ -n "${STUB_SIMULATORS:-}" ]]; then cat "$STUB_SIMULATORS"; else echo '{"devices": {}}'; fi
                 ;;

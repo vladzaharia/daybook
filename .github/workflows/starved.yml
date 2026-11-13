@@ -53,7 +53,8 @@ jobs:
       # Built at normal priority: only the tests run starved.
       - name: Build the package and its tests
         run: |
-          rm -rf .build/out/Intermediates.noindex/XCBuildData
+          # As in CI: plan again for this runner's Metal path, keeping build.db (ci.yml's package job).
+          rm -rf .build/out/Intermediates.noindex/XCBuildData/*.xcbuilddata
           mkdir -p build/test-results
           swift build --build-tests --force-resolved-versions 2>&1 | tee build/test-results/build.log
           git diff --exit-code -- Package.resolved
@@ -72,8 +73,8 @@ jobs:
           trap 'kill "${pids[@]}" 2>/dev/null || true' EXIT
           echo "${#pids[@]} busy loops at background priority; load average $(sysctl -n vm.loadavg)"
           status=0
-          for bundle in DaybookCoreTests DaybookDevicesTests DaybookKitTests DaybookLinkTests \
-                        DaybookIntelligenceTests DaybookCaptionsTests DaybookDesignTests DaybookUITests \
+          for bundle in DaybookCoreTests DaybookDevicesTests DaybookKitTests DaybookLinkTests DaybookWatchLinkTests \
+                        DaybookIntelligenceTests DaybookCaptionsTests DaybookLiveTests DaybookDesignTests DaybookUITests \
                         DaybookTests; do
             echo "::group::$bundle"
             if ! taskpolicy -c background swift test --skip-build --filter "^$bundle\\." 2>&1 \
@@ -128,7 +129,16 @@ jobs:
           udid="$(scripts/ci/pick-simulator.sh 2> "$RUNNER_TEMP/simulator.txt")"
           cat "$RUNNER_TEMP/simulator.txt"
           echo "udid=$udid" >> "$GITHUB_OUTPUT"
-          xcrun simctl bootstatus "$udid" -b
+          # Booting while the app builds, as in CI: its first boot's work mustn't run beside the tests (ci.yml).
+          xcrun simctl boot "$udid" || true
+      - name: Build for testing
+        run: scripts/build-ios.sh --build-for-testing
+      - name: Wait for the simulator
+        env:
+          UDID: ${{ steps.simulator.outputs.udid }}
+        run: |
+          xcrun simctl bootstatus "$UDID" -b > "$RUNNER_TEMP/bootstatus.txt" 2>&1 || { cat "$RUNNER_TEMP/bootstatus.txt"; exit 1; }
+          tail -1 "$RUNNER_TEMP/bootstatus.txt"
       # Every test, the timing ones included, three times in a row: a test that fails any iteration
       # fails the job, and xcresult-retries.sh names each one that passed some iterations and not others.
       # Every test wait five times as long; xcodebuild passes TEST_RUNNER_ variables to the runner.
@@ -139,7 +149,7 @@ jobs:
         run: |
           mkdir -p build/test-results
           status=0
-          scripts/build-ios.sh --test --simulator "$UDID" \
+          scripts/build-ios.sh --test --skip-build --simulator "$UDID" \
             --test-arg -parallel-testing-enabled --test-arg NO \
             --test-arg -test-iterations --test-arg 3 \
             --test-arg -resultBundlePath --test-arg build/test-results/Iterations.xcresult || status=$?
