@@ -317,6 +317,21 @@ final class SummaryRepairTests: XCTestCase {
         XCTAssertEqual(gemma.words(parts: 40, reading: 12_000), 400)
     }
 
+    func testMemoryThatHoldsLessThanTheSmallBudgetsNeverFailsAShortSummary() async throws {
+        let short = transcript(20)
+        // Weights past the working set (0), or Gemma 4 E4B on 8 GB at the older working-set ratio (437 tokens).
+        for memory in [0, 437, MeetingSynthesis.memoryFloor - 1] {
+            let model = BriefModel(context: 131_072, memory: memory, limits: try measured())
+            XCTAssertEqual(model.usableWindow, 131_072, "\(memory): the model's own window, paging as before")
+            XCTAssertEqual(MeetingSynthesis.Budget(model), MeetingSynthesis.Budget(contextLength: 131_072, limits: try measured()))
+            _ = try await MeetingSynthesis.generate(model: model, modelID: "m", transcript: short, notes: "", template: .auto, glossary: [],
+                                                    progress: { _ in })
+            XCTAssertTrue(model.prompts.contains { $0.hasPrefix("Write a concise summary") }, "\(memory): summarized")
+        }
+        // Enough for the small budgets: a cap.
+        XCTAssertEqual(BriefModel(context: 131_072, memory: MeetingSynthesis.memoryFloor).usableWindow, MeetingSynthesis.memoryFloor)
+    }
+
     func testWhatThisDevicesMemoryHoldsForAModel() {
         let gib: Int64 = 1 << 30
         // 48 GiB the GPU may use, 15.6 GB of weights, 20 KB a token (Gemma 4 26B A4B): far more than its window.

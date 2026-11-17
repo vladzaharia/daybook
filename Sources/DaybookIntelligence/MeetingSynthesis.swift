@@ -40,9 +40,9 @@ extension SynthesisModel {
     public var readLimits: SummaryReadLimits { SummaryReadLimits() }
     public var outputTokens: Int? { nil }
 
-    /// The window a pass may fill on this device: the smaller of the model's and what memory holds; nil when the model's
-    /// window isn't known.
-    public var usableWindow: Int? { contextLength.map { window in memoryTokens.map { min(window, max(0, $0)) } ?? window } }
+    /// The window a pass may fill on this device: the smaller of the model's and what memory holds, when memory holds at
+    /// least the small budgets (`MeetingSynthesis.memoryCap`); nil when the model's window isn't known.
+    public var usableWindow: Int? { contextLength.map { window in MeetingSynthesis.memoryCap(memoryTokens).map { min(window, $0) } ?? window } }
     public var checksNotes: Bool { false }
 }
 
@@ -139,7 +139,7 @@ public enum MeetingSynthesis {
         /// catalog's read limits.
         init(contextLength: Int?, memoryTokens: Int? = nil, outputTokens: Int? = nil, limits: SummaryReadLimits = SummaryReadLimits()) {
             guard let contextLength else { self = .standard; return }
-            let window = memoryTokens.map { min(contextLength, max(0, $0)) } ?? contextLength
+            let window = MeetingSynthesis.memoryCap(memoryTokens).map { min(contextLength, $0) } ?? contextLength
             let output = min(outputTokens ?? Self.defaultOutput, Self.defaultOutput)
             let room = SummaryReadLimits.room(window: window, output: output)
             self.init(wholeRead: limits.wholeRead(window: window, output: output), evidence: min(limits.evidence ?? room, room),
@@ -190,6 +190,15 @@ public enum MeetingSynthesis {
         if let available { free = min(free, available) }
         return Int(max(0, free - margin) / Int64(kvBytesPerToken))
     }
+
+    /// The least window memory may hold a model to: one with room for the small budgets (`Budget.standard`, 5,400 tokens of
+    /// evidence in parts of 4,800) beside a reply and the instructions.
+    static let memoryFloor = 16_384
+
+    /// What memory holds for a model as a cap on its window: only when it's at least `memoryFloor`. Less isn't counted, so
+    /// memory never makes a summary fail that ran before memory was: the model reads in its own window and pages, as it
+    /// did, and only a prompt longer than that window is too long.
+    static func memoryCap(_ memoryTokens: Int?) -> Int? { memoryTokens.flatMap { $0 >= memoryFloor ? $0 : nil } }
 
     /// One free-form pass over `text`, or, when its reply ran into its limit (`maxTokens` of the text it
     /// reads), a pass over each half: a reply cut off at its limit silently drops whatever the text says
