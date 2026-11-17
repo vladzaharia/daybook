@@ -22,7 +22,7 @@ public struct CloudOffer: Equatable, Identifiable, Sendable {
     public var model: CloudModel
     public var id: String { model.id }
     public var price: CloudPrice?
-    /// What the model takes of Low, Medium, and High, in that order.
+    /// The efforts the model takes, lowest first.
     public var efforts: [CloudEffort]
     public var maxOutputTokens: Int
     public var structuredOutputs: Bool
@@ -30,16 +30,17 @@ public struct CloudOffer: Equatable, Identifiable, Sendable {
     /// 0–100 on the local summary models' scale; nil when unmeasured (docs/cloud.md, "Summary quality").
     public var summaryQuality: Int?
 
-    public init(model: CloudModel, price: CloudPrice?, efforts: [CloudEffort] = CloudEffort.allCases, maxOutputTokens: Int = 32_000,
+    public init(model: CloudModel, price: CloudPrice?, efforts: [CloudEffort] = CloudEffort.assumed, maxOutputTokens: Int = 32_000,
                 structuredOutputs: Bool = true, refusalFallback: Bool = false, summaryQuality: Int? = nil) {
         self.model = model; self.price = price; self.efforts = efforts; self.maxOutputTokens = maxOutputTokens
         self.structuredOutputs = structuredOutputs; self.refusalFallback = refusalFallback; self.summaryQuality = summaryQuality
     }
 
-    /// `wanted`, or the nearest effort the model takes: medium, then high, then low.
+    /// `wanted`, or the nearest effort the model takes: the highest below it, else the lowest above it. So the default,
+    /// Extra High, is Extra High where the model takes it and its highest level below where it doesn't.
     public func effort(_ wanted: CloudEffort) -> CloudEffort {
         if efforts.contains(wanted) { return wanted }
-        return [.medium, .high, .low].first { efforts.contains($0) } ?? .medium
+        return efforts.filter { $0 < wanted }.max() ?? efforts.filter { $0 > wanted }.min() ?? wanted
     }
 
     /// The estimated cost of summarizing `minutes` of conversation at `effort`, in USD; nil without a price.
@@ -78,12 +79,14 @@ extension CloudCatalog {
                     estimated = price != nil
                 }
                 guard let price else { continue }
-                let efforts = (entry.efforts ?? listing?.efforts).map { offered in CloudEffort.allCases.filter { offered.contains($0.rawValue) } }
+                // What the provider says, else OpenRouter, else the catalog (the providers' model pages), else the levels every model takes.
+                let efforts = (entry.efforts ?? listing?.efforts ?? (known ?? latest?.model)?.efforts)
+                    .map { offered in CloudEffort.allCases.filter { offered.contains($0.rawValue) } }
                 let model = CloudModel(provider: provider, id: entry.id, name: known?.name ?? listing?.name ?? name.displayName,
                                        tier: known?.tier ?? name.family.tier, inputPrice: price.input, outputPrice: price.output,
                                        priceIsEstimated: estimated, contextTokens: entry.maxInputTokens ?? listing?.contextLength,
                                        rank: known?.rank ?? 0)
-                let offer = CloudOffer(model: model, price: price, efforts: efforts.flatMap { $0.isEmpty ? nil : $0 } ?? CloudEffort.allCases,
+                let offer = CloudOffer(model: model, price: price, efforts: efforts.flatMap { $0.isEmpty ? nil : $0 } ?? CloudEffort.assumed,
                                        maxOutputTokens: entry.maxOutputTokens ?? listing?.maxOutputTokens ?? 32_000,
                                        structuredOutputs: listing?.structuredOutputs ?? true, refusalFallback: known?.refusalFallback ?? false,
                                        summaryQuality: known?.summaryQuality)

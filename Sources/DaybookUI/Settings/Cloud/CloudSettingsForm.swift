@@ -247,14 +247,22 @@ public struct CloudSummarySections: View {
                     Text(cloud.isRefreshing ? "Finding models…" : "No models").foregroundStyle(DaybookPalette.Ink.secondary)
                 } else {
                     CloudModelPicker(cloud: cloud)
+                    #if os(macOS)
                     LabeledContent(label("Effort")) {
-                        Picker(label("Effort"), selection: $cloud.preferences.effort) {
+                        Picker(label("Effort"), selection: $cloud.effort) {
                             ForEach(cloud.efforts, id: \.self) { effort in Text(SettingsWords.effort(effort)).tag(effort) }
                         }
                         .pickerStyle(.segmented)
                         .labelsHidden()
                         .fixedSize()
                     }
+                    #else
+                    // Five levels don't fit a segmented control beside the label on a phone.
+                    Picker(label("Effort"), selection: $cloud.effort) {
+                        ForEach(cloud.efforts, id: \.self) { effort in Text(SettingsWords.effort(effort)).tag(effort) }
+                    }
+                    .pickerStyle(.menu)
+                    #endif
                 }
             }
         }

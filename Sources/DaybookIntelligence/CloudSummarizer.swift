@@ -48,6 +48,13 @@ public struct CloudSummarizer: CloudSummarizing {
         let kind = template?.kind ?? meeting.kind
         let built = CloudSynthesis.prompt(source: source, template: kind, glossary: vocabulary, templateInstructions: template?.instructions,
                                           provider: model.provider, catalog: catalog)
+        // Checked against the model's window before anything is sent: the provider's tokenizer isn't here, so the prompt's
+        // length is estimated from its characters (`CloudCatalog.estimatedTokens`, which errs long for Claude).
+        let context = offer.model.contextTokens ?? model.contextTokens
+        let inputTokens = catalog.estimatedTokens(built.instructions + built.prompt + built.schema, provider: model.provider)
+        if let context, inputTokens > context {
+            throw CloudError.inputTooLong(model: model.name, details: "About \(inputTokens.formatted()) tokens in a window of \(context.formatted())")
+        }
 
         // How much it should write, for the limit and for progress while it streams.
         let minutes = Self.minutes(meeting)

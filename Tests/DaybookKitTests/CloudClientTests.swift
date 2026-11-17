@@ -41,15 +41,20 @@ final class CloudClientTests: XCTestCase {
             return .json(["data": [["type": "model", "id": "claude-sonnet-5-5", "display_name": "Claude Sonnet 5.5", "max_input_tokens": 1_000_000,
                                     "max_tokens": 128_000,
                                     "capabilities": ["effort": ["supported": true, "low": ["supported": true], "medium": ["supported": true],
-                                                                "high": ["supported": true], "max": ["supported": true]]]]],
+                                                                "high": ["supported": true], "xhigh": ["supported": true],
+                                                                "max": ["supported": true]]]],
+                                   ["type": "model", "id": "claude-older", "capabilities": ["effort": ["supported": true, "low": ["supported": true],
+                                                                "medium": ["supported": true], "high": ["supported": true], "xhigh": NSNull(),
+                                                                "max": ["supported": false]]]]],
                           "has_more": true, "last_id": "page-1-last"])
         }
         let models = try await client(server).models(.anthropic, key: anthropicKey)
-        XCTAssertEqual(models.map(\.id), ["claude-sonnet-5-5", "claude-haiku-5-5"])
+        XCTAssertEqual(models.map(\.id), ["claude-sonnet-5-5", "claude-older", "claude-haiku-5-5"])
         XCTAssertEqual(models[0].maxInputTokens, 1_000_000)
         XCTAssertEqual(models[0].maxOutputTokens, 128_000)
-        XCTAssertEqual(models[0].efforts, ["low", "medium", "high"])
-        XCTAssertNil(models[1].efforts)
+        XCTAssertEqual(models[0].efforts, ["low", "medium", "high", "xhigh", "max"], "Every level the model takes, the highest kept")
+        XCTAssertEqual(models[1].efforts, ["low", "medium", "high"], "A level it doesn't take, or one it lists as null, isn't")
+        XCTAssertNil(models[2].efforts)
         let first = try XCTUnwrap(server.requests.first)
         XCTAssertEqual(first.path, "/v1/models")
         XCTAssertEqual(first.header("x-api-key"), anthropicKey.secret)

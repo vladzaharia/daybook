@@ -42,9 +42,11 @@ and a bare `User-Agent: Daybook`. It's fetched only once a key has been added.
   ("5-5", "6.1"), and a suffix, optionally followed by "-pro" and a snapshot date ("-20251001", "-2026-09-29"). Anything
   else (Claude Fable, `gpt-5.5`, `o3`, embeddings, `:batch` listings) isn't offered.
 - **Measured models**, each with its tier, its **rank** within the tier (lower is better: measured quality, then
-  price), a **summary quality** (below), whether Anthropic's refusal fallback applies, and how many tokens it writes:
-  output tokens (reasoning included) for 15, 30, 60, 120, and 186 minutes at medium effort, and low and high against
-  medium on an hour (docs/validation.md, 2026-10-31).
+  price), a **summary quality** (below), whether Anthropic's refusal fallback applies, the efforts it takes (from the
+  provider's model page), and how many tokens it writes: output tokens (reasoning included) for 15, 30, 60, 120, and
+  186 minutes at medium effort, and low and high against medium on an hour (docs/validation.md, 2026-10-31). Extra
+  High and Max aren't measured: each is a further step of high's ratio (Claude Sonnet 5.5's high is 1.72× medium, so
+  Extra High is estimated at 2.96× and Max at 5.09×) until `--cloud-check` measures them.
 - **Per provider**: transcript tokens per minute of conversation (Anthropic 311, OpenAI 214: Claude's tokenizer counts
   about 45% more), characters per token for estimating a prompt (2.8 and 4.0), characters of reply per output token
   (for progress), and a default output rate for a model with no measurements.
@@ -114,9 +116,21 @@ long-prompt rates, `context_length`, `top_provider.max_completion_tokens`, `reas
 - a "-pro" variant, as its own model, only when the provider lists it and it's at least the family's measured version;
 - a dated snapshot only when its alias isn't listed.
 
-An older version of a family (`claude-sonnet-4-6`) isn't offered. Each offer's efforts are those the provider or
-OpenRouter says the model takes, of Low, Medium, and High (all three when neither says); its output limit is the
-provider's `max_tokens`, else OpenRouter's, else 32,000.
+An older version of a family (`claude-sonnet-4-6`) isn't offered. Each offer's efforts are those the provider says the
+model takes (Anthropic's `capabilities.effort`: `low`, `medium`, `high`, `xhigh`, `max`, each `supported` or not), else
+OpenRouter's `reasoning.supported_efforts`, else the catalog's (the model's or its family's newest), else Low, Medium, and
+High; its output limit is the provider's `max_tokens`, else OpenRouter's, else 32,000.
+
+**Effort.** Five levels, lowest first: Low, Medium, High, Extra High (`xhigh`), and Max. Every catalog model takes all
+five: Anthropic's effort page lists `xhigh` and `max` for Claude Opus 5.5, Sonnet 5.5, and Haiku 5.5, and OpenAI's model
+pages list `low` through `max` for GPT-6 Astra, GPT-6.1 Sol, GPT-6.1 Terra, and GPT-6 Luna (Terra and Luna also take
+`none`, which Daybook doesn't use; checked 2026-11-16: platform.claude.com/docs/en/build-with-claude/effort,
+platform.claude.com/docs/en/api/models/list, developers.openai.com/api/docs/guides/reasoning and its model pages).
+Summaries ask for Extra High unless the person chooses another level in Settings (`CloudSummaryPreferences.effort`,
+`effortIsChosen`); a model that doesn't take the level asked for gets the highest it takes below it, else the lowest
+above (`CloudOffer.effort`), so the default is Extra High where offered and the highest level below it elsewhere.
+Preferences an earlier version saved have no `effortIsChosen`: their Medium, the old default, can't be told from a
+Medium the person chose, so it moves to Extra High, and a Low or High they chose stays.
 
 **Recommendation and resolution** (`[CloudOffer].resolve`): the chosen model while a key reaches it; else the tier's
 best-ranked offer; else the nearest tier's (Balanced, then Economy, then Best). A chosen model that's gone isn't
@@ -157,7 +171,7 @@ key does.
 | --- | --- | --- |
 | Endpoint | `POST /v1/messages`, `anthropic-version: 2023-06-01`, `x-api-key` | `POST /v1/responses`, `Authorization: Bearer` |
 | Prompt | `system`: `MeetingSynthesis.instructions`; one user message | `instructions`; `input` |
-| Reasoning | `thinking: {type: "adaptive"}`, `output_config.effort` | `reasoning.effort` |
+| Reasoning | `thinking: {type: "adaptive"}`, `output_config.effort` (`low` … `max`) | `reasoning.effort` (`low` … `max`) |
 | Structure | `output_config.format: {type: "json_schema", schema}` | `text.format: {type: "json_schema", name, schema, strict: true}` |
 | Limit | `max_tokens` | `max_output_tokens` |
 | Other | `stream: true`; `fallbacks: "default"` with `anthropic-beta: server-side-fallback-2026-07-01` for Opus 5.5 and Sonnet 5.5 | `stream: true`, `store: false` |
@@ -180,6 +194,7 @@ as server-sent events: Anthropic's `message_start` (model, input tokens), `conte
 | 403 or 404 for the model | "This key can’t use Claude Sonnet 5.5." | No |
 | `stop_reason: "refusal"`, an OpenAI refusal | "Claude Sonnet 5.5 declined to summarize this conversation." (the category in Details) | No |
 | The reply's limit, twice | "The summary was longer than Claude Sonnet 5.5 can write." | Once, with the model's whole limit |
+| The prompt is longer than the model's window (checked before sending) | "This conversation is longer than Claude Sonnet 5.5 can read." | No; nothing is sent |
 | Another 400 | "Anthropic couldn’t take this request." | No |
 
 Three tries in all. A 400 naming the fallback beta (an account it isn't open to) sends the request once more without
@@ -205,8 +220,11 @@ conversation (every catalog model's window holds far more than a day of talk), t
   restated later in other words kept once (`RestatedCommitments`). A notes-only conversation has none.
 - **Parsing:** `MeetingSynthesis.parse`, so a cloud summary has the same shape, terms check, and fallbacks as a local
   one.
-- **Limit:** twice the expected output plus 8,000 tokens, at least 16,000, at most the model's; a reply cut off there
-  is asked for once more with the model's whole limit.
+- **Limit:** twice the expected output (at the effort sent) plus 8,000 tokens, at least 16,000, at most the model's; a
+  reply cut off there is asked for once more with the model's whole limit.
+- **Window:** before anything is sent, the prompt's tokens, estimated from its characters (2.8 a token for Claude,
+  4.0 for OpenAI's models), are checked against the model's window (`max_input_tokens`, else OpenRouter's
+  `context_length`); a longer one fails with `CloudError.inputTooLong` and isn't sent.
 - **Progress:** the reply's characters against what the model is expected to write.
 
 **Notes (the fix for Claude).** Claude Sonnet 5.5 and Haiku 5.5 folded what only a note said into the summary as if it
@@ -248,7 +266,8 @@ Settings › Cloud (a pane of its own on the Mac, between Models and Devices; a 
 - **Summaries** (once a key is set): Use the cloud (Offer First, Always, Never), and Countdown (15 or 30 seconds) while
   it offers first.
 - **Quality** (unless Never): Best, Balanced, and Economy, each with its recommended model and what an hour costs; Model,
-  Recommended or a model of the tier (with its cost when one is chosen); Effort, the efforts the model takes.
+  Recommended or a model of the tier (with its cost when one is chosen); Effort, the efforts the model takes (a segmented
+  control on the Mac, a menu on the iPhone), showing the level a summary would ask for: Extra High until one is chosen.
 - One footer line: "Sends the transcript, notes, and vocabulary, never audio."
 
 Preferences (`CloudSummaryPreferences`) are each device's own, in its UserDefaults (`cloudSummaryPreferences`), read and
@@ -263,7 +282,7 @@ takes `--open-settings cloud-key`.
 A debug build summarizes one fixture with a real key and prints the tokens and cost:
 
     ANTHROPIC_API_KEY=… .build/debug/Daybook --cloud-check anthropic claude-sonnet-5-5 offsite.json [--fixture <id>]
-        [--effort low|medium|high] [--output run.json]
+        [--effort low|medium|high|xhigh|max] [--output run.json]
 
 The key comes from `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` (or `DAYBOOK_CLOUD_KEY`) and is printed only masked. The
 fixture is the summary harness's format (`[{id, title, kind, speakers, lines, notes, bookmarks}]`) or a conversation's

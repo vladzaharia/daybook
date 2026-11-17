@@ -64,6 +64,8 @@ public enum SettingsWords {
         case .low: return "Low"
         case .medium: return "Medium"
         case .high: return "High"
+        case .xhigh: return "Extra High"
+        case .max: return "Max"
         }
     }
 

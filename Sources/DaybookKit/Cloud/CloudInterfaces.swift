@@ -25,7 +25,20 @@ public struct CloudModel: Codable, Equatable, Hashable, Identifiable, Sendable {
     }
 }
 
-public enum CloudEffort: String, Codable, CaseIterable, Sendable { case low, medium, high }
+/// How much a cloud model reasons before it writes, lowest first: the providers' `output_config.effort` (Anthropic) and
+/// `reasoning.effort` (OpenAI) values. Not every model takes every level (`CloudOffer.efforts`).
+public enum CloudEffort: String, Codable, CaseIterable, Comparable, Sendable {
+    case low, medium, high, xhigh, max
+
+    /// What summaries ask for unless the person chooses otherwise: Extra High, or the highest below it the model takes
+    /// (`CloudOffer.effort`).
+    public static let summaryDefault: CloudEffort = .xhigh
+    /// What a model is taken to accept when neither its provider nor OpenRouter says: the levels every reasoning model
+    /// of both providers takes.
+    public static let assumed: [CloudEffort] = [.low, .medium, .high]
+
+    public static func < (a: CloudEffort, b: CloudEffort) -> Bool { allCases.firstIndex(of: a)! < allCases.firstIndex(of: b)! }
+}
 
 /// How the person wants summaries placed (Settings).
 public struct CloudSummaryPreferences: Codable, Equatable, Sendable {
@@ -34,8 +47,47 @@ public struct CloudSummaryPreferences: Codable, Equatable, Sendable {
     public var countdownSeconds: Int = 15            // 15 or 30
     public var tier: CloudTier = .balanced
     public var model: CloudModel.ID?                 // nil: the tier's recommendation
-    public var effort: CloudEffort = .medium
+    /// The effort summaries ask for: `CloudEffort.summaryDefault` until the person chooses one (`effortIsChosen`).
+    public var effort: CloudEffort = CloudEffort.summaryDefault
+    /// The person chose `effort` in Settings; until then it follows the default, which a later version may raise.
+    public var effortIsChosen = false
     public init() {}
+
+    /// Chooses an effort in Settings: it stays until the person changes it.
+    public mutating func choose(_ effort: CloudEffort) {
+        self.effort = effort
+        effortIsChosen = true
+    }
+
+    private enum CodingKeys: String, CodingKey { case policy, countdownSeconds, tier, model, effort, effortIsChosen }
+
+    /// Each field on its own, so preferences from an earlier version keep what they set. Those have no `effortIsChosen`:
+    /// their effort was Medium unless the person changed it, and an explicit Medium can't be told from the old default, so
+    /// Medium moves to the new default and Low or High stays.
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        policy = (try? values.decodeIfPresent(Policy.self, forKey: .policy)) ?? .ask
+        countdownSeconds = (try? values.decodeIfPresent(Int.self, forKey: .countdownSeconds)) ?? 15
+        tier = (try? values.decodeIfPresent(CloudTier.self, forKey: .tier)) ?? .balanced
+        model = (try? values.decodeIfPresent(String.self, forKey: .model)) ?? nil
+        let stored = (try? values.decodeIfPresent(CloudEffort.self, forKey: .effort)) ?? nil
+        if let chosen = (try? values.decodeIfPresent(Bool.self, forKey: .effortIsChosen)) ?? nil {
+            effortIsChosen = chosen && stored != nil
+        } else {
+            effortIsChosen = stored != nil && stored != .medium
+        }
+        effort = effortIsChosen ? stored ?? CloudEffort.summaryDefault : CloudEffort.summaryDefault
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(policy, forKey: .policy)
+        try values.encode(countdownSeconds, forKey: .countdownSeconds)
+        try values.encode(tier, forKey: .tier)
+        try values.encodeIfPresent(model, forKey: .model)
+        try values.encode(effort, forKey: .effort)
+        try values.encode(effortIsChosen, forKey: .effortIsChosen)
+    }
 }
 
 /// Where one conversation's summary will run.

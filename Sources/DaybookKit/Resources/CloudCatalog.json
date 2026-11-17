@@ -1,5 +1,5 @@
 {
- "version": 1,
+ "version": 2,
  "measured": "2026-10-31",
  "promptCharacters": 7300,
  "providers": {
@@ -32,40 +32,47 @@
    "provider": "anthropic", "id": "claude-opus-5-5", "name": "Claude Opus 5.5", "tier": "best", "rank": 1,
    "summaryQuality": 95, "refusalFallback": true,
    "outputTokens": [[15, 4168], [30, 6796], [60, 11627], [120, 17849], [186, 23934]],
-   "effortScale": {"low": 0.70, "high": 1.29}
+   "effortScale": {"low": 0.70, "high": 1.29, "xhigh": 1.66, "max": 2.15},
+   "efforts": ["low", "medium", "high", "xhigh", "max"]
   },
   {
    "provider": "openai", "id": "gpt-6-astra", "name": "GPT-6 Astra", "tier": "best", "rank": 2,
    "summaryQuality": 93,
    "outputTokens": [[15, 1886], [30, 3462], [60, 5501], [120, 8734], [186, 12297]],
-   "effortScale": {"low": 0.95, "high": 2.02}
+   "effortScale": {"low": 0.95, "high": 2.02, "xhigh": 4.08, "max": 8.24},
+   "efforts": ["low", "medium", "high", "xhigh", "max"]
   },
   {
    "provider": "anthropic", "id": "claude-sonnet-5-5", "name": "Claude Sonnet 5.5", "tier": "balanced", "rank": 1,
    "summaryQuality": 94, "refusalFallback": true,
    "outputTokens": [[15, 2276], [30, 3361], [60, 4875], [120, 10917], [186, 10434]],
-   "effortScale": {"low": 1.10, "high": 1.72}
+   "effortScale": {"low": 1.10, "high": 1.72, "xhigh": 2.96, "max": 5.09},
+   "efforts": ["low", "medium", "high", "xhigh", "max"]
   },
   {
    "provider": "openai", "id": "gpt-6.1-sol", "name": "GPT-6.1 Sol", "tier": "balanced", "rank": 2,
    "summaryQuality": 94,
    "outputTokens": [[15, 2049], [30, 2997], [60, 5228], [120, 8132], [186, 11838]],
-   "effortScale": {"low": 0.88, "high": 1.59}
+   "effortScale": {"low": 0.88, "high": 1.59, "xhigh": 2.53, "max": 4.02},
+   "efforts": ["low", "medium", "high", "xhigh", "max"]
   },
   {
    "provider": "anthropic", "id": "claude-haiku-5-5", "name": "Claude Haiku 5.5", "tier": "economy", "rank": 1,
    "summaryQuality": 92,
    "outputTokens": [[15, 3538], [30, 6220], [60, 11336], [120, 18822], [186, 28402]],
-   "effortScale": {"low": 0.89, "high": 1.83}
+   "effortScale": {"low": 0.89, "high": 1.83, "xhigh": 3.35, "max": 6.13},
+   "efforts": ["low", "medium", "high", "xhigh", "max"]
   },
   {
    "provider": "openai", "id": "gpt-6.1-terra", "name": "GPT-6.1 Terra", "tier": "economy", "rank": 2,
    "summaryQuality": 95,
    "outputTokens": [[15, 1941], [30, 2656], [60, 3648], [120, 5710], [186, 7970]],
-   "effortScale": {"low": 0.89, "high": 1.38}
+   "effortScale": {"low": 0.89, "high": 1.38, "xhigh": 1.90, "max": 2.63},
+   "efforts": ["low", "medium", "high", "xhigh", "max"]
   },
   {
-   "provider": "openai", "id": "gpt-6-luna", "name": "GPT-6 Luna", "tier": "economy", "rank": 3
+   "provider": "openai", "id": "gpt-6-luna", "name": "GPT-6 Luna", "tier": "economy", "rank": 3,
+   "efforts": ["low", "medium", "high", "xhigh", "max"]
   }
  ]
 }
