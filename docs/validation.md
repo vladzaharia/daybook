@@ -1,5 +1,75 @@
 # Validation record
 
+## Unsure words in the transcript (2026-11-16)
+
+Words the transcript may have wrong, marked where they read (docs/architecture.md, "Unsure words"), built on
+`feature/unsure-words`.
+
+- **Does the recognizer give per-word confidence?** Yes, and it's stored: every engine's words reach
+  `TrackTranscript.words` with a confidence (`InferenceProcessingEngine.transcribe`). Parakeet's is the lowest of its
+  sub-word tokens' probabilities (`ParakeetWords.words`), Apple Speech's the system's `transcriptionConfidence` for the
+  run, Whisper's WhisperKit's word probability. Passages (`TranscriptSegment.confidence`) don't carry a word's: with
+  speakers found, a passage takes its first word's.
+- **Where the floor came from.** Measured, not tuned in tests: 24 meeting sentences read by six `say` voices
+  (Samantha, Daniel, Karen, Moira, Rishi, Tessa), each clean, through a telephone band, and with white noise at 20, 10,
+  5, and 0 dB and pink noise at 10, 5, and 0 dB (324 files, 112 minutes), transcribed by Parakeet through FluidAudio
+  0.18.0 with the v3 base model already on this Mac (`AsrModels.loadLocal`, nothing downloaded) and by Apple Speech
+  (`SpeechTranscriber`, en-US, installed), with the app's own word rules copied; each word scored right or wrong against
+  the script. Parakeet: 17,372 words, 4.8% wrong, AUROC 0.975 (0.988 clean). Apple Speech: 17,479 words, 10.9% wrong,
+  AUROC 0.914 (0.919 clean). Flagging words below 0.5:
+
+  | | Words flagged | Of them wrong | Wrong words caught | Right words flagged |
+  |---|---|---|---|---|
+  | Parakeet, clean | 1.3% | 76% | 45% | 0.32% |
+  | Parakeet, every condition | 2.7% | 79% | 45% | 0.59% |
+  | Apple Speech, clean | 2.1% | 71% | 32% | 0.65% |
+  | Apple Speech, every condition | 8.0% | 63% | 46% | 3.3% |
+
+  For Parakeet, words between 0.4 and 0.5 were more often wrong than right (6 to 5 clean, 123 to 59 in all) and words
+  between 0.5 and 0.6 more often right (6 to 8, 121 to 145); 0.6 would double the false flags for 14 points more of the
+  errors. For Apple Speech, 0.4 and 0.5 were equally precise on clean speech (71%), 0.5 catching more, and at 0.6 the
+  false flags tripled, nearly all on words with punctuation or a capital: its confidence covers those too, and the
+  marks compare words without them. So both floors are 0.5. Parakeet is sometimes confidently wrong (about one wrong
+  word in ten scored 0.9 or more, "Thomas" for Tomasz), which no floor catches.
+- **Tests.** `TranscriptFlagsTests` (28): disagreement across different passage boundaries (a word read differently,
+  words added, words left out, runs saved without words, a speaker-only run, a shared word alone in its passage between
+  two differences not flagged), punctuation, case, and spacing not flagged, different speech not compared,
+  low-confidence words with their neighbours, a recognizer without a floor flagging nothing, one flag where both signals
+  mark a word, corrected passages never flagged and a correction clearing a mark at once, Keep, Use (a correction in
+  Version History that carries over, changing only the flagged words), answers lasting through fusing and transcribing
+  again while the words read the same, words another recording heard the same way (counted as fusion counts words),
+  merges of flags and answers (either order, one answer when both devices answer, an Undo that stays, an answer given
+  again that wins over an Undo, no common ancestor), the same stored flags whatever answers reached a device, old files
+  without the fields, newer fields and an unknown reason round-tripping, and an hour of words aligned in its band.
+  `UnsureWordsScreensTests` (3): the dotted underline on the words alone, the menu's, VoiceOver's, and the rotor's
+  words, and Keep and Use undone. `UnsureWordsProcessingTests` (1): the Mac's queue with the fake engine transcribes a
+  recording, transcribes it again reading "Friday" for "Thursday" and an unsure name, flags both with the earlier
+  readings, writes the summary as before, and keeps the answers through a third transcription.
+  `RecordingRemovalTests` checks a moved recording takes its answers along. The whole package after the review fixes:
+  2,715 tests, 5 skipped (the opt-in hardware and budget tests), 1 failure:
+  `SpeakerProfileProcessingTests.testGivingVoicesGivesWayToQueuedWork` timed out after 10 s waiting for the voice
+  step to start, a path that doesn't fuse; it passed five times alone and in a rerun of the whole Mac bundle (606
+  tests, 0 failures), and in the run before the fixes (2,711 tests, 0 failures). The file-protection suites that have
+  failed on this Mac (macOS 27.0) passed in both runs. The iPhone app builds for the simulator
+  (`scripts/build-ios.sh`).
+- **Review.** An independent read of the diff found two ways a mark could land on the wrong words (a shared word
+  alone in its passage flagged as its own alternative; agreement counted with punctuation-only words, which fusion
+  attaches to the word before), stored flags that depended on answers not yet synced (so two devices fusing the same
+  transcripts could conflict), a removal that tidied the whole passage, a neighbouring passage's word marked by
+  coincidence, an answer given again lost to an Undo in a merge, and non-finite word times; all fixed, with tests.
+- **Looked at.** A passage with two marks rendered offscreen (`ImageRenderer`) in light and dark: a fine dotted line
+  under "Friday" (not its comma) and "Siobhan", in the meta ink, the words otherwise as before. The apps weren't launched
+  and no screenshots were taken.
+- **Needs real models or hardware.**
+  - Parakeet Ultra, the model Daybook transcribes with, was not measured: its fine-tune may be calibrated differently
+    from the v3 base model. Run the same set through Ultra (and real meetings, where errors are more varied than ten
+    hard names said by six voices) before trusting 0.5 for it.
+  - Whisper's word probabilities weren't measured, so Whisper runs have no floor and are flagged only where two
+    transcripts disagree.
+  - The menu (a right-click on the Mac, touch and hold on the iPhone), VoiceOver's actions and Unsure Words rotor, and
+    the mark under Increase Contrast and Dynamic Type, on a Mac and an iPhone.
+  - How many marks a real hour gets, and whether that reads as quiet.
+
 ## Apple Watch recording (2026-11-11)
 
 Daybook for Apple Watch, a recorder the iPhone manages (docs/watch.md; docs/devices.md, "Apple Watch"), built on
