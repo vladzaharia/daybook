@@ -81,6 +81,32 @@ final class SoundComparisonTests: XCTestCase {
         XCTAssertEqual(searches.values, [650], "A sure match around the prior needs no second search")
     }
 
+    /// A recording a merge placed after the rest was made at another time: what's compared with the sound of a recording made
+    /// alongside the conversation's own is the conversation's own, however long the one at another time is.
+    func testARecordingMadeAtAnotherTimeIsNeverWhatASoundIsComparedWith() async throws {
+        let rig = try await MultiSourceRig.make(in: self)
+        addTeardownBlock { await rig.tearDown() }
+        let reference = try rig.audio("reference.wav", frequency: 440)
+        let id = try await rig.macConversation("Standup", at: Date(), seconds: 600, audio: reference)
+        let ownDigest = try XCTUnwrap(rig.meeting(id)?.tracks.first?.sha256)
+        rig.state.library.update(id) { meeting in
+            var later = RecordingTrack(source: .microphone, relativePath: "Originals/later.wav", fileName: "later.wav", duration: 3_600, offset: 700, sha256: "later",
+                                       alignment: SourceAlignment(method: .manual, offset: 700, rate: 1, date: Date()))
+            later.mergedFrom = UUID()
+            meeting.tracks.append(later)
+        }
+        let seen = BaseDigests()
+        rig.state.sources.alignAudio = { _, base, _, _ in
+            seen.add(base.digest)
+            return AudioAlignment(offset: 5, rate: 1, confidence: 0.9)
+        }
+        let other = try rig.audio("other.wav", frequency: 660)
+        guard case .match = await rig.state.compareSound(of: other, duration: 600, in: id, clockOffset: 5, reliableClock: true, track: UUID()) else {
+            return XCTFail("compared with the conversation's own recording")
+        }
+        XCTAssertEqual(seen.values, [ownDigest])
+    }
+
     /// A recording placed only by shared phrases (or the clocks) is compared by sound once there's something sure to
     /// compare with, with both recordings' digests for the features cache; the sound's placement replaces it, and a
     /// recording lined up against it moves with it. One already compared isn't compared again.
@@ -160,4 +186,12 @@ private final class Searches: @unchecked Sendable {
         func add(_ other: String?, _ reference: String?) { lock.withLock { stored.append((other, reference)) } }
         var values: [(other: String?, reference: String?)] { lock.withLock { stored } }
     }
+}
+
+/// The digests of the recordings a sound was compared with, from the aligner's thread.
+private final class BaseDigests: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [String?] = []
+    func add(_ value: String?) { lock.withLock { stored.append(value) } }
+    var values: [String?] { lock.withLock { stored } }
 }

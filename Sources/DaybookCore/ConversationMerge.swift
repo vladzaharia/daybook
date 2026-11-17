@@ -43,6 +43,12 @@ public enum ConversationMerge {
     /// again after one that stopped partway finds it, and only finishes moving that conversation to the Trash.
     public static func revisionField(_ foldedID: UUID) -> RevisionField { .source("merged:\(foldedID.uuidString)") }
 
+    /// The ID of the copy a merge makes of a folded conversation's recording in the survivor, the same on every device that
+    /// merges them, so two devices (or a retry before sync) make one copy, not two (`MeetingMerge` unions tracks by ID).
+    public static func copyID(of trackID: UUID, folded foldedID: UUID, into survivorID: UUID) -> UUID {
+        SyncEncoding.uuid("merge-copy:\(survivorID.uuidString):\(foldedID.uuidString):\(trackID.uuidString)")
+    }
+
     /// Whether `foldedID` is folded into `meeting` already.
     public static func hasFolded(_ foldedID: UUID, into meeting: Meeting) -> Bool {
         let field = revisionField(foldedID).rawValue
@@ -164,12 +170,23 @@ public enum ConversationMerge {
     /// made, which take the recording's details and its place on the merged timeline, while a copy that was there
     /// before (the same audio was in both) keeps its own. A recording moved out of `folded` before is in the conversation
     /// it moved to, and isn't carried. `photos` are its photos as stored in `merged`'s folder, by ID. `profiles` says
-    /// which voice profile a merged profile stands for. Does nothing when it's folded in already.
+    /// which voice profile a merged profile stands for. `restoring` are copies that were this conversation's moved out of
+    /// `merged` (Move to New Conversation) and are back with it: they're put back, as Info puts one back, with the words
+    /// Version History says it in. Everything it makes is the same whichever device folds it (IDs and dates come from
+    /// the conversations, `now` only dates the Version History entries), so two devices that merge the same conversations
+    /// end with one result. Does nothing when it's folded in already.
     public static func fold(_ folded: Meeting, into merged: inout Meeting, placement: Placement, copies: [UUID: UUID],
-                            fresh: Set<UUID>, photos: [UUID: MeetingPhoto] = [:], profiles: SpeakerProfileMerges? = nil,
-                            at now: Date = Date()) {
+                            fresh: Set<UUID>, restoring: [UUID: String] = [:], photos: [UUID: MeetingPhoto] = [:],
+                            profiles: SpeakerProfileMerges? = nil, at now: Date = Date()) {
         guard !hasFolded(folded.id, into: merged) else { return }
         let shift = placement.shift
+        var putBack: [MeetingRevision] = []
+        for (trackID, words) in restoring.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
+            guard let index = merged.tracks.firstIndex(where: { $0.id == trackID }), merged.tracks[index].removal?.movedTo == folded.id else { continue }
+            merged.tracks[index].removal = nil
+            putBack.append(MeetingRevision(id: SyncEncoding.uuid("merge-put-back:\(merged.id.uuidString):\(folded.id.uuidString):\(trackID.uuidString)"),
+                                           date: now, field: "source:\(trackID.uuidString):put-back", oldValue: "", newValue: "Put back \(words)"))
+        }
         let carried = folded.tracks.filter { !$0.isMovedOut && copies[$0.id] != nil }
         func copy(_ id: UUID) -> UUID? { copies[id] }
 
@@ -183,7 +200,7 @@ public enum ConversationMerge {
             return local.isFinite && local >= 0 ? (leadCopy, local) : nil
         }
         let foldedAnchors = folded.timedNotes == nil && folded.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? [] : NoteTimeline.anchors(folded.timedNotes, text: folded.notes)
+            ? [] : settled(NoteTimeline.anchors(folded.timedNotes, text: folded.notes), saved: folded.timedNotes, owner: folded.id)
         let heldByRecordings = Set(folded.tracks.flatMap { $0.alignment?.heldNoteIDs ?? [] })
         let heldByLead = lead == nil ? [] : foldedAnchors.filter { $0.time != nil && !heldByRecordings.contains($0.id) }.map(\.id)
 
@@ -203,7 +220,7 @@ public enum ConversationMerge {
             // Placed after the rest, or already after the rest of the conversation it comes from (an earlier merge): at another
             // time than what it's compared with, so its place is kept, never taken from the sound.
             if let own, placement.kind == .after || track.stretch != nil {
-                moved.alignment = SourceAlignment(method: .manual, offset: shift + own.offset, rate: own.rate, date: now)
+                moved.alignment = SourceAlignment(method: .manual, offset: shift + own.offset, rate: own.rate, date: folded.date)
                 moved.offset = shift + own.offset
             } else {
                 let isLead = lead?.track.id == track.id
@@ -211,7 +228,7 @@ public enum ConversationMerge {
                 let capture = isLead ? lead.map { shift + $0.clock.offset } : track.alignment?.captureOffset.map { shift + $0 }
                 moved.alignment = SourceAlignment(method: .pending, clockOffset: own.map { shift + $0.offset } ?? track.alignment?.clockOffset.map { shift + $0 },
                                                   clockID: clockID, audioChecked: placement.kind == .alongside ? nil : true,
-                                                  heldNoteIDs: held.isEmpty ? nil : held, captureOffset: held.isEmpty ? nil : capture, date: now)
+                                                  heldNoteIDs: held.isEmpty ? nil : held, captureOffset: held.isEmpty ? nil : capture, date: folded.date)
                 moved.offset = nil
             }
             merged.tracks[index] = moved
@@ -368,7 +385,7 @@ public enum ConversationMerge {
         // time on the merged timeline.
         if !foldedAnchors.isEmpty || !folded.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let anchors = merged.timedNotes != nil || folded.timedNotes != nil
-                ? NoteTimeline.anchors(merged.timedNotes, text: merged.notes) + foldedAnchors.map { note in
+                ? settled(NoteTimeline.anchors(merged.timedNotes, text: merged.notes), saved: merged.timedNotes, owner: merged.id) + foldedAnchors.map { note in
                     TimedNote(id: note.id, time: note.time.map { $0 + shift }, text: note.text)
                 } : nil
             var text = merged.notes
@@ -438,11 +455,21 @@ public enum ConversationMerge {
             return copied
         }
         let title = folded.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let entry = MeetingRevision(date: now, kind: revisionField(folded.id), oldValue: "",
+        let entry = MeetingRevision(id: SyncEncoding.uuid("merge-entry:\(merged.id.uuidString):\(folded.id.uuidString)"), date: now,
+                                    kind: revisionField(folded.id), oldValue: "",
                                     newValue: title.isEmpty ? "Merged a conversation" : "Merged “\(title)”")
-        merged.revisions = (merged.revisions + revisions + [entry]).enumerated()
+        merged.revisions = (merged.revisions + putBack + revisions + [entry]).enumerated()
             .sorted { $0.element.date != $1.element.date ? $0.element.date < $1.element.date : $0.offset < $1.offset }.map(\.element)
         merged.updatedAt = now
+    }
+
+    /// A note's anchors with an ID no saved anchor has (made up while reading plain notes) replaced by one that comes from
+    /// whose notes they are, their place, and their words, so every device that reads them makes the same ones.
+    private static func settled(_ anchors: [TimedNote], saved: [TimedNote]?, owner: UUID) -> [TimedNote] {
+        let known = Set((saved ?? []).map(\.id))
+        return anchors.enumerated().map { index, note in
+            known.contains(note.id) ? note : TimedNote(id: SyncEncoding.uuid("merge-note:\(owner.uuidString):\(index):\(note.text)"), time: note.time, text: note.text)
+        }
     }
 
     /// The recording that holds what the conversation timed by its own clock while its recordings wait to be lined up:

@@ -239,16 +239,20 @@ public enum ConversationActions {
 
     /// Several conversations selected: filing them, merging them into one, summarizing those with a transcript again, and
     /// the Trash. `each` is what the app knows about each one (recording, processing): Merge… waits while any of them is
-    /// busy (`Context.mergeBusy`).
-    public static func batch(_ ids: [UUID], in meetings: [Meeting], context: Context,
-                             each: ((Meeting) -> Context)? = nil) -> [ConversationActionGroup] {
+    /// busy (`Context.mergeBusy`), recording as another device's sync says (`Meeting.status`), or in a merge that's running
+    /// (`merging`, `LibraryController.mergingIDs`).
+    public static func batch(_ ids: [UUID], in meetings: [Meeting], context: Context, each: ((Meeting) -> Context)? = nil,
+                             merging: Set<UUID> = []) -> [ConversationActionGroup] {
         let selected = meetings.filter { ids.contains($0.id) }
         guard !selected.isEmpty else { return [] }
         if selected.count == 1, let meeting = selected.first { return actions(for: meeting, context: context) }
         let mac = context.platform == .mac
         let personal = selected.allSatisfy { $0.effectivePlacement == .personal }
         let summarizable = selected.contains { !$0.unifiedTranscript.isEmpty }
-        let mergeBusy = context.busy ?? selected.lazy.compactMap { (each?($0) ?? context).mergeBusy }.first
+        let mergeBusy = context.busy ?? selected.lazy.compactMap { meeting -> String? in
+            if merging.contains(meeting.id) { return "Merging now" }
+            return meeting.status == .recording ? "Recording now" : (each?(meeting) ?? context).mergeBusy
+        }.first
         let groups = [
             ConversationActionGroup(id: .reprocess, actions: [
                 ConversationAction(id: .process(.summaryOnly), title: ProcessingWords.title(.summaryOnly), symbol: "text.alignleft",

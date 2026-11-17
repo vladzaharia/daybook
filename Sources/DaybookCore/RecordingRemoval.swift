@@ -30,6 +30,12 @@ extension RecordingTrack {
     /// is (a device's recordings already in Daybook, audio already imported) skips this one, so a moved recording
     /// is found in its new conversation. A removed one is still found here, where it can be put back.
     public var isMovedOut: Bool { removal?.movedTo != nil }
+
+    /// A copy a merge made in the conversation it merges into, waiting for its conversation to be folded in
+    /// (`ConversationMerge.fold`): marked as moved to that conversation, so it's out of the transcript and processing, isn't
+    /// listed to be put back, and isn't counted as the same recording in two conversations. A merge that stopped partway
+    /// leaves them, and the merge asked for again finds them by their bytes.
+    public var isPendingMerge: Bool { mergedFrom != nil && removal?.movedTo == mergedFrom }
 }
 
 extension Meeting {

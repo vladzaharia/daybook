@@ -9,6 +9,8 @@ extension AppState {
     /// Merges the conversations `ids`, once the person confirmed. The merged one is selected; the others leave the queue
     /// as they go to the Trash. Something that stops it is said in the window's alert.
     func mergeConversations(_ ids: [UUID]) {
+        // One merge of a conversation at a time: asked again while it runs, nothing more happens.
+        guard library.mergingIDs.isDisjoint(with: ids) else { return }
         Task { [weak self] in
             guard let self else { return }
             do {

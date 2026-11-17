@@ -422,7 +422,7 @@ private struct RowMenu: View {
                                         custom: { MacActions.custom($0, ids: [only.id], state: state) })
         } else if !meetings.isEmpty {
             ConversationActionMenuItems(ConversationActions.batch(ids, in: state.meetings, context: .init(platform: .mac),
-                                                                  each: { MeetingInspector.context(state, $0) }), platform: .mac,
+                                                                  each: { MeetingInspector.context(state, $0) }, merging: state.library.mergingIDs), platform: .mac,
                                         perform: { MacActions.perform($0, on: ids, state: state, undoManager: undoManager, window: window) },
                                         custom: { MacActions.custom($0, ids: ids, state: state) })
         }
@@ -443,7 +443,8 @@ struct BatchActionButtons: View {
     @Environment(\.undoManager) private var undoManager
 
     var body: some View {
-        let groups = ConversationActions.batch(ids, in: state.meetings, context: .init(platform: .mac), each: { MeetingInspector.context(state, $0) })
+        let groups = ConversationActions.batch(ids, in: state.meetings, context: .init(platform: .mac),
+                                              each: { MeetingInspector.context(state, $0) }, merging: state.library.mergingIDs)
         let actions = groups.flatMap(\.actions)
         VStack(spacing: DaybookSpacing.s3) {
             HStack {

@@ -34,6 +34,9 @@ public final class LibraryController {
     /// A sync result is being applied: its saves don't ask for another sync, and a device's
     /// processing waits.
     public private(set) var isApplyingSync = false
+    /// The conversations a merge is working on now (`mergeConversations`): another merge of any of them waits, and the
+    /// apps leave Merge… off for them meanwhile.
+    public internal(set) var mergingIDs: Set<UUID> = []
 
     public let rootURL: URL
     /// The sync folder, when the app has one. Saves ask it to sync.
@@ -826,8 +829,8 @@ public final class LibraryController {
         guard let store else { throw DaybookError.libraryUnavailable }
         try await flushDurably([id])
         guard let meeting = meeting(id) else { throw DaybookError.libraryUnavailable }
-        let imported = try await store.importAudio(from: url, into: meeting, source: provenance.source,
-                                                   sidecarURL: provenance.sidecarURL, offset: provenance.offset, device: provenance.device)
+        let imported = try await store.importAudio(from: url, into: meeting, source: provenance.source, sidecarURL: provenance.sidecarURL,
+                                                   offset: provenance.offset, device: provenance.device, trackID: provenance.trackID)
         var stored = imported.tracks.first { track in !meeting.tracks.contains { $0.id == track.id } && track.fileName == url.lastPathComponent }
         if stored == nil, provenance.capture != nil {
             // Same bytes imported before (recovery after a crash): find the existing track by digest.
@@ -1110,6 +1113,9 @@ public struct RecordingProvenance: Sendable {
     /// The recording joins a conversation another device leads (multipoint): the conversation's
     /// status and message are that device's, so they're left as they are.
     public var joinsConversation = false
+    /// The ID the track gets when these bytes are new to the conversation (a merge's copies, `ConversationMerge.copyID`), so
+    /// the same copy made on two devices is one recording.
+    public var trackID: UUID?
 
     public init(source: AudioSource, device: DeviceRecordingIdentity? = nil, sidecarURL: URL? = nil, offset: TimeInterval? = nil,
                 duration: TimeInterval? = nil, startedAt: Date? = nil, capture: TrackCaptureDetails? = nil,

@@ -110,6 +110,38 @@ final class MergeProcessingTests: XCTestCase {
         XCTAssertEqual(merged.unifiedTranscript.first { $0.text.contains("Hiring") }?.start ?? 0, 10.5, accuracy: 0.001)
         XCTAssertEqual(rig.inference.summarized.count, 1, "one summary for the whole")
     }
+
+    func testBehaviorACorrectionToARecordingMadeAlongsideSurvivesAndNothingNeedsReview() async throws {
+        let rig = try await rig()
+        let macAudio = try rig.audio("mac.wav", frequency: 220)
+        let otherAudio = try rig.audio("other-mac.wav", frequency: 330)
+        try rig.inference.script(macAudio, [(0, "Morning everyone"), (10, "The release is on track")])
+        try rig.inference.script(otherAudio, [(5, "Hiring comes after lunch")])
+        let first = try await rig.macConversation("Design review", at: start, seconds: 30, audio: macAudio)
+        let second = try await rig.macConversation("Design review", at: start.addingTimeInterval(5), seconds: 30, audio: otherAudio)
+        for id in [first, second] {
+            rig.state.processor.enqueue(id)
+            try await rig.processed(id)
+        }
+        let passage = try XCTUnwrap(rig.meeting(second)?.unifiedTranscript.first { $0.text.contains("Hiring") })
+        rig.state.library.correctPassage(passage.id, text: "Hiring comes after the offsite", in: second)
+        await rig.state.flush()
+        rig.state.sources.alignAudio = { _, _, _, _ in AudioAlignment(offset: 5.5, rate: 1, confidence: 0.9) }
+
+        rig.state.mergeConversations([first, second])
+        try await waitUntil("the merged conversation's summary", timeout: 20, state: { "\(rig.inference.summarized.count) summaries" }) {
+            rig.inference.summarized.count == 3
+        }
+        try await rig.processed(first)
+
+        let merged = try XCTUnwrap(rig.meeting(first))
+        XCTAssertNil(rig.meeting(second))
+        let copy = try XCTUnwrap(merged.tracks.first { $0.mergedFrom == second })
+        XCTAssertEqual(copy.alignment?.method, .audio, "lined up by its sound, with the correction in tow")
+        XCTAssertEqual(merged.unifiedTranscript.map(\.text), ["Morning everyone", "The release is on track", "Hiring comes after the offsite"],
+                       "the corrected words, not the ones it heard again")
+        XCTAssertTrue(merged.correctionTransferIssues?.isEmpty ?? true, "nothing needs review: \(String(describing: merged.correctionTransferIssues))")
+    }
 }
 
 /// What the sound search was given as its prior, from the aligner's thread.

@@ -242,7 +242,8 @@ private struct ConversationCommands: Commands {
             PlacementMenuItem(state: state, meeting: meeting)
             // What the selection's menu says of it (`ConversationActions.batch`): two or more, none of them busy.
             let merge = selected.flatMap { ids in
-                ConversationActions.batch(Array(ids), in: state.meetings, context: .init(platform: .mac), each: { MeetingInspector.context(state, $0) })
+                ConversationActions.batch(Array(ids), in: state.meetings, context: .init(platform: .mac), each: { MeetingInspector.context(state, $0) },
+                                          merging: state.library.mergingIDs)
                     .flatMap(\.actions).first { $0.id == .merge }
             }
             Button("Merge…") { if let selected { state.window.confirmingMerge = Array(selected) } }

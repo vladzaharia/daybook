@@ -271,7 +271,7 @@ public actor MeetingStore {
     /// recording; merging and saving happen together afterwards, with nothing in between.
     public func importAudio(from sourceURL: URL, into meeting: Meeting, source: AudioSource = .imported,
                             sidecarURL: URL? = nil, offset: TimeInterval? = nil,
-                            device: DeviceRecordingIdentity? = nil) async throws -> Meeting {
+                            device: DeviceRecordingIdentity? = nil, trackID: UUID? = nil) async throws -> Meeting {
         let resource = try sourceURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
         guard resource.isRegularFile == true, (resource.fileSize ?? 0) > 0 else { throw LibraryError.invalidAudio(sourceURL.lastPathComponent) }
         if let offset, !offset.isFinite { throw LibraryError.invalidTranscript }
@@ -327,7 +327,7 @@ public actor MeetingStore {
                 }
             }
         } else {
-            let id = UUID()
+            let id = trackID ?? UUID()
             let ext = sourceURL.pathExtension.lowercased().filter { $0.isLetter || $0.isNumber }.prefix(12)
             let filename = id.uuidString + (ext.isEmpty ? "" : ".\(ext)")
             let relativePath = "Originals/\(filename)"

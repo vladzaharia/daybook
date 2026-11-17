@@ -6,10 +6,14 @@ import Foundation
 /// one's timeline goes and folds it in; this copies their recordings and photos into the survivor's folder, saves it,
 /// moves the others to the Trash (a deletion that syncs), and asks for the work where the app does it (`process`).
 ///
-/// Nothing changes until every file is here (on the iPhone a recording may download first). One that stops partway can
-/// be asked for again: the copies already made are found by their bytes, a conversation already folded in (its Version
-/// History entry, `ConversationMerge.hasFolded`) only goes to the Trash, and each folded conversation's recordings are
-/// marked moved to the survivor before it does, so the library holds each recording once either way.
+/// Nothing changes for the person until every file is here (on the iPhone a recording may download first). A copy of a
+/// recording waits in the survivor as one moved out to the conversation it came from (`RecordingTrack.isPendingMerge`):
+/// out of the transcript and processing, not listed to put back, not counted as a second conversation's recording, and
+/// the survivor's status and message untouched. One that stops partway can be asked for again: the copies already made
+/// are found by their bytes, a conversation already folded in (its Version History entry, `ConversationMerge.hasFolded`)
+/// only goes to the Trash, and each folded conversation's recordings are marked moved to the survivor before it does, so
+/// the library holds each recording once either way. A recording of the survivor's own that moved out to a conversation
+/// being folded in (Move to New Conversation) is put back by the fold.
 extension LibraryController {
     /// Merges the conversations `ids` into the earliest by date and returns its ID. `audio` and `photo` find a folded
     /// conversation's files (on the iPhone they may download); `context` is what the app knows of each conversation, and
@@ -23,15 +27,22 @@ extension LibraryController {
                                    at now: Date = Date(),
                                    process: (@MainActor (UUID, ProcessingRequest.Mode) -> Void)? = nil) async throws -> UUID {
         let wanted = Array(Set(ids))
+        // Another merge of any of them is running: it isn't asked twice.
+        if let running = ConversationMerge.ordered(wanted.compactMap(meeting)).first(where: { mergingIDs.contains($0.id) }) { throw ConversationMergeError.busy(running.title) }
+        mergingIDs.formUnion(wanted)
+        defer { mergingIDs.subtract(wanted) }
         func current() throws -> [Meeting] {
             let selected = ConversationMerge.ordered(wanted.compactMap(meeting))
             guard selected.count > 1 else { throw ConversationMergeError.tooFew }
-            for meeting in selected { if context(meeting).mergeBusy != nil { throw ConversationMergeError.busy(meeting.title) } }
+            for meeting in selected where meeting.status == .recording || context(meeting).mergeBusy != nil {
+                throw ConversationMergeError.busy(meeting.title)
+            }
             return selected
         }
         let selected = try current()
         let survivorID = selected[0].id
         let folding = selected.dropFirst().filter { !ConversationMerge.hasFolded($0.id, into: selected[0]) }
+        let foldingIDs = Set(folding.map(\.id)), dates = Dictionary(uniqueKeysWithValues: folding.map { ($0.id, $0.date) })
 
         // Every file first: nothing changes until they're all here.
         var recordings: [(meetingID: UUID, track: RecordingTrack, url: URL)] = []
@@ -45,30 +56,41 @@ extension LibraryController {
         // Started or asked for elsewhere while the files came: it waits.
         _ = try current()
 
-        var copies: [UUID: [UUID: UUID]] = [:], fresh: [UUID: Set<UUID>] = [:], stored: [UUID: [UUID: MeetingPhoto]] = [:]
+        // Each copy is the same wherever it's made (`ConversationMerge.copyID`). A copy is new (waits in the survivor for its
+        // conversation to be folded in), one an earlier merge that stopped partway left, or the survivor's own recording that
+        // moved out to the conversation being folded in, which comes back.
+        var copies: [UUID: [UUID: UUID]] = [:], fresh: [UUID: Set<UUID>] = [:], restored: [UUID: Set<UUID>] = [:]
+        var stored: [UUID: [UUID: MeetingPhoto]] = [:]
         await acquireLock()
         do {
             for file in recordings {
                 let before = Set(meeting(survivorID)?.tracks.map(\.id) ?? [])
-                let ingested = try await ingest(file.url, into: survivorID, provenance: .file(source: file.track.source, device: file.track.device,
-                                                                                               duration: file.track.duration))
-                // The same bytes were here already (in both conversations, or copied by a merge that stopped partway).
+                var provenance = RecordingProvenance.file(source: file.track.source, device: file.track.device, duration: file.track.duration)
+                provenance.trackID = ConversationMerge.copyID(of: file.track.id, folded: file.meetingID, into: survivorID)
+                // The survivor's status and message are its own until the fold.
+                provenance.joinsConversation = true
+                let ingested = try await ingest(file.url, into: survivorID, provenance: provenance)
+                // The same bytes were here already (in both conversations, left by a merge that stopped partway, or the
+                // survivor's own recording that moved out).
                 let digest = file.track.sha256.isEmpty ? try await AudioDigest.sha256(contentsOf: file.url) : file.track.sha256
-                guard let copy = ingested.track ?? meeting(survivorID)?.tracks.first(where: { $0.sha256 == digest && !$0.isMovedOut }) else {
+                let same = meeting(survivorID)?.tracks.filter { $0.sha256 == digest } ?? []
+                guard let copy = ingested.track ?? same.first(where: { !$0.isMovedOut }) ?? same.first(where: \.isPendingMerge)
+                    ?? same.first(where: { $0.removal?.movedTo.map(foldingIDs.contains) == true }) else {
                     throw DaybookError.libraryUnavailable
                 }
                 copies[file.meetingID, default: [:]][file.track.id] = copy.id
                 if !before.contains(copy.id) {
-                    // Until it's folded in, a copy stays out of the survivor's transcript and processing, as a removed
-                    // recording does, so one left by a merge that stopped partway changes nothing there.
                     update(survivorID) { survivor in
                         guard let index = survivor.tracks.firstIndex(where: { $0.id == copy.id }) else { return }
                         survivor.tracks[index].mergedFrom = file.meetingID
-                        survivor.tracks[index].removal = RecordingRemoval(removedAt: now)
+                        survivor.tracks[index].removal = RecordingRemoval(removedAt: dates[file.meetingID] ?? now, movedTo: file.meetingID)
                     }
                 }
-                if meeting(survivorID)?.tracks.first(where: { $0.id == copy.id })?.mergedFrom == file.meetingID {
-                    fresh[file.meetingID, default: []].insert(copy.id)
+                guard let track = meeting(survivorID)?.tracks.first(where: { $0.id == copy.id }) else { continue }
+                if track.isPendingMerge {
+                    if !fresh.values.contains(where: { $0.contains(copy.id) }) { fresh[file.meetingID, default: []].insert(copy.id) }
+                } else if track.isMovedOut {
+                    restored[file.meetingID, default: []].insert(copy.id)
                 }
             }
             for file in pictures {
@@ -83,25 +105,41 @@ extension LibraryController {
         // One change to the survivor, then each folded conversation's recordings marked as moved there, with no wait
         // between: a sync pass sees all of it or none.
         let latest = try current()
+        guard latest[0].id == survivorID else { throw ConversationMergeError.changed }
         let toFold = latest.dropFirst().filter { !ConversationMerge.hasFolded($0.id, into: latest[0]) }
         for folded in toFold {
+            // A recording or photo it gained meanwhile isn't here: it waits for the next try. One it lost (moved elsewhere)
+            // leaves its copy waiting in the survivor, out of sight, for the merge of the conversation it went to.
             let carried = folded.tracks.filter { !$0.isMovedOut }
-            guard carried.allSatisfy({ copies[folded.id]?[$0.id] != nil }) else { throw ConversationMergeError.changed }
+            guard carried.allSatisfy({ copies[folded.id]?[$0.id] != nil }),
+                  (folded.photos ?? []).allSatisfy({ stored[folded.id]?[$0.id] != nil || latest[0].photo($0.id) != nil }) else { throw ConversationMergeError.changed }
         }
-        // Where each goes, from the survivor as it was: the copies waiting to be folded in aren't on its timeline yet.
-        let pending = Set(toFold.map(\.id))
+        // Where each goes, from the survivor as it was: the copies waiting to be folded in aren't on its timeline yet, and
+        // the recordings coming back are.
+        let comingBack = Set(restored.values.flatMap { $0 })
         var planned = latest[0]
-        planned.tracks.removeAll { $0.mergedFrom.map(pending.contains) == true }
+        planned.tracks.removeAll(where: \.isPendingMerge)
+        for index in planned.tracks.indices where comingBack.contains(planned.tracks[index].id) { planned.tracks[index].removal = nil }
         let placements = ConversationMerge.placements([planned] + toFold, policy: policy, startOf: startOf)
         let profiles = metadata.speakerProfileMerges
-        update(survivorID) { survivor in
-            for folded in latest.dropFirst() {
-                guard let placement = placements[folded.id] else { continue }
-                ConversationMerge.fold(folded, into: &survivor, placement: placement, copies: copies[folded.id] ?? [:], fresh: fresh[folded.id] ?? [],
-                                       photos: stored[folded.id] ?? [:], profiles: profiles, at: now)
+        let words = Dictionary(uniqueKeysWithValues: comingBack.compactMap { id in
+            latest[0].tracks.first { $0.id == id }.map { (id, RecordingWords.inSentence($0, in: latest[0])) }
+        })
+        // Personal stays Personal: cloud summaries, the lock, and Spotlight follow the placement, so what a Personal
+        // conversation said never lands in a Work one.
+        let personal = selected.contains { $0.effectivePlacement == .personal }
+        if !toFold.isEmpty {
+            update(survivorID) { survivor in
+                if personal { survivor.placement = .personal }
+                for folded in latest.dropFirst() {
+                    guard let placement = placements[folded.id] else { continue }
+                    ConversationMerge.fold(folded, into: &survivor, placement: placement, copies: copies[folded.id] ?? [:], fresh: fresh[folded.id] ?? [],
+                                           restoring: words.filter { restored[folded.id]?.contains($0.key) == true },
+                                           photos: stored[folded.id] ?? [:], profiles: profiles, at: now)
+                }
+                survivor.status = survivor.summary == nil ? .imported : .ready
+                survivor.errorMessage = nil
             }
-            survivor.status = survivor.summary == nil ? .imported : .ready
-            survivor.errorMessage = nil
         }
         for folded in latest.dropFirst() {
             update(folded.id) { meeting in
