@@ -467,6 +467,20 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         XCTAssertEqual(cloud.summarized, [id])
     }
 
+    func testBehaviorDeclinedForTheCloudAFailureHereDoesntBringItBack() async throws {
+        let cloud = FakeCloud()
+        let rig = try await rig(cloud: cloud, policy: .ask, seconds: 30)
+        smallModel(rig)
+        rig.inference.failSummaries(with: LocalIntelligenceError.promptTooLong(needed: 9_000, window: 8_192))
+        let id = try await longConversation(rig, "Declined then failed", frequency: 475)
+        rig.state.processor.enqueue(id)
+        try await countingDown(rig, id)
+        rig.state.chooseSummaryPlacement(.useLocal, for: id)
+        try await rig.processed(id)
+        XCTAssertEqual(rig.meeting(id)?.status, .failed, "The failure here stands")
+        XCTAssertTrue(cloud.summarized.isEmpty, "The person declined the cloud for it")
+    }
+
     func testBehaviorAConversationLongerThanTheCloudModelCanReadIsSummarizedHere() async throws {
         let cloud = FakeCloud()
         cloud.failure = CloudError.inputTooLong(model: "Claude Sonnet 5.5", details: "About 2,000,000 tokens in a window of 1,000,000")

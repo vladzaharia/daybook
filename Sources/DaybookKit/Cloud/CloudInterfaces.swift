@@ -100,18 +100,20 @@ public struct CloudSummaryPreferences: Codable, Equatable, Sendable {
         effortIsChosen = true
     }
 
-    private enum CodingKeys: String, CodingKey { case policy, countdownSeconds, tier, model, effort, effortIsChosen, placements }
+    private enum CodingKeys: String, CodingKey { case policy, countdownSeconds, tier, model, effort, effortLevel, effortIsChosen, placements }
 
     /// Each field on its own, so preferences from an earlier version keep what they set. Those have no `effortIsChosen`:
     /// their effort was Medium unless the person changed it, and an explicit Medium can't be told from the old default, so
-    /// Medium moves to the new default and Low or High stays.
+    /// Medium moves to the new default and Low or High stays. The effort itself is `effortLevel`; `effort` is kept for an
+    /// earlier version to read (below).
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         policy = (try? values.decodeIfPresent(Policy.self, forKey: .policy)) ?? .ask
         countdownSeconds = (try? values.decodeIfPresent(Int.self, forKey: .countdownSeconds)) ?? 15
         tier = (try? values.decodeIfPresent(CloudTier.self, forKey: .tier)) ?? .balanced
         model = (try? values.decodeIfPresent(String.self, forKey: .model)) ?? nil
-        let stored = (try? values.decodeIfPresent(CloudEffort.self, forKey: .effort)) ?? nil
+        let stored = ((try? values.decodeIfPresent(CloudEffort.self, forKey: .effortLevel)) ?? nil)
+            ?? ((try? values.decodeIfPresent(CloudEffort.self, forKey: .effort)) ?? nil)
         if let chosen = (try? values.decodeIfPresent(Bool.self, forKey: .effortIsChosen)) ?? nil {
             effortIsChosen = chosen && stored != nil
         } else {
@@ -121,13 +123,17 @@ public struct CloudSummaryPreferences: Codable, Equatable, Sendable {
         placements = (try? values.decodeIfPresent(CloudPlacements.self, forKey: .placements)) ?? CloudPlacements()
     }
 
+    /// An earlier version reads `effort` and knows only Low, Medium, and High, and one value it can't read would reset all
+    /// its preferences (Never back to Offer First): it gets the old default unless the person chose a level, which it gets
+    /// capped at High.
     public func encode(to encoder: Encoder) throws {
         var values = encoder.container(keyedBy: CodingKeys.self)
         try values.encode(policy, forKey: .policy)
         try values.encode(countdownSeconds, forKey: .countdownSeconds)
         try values.encode(tier, forKey: .tier)
         try values.encodeIfPresent(model, forKey: .model)
-        try values.encode(effort, forKey: .effort)
+        try values.encode(effortIsChosen ? min(effort, .high) : .medium, forKey: .effort)
+        try values.encode(effort, forKey: .effortLevel)
         try values.encode(effortIsChosen, forKey: .effortIsChosen)
         try values.encode(placements, forKey: .placements)
     }

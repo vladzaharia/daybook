@@ -330,6 +330,21 @@ final class CloudDirectoryTests: XCTestCase {
         chosen.choose(.medium)
         XCTAssertEqual(try JSONDecoder().decode(CloudSummaryPreferences.self, from: JSONEncoder().encode(chosen)).effort, .medium)
         XCTAssertEqual(try decode(#"{"policy":"ask","countdownSeconds":15,"tier":"balanced","effort":"high","effortIsChosen":false}"#).effort, .xhigh)
+        // An earlier version reading these preferences finds only levels it knows, so it never resets them (Never stays Never).
+        struct Earlier: Decodable {
+            enum Policy: String, Decodable { case ask, always, never }
+            enum Effort: String, Decodable { case low, medium, high }
+            var policy: Policy; var countdownSeconds: Int; var effort: Effort
+        }
+        var neverSent = CloudSummaryPreferences()
+        neverSent.policy = .never
+        XCTAssertEqual(try JSONDecoder().decode(Earlier.self, from: JSONEncoder().encode(neverSent)).effort, .medium, "The old default")
+        neverSent.choose(.max)
+        let earlier = try JSONDecoder().decode(Earlier.self, from: JSONEncoder().encode(neverSent))
+        XCTAssertEqual(earlier.policy, .never)
+        XCTAssertEqual(earlier.effort, .high, "Max, capped at what it knows")
+        XCTAssertEqual(try JSONDecoder().decode(CloudSummaryPreferences.self, from: JSONEncoder().encode(neverSent)).effort, .max,
+                       "This version keeps Max")
     }
 
     @MainActor

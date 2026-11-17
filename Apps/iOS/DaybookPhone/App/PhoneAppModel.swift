@@ -548,6 +548,7 @@ final class PhoneAppModel: RecordingCommandHandling {
                 // A key added on another device meanwhile arrives through iCloud Keychain.
                 await placement.reloadCloud()
             }
+            placement.cameToForeground()
         case .background:
             // A countdown can't run in the background: each one's default happens now.
             placement.leftForeground()

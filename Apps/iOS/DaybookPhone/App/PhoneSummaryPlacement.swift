@@ -101,6 +101,12 @@ final class PhoneSummaryPlacement {
     @ObservationIgnored private var templates: [UUID: String] = [:]
     /// Summaries that failed here and are being tried in the cloud, with the request and why it failed: declined, it fails.
     @ObservationIgnored private var localFailures: [UUID: (request: UUID, reason: String, kind: ProcessingRequest.FailureKind)] = [:]
+    /// Conversations a failure here mustn't send to the cloud: the person declined its cloud countdown (Don't Use the
+    /// Cloud), or the cloud model couldn't read it. Until its summary is done or given up.
+    @ObservationIgnored private var keptHere: Set<UUID> = []
+    /// Daybook is on the screen. Away from it a countdown can't run, so one that would end in the cloud never begins
+    /// there: it runs where it would have without the cloud.
+    @ObservationIgnored private(set) var isOnScreen = true
 
     init(library: LibraryController, link: PhoneLink, presence: @escaping () -> [KnownSyncDevice],
          clock: @escaping () -> Date = Date.init, runsTimer: Bool = true) {
@@ -185,6 +191,7 @@ final class PhoneSummaryPlacement {
         for id in placements.undecided where isTakenElsewhere(id) {
             // Another device has it: the request this iPhone held goes back, for whichever device finishes the work.
             giveBackHeld(id)
+            forget(id)
             placements.end(id)
         }
         renewHeld()
@@ -218,6 +225,8 @@ final class PhoneSummaryPlacement {
         if let templateID { templates[id] = templateID }
         refresh()
         placements.begin(id)
+        // Away from the screen (transcribed in the background, a background launch), nothing is left to count down.
+        if !isOnScreen { leftForeground() }
         keepHolding()
     }
 
@@ -301,9 +310,13 @@ final class PhoneSummaryPlacement {
     /// summary waiting for a Mac is left to one through the library.
     /// A countdown that ends in the cloud doesn't go there: it runs where it would have without the cloud.
     func leftForeground() {
+        isOnScreen = false
         placements.startDefaultsNow()
         for id in placements.undecided { send(id) }
     }
+
+    /// Back on the screen: countdowns can run again.
+    func cameToForeground() { isOnScreen = true }
 
     /// A sync pass applied: what Macs did may stop work here (a claim lost in a merge, a Mac on it).
     func syncApplied() { refresh() }
@@ -349,11 +362,21 @@ final class PhoneSummaryPlacement {
     /// tried before its request fails, as this conversation's rules allow: at once under Always, after a countdown to it
     /// under Offer First, never without the cloud on offer for it. False when it isn't tried; the request then fails.
     func localSummaryFailed(_ id: UUID, request: UUID, reason: String, kind: ProcessingRequest.FailureKind) -> Bool {
-        guard running[id] == nil, let meeting = library.meeting(id), cloudOffer(for: meeting) != nil else { return false }
+        guard running[id] == nil, !keptHere.contains(id), let meeting = library.meeting(id), cloudOffer(for: meeting) != nil else {
+            keptHere.remove(id)
+            return false
+        }
         localFailures[id] = (request, reason, kind)
         placements.beginAfterLocalFailure(id)
+        if !isOnScreen { leftForeground() }
         keepHolding()
         return true
+    }
+
+    /// Done with what this iPhone held for a conversation's retry: its summary was made, given back, or given up.
+    private func forget(_ id: UUID) {
+        localFailures[id] = nil
+        keptHere.remove(id)
     }
 
     /// A summary that failed here and won't go to the cloud: its request fails with what went wrong here.
@@ -368,6 +391,7 @@ final class PhoneSummaryPlacement {
     /// request this iPhone held through the countdown is the one given back.
     private func send(_ id: UUID) {
         defer { placements.end(id) }
+        forget(id)
         let templateID = templates.removeValue(forKey: id)
         guard library.meeting(id) != nil, !isTakenElsewhere(id) else { return }
         if let request = giveBackHeld(id) ?? library.requestProcessing(id, mode: .summaryOnly, templateID: templateID) {
@@ -387,11 +411,15 @@ final class PhoneSummaryPlacement {
         let templateID = templates.removeValue(forKey: id)
         guard running[id] == nil, let meeting = library.meeting(id), !isTakenElsewhere(id),
               let claimed = library.claimSummary(id, templateID: templateID, at: clock()) else {
+            forget(id)
             placements.end(id)
             return
         }
         let reason = placements[id]?.cloudReason ?? chosen
-        localFailures[id] = nil
+        // A retry after a failure here carries that failure: if the cloud can't read it either, the request fails with it.
+        let failedHere = localFailures.removeValue(forKey: id)
+        // Declined the cloud and placed here: a failure here mustn't bring the cloud back.
+        if place == .thisDevice, placements[id]?.prefersLocal == true { keptHere.insert(id) }
         placements.end(id)
         link.nudge(claimed)
         guard case .cloud(let model) = place, let cloud = cloudSummarizer else {
@@ -413,8 +441,9 @@ final class PhoneSummaryPlacement {
                 await self?.finished(id, request: claimed.id, output: output, place: place, started: started, writtenFrom: meeting,
                                      cloudReason: reason)
             } catch CloudError.inputTooLong {
-                // Longer than the cloud model can read: nothing was sent; here, or a Mac, instead.
-                self?.cloudCouldntRead(id, request: claimed.id)
+                // Longer than the cloud model can read: nothing was sent; here, or a Mac, instead (after a failure here,
+                // the request fails with that failure).
+                self?.cloudCouldntRead(id, request: claimed.id, failedHere: failedHere)
             } catch is CancellationError {
                 self?.stopped(id, request: claimed.id, failure: nil)
             } catch {
@@ -428,6 +457,7 @@ final class PhoneSummaryPlacement {
                           writtenFrom meeting: Meeting, cloudReason: CloudReason?) async {
         running[id] = nil
         runs[id] = nil
+        forget(id)
         let applied = library.applyPlacedSummary(output.summary, to: id, place: place, started: started, writtenFrom: meeting,
                                                  cloudReason: cloudReason)
         library.completeProcessingRequest(request, in: id, at: clock())
@@ -437,10 +467,18 @@ final class PhoneSummaryPlacement {
     }
 
     /// The cloud model couldn't read the conversation (nothing was sent): this iPhone summarizes it when it can, else the
-    /// request goes back for a Mac.
-    private func cloudCouldntRead(_ id: UUID, request: UUID) {
+    /// request goes back for a Mac. When it already failed here, the request fails with that failure instead, so the two
+    /// never hand it back and forth.
+    private func cloudCouldntRead(_ id: UUID, request: UUID, failedHere: (request: UUID, reason: String, kind: ProcessingRequest.FailureKind)?) {
         running[id] = nil
         runs[id] = nil
+        if let failedHere {
+            forget(id)
+            library.failProcessingRequest(request, in: id, reason: failedHere.reason, kind: failedHere.kind, at: clock())
+            return
+        }
+        // Summarized here next: a failure here mustn't try the cloud again.
+        keptHere.insert(id)
         if options.thisDeviceCanSummarize, let runHere, let claimed = library.meeting(id)?.processingRequests?.first(where: { $0.id == request }) {
             runHere(id, claimed)
         } else if let released = library.releaseProcessingRequest(request, in: id, at: clock()) {
@@ -452,6 +490,7 @@ final class PhoneSummaryPlacement {
     private func stopped(_ id: UUID, request: UUID, failure: Error?) {
         running[id] = nil
         runs[id] = nil
+        forget(id)
         if let failure { library.failProcessingRequest(request, in: id, error: failure, at: clock()) }
         else { library.releaseProcessingRequest(request, in: id, at: clock()) }
     }

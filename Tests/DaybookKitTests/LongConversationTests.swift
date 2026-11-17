@@ -105,6 +105,35 @@ final class LongConversationTests: XCTestCase {
         XCTAssertFalse(phone.perform(.useLocal, at: at(2)), "Started is final")
     }
 
+    func testBehaviorTheCloudAlwaysGetsAWholeCountdownAndTheChoicesStayThePersons() {
+        // A countdown to this device with a second left, retargeted to the cloud: its time starts again.
+        var planner = SummaryPlacementPlanner(options: options(), preferences: preferences(), at: start)
+        planner.update(conversation: longer, at: at(14))
+        XCTAssertEqual(planner.phase, .countingDown(to: .cloud(sonnet), until: at(29)))
+        // Back to this device, it keeps its time.
+        planner.update(conversation: .init(), at: at(20))
+        XCTAssertEqual(planner.phase, .countingDown(to: .thisDevice, until: at(29)))
+        // Use the Cloud (an Upgrade accepted) during a countdown to the cloud: now, as the person's choice.
+        var chosen = SummaryPlacementPlanner(options: options(), preferences: preferences(), at: start, conversation: longer)
+        XCTAssertTrue(chosen.perform(.useCloud, at: at(1)))
+        XCTAssertEqual(chosen.phase, .started(.cloud(sonnet)))
+        XCTAssertEqual(chosen.cloudReason, .chosen)
+    }
+
+    @MainActor
+    func testBehaviorAskingForASummaryOrTheCloudDuringACountdownToItDoesWhatWasAsked() {
+        let now = start
+        let placements = SummaryPlacements(options: options(), preferences: preferences(), waitsForMacs: false, clock: { now }, runsTimer: false)
+        placements.conversation = { _, _ in .init(cloudAllowed: true, cloudDoesBetter: true) }
+        let asked = UUID(), upgraded = UUID(), failed = UUID()
+        XCTAssertNil(placements.begin(asked))
+        XCTAssertEqual(placements.begin(asked, immediately: true), .thisDevice, "Summarize Again: where it would have run")
+        XCTAssertEqual(placements.beginInCloud(upgraded), .cloud(sonnet), "An Upgrade to the cloud's model: at once")
+        XCTAssertEqual(placements[upgraded]?.cloudReason, .chosen)
+        placements.beginAfterLocalFailure(failed)
+        XCTAssertEqual(placements.begin(failed, immediately: true), .cloud(sonnet), "After a failure here, the cloud is all that's left")
+    }
+
     func testBehaviorTheCloudForALongConversationStaysInsideThePrivacyRule() {
         // Always: it goes at once, as anything would, recorded as Always's.
         let always = SummaryPlacementPlanner(options: options(), preferences: preferences(.always), at: start, conversation: longer)

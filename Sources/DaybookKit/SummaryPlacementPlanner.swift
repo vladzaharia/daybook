@@ -132,9 +132,14 @@ public struct SummaryPlacementPlanner: Equatable, Sendable {
 
     // MARK: Changes
 
-    /// The person's choice. False when it doesn't apply now (nothing changes).
+    /// The person's choice. False when it doesn't apply now (nothing changes). Use the Cloud during a countdown that ends
+    /// there (an Upgrade to the cloud's model accepted for a long conversation) starts it now, as the person's choice.
     @discardableResult
     public mutating func perform(_ action: Action, at now: Date) -> Bool {
+        if action == .useCloud, case .countingDown(.cloud, _) = phase, let cloud {
+            start(.cloud(cloud), reason: .chosen)
+            return true
+        }
         guard actions.contains(action) else { return false }
         switch action {
         case .useCloud:
@@ -193,8 +198,14 @@ public struct SummaryPlacementPlanner: Equatable, Sendable {
                 // cloud (the conversation moved to Personal, a switch turned off, the key removed) starts here instead.
                 phase = self.conversation.localFailed ? .waiting : defaultPlace.map { .started($0) } ?? .waiting
             } else if let target {
-                // A countdown keeps its time; only where it ends up may change.
-                if target != place { phase = .countingDown(to: target, until: until) }
+                // A countdown keeps its time; only where it ends up may change. One that now ends in the cloud starts its
+                // time again, so the cloud always gets a whole countdown.
+                if target != place {
+                    var cloudBound = false
+                    if case .cloud = target { cloudBound = true }
+                    if case .cloud = place { cloudBound = false }
+                    phase = .countingDown(to: target, until: cloudBound ? now.addingTimeInterval(countdown) : until)
+                }
             } else {
                 phase = .waitingForMac
             }

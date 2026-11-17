@@ -648,7 +648,7 @@ starts it at once.
 **Transcript first, on the Mac.** A job doesn't wait for the summary model to start: it transcribes with what
 transcribes, and at the summary step, when the summary model isn't here (`summarizesLocally`; the options
 say so, `thisDeviceCanSummarize`), the summary goes to the cloud at once under Always, unless the
-conversation is Personal. Otherwise the job ends with the transcript rather than holding the queue for a
+conversation's placement is kept off the cloud (Personal, unless the person turns it on). Otherwise the job ends with the transcript rather than holding the queue for a
 wait, and the summary is owed until the model arrives (`AppState+SummaryPlacement.swift`): the page reads
 "Waiting to summarize after the download · 38%" with the bar, and Use the Cloud while the cloud is on offer,
 which sends it there with no countdown (`ProcessingJob.summarizesInCloud`), from the page or a phone. When
@@ -763,7 +763,7 @@ option, and goes everywhere once the work is done or the offer dismissed.
   devices' work; the iPhone redoes only a conversation whose every recording is its own, as it transcribes only those),
   the Macs reachable now that name their models (the placement's reachability; an earlier Daybook names none, so offers
   nothing), and for the summary the cloud model Settings › Cloud resolves to, with a key and unless Never, and never for
-  a Personal conversation. The best rank
+  a conversation whose placement Settings › Cloud keeps off the cloud (`UpgradeCandidates.cloudPlacements`). The best rank
   wins; on a tie this device, then the Macs in order, then the cloud, so the work stays nearest. A transcription model
   must cover each recording's language as it was transcribed.
 - **Clearly better:** the best must rank at least the step's margin above what's there now. Without one, every Gemma 4

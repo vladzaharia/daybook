@@ -47,15 +47,18 @@ switch is on (above). Within it:
   isn't). The length is estimated before anything runs, at 3.5 characters a token (the local tokenizers read about 3.6
   on the three-hour fixture). Under Offer First its countdown ends in the cloud, "Summarizing with Claude Sonnet 5.5 in
   12 s", with Start Now and Don't Use the Cloud, which runs it where it would have run (this device, or the Mac); it's
-  never sent without the countdown, so an iPhone that leaves the screen mid-countdown (where a countdown can't run)
-  runs it where it would have run instead. Under Always it goes at once, as anything does. A summary someone asked for
+  never sent without a whole countdown: one that comes to end in the cloud partway (a Mac's model changed) starts its
+  time again, and an iPhone that leaves the screen mid-countdown, or whose summary falls due out of sight (where a
+  countdown can't run), runs it where it would have run instead. Use the Cloud or an Upgrade to the cloud's model
+  during it sends it at once, as the person's choice; Summarize Again runs it where it would have run. Under Always it goes at once, as anything does. A summary someone asked for
   (Summarize Again) starts at once where it can, so never in the cloud on its own. A Mac's countdown seen on an iPhone
   names the model (`LinkProcessingProgress.cloudModel` during `summaryCountdown`) and sends Don't Use the Cloud back as
   `processing.choice` `useLocal`; a Mac before this one ignores it, and an iPhone before this one shows the countdown
   as the Mac's own, whose Start Now starts it in the cloud.
 - **A summary that failed on the device** tries the cloud before the job fails, under the same rules: at once under
   Always, after a countdown to the cloud under Offer First (declined, the job fails with what went wrong on the
-  device), never for a conversation kept off the cloud or one the person asked to summarize on this Mac. On the
+  device), never for a conversation kept off the cloud, one the person asked to summarize on this Mac, one whose cloud
+  countdown they declined (Don't Use the Cloud), or one the cloud already couldn't read. On the
   iPhone the processor asks the placement first (`PhoneProcessor.Services.summaryFailed`), and the request stays the
   iPhone's while the cloud is tried.
 - **A conversation longer than the cloud model can read** (`CloudError.inputTooLong`, checked before sending) is
@@ -266,8 +269,9 @@ conversation, checked against the model's window first (a prompt longer than it 
 - **Limit:** twice the expected output (at the effort sent) plus 8,000 tokens, at least 16,000, at most the model's; a
   reply cut off there is asked for once more with the model's whole limit.
 - **Window:** before anything is sent, the prompt's tokens, estimated from its characters (2.8 a token for Claude,
-  4.0 for OpenAI's models), are checked against the model's window (`max_input_tokens`, else OpenRouter's
-  `context_length`); a longer one fails with `CloudError.inputTooLong` and isn't sent.
+  4.0 for OpenAI's models), with room for the smallest reply limit (16,000 tokens, which providers count against the
+  window), are checked against the model's window (`max_input_tokens`, else OpenRouter's `context_length`); a longer one
+  fails with `CloudError.inputTooLong` and isn't sent.
 - **Progress:** the reply's characters against what the model is expected to write.
 
 **Notes (the fix for Claude).** Claude Sonnet 5.5 and Haiku 5.5 folded what only a note said into the summary as if it

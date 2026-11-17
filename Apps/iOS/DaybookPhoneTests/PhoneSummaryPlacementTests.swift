@@ -25,6 +25,12 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         private var held = false
         /// What a summary says, from the conversation as it read it.
         var overview: @Sendable (Meeting) -> String = { _ in "From the cloud" }
+        /// Every summary throws this, when set, as the provider would.
+        var failure: (any Error & Sendable)? {
+            get { lock.withLock { _failure } }
+            set { lock.withLock { _failure = newValue } }
+        }
+        private var _failure: (any Error & Sendable)?
         init(models: [CloudModel]) { self.models = models }
         var asked: [UUID] { lock.withLock { _asked } }
         var isWaiting: Bool { lock.withLock { gate != nil } }
@@ -34,6 +40,7 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         func summarize(_ meeting: Meeting, template: SummaryTemplate?, vocabulary: [String], model: CloudModel, effort: CloudEffort,
                        progress: @escaping @Sendable (Double) -> Void) async throws -> MeetingSummary {
             lock.withLock { _asked.append(meeting.id) }
+            if let failure { throw failure }
             await withTaskCancellationHandler {
                 await withCheckedContinuation { continuation in
                     let wait = lock.withLock { () -> Bool in if held { gate = continuation }; return held }
@@ -463,6 +470,46 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         XCTAssertEqual(cloud.asked, [id])
     }
 
+    func testBehaviorAFailureHereNeverHandsItBackAndForthWithTheCloud() async throws {
+        // Declined the cloud for a long conversation, then failed here: the request fails, no cloud.
+        let cloud = Cloud(models: [sonnet])
+        let rig = try await rig(cloud: cloud, local: Local(failure: LocalFailure()), macSeen: false)
+        let declined = long(rig.library)
+        await rig.placement.summaryIsDue(declined)
+        rig.placement.perform(.useLocal, for: declined)
+        try await waitUntil("the request to fail") { summaryRequests(rig.library, declined).first?.outcome != nil }
+        XCTAssertEqual(summaryRequests(rig.library, declined).first?.outcome?.result, .failed)
+        XCTAssertTrue(cloud.asked.isEmpty)
+        XCTAssertNil(rig.placement.planners[declined])
+        // Failed here, then too long for the cloud: the request fails with what went wrong here, once.
+        cloud.failure = CloudError.inputTooLong(model: "Claude Sonnet 5.5", details: "")
+        let id = transcribed(rig.library, "Too long everywhere")
+        await rig.placement.summaryIsDue(id)
+        rig.placement.perform(.startNow, for: id)
+        try await waitUntil("the countdown to the cloud") { rig.placement.planners[id]?.conversation.localFailed == true }
+        rig.placement.perform(.startNow, for: id)
+        try await waitUntil("the request to fail") { summaryRequests(rig.library, id).first?.outcome != nil }
+        let outcome = try XCTUnwrap(summaryRequests(rig.library, id).first?.outcome)
+        XCTAssertEqual(outcome.result, .failed)
+        XCTAssertNil(rig.placement.planners[id], "Nothing left to try")
+        XCTAssertEqual(cloud.asked.filter { $0 == id }.count, 1, "Tried in the cloud once")
+    }
+
+    func testBehaviorAwayFromTheScreenNoCountdownToTheCloudBegins() async throws {
+        let cloud = Cloud(models: [sonnet])
+        let rig = try await rig(cloud: cloud, local: Local())
+        rig.placement.leftForeground()
+        let id = long(rig.library)
+        await rig.placement.summaryIsDue(id)
+        XCTAssertNil(rig.placement.planners[id], "Nothing counts down out of sight")
+        try await waitUntil("the summary here") { rig.library.meeting(id)?.summary?.overview == "From this iPhone" }
+        XCTAssertTrue(cloud.asked.isEmpty, "Where it would have run without the cloud")
+        rig.placement.cameToForeground()
+        let next = long(rig.library, "On the screen")
+        await rig.placement.summaryIsDue(next)
+        XCTAssertEqual(rig.placement.planners[next]?.actions, [.startNow, .useLocal])
+    }
+
     // MARK: This iPhone's own summarizer
 
     func testBehaviorWithItsOwnSummarizerItCountsDownHereAndOffersWaitForAMac() async throws {
@@ -605,7 +652,8 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         rig.placement.leftForeground()
         XCTAssertNil(rig.placement.planners[counting])
         XCTAssertEqual(summaryRequests(rig.library, counting).count, 1, "The countdown's default: the Mac")
-        // Waiting for a Mac: left to one through the library.
+        // Waiting for a Mac (back on the screen, then away again): left to one through the library.
+        rig.placement.cameToForeground()
         rig.presence.devices = []
         rig.placement.refresh()
         let waiting = transcribed(rig.library, "Waiting")

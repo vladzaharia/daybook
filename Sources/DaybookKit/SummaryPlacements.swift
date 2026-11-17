@@ -61,7 +61,11 @@ public final class SummaryPlacements {
     @discardableResult
     public func begin(_ id: UUID, immediately: Bool = false) -> SummaryPlace? {
         if var existing = planners[id] {
-            if immediately, existing.perform(.startNow, at: clock()) { set(id, existing) }
+            // Asked for during a countdown that ends in the cloud for a long conversation: where it would have run, as an
+            // asked-for summary always starts (after a failure here, the cloud is the one place left, so it goes now).
+            var asked = SummaryPlacementPlanner.Action.startNow
+            if case .countingDown(.cloud, _) = existing.phase, !existing.conversation.localFailed { asked = .useLocal }
+            if immediately, existing.perform(asked, at: clock()) { set(id, existing) }
             return existing.started
         }
         let planner = SummaryPlacementPlanner(options: options, preferences: preferences, at: clock(),

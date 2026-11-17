@@ -1,5 +1,96 @@
 # Validation record
 
+## Long summaries: the usable window, the cloud when it does better, effort, and placements (2026-11-16)
+
+The owner: smaller models can't handle large transcripts; use each local model's whole usable context, fall back to a
+cloud model when one is available and does better, and set thinking very high. Then: the person chooses which
+placements may go to the cloud, and Extra High is the default effort. On `feature/long-summaries` (docs/model-runtime.md,
+"Usable window" and "Summarization"; docs/cloud.md, "Which conversations", "When the cloud is chosen", "What's offered").
+
+**Context windows, checked.** Each language model's `config.json` at its pinned revision was fetched from Hugging Face
+(the config alone; its size and git object ID matched the catalog's for all eleven), and `max_position_embeddings`
+matches the catalog's `contextLength` for every one: Gemma 4 E2B and E4B 131,072; Gemma 4 12B, 26B A4B, and 31B, Qwen
+3.5 4B and 9B, and Qwen 3.6 35B A3B 262,144; Qwen 2.5 1.5B, 3B, and 7B 32,768 (7B's config also says `sliding_window`
+131,072, with `use_sliding_window` false and no `rope_scaling`, so 32,768 stands). Nothing needed correcting; an install now runs with the catalog's current
+capabilities while the catalog lists its revision, so a later correction reaches it. The KV cache per token, from the
+same configs (full-attention layers with their own cache × KV heads × head size × keys and values × 2 bytes): 6 KB
+(E2B), 16 KB (E4B, 12B), 20 KB (26B A4B, Qwen 3.6), 80 KB (31B), 32 KB (Qwen 3.5), 28/36/56 KB (Qwen 2.5 1.5B/3B/7B);
+the doc's earlier figures for Gemma 4 and Qwen 2.5 7B agree.
+
+**The usable window.** The smaller of the model's window and what Metal's recommended working set holds beside the
+weights, with a margin of a tenth (at least 512 MiB). This Mac (M5 Pro, 64 GB, macOS 27.0) reports 55,662,788,608 bytes,
+0.81 of its memory; the table in docs/model-runtime.md applies that ratio to 8, 16, and 32 GB, which wasn't measured on
+those Macs. Every built-in model gets its whole window on the Macs its suggested memory names, except Gemma 4 31B 8-bit
+(199,382 of 262,144 on 64 GB) and Gemma 4 E4B on 8 GB (68,070).
+
+**What a pass reads did not grow for the built-in models.** The docs record why the sizes are what they are: on Gemma 4
+26B A4B, reading the weekly whole with commitments in one pass lost a topic and kept 31 of 38 commitments (36 in parts of
+5,400 tokens), and the three-hour meeting's commitments in two parts of 24,000 tokens kept 60 of 66 (all 66 in parts of
+5,400; 2026-10-31 below). No model was measured reading more. So those sizes are now each model's own limits in the
+catalog (`wholeReadTokens` 5,400, `partTokens` 12,000 or Qwen 2.5's 8,000, `evidenceTokens` 24,000 or 12,000,
+`commitmentPartTokens` 5,400) rather than constants, the window and memory cap them, and a model without limits (one the
+person adds) reads what its window holds. Lifting a built-in model's limits needs a run like the one below on that model.
+What changed for them: a prompt that can't fit the usable window is an error ("The summary model can’t read this
+conversation on this device…") rather than a reply squeezed to 256 tokens, a window or memory too small to read 1,024
+tokens is the same error before anything runs, and notes left out of the final pass are a warning. Long conversations
+those models read in parts now go to the cloud when it does clearly better (below).
+
+**Local thinking: not measured, not shipped.** It needs real inference on installed summary models. This Mac has none
+this session could use: `~/Library/Application Support/Daybook Development` doesn't exist, the signed app's container
+(`~/Library/Containers/local.daybook`) refuses this session ("Operation not permitted": macOS keeps another app's data
+from it), and no Daybook store receipt exists anywhere else in the home folder. Weights weren't downloaded (the disk is at
+93%, and the brief ruled it out). The Hugging Face cache's `gemma-3-12b-it-4bit` isn't a catalog model, and Gemma 3 has
+no thinking mode. So every model keeps `"thinking": "off"`, and no reasoning pass was added. To measure: install a
+summary model in the development library, run the summary harness on the three-hour fixture with thinking on for a
+reasoning pass before each constrained pass (Gemma 4's `enable_thinking`, Qwen 3's), and compare topics, commitments, time,
+and peak memory with these runs.
+
+**Cloud effort.** Anthropic's effort page and Models API reference (platform.claude.com/docs/en/build-with-claude/effort,
+.../api/models/list) list `low`, `medium`, `high`, `xhigh`, and `max`, all five on Claude Opus 5.5, Sonnet 5.5, and Haiku
+5.5, reported per model as `capabilities.effort.<level>.supported` (`xhigh` may be null); OpenAI's reasoning guide and
+model pages (developers.openai.com/api/docs/guides/reasoning, .../models/gpt-6-astra, gpt-6.1-sol, gpt-6.1-terra,
+gpt-6-luna) list `low` through `max` for all four (Terra and Luna also `none`), default `medium`. OpenAI's API reference
+at platform.openai.com answered 403 and wasn't read. Summaries ask for Extra High unless the person chose a level; the
+request bodies are otherwise unchanged (`thinking: {type: "adaptive"}` with `output_config.effort`; `reasoning.effort`).
+No request was sent to either provider: Extra High's and Max's output allowances are extrapolated, not measured, and a
+`--cloud-check` run at each level should replace them.
+
+**Automated.** New or changed: `SummaryRepairTests` (budgets from the window, memory, and the catalog's limits; a
+conversation that fits read whole in one pass, commitments too; parts under a memory-limited window; every pass within
+the window; a prompt that can't fit an error, before or at a pass; what memory holds), `SummaryNotesTests` (notes left
+out of the final pass warned), `RuntimeResidencyTests` (an install's capabilities refreshed while the catalog lists its
+revision, not after), `ModelManifestTests` (each model's window, cache size, and limits), `ModelAdditionTests` (an added
+model's cache size from its config), `CloudClientTests` (Extra High and Max read from Anthropic's list, a null or
+unsupported level left out), `CloudCatalogTests` (every catalog model offers all five; the default Extra High, else the
+highest level below; estimates), `CloudDirectoryTests` (older preferences: Medium moves to Extra High, Low and High stay,
+placements default to Personal off and Work on; switches round-trip; Never overrides), `CloudSummarizerTests` (Extra High
+sent to both providers by default, Max when chosen; a prompt longer than the window never sent), `SummaryPlacementTests`,
+`SummaryPlacementWordsTests`, `UpgradeTests`, and `LongConversationTests` (placements kept off the cloud under every
+policy and mid-countdown; long conversations counting down to the cloud only inside the rule; Don't Use the Cloud; a
+local failure trying the cloud under the same rules; leaving the screen never sending; the link's countdown to the cloud;
+the reason recorded), `SummaryPlacementProcessingTests` on the Mac and `PhoneSummaryPlacementTests` and
+`PhonePageStatusTests` on the iPhone (the same flows end to end, including a queued Use the Cloud for a conversation moved
+to Personal, Use the Cloud refused for a kept-off conversation's waiting request, a long conversation for the Mac's
+model, and a request failing only after the cloud was declined). `swift test`: 2,710 tests across the eleven bundles, 5
+skipped (hardware and timing checks, as before), 0 failures; this time the file-protection suites that fail on this Mac
+passed too (Captions 35, Core 519, Design 43, Devices 187, Intelligence 225, Kit 721, Link 108, Live 44, Mac app 610, UI
+169, WatchLink 49).
+
+**Review.** An independent review of the branch found, and this change fixes: on the iPhone a conversation too long for
+the cloud whose summary also failed here could pass between the two forever (it now fails with the failure here); a
+countdown that falls due out of sight could still end in the cloud (none begins off the screen now); a countdown
+retargeted to the cloud kept its old deadline; a failure after Don't Use the Cloud brought the cloud back; an Upgrade to
+the cloud on a long conversation turned into a countdown; a stale retry could swallow a later Summarize; the final
+pass's evidence didn't leave room for its own words, so a small window failed only after every part; a small window
+refused even a conversation that fit it whole; Summarize Again during a cloud countdown sent it; the cloud's size check
+didn't leave room for a reply; a pause during the retry's countdown read as a failure; and preferences written with
+Extra High would reset in an earlier version (it now reads High, or Medium when unchosen, and keeps Never).
+
+**Still to check:** real long conversations through the new cloud path on a Mac and an iPhone with real keys; the
+working-set ratio on 8–32 GB Macs and an iPhone's memory headroom in practice; Extra High and Max output and cost per
+provider (`--cloud-check`); local thinking, as above; screenshots of Settings › Cloud's new switches and the iPhone's
+Effort menu.
+
 ## Apple Watch recording (2026-11-11)
 
 Daybook for Apple Watch, a recorder the iPhone manages (docs/watch.md; docs/devices.md, "Apple Watch"), built on

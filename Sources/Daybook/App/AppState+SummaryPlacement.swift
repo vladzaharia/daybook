@@ -258,12 +258,16 @@ extension AppState {
             return PlacedSummary(output: output, place: .thisDevice, meeting: meeting, started: started)
         } catch where !(error is CancellationError) {
             // Failed here: the cloud is tried before the job fails, as this conversation's rules allow; never when the person
-            // asked for it here, or the cloud already couldn't read it.
-            guard !job.summarizesHere, tooLongForCloud == nil, summaryHolderElsewhere(id, job: job) == nil,
+            // asked for it here or declined the cloud for it (Don't Use the Cloud), or the cloud already couldn't read it.
+            guard !job.summarizesHere, tooLongForCloud == nil, placements[id]?.prefersLocal != true, summaryHolderElsewhere(id, job: job) == nil,
                   let retry = meetings.first(where: { $0.id == id }), cloudOnOffer(for: retry) else { throw error }
             placements.end(id)
             placements.beginAfterLocalFailure(id)
-            guard case .cloud(let model)? = await placements.place(id) else { throw error }
+            guard case .cloud(let model)? = await placements.place(id) else {
+                // Paused or cancelled during its countdown, it's that; declined, or nothing to try, the failure stands.
+                try Task.checkCancellation()
+                throw error
+            }
             try Task.checkCancellation()
             let restarted = Date()
             reportToPhones(id, force: true)
