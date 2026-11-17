@@ -184,14 +184,17 @@ final class MergeConversationsTests: XCTestCase {
         library.update(standup) { $0.status = .ready; $0.errorMessage = "Summary stopped" }
         try await stoppedPartway(library, [standup, planning, review], gaining: review)
 
-        // The copies are in the survivor (found again by their bytes), out of sight.
+        // The copies' files are in the survivor's folder; nothing else of the merge is in it.
         let survivor = try XCTUnwrap(library.meeting(standup))
-        XCTAssertEqual(survivor.tracks.count, 3)
+        XCTAssertEqual(survivor.tracks.count, 1, "no copy waits in it")
         XCTAssertEqual(survivor.status, .ready, "still the summarized conversation it was")
         XCTAssertEqual(survivor.errorMessage, "Summary stopped")
-        XCTAssertTrue(survivor.removedTracks.isEmpty, "nothing to put back in Info › Audio")
-        XCTAssertEqual(survivor.presentTracks.count, 1, "and out of its transcript and processing")
-        XCTAssertEqual(survivor.tracks.filter(\.isPendingMerge).count, 2)
+        for folded in [planning, review] {
+            let original = try XCTUnwrap(library.meeting(folded)?.tracks.first)
+            let copy = ConversationMerge.copyID(of: original.id, folded: folded, into: standup)
+            let url = try await library.audioURL(for: RecordingTrack(relativePath: "Originals/\(copy.uuidString).wav", fileName: "copy.wav"), in: standup)
+            XCTAssertEqual(AudioDigest.sha256(data: try Data(contentsOf: url)), original.sha256, "its copy is a file, for the next try")
+        }
         XCTAssertNotNil(library.meeting(planning))
         // Nor is it worth a warning that the same recording is in two conversations.
         let remote = root.appendingPathComponent("Remote")
@@ -204,7 +207,7 @@ final class MergeConversationsTests: XCTestCase {
         let merged = try XCTUnwrap(library.meeting(standup))
         XCTAssertEqual(merged.tracks.count, 4)
         XCTAssertEqual(merged.presentTracks.count, 4)
-        XCTAssertFalse(merged.tracks.contains(where: \.isPendingMerge))
+        XCTAssertFalse(merged.tracks.contains(where: \.isWaitingMergeCopy))
         XCTAssertEqual(merged.tracks.first { $0.mergedFrom == planning }?.alignment?.offset, 60)
         XCTAssertNil(merged.tracks.first { $0.mergedFrom == planning }?.removal)
         XCTAssertEqual(merged.revisions.filter { $0.kind == ConversationMerge.revisionField(planning) }.count, 1)
@@ -231,7 +234,7 @@ final class MergeConversationsTests: XCTestCase {
         XCTAssertEqual(again.revisions.filter { $0.kind == ConversationMerge.revisionField(planning) }.count, 1)
     }
 
-    func testBehaviorARecordingThatMovedElsewhereWhileFilesCameLeavesItsCopyOutOfSightForTheMergeOfWhereItWent() async throws {
+    func testBehaviorARecordingThatMovedElsewhereWhileFilesCameIsLeftWhereItWent() async throws {
         let library = try await open()
         let standup = try await conversation(library, "Standup", at: start, said: "Morning everyone")
         let planning = try await conversation(library, "Planning", at: start.addingTimeInterval(3_600), said: "Budget review first")
@@ -252,8 +255,8 @@ final class MergeConversationsTests: XCTestCase {
         XCTAssertEqual(merged.presentTracks.count, 2, "the survivor's own and the one that stayed")
         XCTAssertEqual(merged.presentTracks.last?.mergedFrom, planning)
         XCTAssertTrue(merged.removedTracks.isEmpty, "nothing to put back")
-        XCTAssertEqual(merged.tracks.filter(\.isPendingMerge).count, 1, "the copy of the one that moved waits, out of sight, to be found by its bytes")
-        XCTAssertEqual(merged.tracks.first(where: \.isPendingMerge)?.sha256, movedBytes)
+        XCTAssertEqual(merged.tracks.count, 2, "the one that moved is where it went: its copy stays a file")
+        XCTAssertFalse(merged.tracks.contains { $0.sha256 == movedBytes })
     }
 
     func testBehaviorARecordingMovedOutOfTheSurvivorComesBackWhenItsConversationIsMergedIn() async throws {
@@ -329,6 +332,104 @@ final class MergeConversationsTests: XCTestCase {
         XCTAssertEqual(joined.meeting.highlights.count, a.highlights.count)
         XCTAssertEqual(joined.meeting.timedNotes, a.timedNotes)
         XCTAssertFalse(joined.meeting.revisions.contains { if case .sync = $0.kind { return true } else { return false } })
+    }
+
+    /// The iPhone's merge copies its files, then a Mac starts processing one of them, so the final check stops it; the
+    /// same merge completes on the Mac. Whichever way the two meet, with or without what they had in common, the merged
+    /// conversation holds every recording.
+    func testBehaviorAMergeStoppedPartwayOnOneDeviceNeverHidesWhatAnotherDeviceMerged() async throws {
+        let phone = try await open()
+        let standup = try await conversation(phone, "Standup", at: start, said: "Morning everyone")
+        let planning = try await conversation(phone, "Planning", at: start.addingTimeInterval(3_600), said: "Budget review first")
+        try await phone.flushDurably()
+        let other = root.appendingPathComponent("Mac")
+        try FileManager.default.copyItem(at: phone.rootURL, to: other)
+        let mac = LibraryController(rootURL: other, sync: nil)
+        try await mac.load()
+        let base = try XCTUnwrap(phone.meeting(standup))
+
+        var downloaded = false
+        await assertRefused({
+            try await phone.mergeConversations([standup, planning], audio: { track, id in
+                if !downloaded { downloaded = true; phone.requestProcessing(planning, mode: .summaryOnly) }
+                return try await phone.audioURL(for: track, in: id)
+            }, photo: { photo, id in try await phone.photoURL(for: photo, in: id) }, context: self.context)
+        }, .busy("Planning"))
+        _ = try await merge([standup, planning], in: mac)
+
+        let stopped = try XCTUnwrap(phone.meeting(standup)), done = try XCTUnwrap(mac.meeting(standup))
+        XCTAssertEqual(done.presentTracks.count, 2)
+        for ancestor in [base, nil] as [Meeting?] {
+            for (local, remote) in [(stopped, done), (done, stopped)] {
+                let joined = MeetingMerge.merge(base: ancestor, local: local, remote: remote)
+                XCTAssertEqual(joined.meeting.tracks.sorted { $0.id.uuidString < $1.id.uuidString },
+                               done.tracks.sorted { $0.id.uuidString < $1.id.uuidString }, "the folded copy, whole")
+                XCTAssertEqual(joined.meeting.presentTracks.count, 2, "the planning's recording is in the merged conversation")
+                XCTAssertEqual(joined.warnings.filter { ancestor != nil || $0.contains("track") }, [], "\(joined.warnings)")
+            }
+        }
+    }
+
+    /// A conversation left with its merged recording marked waiting (the state the blocker could leave) shows it again when the
+    /// library opens, and when the merge is asked for again.
+    func testBehaviorAMergedRecordingLeftMarkedWaitingIsBackOnLoadAndWhenMergedAgain() async throws {
+        let library = try await open()
+        let standup = try await conversation(library, "Standup", at: start, said: "Morning everyone")
+        let planning = try await conversation(library, "Planning", at: start.addingTimeInterval(3_600), said: "Budget review first")
+        _ = try await merge([standup, planning], in: library)
+        let copyID = try XCTUnwrap(library.meeting(standup)?.tracks.first { $0.mergedFrom == planning }?.id)
+        func breakIt(_ library: LibraryController) {
+            library.update(standup) { meeting in
+                meeting.tracks[meeting.tracks.firstIndex { $0.id == copyID }!].removal = RecordingRemoval(removedAt: self.start, movedTo: planning)
+            }
+        }
+        breakIt(library)
+        try await library.flushDurably()
+        let reopened = LibraryController(rootURL: library.rootURL, sync: nil)
+        try await reopened.load()
+        XCTAssertNil(reopened.meeting(standup)?.tracks.first { $0.id == copyID }?.removal, "back when the library opens")
+        XCTAssertEqual(reopened.meeting(standup)?.presentTracks.count, 2)
+
+        breakIt(reopened)
+        _ = try await reopened.restoreFromTrash(planning)
+        _ = try await merge([standup, planning], in: reopened)
+        XCTAssertNil(reopened.meeting(standup)?.tracks.first { $0.id == copyID }?.removal, "and when the merge is asked for again")
+        XCTAssertNil(reopened.meeting(planning))
+    }
+
+    /// A copy's track already here without its file (as another device's sync leaves it before the audio arrives), and another
+    /// copy's place taken by a file that isn't its bytes: one track per ID, each with its own bytes, here and on disk.
+    func testBehaviorACopyIsWrittenOnceUnderItsIDWhateverIsAlreadyAtItsPlace() async throws {
+        let library = try await open()
+        let standup = try await conversation(library, "Standup", at: start, said: "Morning everyone")
+        let planning = try await conversation(library, "Planning", at: start.addingTimeInterval(3_600), said: "Budget review first")
+        await library.acquireLock()
+        _ = try await library.ingest(try file("whiteboard.wav"), into: planning, provenance: .file(source: .imported, duration: 30))
+        library.releaseLock()
+        let originals = try XCTUnwrap(library.meeting(planning)?.tracks)
+        let first = ConversationMerge.copyID(of: originals[0].id, folded: planning, into: standup)
+        let second = ConversationMerge.copyID(of: originals[1].id, folded: planning, into: standup)
+        library.update(standup) { meeting in
+            var track = RecordingTrack(id: first, source: originals[0].source, relativePath: "Originals/\(first.uuidString).wav", fileName: "first.wav",
+                                       sha256: originals[0].sha256)
+            track.mergedFrom = planning
+            track.removal = RecordingRemoval(removedAt: self.start, movedTo: planning)
+            meeting.tracks.append(track)
+        }
+        let taken = try await library.audioURL(for: RecordingTrack(relativePath: "Originals/\(second.uuidString).wav", fileName: "x.wav"), in: standup)
+        try Data("not the recording".utf8).write(to: taken)
+
+        _ = try await merge([standup, planning], in: library)
+        let reopened = LibraryController(rootURL: library.rootURL, sync: nil)
+        try await reopened.load()
+        for merged in [try XCTUnwrap(library.meeting(standup)), try XCTUnwrap(reopened.meeting(standup))] {
+            XCTAssertEqual(Set(merged.tracks.map(\.id)).count, merged.tracks.count, "no ID twice")
+            XCTAssertEqual(merged.presentTracks.count, 3)
+            for track in merged.tracks {
+                let bytes = try Data(contentsOf: try await library.audioURL(for: track, in: standup))
+                XCTAssertEqual(AudioDigest.sha256(data: bytes), track.sha256, "\(track.fileName) is its own bytes")
+            }
+        }
     }
 
     // MARK: Waiting

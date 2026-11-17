@@ -31,11 +31,12 @@ extension RecordingTrack {
     /// is found in its new conversation. A removed one is still found here, where it can be put back.
     public var isMovedOut: Bool { removal?.movedTo != nil }
 
-    /// A copy a merge made in the conversation it merges into, waiting for its conversation to be folded in
-    /// (`ConversationMerge.fold`): marked as moved to that conversation, so it's out of the transcript and processing, isn't
-    /// listed to be put back, and isn't counted as the same recording in two conversations. A merge that stopped partway
-    /// leaves them, and the merge asked for again finds them by their bytes.
-    public var isPendingMerge: Bool { mergedFrom != nil && removal?.movedTo == mergedFrom }
+    /// A merge's copy left waiting in the conversation it merges into, marked moved out to the conversation it came from:
+    /// what a merge that stopped partway left before merges kept their copies out of the conversation until the fold
+    /// (`LibraryController.mergeConversations`). Daybook never writes it now. Where it meets the copy folded in, the
+    /// folded one is the recording (`MeetingMerge`), and once its conversation is folded in it's put back
+    /// (`Meeting.settleMergeCopies`).
+    public var isWaitingMergeCopy: Bool { mergedFrom != nil && removal?.movedTo == mergedFrom }
 }
 
 extension Meeting {
@@ -55,6 +56,21 @@ extension Meeting {
         if group.contains(where: { $0.mergedFrom != nil }) { return true }
         let fields = Set(group.map { RecordingRemoval.movedHereField($0.id) })
         return revisions.contains { fields.contains($0.field) }
+    }
+
+    /// Puts back every merge copy left waiting (`RecordingTrack.isWaitingMergeCopy`) whose conversation is folded in
+    /// (`ConversationMerge.hasFolded`): the fold is the recording's, so it's in this conversation, not hidden in neither.
+    /// The library does it as it opens, a merge asked for again does it, and so does every sync merge. Returns whether
+    /// anything changed.
+    @discardableResult
+    public mutating func settleMergeCopies() -> Bool {
+        var changed = false
+        for index in tracks.indices {
+            guard tracks[index].isWaitingMergeCopy, let source = tracks[index].mergedFrom, ConversationMerge.hasFolded(source, into: self) else { continue }
+            tracks[index].removal = nil
+            changed = true
+        }
+        return changed
     }
 
     /// Its bookmarks, without those on a recording taken out of it: they leave with the recording (a moved one's are

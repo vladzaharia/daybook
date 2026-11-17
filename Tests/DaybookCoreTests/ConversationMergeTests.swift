@@ -436,6 +436,61 @@ final class ConversationMergeTests: XCTestCase {
 
     // MARK: Sync
 
+    /// A merge that stopped partway on one device, from a Daybook that left its copies in the conversation marked moved
+    /// out to where they came from, and the same merge completed on another.
+    private func waitingAndCompleted() throws -> (survivor: Meeting, folded: Meeting, waiting: Meeting, completed: Meeting, copyID: UUID) {
+        let survivor = recorded("Standup", at: start, seconds: 600)
+        var folded = recorded("Planning", at: start.addingTimeInterval(3_600), seconds: 300)
+        folded.notes = "Planning notes"
+        let original = folded.tracks[0]
+        let copyID = ConversationMerge.copyID(of: original.id, folded: folded.id, into: survivor.id)
+        let raw = RecordingTrack(id: copyID, source: original.source, relativePath: "Originals/\(copyID.uuidString).wav", fileName: "download.wav",
+                                 createdAt: start.addingTimeInterval(99_999), sha256: original.sha256)
+        var waiting = survivor
+        var waitingCopy = raw
+        waitingCopy.mergedFrom = folded.id
+        waitingCopy.removal = RecordingRemoval(removedAt: start.addingTimeInterval(99_999), movedTo: folded.id)
+        waiting.tracks.append(waitingCopy)
+        var completed = survivor
+        completed.tracks.append(raw)
+        ConversationMerge.fold(folded, into: &completed, placement: try XCTUnwrap(ConversationMerge.placements([survivor, folded])[folded.id]),
+                               copies: [original.id: copyID], fresh: [copyID], at: start)
+        return (survivor, folded, waiting, completed, copyID)
+    }
+
+    func testBehaviorAFoldedCopyBeatsAWaitingCopyOfTheSameRecordingWhicheverWayTheyMeet() throws {
+        let (survivor, folded, waiting, completed, copyID) = try waitingAndCompleted()
+        let expected = try XCTUnwrap(completed.tracks.first { $0.id == copyID })
+        XCTAssertNil(expected.removal)
+        for base in [nil, survivor, waiting] as [Meeting?] {
+            for (local, remote) in [(waiting, completed), (completed, waiting)] {
+                let result = MeetingMerge.merge(base: base, local: local, remote: remote)
+                let label = base == nil ? "no ancestor" : base == survivor ? "before the merge" : "the waiting copy"
+                XCTAssertEqual(result.meeting.tracks.first { $0.id == copyID }, expected, label)
+                XCTAssertEqual(result.meeting.presentTracks.count, 2, label)
+                XCTAssertEqual(result.warnings, [], label)
+                XCTAssertFalse(result.meeting.revisions.contains { if case .sync = $0.kind { return true } else { return false } }, label)
+                XCTAssertTrue(ConversationMerge.hasFolded(folded.id, into: result.meeting), label)
+            }
+        }
+    }
+
+    func testBehaviorAWaitingCopyOfAConversationFoldedInAlreadyIsInTheConversationAgain() throws {
+        let (_, folded, waiting, completed, copyID) = try waitingAndCompleted()
+        // The state the blocker left: the conversation folded in, its recording's copy still marked waiting.
+        var broken = completed
+        let index = try XCTUnwrap(broken.tracks.firstIndex { $0.id == copyID })
+        broken.tracks[index].removal = RecordingRemoval(removedAt: start, movedTo: folded.id)
+        XCTAssertTrue(broken.settleMergeCopies())
+        XCTAssertNil(broken.tracks[index].removal)
+        XCTAssertEqual(broken.tracks[index], completed.tracks[index])
+        XCTAssertFalse(broken.settleMergeCopies(), "once")
+        // One whose conversation isn't folded in yet is left for the merge asked for again.
+        var stopped = waiting
+        XCTAssertFalse(stopped.settleMergeCopies())
+        XCTAssertEqual(stopped, waiting)
+    }
+
     func testBehaviorSyncCountsARecordingMovedToTheConversationItWasMergedIntoOnce() async throws {
         let root = makeTemporaryFolder("DaybookMergeSync")
         let local = root.appendingPathComponent("A")

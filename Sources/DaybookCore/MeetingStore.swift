@@ -271,7 +271,7 @@ public actor MeetingStore {
     /// recording; merging and saving happen together afterwards, with nothing in between.
     public func importAudio(from sourceURL: URL, into meeting: Meeting, source: AudioSource = .imported,
                             sidecarURL: URL? = nil, offset: TimeInterval? = nil,
-                            device: DeviceRecordingIdentity? = nil, trackID: UUID? = nil) async throws -> Meeting {
+                            device: DeviceRecordingIdentity? = nil) async throws -> Meeting {
         let resource = try sourceURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
         guard resource.isRegularFile == true, (resource.fileSize ?? 0) > 0 else { throw LibraryError.invalidAudio(sourceURL.lastPathComponent) }
         if let offset, !offset.isFinite { throw LibraryError.invalidTranscript }
@@ -327,7 +327,7 @@ public actor MeetingStore {
                 }
             }
         } else {
-            let id = trackID ?? UUID()
+            let id = UUID()
             let ext = sourceURL.pathExtension.lowercased().filter { $0.isLetter || $0.isNumber }.prefix(12)
             let filename = id.uuidString + (ext.isEmpty ? "" : ".\(ext)")
             let relativePath = "Originals/\(filename)"
@@ -352,6 +352,50 @@ public actor MeetingStore {
         result.status = .imported; result.updatedAt = Date()
         try save(result)
         return result
+    }
+
+    /// A merge's copy of a folded conversation's recording (`track`, its bytes at `sourceURL`) in conversation `meetingID`'s
+    /// folder, under the ID every device gives it (`ConversationMerge.copyID`), and the track that describes it, which the
+    /// caller adds to the conversation when it folds (`LibraryController.mergeConversations`); `meeting.json` isn't
+    /// written. The file is `Originals/<id>` with the original's extension, the same path on every device. `existing` is
+    /// the conversation's track with that ID, when it has one (another device's fold synced, or a copy an earlier Daybook
+    /// left waiting): that track is the copy, never a second one, and its file is written where it's missing or isn't its
+    /// bytes. A file at a new copy's place that isn't the recording (a copy that stopped partway) is replaced. Bytes that
+    /// aren't the recording's (`sha256`) are refused, and nothing is written.
+    public func mergeCopy(of track: RecordingTrack, from sourceURL: URL, into meetingID: UUID, id: UUID,
+                          existing: RecordingTrack?) async throws -> RecordingTrack {
+        let directory = try meetingDirectory(for: meetingID)
+        let ext = (track.relativePath as NSString).pathExtension.lowercased().filter { $0.isLetter || $0.isNumber }.prefix(12)
+        let relativePath = existing?.relativePath ?? "Originals/\(id.uuidString)" + (ext.isEmpty ? "" : ".\(ext)")
+        let destination = try LocalFiles.relativeURL(relativePath, in: directory)
+        let expected = existing.map(\.sha256) ?? track.sha256
+        func described(_ digest: String) -> RecordingTrack {
+            existing ?? RecordingTrack(id: id, source: track.source, relativePath: relativePath, fileName: track.fileName,
+                                       createdAt: track.createdAt, duration: track.duration, sha256: digest)
+        }
+        // There already: a merge asked for again, or the same copy synced from another device.
+        if !expected.isEmpty, (try? destination.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true,
+           (try? await BlockingFileWork.sha256(destination)) == expected {
+            return described(expected)
+        }
+        let originals = destination.deletingLastPathComponent()
+        try LocalFiles.requireContained(originals, in: directory)
+        try LocalFiles.directory(originals)
+        let staged = originals.appendingPathComponent(".merge-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: staged) }
+        let hash = try await BlockingFileWork.run { isCancelled in
+            try FileManager.default.copyItem(at: sourceURL, to: staged)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: staged.path)
+            return try AudioDigest.sha256(fileURL: staged, isCancelled: isCancelled)
+        }
+        guard expected.isEmpty || hash == expected else { throw LibraryError.invalidAudio(track.fileName) }
+        if fm.fileExists(atPath: destination.path) {
+            _ = try fm.replaceItemAt(destination, withItemAt: staged)
+        } else {
+            try fm.moveItem(at: staged, to: destination)
+        }
+        noteWrite(destination)
+        return described(hash)
     }
 
     /// The same check, on the actor: only for a recording that appeared during an import's await.
