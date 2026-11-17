@@ -113,6 +113,66 @@ final class SummaryPlacementTests: XCTestCase {
     /// Personal, unless the person turns it on in Settings › Cloud (`CloudPlacements`).
     private let kept = SummaryPlacementPlanner.Conversation(cloudAllowed: false)
 
+    func testBehaviorAConversationNotFiledYetFollowsItsOwnSwitchAndAnUnknownOneNeverGoes() throws {
+        var switches = CloudPlacements()
+        let unfiled = Meeting(title: "Just recorded")
+        XCTAssertNil(unfiled.effectivePlacement)
+        XCTAssertTrue(switches.allows(unfiled), "Not filed: on until the person turns it off, as Always sent it before")
+        switches.set(.work, allowed: false)
+        XCTAssertTrue(switches.allows(unfiled), "Not Work's switch")
+        switches.setNotFiled(allowed: false)
+        XCTAssertFalse(switches.allows(unfiled))
+        XCTAssertTrue(CloudPlacements().allows(Meeting(title: "Filed", placement: .work)))
+        // A kind or placement a newer Daybook wrote: never sent, whatever the switches say.
+        let everything = CloudPlacements(allowed: ["work": true, "personal": true, CloudPlacements.notFiledKey: true])
+        func newer<Value>(_ raw: String, as type: Value.Type) throws -> Value where Value: Decodable {
+            try JSONDecoder().decode(type, from: Data("\"\(raw)\"".utf8))
+        }
+        var newerKind = Meeting(title: "Meditation")
+        newerKind.$kind = try newer("meditation", as: Extensible<MeetingKind>.self)
+        XCTAssertFalse(newerKind.$kind.isKnown)
+        XCTAssertFalse(everything.allows(newerKind))
+        var newerPlacement = Meeting(title: "Family")
+        newerPlacement.$placement = try newer("family", as: ExtensibleOptional<LibraryPlacement>.self)
+        XCTAssertFalse(everything.allows(newerPlacement))
+        // Its summary's kind decides while the conversation's is Automatic: unknown, it never goes.
+        var summarized = Meeting(title: "Summarized")
+        var summary = MeetingSummary(title: "Call", overview: "Talked.")
+        summary.$kind = try newer("meditation", as: Extensible<MeetingKind>.self)
+        summarized.summary = summary
+        XCTAssertFalse(everything.allows(summarized))
+        summarized.placement = .work
+        XCTAssertTrue(everything.allows(summarized), "Filed by the person: the summary's kind doesn't decide")
+    }
+
+    func testBehaviorSwitchesStoredInAShapeThisVersionCantReadLetNothingGo() throws {
+        func decode(_ json: String) throws -> CloudSummaryPreferences { try JSONDecoder().decode(CloudSummaryPreferences.self, from: Data(json.utf8)) }
+        let work = Meeting(title: "Work", placement: .work), unfiled = Meeting(title: "Not filed")
+        for stored in [#""on""#, #"{"version":2,"work":{"allowed":true}}"#, #"[true]"#, "null"] {
+            let preferences = try decode(#"{"policy":"always","placements":\#(stored)}"#)
+            XCTAssertEqual(preferences.policy, .always, stored)
+            XCTAssertFalse(preferences.allowsCloud(for: work), stored)
+            XCTAssertFalse(preferences.allowsCloud(for: unfiled), stored)
+            XCTAssertFalse(preferences.placements.allows(.work), "Settings shows every switch off: \(stored)")
+        }
+        // Written back as it was, so the version that wrote it reads it again.
+        let newer = try decode(#"{"policy":"ask","placements":{"version":2,"work":{"allowed":true}}}"#)
+        let written = try JSONSerialization.jsonObject(with: JSONEncoder().encode(newer)) as? [String: Any]
+        XCTAssertEqual(written?["placements"] as? NSDictionary, ["version": 2, "work": ["allowed": true]] as NSDictionary)
+        // A switch set here replaces it: that one on, the rest off.
+        var chosen = newer
+        chosen.placements.set(.work, allowed: true)
+        XCTAssertNil(chosen.placements.unreadable)
+        XCTAssertTrue(chosen.allowsCloud(for: work))
+        XCTAssertFalse(chosen.allowsCloud(for: unfiled))
+        XCTAssertFalse(chosen.placements.allows(.personal))
+        // Absent, the defaults; a newer switch in the shape this version reads is kept.
+        XCTAssertTrue(try decode(#"{"policy":"always"}"#).allowsCloud(for: unfiled))
+        let extra = try decode(#"{"placements":{"work":false,"family":true}}"#)
+        XCTAssertFalse(extra.placements.allows(.work))
+        XCTAssertEqual(try decode(String(decoding: JSONEncoder().encode(extra), as: UTF8.self)).placements, extra.placements)
+    }
+
     func testBehaviorAConversationKeptOffTheCloudHasNoCloudOnOfferEvenUnderAlways() {
         let here = SummaryPlacementPlanner(options: options(local: true, macs: [studio]), preferences: preferences(.always), at: start,
                                            conversation: kept)

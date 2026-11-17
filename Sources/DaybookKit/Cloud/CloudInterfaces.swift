@@ -40,38 +40,79 @@ public enum CloudEffort: String, Codable, CaseIterable, Comparable, Sendable {
     public static func < (a: CloudEffort, b: CloudEffort) -> Bool { allCases.firstIndex(of: a)! < allCases.firstIndex(of: b)! }
 }
 
-/// Which conversations may be summarized in the cloud, by where they're filed: a switch for each placement (Work,
-/// Personal) in Settings › Cloud, part of this device's preferences. Personal is off and every other placement on until
-/// the person changes them, as before there were switches. A conversation not filed yet (its kind isn't known until a
-/// summary finds it, and the person hasn't placed it) follows Work's switch, as it followed Always before. A placement a
-/// newer Daybook wrote, which this version can't read, never goes: what the person chose for it is unknown here.
+/// Which conversations may be summarized in the cloud, by where they're filed: a switch for each placement this version
+/// knows (`LibraryPlacement.allCases`: Work, Personal) and one for a conversation not filed yet, in Settings › Cloud, part
+/// of this device's preferences. Personal is off and every other switch on until the person changes them, as before there
+/// were switches: Always sent a conversation not filed yet. A conversation whose placement or kind a newer Daybook wrote,
+/// which this version can't read, never goes: what the person chose for it is unknown here. Switches stored in a shape
+/// this version can't read (malformed, or a newer version's) let nothing go, and are written back as they were until the
+/// person sets one here.
 public struct CloudPlacements: Codable, Equatable, Sendable {
-    /// Each placement's switch, by its raw value; one not stored has its default.
-    public var allowed: [String: Bool]
+    /// Each switch, by its key (a placement's raw value, or `notFiledKey`); one not stored has its default.
+    public private(set) var allowed: [String: Bool]
+    /// What was stored when it couldn't be read: nothing may go while it stands.
+    public private(set) var unreadable: SyncJSONValue?
+
+    /// The switch for a conversation not filed yet: neither the person nor its kind has placed it.
+    public static let notFiledKey = "notFiled"
 
     public init(allowed: [String: Bool] = [:]) { self.allowed = allowed }
 
+    /// Switches stored in a shape this version can't read: nothing goes.
+    public static func unreadable(_ stored: SyncJSONValue) -> CloudPlacements {
+        var placements = CloudPlacements()
+        placements.unreadable = stored
+        return placements
+    }
+
     /// Personal off, the rest on.
     public static func allowsByDefault(_ placement: LibraryPlacement) -> Bool { placement != .personal }
+    /// A conversation not filed yet goes until the person turns its switch off: what Always did before there were switches.
+    public static let allowsNotFiledByDefault = true
 
-    public func allows(_ placement: LibraryPlacement) -> Bool { allowed[placement.rawValue] ?? Self.allowsByDefault(placement) }
+    public func allows(_ placement: LibraryPlacement) -> Bool {
+        unreadable == nil && (allowed[placement.rawValue] ?? Self.allowsByDefault(placement))
+    }
 
-    public mutating func set(_ placement: LibraryPlacement, allowed: Bool) { self.allowed[placement.rawValue] = allowed }
+    /// The Not Filed switch.
+    public var allowsNotFiled: Bool { unreadable == nil && (allowed[Self.notFiledKey] ?? Self.allowsNotFiledByDefault) }
 
-    /// Whether `meeting` may be summarized in the cloud: its placement's switch (`Meeting.effectivePlacement`), Work's for
-    /// one not filed yet, and never for a placement this version doesn't know.
+    public mutating func set(_ placement: LibraryPlacement, allowed: Bool) { set(placement.rawValue, allowed: allowed) }
+
+    public mutating func setNotFiled(allowed: Bool) { set(Self.notFiledKey, allowed: allowed) }
+
+    /// A switch set here replaces what couldn't be read; every other switch stays off, as it read.
+    private mutating func set(_ key: String, allowed value: Bool) {
+        if unreadable != nil {
+            unreadable = nil
+            allowed = Dictionary(uniqueKeysWithValues: (LibraryPlacement.allCases.map(\.rawValue) + [Self.notFiledKey]).map { ($0, false) })
+        }
+        allowed[key] = value
+    }
+
+    /// Whether `meeting` may be summarized in the cloud: its placement's switch (`Meeting.effectivePlacement`), Not Filed's
+    /// for one not filed yet, and never when its placement or kind (or, when that decides, its summary's kind) is one
+    /// this version doesn't know.
     public func allows(_ meeting: Meeting) -> Bool {
-        guard meeting.$placement.isKnown else { return false }
-        return allows(meeting.effectivePlacement ?? .work)
+        guard meeting.$placement.isKnown, meeting.$kind.isKnown else { return false }
+        if meeting.placement == nil, meeting.kind == .auto, let summary = meeting.summary, !summary.$kind.isKnown { return false }
+        guard let placement = meeting.effectivePlacement else { return allowsNotFiled }
+        return allows(placement)
     }
 
     public init(from decoder: Decoder) throws {
-        allowed = (try? decoder.singleValueContainer().decode([String: Bool].self)) ?? [:]
+        let container = try decoder.singleValueContainer()
+        if let allowed = try? container.decode([String: Bool].self) {
+            self.allowed = allowed
+        } else {
+            allowed = [:]
+            unreadable = (try? container.decode(SyncJSONValue.self)) ?? .null
+        }
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
-        try container.encode(allowed)
+        if let unreadable { try container.encode(unreadable) } else { try container.encode(allowed) }
     }
 }
 
@@ -120,7 +161,12 @@ public struct CloudSummaryPreferences: Codable, Equatable, Sendable {
             effortIsChosen = stored != nil && stored != .medium
         }
         effort = effortIsChosen ? stored ?? CloudEffort.summaryDefault : CloudEffort.summaryDefault
-        placements = (try? values.decodeIfPresent(CloudPlacements.self, forKey: .placements)) ?? CloudPlacements()
+        // Switches stored but unreadable let nothing go: never the defaults, which may be more than the person allowed.
+        if values.contains(.placements) {
+            placements = (try? values.decode(CloudPlacements.self, forKey: .placements)) ?? .unreadable(.null)
+        } else {
+            placements = CloudPlacements()
+        }
     }
 
     /// An earlier version reads `effort` and knows only Low, Medium, and High, and one value it can't read would reset all

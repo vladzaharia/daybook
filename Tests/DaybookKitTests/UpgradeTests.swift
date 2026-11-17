@@ -222,7 +222,10 @@ final class UpgradeTests: XCTestCase {
         var workOff = CloudPlacements()
         workOff.set(.work, allowed: false)
         XCTAssertNil(offer(work, cloud: sonnet, placements: workOff), "Work kept off")
-        XCTAssertNil(offer(unsorted, cloud: sonnet, placements: workOff), "Not filed yet: follows Work")
+        XCTAssertEqual(offer(unsorted, cloud: sonnet, placements: workOff)?.place, .cloud(sonnet), "Not filed yet: its own switch, not Work's")
+        var notFiledOff = CloudPlacements()
+        notFiledOff.setNotFiled(allowed: false)
+        XCTAssertNil(offer(unsorted, cloud: sonnet, placements: notFiledOff))
         XCTAssertEqual(offer(unsorted, cloud: sonnet)?.place, .cloud(sonnet), "…which is on by default")
         // A placement a newer Daybook wrote is never sent: what the person chose for it is unknown here.
         let json = String(decoding: try JSONEncoder().encode(work), as: UTF8.self).replacingOccurrences(of: #""placement":"work""#,

@@ -246,6 +246,9 @@ public struct CloudSummarySections: View {
                         get: { cloud.preferences.placements.allows(placement) },
                         set: { cloud.preferences.placements.set(placement, allowed: $0) }))
                 }
+                Toggle(label(SettingsWords.notFiled), isOn: Binding(
+                    get: { cloud.preferences.placements.allowsNotFiled },
+                    set: { cloud.preferences.placements.setNotFiled(allowed: $0) }))
             }
             Section("Quality") {
                 ForEach(CloudTier.allCases.filter { !cloud.offers(in: $0).isEmpty }, id: \.self) { tier in
