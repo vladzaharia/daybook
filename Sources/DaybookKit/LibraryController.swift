@@ -34,6 +34,9 @@ public final class LibraryController {
     /// A sync result is being applied: its saves don't ask for another sync, and a device's
     /// processing waits.
     public private(set) var isApplyingSync = false
+    /// The conversations a merge is working on now (`mergeConversations`): another merge of any of them waits, and the
+    /// apps leave Merge… off for them meanwhile.
+    public internal(set) var mergingIDs: Set<UUID> = []
 
     public let rootURL: URL
     /// The sync folder, when the app has one. Saves ask it to sync.
@@ -131,6 +134,8 @@ public final class LibraryController {
             meetings[index] = meeting
             persist(meeting, requestingSync: false)
         }
+        // A merge's copy an earlier Daybook left waiting, whose conversation is folded in since, is back in it.
+        for index in meetings.indices where meetings[index].settleMergeCopies() { persist(meetings[index], requestingSync: false) }
         // The sweep is done: from here the record lists only work this run starts.
         saveLocalWork()
         await saves.drain()

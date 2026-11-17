@@ -211,8 +211,11 @@ extension Meeting {
     /// The recording a new source is lined up against: placed surely (`TimelineClock.isStrong`: never one placed only by
     /// shared phrases or the clocks, so a guess isn't composed on a guess), not on the same clock as anything
     /// `excluding` names, and the one most likely to share sound with another recorder (this Mac's original
-    /// microphone, then computer audio, then recorders and files), longest first.
-    public func alignmentReference(excluding: Set<UUID> = []) -> RecordingTrack? {
+    /// microphone, then computer audio, then recorders and files), longest first. On the same stretch of time as
+    /// `onStretchOf` (`RecordingTrack.stretch`): the conversation's own, with none: a recording that a merge placed
+    /// after the rest was made at another time, so its sound is never what another is compared with.
+    public func alignmentReference(excluding: Set<UUID> = [], onStretchOf subject: UUID? = nil) -> RecordingTrack? {
+        let stretch = tracks.first { $0.id == subject }?.stretch
         func rank(_ track: RecordingTrack) -> Int {
             switch track.source {
             case .microphone: return track.derivedFrom == nil ? 0 : 1
@@ -234,7 +237,7 @@ extension Meeting {
             return false
         }
         return tracks.filter { track in
-            !excluding.contains(track.id) && !track.isRemoved && clock(of: track.id)?.isStrong == true
+            !excluding.contains(track.id) && !track.isRemoved && clock(of: track.id)?.isStrong == true && track.stretch == stretch
                 && !(track.alignment?.clockID.map(excludedClocks.contains) ?? false)
                 && !excludedFamilies.contains(track.derivedFrom ?? track.id) && !excludedFamilies.contains(track.id)
                 && !restsOnExcluded(track.id)
@@ -408,8 +411,9 @@ extension Meeting {
     }
 
     func captureGroups() -> [CaptureGroup] {
+        // A merge's copy (`RecordingTrack.mergedFrom`) was captured for another conversation, and the merge placed it.
         let captured = tracks.filter { track in
-            track.alignment == nil && track.deviceKind == nil && !track.isRemoved && track.capture != nil
+            track.alignment == nil && track.deviceKind == nil && !track.isRemoved && track.capture != nil && track.mergedFrom == nil
                 && (track.source == .microphone || track.source == .systemAudio) && track.offset?.isFinite == true
         }
         guard captured.count > 1 else { return [] }

@@ -615,7 +615,11 @@ public actor LibrarySyncEngine {
         for id in pass.deletes { pass.output.removeValue(forKey: id); pass.changed.remove(id); pass.notLocalAudio.removeValue(forKey: id) }
         var sourceMeetings: [String: Set<UUID>] = [:]
         for meeting in pass.output.values {
-            for track in meeting.tracks where !track.sha256.isEmpty { sourceMeetings[track.sha256, default: []].insert(meeting.id) }
+            // A recording moved out (Move to New Conversation, or a merge not yet in the Trash) is the copy in the
+            // conversation it moved to.
+            for track in meeting.tracks where !track.sha256.isEmpty && !track.isMovedOut {
+                sourceMeetings[track.sha256, default: []].insert(meeting.id)
+            }
         }
         if sourceMeetings.values.contains(where: { $0.count > 1 }) {
             pass.warnings.append("The same recording is in more than one conversation. They stay separate.")

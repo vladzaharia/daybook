@@ -113,6 +113,7 @@ private struct ReadingLayout: View {
           ? "Their audio, notes, and summaries go with them."
           : "Its audio, notes, and summary go with it.")
     }
+    .modifier(PhoneMergeConfirmation(library: library))
     .onChange(of: library.isLoaded, initial: true) { _, loaded in
       guard loaded else { return }
       #if DEBUG
@@ -324,6 +325,72 @@ private struct ReadingLayout: View {
       }
     } else {
       session.showNewest(of: library.meetings)
+    }
+  }
+}
+
+/// Merge…'s question ("Merge 3 conversations?"), from a row's menu or the selection bar: it can't be undone. Merging
+/// takes the audio and photos from iCloud where they aren't on this iPhone, and asks a Mac to transcribe the merged
+/// conversation again in full.
+private struct PhoneMergeConfirmation: ViewModifier {
+  let library: LibraryController
+  @Environment(ReadingSession.self) private var session
+  @Environment(PhoneAppModel.self) private var model
+  @Environment(\.audioProvider) private var provider
+  @Environment(\.summaryPlacement) private var placement
+
+  func body(content: Content) -> some View {
+    content
+      .overlay(alignment: .top) {
+        if let progress = session.mergeProgress {
+          ProgressView(value: progress).progressViewStyle(.linear).tint(DaybookPalette.accent)
+        }
+      }
+      .alert(
+        LibraryWords.mergeTitle(session.confirmingMerge.count),
+        isPresented: Binding(
+          get: { !session.confirmingMerge.isEmpty }, set: { if !$0 { session.confirmingMerge = [] } })
+      ) {
+        Button("Merge", role: .destructive) { merge(session.confirmingMerge) }
+        Button("Cancel", role: .cancel) {}
+      } message: {
+        Text(LibraryWords.mergeMessage)
+      }
+  }
+
+  private func merge(_ ids: [UUID]) {
+    let library = library, provider = provider, placement = placement, session = session, model = model
+    // What's recording is read each time the merge asks, not once here: the downloads can take minutes.
+    let recordingOnMac = { PhoneActions.recordingOnMac(model) }
+    // The recordings to download, to say how far they've come.
+    let total = max(1, library.meetings.filter { ids.contains($0.id) }.map { $0.tracks.filter { !$0.isMovedOut }.count }.reduce(0, +))
+    Task {
+      var done = 0
+      session.mergeProgress = 0
+      defer { session.mergeProgress = nil }
+      do {
+        let survivor = try await library.mergeConversations(
+          ids,
+          audio: { track, id in
+            let finished = done
+            defer { done += 1 }
+            return try await provider.localAudio(
+              for: track, in: id,
+              progress: { fraction in
+                Task { @MainActor in session.mergeProgress = (Double(finished) + fraction) / Double(total) }
+              })
+          },
+          photo: { photo, id in try await provider.localPhoto(for: photo, in: id) },
+          context: { PhoneActions.mergeContext($0, recordingOnMac: recordingOnMac()) },
+          process: { id, mode in PhoneActions.process(id, mode, library: library, placement: placement) })
+        for id in ids where id != survivor { session.forget(id) }
+      } catch {
+        session.alert = ReadingAlert(title: "Couldn’t Merge", error: error, fallback: "Try again.")
+      }
+      if session.isSelecting {
+        session.isSelecting = false
+        session.selection = []
+      }
     }
   }
 }

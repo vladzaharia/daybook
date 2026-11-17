@@ -92,6 +92,28 @@ working-set ratio on 8–32 GB Macs and an iPhone's memory headroom in practice;
 provider (`--cloud-check`); local thinking, as above; screenshots of Settings › Cloud's new switches and the iPhone's
 Effort menu.
 
+## Merging conversations (2026-11-16)
+
+Merge… on both apps (docs/architecture.md, "Merging conversations"), built on `feature/merge-conversations`. Nothing
+has run on a device or with real recordings: what's verified is the package's tests, the Mac app end to end with the fake
+inference engine, and the iPhone app's unit tests in the Simulator.
+
+- **Runs.** The package: 2,700 tests, 5 skipped, 1 failure, the guard against a type both apps declare (each app's merge
+  question is named for its platform since; `SharedNameTests` 4 of 4 after). The iPhone bundle: 507 tests, none failed.
+  The file-protection suites that fail on this Mac on `main` passed in both runs.
+- **Tests.** `ConversationMergeTests` (placement after, alongside, and alongside a later one; every run with its words;
+  corrections through fusion; the owner and a named person as one speaker, a taken ID, Daybook's numbers; one voice
+  profile under two names; notes, ink, tags, Version History, folding twice; the sync warning),
+  `MergeConversationsTests` (files and photos copied, the others in the Trash with their recordings marked moved; the
+  busy guard; a merge asked for again after a copy was left, and after the fold; the iPhone's request),
+  `MergeProcessingTests` (on the Mac: an hour apart, every recording transcribed again, the sound aligner never asked,
+  names and a correction kept, one summary; recorded alongside, lined up by the stubbed sound from the clocks' prior),
+  and the action lists on both apps (`ConversationActionsTests`, `LibraryListTests`, `ConversationActionPerformerTests`,
+  `LibraryListPhoneTests`).
+- **Needs real recordings.** A merge of two Macs' recordings of one meeting through the real `AudioAligner`; names across
+  a merge of recordings from different kinds of microphone (the earlier speaker's voice is the one kept); on the iPhone,
+  a merge whose audio and photos download first, with the request taken up by a Mac.
+
 ## Unsure words in the transcript (2026-11-16)
 
 Words the transcript may have wrong, marked where they read (docs/architecture.md, "Unsure words"), built on
