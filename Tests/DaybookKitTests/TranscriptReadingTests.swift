@@ -81,6 +81,33 @@ final class TranscriptReadingTests: XCTestCase {
         XCTAssertEqual(second.marks.labelSegments[meeting.unifiedTranscript[0].id], "Opening")
     }
 
+    func testTheUnsureWordMarksAreWorkedOutAgainOnlyWhenWhatTheyDependOnChanges() throws {
+        var meeting = Meeting(title: "Unsure")
+        let track = UUID()
+        meeting.tracks = [RecordingTrack(id: track, source: .microphone, relativePath: "Originals/a.m4a", fileName: "a.m4a", duration: 60, offset: 0)]
+        meeting.unifiedTranscript = [TranscriptSegment(trackID: track, start: 2, end: 4, text: "We ship on Friday")]
+        meeting.transcriptFlags = [TranscriptFlag(trackID: track, start: 3, end: 3.4, text: "Friday", reason: .disagreement, alternative: "Thursday")]
+        XCTAssertEqual(TranscriptLayout.cached(for: meeting).unsure.values.flatMap { $0 }.map(\.flag.text), ["Friday"])
+        let builds = TranscriptLayout.markBuilds, layouts = TranscriptLayout.builds
+        // Anything else about the conversation: the layout, but not the marks.
+        meeting.title = "Weekly"
+        meeting.setNotes("Notes")
+        meeting.highlights.append(Highlight(time: 2.5, text: "Pricing"))
+        XCTAssertEqual(TranscriptLayout.cached(for: meeting).unsure.values.flatMap { $0 }.count, 1)
+        XCTAssertEqual(TranscriptLayout.builds, layouts + 1)
+        XCTAssertEqual(TranscriptLayout.markBuilds, builds, "Marks don't depend on a title, notes, or bookmarks")
+        // An answer, or a corrected word, does.
+        XCTAssertTrue(meeting.keepFlaggedWords(try XCTUnwrap(meeting.transcriptFlags?.first).id))
+        XCTAssertTrue(TranscriptLayout.cached(for: meeting).unsure.isEmpty)
+        XCTAssertEqual(TranscriptLayout.markBuilds, builds + 1)
+        XCTAssertTrue(meeting.withdrawFlagAnswer(try XCTUnwrap(meeting.transcriptFlags?.first).id))
+        XCTAssertEqual(TranscriptLayout.cached(for: meeting).unsure.values.flatMap { $0 }.count, 1)
+        XCTAssertEqual(TranscriptLayout.markBuilds, builds + 2)
+        meeting.correctSegment(id: meeting.unifiedTranscript[0].id, text: "We ship on Monday")
+        XCTAssertTrue(TranscriptLayout.cached(for: meeting).unsure.isEmpty)
+        XCTAssertEqual(TranscriptLayout.markBuilds, builds + 3)
+    }
+
     func testBehaviorTheLayoutKnowsWhichPassagesThePersonCorrected() {
         var meeting = Meeting(title: "Corrected")
         let track = UUID()
