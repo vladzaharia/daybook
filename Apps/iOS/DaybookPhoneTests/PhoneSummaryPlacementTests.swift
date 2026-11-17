@@ -534,8 +534,9 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         XCTAssertTrue(cloud.asked.isEmpty, "Never sent")
         XCTAssertEqual(summaryRequests(rig.library, id).first?.claim?.lease, 0, "Given back, for the Mac it would have gone to")
         // In front, a countdown to the cloud may begin; inactive (Control Center), it goes where it would have run.
+        // The person opens Daybook: iOS has it active and the scene's phase says so.
         active = true
-        relaunched.refresh()
+        relaunched.cameToForeground()
         XCTAssertTrue(relaunched.isOnScreen)
         let next = long(rig.library, "In front")
         await relaunched.summaryIsDue(next)
