@@ -655,6 +655,7 @@ struct RowMenu: View {
   @Environment(\.summaryPlacement) private var placement
   @Environment(\.undoManager) private var undoManager
   @Environment(PersonalLock.self) private var personalLock: PersonalLock?
+  @Environment(PhoneAppModel.self) private var model
 
   var body: some View {
     let meetings = library.meetings.filter { ids.contains($0.id) }
@@ -681,7 +682,10 @@ struct RowMenu: View {
       Divider()
     }
     if !meetings.isEmpty {
-      ConversationActionMenuItems(PhoneActions.groups(for: ids, library: library), platform: .iPhone) {
+      ConversationActionMenuItems(
+        PhoneActions.groups(for: ids, library: library, recordingOnMac: PhoneActions.recordingOnMac(model)),
+        platform: .iPhone
+      ) {
         PhoneActions.perform(
           $0, on: ids, library: library, session: session, provider: provider,
           placement: placement, undoManager: undoManager)
@@ -695,13 +699,29 @@ struct RowMenu: View {
 /// does them, and this iPhone's own here.
 @MainActor
 enum PhoneActions {
-  /// The actions for one conversation, or a selection's.
-  static func groups(for ids: [UUID], library: LibraryController) -> [ConversationActionGroup] {
+  /// The actions for one conversation, or a selection's. `recordingOnMac` are the conversations connected Macs are
+  /// recording now, which Merge… waits for.
+  static func groups(for ids: [UUID], library: LibraryController, recordingOnMac: Set<UUID> = []) -> [ConversationActionGroup] {
     let selected = library.meetings.filter { ids.contains($0.id) }
     guard let only = selected.first, selected.count == 1 else {
-      return ConversationActions.batch(ids, in: library.meetings, context: .init(platform: .iPhone))
+      return ConversationActions.batch(
+        ids, in: library.meetings, context: .init(platform: .iPhone),
+        each: { mergeContext($0, recordingOnMac: recordingOnMac) })
     }
     return groups(for: only)
+  }
+
+  /// What this iPhone knows of a conversation that Merge… asks: a Mac recording it, this iPhone processing it, and its
+  /// processing asked for or under way anywhere (`ConversationActions.Context.mergeBusy`).
+  static func mergeContext(_ meeting: Meeting, recordingOnMac: Set<UUID>) -> ConversationActions.Context {
+    var context = ConversationInfo.context(meeting)
+    context.isRecording = recordingOnMac.contains(meeting.id)
+    return context
+  }
+
+  /// The conversations the Macs this iPhone is connected to are recording now.
+  static func recordingOnMac(_ model: PhoneAppModel) -> Set<UUID> {
+    PhoneRowStatus.recording(model.link.connectedMacs.compactMap(\.recording))
   }
 
   /// One conversation's actions on this iPhone: Take Photo where there's a camera, Reprocess unless it's waiting.
@@ -740,6 +760,7 @@ enum PhoneActions {
         case .versionHistory(let id): session.sheet = .history(id)
         case .moveToFolder(let ids): session.sheet = .move(ids)
         case .moveToTrash(let ids): session.confirmingTrash = ids
+        case .merge(let ids): if ids.count > 1 { session.confirmingMerge = ids }
         }
       },
       copy: { LocalPasteboard.copy($0) },
@@ -758,7 +779,7 @@ enum PhoneActions {
         break  // The Mac's.
       case .play, .adjustTiming, .showOriginalTranscript, .moveToNewConversation, .removeRecording:
         break  // A recording's, in Info.
-      case .copySummary, .process, .versionHistory, .moveToFolder, .tags, .moveTo, .moveToTrash:
+      case .copySummary, .process, .versionHistory, .moveToFolder, .tags, .moveTo, .merge, .moveToTrash:
         break  // The library's (`ConversationActionPerformer`).
       }
     }
@@ -817,10 +838,10 @@ private struct SelectionBar: View {
   @Environment(\.audioProvider) private var provider
   @Environment(\.summaryPlacement) private var placement
   @Environment(\.undoManager) private var undoManager
+  @Environment(PhoneAppModel.self) private var model
 
   var body: some View {
-    let groups = ConversationActions.batch(
-      ids, in: library.meetings, context: .init(platform: .iPhone))
+    let groups = PhoneActions.groups(for: ids, library: library, recordingOnMac: PhoneActions.recordingOnMac(model))
     let actions = ConversationActionMenuItems.shown(groups, on: .iPhone).flatMap(\.actions)
     HStack(spacing: 0) {
       if actions.isEmpty {

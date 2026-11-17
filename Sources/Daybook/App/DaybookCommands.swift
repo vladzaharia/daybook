@@ -199,6 +199,8 @@ private struct WindowCommands: Commands {
 private struct ConversationCommands: Commands {
     let state: AppState
     @FocusedValue(\.shownConversation) private var shownID
+    /// Several conversations the library window's list selects, for Merge….
+    @FocusedValue(\.selectedConversations) private var selected
 
     var body: some Commands {
         let meeting = state.shownMeeting(shownID)
@@ -238,6 +240,13 @@ private struct ConversationCommands: Commands {
             }
             .disabled(meeting == nil)
             PlacementMenuItem(state: state, meeting: meeting)
+            // What the selection's menu says of it (`ConversationActions.batch`): two or more, none of them busy.
+            let merge = selected.flatMap { ids in
+                ConversationActions.batch(Array(ids), in: state.meetings, context: .init(platform: .mac), each: { MeetingInspector.context(state, $0) })
+                    .flatMap(\.actions).first { $0.id == .merge }
+            }
+            Button("Merge…") { if let selected { state.window.confirmingMerge = Array(selected) } }
+                .disabled(merge?.isAvailable != true)
             Divider()
             Button("Version History…") { state.window.sheet = .versionHistory }
                 .disabled(meeting?.revisions.isEmpty != false)

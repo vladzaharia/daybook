@@ -93,6 +93,8 @@ final class ReadingSession {
     var alert: ReadingAlert?
     /// Conversations waiting for the person to confirm moving them to the Trash.
     var confirmingTrash: [UUID] = []
+    /// Conversations waiting for the person to confirm merging them (Merge…).
+    var confirmingMerge: [UUID] = []
 
     let player = PlaybackController()
     /// Debug launch arguments for screenshots, applied once the library has loaded.

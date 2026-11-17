@@ -37,6 +37,8 @@ public struct ConversationAction: Equatable, Identifiable, Sendable {
         case tags
         case moveTo(LibraryPlacement)
         case showInFinder
+        /// Several selected: they become one conversation (`LibraryController.mergeConversations`).
+        case merge
         // The Trash
         case moveToTrash
         // A recording (Info › Audio)
@@ -133,6 +135,14 @@ public enum ConversationActions {
             default: return nil
             }
         }
+
+        /// Why it can't be merged now, when it can't: what keeps a recording in it (`recordingBusy`), or a recording made
+        /// alongside it that hasn't arrived yet, which would land on a timeline the merge moved.
+        public var mergeBusy: String? {
+            if let busy = recordingBusy { return busy }
+            if case .awaitingRecordings? = status { return "Waiting for a recording" }
+            return nil
+        }
     }
 
     /// The conversation's actions, grouped in order, with what this platform doesn't show left out.
@@ -227,14 +237,18 @@ public enum ConversationActions {
                            symbol: personal ? "briefcase" : "house")
     }
 
-    /// Several conversations selected: filing them, summarizing those with a transcript again, and the Trash.
-    public static func batch(_ ids: [UUID], in meetings: [Meeting], context: Context) -> [ConversationActionGroup] {
+    /// Several conversations selected: filing them, merging them into one, summarizing those with a transcript again, and
+    /// the Trash. `each` is what the app knows about each one (recording, processing): Merge… waits while any of them is
+    /// busy (`Context.mergeBusy`).
+    public static func batch(_ ids: [UUID], in meetings: [Meeting], context: Context,
+                             each: ((Meeting) -> Context)? = nil) -> [ConversationActionGroup] {
         let selected = meetings.filter { ids.contains($0.id) }
         guard !selected.isEmpty else { return [] }
         if selected.count == 1, let meeting = selected.first { return actions(for: meeting, context: context) }
         let mac = context.platform == .mac
         let personal = selected.allSatisfy { $0.effectivePlacement == .personal }
         let summarizable = selected.contains { !$0.unifiedTranscript.isEmpty }
+        let mergeBusy = context.busy ?? selected.lazy.compactMap { (each?($0) ?? context).mergeBusy }.first
         let groups = [
             ConversationActionGroup(id: .reprocess, actions: [
                 ConversationAction(id: .process(.summaryOnly), title: ProcessingWords.title(.summaryOnly), symbol: "text.alignleft",
@@ -244,6 +258,9 @@ public enum ConversationActions {
                 ConversationAction(id: .moveToFolder, title: mac ? "Move to Folder" : "Move to Folder…", symbol: "folder"),
                 ConversationAction(id: .tags, title: "Tags…", symbol: "tag"),
                 placement(personal),
+                // It asks first: it can't be undone.
+                ConversationAction(id: .merge, title: "Merge…", symbol: "arrow.triangle.merge",
+                                   availability: mergeBusy.map { .unavailable($0) } ?? .available),
             ]),
             ConversationActionGroup(id: .trash, actions: [
                 ConversationAction(id: .moveToTrash, title: "Move \(selected.count) to Trash…", symbol: "trash", role: .destructive,
