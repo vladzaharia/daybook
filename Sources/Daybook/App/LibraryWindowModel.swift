@@ -80,6 +80,8 @@ final class LibraryWindowModel {
     var sheet: ActiveSheet?
     /// Conversations waiting for the person to confirm moving them to the Trash.
     var confirmingTrash: [UUID] = []
+    /// Conversations waiting for the person to confirm merging them (Merge…).
+    var confirmingMerge: [UUID] = []
     /// Set to move keyboard focus to a conversation's title on its page.
     var titleFocusRequest: UUID?
     /// A moment's word over the page after something that leaves nothing else to see: Copy Summary's "Copied", from

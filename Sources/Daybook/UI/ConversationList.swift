@@ -421,7 +421,8 @@ private struct RowMenu: View {
                                         perform: { MacActions.perform($0, on: [only.id], state: state, undoManager: undoManager, window: window) },
                                         custom: { MacActions.custom($0, ids: [only.id], state: state) })
         } else if !meetings.isEmpty {
-            ConversationActionMenuItems(ConversationActions.batch(ids, in: state.meetings, context: .init(platform: .mac)), platform: .mac,
+            ConversationActionMenuItems(ConversationActions.batch(ids, in: state.meetings, context: .init(platform: .mac),
+                                                                  each: { MeetingInspector.context(state, $0) }, merging: state.library.mergingIDs), platform: .mac,
                                         perform: { MacActions.perform($0, on: ids, state: state, undoManager: undoManager, window: window) },
                                         custom: { MacActions.custom($0, ids: ids, state: state) })
         }
@@ -434,7 +435,7 @@ private struct RowMenu: View {
 }
 
 /// Several conversations selected, on the page: what can be done to all of them, from `ConversationActions.batch`
-/// (Summarize Again, Move to Folder, Tags…, Work or Personal, the Trash), as buttons.
+/// (Summarize Again, Move to Folder, Tags…, Work or Personal, Merge…, the Trash), as buttons.
 struct BatchActionButtons: View {
     let state: AppState
     let ids: [UUID]
@@ -442,7 +443,8 @@ struct BatchActionButtons: View {
     @Environment(\.undoManager) private var undoManager
 
     var body: some View {
-        let groups = ConversationActions.batch(ids, in: state.meetings, context: .init(platform: .mac))
+        let groups = ConversationActions.batch(ids, in: state.meetings, context: .init(platform: .mac),
+                                              each: { MeetingInspector.context(state, $0) }, merging: state.library.mergingIDs)
         let actions = groups.flatMap(\.actions)
         VStack(spacing: DaybookSpacing.s3) {
             HStack {
@@ -510,6 +512,7 @@ enum MacActions {
                     state.window.sheet = .versionHistory
                 case .moveToFolder: break // A menu of the folders (`custom`).
                 case .moveToTrash(let ids): state.window.confirmingTrash = ids
+                case .merge(let ids): if ids.count > 1 { state.window.confirmingMerge = ids }
                 }
             },
             copy: { LocalPasteboard.copy($0) },
@@ -533,7 +536,7 @@ enum MacActions {
                 break // The iPhone's.
             case .play, .adjustTiming, .showOriginalTranscript, .moveToNewConversation, .removeRecording:
                 break // A recording's, in the inspector.
-            case .copySummary, .process, .versionHistory, .moveToFolder, .tags, .moveTo, .moveToTrash:
+            case .copySummary, .process, .versionHistory, .moveToFolder, .tags, .moveTo, .merge, .moveToTrash:
                 break // The library's (`ConversationActionPerformer`).
             }
         }

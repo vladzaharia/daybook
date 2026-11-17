@@ -12,6 +12,9 @@ extension FocusedValues {
     /// conversation of the imported recording it shows. Nil with none, or with several selected. For menus and other
     /// windows that act on what the person is looking at.
     @Entry var shownConversation: UUID?
+    /// The conversations the library window's list selects when it selects several, for Conversation › Merge…; nil
+    /// with one or none.
+    @Entry var selectedConversations: Set<UUID>?
     /// Whether the library window's toolbar shows, for View › Show/Hide Toolbar.
     @Entry var libraryToolbarShown: Binding<Bool>?
     /// Whether the library window's inspector shows, for View › Show/Hide Inspector (⌃⌘I); nil without a conversation
@@ -151,6 +154,7 @@ struct LibraryView: View {
             Text(state.window.confirmingTrash.count > 1 ? "Their audio, notes, and summaries go with them."
                  : "Its audio, notes, and summary go with it.")
         }
+        .modifier(MacMergeConfirmation(state: state))
         .alert(state.shownProblem?.title ?? "", isPresented: Binding(get: { state.shownProblem != nil }, set: { if !$0 { state.dismissProblem() } }),
                presenting: state.shownProblem) { problem in
             Button("OK") { state.dismissProblem() }
@@ -647,6 +651,29 @@ private struct BatchSelectionView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(DaybookPalette.paper)
+    }
+}
+
+/// Merge…'s question ("Merge 3 conversations?"), from whichever menu asked: it can't be undone. The selection of several
+/// is what Conversation › Merge… acts on (`FocusedValues.selectedConversations`).
+private struct MacMergeConfirmation: ViewModifier {
+    @Bindable var state: AppState
+
+    private var several: Set<UUID>? { state.window.selection.count > 1 ? state.window.selection : nil }
+
+    func body(content: Content) -> some View {
+        content
+            .focusedSceneValue(\.selectedConversations, several)
+            .alert(LibraryWords.mergeTitle(state.window.confirmingMerge.count),
+                      isPresented: Binding(get: { !state.window.confirmingMerge.isEmpty }, set: { if !$0 { state.window.confirmingMerge = [] } })) {
+            Button("Merge", role: .destructive) {
+                state.mergeConversations(state.window.confirmingMerge)
+                state.window.confirmingMerge = []
+            }
+            Button("Cancel", role: .cancel) { state.window.confirmingMerge = [] }
+        } message: {
+            Text(LibraryWords.mergeMessage)
+        }
     }
 }
 

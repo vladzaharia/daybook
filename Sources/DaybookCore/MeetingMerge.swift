@@ -107,10 +107,23 @@ public enum MeetingMerge {
                 return track
             }
         }
-        result.tracks = items("track", unmarked(local.tracks), unmarked(remote.tracks), unmarked(base?.tracks ?? []))
+        // A merge's copy one device left waiting (`RecordingTrack.isWaitingMergeCopy`) and the copy another folded in are one
+        // recording, and the folded one is it, whole: never a conflict, whichever side or ancestor holds which.
+        func folding(_ tracks: [RecordingTrack], over others: [RecordingTrack]) -> [RecordingTrack] {
+            tracks.map { track in
+                guard track.isWaitingMergeCopy else { return track }
+                return others.first { $0.id == track.id && !$0.isWaitingMergeCopy } ?? track
+            }
+        }
+        let localTracks = folding(local.tracks, over: remote.tracks)
+        let remoteTracks = folding(remote.tracks, over: local.tracks)
+        // What they had in common was the waiting copy: the folded ones are compared as made apart, so either order is the same.
+        let foldedIDs = Set((localTracks + remoteTracks).filter { $0.mergedFrom != nil && !$0.isWaitingMergeCopy }.map(\.id))
+        let baseTracks = (base?.tracks ?? []).filter { !($0.isWaitingMergeCopy && foldedIDs.contains($0.id)) }
+        result.tracks = items("track", unmarked(localTracks), unmarked(remoteTracks), unmarked(baseTracks))
         for index in result.tracks.indices {
             let id = result.tracks[index].id
-            let a = local.tracks.first { $0.id == id }, b = remote.tracks.first { $0.id == id }, old = base?.tracks.first { $0.id == id }
+            let a = localTracks.first { $0.id == id }, b = remoteTracks.first { $0.id == id }, old = baseTracks.first { $0.id == id }
             if let a, let b {
                 // In the conversation is the ancestor where there's none: a mark made on one side is that side's.
                 result.tracks[index].removal = choose("track-removal:\(id)", a.removal, b.removal, .some(old?.removal))
@@ -233,6 +246,8 @@ public enum MeetingMerge {
         }
         result.revisions = revisions.values.sorted { $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date < $1.date }
         result.updatedAt = max(local.updatedAt, remote.updatedAt)
+        // A copy still waiting whose conversation either side folded in is that fold's.
+        result.settleMergeCopies()
         let warnings = conflicted.map { "Concurrent edits to \($0) in \(result.title) were preserved in History." }
         return MeetingMergeResult(meeting: result, warnings: warnings.sorted())
     }
