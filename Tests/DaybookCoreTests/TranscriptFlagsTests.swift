@@ -163,15 +163,35 @@ final class TranscriptFlagsTests: XCTestCase {
         XCTAssertEqual(a.transcriptFlags, b.transcriptFlags, "IDs come from what they mark")
     }
 
-    func testFlagsAreWorkedOutOffTheMainActorAsFusionIs() {
+    func testFlagsAreWorkedOutOffTheMainActorAsFusionIs() async throws {
         var direct = meeting(run(["We ship on Thursday"], at: 1))
         direct.transcripts.append(run(["We ship on Friday"], at: 2))
-        var prepared = direct
         let fusion = SourceFusion.fuse(direct).fusion
-        direct.applyFusion(fusion)
-        prepared.applyFusion(prepared.preparingFusion(fusion))
-        XCTAssertNotNil(direct.transcriptFlags)
-        XCTAssertEqual(prepared.transcriptFlags, direct.transcriptFlags)
+        let snapshot = direct
+        // Prepared away from the main actor, on a snapshot, with the flags in it.
+        let prepared = await Task.detached { () -> PreparedFusion in
+            XCTAssertFalse(Thread.isMainThread)
+            return snapshot.preparingFusion(fusion)
+        }.value
+        XCTAssertEqual(prepared.flags.map(\.text), ["Friday"], "Worked out with the fusion, before it is applied")
+        // Applying it takes the flags as prepared: it works none out again.
+        var sentinel = PreparedFusion(result: prepared.result, transferred: prepared.transferred,
+                                      flags: [TranscriptFlag(trackID: track, start: 0, end: 1, text: "Prepared", reason: .lowConfidence)],
+                                      ranking: nil, basis: prepared.basis)
+        var applied = direct
+        applied.applyFusion(sentinel)
+        XCTAssertEqual(applied.transcriptFlags?.map(\.text), ["Prepared"])
+        // Changed since it was prepared, the fusion is done again where it's applied.
+        direct.setNotes("Changed meanwhile")
+        direct.unifiedTranscript = [TranscriptSegment(trackID: track, start: 10, end: 11, text: "Edited since")]
+        sentinel = PreparedFusion(result: prepared.result, transferred: prepared.transferred, flags: sentinel.flags, ranking: nil, basis: prepared.basis)
+        var late = direct
+        late.applyFusion(sentinel)
+        XCTAssertEqual(late.transcriptFlags?.map(\.text), ["Friday"])
+        var plain = meeting(run(["We ship on Thursday"], at: 1))
+        plain.transcripts.append(run(["We ship on Friday"], at: 2))
+        plain.applyFusion(fusion)
+        XCTAssertEqual(plain.transcriptFlags, prepared.flags)
     }
 
     // MARK: Engines that write differently
@@ -603,6 +623,16 @@ final class TranscriptFlagsTests: XCTestCase {
         let covered = TranscriptFlags.answered([second, first], by: [TranscriptFlagDismissal(flag: first, outcome: .kept, at: date(10))])
         XCTAssertEqual(covered, [first.id], "Not the repeat")
         XCTAssertEqual(TranscriptFlags.answered([second, first], by: [TranscriptFlagDismissal(flag: second, outcome: .kept, at: date(10))]), [second.id])
+    }
+
+    func testKeepingOneWordLeavesASeparateRepeatOfItShowing() throws {
+        var meeting = meeting(run(["No it is Friday or Friday maybe"], at: 1, confidence: ["Friday": 0.2]))
+        let marks = shown(meeting)
+        XCTAssertEqual(marks.map(\.flag.text), ["Friday", "Friday"])
+        meeting.keepFlaggedWords(marks[0].flag.id)
+        XCTAssertEqual(shown(meeting).map(\.flag.start), [marks[1].flag.start], "The second is still a question")
+        fuse(&meeting)
+        XCTAssertEqual(shown(meeting).map(\.flag.start), [marks[1].flag.start])
     }
 
     func testAnAnswerCoversALaterFlagOnlyWhereItOffersTheSameEarlierReadingOrNone() {

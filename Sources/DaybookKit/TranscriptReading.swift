@@ -203,12 +203,14 @@ public struct TranscriptLayout: Sendable {
     /// Unsure words that show, by passage, in reading order (`Meeting.transcriptFlagMarks`).
     public let unsure: [UUID: [TranscriptFlagMark]]
 
-    public init(_ meeting: Meeting) {
+    public init(_ meeting: Meeting) { self.init(meeting, unsure: meeting.transcriptFlagMarks) }
+
+    private init(_ meeting: Meeting, unsure: [UUID: [TranscriptFlagMark]]) {
         blocks = TranscriptBlock.blocks(in: meeting)
         marks = BookmarkMarks(meeting: meeting)
         playhead = PlayheadIndex(meeting: meeting)
         correctedSegmentIDs = meeting.correctedSegmentIDs
-        unsure = meeting.transcriptFlagMarks
+        self.unsure = unsure
     }
 
     /// The layout for this version of the conversation: worked out again only when it changed. An
@@ -217,11 +219,29 @@ public struct TranscriptLayout: Sendable {
     public static func cached(for meeting: Meeting) -> TranscriptLayout {
         if let hit = cache[meeting.id], hit.meeting == meeting { return hit.layout }
         if cache.count >= 8 { cache.removeAll() }
-        let layout = TranscriptLayout(meeting)
+        let layout = TranscriptLayout(meeting, unsure: unsureMarks(for: meeting))
         cache[meeting.id] = (meeting, layout)
         builds += 1
         return layout
     }
+
+    /// The unsure words that show, worked out again only when what they depend on changed (the flags, the answers, the
+    /// transcript, its corrections, and the recordings' clocks), not at every change to the conversation: a title, a
+    /// note, or a summary arriving leaves them as they were.
+    @MainActor
+    private static func unsureMarks(for meeting: Meeting) -> [UUID: [TranscriptFlagMark]] {
+        let inputs = TranscriptFlags.MarkInputs(meeting)
+        if let hit = marksCache[meeting.id], hit.inputs == inputs { return hit.marks }
+        if marksCache.count >= 8 { marksCache.removeAll() }
+        let marks = meeting.transcriptFlagMarks
+        marksCache[meeting.id] = (inputs, marks)
+        markBuilds += 1
+        return marks
+    }
+
+    @MainActor private static var marksCache: [UUID: (inputs: TranscriptFlags.MarkInputs, marks: [UUID: [TranscriptFlagMark]])] = [:]
+    /// Unsure-word marks worked out (tests).
+    @MainActor public private(set) static var markBuilds = 0
 
     @MainActor private static var cache: [UUID: (meeting: Meeting, layout: TranscriptLayout)] = [:]
     /// Layouts worked out (tests).

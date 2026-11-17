@@ -282,6 +282,23 @@ public enum TranscriptFlags {
         return bySegment
     }
 
+    /// What the marks that show depend on, and nothing else of a conversation: a copy that compares equal to another has
+    /// the same marks, so they needn't be worked out again for a change to anything else.
+    public struct MarkInputs: Equatable, Sendable {
+        var flags: [TranscriptFlag]?
+        var answers: [TranscriptFlagDismissal]?
+        var passages: [TranscriptSegment]
+        var corrections: [MeetingRevision]
+        var tracks: [RecordingTrack]
+        var alignments: [TrackAlignment]
+
+        public init(_ meeting: Meeting) {
+            flags = meeting.transcriptFlags; answers = meeting.transcriptFlagDismissals; passages = meeting.unifiedTranscript
+            corrections = meeting.revisions.filter { if case .segment = $0.kind { return true } else { return false } }
+            tracks = meeting.tracks; alignments = meeting.alignmentReports
+        }
+    }
+
     /// The ID a flag over `text` of a recording at `start`–`end` gets, the same on every device.
     static func id(trackID: UUID, reason: String, start: TimeInterval, end: TimeInterval, text: String) -> UUID {
         SyncEncoding.uuid("transcript-flag:\(trackID.uuidString):\(reason):\(milliseconds(start)):\(milliseconds(end)):\(key(of: text))")
