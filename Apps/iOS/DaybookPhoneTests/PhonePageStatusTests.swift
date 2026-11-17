@@ -75,9 +75,10 @@ final class PhonePageStatusTests: XCTestCase {
                                                              summarizes: model.processingCapabilities.summarizes))
     }
 
-    /// ux-mac-10: Personal is never sent to the cloud on its own. Under Always a Work summary goes to the cloud at once; a
-    /// Personal one waits, with Use the Cloud as a tap.
-    func testBehaviorAPersonalConversationUnderAlwaysWaitsWithUseTheCloud() async throws {
+    /// A Personal conversation, kept off the cloud by Settings › Cloud's switch (off until the person turns it on), is
+    /// never offered it: under Always a Work summary goes to the cloud at once, and a Personal one waits for a Mac with
+    /// no Use the Cloud at all.
+    func testBehaviorAPersonalConversationKeptOffTheCloudIsNeverOfferedIt() async throws {
         let model = try await demo()
         var preferences = CloudSummaryPreferences()
         preferences.policy = .always
@@ -94,9 +95,10 @@ final class PhonePageStatusTests: XCTestCase {
         // Their summaries due, as after transcribing here.
         model.placement.placements.begin(personal.id)
         model.placement.placements.begin(work.id)
+        XCTAssertNil(model.placement.cloudOffer(for: personal.id))
         let waits = try page(ReadingDemo.Title.transcriptOnly, model)
-        XCTAssertEqual(waits?.title, SummaryPlacementWords.waitingForMac)
-        XCTAssertEqual(waits?.actions, [.placement(.useCloud)])
+        XCTAssertFalse(waits?.actions.contains(.placement(.useCloud)) ?? true, "No Use the Cloud for it anywhere")
+        XCTAssertNotEqual(waits?.title, SummaryPlacementWords.inCloud("Claude Sonnet 5.5"))
         let sent = try page(ReadingDemo.Title.ready, model)
         XCTAssertEqual(sent?.title, SummaryPlacementWords.inCloud("Claude Sonnet 5.5"))
         XCTAssertEqual(sent?.actions, [.stopSummary])

@@ -430,7 +430,8 @@ public enum StatusOverviewModel {
     /// iPhone's countdown to a Mac or wait for one (`planners`), a Mac's countdown, and, with the cloud on offer,
     /// Use the Cloud for a Summarize request still waiting for a Mac.
     public static func queue(meetings: [Meeting], liveProgress: [UUID: LiveProgress], words: DeviceWords,
-                             planners: [UUID: SummaryPlacementPlanner] = [:], runs: [UUID: SummaryPlace] = [:], cloudOffered: Bool = false,
+                             planners: [UUID: SummaryPlacementPlanner] = [:], runs: [UUID: SummaryPlace] = [:],
+                             cloudOffered: (Meeting) -> Bool = { _ in false },
                              now: Date = Date(), limit: Int = 6) -> [StatusQueueEntry] {
         let thisDevice = words.thisDeviceID
         var running: [StatusQueueEntry] = [], waiting: [(Date, StatusQueueEntry)] = [], failed: [StatusQueueEntry] = []
@@ -474,7 +475,7 @@ public enum StatusOverviewModel {
                                                 mac: progress.device?.name, brief: verb + percent))
             case .requested(.device(let request)):
                 // A summary waiting for a Mac can go to the cloud instead.
-                let cloud = cloudOffered && request.mode == .summaryOnly
+                let cloud = cloudOffered(meeting) && request.mode == .summaryOnly
                 waiting.append((request.createdAt, StatusQueueEntry(id: meeting.id, title: meeting.title,
                                                                     line: cloud ? SummaryPlacementWords.waitingForMac : "Waiting",
                                                                     requestedHere: request.requestedBy.id == thisDevice,

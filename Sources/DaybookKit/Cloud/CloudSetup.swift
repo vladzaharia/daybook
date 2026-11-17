@@ -169,7 +169,14 @@ public final class CloudSetup {
     }
 
     /// The efforts the resolved model takes.
-    public var efforts: [CloudEffort] { resolved?.efforts ?? CloudEffort.allCases }
+    public var efforts: [CloudEffort] { resolved?.efforts ?? CloudEffort.assumed }
+
+    /// The effort a summary asks the resolved model for: the preferred one, or the nearest it takes (`CloudOffer.effort`).
+    /// Choosing one in Settings keeps it (`CloudSummaryPreferences.choose`).
+    public var effort: CloudEffort {
+        get { resolved?.effort(preferences.effort) ?? preferences.effort }
+        set { preferences.choose(newValue) }
+    }
 
     private func reloadKeys() {
         var masked: [CloudProvider: String] = [:]

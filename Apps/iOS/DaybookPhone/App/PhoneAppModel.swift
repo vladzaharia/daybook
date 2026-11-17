@@ -210,7 +210,8 @@ final class PhoneAppModel: RecordingCommandHandling {
         let sync = self.sync, link = self.link
         // A network that comes back or changes sends what the courier holds now, rather than at its next retry.
         environment.network.onChange { [weak sync] in Task { @MainActor in sync?.networkChanged() } }
-        placement = PhoneSummaryPlacement(library: library.controller, link: link, presence: { sync.devices })
+        placement = PhoneSummaryPlacement(library: library.controller, link: link, presence: { sync.devices },
+                                          appIsActive: { UIApplication.shared.applicationState == .active })
         upgrades = PhoneUpgrades(library: library.controller, placement: placement, link: link, presence: { sync.devices })
         captions = LiveCaptionsController(store: LiveCaptionStore(libraryRoot: library.rootURL),
                                           makeCaptioner: Self.captioner(settings: settings, options: options, models: models,
@@ -548,6 +549,7 @@ final class PhoneAppModel: RecordingCommandHandling {
                 // A key added on another device meanwhile arrives through iCloud Keychain.
                 await placement.reloadCloud()
             }
+            placement.cameToForeground()
         case .background:
             // A countdown can't run in the background: each one's default happens now.
             placement.leftForeground()
@@ -560,6 +562,9 @@ final class PhoneAppModel: RecordingCommandHandling {
             protector.keep()
             remindMeetings()
             Task { await link.setActivity(recorder.isActive || multipoints.recorderOnly != nil ? .backgroundRecording : .background) }
+        case .inactive:
+            // A countdown that ends in the cloud runs only while Daybook is active on the screen.
+            placement.becameInactive()
         default:
             break
         }
@@ -643,6 +648,9 @@ final class PhoneAppModel: RecordingCommandHandling {
             else { Task { await placement.summaryIsDue(id, templateID: templateID) } }
         }
         placement.runHere = { [weak processor] id, request in processor?.summarizeHere(id, request: request) }
+        processor.services.summaryFailed = { [weak placement] id, request, reason, kind in
+            placement?.localSummaryFailed(id, request: request, reason: reason, kind: kind) ?? false
+        }
         placement.localSummarizer = processingSummarizer
         // An upgrade of this iPhone's own recordings is its processor's work; what it can do is what its models can.
         upgrades.capabilities = { [weak self] in self?.processingCapabilities ?? .none }

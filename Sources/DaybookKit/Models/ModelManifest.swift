@@ -212,6 +212,10 @@ public struct ModelCapabilities: Hashable, Sendable {
     public var expectedSpeakerCount: Bool?
     // Language
     public var contextLength: Int?
+    /// KV-cache bytes each token of context takes beside the weights (full-attention layers that keep their own
+    /// cache, keys and values in 16 bits), from the pinned `config.json`: how much of the window this device's memory
+    /// holds (`MeetingSynthesis.memoryTokens`). Nil when unknown: the window is the model's alone.
+    public var kvCacheBytesPerToken: Int?
     /// Can constrain output to a JSON schema.
     public var structuredOutput: Bool?
     // Images
@@ -227,12 +231,12 @@ public struct ModelCapabilities: Hashable, Sendable {
     public init(wordTimestamps: Bool? = nil, wordConfidence: Bool? = nil, languages: [String]? = nil, vocabularyPrompt: Bool? = nil,
                 maxSpeakers: Int? = nil, voiceEmbeddings: VoiceEmbeddingSpace? = nil, expectedSpeakerCount: Bool? = nil,
                 contextLength: Int? = nil, structuredOutput: Bool? = nil, streaming: Bool? = nil, memoryGB: Double? = nil,
-                realTimeFactor: Double? = nil, imageInput: Bool? = nil) {
+                realTimeFactor: Double? = nil, imageInput: Bool? = nil, kvCacheBytesPerToken: Int? = nil) {
         self.wordTimestamps = wordTimestamps; self.wordConfidence = wordConfidence; self.languages = languages
         self.vocabularyPrompt = vocabularyPrompt; self.maxSpeakers = maxSpeakers; self.voiceEmbeddings = voiceEmbeddings
         self.expectedSpeakerCount = expectedSpeakerCount; self.contextLength = contextLength
         self.structuredOutput = structuredOutput; self.streaming = streaming; self.memoryGB = memoryGB
-        self.realTimeFactor = realTimeFactor; self.imageInput = imageInput
+        self.realTimeFactor = realTimeFactor; self.imageInput = imageInput; self.kvCacheBytesPerToken = kvCacheBytesPerToken
     }
 }
 
@@ -666,7 +670,7 @@ extension ModelLicense: Codable {
 extension ModelCapabilities: Codable {
     private enum CodingKeys: String, CodingKey {
         case wordTimestamps, wordConfidence, languages, vocabularyPrompt, maxSpeakers, voiceEmbeddings, expectedSpeakerCount
-        case contextLength, structuredOutput, streaming, memoryGB, realTimeFactor, imageInput
+        case contextLength, structuredOutput, streaming, memoryGB, realTimeFactor, imageInput, kvCacheBytesPerToken
     }
 
     /// Each field on its own: one a newer manifest types differently is dropped, not the variant.
@@ -686,6 +690,7 @@ extension ModelCapabilities: Codable {
         memoryGB = optional(Double.self, .memoryGB)
         realTimeFactor = optional(Double.self, .realTimeFactor)
         imageInput = optional(Bool.self, .imageInput)
+        kvCacheBytesPerToken = optional(Int.self, .kvCacheBytesPerToken)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -703,6 +708,7 @@ extension ModelCapabilities: Codable {
         try values.encodeIfPresent(memoryGB, forKey: .memoryGB)
         try values.encodeIfPresent(realTimeFactor, forKey: .realTimeFactor)
         try values.encodeIfPresent(imageInput, forKey: .imageInput)
+        try values.encodeIfPresent(kvCacheBytesPerToken, forKey: .kvCacheBytesPerToken)
     }
 }
 

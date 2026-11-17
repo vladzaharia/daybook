@@ -19,7 +19,7 @@ final class SettingsWordsTests: XCTestCase {
         XCTAssertEqual(SettingsWords.provider(.anthropic), "Anthropic")
         XCTAssertEqual(SettingsWords.provider(.openai), "OpenAI")
         XCTAssertEqual(CloudTier.allCases.map(SettingsWords.tier), ["Best", "Balanced", "Economy"])
-        XCTAssertEqual(CloudEffort.allCases.map(SettingsWords.effort), ["Low", "Medium", "High"])
+        XCTAssertEqual(CloudEffort.allCases.map(SettingsWords.effort), ["Low", "Medium", "High", "Extra High", "Max"])
         XCTAssertEqual(SettingsWords.policy(.ask), "Offer first")
         XCTAssertEqual(SettingsWords.policy(.never), "Never")
         XCTAssertEqual(SettingsWords.seconds(15), "15 seconds")

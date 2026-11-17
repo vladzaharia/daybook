@@ -682,7 +682,7 @@ enum StatusSheetInputs {
     inputs.queue = StatusOverviewModel.queue(
       meetings: library.meetings, liveProgress: model.liveProgress, words: words,
       planners: model.placement.planners, runs: model.placement.runs,
-      cloudOffered: model.placement.cloudOffer != nil)
+      cloudOffered: { model.placement.cloudOffer(for: $0) != nil })
     let work = localWork(model, library: library)
     inputs.local = work.line
     inputs.localQueue = work.entries

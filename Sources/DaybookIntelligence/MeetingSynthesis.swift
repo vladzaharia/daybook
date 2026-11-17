@@ -21,6 +21,11 @@ public protocol SynthesisModel: Sendable {
     /// The variant's context window (`capabilities.contextLength`), which sets how much a pass may read
     /// and write (`MeetingSynthesis.Budget`); nil keeps the small budgets that fit any model.
     var contextLength: Int? { get }
+    /// How many tokens of context this device's memory holds for the model beside its weights
+    /// (`MeetingSynthesis.memoryTokens`); nil when unknown, leaving the window the model's own.
+    var memoryTokens: Int? { get }
+    /// The catalog's limits on what one pass reads (`SummaryReadLimits`): the sizes a model was measured at.
+    var readLimits: SummaryReadLimits { get }
     /// The variant's `engineOptions["outputTokens"]`: the most any pass may write, below the default.
     var outputTokens: Int? { get }
     /// The variant's `engineOptions["noteCheck"] == "on"`: notes are checked against what was said before the summary
@@ -31,7 +36,13 @@ public protocol SynthesisModel: Sendable {
 extension SynthesisModel {
     public var briefCommitments: Bool { false }
     public var contextLength: Int? { nil }
+    public var memoryTokens: Int? { nil }
+    public var readLimits: SummaryReadLimits { SummaryReadLimits() }
     public var outputTokens: Int? { nil }
+
+    /// The window a pass may fill on this device: the smaller of the model's and what memory holds, when memory holds at
+    /// least the small budgets (`MeetingSynthesis.memoryCap`); nil when the model's window isn't known.
+    public var usableWindow: Int? { contextLength.map { window in MeetingSynthesis.memoryCap(memoryTokens).map { min(window, $0) } ?? window } }
     public var checksNotes: Bool { false }
 }
 
@@ -74,52 +85,77 @@ public enum MeetingSynthesis {
     /// reply is complete.
     static let finalTokens = 3_000
     static let actionTokens = 1_600
-    /// The most tokens of transcript (or evidence being compressed) one extraction pass reads.
+    /// The most tokens of transcript (or evidence being compressed) one extraction pass reads of a conversation within
+    /// the evidence budget.
     static let partBudget = 4_800
+    /// The least a part may hold: a window (or memory) that leaves less can't summarize.
+    static let minimumRead = 1_024
 
     /// How many words each of `parts` extraction or compression passes may write: an even share of
     /// the final pass's evidence, so the parts reach it without another round of compression when they
     /// can, but never fewer than 400 or more than 900.
     static func extractionWords(parts: Int) -> Int { Budget.standard.words(parts: parts, reading: partBudget) }
 
-    /// How much one pass may read and write. Any pass may write up to 16,384 tokens when the model's
-    /// context window is known (the catalog's `outputTokens` can set less), less where the prompt leaves
-    /// less room in the window: a limit is a ceiling, and a pass stops when its reply is complete. A
-    /// window of 64K tokens or more lets the final pass read up to 24,000 tokens of evidence (Qwen 2.5's
-    /// 32K, 12,000), and a conversation longer than that is read in parts of 12,000 (8,000). With 1,100 to
-    /// 1,800 tokens a pass and 5,400 of evidence, a three-hour meeting took over 50 passes, a third cut off
-    /// at their limit and read again in halves, and compression never got its evidence down to size
-    /// (docs/validation.md, 2026-10-31). What the 26B was tuned on stays: a conversation up to 5,400 tokens
-    /// is read whole, a longer one up to the evidence budget in parts of 4,800, and commitments in parts
-    /// of 5,400 (one pass over the whole weekly kept 31 of its 38, two kept 36). An unknown window keeps
-    /// the small budgets throughout.
+    /// How much one pass may read and write: a function of the usable window (the smaller of the model's context window
+    /// and what this device's memory holds for it, `SynthesisModel.usableWindow`), less room for each pass's reply and
+    /// instructions (`SummaryReadLimits.room`), and of the catalog's per-model limits (`SummaryReadLimits`). A
+    /// conversation that fits is read whole by the final pass; a longer one in as few parts as fit, each at most the
+    /// catalog's part size and the window's room. Commitments follow the same rule. A limit the catalog doesn't set
+    /// follows the window alone. Any pass may write up to 16,384 tokens (the catalog's `outputTokens` can set less),
+    /// less where the prompt leaves less room in the window: a limit is a ceiling, and a pass stops when its reply is
+    /// complete. With 1,100 to 1,800 tokens a pass and 5,400 of evidence, a three-hour meeting took over 50 passes, a
+    /// third cut off at their limit and read again in halves, and compression never got its evidence down to size
+    /// (docs/validation.md, 2026-10-31). A conversation up to the evidence budget is read in parts of 4,800, as the 26B
+    /// was tuned on. An unknown window keeps the small budgets throughout.
     struct Budget: Equatable {
+        /// The longest conversation the final pass reads whole.
+        var wholeRead: Int
         /// The most tokens of evidence the final pass reads.
         var evidence: Int
         /// The parts a conversation longer than `evidence` is read in.
         var longPart: Int
+        /// The parts the commitments passes read the transcript in.
+        var commitmentPart: Int
         /// The most tokens a pass may write; nil for the fixed limits of the small budgets.
         var output: Int?
+        /// The usable window, when known: every pass's prompt and reply must fit in it.
+        var window: Int?
+        /// The catalog's own limits on reading whole and on a commitments part, when it sets them. Below them, with a
+        /// known window, a conversation is read in one pass whenever its prompt and a reply fit (the window's room above
+        /// is an estimate of the rest of the prompt; the pass is checked exactly).
+        var wholeReadLimit: Int?
+        var commitmentPartLimit: Int?
 
-        static let standard = Budget(evidence: evidenceBudget, longPart: partBudget, output: nil)
-        static let defaultOutput = 16_384
+        static let standard = Budget(wholeRead: evidenceBudget, evidence: evidenceBudget, longPart: partBudget, commitmentPart: evidenceBudget,
+                                     output: nil, window: nil)
+        static let defaultOutput = SummaryReadLimits.defaultOutput
 
-        init(evidence: Int, longPart: Int, output: Int?) {
-            self.evidence = evidence; self.longPart = longPart; self.output = output
+        init(wholeRead: Int, evidence: Int, longPart: Int, commitmentPart: Int, output: Int?, window: Int?) {
+            self.wholeRead = wholeRead; self.evidence = evidence; self.longPart = longPart; self.commitmentPart = commitmentPart
+            self.output = output; self.window = window
         }
 
-        /// From a model's context window and the catalog's output limit, if any.
-        init(contextLength: Int?, outputTokens: Int? = nil) {
+        /// From a model's context window, what this device's memory holds for it, the catalog's output limit, and the
+        /// catalog's read limits.
+        init(contextLength: Int?, memoryTokens: Int? = nil, outputTokens: Int? = nil, limits: SummaryReadLimits = SummaryReadLimits()) {
+            guard let contextLength else { self = .standard; return }
+            let window = MeetingSynthesis.memoryCap(memoryTokens).map { min(contextLength, $0) } ?? contextLength
             let output = min(outputTokens ?? Self.defaultOutput, Self.defaultOutput)
-            switch contextLength ?? 0 {
-            case 64_000...: self.init(evidence: 24_000, longPart: 12_000, output: output)   // Gemma 4, Qwen 3.x
-            case 24_000..<64_000: self.init(evidence: 12_000, longPart: 8_000, output: output)   // Qwen 2.5's 32K
-            default: self = .standard
-            }
+            let room = SummaryReadLimits.room(window: window, output: output)
+            self.init(wholeRead: limits.wholeRead(window: window, output: output), evidence: min(limits.evidence ?? room, room),
+                      longPart: min(limits.part ?? room, room), commitmentPart: min(limits.commitmentPart ?? room, room),
+                      output: output, window: window)
+            wholeReadLimit = limits.wholeRead
+            commitmentPartLimit = limits.commitmentPart
+        }
+
+        /// The budget for `model`: its window, memory, and the catalog's limits.
+        init(_ model: any SynthesisModel) {
+            self.init(contextLength: model.contextLength, memoryTokens: model.memoryTokens, outputTokens: model.outputTokens, limits: model.readLimits)
         }
 
         /// The size of the parts a transcript of `tokens` is read in.
-        func part(transcript tokens: Int) -> Int { tokens > evidence ? longPart : partBudget }
+        func part(transcript tokens: Int) -> Int { tokens > evidence ? longPart : min(partBudget, longPart) }
 
         /// Each of `parts` extraction or compression passes' share of the final pass's evidence, in words,
         /// so the parts reach it without another round of compression when they can: never fewer than 400,
@@ -132,7 +168,37 @@ public enum MeetingSynthesis {
         func compressionTokens(words: Int, reading input: Int) -> Int { min(output ?? words * 2, max(64, input / 2)) }
         var finalTokens: Int { output ?? MeetingSynthesis.finalTokens }
         var commitmentTokens: Int { output ?? MeetingSynthesis.actionTokens }
+        /// Room kept for the final pass's reply when deciding whether a conversation is read whole.
+        var finalReply: Int { window.map { min(finalTokens, $0 / 4) } ?? 0 }
     }
+
+    /// The fewest tokens a pass may be left to write: a prompt that leaves less than this (or than its whole limit,
+    /// when that's smaller) doesn't fit, and the pass is an error rather than a reply cut short.
+    static let minimumReply = 1_024
+    /// Room for the chat template around a prompt.
+    static let templateTokens = 1_024
+
+    /// How many tokens of context `memory` bytes hold for a model whose cache takes `kvBytesPerToken` a token, beside
+    /// its weights (`weightBytes`) and a margin for the rest of the work (the larger of 512 MiB and a tenth of `memory`:
+    /// activations while a prompt is read, sliding-window caches, the allocator's 256 MB cache). `memory` is what the GPU may
+    /// use (Metal's recommended working set); `available`, when given, is what the process may still take (an
+    /// iPhone's, after the weights are loaded). Nil when the cache's size isn't known; 0 when nothing is left.
+    public static func memoryTokens(memory: Int64, weightBytes: Int64, available: Int64? = nil, kvBytesPerToken: Int?) -> Int? {
+        guard let kvBytesPerToken, kvBytesPerToken > 0, memory > 0 else { return nil }
+        let margin = max(Int64(512) << 20, memory / 10)
+        var free = memory - weightBytes
+        if let available { free = min(free, available) }
+        return Int(max(0, free - margin) / Int64(kvBytesPerToken))
+    }
+
+    /// The least window memory may hold a model to: one with room for the small budgets (`Budget.standard`, 5,400 tokens of
+    /// evidence in parts of 4,800) beside a reply and the instructions.
+    static let memoryFloor = 16_384
+
+    /// What memory holds for a model as a cap on its window: only when it's at least `memoryFloor`. Less isn't counted, so
+    /// memory never makes a summary fail that ran before memory was: the model reads in its own window and pages, as it
+    /// did, and only a prompt longer than that window is too long.
+    static func memoryCap(_ memoryTokens: Int?) -> Int? { memoryTokens.flatMap { $0 >= memoryFloor ? $0 : nil } }
 
     /// One free-form pass over `text`, or, when its reply ran into its limit (`maxTokens` of the text it
     /// reads), a pass over each half: a reply cut off at its limit silently drops whatever the text says
@@ -214,7 +280,8 @@ public enum MeetingSynthesis {
                                 photos: [PhotoEvidence] = [],
                                 progress: @escaping IntelligenceProgressHandler) async throws -> GeneratedMeetingNotes {
         let prepared = try await prepare(original, model: model, glossary: glossary, templateInstructions: templateInstructions, progress: progress)
-        let gathered = try await gatherEvidence(prepared, model: model, progress: progress)
+        let overhead = await finalOverhead(prepared, model: model, template: template, photos: photos)
+        let gathered = try await gatherEvidence(prepared, model: model, finalOverhead: overhead, progress: progress)
         try Task.checkCancellation()
         let written = try await writeSummary(prepared, gathered, model: model, modelID: modelID, template: template, photos: photos,
                                              progress: progress)
@@ -244,7 +311,7 @@ public enum MeetingSynthesis {
         if templateTokens.count > Limits.instructionTokens {
             warnings.append("Only the first \(Limits.instructionTokens) tokens of the custom summary instructions were used.")
         }
-        let budget = Budget(contextLength: model.contextLength, outputTokens: model.outputTokens)
+        let budget = Budget(model)
         let repeating = source.isStructured && model.checksNotes
             ? try await notesRepeatingWhatWasSaid(source, model: model, budget: budget, progress: progress) : []
         for index in source.anchors.indices where repeating.contains(source.anchors[index].label) {
@@ -255,15 +322,31 @@ public enum MeetingSynthesis {
                         notes: source.isStructured ? NotePayload.all(source) : [])
     }
 
-    /// The final pass's evidence: the whole conversation when it fits `evidenceBudget`; otherwise each part
-    /// read for its evidence (with the notes and bookmarks beside every part when they're short enough), that
-    /// evidence compressed round by round until it fits the budget, and the passages the person marked kept
-    /// word for word.
-    static func gatherEvidence(_ prepared: Prepared, model: any SynthesisModel,
+    /// The final pass's evidence: the whole conversation when it fits (the model's whole-read limit, and the window
+    /// with the final pass's own words, `finalOverhead`, and room for its reply); otherwise each part read for its
+    /// evidence (with the notes and bookmarks beside every part when they're short enough), that evidence compressed
+    /// round by round until it fits the budget, and the passages the person marked kept word for word.
+    static func gatherEvidence(_ prepared: Prepared, model: any SynthesisModel, finalOverhead: Int = 0,
                                progress: @escaping IntelligenceProgressHandler) async throws -> Gathered {
         let whole = SynthesisJSON.string(prepared.payload)
-        guard await model.encode(whole).count > evidenceBudget else { return Gathered(evidence: .conversation(prepared.payload)) }
-        let source = prepared.source, notes = prepared.notes, budget = prepared.budget
+        let wholeTokens = await model.encode(whole).count
+        var budget = prepared.budget
+        if let window = budget.window {
+            // Read whole when its prompt and a reply fit the window, within the catalog's limit, whatever the window's
+            // room estimates for the rest of a prompt.
+            let fits = wholeTokens + finalOverhead + templateTokens + budget.finalReply <= window
+            if fits && wholeTokens <= (budget.wholeReadLimit ?? .max) { return Gathered(evidence: .conversation(prepared.payload)) }
+            // In parts: the final pass's evidence leaves room for its own words, the notes, and the passages near them, so it
+            // can't fail only after every part was read.
+            let besideEvidence = finalOverhead + templateTokens + budget.finalReply + (prepared.structured ? focusBudget + notesBudget : 0)
+            budget.evidence = min(budget.evidence, window - besideEvidence)
+            guard min(budget.longPart, budget.evidence) >= minimumRead else {
+                throw LocalIntelligenceError.promptTooLong(needed: besideEvidence + minimumRead, window: window)
+            }
+        } else if wholeTokens <= budget.wholeRead {
+            return Gathered(evidence: .conversation(prepared.payload))
+        }
+        let source = prepared.source, notes = prepared.notes
         let annotated = prepared.payload.recordedTranscript
         let notesJSON = notes.isEmpty ? "" : SynthesisJSON.string(NotesPayload(userNotesAndBookmarks: notes))
         let notesTokens = notes.isEmpty ? 0 : await model.encode(notesJSON).count
@@ -293,7 +376,11 @@ public enum MeetingSynthesis {
             let passages = await source.focusPassages(fitting: focusBudget) { await model.encode($0).count }
             gathered.focus = passages.isEmpty ? nil : passages
             if notesTravel { gathered.notes = notes }
-            else if !notes.isEmpty { gathered.notes = await fitting(notes, budget: notesBudget, model: model) }
+            else if !notes.isEmpty {
+                let kept = await fitting(notes, budget: notesBudget, model: model)
+                gathered.notes = kept
+                if kept.count < notes.count { gathered.warnings.append(notesLeftOutWarning(notes.count - kept.count)) }
+            }
         }
         gathered.warnings.append("This long conversation was summarized in several local passes. Review the transcript for detail omitted during compression.")
         return gathered
@@ -366,6 +453,24 @@ public enum MeetingSynthesis {
         return evidence
     }
 
+    /// "2 of your notes and bookmarks didn’t fit beside this long conversation's evidence…": the final pass is given the
+    /// notes that fit `notesBudget` (`fitting`); the rest reached it only through the parts read before it.
+    static func notesLeftOutWarning(_ count: Int) -> String {
+        "\(count == 1 ? "One of your notes" : "\(count) of your notes") didn’t fit in the final pass of this long conversation's summary and "
+            + "reached it only through the parts read before it. Review the summary against your notes."
+    }
+
+    /// The tokens of the final pass's own words, with the instructions: its prompt for an empty conversation, with this
+    /// summary's template, vocabulary, notes rules, and photos. With the conversation's own tokens and room for the
+    /// reply, it says whether the conversation fits the window whole.
+    static func finalOverhead(_ prepared: Prepared, model: any SynthesisModel, template: MeetingKind, photos: [PhotoEvidence]) async -> Int {
+        let listsActions = !model.supportsStructuredOutput || prepared.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let prompt = finalPrompt(evidence: .extracted(""), template: template, glossary: prepared.glossary,
+                                 templateInstructions: prepared.customInstructions, photos: photos, listsActions: listsActions,
+                                 notesRepeating: !prepared.repeating.isEmpty)
+        return await model.encode(instructions + prompt).count
+    }
+
     /// The final pass: the summary, its kind and title, its sections, and suggested terms. When the
     /// commitments pass will list the actions, constrained like this pass, the final pass leaves them to it:
     /// in a long conversation they were about a quarter of what this pass wrote, only to be replaced.
@@ -392,7 +497,19 @@ public enum MeetingSynthesis {
     static func verifyCommitments(_ result: GeneratedMeetingNotes, transcript: String, model: any SynthesisModel, budget: Budget,
                                   progress: @escaping IntelligenceProgressHandler) async throws
         -> (summary: MeetingSummary, warnings: [String], responses: [String]) {
-        let parts = await transcriptParts(transcript, model: model, tokenLimit: evidenceBudget, evenly: false)
+        var limit = budget.commitmentPart
+        if let window = budget.window, !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            // One pass whenever its prompt and a reply fit, within the catalog's limit; otherwise parts the window's room allows.
+            let tokens = await model.encode(transcript).count
+            let needed = await model.encode(instructions + commitmentsPrompt(transcript, parts: 1, brief: model.briefCommitments)).count
+                + templateTokens + min(budget.commitmentTokens, minimumReply)
+            if needed <= window && tokens <= (budget.commitmentPartLimit ?? .max) {
+                limit = max(limit, tokens)
+            } else if limit < minimumRead {
+                throw LocalIntelligenceError.promptTooLong(needed: needed - tokens + minimumRead, window: window)
+            }
+        }
+        let parts = await transcriptParts(transcript, model: model, tokenLimit: limit, evenly: false)
         var responses: [String] = []
         for (index, part) in parts.enumerated() {
             try Task.checkCancellation()
@@ -697,14 +814,20 @@ public enum MeetingSynthesis {
 
     /// One pass. With `schema` and a model that supports structured output, the reply is constrained
     /// to the schema; if that fails for any reason but cancellation, the same prompt runs free-form
-    /// and `parse` handles whatever comes back, as it always has.
+    /// and `parse` handles whatever comes back, as it always has. A pass asks for no more than the usable window
+    /// holds after its prompt; a prompt that leaves less than `minimumReply` (or the pass's whole limit) is an error,
+    /// never a reply cut short to fit.
     private static func respond(model: any SynthesisModel, prompt: String, maxTokens: Int, schema: String? = nil) async throws -> String {
         try Task.checkCancellation()
         var maxTokens = maxTokens
-        if let context = model.contextLength {
+        if let window = model.usableWindow {
             // What the window holds after the prompt, with room for the chat template.
-            let room = context - (await model.encode(instructions + prompt).count) - 1_024
-            maxTokens = min(maxTokens, max(256, room))
+            let needed = await model.encode(instructions + prompt).count + templateTokens
+            let room = window - needed
+            guard room >= min(maxTokens, minimumReply) else {
+                throw LocalIntelligenceError.promptTooLong(needed: needed + min(maxTokens, minimumReply), window: window)
+            }
+            maxTokens = min(maxTokens, room)
         }
         var response: String?
         if let schema, model.supportsStructuredOutput {

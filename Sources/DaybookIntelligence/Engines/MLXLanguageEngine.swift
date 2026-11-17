@@ -6,6 +6,9 @@ import MLXGuidedGeneration
 import MLXLLM
 import MLXLMCommon
 import Synchronization
+#if os(iOS)
+import os
+#endif
 #if canImport(MLXVLM)
 import MLXVLM
 #endif
@@ -19,7 +22,8 @@ import MLXVLM
 /// (`qwen3_5`, `qwen3_5_moe`), constrained JSON output for variants that declare
 /// `structuredOutput`, and the `thinking` engine option (summaries also read `commitments: "brief"`, which
 /// asks the commitments pass in fewer words, `noteCheck: "on"`, which checks notes against what was said
-/// first, and `outputTokens`, the most a pass may write, below its default from the context window). Version 3 serves `imageDescription` too:
+/// first, `outputTokens`, the most a pass may write, below its default from the context window, and the read limits
+/// `SummaryReadLimits` takes: `wholeReadTokens`, `partTokens`, `evidenceTokens`, `commitmentPartTokens`). Version 3 serves `imageDescription` too:
 /// a variant that declares the role (and `imageInput`) is loaded through MLXVLM to caption photos
 /// (`MLXVisionDescriber`), from the same install that writes summaries. MLXVLM builds for the Mac only
 /// (Package.swift), so on the iPhone the engine serves summaries alone.
@@ -112,8 +116,23 @@ public struct MLXLanguageEngine: ModelEngine {
         let context = (config?["max_position_embeddings"] as? Int) ?? (text?["max_position_embeddings"] as? Int)
         return ModelAdditionProposal(
             artifacts: [model],
-            capabilities: ModelCapabilities(contextLength: context, structuredOutput: true, imageInput: describesPhotos ? true : nil),
+            capabilities: ModelCapabilities(contextLength: context, structuredOutput: true, imageInput: describesPhotos ? true : nil,
+                                            kvCacheBytesPerToken: Self.kvCacheBytesPerToken(text ?? config ?? [:])),
             engineOptions: ["architecture": modelType], recommendedMemoryGB: memory)
+    }
+
+    /// A model's KV cache per token of context from its `config.json` (the text model's settings): keys and values in
+    /// 16 bits for each full-attention layer (every layer when the config doesn't say which), with the global attention's
+    /// heads and head size where it has its own. Layers that share another's cache are counted too, so it errs high.
+    /// Nil when the config doesn't give the sizes.
+    static func kvCacheBytesPerToken(_ config: [String: Any]) -> Int? {
+        guard let layers = config["num_hidden_layers"] as? Int else { return nil }
+        let full = (config["layer_types"] as? [String]).map { types in types.filter { $0 == "full_attention" }.count } ?? layers
+        let heads = (config["num_global_key_value_heads"] as? Int) ?? (config["num_key_value_heads"] as? Int) ?? (config["num_attention_heads"] as? Int)
+        let headSize = (config["global_head_dim"] as? Int) ?? (config["head_dim"] as? Int)
+            ?? (config["hidden_size"] as? Int).flatMap { size in (config["num_attention_heads"] as? Int).map { size / max(1, $0) } }
+        guard let heads, let headSize, full > 0 else { return nil }
+        return full * heads * headSize * 2 * 2
     }
 
     public func load(_ installation: ModelInstallation, role: ModelRole,
@@ -136,8 +155,23 @@ public struct MLXLanguageEngine: ModelEngine {
                              briefCommitments: installation.engineOptions["commitments"] == "brief",
                              checksNotes: installation.engineOptions["noteCheck"] == "on",
                              contextLength: installation.capabilities.contextLength,
+                             memoryTokens: Self.memoryTokens(installation),
+                             readLimits: SummaryReadLimits(engineOptions: installation.engineOptions),
                              outputTokens: installation.engineOptions["outputTokens"].flatMap(Int.init),
                              loadSeconds: Date().timeIntervalSince(started))
+    }
+
+    /// How many tokens of context this device's memory holds for the install beside its weights
+    /// (`MeetingSynthesis.memoryTokens`): Metal's recommended working set, less the weights; on an iPhone, no more than
+    /// the process may still take once they're loaded. Nil when the catalog doesn't give the cache's size.
+    static func memoryTokens(_ installation: ModelInstallation) -> Int? {
+        let weights = installation.receipt.artifacts.flatMap(\.files).filter { $0.path.hasSuffix(".safetensors") }.reduce(Int64(0)) { $0 + $1.size }
+        var available: Int64?
+        #if os(iOS)
+        available = Int64(os_proc_available_memory())
+        #endif
+        return MeetingSynthesis.memoryTokens(memory: Int64(GPU.maxRecommendedWorkingSetBytes() ?? 0), weightBytes: weights, available: available,
+                                             kvBytesPerToken: installation.capabilities.kvCacheBytesPerToken)
     }
 }
 
@@ -147,10 +181,10 @@ final class MLXSummarizer: Summarizing, Sendable {
     private let loadSeconds: Double
 
     init(container: ModelContainer, structuredOutput: Bool, chatTemplateContext: [String: any Sendable]?, briefCommitments: Bool, checksNotes: Bool,
-         contextLength: Int?, outputTokens: Int?, loadSeconds: Double) {
+         contextLength: Int?, memoryTokens: Int?, readLimits: SummaryReadLimits, outputTokens: Int?, loadSeconds: Double) {
         model = Mutex(MLXSynthesisModel(container: container, supportsStructuredOutput: structuredOutput,
                                         chatTemplateContext: chatTemplateContext, briefCommitments: briefCommitments, checksNotes: checksNotes,
-                                        contextLength: contextLength, outputTokens: outputTokens))
+                                        contextLength: contextLength, memoryTokens: memoryTokens, readLimits: readLimits, outputTokens: outputTokens))
         self.loadSeconds = loadSeconds
     }
 
@@ -199,16 +233,21 @@ final class MLXSynthesisModel: SynthesisModel, Sendable {
     let briefCommitments: Bool
     let checksNotes: Bool
     let contextLength: Int?
+    let memoryTokens: Int?
+    let readLimits: SummaryReadLimits
     let outputTokens: Int?
 
     init(container: ModelContainer, supportsStructuredOutput: Bool, chatTemplateContext: [String: any Sendable]?, briefCommitments: Bool = false,
-         checksNotes: Bool = false, contextLength: Int? = nil, outputTokens: Int? = nil) {
+         checksNotes: Bool = false, contextLength: Int? = nil, memoryTokens: Int? = nil, readLimits: SummaryReadLimits = SummaryReadLimits(),
+         outputTokens: Int? = nil) {
         self.container = container
         self.supportsStructuredOutput = supportsStructuredOutput
         self.chatTemplateContext = chatTemplateContext
         self.briefCommitments = briefCommitments
         self.checksNotes = checksNotes
         self.contextLength = contextLength
+        self.memoryTokens = memoryTokens
+        self.readLimits = readLimits
         self.outputTokens = outputTokens
     }
 

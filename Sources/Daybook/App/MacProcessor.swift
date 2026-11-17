@@ -214,7 +214,8 @@ final class MacProcessor {
             app.update(id) { $0.status = .ready }
             return
         }
-        let summary = generated.summary.placed(placed.place, by: app.library.thisDevice, inputs: current.modelsBehindTranscript)
+        let summary = generated.summary.placed(placed.place, by: app.library.thisDevice, inputs: current.modelsBehindTranscript,
+                                               cloudReason: placed.cloudReason)
         app.update(id) { meeting in
             meeting.setSummary(summary, writtenFrom: current)
             // Keep Auto selected so a new source or revised context can change the inferred kind.

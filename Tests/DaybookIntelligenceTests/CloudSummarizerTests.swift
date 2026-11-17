@@ -171,6 +171,57 @@ final class CloudSummarizerTests: XCTestCase {
         XCTAssertEqual(result.summary.actionItems.map(\.owner), ["Alex"])
     }
 
+    func testBehaviorSummariesAskBothProvidersForExtraHighByDefaultAndMaxWhenChosen() async throws {
+        let server = FakeCloudServer()
+        let summarizer = await summarizer(server, keys: [.anthropic: anthropicKey, .openai: openAIKey]) { request in
+            request.path == "/v1/messages" ? .anthropicReply(self.pieces(self.reply)) : .openAIReply(self.pieces(self.reply))
+        }
+        let preferred = CloudSummaryPreferences().effort
+        let claude = try await summarizer.summary(meeting(), template: nil, vocabulary: [], model: try model("claude-sonnet-5-5", in: summarizer),
+                                                  effort: preferred)
+        XCTAssertEqual(claude.provenance.effort, .xhigh)
+        XCTAssertEqual(claude.summary.processingSettings?.parameters["effort"], "xhigh")
+        let anthropic = try XCTUnwrap(server.requests.last { $0.path == "/v1/messages" }?.json)
+        XCTAssertEqual((anthropic["output_config"] as? [String: Any])?["effort"] as? String, "xhigh")
+        XCTAssertEqual((anthropic["thinking"] as? [String: Any])?["type"] as? String, "adaptive")
+        let gpt = try await summarizer.summary(meeting(), template: nil, vocabulary: [], model: try model("gpt-6.1-sol", in: summarizer), effort: preferred)
+        XCTAssertEqual(gpt.provenance.effort, .xhigh)
+        let openAI = try XCTUnwrap(server.requests.last { $0.path == "/v1/responses" }?.json)
+        XCTAssertEqual((openAI["reasoning"] as? [String: Any])?["effort"] as? String, "xhigh")
+        // Max, chosen in Settings, is sent as itself.
+        _ = try await summarizer.summary(meeting(), template: nil, vocabulary: [], model: try model("claude-sonnet-5-5", in: summarizer), effort: .max)
+        XCTAssertEqual((server.requests.last { $0.path == "/v1/messages" }?.json?["output_config"] as? [String: Any])?["effort"] as? String, "max")
+        _ = try await summarizer.summary(meeting(), template: nil, vocabulary: [], model: try model("gpt-6.1-sol", in: summarizer), effort: .max)
+        XCTAssertEqual((server.requests.last { $0.path == "/v1/responses" }?.json?["reasoning"] as? [String: Any])?["effort"] as? String, "max")
+    }
+
+    func testBehaviorAConversationLongerThanTheModelsWindowIsNeverSent() async throws {
+        let server = FakeCloudServer()
+        server.handle { request in
+            switch request.path {
+            case "/v1/models" where request.header("x-api-key") != nil:
+                return .json(["data": [["id": "claude-sonnet-5-5", "max_input_tokens": 1_500, "max_tokens": 128_000]]])
+            case "/v1/models": return .failure(.cannotFindHost)
+            default: return .anthropicReply(["{}"])
+            }
+        }
+        var client = CloudClient(session: server.session, endpoints: CloudEndpoints(base: server.base))
+        client.wait = { _ in }
+        let directory = CloudDirectory(keys: MemoryCloudKeyStore([.anthropic: anthropicKey]), client: client, defaults: makeTestDefaults())
+        _ = await directory.offers()
+        let summarizer = CloudSummarizer(directory: directory)
+        let sonnet = try await model("claude-sonnet-5-5", in: summarizer)
+        XCTAssertEqual(sonnet.contextTokens, 1_500)
+        do {
+            _ = try await summarizer.summary(meeting(), template: nil, vocabulary: [], model: sonnet, effort: .xhigh)
+            XCTFail("The prompt is longer than the window")
+        } catch let error as CloudError {
+            XCTAssertEqual(error.message, "This conversation is longer than Claude Sonnet 5.5 can read.")
+            guard case .inputTooLong = error else { return XCTFail("\(error)") }
+        }
+        XCTAssertFalse(server.requests.contains { $0.path == "/v1/messages" }, "Nothing was sent")
+    }
+
     func testBehaviorASummaryCutOffAtItsLimitIsAskedForAgainWithAllTheModelCanWrite() async throws {
         let server = FakeCloudServer()
         let summarizer = await summarizer(server, keys: [.anthropic: anthropicKey]) { _ in

@@ -238,7 +238,10 @@ extension ConversationStatusPresentation {
             var actions: [SummaryPlacementPlanner.Action] = []
             if progress.phase == .summaryCountdown, let countdown = progress.countdown {
                 until = receivedAt.addingTimeInterval(max(0, countdown.secondsLeft))
-                if answerable { actions = (countdown.cloudOffered ? [.useCloud] : []) + [.startNow] }
+                if answerable {
+                    // A countdown that ends in the cloud names its model; Don't Use the Cloud keeps it on the Mac.
+                    actions = progress.cloudModel != nil ? [.startNow, .useLocal] : (countdown.cloudOffered ? [.useCloud] : []) + [.startNow]
+                }
             }
             self.init(phase: progress.phase, fraction: progress.fraction, device: progress.macName, countdownUntil: until,
                       cloudModel: progress.cloudModel, placementActions: actions)
@@ -553,8 +556,9 @@ extension ConversationStatusPresentation {
             return line
         }
         if let link = inputs.link, link.phase == .summaryCountdown, let until = link.countdownUntil {
-            return ConversationStatusPresentation(kind: .line, symbol: "clock",
-                                                  title: SummaryPlacementWords.countdown(on: link.device, until: until, at: now),
+            let title = link.cloudModel.map { SummaryPlacementWords.countdown(inCloud: $0, until: until, at: now) }
+                ?? SummaryPlacementWords.countdown(on: link.device, until: until, at: now)
+            return ConversationStatusPresentation(kind: .line, symbol: "clock", title: title,
                                                   countdownUntil: until, actions: link.placementActions.map(Action.placement))
         }
         if let link = inputs.link, link.phase == .summarizing, let model = link.cloudModel {

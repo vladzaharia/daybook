@@ -240,7 +240,7 @@ extension ConversationStatusPresentation.Inputs {
             meetingID: meeting.id, now: now)
         inputs.link = model?.liveProgress[meeting.id].map(ConversationStatusPresentation.LinkWork.init(live:))
         inputs.placement = .init(planner: placement?.planners[meeting.id], run: placement?.runs[meeting.id],
-                                 cloudOffered: placement?.cloudOffer != nil)
+                                 cloudOffered: placement?.cloudOffer(for: meeting) != nil)
         inputs.pause = PhoneProcessor.current?.pause.map(ProcessingWords.PauseReason.init(phone:))
         inputs.cloudModel = placement?.cloud?.resolved?.model.name
         if let owns = model?.library.ownsTrack {

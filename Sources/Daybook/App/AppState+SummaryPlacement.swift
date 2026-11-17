@@ -1,6 +1,7 @@
 import DaybookCore
 import DaybookIntelligence
 import DaybookKit
+import AppKit
 import DaybookLink
 import Foundation
 
@@ -14,8 +15,16 @@ import Foundation
 /// conversation's requests: an iPhone summarizing it in the cloud, say) isn't written here too, and one
 /// that arrives while this Mac summarizes is kept rather than replaced.
 ///
-/// A Personal conversation (placed there, or its template or kind says so) is never sent to the cloud on its own:
-/// under Always it counts down as Offer First does, and the cloud is the person's choice for it (Use the Cloud).
+/// A conversation whose placement Settings › Cloud keeps off the cloud (Personal, unless the person turns it on:
+/// `CloudPlacements`) is never sent there, whatever asks: no Use the Cloud is offered for it, Always doesn't send it, a
+/// queued Use the Cloud or cloud upgrade runs here instead, and a conversation moved there (or a switch turned off) while
+/// it counts down to the cloud goes on here. This Mac applies its own switches: preferences are each device's own.
+///
+/// **When the cloud would do better** (docs/cloud.md, "When the cloud is chosen"). A conversation longer than this Mac's
+/// summary model reads in one pass, whose summary the cloud's model ranks clearly above (`LongConversations`), counts down
+/// to the cloud under Offer First, with Start Now and Don't Use the Cloud; Always sends it as any. A summary that fails here
+/// tries the cloud before the job fails, under the same rules (at once under Always, after a countdown under Offer First,
+/// never for a conversation kept off the cloud). The summary records why it went (`cloudReason`).
 ///
 /// **Transcript first.** A job never waits for the summary model to start: it transcribes with what transcribes, and at
 /// the summary step, when the summary model isn't here and the cloud wouldn't take the summary at once (Always, unless
@@ -30,8 +39,33 @@ extension AppState {
 
     func wireSummaryPlacements() {
         placements.onChange = { [weak self] id in self?.reportSummaryPlacement(id) }
-        placements.isPersonal = { [weak self] id in
-            self?.meetings.first(where: { $0.id == id })?.effectivePlacement == .personal
+        placements.conversation = { [weak self] id, options in
+            guard let self, let meeting = self.meetings.first(where: { $0.id == id }) else { return .init(cloudAllowed: false) }
+            let allowed = self.cloud.preferences.placements.allows(meeting)
+            // This Mac's summary model: the running job's, else the one chosen.
+            let local = options.thisDeviceCanSummarize ? self.processor.queue.running.flatMap { $0.meetingID == id ? $0.summaryModelID : nil }
+                ?? self.summaryModel : nil
+            return .init(cloudAllowed: allowed,
+                         cloudDoesBetter: allowed && LongConversations.cloudDoesBetter(meeting, localModel: local, cloud: options.cloud,
+                                                                                       ranks: self.upgradeRanks))
+        }
+        followConversationsWhilePlacing()
+        if environment.watchesScreen {
+            // Unseen until a window that shows the countdowns is on the screen.
+            placements.countdownsAreSeen = false
+            CountdownVisibility(placements).watch()
+        }
+    }
+
+    /// A conversation changing (moved to Personal, say) reaches its countdown at once: every change to the library asks
+    /// each planner's conversation again while anything is being placed.
+    private func followConversationsWhilePlacing() {
+        withObservationTracking { _ = library.revision } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if !self.placements.planners.isEmpty, self.hasCloudSetup { self.placements.update() }
+                self.followConversationsWhilePlacing()
+            }
         }
     }
 
@@ -53,6 +87,15 @@ extension AppState {
 
     /// The cloud is on offer for a summary: a key, a model it reaches, and not Never.
     var cloudOnOffer: Bool { cloud.preferences.policy != .never && cloud.resolved != nil }
+
+    /// The cloud is on offer for this conversation: on offer at all, and its placement's switch on (`CloudPlacements`).
+    func cloudOnOffer(for meeting: Meeting) -> Bool { cloudOnOffer && cloud.preferences.placements.allows(meeting) }
+
+    /// Whether Settings › Cloud lets this conversation go to the cloud: its placement's switch. False for one that's gone.
+    func cloudAllowed(_ id: UUID) -> Bool {
+        guard let meeting = meetings.first(where: { $0.id == id }) else { return false }
+        return cloud.preferences.placements.allows(meeting)
+    }
 
     /// A key, the models offered, or the preferences changed (`CloudSetup.onChange`), or a summary is about to be
     /// placed: every countdown follows. Nothing to do before the cloud is first needed.
@@ -91,14 +134,14 @@ extension AppState {
     // MARK: Waiting for the summary model
 
     /// Whether a summary of `meeting` made now would wait for this Mac's summary model: `model` (the one chosen, unless a
-    /// job froze another) isn't here, and the cloud wouldn't take the summary at once. It does under Always, unless the
-    /// conversation is Personal, and whenever the person chose it for this summary (`toCloud`: Use the Cloud, an upgrade to
-    /// the cloud's model); never for one they asked to run here (`here`: Summarize on This Mac).
+    /// job froze another) isn't here, and the cloud wouldn't take the summary at once. It does under Always, and whenever
+    /// the person chose it for this summary (`toCloud`: Use the Cloud, an upgrade to the cloud's model), as long as the
+    /// conversation's placement lets it go there; never for one they asked to run here (`here`: Summarize on This Mac).
     func summaryWaitsForModel(_ meeting: Meeting, model: String? = nil, toCloud: Bool = false, here: Bool = false) -> Bool {
         let model = model ?? summaryModel
         if !model.isEmpty, installedModels.contains(model) { return false }
-        guard !here, cloudOnOffer else { return true }
-        return !toCloud && (cloud.preferences.policy != .always || meeting.effectivePlacement == .personal)
+        guard !here, cloudOnOffer(for: meeting) else { return true }
+        return !toCloud && cloud.preferences.policy != .always
     }
 
     /// The same for a job's summary, by what the job froze and what the person chose for it.
@@ -201,20 +244,61 @@ extension AppState {
         guard let meeting = meetings.first(where: { $0.id == id }) else { return nil }
         let started = Date()
         reportToPhones(id, force: true)
-        switch place {
-        case .cloud(let model):
-            if cloud.keys[model.provider] != nil {
-                let output = try await cloudSummarizer.summaryOutput(meeting, template: template, vocabulary: vocabulary, model: model,
-                                                                     effort: cloud.preferences.effort) { fraction in
-                    progress(ProcessingProgress(fraction: fraction, message: SummaryPlacementWords.inCloud(model.name), stage: .summarizing))
+        var tooLongForCloud: CloudError?
+        if case .cloud(let model) = place {
+            do {
+                if let output = try await summarizeInCloud(meeting, model: model, template: template, vocabulary: vocabulary, progress: progress) {
+                    return PlacedSummary(output: output, place: place, meeting: meeting, started: started, cloudReason: placements[id]?.cloudReason)
                 }
-                return PlacedSummary(output: output, place: place, meeting: meeting, started: started)
+            } catch let error as CloudError {
+                // Longer than the cloud model can read: nothing was sent, and it's summarized here, saying so.
+                guard case .inputTooLong = error, summarizesLocally else { throw error }
+                tooLongForCloud = error
             }
-            // The key went away as it started: here, as without one.
-            fallthrough
-        case .thisDevice, .mac:
-            let output = try await engine.summarize(meeting, template: template, vocabulary: vocabulary, progress: progress)
+        }
+        // Here: the default, or the cloud couldn't take it (the key went away as it started, the conversation may not go,
+        // or it's longer than the cloud model's window).
+        do {
+            var output = try await engine.summarize(meeting, template: template, vocabulary: vocabulary, progress: progress)
+            if let tooLongForCloud { output.warnings.insert(tooLongForCloud.message, at: 0) }
             return PlacedSummary(output: output, place: .thisDevice, meeting: meeting, started: started)
+        } catch where !(error is CancellationError) {
+            // Failed here: the cloud is tried before the job fails, as this conversation's rules allow; never when the person
+            // asked for it here or declined the cloud for it (Don't Use the Cloud), or the cloud already couldn't read it.
+            guard !job.summarizesHere, tooLongForCloud == nil, placements[id]?.prefersLocal != true, summaryHolderElsewhere(id, job: job) == nil,
+                  let retry = meetings.first(where: { $0.id == id }), cloudOnOffer(for: retry) else { throw error }
+            placements.end(id)
+            placements.beginAfterLocalFailure(id)
+            guard case .cloud(let model)? = await placements.place(id) else {
+                // Paused or cancelled during its countdown, it's that; declined, or nothing to try, the failure stands.
+                try Task.checkCancellation()
+                throw error
+            }
+            try Task.checkCancellation()
+            // As it's sent: another device holding the summary, or one it wrote since this step began, and this Mac stands
+            // down, as before its first try. The summary keeps that start, so one written meanwhile is never replaced.
+            if summaryHolderElsewhere(id, job: job) != nil
+                || meetings.first(where: { $0.id == id })?.summaryWrittenElsewhere(after: started, excluding: library.thisDevice.id) == true {
+                return nil
+            }
+            reportToPhones(id, force: true)
+            guard let current = meetings.first(where: { $0.id == id }),
+                  let output = try await summarizeInCloud(current, model: model, template: template, vocabulary: vocabulary, progress: progress) else {
+                throw error
+            }
+            return PlacedSummary(output: output, place: .cloud(model), meeting: current, started: started, cloudReason: .localFailed)
+        }
+    }
+
+    /// The conversation's summary from `model`, or nil when the cloud can't take it now: the key went away, or the
+    /// conversation may not go there (the device that sends it applies its own switches, as the conversation is now: one
+    /// moved to a placement kept off the cloud, or a switch turned off, while it counted down is summarized here instead).
+    private func summarizeInCloud(_ meeting: Meeting, model: CloudModel, template: SummaryTemplate?, vocabulary: [String],
+                                  progress: @escaping ProcessingProgressHandler) async throws -> SummaryProcessingOutput? {
+        guard cloud.keys[model.provider] != nil, cloud.preferences.allowsCloud(for: meeting) else { return nil }
+        return try await cloudSummarizer.summaryOutput(meeting, template: template, vocabulary: vocabulary, model: model,
+                                                       effort: cloud.preferences.effort) { fraction in
+            progress(ProcessingProgress(fraction: fraction, message: SummaryPlacementWords.inCloud(model.name), stage: .summarizing))
         }
     }
 
@@ -225,6 +309,8 @@ extension AppState {
         /// The conversation as it was summarized.
         var meeting: Meeting
         var started: Date
+        /// Why it went to the cloud, when it did.
+        var cloudReason: CloudReason?
     }
 
     // MARK: Choices
@@ -237,7 +323,8 @@ extension AppState {
     }
 
     /// Use the Cloud or Start Now, from the page, the inspector, Floating Notes, or a phone. A summary waiting for the
-    /// summary model has no countdown: Use the Cloud summarizes it there now (`summarizeInCloud`).
+    /// summary model has no countdown: Use the Cloud summarizes it there now (`summarizeInCloud`). Use the Cloud for a
+    /// conversation the cloud isn't on offer for does nothing, whoever asks.
     func chooseSummaryPlacement(_ action: SummaryPlacementPlanner.Action, for id: UUID) {
         if action == .useCloud, placements[id] == nil, processor.queue.runningID != id, !processor.queue.isQueued(id) {
             summarizeInCloud(id)
@@ -247,16 +334,22 @@ extension AppState {
     }
 
     /// Use the Cloud for a summary waiting for this Mac's summary model: a Summarize that goes to the cloud with no
-    /// countdown (`ProcessingJob.summarizesInCloud`), carrying out a Summarize request left open for it.
+    /// countdown (`ProcessingJob.summarizesInCloud`), carrying out a Summarize request left open for it. Nothing for a
+    /// conversation the cloud isn't on offer for.
     func summarizeInCloud(_ id: UUID) {
+        guard let meeting = meetings.first(where: { $0.id == id }), cloudOnOffer(for: meeting) else { return }
         processor.enqueue(id, mode: .summaryOnly, summarizesInCloud: true)
     }
 
-    /// A paired phone chose for a countdown this Mac shows it.
-    func phoneChoseSummaryPlacement(_ choice: LinkSummaryChoice) {
+    /// A paired phone chose for a countdown this Mac shows it. A phone that doesn't answer a countdown that ends in the cloud
+    /// (`answersCloudCountdowns`) was never shown one as it is (`PhoneLink.broadcast`): its Start Now or Use the Cloud is
+    /// never taken for one, which would send the transcript; this Mac's own countdown, while it's seen, is where it's chosen.
+    func phoneChoseSummaryPlacement(_ choice: LinkSummaryChoice, answersCloudCountdowns: Bool = true) {
+        if !answersCloudCountdowns, choice.choice != .useLocal, placements[choice.meetingID]?.endsInCloud == true { return }
         switch choice.choice {
         case .useCloud: chooseSummaryPlacement(.useCloud, for: choice.meetingID)
         case .startNow: chooseSummaryPlacement(.startNow, for: choice.meetingID)
+        case .useLocal: chooseSummaryPlacement(.useLocal, for: choice.meetingID)
         default: break
         }
     }
@@ -275,15 +368,76 @@ extension AppState {
         guard let planner = placements[id] else { return nil }
         let name = library.thisDevice.name
         switch planner.phase {
-        case .countingDown(_, let until):
+        case .countingDown(let place, let until):
+            // A countdown that ends in the cloud names its model, so the phone says so and offers Don't Use the Cloud.
+            var cloudModel: String?
+            if case .cloud(let model) = place { cloudModel = model.name }
             return LinkProcessingProgress(meetingID: id, phase: .summaryCountdown, macName: name,
                                           countdown: LinkSummaryCountdown(secondsLeft: max(0, until.timeIntervalSince(now)),
-                                                                          cloudOffered: planner.cloud != nil))
+                                                                          cloudOffered: planner.cloud != nil), cloudModel: cloudModel)
         case .started(.cloud(let model)):
             return LinkProcessingProgress(meetingID: id, phase: .summarizing, fraction: min(1, max(0, processor.queue.activity.value.fraction)),
                                           macName: name, cloudModel: model.name)
         case .started, .waitingForMac, .waiting:
             return nil
+        }
+    }
+}
+
+/// Whether this Mac's countdowns are in front of the person (`SummaryPlacements.countdownsAreSeen`; docs/cloud.md, "When the
+/// cloud is chosen"): the session is this Mac's active one, its screen unlocked and awake, the Mac not going to sleep, and
+/// Daybook not hidden, with its library window (whose list and page show a running summary's countdown) or Floating Notes
+/// on the screen, not minimized and not covered (`NSWindow.occlusionState`). The menu bar item isn't counted: its menu
+/// shows the countdown only while it's open. Looked at again on each signal, for the app's life.
+@MainActor
+final class CountdownVisibility {
+    private let placements: SummaryPlacements
+    private var screenLocked = false, screensAsleep = false, sleeping = false, sessionInactive = false
+
+    init(_ placements: SummaryPlacements) { self.placements = placements }
+
+    func watch(distributed: NotificationCenter = DistributedNotificationCenter.default(),
+               workspace: NotificationCenter = NSWorkspace.shared.notificationCenter, app: NotificationCenter = .default) {
+        let signals: [(NotificationCenter, Notification.Name, (CountdownVisibility) -> Void)] = [
+            (distributed, PersonalLock.screenLocked, { $0.screenLocked = true }),
+            (distributed, Notification.Name("com.apple.screenIsUnlocked"), { $0.screenLocked = false }),
+            (workspace, NSWorkspace.screensDidSleepNotification, { $0.screensAsleep = true }),
+            (workspace, NSWorkspace.screensDidWakeNotification, { $0.screensAsleep = false }),
+            (workspace, NSWorkspace.willSleepNotification, { $0.sleeping = true }),
+            (workspace, NSWorkspace.didWakeNotification, { $0.sleeping = false }),
+            (workspace, NSWorkspace.sessionDidResignActiveNotification, { $0.sessionInactive = true }),
+            (workspace, NSWorkspace.sessionDidBecomeActiveNotification, { $0.sessionInactive = false }),
+            (app, NSWindow.didChangeOcclusionStateNotification, { _ in }),
+            (app, NSWindow.didMiniaturizeNotification, { _ in }),
+            (app, NSWindow.didDeminiaturizeNotification, { _ in }),
+            (app, NSWindow.willCloseNotification, { _ in }),
+            (app, NSApplication.didHideNotification, { _ in }),
+            (app, NSApplication.didUnhideNotification, { _ in }),
+        ]
+        for (center, name, change) in signals {
+            // Held for the app's life, as the observers are.
+            _ = center.addObserver(forName: name, object: nil, queue: .main) { [self] _ in
+                MainActor.assumeIsolated {
+                    change(self)
+                    // After the change settles: a window closing is still on the screen as it says so.
+                    DispatchQueue.main.async { self.update() }
+                }
+            }
+        }
+        update()
+    }
+
+    private func update() {
+        let seen = !screenLocked && !screensAsleep && !sleeping && !sessionInactive && Self.windowShowsCountdowns()
+        if placements.countdownsAreSeen != seen { placements.countdownsAreSeen = seen }
+    }
+
+    /// The library window or Floating Notes is on the screen and not covered.
+    static func windowShowsCountdowns() -> Bool {
+        guard !NSApp.isHidden else { return false }
+        return NSApp.windows.contains { window in
+            (window.identifier?.rawValue.hasPrefix(WindowID.library) == true || window is FloatingNotesPanel)
+                && window.isVisible && !window.isMiniaturized && window.occlusionState.contains(.visible)
         }
     }
 }

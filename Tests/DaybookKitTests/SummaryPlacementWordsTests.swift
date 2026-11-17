@@ -119,23 +119,20 @@ final class SummaryPlacementWordsTests: XCTestCase {
         XCTAssertEqual(queue?.shortText, Words.countdown(seconds: 15))
     }
 
-    func testBehaviorAPersonalConversationUnderAlwaysCountsDownInTheSameWords() {
-        // ux-mac-10: Personal is never sent to the cloud on its own. Under Always it counts down as Offer First does, so
-        // it reads as any countdown, with Use the Cloud a tap away; the words don't name it Personal.
+    func testBehaviorAConversationKeptOffTheCloudSaysNothingOfIt() {
+        // Personal, unless the person turns it on: no countdown (nothing to choose), no Use the Cloud, and no line beyond
+        // what the processing status says; with nowhere to run it, it waits as before there was a cloud.
         let options = SummaryOptions(thisDeviceCanSummarize: true, reachableMacs: [], cloud: sonnet)
-        let personal = SummaryPlacementPlanner(options: options, preferences: preferences(.always), at: start, personal: true)
-        XCTAssertEqual(personal.line(at: at(3), thisDevice: "this Mac"), Words.countdown(on: "this Mac", seconds: 12))
-        XCTAssertEqual(personal.shortLine(at: at(3)), Words.countdown(seconds: 12))
-        XCTAssertEqual(personal.actions.map(\.title), [Words.title(.useCloud), Words.title(.startNow)])
-        let offerFirst = SummaryPlacementPlanner(options: options, preferences: preferences(.ask), at: start)
-        XCTAssertEqual(personal.line(at: at(3), thisDevice: "this Mac"), offerFirst.line(at: at(3), thisDevice: "this Mac"))
+        let kept = SummaryPlacementPlanner.Conversation(cloudAllowed: false)
+        let personal = SummaryPlacementPlanner(options: options, preferences: preferences(.always), at: start, conversation: kept)
+        XCTAssertNil(personal.line(at: at(3), thisDevice: "this Mac"))
+        XCTAssertTrue(personal.actions.isEmpty)
         // Work under Always goes to the cloud at once, and says so.
         let work = SummaryPlacementPlanner(options: options, preferences: preferences(.always), at: start)
         XCTAssertEqual(work.line(at: start, thisDevice: "this Mac"), Words.inCloud(sonnet.name))
-        // With nowhere else to run it, a Personal one waits for a Mac, with Use the Cloud.
         let nowhere = SummaryPlacementPlanner(options: SummaryOptions(thisDeviceCanSummarize: false, reachableMacs: [], cloud: sonnet),
-                                              preferences: preferences(.always), at: start, waitsForMacs: true, personal: true)
-        XCTAssertEqual(nowhere.line(at: start, thisDevice: "this iPhone"), Words.waitingForMac)
-        XCTAssertEqual(nowhere.actions.map(\.title), [Words.title(.useCloud)])
+                                              preferences: preferences(.always), at: start, waitsForMacs: true, conversation: kept)
+        XCTAssertNil(nowhere.line(at: start, thisDevice: "this iPhone"))
+        XCTAssertTrue(nowhere.actions.isEmpty)
     }
 }

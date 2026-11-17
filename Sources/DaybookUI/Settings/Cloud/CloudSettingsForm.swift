@@ -3,7 +3,8 @@ import DaybookKit
 import SwiftUI
 
 // Settings › Cloud, the same on both apps (docs/cloud.md, "Settings"): each provider's key, then, once there is one,
-// when summaries use the cloud, the tier with what an hour costs, Recommended or a model, and effort. Labels are in
+// when summaries use the cloud and for which conversations, the tier with what an hour costs, Recommended or a model,
+// and effort. Labels are in
 // sentence case on the Mac and title case on the iPhone (`SettingsWords.titleCased`).
 
 /// Settings › Cloud's sections. Each app hosts them in its own form and presents the key editor (`CloudKeyEditor`)
@@ -239,6 +240,16 @@ public struct CloudSummarySections: View {
             }
         }
         if cloud.preferences.policy != .never {
+            Section(label(SettingsWords.cloudPlacements)) {
+                ForEach(LibraryPlacement.allCases, id: \.self) { placement in
+                    Toggle(label(SettingsWords.placement(placement)), isOn: Binding(
+                        get: { cloud.preferences.placements.allows(placement) },
+                        set: { cloud.preferences.placements.set(placement, allowed: $0) }))
+                }
+                Toggle(label(SettingsWords.notFiled), isOn: Binding(
+                    get: { cloud.preferences.placements.allowsNotFiled },
+                    set: { cloud.preferences.placements.setNotFiled(allowed: $0) }))
+            }
             Section("Quality") {
                 ForEach(CloudTier.allCases.filter { !cloud.offers(in: $0).isEmpty }, id: \.self) { tier in
                     CloudTierRow(cloud: cloud, tier: tier)
@@ -247,14 +258,22 @@ public struct CloudSummarySections: View {
                     Text(cloud.isRefreshing ? "Finding models…" : "No models").foregroundStyle(DaybookPalette.Ink.secondary)
                 } else {
                     CloudModelPicker(cloud: cloud)
+                    #if os(macOS)
                     LabeledContent(label("Effort")) {
-                        Picker(label("Effort"), selection: $cloud.preferences.effort) {
+                        Picker(label("Effort"), selection: $cloud.effort) {
                             ForEach(cloud.efforts, id: \.self) { effort in Text(SettingsWords.effort(effort)).tag(effort) }
                         }
                         .pickerStyle(.segmented)
                         .labelsHidden()
                         .fixedSize()
                     }
+                    #else
+                    // Five levels don't fit a segmented control beside the label on a phone.
+                    Picker(label("Effort"), selection: $cloud.effort) {
+                        ForEach(cloud.efforts, id: \.self) { effort in Text(SettingsWords.effort(effort)).tag(effort) }
+                    }
+                    .pickerStyle(.menu)
+                    #endif
                 }
             }
         }

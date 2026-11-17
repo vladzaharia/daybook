@@ -110,10 +110,14 @@ public struct UpgradeCandidates: Sendable {
     public var macs: [ProcessingMac]
     /// The cloud model Settings › Cloud resolves to, for summaries: nil without a key, or with Never.
     public var cloud: CloudModel?
+    /// Which conversations Settings › Cloud lets go to the cloud, by placement: the cloud is never offered for one it
+    /// keeps off.
+    public var cloudPlacements: CloudPlacements
 
     public init(thisDevice: ProcessingCapabilities, redoesRecordings: @escaping @Sendable (Meeting) -> Bool = { _ in true },
-                macs: [ProcessingMac] = [], cloud: CloudModel? = nil) {
+                macs: [ProcessingMac] = [], cloud: CloudModel? = nil, cloudPlacements: CloudPlacements = CloudPlacements()) {
         self.thisDevice = thisDevice; self.redoesRecordings = redoesRecordings; self.macs = macs; self.cloud = cloud
+        self.cloudPlacements = cloudPlacements
     }
 }
 
@@ -192,7 +196,8 @@ public enum Upgrades {
     }
 
     /// The best model within reach for `role`, by rank: this device's, then each reachable Mac's in order, then (for
-    /// summaries) the cloud's, never for a Personal conversation; on a tie the earlier one, so work stays nearest. A
+    /// summaries) the cloud's, never for a conversation whose placement Settings › Cloud keeps off it (`CloudPlacements`);
+    /// on a tie the earlier one, so work stays nearest. A
     /// transcription model is a candidate only when it covers every recording's language as transcribed.
     static func best(_ role: UpgradeRole, for meeting: Meeting, candidates: UpgradeCandidates,
                      ranks: UpgradeRanks) -> (place: UpgradeOffer.Place, model: String, quality: Int)? {
@@ -203,8 +208,8 @@ public enum Upgrades {
         for mac in candidates.macs {
             if let model = runs(role, mac.capabilities) { options.append((.mac(ProcessingRequest.Device(id: mac.id, name: mac.name)), model)) }
         }
-        // A Personal conversation is never nudged toward the cloud: it goes there only when the person chooses it.
-        if role == .summarization, meeting.effectivePlacement != .personal, let cloud = candidates.cloud {
+        // A conversation kept off the cloud (Personal, unless the person turns it on) is never offered it.
+        if role == .summarization, candidates.cloudPlacements.allows(meeting), let cloud = candidates.cloud {
             options.append((.cloud(cloud), "\(cloud.provider.rawValue)/\(cloud.id)"))
         }
         var best: (place: UpgradeOffer.Place, model: String, quality: Int)?

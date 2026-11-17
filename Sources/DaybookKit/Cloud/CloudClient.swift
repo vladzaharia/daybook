@@ -496,7 +496,7 @@ private struct AnthropicModelPage: Decodable {
             struct Supported: Decodable { var supported: Bool? }
             struct Effort: Decodable {
                 var supported: Bool?
-                var low: Supported?, medium: Supported?, high: Supported?
+                var low: Supported?, medium: Supported?, high: Supported?, xhigh: Supported?, max: Supported?
             }
             var effort: Effort?
         }
@@ -504,7 +504,8 @@ private struct AnthropicModelPage: Decodable {
         var listed: CloudListedModel {
             var efforts: [String]?
             if let effort = capabilities?.effort, effort.supported == true {
-                efforts = [("low", effort.low), ("medium", effort.medium), ("high", effort.high)].compactMap { $0.1?.supported == true ? $0.0 : nil }
+                efforts = [("low", effort.low), ("medium", effort.medium), ("high", effort.high), ("xhigh", effort.xhigh), ("max", effort.max)]
+                    .compactMap { $0.1?.supported == true ? $0.0 : nil }
             }
             return CloudListedModel(id: id, displayName: display_name, maxInputTokens: max_input_tokens, maxOutputTokens: max_tokens, efforts: efforts)
         }

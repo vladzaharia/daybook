@@ -273,6 +273,35 @@ final class SummaryNotesTests: XCTestCase {
         XCTAssertTrue(notes.warnings.contains { $0.contains("several local passes") })
     }
 
+    func testNotesThatDontFitTheFinalPassAreAWarning() async throws {
+        var meeting = meeting()
+        meeting.unifiedTranscript += (0..<2_000).map { index in
+            TranscriptSegment(trackID: track, start: 300 + Double(index) * 6, end: 305 + Double(index) * 6,
+                              text: "We went over routine item number \(index) for the quarterly review.", speakerID: "sam")
+        }
+        // Forty long notes: far more than the final pass takes beside compressed evidence.
+        let long = (0..<40).map { index in "Follow up on item \(index * 50): " + Array(repeating: "context", count: 60).joined(separator: " ") }
+        meeting.timedNotes = long.enumerated().map { TimedNote(time: 300 + Double($0.offset) * 300, text: $0.element) }
+        meeting.notes = long.joined(separator: "\n")
+        let model = WordModel()
+        let summary = self.summary
+        model.reply = { prompt, _ in
+            if prompt.contains("Extract ALL explicit agreed tasks") { return #"{"actions":[]}"# }
+            if prompt.contains("Extract concise factual evidence") || prompt.contains("Compress these evidence notes") { return "Routine review." }
+            return summary
+        }
+        let notes = try await MeetingSynthesis.generate(model: model, modelID: "gemma", source: MeetingEvidence.summarySource(meeting),
+                                                        template: .auto, glossary: [], progress: { _ in })
+        let final = try XCTUnwrap(model.prompts.first { $0.contains("Write a concise summary") })
+        XCTAssertFalse(final.contains("Follow up on item 1950"), "The last notes didn't fit beside the evidence")
+        let warning = try XCTUnwrap(notes.warnings.first { $0.contains("didn’t fit in the final pass") })
+        XCTAssertTrue(warning.hasSuffix("Review the summary against your notes."))
+        // A short conversation reads every note in place: nothing to warn about.
+        let short = try await MeetingSynthesis.generate(model: model, modelID: "gemma", source: MeetingEvidence.summarySource(self.meeting()),
+                                                        template: .auto, glossary: [], progress: { _ in })
+        XCTAssertFalse(short.warnings.contains { $0.contains("didn’t fit") })
+    }
+
     func testTemplatesStillShapeTheSummary() async throws {
         let model = WordModel()
         let summary = self.summary

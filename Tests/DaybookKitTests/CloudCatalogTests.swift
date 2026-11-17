@@ -13,7 +13,7 @@ final class CloudCatalogTests: XCTestCase {
     // MARK: The catalog
 
     func testBehaviorBuiltInCatalogPlacesEveryMeasuredModelInItsFamilyAndTier() throws {
-        XCTAssertEqual(catalog.version, 1)
+        XCTAssertEqual(catalog.version, 2)
         XCTAssertEqual(Set(catalog.models.map(\.id)), ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "gpt-6-astra",
                                                        "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna"])
         for model in catalog.models {
@@ -120,7 +120,42 @@ final class CloudCatalogTests: XCTestCase {
         XCTAssertFalse(offer.model.priceIsEstimated)
         XCTAssertEqual(offer.model.inputPrice, 2.5)
         XCTAssertEqual(offer.efforts, [.low, .high], "Only the efforts the model takes")
-        XCTAssertEqual(offer.effort(.medium), .high, "The nearest it takes")
+        XCTAssertEqual(offer.effort(.medium), .low, "The highest it takes below")
+        XCTAssertEqual(offer.effort(.xhigh), .high)
+        XCTAssertEqual(CloudOffer(model: offer.model, price: nil, efforts: [.high, .max]).effort(.low), .high, "Else the lowest above")
+    }
+
+    func testBehaviorTheDefaultEffortIsExtraHighWhereOfferedElseTheHighestBelow() throws {
+        let preferred = CloudSummaryPreferences().effort
+        XCTAssertEqual(preferred, .xhigh)
+        // Every measured model of both providers takes Extra High (their model pages; the snapshot says so too), even
+        // when the provider's own list doesn't say.
+        let offers = catalog.offers(listings: [.anthropic: listed(["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]),
+                                               .openai: listed(["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna"])],
+                                    prices: CloudPriceBook(models: [:], fetchedAt: nil))
+        XCTAssertTrue(offers.isEmpty, "No price, no offer")
+        let priced = catalog.offers(listings: [.anthropic: listed(["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]),
+                                               .openai: listed(["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna"])],
+                                    prices: .snapshot)
+        XCTAssertEqual(priced.count, 7)
+        for offer in priced {
+            XCTAssertEqual(offer.efforts, CloudEffort.allCases, offer.id)
+            XCTAssertEqual(offer.effort(preferred), .xhigh, offer.id)
+        }
+        // Without OpenRouter's word, the catalog's: the provider's model page.
+        var bare = CloudPriceBook.snapshot
+        bare.models["openai/gpt-6.1-sol"]?.efforts = nil
+        XCTAssertEqual(catalog.offers(listings: [.openai: listed(["gpt-6.1-sol"])], prices: bare).first?.efforts, CloudEffort.allCases)
+        // A model that doesn't take Extra High gets the highest it takes below it.
+        let sonnet = try XCTUnwrap(priced.offer("claude-sonnet-5-5"))
+        XCTAssertEqual(CloudOffer(model: sonnet.model, price: nil, efforts: [.low, .medium, .high, .max]).effort(preferred), .high)
+        XCTAssertEqual(CloudOffer(model: sonnet.model, price: nil).effort(preferred), .high, "The levels assumed when nothing says")
+        XCTAssertEqual(CloudOffer(model: sonnet.model, price: nil, efforts: [.low, .medium]).effort(preferred), .medium)
+        // Estimates follow: Extra High and Max above High.
+        let hour = { (effort: CloudEffort) in self.catalog.expectedOutputTokens("claude-sonnet-5-5", provider: .anthropic, minutes: 60, effort: effort) }
+        XCTAssertLessThan(hour(.high), hour(.xhigh))
+        XCTAssertLessThan(hour(.xhigh), hour(.max))
+        XCTAssertEqual(hour(.xhigh), Int((4_875 * 2.96).rounded()))
     }
 
     func testBehaviorProVariantsAreTheirOwnModelsOnlyWhenTheProviderListsThem() {
@@ -129,7 +164,7 @@ final class CloudCatalogTests: XCTestCase {
                                     prices: .snapshot)
         XCTAssertEqual(offers.map(\.id), ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-sol-pro", "gpt-6.1-terra", "gpt-6-luna"])
         XCTAssertEqual(offers.offer("gpt-6.1-sol-pro")?.model.name, "GPT-6.1 Sol Pro")
-        XCTAssertEqual(offers.offer("gpt-6.1-sol-pro")?.efforts, [.low, .medium, .high])
+        XCTAssertEqual(offers.offer("gpt-6.1-sol-pro")?.efforts, [.low, .medium, .high, .xhigh, .max])
         let alone = catalog.offers(listings: [.openai: listed(["gpt-6.1-sol-2026-09-29"])], prices: .snapshot)
         XCTAssertEqual(alone.map(\.id), ["gpt-6.1-sol-2026-09-29"], "A dated snapshot without its alias stands for it")
         XCTAssertEqual(alone.first?.model.name, "GPT-6.1 Sol")

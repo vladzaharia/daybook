@@ -221,7 +221,7 @@ final class PhoneLink {
                                        LinkCapabilities.cascadeFeature, LinkCapabilities.sharedNotesFeature,
                                        LinkCapabilities.pageStopFeature, LinkCapabilities.recordPermissionFeature,
                                        LinkCapabilities.liveCaptionsFeature, LinkCapabilities.liveLevelsFeature,
-                                       LinkCapabilities.sharesLevelsFeature],
+                                       LinkCapabilities.sharesLevelsFeature, LinkCapabilities.cloudCountdownFeature],
                             syncDeviceID: syncDeviceID)
     }
 
