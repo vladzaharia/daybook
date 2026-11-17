@@ -203,19 +203,28 @@ public struct SavedCaptionsView: View {
     }
 }
 
-/// One caption: its time, which plays from there, then the words.
-private struct SavedCaptionRow: View {
+/// One caption: its time, which plays from there, then the words. Without `play` (a recording still being
+/// captioned has nothing to play yet: the live transcript, `LiveTranscriptView`), the time is just a time.
+struct SavedCaptionRow: View {
     let segment: LiveCaptionSegment
     /// Before the words: the person live speakers recognized, or the device that heard it.
     let name: String?
     let isPlaying: Bool
-    let play: () -> Void
+    let play: (() -> Void)?
     @Environment(\.daybookDensity) private var density
     @Environment(\.readingScale) private var scale
 
     var body: some View {
         MarginRow {
-            CaptionTime(time: segment.start, play: play)
+            if let play {
+                CaptionTime(time: segment.start, play: play)
+            } else {
+                Text(TimeLabel.short(segment.start))
+                    .daybookFont(.time)
+                    .foregroundStyle(DaybookPalette.Ink.meta)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
         } content: {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 // Never cut off by the words.
@@ -244,9 +253,23 @@ private struct SavedCaptionRow: View {
         .padding(.vertical, 5)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(name.map { "\($0), caption" } ?? "Caption") at \(SpokenTime.format(segment.start))\(segment.isTentative ? ", tentative" : ""): \(segment.text)")
-        .accessibilityHint("Plays from here")
-        .accessibilityAddTraits(.isButton)
-        .accessibilityAction(.default, play)
+        .modifier(PlaysFromHere(play: play))
+    }
+}
+
+/// A caption that plays its recording is a button; one that doesn't is only read.
+private struct PlaysFromHere: ViewModifier {
+    let play: (() -> Void)?
+
+    func body(content: Content) -> some View {
+        if let play {
+            content
+                .accessibilityHint("Plays from here")
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction(.default, play)
+        } else {
+            content
+        }
     }
 }
 
