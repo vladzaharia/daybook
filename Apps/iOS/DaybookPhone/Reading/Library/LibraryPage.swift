@@ -706,7 +706,7 @@ enum PhoneActions {
     guard let only = selected.first, selected.count == 1 else {
       return ConversationActions.batch(
         ids, in: library.meetings, context: .init(platform: .iPhone),
-        each: { mergeContext($0, recordingOnMac: recordingOnMac) })
+        each: { mergeContext($0, recordingOnMac: recordingOnMac) }, merging: library.mergingIDs)
     }
     return groups(for: only)
   }

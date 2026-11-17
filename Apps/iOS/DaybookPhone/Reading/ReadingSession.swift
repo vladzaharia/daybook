@@ -95,6 +95,8 @@ final class ReadingSession {
     var confirmingTrash: [UUID] = []
     /// Conversations waiting for the person to confirm merging them (Merge…).
     var confirmingMerge: [UUID] = []
+    /// How far a merge's downloads have come (0...1), while it runs; nil otherwise.
+    var mergeProgress: Double?
 
     let player = PlaybackController()
     /// Debug launch arguments for screenshots, applied once the library has loaded.
