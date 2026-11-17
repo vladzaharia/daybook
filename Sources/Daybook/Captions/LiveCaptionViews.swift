@@ -13,7 +13,8 @@ import SwiftUI
 // MARK: - The conversation page
 
 /// Live captions on the conversation page, after your notes, while this Mac records the conversation:
-/// the newest lines as they're heard, You and Call before their words. Once it stops, the saved captions
+/// the newest lines as they're heard, You and Call before their words; the lines open the whole live
+/// transcript (`LiveTranscriptLink`). Once it stops, the saved captions
 /// read on the transcript's page, as on the iPhone (`AppState.savedCaptions(for:)`, `SavedCaptionsView`).
 ///
 /// It reads the captions itself, so a revised word redraws only this section.
@@ -29,10 +30,13 @@ struct LiveCaptionsSection: View {
         if isRecording, captions.isShowing(for: meeting.id) {
             // On the text's edge, as everything on the page is.
             MarginRow {
-                LiveCaptionStrip(lines: Self.lines(captions.recent(Self.liveLines), names: captions.sourceNames,
-                                                   listening: captions.state == .listening),
-                                 status: LiveCaptionStatus.line(captions.state, locale: captions.locale),
-                                 style: Self.style)
+                LiveTranscriptLink(source: captions.session.transcriptSource,
+                                   isEnabled: LiveTranscriptLink<EmptyView>.opens(state: captions.state, lines: captions.segments.count)) {
+                    LiveCaptionStrip(lines: Self.lines(captions.recent(Self.liveLines), names: captions.sourceNames,
+                                                       listening: captions.state == .listening),
+                                     status: LiveCaptionStatus.line(captions.state, locale: captions.locale),
+                                     style: Self.style)
+                }
             }
             .padding(.top, DaybookSpacing.s6)
         }

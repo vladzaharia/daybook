@@ -80,9 +80,12 @@ private struct PanelCaptions: View {
 
     var body: some View {
         let segments = captions.state == .listening ? captions.recent(compact ? 1 : 2) : []
-        LiveCaptionStrip(lines: segments.map { LiveCaptionLabels.line($0, names: captions.sourceNames) },
-                         status: LiveCaptionStatus.line(captions.state, locale: captions.locale),
-                         style: compact ? .panelCompact : .panel)
+        LiveTranscriptLink(source: captions.session.transcriptSource,
+                           isEnabled: LiveTranscriptLink<EmptyView>.opens(state: captions.state, lines: captions.segments.count)) {
+            LiveCaptionStrip(lines: segments.map { LiveCaptionLabels.line($0, names: captions.sourceNames) },
+                             status: LiveCaptionStatus.line(captions.state, locale: captions.locale),
+                             style: compact ? .panelCompact : .panel)
+        }
             .padding(.leading, FloatingLayout.inset)
             .padding(.trailing, FloatingLayout.inset)
             // A fixed height, so the notes never move as words arrive.

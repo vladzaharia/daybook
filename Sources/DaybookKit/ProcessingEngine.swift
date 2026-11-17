@@ -161,7 +161,7 @@ extension ProcessingEngine {
                 notices += output.notices
             }
             let fusion = SourceFusion.fuse(working)
-            working.applyFusion(fusion.fusion)
+            working.applyFusion(fusion.fusion, ranking: UpgradeRanks.builtIn.transcriptionRanking)
             working.applyPlacements(fusion.settled)
         }
         try Task.checkCancellation()

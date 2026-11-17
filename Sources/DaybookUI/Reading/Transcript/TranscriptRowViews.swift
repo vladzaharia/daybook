@@ -72,6 +72,10 @@ struct TranscriptRowActions {
     var showHeardIn: (TranscriptSegment) -> Void
     var showNotes: () -> Void
     var move: (_ from: String, _ by: Int) -> Void
+    /// Keeps words marked unsure as they are.
+    var keepUnsure: (TranscriptFlagMark) -> Void
+    /// Puts the earlier reading in place of words marked unsure.
+    var useEarlierReading: (TranscriptFlagMark) -> Void
 }
 
 /// A turn's header: its speaker in their ink (renamed from here), and its first time.
@@ -110,8 +114,9 @@ struct TurnHeaderRow: View {
     }
 }
 
-/// One passage: its words as heard (corrected where the person corrected them), bookmarks marked, the playhead's rule
-/// while it plays. A click or tap plays from it; a double-click, Return, ⌘E, or the menu corrects it.
+/// One passage: its words as heard (corrected where the person corrected them), words that may be heard wrong under a
+/// dotted line, bookmarks marked, the playhead's rule while it plays. A click or tap plays from it; a double-click,
+/// Return, ⌘E, or the menu corrects it; the menu keeps unsure words or takes the earlier reading.
 struct PassageRow: View {
     let meeting: Meeting
     let segment: TranscriptSegment
@@ -123,6 +128,8 @@ struct PassageRow: View {
     let bookmarks: [Highlight]
     let label: String?
     let corrected: Bool
+    /// Unsure words in it, in reading order (`TranscriptLayout.unsure`).
+    let unsure: [TranscriptFlagMark]
     let highlight: String
     let actions: TranscriptRowActions
     var focus: FocusState<String?>.Binding
@@ -163,7 +170,7 @@ struct PassageRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 if let label { labelLine(label) }
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(FindHighlight.mark(AttributedString(segment.text), query: highlight))
+                    Text(FindHighlight.mark(UnsureWords.marked(segment.text, unsure), query: highlight))
                         .font(DaybookFont.body.font(density, scale: scale))
                         .foregroundStyle(DaybookPalette.Ink.body)
                         .lineSpacing(DaybookFont.bodyLineSpacing(density, scale: scale))
@@ -210,6 +217,18 @@ struct PassageRow: View {
         .accessibilityActions {
             if let speakerID = segment.speakerID { Button("Rename Speaker") { actions.rename(speakerID, rowID) } }
             if segment.provenance.count > 1 { Button("Heard in \(segment.provenance.count) Recordings") { actions.showHeardIn(segment) } }
+            unsureButtons
+        }
+    }
+
+    /// For each unsure word or phrase: the earlier reading when there's one to take, and Keep.
+    @ViewBuilder private var unsureButtons: some View {
+        ForEach(unsure, id: \.flag.id) { mark in
+            let words = mark.words(in: segment.text) ?? mark.flag.text
+            if let title = UnsureWords.earlierReadingTitle(mark, in: segment.text) {
+                Button(title, systemImage: "arrow.uturn.backward") { actions.useEarlierReading(mark) }
+            }
+            Button(UnsureWords.keepTitle(words), systemImage: "checkmark") { actions.keepUnsure(mark) }
         }
     }
 
@@ -248,6 +267,10 @@ struct PassageRow: View {
         if let speakerID = segment.speakerID {
             Button("Rename Speaker…", systemImage: "person.text.rectangle") { actions.rename(speakerID, rowID) }
         }
+        if !unsure.isEmpty {
+            Divider()
+            unsureButtons
+        }
         Divider()
         Button("Add Bookmark Here", systemImage: "bookmark") { actions.bookmark(segment) }
         if segment.provenance.count > 1 {
@@ -281,7 +304,39 @@ struct PassageRow: View {
         if holder { parts.append(label.map { "Bookmark: \($0)" } ?? "Bookmarked") }
         parts.append(segment.text)
         if corrected { parts.append("Corrected") }
+        if !unsure.isEmpty { parts.append(UnsureWords.spoken(unsure.map { $0.words(in: segment.text) ?? $0.flag.text })) }
         return parts.joined(separator: ". ")
+    }
+}
+
+/// Unsure words as a passage shows them, the same on both apps: a dotted line under them in the meta ink (quiet, and a
+/// pattern, so the mark never rests on colour), and the words of what can be done with them.
+enum UnsureWords {
+    /// The passage's text with each unsure word or phrase underlined with dots.
+    static func marked(_ text: String, _ unsure: [TranscriptFlagMark]) -> AttributedString {
+        var attributed = AttributedString(text)
+        for mark in unsure {
+            guard let range = Range(NSRange(location: mark.range.lowerBound, length: mark.range.count), in: text),
+                  let marked = Range(range, in: attributed) else { continue }
+            // By the attribute's type: a key path through the attribute scope isn't Sendable, which complete checking flags.
+            attributed[marked][AttributeScopes.SwiftUIAttributes.UnderlineStyleAttribute.self] =
+                Text.LineStyle(pattern: .dot, color: DaybookPalette.Ink.meta)
+        }
+        return attributed
+    }
+
+    /// The action taking the earlier reading: "Use “Thursday”", or "Remove “really”" where it heard nothing. Nil when
+    /// there's no earlier reading, or taking it would leave nothing of the passage.
+    static func earlierReadingTitle(_ mark: TranscriptFlagMark, in text: String) -> String? {
+        guard let alternative = mark.alternativeWords, mark.replacing(in: text) != nil else { return nil }
+        return alternative.isEmpty ? "Remove “\(mark.words(in: text) ?? mark.flag.text)”" : "Use “\(alternative)”"
+    }
+
+    static func keepTitle(_ words: String) -> String { "Keep “\(words)”" }
+
+    /// What VoiceOver reads after the passage: "Unsure: “Friday”, “Maria”".
+    static func spoken(_ words: [String]) -> String {
+        "Unsure: " + words.map { "“\($0)”" }.joined(separator: ", ")
     }
 }
 
