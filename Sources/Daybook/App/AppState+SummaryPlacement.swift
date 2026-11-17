@@ -14,8 +14,10 @@ import Foundation
 /// conversation's requests: an iPhone summarizing it in the cloud, say) isn't written here too, and one
 /// that arrives while this Mac summarizes is kept rather than replaced.
 ///
-/// A Personal conversation (placed there, or its template or kind says so) is never sent to the cloud on its own:
-/// under Always it counts down as Offer First does, and the cloud is the person's choice for it (Use the Cloud).
+/// A conversation whose placement Settings › Cloud keeps off the cloud (Personal, unless the person turns it on:
+/// `CloudPlacements`) is never sent there, whatever asks: no Use the Cloud is offered for it, Always doesn't send it, a
+/// queued Use the Cloud or cloud upgrade runs here instead, and a conversation moved there (or a switch turned off) while
+/// it counts down to the cloud goes on here. This Mac applies its own switches: preferences are each device's own.
 ///
 /// **Transcript first.** A job never waits for the summary model to start: it transcribes with what transcribes, and at
 /// the summary step, when the summary model isn't here and the cloud wouldn't take the summary at once (Always, unless
@@ -30,8 +32,22 @@ extension AppState {
 
     func wireSummaryPlacements() {
         placements.onChange = { [weak self] id in self?.reportSummaryPlacement(id) }
-        placements.isPersonal = { [weak self] id in
-            self?.meetings.first(where: { $0.id == id })?.effectivePlacement == .personal
+        placements.conversation = { [weak self] id, _ in
+            guard let self else { return .init(cloudAllowed: false) }
+            return .init(cloudAllowed: self.cloudAllowed(id))
+        }
+        followConversationsWhilePlacing()
+    }
+
+    /// A conversation changing (moved to Personal, say) reaches its countdown at once: every change to the library asks
+    /// each planner's conversation again while anything is being placed.
+    private func followConversationsWhilePlacing() {
+        withObservationTracking { _ = library.revision } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if !self.placements.planners.isEmpty, self.hasCloudSetup { self.placements.update() }
+                self.followConversationsWhilePlacing()
+            }
         }
     }
 
@@ -53,6 +69,15 @@ extension AppState {
 
     /// The cloud is on offer for a summary: a key, a model it reaches, and not Never.
     var cloudOnOffer: Bool { cloud.preferences.policy != .never && cloud.resolved != nil }
+
+    /// The cloud is on offer for this conversation: on offer at all, and its placement's switch on (`CloudPlacements`).
+    func cloudOnOffer(for meeting: Meeting) -> Bool { cloudOnOffer && cloud.preferences.placements.allows(meeting) }
+
+    /// Whether Settings › Cloud lets this conversation go to the cloud: its placement's switch. False for one that's gone.
+    func cloudAllowed(_ id: UUID) -> Bool {
+        guard let meeting = meetings.first(where: { $0.id == id }) else { return false }
+        return cloud.preferences.placements.allows(meeting)
+    }
 
     /// A key, the models offered, or the preferences changed (`CloudSetup.onChange`), or a summary is about to be
     /// placed: every countdown follows. Nothing to do before the cloud is first needed.
@@ -91,14 +116,14 @@ extension AppState {
     // MARK: Waiting for the summary model
 
     /// Whether a summary of `meeting` made now would wait for this Mac's summary model: `model` (the one chosen, unless a
-    /// job froze another) isn't here, and the cloud wouldn't take the summary at once. It does under Always, unless the
-    /// conversation is Personal, and whenever the person chose it for this summary (`toCloud`: Use the Cloud, an upgrade to
-    /// the cloud's model); never for one they asked to run here (`here`: Summarize on This Mac).
+    /// job froze another) isn't here, and the cloud wouldn't take the summary at once. It does under Always, and whenever
+    /// the person chose it for this summary (`toCloud`: Use the Cloud, an upgrade to the cloud's model), as long as the
+    /// conversation's placement lets it go there; never for one they asked to run here (`here`: Summarize on This Mac).
     func summaryWaitsForModel(_ meeting: Meeting, model: String? = nil, toCloud: Bool = false, here: Bool = false) -> Bool {
         let model = model ?? summaryModel
         if !model.isEmpty, installedModels.contains(model) { return false }
-        guard !here, cloudOnOffer else { return true }
-        return !toCloud && (cloud.preferences.policy != .always || meeting.effectivePlacement == .personal)
+        guard !here, cloudOnOffer(for: meeting) else { return true }
+        return !toCloud && cloud.preferences.policy != .always
     }
 
     /// The same for a job's summary, by what the job froze and what the person chose for it.
@@ -203,14 +228,16 @@ extension AppState {
         reportToPhones(id, force: true)
         switch place {
         case .cloud(let model):
-            if cloud.keys[model.provider] != nil {
+            // The device that sends it applies its own switches, as the conversation is now: moved to a placement kept off
+            // the cloud (or the switch turned off) while it counted down, it's summarized here instead.
+            if cloud.keys[model.provider] != nil, cloud.preferences.allowsCloud(for: meeting) {
                 let output = try await cloudSummarizer.summaryOutput(meeting, template: template, vocabulary: vocabulary, model: model,
                                                                      effort: cloud.preferences.effort) { fraction in
                     progress(ProcessingProgress(fraction: fraction, message: SummaryPlacementWords.inCloud(model.name), stage: .summarizing))
                 }
                 return PlacedSummary(output: output, place: place, meeting: meeting, started: started)
             }
-            // The key went away as it started: here, as without one.
+            // The key went away as it started, or the conversation may not go: here, as without one.
             fallthrough
         case .thisDevice, .mac:
             let output = try await engine.summarize(meeting, template: template, vocabulary: vocabulary, progress: progress)
@@ -237,7 +264,8 @@ extension AppState {
     }
 
     /// Use the Cloud or Start Now, from the page, the inspector, Floating Notes, or a phone. A summary waiting for the
-    /// summary model has no countdown: Use the Cloud summarizes it there now (`summarizeInCloud`).
+    /// summary model has no countdown: Use the Cloud summarizes it there now (`summarizeInCloud`). Use the Cloud for a
+    /// conversation the cloud isn't on offer for does nothing, whoever asks.
     func chooseSummaryPlacement(_ action: SummaryPlacementPlanner.Action, for id: UUID) {
         if action == .useCloud, placements[id] == nil, processor.queue.runningID != id, !processor.queue.isQueued(id) {
             summarizeInCloud(id)
@@ -247,8 +275,10 @@ extension AppState {
     }
 
     /// Use the Cloud for a summary waiting for this Mac's summary model: a Summarize that goes to the cloud with no
-    /// countdown (`ProcessingJob.summarizesInCloud`), carrying out a Summarize request left open for it.
+    /// countdown (`ProcessingJob.summarizesInCloud`), carrying out a Summarize request left open for it. Nothing for a
+    /// conversation the cloud isn't on offer for.
     func summarizeInCloud(_ id: UUID) {
+        guard let meeting = meetings.first(where: { $0.id == id }), cloudOnOffer(for: meeting) else { return }
         processor.enqueue(id, mode: .summaryOnly, summarizesInCloud: true)
     }
 

@@ -215,7 +215,7 @@ extension ConversationStatusPresentation.Inputs {
         if case .requested(.device) = status { summaryMayWait = true }
         if summaryMayWait, state.summaryWaitsForModel(meeting) {
             inputs.summaryWaitsForModel = true
-            inputs.placement.cloudOffered = state.cloudOnOffer
+            inputs.placement.cloudOffered = state.cloudOnOffer(for: meeting)
         }
         if status == .done { inputs.upgrade = state.upgradeOffer(for: meeting) }
         // Where an iPhone recording it waits for is: " · Sending 40%", " · Last online 10:02".

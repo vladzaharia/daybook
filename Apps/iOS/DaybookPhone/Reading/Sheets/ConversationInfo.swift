@@ -68,7 +68,7 @@ struct ConversationInfo: View {
                 var inputs = ConversationStatusPresentation.Inputs(words: words, local: .iPhone())
                 if let placement {
                     inputs.placement = .init(planner: placement.planners[meeting.id], run: placement.runs[meeting.id],
-                                             cloudOffered: placement.cloudOffer != nil)
+                                             cloudOffered: placement.cloudOffer(for: meeting) != nil)
                 }
                 return InfoNow.make(ProcessingStatus.phone(meeting, now: date), meeting: meeting, inputs: inputs, now: date)
             },

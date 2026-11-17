@@ -610,10 +610,11 @@ preferences (the policy, the countdown's length, the effort) are read from each 
 
 **When it counts down.** Only when there's something to choose. Without a cloud model on offer (no key, or
 Never) a summary starts at once where it can, as before there was a cloud. **Always** sends it to the cloud
-with no countdown, except a **Personal** conversation (filed there, or its template or summary says so:
-`Meeting.effectivePlacement`), which is never sent on its own: it counts down as Offer First does, or waits for a
-Mac, and the cloud is only ever the person's choice for it (Use the Cloud). The planner reads it as `isPersonal`,
-which each app's `SummaryPlacements.isPersonal` answers from its library as the planner begins. A summary someone
+with no countdown. A conversation whose placement Settings › Cloud keeps off the cloud (Personal, unless the person
+turns it on; docs/cloud.md, "Which conversations") has no cloud on offer at all: no countdown, no Use the Cloud, and
+Always doesn't send it. The planner reads it as `Conversation.cloudAllowed`, which each app's
+`SummaryPlacements.conversation` answers from its library and its own switches as the planner begins and at every
+change, the library's included. A summary someone
 asked for starts at once wherever it can: Summarize Again, a template,
 Identify Speakers Again, Transcribe Everything Again, here or as another device's request. Only the summary
 that new audio makes due counts down.
@@ -622,7 +623,8 @@ that new audio makes due counts down.
 countdown keeps its deadline when where it ends up changes (the Mac it counted down to went away and another
 is reachable; this device became able to summarize, or stopped); one with nowhere left to go waits for a Mac;
 one whose cloud went away (the key removed, Never chosen) starts its default now, since the countdown was
-there to offer the cloud; Always chosen sends it to the cloud, except a Personal one, which keeps counting down.
+there to offer the cloud, and so does one whose conversation was moved to a placement kept off the cloud, or whose
+switch was turned off; Always chosen sends it to the cloud.
 Waiting turns into a fresh countdown when somewhere to run it appears.
 
 **On the Mac.** The summary step of every job goes through the planner (`placedSummary`): when the

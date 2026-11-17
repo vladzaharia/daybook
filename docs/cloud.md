@@ -3,7 +3,7 @@
 A summary can be written by a cloud model, Anthropic's or OpenAI's, with the person's own key. Everything else stays on
 the device: transcription, speaker detection, voice profiles, and audio. With no key nothing changes and nothing is
 offered. With a key, Settings › Cloud chooses when summaries use the cloud (offered with a countdown first, always, or
-never) and which model. Where a summary runs is decided by the placement planner (`SummaryPlacementPlanner`, the
+never), for which conversations (a switch for each placement: Work, Personal), and which model. Where a summary runs is decided by the placement planner (`SummaryPlacementPlanner`, the
 placement stream); this page is the cloud side: the catalog, keys, discovery, the requests, and the summary itself.
 
 ## What is sent
@@ -14,11 +14,21 @@ audio, no photos or their captions, no voiceprints, no speaker profiles. Photo c
 summary places photos by time only (`PhotoPlacement.arrange`). OpenAI's request sets `store: false`, so the response
 isn't kept on OpenAI's side.
 
-**Personal.** A conversation that's Personal (filed there, given the Therapy or Personal template, or found Personal by
-its summary: `Meeting.effectivePlacement`) is never sent on its own. Under Always it counts down as Offer First does, or
-waits for a Mac, with Use the Cloud, and the cloud's Upgrade is never offered for it (docs/multipoint.md). Use the Cloud
-is the person's choice for that one conversation. A conversation whose kind isn't known yet follows Always until a
-summary finds it Personal.
+**Which conversations.** Settings › Cloud has a switch for each placement (`LibraryPlacement`: Work, Personal), kept in
+this device's preferences (`CloudSummaryPreferences.placements`, `CloudPlacements`). A conversation's placement is the
+person's filing, else what its template or summary says (`Meeting.effectivePlacement`: the Therapy and Personal
+templates and kinds are Personal, the rest Work). Personal is off and Work on until the person changes them, which is
+what Daybook did before there were switches; preferences saved before them read as those defaults. A conversation not
+filed yet (its kind isn't known until a summary finds it) follows Work's switch, as it followed Always before. A
+placement written by a newer Daybook, which this version can't read, is never sent: what the person chose for it is
+unknown here. A conversation whose switch is off is never sent to the cloud, whatever asks: Use the Cloud isn't offered
+for it (the countdown, the wait for a Mac, the wait for this Mac's summary model, the status sheet and Floating Notes),
+the cloud's Upgrade isn't offered, Always doesn't send it, and a countdown has nothing to offer, so it starts where it
+can at once. Below the interface, the code that sends a summary checks again with the conversation as it is then
+(`AppState.placedSummary` on the Mac, `PhoneSummaryPlacement.run` on the iPhone): a queued Use the Cloud, a cloud
+upgrade accepted earlier, or a conversation moved to Personal (or a switch turned off) while it counts down is
+summarized on the device instead, or sent to a Mac. Preferences are each device's own, so the device that sends a
+summary applies its own switches; a Mac's countdown seen on an iPhone offers what the Mac's switches allow.
 
 OpenRouter's model list (for prices) is fetched without a key and carries nothing about the person: no key, no cookies,
 and a bare `User-Agent: Daybook`. It's fetched only once a key has been added.
@@ -265,6 +275,7 @@ Settings › Cloud (a pane of its own on the Mac, between Models and Devices; a 
   (iPhone) with a secure field; it checks the key before keeping it.
 - **Summaries** (once a key is set): Use the cloud (Offer First, Always, Never), and Countdown (15 or 30 seconds) while
   it offers first.
+- **Use the cloud for** (unless Never): a switch for each placement, Work and Personal; labels only.
 - **Quality** (unless Never): Best, Balanced, and Economy, each with its recommended model and what an hour costs; Model,
   Recommended or a model of the tier (with its cost when one is chosen); Effort, the efforts the model takes (a segmented
   control on the Mac, a menu on the iPhone), showing the level a summary would ask for: Extra High until one is chosen.

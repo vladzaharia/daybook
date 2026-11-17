@@ -5,8 +5,7 @@ import Foundation
 /// it starts, the wait for a Mac, a summary under way where it was placed, and the person's choices. The page and its
 /// list row, the list's subtitle, the inspector, Floating Notes and the menu bar on a Mac, the iPhone's status sheet,
 /// and a Mac's countdown seen over the link all say them from here, with one rounding rule for the seconds and one way
-/// to move them as a line ticks. Personal under Always counts down as Offer First does (`SummaryPlacementPlanner`), so
-/// it reads as any countdown, with Use the Cloud.
+/// to move them as a line ticks.
 public enum SummaryPlacementWords {
     // MARK: The countdown
 

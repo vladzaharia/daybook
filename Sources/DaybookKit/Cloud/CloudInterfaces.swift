@@ -40,6 +40,41 @@ public enum CloudEffort: String, Codable, CaseIterable, Comparable, Sendable {
     public static func < (a: CloudEffort, b: CloudEffort) -> Bool { allCases.firstIndex(of: a)! < allCases.firstIndex(of: b)! }
 }
 
+/// Which conversations may be summarized in the cloud, by where they're filed: a switch for each placement (Work,
+/// Personal) in Settings › Cloud, part of this device's preferences. Personal is off and every other placement on until
+/// the person changes them, as before there were switches. A conversation not filed yet (its kind isn't known until a
+/// summary finds it, and the person hasn't placed it) follows Work's switch, as it followed Always before. A placement a
+/// newer Daybook wrote, which this version can't read, never goes: what the person chose for it is unknown here.
+public struct CloudPlacements: Codable, Equatable, Sendable {
+    /// Each placement's switch, by its raw value; one not stored has its default.
+    public var allowed: [String: Bool]
+
+    public init(allowed: [String: Bool] = [:]) { self.allowed = allowed }
+
+    /// Personal off, the rest on.
+    public static func allowsByDefault(_ placement: LibraryPlacement) -> Bool { placement != .personal }
+
+    public func allows(_ placement: LibraryPlacement) -> Bool { allowed[placement.rawValue] ?? Self.allowsByDefault(placement) }
+
+    public mutating func set(_ placement: LibraryPlacement, allowed: Bool) { self.allowed[placement.rawValue] = allowed }
+
+    /// Whether `meeting` may be summarized in the cloud: its placement's switch (`Meeting.effectivePlacement`), Work's for
+    /// one not filed yet, and never for a placement this version doesn't know.
+    public func allows(_ meeting: Meeting) -> Bool {
+        guard meeting.$placement.isKnown else { return false }
+        return allows(meeting.effectivePlacement ?? .work)
+    }
+
+    public init(from decoder: Decoder) throws {
+        allowed = (try? decoder.singleValueContainer().decode([String: Bool].self)) ?? [:]
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(allowed)
+    }
+}
+
 /// How the person wants summaries placed (Settings).
 public struct CloudSummaryPreferences: Codable, Equatable, Sendable {
     public enum Policy: String, Codable, Sendable { case ask, always, never }
@@ -51,7 +86,13 @@ public struct CloudSummaryPreferences: Codable, Equatable, Sendable {
     public var effort: CloudEffort = CloudEffort.summaryDefault
     /// The person chose `effort` in Settings; until then it follows the default, which a later version may raise.
     public var effortIsChosen = false
+    /// Which conversations may go to the cloud, by placement.
+    public var placements = CloudPlacements()
     public init() {}
+
+    /// Whether `meeting` may be summarized in the cloud on this device: the policy isn't Never, and its placement's switch
+    /// is on. A key, and a model it reaches, are the rest (`CloudSetup.resolved`).
+    public func allowsCloud(for meeting: Meeting) -> Bool { policy != .never && placements.allows(meeting) }
 
     /// Chooses an effort in Settings: it stays until the person changes it.
     public mutating func choose(_ effort: CloudEffort) {
@@ -59,7 +100,7 @@ public struct CloudSummaryPreferences: Codable, Equatable, Sendable {
         effortIsChosen = true
     }
 
-    private enum CodingKeys: String, CodingKey { case policy, countdownSeconds, tier, model, effort, effortIsChosen }
+    private enum CodingKeys: String, CodingKey { case policy, countdownSeconds, tier, model, effort, effortIsChosen, placements }
 
     /// Each field on its own, so preferences from an earlier version keep what they set. Those have no `effortIsChosen`:
     /// their effort was Medium unless the person changed it, and an explicit Medium can't be told from the old default, so
@@ -77,6 +118,7 @@ public struct CloudSummaryPreferences: Codable, Equatable, Sendable {
             effortIsChosen = stored != nil && stored != .medium
         }
         effort = effortIsChosen ? stored ?? CloudEffort.summaryDefault : CloudEffort.summaryDefault
+        placements = (try? values.decodeIfPresent(CloudPlacements.self, forKey: .placements)) ?? CloudPlacements()
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -87,6 +129,7 @@ public struct CloudSummaryPreferences: Codable, Equatable, Sendable {
         try values.encodeIfPresent(model, forKey: .model)
         try values.encode(effort, forKey: .effort)
         try values.encode(effortIsChosen, forKey: .effortIsChosen)
+        try values.encode(placements, forKey: .placements)
     }
 }
 

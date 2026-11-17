@@ -305,6 +305,21 @@ final class CloudDirectoryTests: XCTestCase {
         XCTAssertEqual(untouched.model, "claude-opus-5-5")
         XCTAssertEqual(untouched.effort, .xhigh, "Medium was the old default: it moves to the new one")
         XCTAssertFalse(untouched.effortIsChosen)
+        // No switches stored: Personal off and Work on, what Daybook did before there were switches.
+        XCTAssertEqual(untouched.placements, CloudPlacements())
+        XCTAssertFalse(untouched.placements.allows(.personal))
+        XCTAssertTrue(untouched.placements.allows(.work))
+        var switched = untouched
+        switched.placements.set(.personal, allowed: true)
+        switched.placements.set(.work, allowed: false)
+        let read = try JSONDecoder().decode(CloudSummaryPreferences.self, from: JSONEncoder().encode(switched))
+        XCTAssertTrue(read.placements.allows(.personal))
+        XCTAssertFalse(read.placements.allows(.work))
+        // Never keeps everything off the cloud, whatever the switches say.
+        var never = read
+        never.policy = .never
+        XCTAssertFalse(never.allowsCloud(for: Meeting(title: "Anything", placement: .personal)))
+        XCTAssertTrue(read.allowsCloud(for: Meeting(title: "Anything", placement: .personal)))
         let lowered = try decode(#"{"policy":"ask","countdownSeconds":15,"tier":"balanced","effort":"low"}"#)
         XCTAssertEqual(lowered.effort, .low, "Low was the person's choice")
         XCTAssertTrue(lowered.effortIsChosen)

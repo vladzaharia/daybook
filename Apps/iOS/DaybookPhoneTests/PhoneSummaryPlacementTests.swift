@@ -246,6 +246,67 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         XCTAssertEqual(ProcessingStatus(try XCTUnwrap(rig.library.meeting(id))), .done)
     }
 
+    // MARK: Kept off the cloud
+
+    func testBehaviorAConversationKeptOffTheCloudIsNeverSentFromThisIPhone() async throws {
+        let cloud = Cloud(models: [sonnet])
+        let rig = try await rig(cloud: cloud, macSeen: false)
+        var preferences = rig.cloud.preferences
+        preferences.policy = .always
+        rig.cloud.preferences = preferences
+        // Filed in Personal, under Always, with no Mac: no countdown, no cloud; it waits for a Mac through the library.
+        let personal = transcribed(rig.library, "Session")
+        rig.library.update(personal) { $0.placement = .personal }
+        await rig.placement.summaryIsDue(personal)
+        XCTAssertNil(rig.placement.cloudOffer(for: personal))
+        XCTAssertNil(rig.placement.planners[personal])
+        XCTAssertTrue(cloud.asked.isEmpty)
+        let waiting = try XCTUnwrap(summaryRequests(rig.library, personal).first)
+        XCTAssertEqual(waiting.claim?.lease ?? 0, 0, "Left to a Mac")
+        // Use the Cloud for its waiting request, from anywhere, does nothing; the page doesn't offer it.
+        rig.placement.perform(.useCloud, for: personal)
+        XCTAssertTrue(cloud.asked.isEmpty)
+        let meeting = try XCTUnwrap(rig.library.meeting(personal))
+        let page = try XCTUnwrap(try pageStatus(rig, personal, ProcessingStatus(meeting), cloudOffered: rig.placement.cloudOffer(for: personal) != nil))
+        XCTAssertFalse(page.actions.contains(.placement(.useCloud)))
+        // The upgrade to the cloud isn't offered for it either.
+        XCTAssertNil(Upgrades.offer(.summarization, for: meeting, candidates: UpgradeCandidates(
+            thisDevice: .none, cloud: rig.placement.cloudOffer, cloudPlacements: rig.placement.preferences.placements)))
+        // Work under Always goes to the cloud at once.
+        let work = transcribed(rig.library, "Standup")
+        rig.library.update(work) { $0.placement = .work }
+        await rig.placement.summaryIsDue(work)
+        try await waitUntil("the cloud to be asked") { cloud.asked == [work] }
+        // With Personal let go in Settings, it goes too.
+        preferences.placements.set(.personal, allowed: true)
+        rig.cloud.preferences = preferences
+        let allowed = transcribed(rig.library, "Allowed")
+        rig.library.update(allowed) { $0.placement = .personal }
+        await rig.placement.summaryIsDue(allowed)
+        try await waitUntil("the cloud to be asked again") { cloud.asked == [work, allowed] }
+    }
+
+    func testBehaviorAConversationMovedOffTheCloudMidCountdownGoesToTheMac() async throws {
+        let cloud = Cloud(models: [sonnet])
+        let rig = try await rig(cloud: cloud)
+        let id = transcribed(rig.library)
+        await rig.placement.summaryIsDue(id)
+        XCTAssertEqual(rig.placement.planners[id]?.actions, [.useCloud, .startNow])
+        rig.library.update(id) { $0.placement = .personal }
+        rig.placement.refresh()
+        XCTAssertNil(rig.placement.planners[id], "Nothing left to choose: it goes to the Mac now")
+        XCTAssertEqual(summaryRequests(rig.library, id).first?.claim?.lease, 0, "Given back, for the Mac")
+        XCTAssertTrue(cloud.asked.isEmpty)
+        // Use the Cloud chosen before this iPhone heard of the move: the last check before sending keeps it here.
+        let raced = transcribed(rig.library, "Raced")
+        await rig.placement.summaryIsDue(raced)
+        rig.library.update(raced) { $0.placement = .personal }
+        rig.placement.perform(.useCloud, for: raced)
+        XCTAssertTrue(cloud.asked.isEmpty, "Never sent")
+        XCTAssertNil(rig.placement.runs[raced])
+        XCTAssertEqual(summaryRequests(rig.library, raced).first?.claim?.lease, 0, "To the Mac instead")
+    }
+
     func testBehaviorSummarizeWithNoMacLeavesTheRequestAndUseTheCloudTakesItBack() async throws {
         let cloud = Cloud(models: [sonnet])
         let rig = try await rig(cloud: cloud, macSeen: false)
@@ -510,7 +571,7 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         askedMeeting.processingRequests = [request]
         let meetings = [Meeting(id: counting, title: "Counting"), Meeting(id: waiting, title: "Waiting"), askedMeeting]
         let queue = StatusOverviewModel.queue(meetings: meetings, liveProgress: [:], words: .iPhone(id: "me"), planners: [counting: toMac, waiting: forMac],
-                                              cloudOffered: true, now: now)
+                                              cloudOffered: { _ in true }, now: now)
         let byTitle = Dictionary(uniqueKeysWithValues: queue.map { ($0.title, $0) })
         XCTAssertEqual(byTitle["Counting"]?.line(under: nil, at: now.addingTimeInterval(3)), SummaryPlacementWords.countdown(on: "Studio Mac", seconds: 12))
         XCTAssertEqual(byTitle["Counting"]?.line(under: "Studio Mac", at: now.addingTimeInterval(3)), SummaryPlacementWords.countdown(seconds: 12),

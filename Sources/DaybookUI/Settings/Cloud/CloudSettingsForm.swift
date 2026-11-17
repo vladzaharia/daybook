@@ -3,7 +3,8 @@ import DaybookKit
 import SwiftUI
 
 // Settings › Cloud, the same on both apps (docs/cloud.md, "Settings"): each provider's key, then, once there is one,
-// when summaries use the cloud, the tier with what an hour costs, Recommended or a model, and effort. Labels are in
+// when summaries use the cloud and for which conversations, the tier with what an hour costs, Recommended or a model,
+// and effort. Labels are in
 // sentence case on the Mac and title case on the iPhone (`SettingsWords.titleCased`).
 
 /// Settings › Cloud's sections. Each app hosts them in its own form and presents the key editor (`CloudKeyEditor`)
@@ -239,6 +240,13 @@ public struct CloudSummarySections: View {
             }
         }
         if cloud.preferences.policy != .never {
+            Section(label(SettingsWords.cloudPlacements)) {
+                ForEach(LibraryPlacement.allCases, id: \.self) { placement in
+                    Toggle(label(SettingsWords.placement(placement)), isOn: Binding(
+                        get: { cloud.preferences.placements.allows(placement) },
+                        set: { cloud.preferences.placements.set(placement, allowed: $0) }))
+                }
+            }
             Section("Quality") {
                 ForEach(CloudTier.allCases.filter { !cloud.offers(in: $0).isEmpty }, id: \.self) { tier in
                     CloudTierRow(cloud: cloud, tier: tier)

@@ -11,8 +11,9 @@ import Observation
 /// out. A caller that would rather wait for the answer uses `place(_:immediately:)`. The entry stays until
 /// the app ends it, so the status can say "Summarizing with Claude Sonnet 5.5" while the cloud works.
 ///
-/// Whether a conversation is Personal is asked of the app's library as its planner begins (`isPersonal`): a Personal
-/// one is never sent to the cloud on its own (`SummaryPlacementPlanner.isPersonal`).
+/// What the planner needs of each conversation (`SummaryPlacementPlanner.Conversation`: whether its placement lets it go
+/// to the cloud) is asked of the app (`conversation`) as its planner begins and whenever anything changes, so a
+/// conversation moved to Personal, or a switch turned off, mid-countdown loses the cloud at once.
 @MainActor
 @Observable
 public final class SummaryPlacements {
@@ -25,8 +26,9 @@ public final class SummaryPlacements {
     @ObservationIgnored public var onSettled: ((UUID, SummaryPlacementPlanner.Phase) -> Void)?
     /// Any planner changed in a way worth telling another device (a countdown began, retargeted, or ended).
     @ObservationIgnored public var onChange: ((UUID) -> Void)?
-    /// Whether the conversation is Personal (`Meeting.effectivePlacement`), from the app's library.
-    @ObservationIgnored public var isPersonal: (UUID) -> Bool = { _ in false }
+    /// What the planner needs of a conversation, from the app's library and Settings › Cloud (`CloudPlacements`), given
+    /// what this device offers now.
+    @ObservationIgnored public var conversation: (UUID, SummaryOptions) -> SummaryPlacementPlanner.Conversation = { _, _ in .init() }
 
     private let clock: () -> Date
     private let runsTimer: Bool
@@ -63,13 +65,14 @@ public final class SummaryPlacements {
             return existing.started
         }
         let planner = SummaryPlacementPlanner(options: options, preferences: preferences, at: clock(),
-                                              immediately: immediately, waitsForMacs: waitsForMacs, personal: isPersonal(id))
+                                              immediately: immediately, waitsForMacs: waitsForMacs, conversation: conversation(id, options))
         set(id, planner)
         return planner.started
     }
 
     /// A summary the person asked the cloud for (an "Upgrade" to the cloud's better model, docs/multipoint.md): it starts
-    /// there at once, with no countdown, while the cloud is on offer; otherwise it's placed as a due one is.
+    /// there at once, with no countdown, while the cloud is on offer for it; otherwise (no key, Never, or its placement kept
+    /// off the cloud) it's placed as a due one is.
     @discardableResult
     public func beginInCloud(_ id: UUID) -> SummaryPlace? {
         if planners[id] != nil {
@@ -77,7 +80,7 @@ public final class SummaryPlacements {
             return planners[id]?.started
         }
         var planner = SummaryPlacementPlanner(options: options, preferences: preferences, at: clock(), waitsForMacs: waitsForMacs,
-                                              personal: isPersonal(id))
+                                              conversation: conversation(id, options))
         planner.perform(.useCloud, at: clock())
         set(id, planner)
         return planner.started
@@ -90,7 +93,7 @@ public final class SummaryPlacements {
         guard options.thisDeviceCanSummarize else { return nil }
         let here = SummaryOptions(thisDeviceCanSummarize: true, reachableMacs: [], cloud: nil)
         let planner = SummaryPlacementPlanner(options: here, preferences: preferences, at: clock(), immediately: true,
-                                              waitsForMacs: waitsForMacs, personal: isPersonal(id))
+                                              waitsForMacs: waitsForMacs, conversation: conversation(id, here))
         set(id, planner)
         return planner.started
     }
@@ -122,14 +125,15 @@ public final class SummaryPlacements {
         return true
     }
 
-    /// What this device offers, or the preferences, changed: every conversation being placed follows.
+    /// What this device offers, the preferences, or a conversation (its placement) changed: every conversation being
+    /// placed follows, its own state asked again (`conversation`).
     public func update(options: SummaryOptions? = nil, preferences: CloudSummaryPreferences? = nil) {
         if let options { self.options = options }
         if let preferences { self.preferences = preferences }
         let now = clock()
         for (id, planner) in planners {
             var changed = planner
-            changed.update(options: options, preferences: preferences, at: now)
+            changed.update(options: options, preferences: preferences, conversation: conversation(id, self.options), at: now)
             if changed != planner { set(id, changed) }
         }
     }

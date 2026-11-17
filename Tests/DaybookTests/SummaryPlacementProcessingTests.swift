@@ -241,7 +241,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         // The cloud's provenance.
         let cloud = try XCTUnwrap(summary.cloudProvenance)
         XCTAssertEqual(cloud.model, "claude-sonnet-5-5")
-        XCTAssertEqual(cloud.effort, .medium)
+        XCTAssertEqual(cloud.effort, .xhigh, "Summaries ask for Extra High until the person chooses another level")
         XCTAssertEqual(cloud.inputTokens, 9_800)
         XCTAssertEqual(cloud.outputTokens, 2_900)
         XCTAssertNotNil(cloud.estimatedCost)
@@ -300,26 +300,64 @@ final class SummaryPlacementProcessingTests: XCTestCase {
 
     /// A Personal conversation is never sent to the cloud on its own: under Always it counts down as Offer First does,
     /// and Use the Cloud is the person's choice for that one conversation.
-    func testBehaviorAlwaysCountsDownForAPersonalConversation() async throws {
+    func testBehaviorAConversationKeptOffTheCloudIsNeverSentWhateverAsks() async throws {
         let cloud = FakeCloud()
         let rig = try await rig(cloud: cloud, policy: .always, seconds: 30)
+        // Filed in Personal, under Always: no countdown, no cloud, summarized here.
         let filed = try await conversation(rig, "Filed in Personal", frequency: 345)
         rig.state.library.update(filed) { $0.placement = .personal }
+        let counted = CountdownSeen(rig.state.placements, for: filed)
+        defer { counted.cancel() }
         rig.state.processor.enqueue(filed)
-        try await countingDown(rig, filed)
-        XCTAssertEqual(rig.state.placements[filed]?.actions, [.useCloud, .startNow])
-        rig.state.chooseSummaryPlacement(.startNow, for: filed)
         try await rig.processed(filed)
-        XCTAssertTrue(cloud.summarized.isEmpty, "Never sent on its own")
+        XCTAssertFalse(counted.happened, "Nothing to offer: no countdown")
+        XCTAssertTrue(cloud.summarized.isEmpty, "Never sent")
         XCTAssertEqual(rig.inference.summarized.count, 1, "Summarized here")
+        // Use the Cloud, from anywhere (a phone, a stale button), and the cloud's upgrade path do nothing for it.
+        XCTAssertFalse(rig.state.cloudOnOffer(for: try XCTUnwrap(rig.meeting(filed))))
+        rig.state.summarizeInCloud(filed)
+        XCTAssertFalse(rig.state.processor.queue.isQueued(filed))
+        // A Use the Cloud queued before the conversation moved to Personal runs here instead.
+        let moved = try await conversation(rig, "Moved after queueing", frequency: 355)
+        // Both in one turn: the job reaches its summary step only after the move.
+        rig.state.processor.enqueue(moved, summarizesInCloud: true)
+        rig.state.library.update(moved) { $0.placement = .personal }
+        try await rig.processed(moved)
+        XCTAssertTrue(cloud.summarized.isEmpty, "Still never sent")
+        XCTAssertEqual(rig.inference.summarized.count, 2)
+        // The person lets Personal go to the cloud: Always sends it.
+        var preferences = rig.state.cloud.preferences
+        preferences.placements.set(.personal, allowed: true)
+        rig.state.cloud.preferences = preferences
+        let allowed = try await conversation(rig, "Personal allowed", frequency: 365)
+        rig.state.library.update(allowed) { $0.kind = .therapy }
+        rig.state.processor.enqueue(allowed)
+        try await rig.processed(allowed)
+        XCTAssertEqual(cloud.summarized, [allowed])
+    }
 
-        let therapy = try await conversation(rig, "Therapy template", frequency: 355)
-        rig.state.library.update(therapy) { $0.kind = .therapy }
-        rig.state.processor.enqueue(therapy)
-        try await countingDown(rig, therapy)
-        rig.state.chooseSummaryPlacement(.useCloud, for: therapy)
-        try await rig.processed(therapy)
-        XCTAssertEqual(cloud.summarized, [therapy], "Use the Cloud still sends it")
+    func testBehaviorAConversationMovedOffTheCloudMidCountdownIsSummarizedHere() async throws {
+        let cloud = FakeCloud()
+        let rig = try await rig(cloud: cloud, policy: .ask, seconds: 30)
+        let id = try await conversation(rig, "Moved mid-countdown", frequency: 375)
+        rig.state.processor.enqueue(id)
+        try await countingDown(rig, id)
+        XCTAssertEqual(rig.state.placements[id]?.actions, [.useCloud, .startNow])
+        rig.state.library.update(id) { $0.placement = .personal }
+        try await rig.processed(id)
+        XCTAssertTrue(cloud.summarized.isEmpty)
+        XCTAssertEqual(rig.inference.summarized.count, 1, "Its countdown lost the cloud and started here")
+        // Work kept off the cloud in Settings mid-countdown: the same.
+        let work = try await conversation(rig, "Work switched off", frequency: 385)
+        rig.state.library.update(work) { $0.placement = .work }
+        rig.state.processor.enqueue(work)
+        try await countingDown(rig, work)
+        var preferences = rig.state.cloud.preferences
+        preferences.placements.set(.work, allowed: false)
+        rig.state.cloud.preferences = preferences
+        try await rig.processed(work)
+        XCTAssertTrue(cloud.summarized.isEmpty)
+        XCTAssertEqual(rig.inference.summarized.count, 2)
     }
 
     /// A speaker named while the summary is being written: the name follows into it, as into a summary already there,

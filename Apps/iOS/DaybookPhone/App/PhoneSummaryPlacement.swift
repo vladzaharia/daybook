@@ -44,8 +44,10 @@ extension LibraryController {
 ///   iPhone stops its own countdown for that conversation.
 /// - **In the background**, where a countdown can't run, each countdown's default happens at once, and a
 ///   summary waiting for a Mac is left to one through the library.
-/// - **Personal** (placed there, or its template or kind says so) is never sent to the cloud on its own: under Always
-///   it counts down as Offer First does, or waits for a Mac, with Use the Cloud.
+/// - **Kept off the cloud**: a conversation whose placement Settings › Cloud keeps off it (Personal, unless the person
+///   turns it on: `CloudPlacements`) is never sent there, whatever asks: no Use the Cloud, no cloud Upgrade, Always
+///   doesn't send it, and one moved there (or a switch turned off) mid-countdown goes on here or to a Mac. This iPhone
+///   applies its own switches: preferences are each device's own.
 @MainActor
 @Observable
 final class PhoneSummaryPlacement {
@@ -102,9 +104,22 @@ final class PhoneSummaryPlacement {
         self.runsTimer = runsTimer
         placements = SummaryPlacements(waitsForMacs: true, clock: clock, runsTimer: runsTimer)
         placements.onSettled = { [weak self] id, phase in self?.settled(id, phase) }
-        placements.isPersonal = { [weak library] id in library?.meeting(id)?.effectivePlacement == .personal }
+        placements.conversation = { [weak self] id, _ in .init(cloudAllowed: self?.cloudAllowed(id) ?? false) }
         // A Mac's countdown or work on a conversation ends this iPhone's own countdown for it.
         link.onLiveProgress = { [weak self] _ in self?.refresh() }
+        followConversationsWhilePlacing()
+    }
+
+    /// A conversation changing (moved to Personal, say) reaches its countdown at once: every change to the library asks
+    /// each planner's conversation again while anything is being placed.
+    private func followConversationsWhilePlacing() {
+        withObservationTracking { _ = library.revision } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if !self.placements.planners.isEmpty { self.refresh() }
+                self.followConversationsWhilePlacing()
+            }
+        }
     }
 
     /// "this iPhone" in the countdown's words.
@@ -123,6 +138,15 @@ final class PhoneSummaryPlacement {
     /// The cloud model on offer: what Settings › Cloud resolves to, nil without a key (the planner leaves it out
     /// with Never).
     var cloudOffer: CloudModel? { preferences.policy == .never ? nil : cloud?.resolved?.model }
+
+    /// The cloud model on offer for this conversation: none when its placement is kept off the cloud.
+    func cloudOffer(for meeting: Meeting) -> CloudModel? { preferences.placements.allows(meeting) ? cloudOffer : nil }
+
+    /// The same, by conversation; none for one that's gone.
+    func cloudOffer(for id: UUID) -> CloudModel? { library.meeting(id).flatMap(cloudOffer(for:)) }
+
+    /// Whether Settings › Cloud lets this conversation go to the cloud: its placement's switch. False for one that's gone.
+    func cloudAllowed(_ id: UUID) -> Bool { library.meeting(id).map(preferences.placements.allows) ?? false }
 
     var options: SummaryOptions {
         SummaryOptions(thisDeviceCanSummarize: runHere != nil && localSummarizer?.canSummarize == true, macs: reachableMacs,
@@ -243,7 +267,7 @@ final class PhoneSummaryPlacement {
             case .startNow: link.sendSummaryChoice(.startNow, for: id, to: mac)
             case .waitForMac: break
             }
-        } else if action == .useCloud, let model = cloudOffer, waitingSummaryRequest(id) != nil {
+        } else if action == .useCloud, let model = cloudOffer(for: id), waitingSummaryRequest(id) != nil {
             run(id, .cloud(model))
         }
     }
@@ -307,6 +331,11 @@ final class PhoneSummaryPlacement {
     /// processor runs it (`runHere`) under its rules; in the cloud, it runs now.
     private func run(_ id: UUID, _ place: SummaryPlace) {
         if place == .thisDevice, runHere == nil { return send(id) }
+        // The device that sends it applies its own switches, as the conversation is now: one moved to a placement kept
+        // off the cloud (or a switch turned off) since it was placed goes here, or to a Mac.
+        if case .cloud = place, let meeting = library.meeting(id), !preferences.allowsCloud(for: meeting) {
+            return options.thisDeviceCanSummarize ? run(id, .thisDevice) : send(id)
+        }
         let templateID = templates.removeValue(forKey: id)
         guard running[id] == nil, let meeting = library.meeting(id), !isTakenElsewhere(id),
               let claimed = library.claimSummary(id, templateID: templateID, at: clock()) else {
