@@ -117,8 +117,9 @@ extension LibraryController {
             latest[0].tracks.first { $0.id == id }.map { (id, RecordingWords.inSentence($0, in: latest[0])) }
         })
         // Personal stays Personal: cloud summaries, the lock, and Spotlight follow the placement, so what a Personal
-        // conversation said never lands in a Work one.
-        let personal = selected.contains { $0.effectivePlacement == .personal }
+        // conversation said never lands in a Work one. As each is now: one made Personal on another device while the files
+        // came counts.
+        let personal = latest.contains { $0.effectivePlacement == .personal }
         // The copies the fold carries join the survivor in the same change.
         let carriedCopies = Set(toFold.flatMap { folded in folded.tracks.filter { !$0.isMovedOut }.compactMap { copies[folded.id]?[$0.id] } })
         update(survivorID) { survivor in

@@ -397,6 +397,20 @@ final class MergeConversationsTests: XCTestCase {
         XCTAssertNil(reopened.meeting(planning))
     }
 
+    /// Another device made the folded conversation Personal while its recordings downloaded: the merged one is Personal.
+    func testBehaviorAConversationMadePersonalWhileItsFilesCameMakesTheMergedOnePersonal() async throws {
+        let library = try await open()
+        let standup = try await conversation(library, "Standup", at: start, said: "Morning everyone")
+        let planning = try await conversation(library, "Planning", at: start.addingTimeInterval(3_600), said: "Budget review first")
+        library.setPlacement([standup, planning], .work)
+        var changed = false
+        _ = try await library.mergeConversations([standup, planning], audio: { track, id in
+            if !changed { changed = true; library.setPlacement([planning], .personal) }
+            return try await library.audioURL(for: track, in: id)
+        }, photo: { photo, id in try await library.photoURL(for: photo, in: id) }, context: context)
+        XCTAssertEqual(library.meeting(standup)?.effectivePlacement, .personal)
+    }
+
     /// A copy's track already here without its file (as another device's sync leaves it before the audio arrives), and another
     /// copy's place taken by a file that isn't its bytes: one track per ID, each with its own bytes, here and on disk.
     func testBehaviorACopyIsWrittenOnceUnderItsIDWhateverIsAlreadyAtItsPlace() async throws {
