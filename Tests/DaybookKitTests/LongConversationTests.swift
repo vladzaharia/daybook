@@ -121,17 +121,65 @@ final class LongConversationTests: XCTestCase {
     }
 
     @MainActor
-    func testBehaviorAskingForASummaryOrTheCloudDuringACountdownToItDoesWhatWasAsked() {
+    func testBehaviorAskingForASummaryDuringACountdownToTheCloudNeverShortensIt() {
         let now = start
         let placements = SummaryPlacements(options: options(), preferences: preferences(), waitsForMacs: false, clock: { now }, runsTimer: false)
         placements.conversation = { _, _ in .init(cloudAllowed: true, cloudDoesBetter: true) }
         let asked = UUID(), upgraded = UUID(), failed = UUID()
         XCTAssertNil(placements.begin(asked))
-        XCTAssertEqual(placements.begin(asked, immediately: true), .thisDevice, "Summarize Again: where it would have run")
+        // Summarize Again, a template, Try Again, or another device's request: the countdown goes on as it was.
+        XCTAssertNil(placements.begin(asked, immediately: true))
+        XCTAssertEqual(placements[asked]?.phase, .countingDown(to: .cloud(sonnet), until: at(15)))
         XCTAssertEqual(placements.beginInCloud(upgraded), .cloud(sonnet), "An Upgrade to the cloud's model: at once")
         XCTAssertEqual(placements[upgraded]?.cloudReason, .chosen)
+        // After a failure here too: only Start Now on the countdown starts it early.
         placements.beginAfterLocalFailure(failed)
-        XCTAssertEqual(placements.begin(failed, immediately: true), .cloud(sonnet), "After a failure here, the cloud is all that's left")
+        XCTAssertNil(placements.begin(failed, immediately: true))
+        XCTAssertEqual(placements[failed]?.phase, .countingDown(to: .cloud(sonnet), until: at(15)))
+        XCTAssertTrue(placements.perform(.startNow, for: failed))
+        XCTAssertEqual(placements[failed]?.started, .cloud(sonnet))
+        // A countdown to this device still starts at once when asked for.
+        placements.conversation = { _, _ in .init(cloudAllowed: true) }
+        let short = UUID()
+        XCTAssertNil(placements.begin(short))
+        XCTAssertEqual(placements.begin(short, immediately: true), .thisDevice)
+    }
+
+    @MainActor
+    func testBehaviorACountdownToTheCloudRunsOnlyWhileItIsSeen() {
+        var now = start
+        let placements = SummaryPlacements(options: options(), preferences: preferences(), waitsForMacs: false, clock: { now }, runsTimer: false)
+        let long = UUID(), short = UUID(), failed = UUID()
+        placements.conversation = { id, _ in .init(cloudAllowed: true, cloudDoesBetter: id == long) }
+        placements.begin(long)
+        placements.begin(short)
+        placements.beginAfterLocalFailure(failed)
+        // Locked, asleep, hidden, or off the screen: none goes to the cloud.
+        placements.countdownsAreSeen = false
+        XCTAssertEqual(placements[long]?.started, .thisDevice, "Where it would have run without the cloud")
+        XCTAssertEqual(placements[failed]?.phase, .waiting, "After a failure here: nowhere, so it fails")
+        XCTAssertEqual(placements[short]?.phase, .countingDown(to: .thisDevice, until: at(15)), "A countdown here goes on")
+        // One that would begin, or come to end in the cloud, while unseen never counts down to it.
+        let later = UUID(), retried = UUID()
+        placements.conversation = { _, _ in .init(cloudAllowed: true, cloudDoesBetter: true) }
+        XCTAssertEqual(placements.begin(later), .thisDevice)
+        XCTAssertNil(placements.beginAfterLocalFailure(retried))
+        XCTAssertEqual(placements[retried]?.phase, .waiting)
+        placements.update()
+        XCTAssertEqual(placements[short]?.started, .thisDevice, "Retargeted to the cloud unseen: here instead")
+        // Seen again: nothing resumes on its own; a new countdown to the cloud is a whole one.
+        placements.countdownsAreSeen = true
+        XCTAssertEqual(placements[long]?.started, .thisDevice)
+        now = at(20)
+        let fresh = UUID()
+        XCTAssertNil(placements.begin(fresh))
+        XCTAssertEqual(placements[fresh]?.phase, .countingDown(to: .cloud(sonnet), until: at(35)))
+        // Unseen as it runs out: it doesn't go.
+        placements.countdownsAreSeen = false
+        placements.countdownsAreSeen = true
+        now = at(40)
+        placements.advance()
+        XCTAssertEqual(placements[fresh]?.started, .thisDevice)
     }
 
     func testBehaviorTheCloudForALongConversationStaysInsideThePrivacyRule() {

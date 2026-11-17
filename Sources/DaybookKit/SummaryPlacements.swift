@@ -29,6 +29,14 @@ public final class SummaryPlacements {
     /// What the planner needs of a conversation, from the app's library and Settings › Cloud (`CloudPlacements`), given
     /// what this device offers now.
     @ObservationIgnored public var conversation: (UUID, SummaryOptions) -> SummaryPlacementPlanner.Conversation = { _, _ in .init() }
+    /// The person can see this device's countdowns now (docs/cloud.md, "When the cloud is chosen"): on the Mac, the session
+    /// is unlocked and a Daybook window that shows them is on the screen (`AppState.countdownsVisible`); on the iPhone,
+    /// Daybook is active on the screen (`PhoneSummaryPlacement.isOnScreen`). A countdown that ends in the cloud runs only
+    /// while it's seen: unseen, it runs where it would have without the cloud (Don't Use the Cloud; after a failure here,
+    /// nowhere), and it never goes back to the cloud on its own. Seen until the app says otherwise.
+    public var countdownsAreSeen = true {
+        didSet { if !countdownsAreSeen { keepUnseenOffTheCloud() } }
+    }
 
     private let clock: () -> Date
     private let runsTimer: Bool
@@ -57,21 +65,19 @@ public final class SummaryPlacements {
 
     /// A conversation's summary is due (or, `immediately`, asked for). Returns where it started, when it
     /// did at once. A conversation already being placed keeps its planner, except that being asked for
-    /// starts its countdown's default now.
+    /// starts its countdown's default now. A countdown that ends in the cloud goes on unchanged, whatever asked (Summarize
+    /// Again, a template, Try Again, another device's request): only Start Now on that countdown, where it's seen, starts it
+    /// early.
     @discardableResult
     public func begin(_ id: UUID, immediately: Bool = false) -> SummaryPlace? {
         if var existing = planners[id] {
-            // Asked for during a countdown that ends in the cloud for a long conversation: where it would have run, as an
-            // asked-for summary always starts (after a failure here, the cloud is the one place left, so it goes now).
-            var asked = SummaryPlacementPlanner.Action.startNow
-            if case .countingDown(.cloud, _) = existing.phase, !existing.conversation.localFailed { asked = .useLocal }
-            if immediately, existing.perform(asked, at: clock()) { set(id, existing) }
+            if immediately, !existing.endsInCloud, existing.perform(.startNow, at: clock()) { set(id, existing) }
             return existing.started
         }
         let planner = SummaryPlacementPlanner(options: options, preferences: preferences, at: clock(),
                                               immediately: immediately, waitsForMacs: waitsForMacs, conversation: conversation(id, options))
         set(id, planner)
-        return planner.started
+        return planners[id]?.started
     }
 
     /// A summary the person asked the cloud for (an "Upgrade" to the cloud's better model, docs/multipoint.md): it starts
@@ -87,7 +93,7 @@ public final class SummaryPlacements {
                                               conversation: conversation(id, options))
         planner.perform(.useCloud, at: clock())
         set(id, planner)
-        return planner.started
+        return planners[id]?.started
     }
 
     /// The summary on this device failed: the cloud is tried before the work fails, as the rules for this conversation allow
@@ -102,7 +108,7 @@ public final class SummaryPlacements {
         let planner = SummaryPlacementPlanner(options: options, preferences: preferences, at: clock(), waitsForMacs: waitsForMacs,
                                               conversation: conversation)
         set(id, planner)
-        return planner.started
+        return planners[id]?.started
     }
 
     /// A summary the person asked to run on this device (Summarize on This Mac, after the cloud couldn't): it starts
@@ -114,7 +120,7 @@ public final class SummaryPlacements {
         let planner = SummaryPlacementPlanner(options: here, preferences: preferences, at: clock(), immediately: true,
                                               waitsForMacs: waitsForMacs, conversation: conversation(id, here))
         set(id, planner)
-        return planner.started
+        return planners[id]?.started
     }
 
     /// Begins placing and waits until it has started somewhere: the place, or nil when it was ended first
@@ -160,12 +166,12 @@ public final class SummaryPlacements {
         }
     }
 
-    /// Countdowns that ran out start their default.
+    /// Countdowns that ran out start their default; one that ends in the cloud, only while it's seen.
     public func advance() {
         let now = clock()
         for (id, planner) in planners {
             var changed = planner
-            changed.advance(to: now)
+            if !countdownsAreSeen, changed.endsInCloud { changed.perform(.useLocal, at: now) } else { changed.advance(to: now) }
             if changed != planner { set(id, changed) }
         }
         scheduleTimer()
@@ -193,9 +199,18 @@ public final class SummaryPlacements {
         scheduleTimer()
     }
 
+    /// Nobody can see the countdowns: each one that ends in the cloud runs where it would have without the cloud.
+    private func keepUnseenOffTheCloud() {
+        for (id, planner) in planners where planner.endsInCloud { set(id, planner) }
+    }
+
     // MARK: Internals
 
     private func set(_ id: UUID, _ planner: SummaryPlacementPlanner) {
+        var planner = planner
+        // A countdown that comes to end in the cloud while nobody can see it (begun, retargeted, or after a failure here)
+        // never runs there.
+        if !countdownsAreSeen, planner.endsInCloud { planner.perform(.useLocal, at: clock()) }
         let before = planners[id]
         planners[id] = planner
         if before?.phase != planner.phase || before?.actions != planner.actions { onChange?(id) }

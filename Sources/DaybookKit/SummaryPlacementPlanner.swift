@@ -17,7 +17,7 @@ import Foundation
 ///   it nowhere to run.
 /// - A conversation whose placement Settings › Cloud keeps off the cloud (`Conversation.cloudAllowed`: Personal, unless
 ///   the person turns it on) has no cloud on offer at all: no Use the Cloud, and Always doesn't send it.
-/// - Asked for by the person or another device, it starts at once (`immediately`).
+/// - Asked for by the person or another device, it starts at once (`immediately`), never in the cloud on its own.
 ///
 /// Pure: every change takes the time, so tests drive it with a clock of their own.
 public struct SummaryPlacementPlanner: Equatable, Sendable {
@@ -100,6 +100,12 @@ public struct SummaryPlacementPlanner: Equatable, Sendable {
     public var started: SummaryPlace? {
         if case .started(let place) = phase { return place }
         return nil
+    }
+
+    /// It's counting down to the cloud.
+    public var endsInCloud: Bool {
+        if case .countingDown(.cloud, _) = phase { return true }
+        return false
     }
 
     /// When the countdown runs out.
