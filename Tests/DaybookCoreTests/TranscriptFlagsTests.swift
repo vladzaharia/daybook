@@ -10,7 +10,7 @@ final class TranscriptFlagsTests: XCTestCase {
     /// One run of the recording: `passages` of words, each word 0.4 s from `start` on, with the confidences given (else
     /// 0.98), its words kept as a recognizer keeps them.
     private func run(_ passages: [String], start: Double = 10, at time: Double, confidence: [String: Double] = [:],
-                     model: String = "parakeet/ultra", words keepsWords: Bool = true) -> TrackTranscript {
+                     model: String = "parakeet/ultra", words keepsWords: Bool = true, language: String? = nil) -> TrackTranscript {
         var clock = start
         var segments: [TranscriptSegment] = [], words: [TranscriptWord] = []
         for passage in passages {
@@ -23,7 +23,8 @@ final class TranscriptFlagsTests: XCTestCase {
             segments.append(TranscriptSegment(trackID: track, start: first, end: clock - 0.05, text: passage))
             clock += 0.6
         }
-        return TrackTranscript(trackID: track, segments: segments, modelID: model, createdAt: Date(timeIntervalSince1970: time),
+        return TrackTranscript(trackID: track, segments: segments, language: language, modelID: model,
+                               createdAt: Date(timeIntervalSince1970: time),
                                processingSettings: ProcessingSettings(modelID: model), words: keepsWords ? words : nil)
     }
 
@@ -35,8 +36,19 @@ final class TranscriptFlagsTests: XCTestCase {
         return meeting
     }
 
-    private func fuse(_ meeting: inout Meeting) {
-        meeting.applyFusion(SourceFusion.fuse(meeting).fusion)
+    private func fuse(_ meeting: inout Meeting, ranking: TranscriptFlags.Ranking? = nil) {
+        meeting.applyFusion(SourceFusion.fuse(meeting).fusion, ranking: ranking)
+    }
+
+    /// The transcription ranks the model catalogue gives, as far as these tests need them.
+    private let ranks: TranscriptFlags.Ranking = { ["parakeet/ultra": 90, "whisper/large": 85, "whisper/base": 50][$0] }
+
+    private func ranked(_ runs: TrackTranscript...) -> Meeting {
+        var meeting = Meeting(tracks: [RecordingTrack(id: track, source: .microphone, relativePath: "Originals/mic.caf",
+                                                      fileName: "mic.caf", duration: 120, offset: 0)])
+        meeting.transcripts = runs
+        fuse(&meeting, ranking: ranks)
+        return meeting
     }
 
     private func shown(_ meeting: Meeting) -> [TranscriptFlagMark] {
@@ -127,6 +139,20 @@ final class TranscriptFlagsTests: XCTestCase {
         XCTAssertEqual(shown(meeting).map(\.flag.alternative), ["Thursday", "late"])
     }
 
+    func testAnEarlierRunThatCoveredOnlyPartOfTheAudioStillFlagsWhereItDiffers() throws {
+        let passages = ["We ship on Thursday at noon", "Jordan reviews the migration next week", "Priya owns the pricing page copy",
+                        "Then we talk about hiring plans", "Finally the budget for next quarter"]
+        let meeting = meeting(run(Array(passages.prefix(2)), at: 1),
+                              run(passages.enumerated().map { $0.offset == 0 ? "We ship on Friday at noon" : $0.element }, at: 2))
+        XCTAssertEqual(shown(meeting).map(\.flag.text), ["Friday"], "The tail the earlier run never heard isn't a disagreement")
+        XCTAssertEqual(shown(meeting).first?.flag.alternative, "Thursday")
+    }
+
+    func testWordsOnlyTheLatestRunHeardBeyondTheEarlierRunsCoverageAreNotFlagged() {
+        let meeting = meeting(run(["We ship on Friday"], at: 1), run(["We ship on Friday", "and then we really should go"], at: 2))
+        XCTAssertNil(meeting.transcriptFlags)
+    }
+
     func testOneRunGivesNoDisagreement() {
         XCTAssertNil(meeting(run(["We ship on Friday"], at: 1)).transcriptFlags)
     }
@@ -146,6 +172,57 @@ final class TranscriptFlagsTests: XCTestCase {
         prepared.applyFusion(prepared.preparingFusion(fusion))
         XCTAssertNotNil(direct.transcriptFlags)
         XCTAssertEqual(prepared.transcriptFlags, direct.transcriptFlags)
+    }
+
+    // MARK: Engines that write differently
+
+    func testStyleDifferencesBetweenEnginesAreNotDisagreements() {
+        let meeting = meeting(run(["OK so the budget is 20 percent higher and Dr. Smith will follow up on the 3rd uh tomorrow"], at: 1,
+                                  model: "whisper/large", language: "en"),
+                              run(["Okay so the budget is twenty percent higher and Doctor Smith will follow up on the third tomorrow"], at: 2,
+                                  language: "en"))
+        XCTAssertNil(meeting.transcriptFlags, "\(meeting.transcriptFlags?.map { "\($0.text) <- \($0.alternative ?? "")" } ?? [])")
+        let compound = self.meeting(run(["We need twenty one chairs and thirty two tables"], at: 1, language: "en"),
+                                    run(["We need 21 chairs and thirty-two tables"], at: 2, language: "en"))
+        XCTAssertNil(compound.transcriptFlags)
+        let real = self.meeting(run(["We need 20 chairs"], at: 1, language: "en"), run(["We need twenty one chairs"], at: 2, language: "en"))
+        XCTAssertEqual(real.transcriptFlags?.map(\.text), ["twenty one"], "A different number is a different word")
+    }
+
+    func testEnglishStyleRulesNeverTouchOtherLanguagesOrUnknownOnes() {
+        // "um" is Portuguese for "a", not a filler.
+        let portuguese = meeting(run(["Eu quero um café agora"], at: 1, language: "pt"), run(["Eu quero café agora"], at: 2, language: "pt"))
+        XCTAssertEqual(portuguese.transcriptFlags?.count, 1, "The word that went is flagged on the word beside it")
+        XCTAssertEqual(portuguese.transcriptFlags?.first?.alternative?.contains("um"), true)
+        let unknown = meeting(run(["We need 20 chairs"], at: 1), run(["We need twenty chairs"], at: 2))
+        XCTAssertEqual(unknown.transcriptFlags?.map(\.text), ["twenty"], "No language, no English rules: left as the words are")
+        let german = meeting(run(["Wir treffen uns um drei Uhr"], at: 1, language: "de"), run(["Wir treffen uns um 3 Uhr"], at: 2, language: "de"))
+        XCTAssertEqual(german.transcriptFlags?.map(\.text), ["3"])
+    }
+
+    func testAStrongerLatestRunIsFlaggedOnlyWhereItIsNotConfident() throws {
+        let earlier = run(["We ship on Thursday and then Priya reviews it"], at: 1, model: "whisper/base", language: "en")
+        let latest = run(["We ship on Friday and then Maria reviews it"], at: 2, confidence: ["Maria": 0.6], language: "en")
+        let meeting = ranked(earlier, latest)
+        XCTAssertEqual(meeting.transcriptFlags?.map(\.text), ["Maria"], "\"Friday\" was read with 0.98: the weaker run is the one that erred")
+        XCTAssertEqual(meeting.transcriptFlags?.first?.alternative, "Priya")
+        // The same pair without ranks: both are flagged.
+        let unranked = self.meeting(earlier, latest)
+        XCTAssertEqual(unranked.transcriptFlags?.map(\.text), ["Friday", "Maria"])
+        // A recognizer that gave no confidence is flagged as before.
+        let none = ranked(earlier, run(["We ship on Friday and then Maria reviews it"], at: 2, words: false, language: "en"))
+        XCTAssertEqual(none.transcriptFlags?.map(\.text), ["Friday", "Maria"])
+    }
+
+    func testRunsFromOneModelAndStrongerRunsWithUnmeasuredConfidencesAreComparedAsBefore() {
+        let same = ranked(run(["We ship on Thursday"], at: 1), run(["We ship on Friday"], at: 2))
+        XCTAssertEqual(same.transcriptFlags?.map(\.text), ["Friday"])
+        // Whisper's word probabilities weren't measured: a stronger Whisper run's confident words are still flagged.
+        let whisper = ranked(run(["We ship on Thursday"], at: 1, model: "whisper/base"), run(["We ship on Friday"], at: 2, model: "whisper/large"))
+        XCTAssertEqual(whisper.transcriptFlags?.map(\.text), ["Friday"])
+        // A weaker latest run is flagged as before.
+        let weaker = ranked(run(["We ship on Thursday"], at: 1), run(["We ship on Friday"], at: 2, model: "whisper/base"))
+        XCTAssertEqual(weaker.transcriptFlags?.map(\.text), ["Friday"])
     }
 
     // MARK: Low confidence
@@ -277,7 +354,7 @@ final class TranscriptFlagsTests: XCTestCase {
         var unsure = meeting(run(["We met Siobhan"], at: 1, confidence: ["Siobhan": floor / 2]))
         let flag = try XCTUnwrap(shown(unsure).first?.flag)
         XCTAssertFalse(unsure.useFlagAlternative(flag.id))
-        var added = meeting(run(["Fine"], at: 1), run(["Fine", "really"], at: 2))
+        var added = meeting(run(["Fine", "yes sure"], at: 1), run(["Fine", "really", "yes sure"], at: 2))
         let mark = try XCTUnwrap(shown(added).first)
         XCTAssertEqual(mark.flag.text, "really")
         XCTAssertNil(mark.replacing(in: "really"), "A passage is never corrected to nothing")

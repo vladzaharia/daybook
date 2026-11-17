@@ -82,6 +82,11 @@ public struct UpgradeRanks: Sendable {
         return cloud.latest(in: name.family)?.model.summaryQuality
     }
 
+    /// The transcription ranks as the unsure words compare a recording's runs by (`TranscriptFlags.Ranking`).
+    public var transcriptionRanking: TranscriptFlags.Ranking {
+        { key in self.quality(of: key, for: .transcription) }
+    }
+
     /// "anthropic/claude-sonnet-5-5" read as the provider and its model ID; nil for anything else.
     static func cloudModel(_ key: String) -> (CloudProvider, String)? {
         let parts = key.split(separator: "/", maxSplits: 1).map(String.init)

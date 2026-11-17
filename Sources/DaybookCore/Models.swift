@@ -670,20 +670,22 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         if old != new { revisions.append(MeetingRevision(kind: .summary, oldValue: old, newValue: new)) }
         summary = value; updatedAt = Date()
     }
-    @discardableResult public mutating func applyFusion(_ result: FusionResult) -> [CorrectionTransferIssue] {
-        applyFusion(result, transferred: CorrectionTransfer.apply(to: result.segments, in: self))
+    /// `ranking` is the model catalogue's transcription quality (`TranscriptFlags.Ranking`), which the unsure words
+    /// compare the recording's runs by.
+    @discardableResult public mutating func applyFusion(_ result: FusionResult, ranking: TranscriptFlags.Ranking? = nil) -> [CorrectionTransferIssue] {
+        applyFusion(result, transferred: CorrectionTransfer.apply(to: result.segments, in: self), ranking: ranking)
     }
     /// `flags` are the transcript's flags worked out beforehand for the same conversation (`preparingFusion`); nil
     /// works them out here.
     @discardableResult mutating func applyFusion(_ result: FusionResult, transferred: CorrectionTransfer.Result,
-                                                 flags: [TranscriptFlag]? = nil) -> [CorrectionTransferIssue] {
+                                                 flags: [TranscriptFlag]? = nil, ranking: TranscriptFlags.Ranking? = nil) -> [CorrectionTransferIssue] {
         unifiedTranscript = transferred.segments
         correctionTransferIssues = transferred.issues.isEmpty ? nil : transferred.issues
         alignmentReports = result.alignments; updatedAt = Date()
         fusionSummary = result.summary
         backgroundPassages = result.backgroundSegments.isEmpty ? nil : result.backgroundSegments
         speakers += result.addedSpeakers.filter { added in !speakers.contains { $0.id == added.id } }
-        let flags = flags ?? TranscriptFlags.flags(for: self)
+        let flags = flags ?? TranscriptFlags.flags(for: self, ranking: ranking)
         transcriptFlags = flags.isEmpty ? nil : flags
         return transferred.issues
     }

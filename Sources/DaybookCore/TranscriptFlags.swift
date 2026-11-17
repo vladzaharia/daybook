@@ -216,6 +216,17 @@ public enum TranscriptFlags {
     /// Above this share of differing words, the two transcripts aren't readings of the same speech (another language,
     /// another stretch of audio) and aren't compared.
     static let comparableShare = 0.5
+    /// When the latest run's model ranks above the earlier run's (the model catalogue's transcription quality), its
+    /// words at or above this confidence are taken as read right and a disagreement over them isn't flagged: the earlier
+    /// run was the weaker, and it's the one that erred. From the measured confidences (docs/validation.md, "Unsure words
+    /// in the transcript"): a Parakeet word scored 0.9 or more was right 99.5% of the time (15,531 of 15,616) and an
+    /// Apple Speech word 98.4% (11,697 of 11,882), where all their words were right 95.2% and 89.1% of the time; below
+    /// 0.9, 42% of Parakeet's words and 31% of Apple Speech's were wrong, so there the two readings are worth a question.
+    static let confidentWhenStronger = 0.9
+
+    /// The rank of the model that made a transcript, by what `modelKey(of:)` reads from it, for transcription (the model
+    /// catalogue's `quality`); nil when it isn't ranked. DaybookCore doesn't know the catalogue, so DaybookKit gives it.
+    public typealias Ranking = @Sendable (_ model: String) -> Int?
 
     /// Words below this confidence are flagged, by recognizer family (`ModelProvenance.family`); a recognizer not listed
     /// gives none. Each was set from its confidences over words it got right and wrong (docs/validation.md, "Unsure
@@ -235,13 +246,51 @@ public enum TranscriptFlags {
         return id.split(separator: "/").first.map(String.init) ?? id
     }
 
+    /// How a transcript's model is named to the catalogue: its variant ("parakeet/ultra"), else the ID it was saved with.
+    static func modelKey(of transcript: TrackTranscript) -> String {
+        transcript.processingSettings?.model?.variantKey ?? transcript.modelID
+    }
+
+    /// Whether `latest`'s model ranks above `earlier`'s, and its confidences are measured (`confidenceFloors`): only then
+    /// is a high confidence taken as the word being right. Never when either isn't ranked.
+    static func isStronger(_ latest: TrackTranscript, than earlier: TrackTranscript, ranking: Ranking?) -> Bool {
+        guard let ranking, confidenceFloor(for: latest) != nil,
+              let a = ranking(modelKey(of: latest)), let b = ranking(modelKey(of: earlier)) else { return false }
+        return a > b
+    }
+
+    /// A run's words as two runs are compared: for English, without fillers, with the writing of numbers, ordinals,
+    /// abbreviations, and "OK" made one (`TranscriptWordStyle`), and a number said as two words ("twenty one") one word.
+    /// Each word's place among the run's own words comes with it, for the flags to find them again.
+    static func comparable(_ words: [Token], english: Bool) -> (tokens: [Token], source: [Range<Int>]) {
+        guard english else { return (words, words.indices.map { $0..<($0 + 1) }) }
+        var tokens: [Token] = [], source: [Range<Int>] = []
+        var index = 0
+        while index < words.count {
+            var word = words[index]
+            var end = index + 1
+            if TranscriptWordStyle.isFiller(word.key) { index += 1; continue }
+            if end < words.count, words[end].segment == word.segment, let number = TranscriptWordStyle.joins(word.key, words[end].key) {
+                let next = words[end]
+                word = Token(key: number, text: word.text + " " + next.text, start: word.start, end: next.end,
+                             confidence: [word.confidence, next.confidence].compactMap { $0 }.min(), segment: word.segment)
+                end += 1
+            } else {
+                word.key = TranscriptWordStyle.key(word.key)
+            }
+            tokens.append(word); source.append(index..<end)
+            index = end
+        }
+        return (tokens, source)
+    }
+
     /// The flags of a conversation's transcript as it is now, for storing with it (`Meeting.transcriptFlags`): for each
     /// recording in the unified transcript, where its latest transcript and the previous one that reads differently
     /// disagree, and the words its latest transcript is unsure of, less those in passages the person corrected, those
     /// another recording heard the same way, and those not in the transcript. The person's answers aren't read here
     /// (`marks` reads them), so two devices fusing the same transcripts store the same flags whatever answers have
     /// reached each. Pure; run it off the main actor.
-    public static func flags(for meeting: Meeting) -> [TranscriptFlag] {
+    public static func flags(for meeting: Meeting, ranking: Ranking? = nil) -> [TranscriptFlag] {
         var heard = Set<UUID>()
         for segment in meeting.unifiedTranscript {
             heard.insert(segment.trackID)
@@ -259,13 +308,22 @@ public enum TranscriptFlags {
                 .map(\.element)
             let words = tokens(latest)
             var covered = Set<Int>()
+            if TranscriptWordStyle.isEnglish(latest.language) {
+                covered = Set(words.indices.filter { TranscriptWordStyle.isFiller(words[$0].key) })
+            }
             // The run before the latest that reads differently: a speaker-only run repeats its run's words.
-            let keys = words.map(\.key)
-            if let previous = others.lazy.map(tokens).first(where: { $0.map(\.key) != keys }) {
-                for flag in disagreements(words, previous, trackID: trackID) {
+            for other in others {
+                let english = TranscriptWordStyle.isEnglish(latest, other)
+                let now = comparable(words, english: english), before = comparable(tokens(other), english: english)
+                guard now.tokens.map(\.key) != before.tokens.map(\.key) else { continue }
+                // A stronger recognizer's confident words are taken as read right: the earlier run erred.
+                let stronger = isStronger(latest, than: other, ranking: ranking)
+                for flag in disagreements(now.tokens, before.tokens, trackID: trackID) {
+                    if stronger, let confidence = flag.flag.confidence, confidence >= confidentWhenStronger { continue }
                     found.append(flag.flag)
-                    covered.formUnion(flag.indices)
+                    for index in flag.indices { covered.formUnion(now.source[index]) }
                 }
+                break
             }
             if let floor = confidenceFloor(for: latest) {
                 found += unsure(words, below: floor, skipping: covered, trackID: trackID)
@@ -493,7 +551,13 @@ public enum TranscriptFlags {
     /// latest run left out is flagged with the word beside it, so there's always something to mark.
     static func disagreements(_ latest: [Token], _ earlier: [Token], trackID: UUID) -> [(flag: TranscriptFlag, indices: Range<Int>)] {
         guard !latest.isEmpty, let steps = alignment(latest, earlier) else { return [] }
-        let differences = differences(steps, latest, earlier)
+        // Only time both runs cover can be a disagreement: a run that heard part of the audio says nothing of the rest.
+        guard let first = [latest.first?.start, earlier.first?.start].compactMap({ $0 }).max(),
+              let last = [latest.last?.end, earlier.last?.end].compactMap({ $0 }).min(), last > first else { return [] }
+        func covers(_ word: Token) -> Bool { word.end > first && word.start < last }
+        let differences = differences(steps, latest, earlier).filter { difference in
+            latest[difference.a].contains(where: covers) || earlier[difference.b].contains(where: covers)
+        }
         // Each earlier word's place among the latest run's words: the word it was aligned with, else the latest word
         // before it (the first, before any).
         var partner = [Int](repeating: 0, count: earlier.count)
@@ -503,7 +567,8 @@ public enum TranscriptFlags {
             if let y = step.b { partner[y] = step.a ?? lastA ?? 0 }
         }
         let differing = differences.reduce(0) { $0 + max($1.a.count, $1.b.count) }
-        guard Double(differing) <= comparableShare * Double(max(latest.count, earlier.count)) else { return [] }
+        let shared = max(latest.filter(covers).count, earlier.filter(covers).count)
+        guard Double(differing) <= comparableShare * Double(shared) else { return [] }
         func text(_ words: some Sequence<Token>) -> String { words.map(\.text).joined(separator: " ") }
         var flags: [(flag: TranscriptFlag, indices: Range<Int>)] = []
         for difference in differences {
