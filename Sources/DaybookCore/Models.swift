@@ -76,6 +76,9 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
     public var backgroundAudio: BackgroundAudioAnalysis?
     /// Set once the recording is taken out of its conversation (RecordingRemoval.swift); nil while it's in it.
     public var removal: RecordingRemoval?
+    /// The conversation this recording came from when it was merged into this one (`ConversationMerge`); nil for one
+    /// recorded, imported, or moved here.
+    public var mergedFrom: UUID?
     /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
     public var unknownFields = UnknownFields()
     public init(id: UUID = UUID(), source: AudioSource = .imported, relativePath: String,
@@ -101,7 +104,7 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case id, source, relativePath, fileName, createdAt, duration, offset, sha256, deviceKind, deviceSerial,
-            deviceRecordingID, derivedFrom, processing, startedAt, alignment, capture, backgroundAudio, removal
+            deviceRecordingID, derivedFrom, processing, startedAt, alignment, capture, backgroundAudio, removal, mergedFrom
     }
     private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
 
@@ -126,6 +129,7 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
         // A newer analysis this version can't read is measured again, never a reason to reject the meeting.
         backgroundAudio = (try? values.decodeIfPresent(BackgroundAudioAnalysis.self, forKey: .backgroundAudio)) ?? nil
         removal = try values.decodeIfPresent(RecordingRemoval.self, forKey: .removal)
+        mergedFrom = try values.decodeIfPresent(UUID.self, forKey: .mergedFrom)
         unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
     }
 
@@ -149,6 +153,7 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
         try values.encodeIfPresent(capture, forKey: .capture)
         try values.encodeIfPresent(backgroundAudio, forKey: .backgroundAudio)
         try values.encodeIfPresent(removal, forKey: .removal)
+        try values.encodeIfPresent(mergedFrom, forKey: .mergedFrom)
         try unknownFields.encode(to: encoder)
     }
 }

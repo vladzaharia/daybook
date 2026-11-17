@@ -42,9 +42,12 @@ extension Meeting {
     /// The person moved this recording here from another conversation (Move to New Conversation), with the copies
     /// that share its audio: this is where they filed it. It's never matched to another conversation the way a
     /// recording that arrives on its own is (by a recorder's link, overlap in time, or the sound), so it can't be
-    /// matched straight back into the one it left. Its Version History entry says so, which syncs with it.
+    /// matched straight back into the one it left. Its Version History entry says so, which syncs with it. One that came
+    /// in when the person merged its conversation into this one (`RecordingTrack.mergedFrom`) is where they filed it too.
     public func wasMovedHere(_ trackID: UUID) -> Bool {
-        let fields = Set(recordingGroup(of: trackID).map { RecordingRemoval.movedHereField($0.id) })
+        let group = recordingGroup(of: trackID)
+        if group.contains(where: { $0.mergedFrom != nil }) { return true }
+        let fields = Set(group.map { RecordingRemoval.movedHereField($0.id) })
         return revisions.contains { fields.contains($0.field) }
     }
 
