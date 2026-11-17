@@ -73,6 +73,13 @@ final class RecordingRemovalTests: XCTestCase {
         await library.realign(id)
         let passage = try XCTUnwrap(library.meeting(id)?.unifiedTranscript.first { $0.text.contains("interview") })
         library.correctPassage(passage.id, text: "Welcome to the interview about prices.", in: id)
+        // Unsure words the person answered on each recording.
+        library.update(id) { meeting in
+            meeting.transcriptFlagDismissals = [
+                TranscriptFlagDismissal(flag: TranscriptFlag(trackID: micID, start: 31, end: 32, text: "dates", reason: .lowConfidence), outcome: .kept),
+                TranscriptFlagDismissal(flag: TranscriptFlag(trackID: fileID, start: 2, end: 3, text: "Welcome", reason: .lowConfidence), outcome: .kept),
+            ]
+        }
         return (id, micID, fileID, passage.id)
     }
 
@@ -185,6 +192,8 @@ final class RecordingRemovalTests: XCTestCase {
         XCTAssertEqual(moved.highlights.map(\.trackID), [copy.id])
         XCTAssertEqual(moved.unifiedTranscript.first { $0.id == corrected }?.text, "Welcome to the interview about prices.",
                        "the correction made to its passage carries over")
+        XCTAssertEqual(moved.transcriptFlagDismissals?.map(\.trackID), [copy.id], "and the answers to its unsure words")
+        XCTAssertEqual(moved.transcriptFlagDismissals?.map(\.text), ["Welcome"])
 
         let left = try XCTUnwrap(library.meeting(id))
         XCTAssertEqual(left.presentTracks.map(\.id), [mic])
