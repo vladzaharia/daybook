@@ -252,17 +252,26 @@ final class SummaryRepairTests: XCTestCase {
         XCTAssertLessThan(final.maxTokens, 16_384, "Asked for no more than the window holds")
     }
 
-    func testAPromptThatCannotFitIsAnErrorNeverAGuess() async throws {
-        // A window too small to read even a small part with room for a reply.
+    func testASmallWindowReadsWhatFitsAndRefusesWhatDoesntBeforeAnyPart() async throws {
+        // A short conversation fits a small window whole, with its prompt and a reply: one final pass, one commitments pass.
+        let small = BriefModel(context: 4_096)
+        _ = try await MeetingSynthesis.generate(model: small, modelID: "m", transcript: transcript(20), notes: "", template: .auto, glossary: [],
+                                                progress: { _ in })
+        XCTAssertEqual(small.prompts.filter { $0.hasPrefix("Write a concise summary") }.count, 1)
+        XCTAssertFalse(small.prompts.contains { $0.hasPrefix("Extract concise") })
+        // A long one would have to be read in parts too small to hold anything: an error before any part is read.
         let tiny = BriefModel(context: 6_000)
         do {
-            _ = try await MeetingSynthesis.generate(model: tiny, modelID: "m", transcript: transcript(20), notes: "", template: .auto, glossary: [],
-                                                    progress: { _ in })
-            XCTFail("A window this small can't summarize")
+            _ = try await MeetingSynthesis.generate(model: tiny, modelID: "m", transcript: transcript(2_000), notes: "", template: .auto,
+                                                    glossary: [], progress: { _ in })
+            XCTFail("A window this small can't read it")
         } catch LocalIntelligenceError.promptTooLong(_, let window) {
             XCTAssertEqual(window, 6_000)
         }
         XCTAssertTrue(tiny.passes.isEmpty, "Nothing ran")
+    }
+
+    func testAPromptThatCannotFitIsAnErrorNeverAGuess() async throws {
         // A final pass whose own words (here, the vocabulary) leave no room for its reply.
         let glossary = (0..<80).map { _ in Array(repeating: "x", count: 100).joined(separator: " ") }   // 8,000 tokens, each term within 200 characters
         let crowded = BriefModel(context: 10_000)

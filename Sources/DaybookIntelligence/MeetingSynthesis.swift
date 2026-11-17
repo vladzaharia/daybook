@@ -120,6 +120,11 @@ public enum MeetingSynthesis {
         var output: Int?
         /// The usable window, when known: every pass's prompt and reply must fit in it.
         var window: Int?
+        /// The catalog's own limits on reading whole and on a commitments part, when it sets them. Below them, with a
+        /// known window, a conversation is read in one pass whenever its prompt and a reply fit (the window's room above
+        /// is an estimate of the rest of the prompt; the pass is checked exactly).
+        var wholeReadLimit: Int?
+        var commitmentPartLimit: Int?
 
         static let standard = Budget(wholeRead: evidenceBudget, evidence: evidenceBudget, longPart: partBudget, commitmentPart: evidenceBudget,
                                      output: nil, window: nil)
@@ -140,6 +145,8 @@ public enum MeetingSynthesis {
             self.init(wholeRead: limits.wholeRead(window: window, output: output), evidence: min(limits.evidence ?? room, room),
                       longPart: min(limits.part ?? room, room), commitmentPart: min(limits.commitmentPart ?? room, room),
                       output: output, window: window)
+            wholeReadLimit = limits.wholeRead
+            commitmentPartLimit = limits.commitmentPart
         }
 
         /// The budget for `model`: its window, memory, and the catalog's limits.
@@ -296,10 +303,6 @@ public enum MeetingSynthesis {
             warnings.append("Only the first \(Limits.instructionTokens) tokens of the custom summary instructions were used.")
         }
         let budget = Budget(model)
-        // A window too small (or memory too short) to read even a small part at once can't summarize anything.
-        if let window = budget.window, min(budget.longPart, budget.commitmentPart) < minimumRead {
-            throw LocalIntelligenceError.promptTooLong(needed: minimumRead + SummaryReadLimits.promptAllowance + minimumReply, window: window)
-        }
         let repeating = source.isStructured && model.checksNotes
             ? try await notesRepeatingWhatWasSaid(source, model: model, budget: budget, progress: progress) : []
         for index in source.anchors.indices where repeating.contains(source.anchors[index].label) {
@@ -318,9 +321,22 @@ public enum MeetingSynthesis {
                                progress: @escaping IntelligenceProgressHandler) async throws -> Gathered {
         let whole = SynthesisJSON.string(prepared.payload)
         let wholeTokens = await model.encode(whole).count
-        let budget = prepared.budget
-        let fitsWindow = budget.window.map { wholeTokens + finalOverhead + templateTokens + budget.finalReply <= $0 } ?? true
-        if wholeTokens <= budget.wholeRead && fitsWindow { return Gathered(evidence: .conversation(prepared.payload)) }
+        var budget = prepared.budget
+        if let window = budget.window {
+            // Read whole when its prompt and a reply fit the window, within the catalog's limit, whatever the window's
+            // room estimates for the rest of a prompt.
+            let fits = wholeTokens + finalOverhead + templateTokens + budget.finalReply <= window
+            if fits && wholeTokens <= (budget.wholeReadLimit ?? .max) { return Gathered(evidence: .conversation(prepared.payload)) }
+            // In parts: the final pass's evidence leaves room for its own words, the notes, and the passages near them, so it
+            // can't fail only after every part was read.
+            let besideEvidence = finalOverhead + templateTokens + budget.finalReply + (prepared.structured ? focusBudget + notesBudget : 0)
+            budget.evidence = min(budget.evidence, window - besideEvidence)
+            guard min(budget.longPart, budget.evidence) >= minimumRead else {
+                throw LocalIntelligenceError.promptTooLong(needed: besideEvidence + minimumRead, window: window)
+            }
+        } else if wholeTokens <= budget.wholeRead {
+            return Gathered(evidence: .conversation(prepared.payload))
+        }
         let source = prepared.source, notes = prepared.notes
         let annotated = prepared.payload.recordedTranscript
         let notesJSON = notes.isEmpty ? "" : SynthesisJSON.string(NotesPayload(userNotesAndBookmarks: notes))
@@ -472,7 +488,19 @@ public enum MeetingSynthesis {
     static func verifyCommitments(_ result: GeneratedMeetingNotes, transcript: String, model: any SynthesisModel, budget: Budget,
                                   progress: @escaping IntelligenceProgressHandler) async throws
         -> (summary: MeetingSummary, warnings: [String], responses: [String]) {
-        let parts = await transcriptParts(transcript, model: model, tokenLimit: budget.commitmentPart, evenly: false)
+        var limit = budget.commitmentPart
+        if let window = budget.window, !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            // One pass whenever its prompt and a reply fit, within the catalog's limit; otherwise parts the window's room allows.
+            let tokens = await model.encode(transcript).count
+            let needed = await model.encode(instructions + commitmentsPrompt(transcript, parts: 1, brief: model.briefCommitments)).count
+                + templateTokens + min(budget.commitmentTokens, minimumReply)
+            if needed <= window && tokens <= (budget.commitmentPartLimit ?? .max) {
+                limit = max(limit, tokens)
+            } else if limit < minimumRead {
+                throw LocalIntelligenceError.promptTooLong(needed: needed - tokens + minimumRead, window: window)
+            }
+        }
+        let parts = await transcriptParts(transcript, model: model, tokenLimit: limit, evenly: false)
         var responses: [String] = []
         for (index, part) in parts.enumerated() {
             try Task.checkCancellation()
