@@ -200,25 +200,6 @@ public struct TranscriptFlagMark: Equatable, Sendable {
         guard let alternative = flag.alternative?.trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
         return TranscriptFlags.core(of: alternative).map { String(alternative[$0]) } ?? ""
     }
-
-    /// The passage with the alternative reading in place of the flagged words. Nil without an alternative, when the
-    /// passage doesn't hold the words there any more, or when nothing would be left of it.
-    public func replacing(in text: String) -> String? {
-        guard let alternative = alternativeWords,
-              let range = Range(NSRange(location: range.lowerBound, length: range.count), in: text) else { return nil }
-        guard alternative.isEmpty else {
-            return text.replacingCharacters(in: range, with: alternative)
-        }
-        // Words taken out: the space on one side goes with them, and at the start, the punctuation after them too.
-        var before = String(text[..<range.lowerBound]), after = String(text[range.upperBound...])
-        while before.last?.isWhitespace == true { before.removeLast() }
-        while after.first?.isWhitespace == true { after.removeFirst() }
-        if before.isEmpty {
-            while let first = after.first, first.isPunctuation || first.isWhitespace { after.removeFirst() }
-        }
-        let joined = before.isEmpty || after.isEmpty || after.first?.isPunctuation == true ? before + after : before + " " + after
-        return joined.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : joined
-    }
 }
 
 public enum TranscriptFlags {

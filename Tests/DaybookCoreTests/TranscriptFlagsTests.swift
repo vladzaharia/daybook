@@ -284,11 +284,38 @@ final class TranscriptFlagsTests: XCTestCase {
         let text = "Vraiment\u{00A0}? Oui,  bien sûr ."
         XCTAssertEqual(TranscriptFlagMark(flag: flag, segmentID: UUID(), range: 0..<8).replacing(in: text),
                        "Exactement\u{00A0}? Oui,  bien sûr .", "The rest of the passage as it was")
-        var removal = flag
-        removal.alternative = ""
-        XCTAssertEqual(TranscriptFlagMark(flag: removal, segmentID: UUID(), range: 0..<8).replacing(in: "Vraiment, on y va"), "on y va",
-                       "Taken out at the start, with the comma after it")
-        XCTAssertEqual(TranscriptFlagMark(flag: removal, segmentID: UUID(), range: 3..<9).replacing(in: "We really, should"), "We, should")
+    }
+
+    /// The passage with the word at `range` taken out, or put as `alternative` (nil: taken out).
+    private func replaced(_ text: String, _ words: String, with alternative: String = "") -> String? {
+        let range = (text as NSString).range(of: words)
+        let flag = TranscriptFlag(trackID: track, start: 0, end: 1, text: words, reason: .disagreement, alternative: alternative)
+        return TranscriptFlagMark(flag: flag, segmentID: UUID(), range: range.location..<(range.location + range.length)).replacing(in: text)
+    }
+
+    func testTakingWordsOutLeavesWellFormedText() {
+        XCTAssertEqual(replaced("We met, really, early", "really"), "We met, early", "No doubled comma")
+        XCTAssertEqual(replaced("Okay — really — fine", "really"), "Okay — fine", "No doubled dash")
+        XCTAssertEqual(replaced("It was fine (really) yes", "really"), "It was fine yes", "No empty brackets")
+        XCTAssertEqual(replaced("He said “really” and left", "really"), "He said and left", "No empty quotes")
+        XCTAssertEqual(replaced("I think so. Really. We go", "Really"), "I think so. We go", "No doubled full stop")
+        XCTAssertEqual(replaced("Really, we should go.", "Really"), "We should go.", "A sentence starts with a capital")
+        XCTAssertEqual(replaced("Vraiment, on y va", "Vraiment"), "On y va")
+        XCTAssertEqual(replaced("We really, should go", "really"), "We should go", "The comma went with the word")
+        XCTAssertEqual(replaced("We should go really.", "really"), "We should go.", "The sentence still ends")
+        XCTAssertEqual(replaced("We should go, really", "really"), "We should go", "Nothing dangling at the end")
+        XCTAssertEqual(replaced("We met. Really we should go", "Really"), "We met. We should go")
+        XCTAssertEqual(replaced("(fine, really) yes", "really"), "(fine) yes")
+        XCTAssertNil(replaced("Really", "Really"), "A passage is never corrected to nothing")
+        XCTAssertNil(replaced("Really.", "Really"))
+    }
+
+    func testAnAlternativeSharingANeighbourKeepsThePassagesOwnSpelling() {
+        XCTAssertEqual(replaced("We should go", "We", with: "so we"), "So we should go", "A shared word loses its sentence-start capital")
+        XCTAssertEqual(replaced("Send it to Maria today", "to Maria", with: "to maria"), "Send it to Maria today", "Its own case and spelling")
+        XCTAssertEqual(replaced("Ship it Friday with Maria", "Friday with Maria", with: "thursday with maria"), "Ship it thursday with Maria", "Only the words the passage lacks come from the earlier reading")
+        XCTAssertEqual(replaced("Friday is fine", "Friday", with: "thursday"), "Thursday is fine", "A sentence starts with a capital")
+        XCTAssertEqual(replaced("We ship on Friday.", "Friday", with: "Thursday."), "We ship on Thursday.")
     }
 
     func testAFlagShowsOnlyWhereThePassageStillReadsIt() throws {
