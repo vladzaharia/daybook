@@ -31,32 +31,54 @@ Words the transcript may have wrong, marked where they read (docs/architecture.m
   false flags tripled, nearly all on words with punctuation or a capital: its confidence covers those too, and the
   marks compare words without them. So both floors are 0.5. Parakeet is sometimes confidently wrong (about one wrong
   word in ten scored 0.9 or more, "Thomas" for Tomasz), which no floor catches.
-- **Tests.** `TranscriptFlagsTests` (28): disagreement across different passage boundaries (a word read differently,
+- **Where 0.9 came from** (`TranscriptFlags.confidentWhenStronger`: after an upgrade to a stronger model, a disagreement
+  is flagged only where the latest words' confidence is below it). From the same measurements: words scored 0.9 or more
+  were right 99.5% of the time for Parakeet (15,531 right, 85 wrong) and 98.4% for Apple Speech (11,697, 185), against 95.2%
+  and 89.1% for all their words, so a disagreement over such a word is almost always the earlier, weaker run's error;
+  words below 0.9 were wrong 42% (Parakeet) and 31% (Apple Speech) of the time, enough to be worth a question. The bound
+  also keeps nine in ten of a recognizer's wrong words in doubt (90% and 90% of them score below 0.9), where 0.8 would
+  let one in five through as confident (81% and 80% below it) and 0.95 would doubt 2 and 8 points more of all their
+  words to catch 4 and 5 points more of the wrong ones. It isn't applied to Whisper, whose probabilities weren't
+  measured, and a recognizer that gives no confidence is flagged as before; two runs of one model are compared as before.
+- **Tests.** `TranscriptFlagsTests` (50): disagreement across different passage boundaries (a word read differently,
   words added, words left out, runs saved without words, a speaker-only run, a shared word alone in its passage between
-  two differences not flagged), punctuation, case, and spacing not flagged, different speech not compared,
+  two differences not flagged), punctuation, case, and spacing not flagged, different speech not compared, an earlier run
+  that covered only part of the audio still flagging where it differs, engines' styles ("OK", numbers and ordinals,
+  "Dr.", fillers) not disagreements for English and left alone for Portuguese, German, and no language, a stronger
+  latest run flagged only where unconfident (and as before for one model, an unmeasured recognizer, or no confidence),
   low-confidence words with their neighbours, a recognizer without a floor flagging nothing, one flag where both signals
-  mark a word, corrected passages never flagged and a correction clearing a mark at once, Keep, Use (a correction in
-  Version History that carries over, changing only the flagged words), answers lasting through fusing and transcribing
-  again while the words read the same, words another recording heard the same way (counted as fusion counts words),
-  merges of flags and answers (either order, one answer when both devices answer, an Undo that stays, an answer given
-  again that wins over an Undo, no common ancestor), the same stored flags whatever answers reached a device, old files
-  without the fields, newer fields and an unknown reason round-tripping, and an hour of words aligned in its band.
-  `UnsureWordsScreensTests` (3): the dotted underline on the words alone, the menu's, VoiceOver's, and the rotor's
-  words, and Keep and Use undone. `UnsureWordsProcessingTests` (1): the Mac's queue with the fake engine transcribes a
-  recording, transcribes it again reading "Friday" for "Thursday" and an unsure name, flags both with the earlier
-  readings, writes the summary as before, and keeps the answers through a third transcription.
-  `RecordingRemovalTests` checks a moved recording takes its answers along. The whole package after the review fixes:
-  2,715 tests, 5 skipped (the opt-in hardware and budget tests), 1 failure:
-  `SpeakerProfileProcessingTests.testGivingVoicesGivesWayToQueuedWork` timed out after 10 s waiting for the voice
-  step to start, a path that doesn't fuse; it passed five times alone and in a rerun of the whole Mac bundle (606
-  tests, 0 failures), and in the run before the fixes (2,711 tests, 0 failures). The file-protection suites that have
-  failed on this Mac (macOS 27.0) passed in both runs. The iPhone app builds for the simulator
-  (`scripts/build-ios.sh`).
-- **Review.** An independent read of the diff found two ways a mark could land on the wrong words (a shared word
-  alone in its passage flagged as its own alternative; agreement counted with punctuation-only words, which fusion
-  attaches to the word before), stored flags that depended on answers not yet synced (so two devices fusing the same
-  transcripts could conflict), a removal that tidied the whole passage, a neighbouring passage's word marked by
-  coincidence, an answer given again lost to an Undo in a merge, and non-finite word times; all fixed, with tests.
+  mark a word, a correction clearing only the flags on the words it changed (two flags in one passage, Use on one, words
+  added before them, words the person typed never marked), Keep, Use (a correction in Version History that carries over,
+  changing only the flagged words) and its text well formed (a word taken out between commas, dashes, brackets, quotes,
+  full stops, at the start, at the end, a neighbour word the earlier reading shares), answers merging as a union (two
+  devices, no ancestor, both answering one flag, Undo with another device's answer synced in between, an older copy with
+  fewer answers, an answer given again after it was taken back or taken back after it was given again, the same result in
+  any order and grouping), coverage word by word (regrouping, a speaker refresh, one word unsure now, a timing shift of a
+  second and not of four, a repeat of a word 0.45 s later still showing, another earlier reading a new question), flags
+  and answers in a shape this version can't read kept and written back, devices on different algorithm versions not
+  fighting over the flags, any time making a flag ID, flags worked out off the main actor and applied as prepared, and
+  old files without the fields, newer fields and an unknown reason round-tripping, and an hour of words aligned in its
+  band. `UnsureWordsScreensTests` (4): the dotted underline (its pattern and ink) on the words alone, the menu's,
+  VoiceOver's, and the rotor's words, Keep and Use undone and done again, and Undo taking back only its own answer whatever
+  arrived between. `TranscriptReadingTests` checks the marks are worked out again only when their inputs change.
+  `UnsureWordsProcessingTests` (1): the Mac's queue with the fake engine transcribes a recording, transcribes it again
+  reading "Friday" for "Thursday" and an unsure name, flags both with the earlier readings, writes the summary as before,
+  and keeps the answers through a third transcription. `RecordingRemovalTests` checks a moved recording takes its answers
+  along. The whole package after the second review's fixes: 2,739 tests, 5 skipped (the opt-in hardware and budget tests), 0
+  failures (the file-protection suites that have failed on this Mac before passed too), and the iPhone app builds for the
+  simulator (`scripts/build-ios.sh`).
+- **Reviews.** An independent read of the diff found two ways a mark could land on the wrong words (a shared word alone
+  in its passage flagged as its own alternative; agreement counted with punctuation-only words, which fusion attaches to
+  the word before), stored flags that depended on answers not yet synced (so two devices fusing the same transcripts could
+  conflict), a removal that tidied the whole passage, a neighbouring passage's word marked by coincidence, an answer given
+  again lost to an Undo in a merge, and non-finite word times; all fixed, with tests. A second read found a correction
+  clearing every other flag in its passage, Undo restoring the whole answers field (so another device's answer could be
+  lost in the next merge, as could an older Daybook's whole list), coverage by the exact text of the whole flag (too weak
+  for a regrouped phrase or a re-read word, too broad for a repeated word), Use and Remove writing malformed text,
+  disagreements that were only how two engines write or a weaker earlier run's error, a partial earlier run suppressing
+  every disagreement, stored flags and answers a newer Daybook wrote being dropped, flag IDs trapping on absurd times, the
+  marks being worked out again at every change to a conversation, and two tests that asserted too little; all fixed, with
+  tests.
 - **Looked at.** A passage with two marks rendered offscreen (`ImageRenderer`) in light and dark: a fine dotted line
   under "Friday" (not its comma) and "Siobhan", in the meta ink, the words otherwise as before. The apps weren't launched
   and no screenshots were taken.
@@ -68,7 +90,9 @@ Words the transcript may have wrong, marked where they read (docs/architecture.m
     transcripts disagree.
   - The menu (a right-click on the Mac, touch and hold on the iPhone), VoiceOver's actions and Unsure Words rotor, and
     the mark under Increase Contrast and Dynamic Type, on a Mac and an iPhone.
-  - How many marks a real hour gets, and whether that reads as quiet.
+  - How many marks a real hour gets, in particular after an upgrade from a weaker recognizer to a stronger one (the
+    normalisation and the confidence bound are meant to cut the hundreds an hour; the count is unmeasured), and whether
+    that reads as quiet.
 
 ## Apple Watch recording (2026-11-11)
 
