@@ -4,6 +4,7 @@ import DaybookDesign
 import DaybookKit
 import DaybookLink
 import DaybookUI
+import SwiftUI
 import XCTest
 @testable import DaybookPhone
 
@@ -162,6 +163,61 @@ final class LiveCaptionsTests: XCTestCase {
         // finds them, with nothing else to set it off.
         XCTAssertEqual(model.captions.waitingForSpeakers().map(\.meetingID), [id])
         XCTAssertEqual(model.captions.waitingForSpeakers().first?.trackID, model.library.controller.meeting(id)?.tracks.first?.id)
+    }
+
+    // MARK: The live transcript
+
+    /// The line that shows the newest words opens every one heard so far, and opening and closing it never
+    /// reaches the recording.
+    func testBehaviorTheCaptionLineOpensTheWholeLiveTranscriptWithoutTouchingTheRecording() async throws {
+        let rig = RecorderRig()
+        let captioner = ScriptedCaptioner(lines: [])
+        let model = try makeModel(rig: rig, captioner: captioner)
+        try await model.startRecording()
+        try await waitUntil("listening") { model.captions.state == .listening }
+        rig.pump(2)
+        for index in 0..<40 {
+            captioner.apply(text: "Line \(index)", start: Double(index) * 2, end: Double(index) * 2 + 1.5, isFinal: true)
+        }
+        try await waitUntil("heard") { model.captions.segments.last?.text == "Line 39" }
+        XCTAssertEqual(model.captions.recent(100).count, 8, "the recording screen keeps only the newest few")
+        XCTAssertTrue(LiveTranscriptLink<EmptyView>.opens(state: model.captions.state, lines: model.captions.segments.count))
+
+        // The line is a button, in every layout's strip and in the one-line caption.
+        let strip = PhoneCaptions(style: .strip).environment(model).environment(\.daybookDensity, .touch)
+        let oneLine = PhoneCaptionLine().environment(model).environment(\.daybookDensity, .touch)
+        for view in [AnyView(strip), AnyView(oneLine)] {
+            let host = UIHostingController(rootView: view)
+            let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 300))
+            window.rootViewController = host
+            window.isHidden = false
+            host.view.layoutIfNeeded()
+            defer { window.isHidden = true }
+            XCTAssertGreaterThan(host.sizeThatFits(in: CGSize(width: 390, height: 300)).height, 0)
+        }
+
+        // Opened: the transcript reads all of them while recording continues.
+        let open = LiveTranscriptModel(interval: .milliseconds(10))
+        let task = Task { await open.run(model.captions.session.transcriptSource) }
+        try await waitUntil("the transcript fills") { open.lines.count == 40 }
+        XCTAssertEqual(open.lines.map(\.text), (0..<40).map { "Line \($0)" })
+        rig.pump(2)
+        captioner.apply(text: "Line 40", start: 80, end: 81, isFinal: false)
+        try await waitUntil("follows") { open.lines.last?.text == "Line 40" }
+        XCTAssertEqual(open.lines.count, 41)
+        task.cancel()
+        await task.value
+
+        // Closed: nothing about the recording or its captions changed.
+        XCTAssertEqual(model.recorder.state, .recording)
+        XCTAssertEqual(model.captions.state, .listening)
+        let id = try XCTUnwrap(model.recorder.captureID)
+        try await model.stopRecording()
+        let saved = try XCTUnwrap(model.captions.store.captions(for: id))
+        XCTAssertEqual(saved.segments.count, 41, "what's saved is every line, with or without the transcript")
+        XCTAssertEqual(model.library.controller.meeting(id)?.tracks.first?.duration ?? 0, 4, accuracy: 0.01)
+        XCTAssertFalse(LiveTranscriptLink<EmptyView>.opens(state: model.captions.state, lines: model.captions.segments.count),
+                       "after Stop the line is gone, and the transcript with it")
     }
 
     func testAFailingCaptionerNeverStopsTheRecording() async throws {
