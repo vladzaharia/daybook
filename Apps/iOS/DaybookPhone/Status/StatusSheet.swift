@@ -1161,7 +1161,10 @@ private struct StatusCaptions: View {
         let segments = session.liveCaptions
         let state = session.liveCaptionState
         if LiveCaptionStrip.shows(segments: segments, state: state, locale: locale) {
-          LiveCaptionStrip(segments: segments, state: state, locale: locale, style: .sheet)
+          LiveTranscriptLink(source: LiveTranscriptModel.Source(read: { LiveTranscriptModel.Reading(lines: session.liveCaptions) }),
+                             isEnabled: LiveTranscriptLink<EmptyView>.opens(state: state, lines: segments.count)) {
+            LiveCaptionStrip(segments: segments, state: state, locale: locale, style: .sheet)
+          }
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
