@@ -71,10 +71,11 @@ local failure trying the cloud under the same rules; leaving the screen never se
 the reason recorded), `SummaryPlacementProcessingTests` on the Mac and `PhoneSummaryPlacementTests` and
 `PhonePageStatusTests` on the iPhone (the same flows end to end, including a queued Use the Cloud for a conversation moved
 to Personal, Use the Cloud refused for a kept-off conversation's waiting request, a long conversation for the Mac's
-model, and a request failing only after the cloud was declined). `swift test`: 2,710 tests across the eleven bundles, 5
+model, and a request failing only after the cloud was declined). `swift test`: 2,714 tests across the eleven bundles, 5
 skipped (hardware and timing checks, as before), 0 failures; this time the file-protection suites that fail on this Mac
-passed too (Captions 35, Core 519, Design 43, Devices 187, Intelligence 225, Kit 721, Link 108, Live 44, Mac app 610, UI
-169, WatchLink 49).
+passed too (Captions 35, Core 519, Design 43, Devices 187, Intelligence 226, Kit 723, Link 108, Live 44, Mac app 611, UI
+169, WatchLink 49). The iPhone bundle (`scripts/build-ios.sh --test` on an iPhone Duo simulator, iOS 27.1, CI's two
+encoder timing tests left out as CI runs them apart): 511 tests, 0 failures.
 
 **Review.** An independent review of the branch found, and this change fixes: on the iPhone a conversation too long for
 the cloud whose summary also failed here could pass between the two forever (it now fails with the failure here); a
