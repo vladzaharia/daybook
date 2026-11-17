@@ -43,6 +43,32 @@ final class ConversationMergeTests: XCTestCase {
 
     // MARK: Placement
 
+    func testBehaviorAnswersToUnsureWordsFollowTheirRecordingsAndStillAnswerAfterTheMerge() throws {
+        var survivor = recorded("Standup", at: start, seconds: 600)
+        var later = recorded("Planning", at: start.addingTimeInterval(3_600), seconds: 300)
+        let kept = TranscriptFlag(trackID: survivor.tracks[0].id, start: 12, end: 13, text: "Friday", reason: .lowConfidence)
+        let asked = TranscriptFlag(trackID: later.tracks[0].id, start: 40, end: 41, text: "Kestrel", reason: .lowConfidence)
+        survivor.transcriptFlagDismissals = [TranscriptFlagDismissal(flag: kept, outcome: .kept, at: start)]
+        later.transcriptFlagDismissals = [TranscriptFlagDismissal(flag: asked, outcome: .kept, at: start)]
+
+        var merged = survivor
+        let placement = try XCTUnwrap(ConversationMerge.placements([later, survivor])[later.id])
+        let copies = fold(later, into: &merged, placement: placement)
+        let copyID = try XCTUnwrap(copies[later.tracks[0].id])
+        let answers = try XCTUnwrap(merged.transcriptFlagDismissals)
+        XCTAssertEqual(answers.count, 2, "the survivor's own answer stays")
+        let moved = try XCTUnwrap(answers.first { $0.id == asked.id })
+        XCTAssertEqual(moved.trackID, copyID)
+        XCTAssertEqual(moved.start, 40, "in its recording's own time, wherever the recording lands")
+        // The same words flagged again on the copy, as transcribing the merged conversation again finds them.
+        let again = TranscriptFlag(trackID: copyID, start: 40.02, end: 41.01, text: "Kestrel", reason: .lowConfidence)
+        XCTAssertEqual(TranscriptFlags.answered([again], by: answers), [again.id])
+
+        // Folding the same conversation again adds nothing.
+        ConversationMerge.fold(later, into: &merged, placement: placement, copies: copies, fresh: [], at: start)
+        XCTAssertEqual(merged.transcriptFlagDismissals?.count, 2)
+    }
+
     func testBehaviorAConversationRecordedAtAnotherTimeFollowsTheOneBeforeItKeepingItsRecordingsPlaces() throws {
         let survivor = recorded("Standup", at: start, seconds: 600)
         var later = recorded("Planning", at: start.addingTimeInterval(3_600), seconds: 300)

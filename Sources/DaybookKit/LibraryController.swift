@@ -473,7 +473,7 @@ public final class LibraryController {
         let version = keepingVersion ? snapshot.fusionSummary?.version ?? 1 : FusionSummary.currentVersion
         let (prepared, settled) = await detachedWork(priority: .userInitiated) {
             let fusion = SourceFusion.fuse(snapshot, version: version)
-            return (snapshot.preparingFusion(fusion.fusion), fusion.settled)
+            return (snapshot.preparingFusion(fusion.fusion, ranking: UpgradeRanks.builtIn.transcriptionRanking), fusion.settled)
         }
         // Applied even when the caller was cancelled meanwhile: it matches the transcripts kept.
         guard let current = meeting(id), current.transcripts == snapshot.transcripts,
