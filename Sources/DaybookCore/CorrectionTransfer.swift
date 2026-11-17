@@ -11,27 +11,31 @@ public struct CorrectionTransferIssue: Codable, Equatable, Identifiable, Sendabl
     }
 }
 
-/// A fusion result with saved corrections already carried over to it, worked out off the main actor
-/// (`Meeting.preparingFusion`) and applied with `Meeting.applyFusion(_:)`.
+/// A fusion result with saved corrections already carried over to it, and the transcript's flags worked out
+/// (`TranscriptFlags`), off the main actor (`Meeting.preparingFusion`); applied with `Meeting.applyFusion(_:)`.
 public struct PreparedFusion: Sendable {
     public let result: FusionResult
     let transferred: CorrectionTransfer.Result
+    let flags: [TranscriptFlag]
     /// What the transfer read. Applied to a conversation where any of it changed since, the transfer
     /// is worked out again there, so a correction made meanwhile is never lost.
     let basis: CorrectionTransfer.Basis
 }
 
 extension Meeting {
-    /// Carries saved corrections over to a fusion result, for `applyFusion(_:)` later. Pure: run it
-    /// off the main actor on a snapshot.
+    /// Carries saved corrections over to a fusion result and finds the words the transcript may have wrong, for
+    /// `applyFusion(_:)` later. Pure: run it off the main actor on a snapshot.
     public func preparingFusion(_ result: FusionResult) -> PreparedFusion {
-        PreparedFusion(result: result, transferred: CorrectionTransfer.apply(to: result.segments, in: self), basis: .init(self))
+        let transferred = CorrectionTransfer.apply(to: result.segments, in: self)
+        var fused = self
+        fused.applyFusion(result, transferred: transferred)
+        return PreparedFusion(result: result, transferred: transferred, flags: fused.transcriptFlags ?? [], basis: .init(self))
     }
 
     /// Applies a prepared fusion, as `applyFusion(_ result:)` does.
     @discardableResult public mutating func applyFusion(_ prepared: PreparedFusion) -> [CorrectionTransferIssue] {
         guard prepared.basis == .init(self) else { return applyFusion(prepared.result) }
-        return applyFusion(prepared.result, transferred: prepared.transferred)
+        return applyFusion(prepared.result, transferred: prepared.transferred, flags: prepared.flags)
     }
 }
 

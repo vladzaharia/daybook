@@ -606,6 +606,11 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
     public var speakerIdentities: [SpeakerIdentity]?
     /// "Upgrade" offers the person dismissed (`UpgradeDismissal`). Nil until the first; merged as a union.
     public var upgradeDismissals: [UpgradeDismissal]?
+    /// Words the transcript may have wrong (`TranscriptFlags`), derived with the unified transcript and merged with it.
+    /// Nil when there are none, and for conversations fused before flags.
+    public var transcriptFlags: [TranscriptFlag]?
+    /// The person's answers to flags (`TranscriptFlagDismissal`). Nil until the first; merged one answer at a time.
+    public var transcriptFlagDismissals: [TranscriptFlagDismissal]?
     /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
     public var unknownFields = UnknownFields()
     public init(id: UUID = UUID(), title: String = "Untitled meeting", date: Date = Date(),
@@ -668,13 +673,18 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
     @discardableResult public mutating func applyFusion(_ result: FusionResult) -> [CorrectionTransferIssue] {
         applyFusion(result, transferred: CorrectionTransfer.apply(to: result.segments, in: self))
     }
-    @discardableResult mutating func applyFusion(_ result: FusionResult, transferred: CorrectionTransfer.Result) -> [CorrectionTransferIssue] {
+    /// `flags` are the transcript's flags worked out beforehand for the same conversation (`preparingFusion`); nil
+    /// works them out here.
+    @discardableResult mutating func applyFusion(_ result: FusionResult, transferred: CorrectionTransfer.Result,
+                                                 flags: [TranscriptFlag]? = nil) -> [CorrectionTransferIssue] {
         unifiedTranscript = transferred.segments
         correctionTransferIssues = transferred.issues.isEmpty ? nil : transferred.issues
         alignmentReports = result.alignments; updatedAt = Date()
         fusionSummary = result.summary
         backgroundPassages = result.backgroundSegments.isEmpty ? nil : result.backgroundSegments
         speakers += result.addedSpeakers.filter { added in !speakers.contains { $0.id == added.id } }
+        let flags = flags ?? TranscriptFlags.flags(for: self)
+        transcriptFlags = flags.isEmpty ? nil : flags
         return transferred.issues
     }
     /// Explicit review either applies the saved correction to a chosen passage or dismisses transfer.
@@ -726,7 +736,7 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
             placement, tracks, transcripts, unifiedTranscript, alignmentReports, summary, revisions, highlights,
             speakers, status, errorMessage, correctionTransferIssues, speakerMatches, companions, sourceSuggestions,
             audioAlignments, fusionSummary, processingRequests, photos, ink, backgroundPassages, includesBackgroundAudio,
-            speakerIdentities, upgradeDismissals
+            speakerIdentities, upgradeDismissals, transcriptFlags, transcriptFlagDismissals
     }
     private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
 
@@ -768,6 +778,10 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         speakerIdentities = try values.decodeIfPresent([SpeakerIdentity].self, forKey: .speakerIdentities)
         // A dismissal a newer Daybook wrote differently is dropped: at worst an offer shows again.
         upgradeDismissals = (try? values.decodeIfPresent([UpgradeDismissal].self, forKey: .upgradeDismissals)) ?? nil
+        // Flags a newer Daybook wrote differently are worked out again at the next fusion; answers it wrote differently
+        // are dropped: at worst a flag shows again.
+        transcriptFlags = (try? values.decodeIfPresent([TranscriptFlag].self, forKey: .transcriptFlags)) ?? nil
+        transcriptFlagDismissals = (try? values.decodeIfPresent([TranscriptFlagDismissal].self, forKey: .transcriptFlagDismissals)) ?? nil
         unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
     }
 
@@ -808,6 +822,8 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         try values.encodeIfPresent(includesBackgroundAudio, forKey: .includesBackgroundAudio)
         try values.encodeIfPresent(speakerIdentities, forKey: .speakerIdentities)
         try values.encodeIfPresent(upgradeDismissals, forKey: .upgradeDismissals)
+        try values.encodeIfPresent(transcriptFlags, forKey: .transcriptFlags)
+        try values.encodeIfPresent(transcriptFlagDismissals, forKey: .transcriptFlagDismissals)
         try unknownFields.encode(to: encoder)
     }
 }

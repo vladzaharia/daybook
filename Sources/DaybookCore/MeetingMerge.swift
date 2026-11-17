@@ -167,6 +167,10 @@ public enum MeetingMerge {
         result.correctionTransferIssues = view.correctionIssues
         result.fusionSummary = view.fusionSummary
         result.backgroundPassages = view.backgroundPassages
+        result.transcriptFlags = view.flags
+        // The person's answers to flags: every device's, once each; one taken back (Undo) stays taken back.
+        result.transcriptFlagDismissals = TranscriptFlagDismissal.merged(base: base?.transcriptFlagDismissals,
+                                                                         local.transcriptFlagDismissals, remote.transcriptFlagDismissals)
         if local.includesBackgroundAudio != nil || remote.includesBackgroundAudio != nil {
             result.includesBackgroundAudio = choose("background-audio", local.includesBackgroundAudio, remote.includesBackgroundAudio,
                 base.map(\.includesBackgroundAudio) ?? unset(local.includesBackgroundAudio, remote.includesBackgroundAudio, isDefault: { $0 == nil }, otherwise: nil))
@@ -279,13 +283,17 @@ private struct MergedTranscriptView: Codable, Equatable {
     var correctionIssues: [CorrectionTransferIssue]?
     var fusionSummary: FusionSummary?
     var backgroundPassages: [TranscriptSegment]?
+    /// Worked out with the passages, so they stay with the transcript they mark.
+    var flags: [TranscriptFlag]?
     init() {}
     init(_ meeting: Meeting) {
         segments = meeting.unifiedTranscript; alignments = meeting.alignmentReports
         correctionIssues = meeting.correctionTransferIssues; fusionSummary = meeting.fusionSummary
-        backgroundPassages = meeting.backgroundPassages
+        backgroundPassages = meeting.backgroundPassages; flags = meeting.transcriptFlags
     }
-    var isEmpty: Bool { segments.isEmpty && alignments.isEmpty && correctionIssues == nil && fusionSummary == nil && backgroundPassages == nil }
+    var isEmpty: Bool {
+        segments.isEmpty && alignments.isEmpty && correctionIssues == nil && fusionSummary == nil && backgroundPassages == nil && flags == nil
+    }
 }
 private struct MergedNotes: Codable, Equatable {
     var text: String
