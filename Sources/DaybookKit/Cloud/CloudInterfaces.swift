@@ -133,6 +133,19 @@ public struct CloudSummaryPreferences: Codable, Equatable, Sendable {
     }
 }
 
+/// Why a summary went to the cloud, as its provenance records it (`cloudReason`).
+public enum CloudReason: String, Codable, Equatable, Sendable {
+    /// The person chose it: Use the Cloud, or an Upgrade to the cloud's model.
+    case chosen
+    /// Settings › Cloud says Always.
+    case always
+    /// Longer than the local model reads in one pass, and the cloud's model ranks clearly better
+    /// (`LongConversations.cloudDoesBetter`); under Offer First, after its countdown.
+    case longConversation
+    /// The summary on the device failed, and the cloud was tried before giving up.
+    case localFailed
+}
+
 /// Where one conversation's summary will run.
 public enum SummaryPlace: Equatable, Sendable {
     case thisDevice

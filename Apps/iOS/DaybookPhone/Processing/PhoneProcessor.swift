@@ -88,6 +88,10 @@ final class PhoneProcessor {
         /// when the person asked for the work (Transcribe Everything Again, Identify Speakers Again), so it starts
         /// at once; otherwise it's due, and may count down. The template the request asked for comes with it.
         var summaryDue: @MainActor (_ meetingID: UUID, _ templateID: String?, _ askedFor: Bool) -> Void = { _, _, _ in }
+        /// A summary placed here failed: the placement may try the cloud before the request fails, and says whether it
+        /// does (`PhoneSummaryPlacement.localSummaryFailed`). The request stays this iPhone's while it does.
+        var summaryFailed: @MainActor (_ meetingID: UUID, _ requestID: UUID, _ reason: String, _ kind: ProcessingRequest.FailureKind) -> Bool
+            = { _, _, _, _ in false }
         /// Just before a job starts: other heavy work (the live speaker pass) gives way.
         var willStart: @MainActor () -> Void = {}
         /// Whether files kept until unlock can be read now: a job that fails while they can't paused for the unlock,
@@ -393,6 +397,7 @@ final class PhoneProcessor {
         let now = Date()
         // Where the summary goes next, once the models are let go.
         var summaryDue: (templateID: String?, askedFor: Bool)?
+        let placedHere = summariesHere.contains(requestID)
         if case .paused = outcome {} else { summariesHere.remove(requestID) }
         switch outcome {
         case .completed:
@@ -421,7 +426,10 @@ final class PhoneProcessor {
                 library.releaseProcessingRequest(requestID, in: id, at: now)
             }
         case .failed(let reason, let kind):
-            library.failProcessingRequest(requestID, in: id, reason: reason, kind: kind, at: now)
+            // A summary placed here tries the cloud first, where this conversation may go there.
+            if !(placedHere && services.summaryFailed(id, requestID, reason, kind)) {
+                library.failProcessingRequest(requestID, in: id, reason: reason, kind: kind, at: now)
+            }
         case .paused:
             // The claim stays: this iPhone comes back to it, unless it lapses first and a Mac takes it.
             paused.insert(id)

@@ -602,6 +602,10 @@ preferences (the policy, the countdown's length, the effort) are read from each 
   **Use the Cloud** and **Start Now**, and, on a device that isn't a Mac and counts down to itself, **Wait
   for a Mac** (a reachable Mac gets it at once; otherwise it waits for one, passing over this device from
   then on).
+- **Counting down to the cloud**: a conversation longer than the local model reads in one pass, which the cloud's
+  model would summarize clearly better, or one whose summary here just failed (docs/cloud.md, "When the cloud is
+  chosen"). When it runs out it starts in the cloud; **Start Now** and **Don't Use the Cloud** (where it would have
+  run; after a failure, nowhere, so the job fails as it would have).
 - **Waiting for a Mac**: nothing here can summarize it and no Mac is reachable, with the cloud on offer.
   No countdown; Use the Cloud. When a Mac becomes reachable, a fresh countdown starts before it's sent.
 - **Started**: here, sent to a Mac, or in the cloud. Nothing changes it after this.

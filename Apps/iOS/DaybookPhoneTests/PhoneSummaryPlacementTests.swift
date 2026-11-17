@@ -49,10 +49,17 @@ final class PhoneSummaryPlacementTests: XCTestCase {
     struct Local: LocalSummarizing {
         let model = "gemma-4/e2b-4bit"
         var canSummarize = true
+        /// Every summary throws this, when set, as a model that runs out of room would.
+        var failure: LocalFailure?
         func summarize(_ meeting: Meeting, template: SummaryTemplate?, vocabulary: [String],
                        progress: @escaping @Sendable (Double) -> Void) async throws -> SummaryProcessingOutput {
-            SummaryProcessingOutput(summary: MeetingSummary(title: meeting.title, overview: "From this iPhone", modelID: model))
+            if let failure { throw failure }
+            return SummaryProcessingOutput(summary: MeetingSummary(title: meeting.title, overview: "From this iPhone", modelID: model))
         }
+    }
+
+    struct LocalFailure: LocalizedError, Equatable {
+        var errorDescription: String? { "The summary model couldn’t read this conversation." }
     }
 
     @MainActor private struct Rig {
@@ -94,6 +101,10 @@ final class PhoneSummaryPlacementTests: XCTestCase {
                 owns: { { _ in false } }, audio: { _, _ in throw CancellationError() }, release: {}),
                 continued: ContinuedProcessing(scheduler: nil))
             placement.runHere = { [weak made] id, request in made?.summarizeHere(id, request: request) }
+            // As the app wires it: a summary that fails here may try the cloud first.
+            made.services.summaryFailed = { [weak placement] id, request, reason, kind in
+                placement?.localSummaryFailed(id, request: request, reason: reason, kind: kind) ?? false
+            }
             processor = made
         }
         placement.localSummarizer = local
@@ -101,11 +112,26 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         return Rig(library: library, link: link, placement: placement, presence: presence, clock: clock, processor: processor)
     }
 
-    /// A Mac that summarizes, seen through sync at `date`.
-    private func studio(at date: Date, summarizes: Bool = true) -> KnownSyncDevice {
+    /// A Mac that summarizes, seen through sync at `date`, with the summary model it says it runs.
+    private func studio(at date: Date, summarizes: Bool = true, model: String? = nil) -> KnownSyncDevice {
         var device = KnownSyncDevice(id: studioID.uuidString, deviceClass: .mac, displayName: "Studio Mac", canProcess: true, lastSeen: date)
-        device.capabilities = SyncDeviceCapabilities(transcribes: true, findsSpeakers: true, summarizes: summarizes)
+        device.capabilities = SyncDeviceCapabilities(transcribes: true, findsSpeakers: true, summarizes: summarizes,
+                                                     models: model.map { [ModelRole.summarization.rawValue: $0] })
         return device
+    }
+
+    /// A conversation of a thousand passages with this iPhone's transcript and no summary: far longer than Gemma 4 E2B
+    /// reads in one pass.
+    private func long(_ library: LibraryController, _ title: String = "Offsite") -> UUID {
+        let id = transcribed(library, title)
+        library.update(id) { meeting in
+            let track = meeting.tracks[0].id
+            meeting.unifiedTranscript = (0..<1_000).map {
+                TranscriptSegment(trackID: track, start: Double($0) * 5, end: Double($0) * 5 + 4,
+                                  text: "We went over item number \($0) of the quarterly planning review.")
+            }
+        }
+        return id
     }
 
     /// A conversation with this iPhone's transcript and no summary.
@@ -326,6 +352,7 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         XCTAssertEqual(cloud.asked, [id])
         XCTAssertEqual(summaryRequests(rig.library, id).map(\.id), [waiting.id], "The same request, claimed here and finished")
         XCTAssertEqual(summaryRequests(rig.library, id).first?.outcome?.device, rig.library.thisDevice)
+        XCTAssertEqual(rig.library.meeting(id)?.summary?.cloudReason, .chosen, "Why it went, in its provenance")
     }
 
     func testBehaviorAlwaysSendsItToTheCloudWithoutACountdown() async throws {
@@ -354,6 +381,86 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         try await waitUntil("the summary") { rig.library.meeting(id)?.summary != nil }
         XCTAssertEqual(rig.library.meeting(id)?.summary?.overview, "Priya ships on Friday.")
         XCTAssertEqual(cloud.asked, [id], "Written once")
+    }
+
+    // MARK: When the cloud would do better
+
+    func testBehaviorALongConversationCountsDownToTheCloudAndDontUseTheCloudKeepsItHere() async throws {
+        let cloud = Cloud(models: [sonnet])
+        let rig = try await rig(cloud: cloud, local: Local())
+        let id = long(rig.library)
+        await rig.placement.summaryIsDue(id)
+        let planner = try XCTUnwrap(rig.placement.planners[id])
+        guard case .countingDown(.cloud(let model), _) = planner.phase else { return XCTFail("\(planner.phase)") }
+        XCTAssertEqual(model.id, "claude-sonnet-5-5")
+        XCTAssertEqual(planner.actions, [.startNow, .useLocal])
+        XCTAssertEqual(planner.line(at: rig.clock.now, thisDevice: PhoneSummaryPlacement.thisDeviceWords),
+                       "Summarizing with Claude Sonnet 5.5 in 15 s")
+        XCTAssertTrue(cloud.asked.isEmpty, "Never sent without its countdown")
+        rig.clock.now.addTimeInterval(15)
+        rig.placement.placements.advance()
+        try await waitUntil("the summary") { rig.library.meeting(id)?.summary != nil }
+        XCTAssertEqual(cloud.asked, [id])
+        XCTAssertEqual(rig.library.meeting(id)?.summary?.cloudReason, .longConversation)
+        // Don't Use the Cloud: this iPhone's summarizer, as it would have been.
+        let kept = long(rig.library, "Kept here")
+        await rig.placement.summaryIsDue(kept)
+        rig.placement.perform(.useLocal, for: kept)
+        try await waitUntil("the summary here") { rig.library.meeting(kept)?.summary?.overview == "From this iPhone" }
+        XCTAssertEqual(cloud.asked, [id])
+    }
+
+    func testBehaviorALongConversationForTheMacsModelCountsDownToTheCloudAndDontUseTheCloudSendsItToTheMac() async throws {
+        let cloud = Cloud(models: [sonnet])
+        let rig = try await rig(cloud: cloud)
+        rig.presence.devices = [studio(at: rig.clock.now, model: "gemma-4/e4b-4bit")]
+        rig.placement.refresh()
+        let id = long(rig.library)
+        await rig.placement.summaryIsDue(id)
+        XCTAssertEqual(rig.placement.planners[id]?.actions, [.startNow, .useLocal], "E4B on the Mac: 53 against 94")
+        rig.placement.perform(.useLocal, for: id)
+        XCTAssertNil(rig.placement.planners[id])
+        XCTAssertEqual(summaryRequests(rig.library, id).first?.claim?.lease, 0, "Given back, for the Mac")
+        XCTAssertTrue(cloud.asked.isEmpty)
+        // The Mac's 26B (90 against 94) reads it as well as the cloud: a countdown to the Mac, with Use the Cloud.
+        rig.presence.devices = [studio(at: rig.clock.now, model: "gemma-4/26b-a4b-qat-4bit")]
+        rig.placement.refresh()
+        let other = long(rig.library, "Second")
+        await rig.placement.summaryIsDue(other)
+        XCTAssertEqual(rig.placement.planners[other]?.actions, [.useCloud, .startNow])
+    }
+
+    func testBehaviorASummaryThatFailsHereTriesTheCloudBeforeItsRequestFails() async throws {
+        let cloud = Cloud(models: [sonnet])
+        let rig = try await rig(cloud: cloud, local: Local(failure: LocalFailure()), macSeen: false)
+        let id = transcribed(rig.library)
+        await rig.placement.summaryIsDue(id)
+        rig.placement.perform(.startNow, for: id)
+        // It fails here, and Offer First counts down again, to the cloud.
+        try await waitUntil("the countdown to the cloud") { rig.placement.planners[id]?.conversation.localFailed == true }
+        XCTAssertEqual(rig.placement.planners[id]?.actions, [.startNow, .useLocal])
+        XCTAssertNil(summaryRequests(rig.library, id).first?.outcome, "Not failed while the cloud is tried")
+        rig.placement.perform(.startNow, for: id)
+        try await waitUntil("the cloud's summary") { rig.library.meeting(id)?.summary != nil }
+        XCTAssertEqual(cloud.asked, [id])
+        XCTAssertEqual(rig.library.meeting(id)?.summary?.cloudReason, .localFailed)
+        XCTAssertEqual(summaryRequests(rig.library, id).first?.outcome?.result, .completed)
+        // Declined: the request fails with what went wrong here.
+        let declined = transcribed(rig.library, "Declined")
+        await rig.placement.summaryIsDue(declined)
+        rig.placement.perform(.startNow, for: declined)
+        try await waitUntil("the second countdown to the cloud") { rig.placement.planners[declined]?.conversation.localFailed == true }
+        rig.placement.perform(.useLocal, for: declined)
+        try await waitUntil("the request to fail") { summaryRequests(rig.library, declined).first?.outcome != nil }
+        XCTAssertEqual(summaryRequests(rig.library, declined).first?.outcome?.result, .failed)
+        XCTAssertEqual(cloud.asked, [id])
+        // Kept off the cloud: it fails with nothing to try.
+        let personal = transcribed(rig.library, "Personal")
+        rig.library.update(personal) { $0.placement = .personal }
+        await rig.placement.summaryIsDue(personal)
+        try await waitUntil("the Personal request to fail") { summaryRequests(rig.library, personal).first?.outcome != nil }
+        XCTAssertEqual(summaryRequests(rig.library, personal).first?.outcome?.result, .failed)
+        XCTAssertEqual(cloud.asked, [id])
     }
 
     // MARK: This iPhone's own summarizer

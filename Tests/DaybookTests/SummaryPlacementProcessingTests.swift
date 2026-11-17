@@ -1,5 +1,6 @@
 import DaybookCore
 import DaybookDesign
+import DaybookIntelligence
 @testable import DaybookKit
 import DaybookLink
 import DaybookTestSupport
@@ -31,6 +32,12 @@ final class FakeCloud: CloudSummarizing, @unchecked Sendable {
 
     /// What a summary says, from the conversation as it read it.
     var overview: @Sendable (Meeting) -> String = { _ in "From the cloud" }
+    /// Every summary throws this, when set, as the provider would.
+    var failure: (any Error & Sendable)? {
+        get { lock.withLock { _failure } }
+        set { lock.withLock { _failure = newValue } }
+    }
+    private var _failure: (any Error & Sendable)?
 
     init(models: [CloudModel] = [FakeCloud.sonnet]) { self.models = models }
 
@@ -47,6 +54,7 @@ final class FakeCloud: CloudSummarizing, @unchecked Sendable {
 
     func summarize(_ meeting: Meeting, template: SummaryTemplate?, vocabulary: [String], model: CloudModel, effort: CloudEffort,
                    progress: @escaping @Sendable (Double) -> Void) async throws -> MeetingSummary {
+        if let failure { throw failure }
         lock.withLock { _summarized.append(meeting.id) }
         await withCheckedContinuation { continuation in
             let held = lock.withLock { () -> Bool in if _held { waiting.append(continuation) }; return _held }
@@ -82,6 +90,19 @@ final class SummaryPlacementProcessingTests: XCTestCase {
     private func conversation(_ rig: MultiSourceRig, _ title: String, frequency: Double) async throws -> UUID {
         let audio = try rig.audio("\(title).wav", frequency: frequency)
         return try await rig.waitingConversation(title, audio: audio, script: [(0, "We ship on Friday.")])
+    }
+
+    /// A conversation of a thousand passages: far longer than Gemma 4 E4B reads in one pass.
+    private func longConversation(_ rig: MultiSourceRig, _ title: String, frequency: Double) async throws -> UUID {
+        let audio = try rig.audio("\(title).wav", frequency: frequency)
+        let script = (0..<1_000).map { (Double($0) * 5, "We went over item number \($0) of the quarterly planning review.") }
+        return try await rig.waitingConversation(title, audio: audio, script: script)
+    }
+
+    /// This Mac summarizes with Gemma 4 E4B, which the cloud's Claude Sonnet 5.5 ranks clearly above (53 against 94).
+    private func smallModel(_ rig: MultiSourceRig) {
+        rig.state.summaryModel = "gemma-4/e4b-4bit"
+        rig.state.installedModels.insert("gemma-4/e4b-4bit")
     }
 
     private func countingDown(_ rig: MultiSourceRig, _ id: UUID) async throws {
@@ -201,6 +222,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         XCTAssertEqual(summary.cloudProvenance?.sentBy, rig.state.library.thisDevice.name)
         XCTAssertEqual(summary.origin.colophon(thisDeviceID: rig.state.library.thisDevice.id, thisDevice: "this Mac", unknown: "this Mac"),
                        "Summarized with Claude Sonnet 5.5")
+        XCTAssertEqual(summary.cloudReason, .chosen, "Use the Cloud, in its provenance")
     }
 
     func testBehaviorTheRealCloudSummaryCarriesItsProvenanceAndWhereItRan() async throws {
@@ -296,6 +318,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         try await rig.processed(id)
         XCTAssertEqual(cloud.summarized, [id])
         XCTAssertTrue(rig.inference.summarized.isEmpty)
+        XCTAssertEqual(rig.meeting(id)?.summary?.cloudReason, .always)
     }
 
     /// A Personal conversation is never sent to the cloud on its own: under Always it counts down as Offer First does,
@@ -358,6 +381,102 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         try await rig.processed(work)
         XCTAssertTrue(cloud.summarized.isEmpty)
         XCTAssertEqual(rig.inference.summarized.count, 2)
+    }
+
+    // MARK: When the cloud would do better
+
+    func testBehaviorALongConversationCountsDownToTheCloudUnderOfferFirst() async throws {
+        let cloud = FakeCloud()
+        let rig = try await rig(cloud: cloud, policy: .ask, seconds: 1)
+        smallModel(rig)
+        let id = try await longConversation(rig, "Offsite", frequency: 395)
+        rig.state.processor.enqueue(id)
+        try await countingDown(rig, id)
+        let planner = try XCTUnwrap(rig.state.placements[id])
+        guard case .countingDown(.cloud(let model), _) = planner.phase else { return XCTFail("\(planner.phase)") }
+        XCTAssertEqual(model.id, "claude-sonnet-5-5", "Settings › Cloud's model")
+        XCTAssertEqual(planner.actions, [.startNow, .useLocal])
+        XCTAssertTrue(cloud.summarized.isEmpty, "Never sent without its countdown")
+        // A phone hears that it ends in the cloud.
+        XCTAssertEqual(rig.state.placementProgress(id)?.cloudModel, "Claude Sonnet 5.5")
+        try await rig.processed(id)
+        XCTAssertEqual(cloud.summarized, [id])
+        XCTAssertTrue(rig.inference.summarized.isEmpty)
+        XCTAssertEqual(rig.meeting(id)?.summary?.cloudReason, .longConversation)
+    }
+
+    func testBehaviorDontUseTheCloudKeepsALongConversationHereAndAShortOneNeverCountsDownToIt() async throws {
+        let cloud = FakeCloud()
+        let rig = try await rig(cloud: cloud, policy: .ask, seconds: 30)
+        smallModel(rig)
+        let id = try await longConversation(rig, "Kept here", frequency: 405)
+        rig.state.processor.enqueue(id)
+        try await countingDown(rig, id)
+        rig.state.phoneChoseSummaryPlacement(LinkSummaryChoice(meetingID: id, choice: .useLocal))
+        try await rig.processed(id)
+        XCTAssertTrue(cloud.summarized.isEmpty)
+        XCTAssertEqual(rig.inference.summarized.count, 1, "Here, as it would have been")
+        // A short one reads whole here: its countdown ends here, with Use the Cloud.
+        let short = try await conversation(rig, "Short", frequency: 415)
+        rig.state.processor.enqueue(short)
+        try await countingDown(rig, short)
+        XCTAssertEqual(rig.state.placements[short]?.actions, [.useCloud, .startNow])
+        rig.state.chooseSummaryPlacement(.startNow, for: short)
+        try await rig.processed(short)
+        XCTAssertTrue(cloud.summarized.isEmpty)
+        // Filed in Personal, a long one never counts down to the cloud.
+        let personal = try await longConversation(rig, "Personal offsite", frequency: 425)
+        rig.state.library.update(personal) { $0.placement = .personal }
+        rig.state.processor.enqueue(personal)
+        try await rig.processed(personal)
+        XCTAssertTrue(cloud.summarized.isEmpty)
+        XCTAssertEqual(rig.inference.summarized.count, 3)
+    }
+
+    func testBehaviorASummaryThatFailsHereTriesTheCloudBeforeTheJobFails() async throws {
+        let cloud = FakeCloud()
+        let rig = try await rig(cloud: cloud, policy: .ask, seconds: 1)
+        rig.inference.failSummaries(with: LocalIntelligenceError.promptTooLong(needed: 9_000, window: 8_192))
+        let id = try await conversation(rig, "Fails here", frequency: 435)
+        rig.state.processor.enqueue(id)
+        // The countdown to this Mac runs out, the summary fails, and Offer First counts down again, to the cloud.
+        try await waitUntil("the countdown to the cloud") { rig.state.placements[id]?.conversation.localFailed == true }
+        XCTAssertEqual(rig.state.placements[id]?.actions, [.startNow, .useLocal])
+        try await rig.processed(id)
+        XCTAssertEqual(cloud.summarized, [id])
+        XCTAssertEqual(rig.meeting(id)?.status, .ready)
+        XCTAssertEqual(rig.meeting(id)?.summary?.cloudReason, .localFailed)
+
+        // Declined: the job fails with what went wrong here.
+        let declined = try await conversation(rig, "Declined", frequency: 445)
+        rig.state.processor.enqueue(declined)
+        try await waitUntil("the second countdown to the cloud") { rig.state.placements[declined]?.conversation.localFailed == true }
+        rig.state.chooseSummaryPlacement(.useLocal, for: declined)
+        try await rig.processed(declined)
+        XCTAssertEqual(cloud.summarized, [id])
+        XCTAssertEqual(rig.meeting(declined)?.status, .failed)
+        XCTAssertTrue(rig.meeting(declined)?.errorMessage?.contains("can’t read this conversation") == true,
+                      rig.meeting(declined)?.errorMessage ?? "no message")
+
+        // Kept off the cloud: it fails with no countdown at all.
+        let personal = try await conversation(rig, "Personal fails", frequency: 455)
+        rig.state.library.update(personal) { $0.placement = .personal }
+        rig.state.processor.enqueue(personal)
+        try await rig.processed(personal)
+        XCTAssertEqual(rig.meeting(personal)?.status, .failed)
+        XCTAssertEqual(cloud.summarized, [id])
+    }
+
+    func testBehaviorAConversationLongerThanTheCloudModelCanReadIsSummarizedHere() async throws {
+        let cloud = FakeCloud()
+        cloud.failure = CloudError.inputTooLong(model: "Claude Sonnet 5.5", details: "About 2,000,000 tokens in a window of 1,000,000")
+        let rig = try await rig(cloud: cloud, policy: .always)
+        let id = try await conversation(rig, "Too long for the cloud", frequency: 465)
+        rig.state.processor.enqueue(id)
+        try await rig.processed(id)
+        XCTAssertEqual(rig.inference.summarized.count, 1, "Nothing was sent; summarized here")
+        XCTAssertEqual(rig.meeting(id)?.status, .ready)
+        XCTAssertTrue(rig.meeting(id)?.errorMessage?.contains("longer than Claude Sonnet 5.5 can read") == true)
     }
 
     /// A speaker named while the summary is being written: the name follows into it, as into a summary already there,

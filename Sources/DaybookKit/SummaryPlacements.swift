@@ -86,6 +86,21 @@ public final class SummaryPlacements {
         return planner.started
     }
 
+    /// The summary on this device failed: the cloud is tried before the work fails, as the rules for this conversation allow
+    /// (`SummaryPlacementPlanner.Conversation.localFailed`): at once under Always, after a countdown to it under Offer First
+    /// (with Don't Use the Cloud), never without the cloud on offer for it. Returns where it started, when it did at once;
+    /// a planner that settles `.waiting` means the cloud won't be tried. Any planner the conversation had is replaced.
+    @discardableResult
+    public func beginAfterLocalFailure(_ id: UUID) -> SummaryPlace? {
+        planners.removeValue(forKey: id)
+        var conversation = conversation(id, options)
+        conversation.localFailed = true
+        let planner = SummaryPlacementPlanner(options: options, preferences: preferences, at: clock(), waitsForMacs: waitsForMacs,
+                                              conversation: conversation)
+        set(id, planner)
+        return planner.started
+    }
+
     /// A summary the person asked to run on this device (Summarize on This Mac, after the cloud couldn't): it starts
     /// here at once, whatever the cloud preferences say. Nil, and nothing placed, when this device can't summarize.
     @discardableResult
@@ -133,7 +148,9 @@ public final class SummaryPlacements {
         let now = clock()
         for (id, planner) in planners {
             var changed = planner
-            changed.update(options: options, preferences: preferences, conversation: conversation(id, self.options), at: now)
+            var asked = conversation(id, self.options)
+            asked.localFailed = planner.conversation.localFailed
+            changed.update(options: options, preferences: preferences, conversation: asked, at: now)
             if changed != planner { set(id, changed) }
         }
     }
@@ -150,11 +167,14 @@ public final class SummaryPlacements {
     }
 
     /// Every countdown's default happens now, as when the app leaves the screen (the iPhone can't keep a
-    /// timer in the background).
+    /// timer in the background), except that one ending in the cloud doesn't go there: it was never seen to its end, and
+    /// the cloud is never used without its countdown, so it runs where it would have without the cloud (Don't Use the
+    /// Cloud; after a failure here, nowhere).
     public func startDefaultsNow() {
         for (id, planner) in planners {
             var changed = planner
-            changed.perform(.startNow, at: clock())
+            if case .countingDown(.cloud, _) = planner.phase { changed.perform(.useLocal, at: clock()) }
+            else { changed.perform(.startNow, at: clock()) }
             if changed != planner { set(id, changed) }
         }
     }

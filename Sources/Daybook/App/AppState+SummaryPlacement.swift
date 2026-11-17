@@ -19,6 +19,12 @@ import Foundation
 /// queued Use the Cloud or cloud upgrade runs here instead, and a conversation moved there (or a switch turned off) while
 /// it counts down to the cloud goes on here. This Mac applies its own switches: preferences are each device's own.
 ///
+/// **When the cloud would do better** (docs/cloud.md, "When the cloud is chosen"). A conversation longer than this Mac's
+/// summary model reads in one pass, whose summary the cloud's model ranks clearly above (`LongConversations`), counts down
+/// to the cloud under Offer First, with Start Now and Don't Use the Cloud; Always sends it as any. A summary that fails here
+/// tries the cloud before the job fails, under the same rules (at once under Always, after a countdown under Offer First,
+/// never for a conversation kept off the cloud). The summary records why it went (`cloudReason`).
+///
 /// **Transcript first.** A job never waits for the summary model to start: it transcribes with what transcribes, and at
 /// the summary step, when the summary model isn't here and the cloud wouldn't take the summary at once (Always, unless
 /// the conversation is Personal), it ends with the transcript. The summary is owed (`ProcessingQueue.awaitingSummaryModel`,
@@ -32,9 +38,15 @@ extension AppState {
 
     func wireSummaryPlacements() {
         placements.onChange = { [weak self] id in self?.reportSummaryPlacement(id) }
-        placements.conversation = { [weak self] id, _ in
-            guard let self else { return .init(cloudAllowed: false) }
-            return .init(cloudAllowed: self.cloudAllowed(id))
+        placements.conversation = { [weak self] id, options in
+            guard let self, let meeting = self.meetings.first(where: { $0.id == id }) else { return .init(cloudAllowed: false) }
+            let allowed = self.cloud.preferences.placements.allows(meeting)
+            // This Mac's summary model: the running job's, else the one chosen.
+            let local = options.thisDeviceCanSummarize ? self.processor.queue.running.flatMap { $0.meetingID == id ? $0.summaryModelID : nil }
+                ?? self.summaryModel : nil
+            return .init(cloudAllowed: allowed,
+                         cloudDoesBetter: allowed && LongConversations.cloudDoesBetter(meeting, localModel: local, cloud: options.cloud,
+                                                                                       ranks: self.upgradeRanks))
         }
         followConversationsWhilePlacing()
     }
@@ -226,22 +238,52 @@ extension AppState {
         guard let meeting = meetings.first(where: { $0.id == id }) else { return nil }
         let started = Date()
         reportToPhones(id, force: true)
-        switch place {
-        case .cloud(let model):
-            // The device that sends it applies its own switches, as the conversation is now: moved to a placement kept off
-            // the cloud (or the switch turned off) while it counted down, it's summarized here instead.
-            if cloud.keys[model.provider] != nil, cloud.preferences.allowsCloud(for: meeting) {
-                let output = try await cloudSummarizer.summaryOutput(meeting, template: template, vocabulary: vocabulary, model: model,
-                                                                     effort: cloud.preferences.effort) { fraction in
-                    progress(ProcessingProgress(fraction: fraction, message: SummaryPlacementWords.inCloud(model.name), stage: .summarizing))
+        var tooLongForCloud: CloudError?
+        if case .cloud(let model) = place {
+            do {
+                if let output = try await summarizeInCloud(meeting, model: model, template: template, vocabulary: vocabulary, progress: progress) {
+                    return PlacedSummary(output: output, place: place, meeting: meeting, started: started, cloudReason: placements[id]?.cloudReason)
                 }
-                return PlacedSummary(output: output, place: place, meeting: meeting, started: started)
+            } catch let error as CloudError {
+                // Longer than the cloud model can read: nothing was sent, and it's summarized here, saying so.
+                guard case .inputTooLong = error, summarizesLocally else { throw error }
+                tooLongForCloud = error
             }
-            // The key went away as it started, or the conversation may not go: here, as without one.
-            fallthrough
-        case .thisDevice, .mac:
-            let output = try await engine.summarize(meeting, template: template, vocabulary: vocabulary, progress: progress)
+        }
+        // Here: the default, or the cloud couldn't take it (the key went away as it started, the conversation may not go,
+        // or it's longer than the cloud model's window).
+        do {
+            var output = try await engine.summarize(meeting, template: template, vocabulary: vocabulary, progress: progress)
+            if let tooLongForCloud { output.warnings.insert(tooLongForCloud.message, at: 0) }
             return PlacedSummary(output: output, place: .thisDevice, meeting: meeting, started: started)
+        } catch where !(error is CancellationError) {
+            // Failed here: the cloud is tried before the job fails, as this conversation's rules allow; never when the person
+            // asked for it here, or the cloud already couldn't read it.
+            guard !job.summarizesHere, tooLongForCloud == nil, summaryHolderElsewhere(id, job: job) == nil,
+                  let retry = meetings.first(where: { $0.id == id }), cloudOnOffer(for: retry) else { throw error }
+            placements.end(id)
+            placements.beginAfterLocalFailure(id)
+            guard case .cloud(let model)? = await placements.place(id) else { throw error }
+            try Task.checkCancellation()
+            let restarted = Date()
+            reportToPhones(id, force: true)
+            guard let current = meetings.first(where: { $0.id == id }),
+                  let output = try await summarizeInCloud(current, model: model, template: template, vocabulary: vocabulary, progress: progress) else {
+                throw error
+            }
+            return PlacedSummary(output: output, place: .cloud(model), meeting: current, started: restarted, cloudReason: .localFailed)
+        }
+    }
+
+    /// The conversation's summary from `model`, or nil when the cloud can't take it now: the key went away, or the
+    /// conversation may not go there (the device that sends it applies its own switches, as the conversation is now: one
+    /// moved to a placement kept off the cloud, or a switch turned off, while it counted down is summarized here instead).
+    private func summarizeInCloud(_ meeting: Meeting, model: CloudModel, template: SummaryTemplate?, vocabulary: [String],
+                                  progress: @escaping ProcessingProgressHandler) async throws -> SummaryProcessingOutput? {
+        guard cloud.keys[model.provider] != nil, cloud.preferences.allowsCloud(for: meeting) else { return nil }
+        return try await cloudSummarizer.summaryOutput(meeting, template: template, vocabulary: vocabulary, model: model,
+                                                       effort: cloud.preferences.effort) { fraction in
+            progress(ProcessingProgress(fraction: fraction, message: SummaryPlacementWords.inCloud(model.name), stage: .summarizing))
         }
     }
 
@@ -252,6 +294,8 @@ extension AppState {
         /// The conversation as it was summarized.
         var meeting: Meeting
         var started: Date
+        /// Why it went to the cloud, when it did.
+        var cloudReason: CloudReason?
     }
 
     // MARK: Choices
@@ -287,6 +331,7 @@ extension AppState {
         switch choice.choice {
         case .useCloud: chooseSummaryPlacement(.useCloud, for: choice.meetingID)
         case .startNow: chooseSummaryPlacement(.startNow, for: choice.meetingID)
+        case .useLocal: chooseSummaryPlacement(.useLocal, for: choice.meetingID)
         default: break
         }
     }
@@ -305,10 +350,13 @@ extension AppState {
         guard let planner = placements[id] else { return nil }
         let name = library.thisDevice.name
         switch planner.phase {
-        case .countingDown(_, let until):
+        case .countingDown(let place, let until):
+            // A countdown that ends in the cloud names its model, so the phone says so and offers Don't Use the Cloud.
+            var cloudModel: String?
+            if case .cloud(let model) = place { cloudModel = model.name }
             return LinkProcessingProgress(meetingID: id, phase: .summaryCountdown, macName: name,
                                           countdown: LinkSummaryCountdown(secondsLeft: max(0, until.timeIntervalSince(now)),
-                                                                          cloudOffered: planner.cloud != nil))
+                                                                          cloudOffered: planner.cloud != nil), cloudModel: cloudModel)
         case .started(.cloud(let model)):
             return LinkProcessingProgress(meetingID: id, phase: .summarizing, fraction: min(1, max(0, processor.queue.activity.value.fraction)),
                                           macName: name, cloudModel: model.name)

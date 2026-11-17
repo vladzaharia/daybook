@@ -41,6 +41,11 @@ public enum SummaryPlacementWords {
         countdown(on: device, seconds: secondsLeft(until: deadline, at: now))
     }
 
+    /// "Summarizing with Claude Opus 5.5 in 12 s": a countdown that ends in the cloud (a Mac's, seen over the link).
+    public static func countdown(inCloud model: String, until deadline: Date, at now: Date) -> String {
+        "\(inCloud(model)) in \(seconds(secondsLeft(until: deadline, at: now)))"
+    }
+
     /// The same toward a planner's place; `thisDevice` is how this device calls itself ("this Mac", "this iPhone").
     public static func countdown(to place: SummaryPlace, thisDevice: String, seconds: Int) -> String {
         "\(running(place, thisDevice: thisDevice)) in \(self.seconds(seconds))"
@@ -100,6 +105,7 @@ public enum SummaryPlacementWords {
         case .useCloud: return "Use the Cloud"
         case .startNow: return "Start Now"
         case .waitForMac: return "Wait for a Mac"
+        case .useLocal: return "Don’t Use the Cloud"
         }
     }
 }

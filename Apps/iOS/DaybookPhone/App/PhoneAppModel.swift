@@ -643,6 +643,9 @@ final class PhoneAppModel: RecordingCommandHandling {
             else { Task { await placement.summaryIsDue(id, templateID: templateID) } }
         }
         placement.runHere = { [weak processor] id, request in processor?.summarizeHere(id, request: request) }
+        processor.services.summaryFailed = { [weak placement] id, request, reason, kind in
+            placement?.localSummaryFailed(id, request: request, reason: reason, kind: kind) ?? false
+        }
         placement.localSummarizer = processingSummarizer
         // An upgrade of this iPhone's own recordings is its processor's work; what it can do is what its models can.
         upgrades.capabilities = { [weak self] in self?.processingCapabilities ?? .none }

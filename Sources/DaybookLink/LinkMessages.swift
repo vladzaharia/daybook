@@ -737,6 +737,8 @@ public struct LinkSummaryChoice: Codable, Sendable, Equatable {
         public init(rawValue: String) { self.rawValue = rawValue }
         public static let useCloud: Self = "useCloud"
         public static let startNow: Self = "startNow"
+        /// Don't Use the Cloud, for a countdown that ends there: a Mac before this one ignores it.
+        public static let useLocal: Self = "useLocal"
     }
 
     public var meetingID: UUID

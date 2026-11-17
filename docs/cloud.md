@@ -12,7 +12,7 @@ A cloud summary sends the conversation's transcript text (with each note and boo
 them marked), the notes and bookmarks, the template (its kind and instructions), and the vocabulary. Nothing else: no
 audio, no photos or their captions, no voiceprints, no speaker profiles. Photo captions stay on the device, so a cloud
 summary places photos by time only (`PhotoPlacement.arrange`). OpenAI's request sets `store: false`, so the response
-isn't kept on OpenAI's side.
+isn't kept on OpenAI's side. The same is sent whatever brought the summary to the cloud ("When the cloud is chosen").
 
 **Which conversations.** Settings › Cloud has a switch for each placement (`LibraryPlacement`: Work, Personal), kept in
 this device's preferences (`CloudSummaryPreferences.placements`, `CloudPlacements`). A conversation's placement is the
@@ -32,6 +32,38 @@ summary applies its own switches; a Mac's countdown seen on an iPhone offers wha
 
 OpenRouter's model list (for prices) is fetched without a key and carries nothing about the person: no key, no cookies,
 and a bare `User-Agent: Daybook`. It's fetched only once a key has been added.
+
+## When the cloud is chosen
+
+Always inside the privacy rule: the person's own key, a policy that isn't Never, and a conversation whose placement's
+switch is on (above). Within it:
+
+- **Use the Cloud**, an Upgrade to the cloud's model, and **Always**, as before.
+- **A conversation the local model reads in more than one pass** (`LongConversations.cloudDoesBetter`): one longer than
+  the model it would run on (this device's, or on an iPhone the Mac it would go to) reads whole, by the catalog's
+  whole-read limit or its window (docs/model-runtime.md, "Usable window"; 5,400 tokens for every built-in model, about 17
+  minutes of talk), when the cloud's model ranks above that model by the summary Upgrade margin (10 on the shared
+  quality scale, `UpgradeRole.margin`: Claude Sonnet 5.5's 94 against Gemma 4 E4B's 53 is, against Gemma 4 26B A4B's 90
+  isn't). The length is estimated before anything runs, at 3.5 characters a token (the local tokenizers read about 3.6
+  on the three-hour fixture). Under Offer First its countdown ends in the cloud, "Summarizing with Claude Sonnet 5.5 in
+  12 s", with Start Now and Don't Use the Cloud, which runs it where it would have run (this device, or the Mac); it's
+  never sent without the countdown, so an iPhone that leaves the screen mid-countdown (where a countdown can't run)
+  runs it where it would have run instead. Under Always it goes at once, as anything does. A summary someone asked for
+  (Summarize Again) starts at once where it can, so never in the cloud on its own. A Mac's countdown seen on an iPhone
+  names the model (`LinkProcessingProgress.cloudModel` during `summaryCountdown`) and sends Don't Use the Cloud back as
+  `processing.choice` `useLocal`; a Mac before this one ignores it, and an iPhone before this one shows the countdown
+  as the Mac's own, whose Start Now starts it in the cloud.
+- **A summary that failed on the device** tries the cloud before the job fails, under the same rules: at once under
+  Always, after a countdown to the cloud under Offer First (declined, the job fails with what went wrong on the
+  device), never for a conversation kept off the cloud or one the person asked to summarize on this Mac. On the
+  iPhone the processor asks the placement first (`PhoneProcessor.Services.summaryFailed`), and the request stays the
+  iPhone's while the cloud is tried.
+- **A conversation longer than the cloud model can read** (`CloudError.inputTooLong`, checked before sending) is
+  summarized on the device instead (or, from an iPhone without a summarizer, by a Mac), with the cloud's sentence among
+  the summary's warnings.
+
+The summary records why it went (`cloudReason` in its parameters, `MeetingSummary.cloudReason`): `chosen`, `always`,
+`longConversation`, or `localFailed`.
 
 ## Where the code lives
 
@@ -215,7 +247,8 @@ wrote it.
 
 `CloudSummarizer.summary` (and `summarize`, the protocol's) builds the same source a local summary does
 (`MeetingEvidence.summarySource`) and the local pipeline's final prompt and schema in one pass over the whole
-conversation (every catalog model's window holds far more than a day of talk), through `CloudSynthesis`:
+conversation, checked against the model's window first (a prompt longer than it is never sent; every catalog model's
+1M-token window holds far more than a day of talk), through `CloudSynthesis`:
 
 - **Prompt:** `MeetingSynthesis.finalPrompt` with the template's kind and instructions (bounded to about 700 tokens, as
   locally), the vocabulary, the transcript with notes and bookmarks in place, and two cloud additions:
@@ -251,8 +284,8 @@ Working it out in the reply, rather than only being told to, is the same idea as
 `priceIsEstimated`, `sentBy` (the device that sent it: `CloudSummarizer(directory:deviceName:)`; the Mac gives
 `ProcessingRequest.Device.currentName`, the iPhone its library name), `templateID`, and `templateInstructions`
 (`CloudProvenance.Key`). The placement adds where it ran on the same summary (docs/multipoint.md, "Where summaries
-run"): `summarizedBy`, `summarizedByName`, `place` (`cloud`), and `model.<role>`, with `model.summarization`
-"anthropic/claude-sonnet-5-5". A summary placed in the cloud without the cloud's provenance (a test's or a demo's
+run"): `summarizedBy`, `summarizedByName`, `place` (`cloud`), `cloudReason` (why it went, "When the cloud is chosen"),
+and `model.<role>`, with `model.summarization` "anthropic/claude-sonnet-5-5". A summary placed in the cloud without the cloud's provenance (a test's or a demo's
 stand-in) gets the model it was sent to, so every cloud summary has both. `MeetingSummary.origin.cloudModel` is the
 model's name for any cloud summary, placed or not (`--cloud-check`'s, or one written before the placement). The
 page's colophon reads "Summarized with Claude Sonnet 5.5", with the cloud glyph, on both apps; the Mac inspector's

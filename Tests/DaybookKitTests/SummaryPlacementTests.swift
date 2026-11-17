@@ -337,7 +337,7 @@ final class SummaryPlacementTests: XCTestCase {
         let started = SummaryPlacementPlanner(options: options(local: true, cloud: false), preferences: preferences(), at: start)
         XCTAssertNil(started.line(at: at(0), thisDevice: "this Mac"), "The processing status says the rest")
         XCTAssertEqual(SummaryPlacementPlanner.Action.allCases.map(\.title),
-                       [Words.title(.useCloud), Words.title(.startNow), Words.title(.waitForMac)])
+                       [Words.title(.useCloud), Words.title(.startNow), Words.title(.waitForMac), Words.title(.useLocal)])
     }
 
     // MARK: Every conversation on a device

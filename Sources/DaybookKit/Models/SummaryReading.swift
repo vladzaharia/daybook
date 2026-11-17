@@ -55,3 +55,44 @@ extension CatalogModel {
     /// What one pass of this model may read (`SummaryReadLimits`).
     public var summaryReadLimits: SummaryReadLimits { SummaryReadLimits(engineOptions: engineOptions) }
 }
+
+/// Whether a conversation is longer than a local summary model reads in one pass, and so whether the cloud would do
+/// clearly better with it (docs/cloud.md, "When the cloud is chosen"). Decided before anything runs, so the length
+/// is estimated: the local models' tokenizers read about 3.6 characters of transcript a token (Gemma 4 on the
+/// three-hour offsite fixture: 173,000 characters, 47,832 tokens), and 3.5 is used.
+public enum LongConversations {
+    static let charactersPerToken = 3.5
+
+    /// The conversation's length in a local model's tokens, estimated: its transcript and notes as a summary reads them.
+    public static func estimatedTokens(_ meeting: Meeting) -> Int {
+        let source = MeetingEvidence.summarySource(meeting)
+        let characters = source.transcript.count + (source.isStructured ? source.anchors.reduce(0) { $0 + $1.text.count } : source.notesText.count)
+        return Int((Double(characters) / charactersPerToken).rounded(.up))
+    }
+
+    /// Whether `model` reads the conversation in one pass: it's no longer than the model's whole-read limit, or, with
+    /// none, than what its context window holds. A model with neither isn't known to.
+    public static func readsWhole(_ meeting: Meeting, model: CatalogModel) -> Bool {
+        let limits = model.summaryReadLimits
+        let limit: Int?
+        if let window = model.capabilities.contextLength {
+            let output = min(model.engineOptions["outputTokens"].flatMap { Int($0) } ?? SummaryReadLimits.defaultOutput, SummaryReadLimits.defaultOutput)
+            limit = limits.wholeRead(window: window, output: output)
+        } else {
+            limit = limits.wholeRead
+        }
+        guard let limit else { return false }
+        return estimatedTokens(meeting) <= limit
+    }
+
+    /// Whether the cloud model would do clearly better than `localModel` (a catalog key) for this conversation: it's
+    /// longer than the local model reads in one pass, and the cloud model's summary quality clears the local model's by
+    /// the summary Upgrade margin (`UpgradeRole.margin`). False without a cloud model, a local model the catalogs rank,
+    /// or a ranked cloud model.
+    public static func cloudDoesBetter(_ meeting: Meeting, localModel: String?, cloud: CloudModel?, ranks: UpgradeRanks = .builtIn) -> Bool {
+        guard let cloud, let localModel, let model = ranks.catalog.model(ModelReference(localModel).id),
+              let local = ranks.quality(of: localModel, for: .summarization),
+              let better = ranks.quality(of: "\(cloud.provider.rawValue)/\(cloud.id)", for: .summarization) else { return false }
+        return better >= local + UpgradeRole.summarization.margin && !readsWhole(meeting, model: model)
+    }
+}
