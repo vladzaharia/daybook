@@ -79,6 +79,9 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
     /// The conversation this recording came from when it was merged into this one (`ConversationMerge`); nil for one
     /// recorded, imported, or moved here.
     public var mergedFrom: UUID?
+    /// The stretch of time a recording is on: the conversation it came from when a merge placed it after the rest
+    /// (`mergedFrom`, placed as by hand), else nil, the conversation's own (and recordings made alongside it).
+    public var stretch: UUID? { alignment?.method == .manual ? mergedFrom : nil }
     /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
     public var unknownFields = UnknownFields()
     public init(id: UUID = UUID(), source: AudioSource = .imported, relativePath: String,

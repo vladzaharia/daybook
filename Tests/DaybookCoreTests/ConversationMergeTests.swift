@@ -145,6 +145,57 @@ final class ConversationMergeTests: XCTestCase {
         XCTAssertEqual(settled[copies[alongside.tracks[0].id]!]?.offset, 660)
     }
 
+    func testBehaviorAConversationMergedIntoOneThatHoldsAMergeIsPlacedAgainstTheStretchItOverlaps() throws {
+        let survivor = recorded("Morning", at: start, seconds: 1_800)
+        let afternoon = recorded("Afternoon", at: start.addingTimeInterval(14_400), seconds: 1_800)
+        var merged = survivor
+        let first = ConversationMerge.placements([survivor, afternoon])[afternoon.id]!
+        XCTAssertEqual(first, .init(kind: .after, shift: 1_800))
+        _ = fold(afternoon, into: &merged, placement: first)
+
+        // Made alongside what was folded in (14:05 to 14:35): beside it, not after everything.
+        let alongsideFolded = recorded("Afternoon on iPhone", at: start.addingTimeInterval(14_700), seconds: 1_800)
+        XCTAssertEqual(ConversationMerge.placements([merged, alongsideFolded])[alongsideFolded.id], .init(kind: .alongsideLater, shift: 2_100),
+                       "5 min into the afternoon, which sits at 30 min")
+        // Made at another time that the folded one's place on the timeline (30 to 60 min) must not make look like the morning's.
+        let elsewhere = recorded("Midday", at: start.addingTimeInterval(2_400), seconds: 1_800)
+        XCTAssertEqual(ConversationMerge.placements([merged, elsewhere])[elsewhere.id], .init(kind: .after, shift: 3_600),
+                       "never compared by sound with the morning's recording")
+        // Alongside the survivor's own recording: still the sound's.
+        let alongsideOwn = recorded("Morning on iPhone", at: start.addingTimeInterval(120), seconds: 600)
+        XCTAssertEqual(ConversationMerge.placements([merged, alongsideOwn])[alongsideOwn.id], .init(kind: .alongside, shift: 120))
+    }
+
+    func testBehaviorOneAlongsideAnEarlierFoldIsLinedUpAgainstARecordingOnItsOwnStretch() throws {
+        var merged = recorded("Morning", at: start, seconds: 1_800)
+        let afternoon = recorded("Afternoon", at: start.addingTimeInterval(14_400), seconds: 1_800)
+        let copies = fold(afternoon, into: &merged, placement: ConversationMerge.placements([merged, afternoon])[afternoon.id]!)
+        let afterCopy = try XCTUnwrap(copies[afternoon.tracks[0].id])
+        // The morning's own recording is the one an iPhone made at the same time is lined up against, not one 4 hours later.
+        let ownMic = merged.tracks[0].id
+        XCTAssertEqual(merged.alignmentReference(onStretchOf: UUID())?.id, ownMic)
+        XCTAssertEqual(merged.alignmentReference(excluding: [ownMic], onStretchOf: UUID())?.id, nil, "the folded one's isn't on the morning's stretch")
+        XCTAssertEqual(merged.alignmentReference(onStretchOf: afterCopy)?.id, afterCopy, "its own stretch's reference is its own recording")
+    }
+
+    func testBehaviorAConversationThatHoldsAMergeKeepsWhatItPlacedAfterWhenItJoinsAnotherAlongside() throws {
+        var held = recorded("Held", at: start.addingTimeInterval(60), seconds: 600)
+        let evening = recorded("Evening", at: start.addingTimeInterval(36_000), seconds: 600)
+        let eveningCopies = fold(evening, into: &held, placement: ConversationMerge.placements([held, evening])[evening.id]!)
+        let survivor = recorded("Standup", at: start, seconds: 900)
+
+        let placement = ConversationMerge.placements([survivor, held])[held.id]!
+        XCTAssertEqual(placement, .init(kind: .alongside, shift: 60), "its own recording overlaps the survivor's")
+        var merged = survivor
+        let copies = fold(held, into: &merged, placement: placement)
+        let own = try XCTUnwrap(merged.tracks.first { $0.id == copies[held.tracks[0].id] })
+        XCTAssertTrue(own.alignment?.isPending == true, "lined up from the sound, as the survivor's overlap it")
+        let later = try XCTUnwrap(merged.tracks.first { $0.id == copies[eveningCopies[evening.tracks[0].id]!] })
+        XCTAssertEqual(later.alignment?.method, .manual, "made hours later: never offered to the sound")
+        XCTAssertEqual(later.alignment?.offset, 60 + 600)
+        XCTAssertEqual(later.mergedFrom, evening.id, "still the evening's")
+    }
+
     // MARK: What comes along
 
     func testBehaviorEveryRunComesAlongWithItsWordsAndTheCorrectionsSurviveFusion() throws {
@@ -221,11 +272,66 @@ final class ConversationMergeTests: XCTestCase {
         XCTAssertTrue(merged.renamedSpeakerIDs.contains(omar.id), "the name the person gave is still theirs")
         // A number Daybook gave goes on from the survivor's.
         let unnamed = try XCTUnwrap(merged.speakers.first { $0.id == "run2:S2" })
-        XCTAssertEqual(unnamed.name, "Speaker \(merged.speakers.firstIndex { $0.id == "run2:S2" }! + 1)")
+        XCTAssertEqual(unnamed.name, "Speaker 4", "goes on from the speakers here")
         XCTAssertEqual(unnamed.sourceTrackID, copies[theirs])
         // The rename of the owner stays in Version History, about no speaker here.
         XCTAssertTrue(merged.revisions.contains { $0.kind == .speaker("\(later.id.uuidString):owner") && $0.newValue == "Vlad" })
         XCTAssertFalse(merged.renamedSpeakerIDs.contains("owner"), "the survivor's name for the owner stands")
+    }
+
+    func testBehaviorANumberDaybookGaveNeverRepeatsOneTheSurvivorHas() throws {
+        var survivor = recorded("Standup", at: start, seconds: 60)
+        let mine = survivor.tracks[0].id
+        survivor.speakers = [Speaker(id: "a", name: "Speaker 1", sourceTrackID: mine), Speaker(id: "b", name: "Speaker 3", sourceTrackID: mine)]
+        var later = recorded("Planning", at: start.addingTimeInterval(3_600), seconds: 60)
+        let theirs = later.tracks[0].id
+        later.speakers = [Speaker(id: "c", name: "Speaker 1", sourceTrackID: theirs), Speaker(id: "d", name: "Speaker 2", sourceTrackID: theirs)]
+        later.transcripts = [TrackTranscript(trackID: theirs, segments: [
+            TranscriptSegment(trackID: theirs, start: 0, end: 3, text: "Hi", speakerID: "c"),
+            TranscriptSegment(trackID: theirs, start: 3, end: 6, text: "Hello", speakerID: "d"),
+        ])]
+        var merged = survivor
+        _ = fold(later, into: &merged, placement: ConversationMerge.placements([survivor, later])[later.id]!)
+        let names = merged.speakers.map(\.name)
+        XCTAssertEqual(Set(names).count, names.count, "no two speakers are called the same: \(names)")
+        XCTAssertEqual(names, ["Speaker 1", "Speaker 3", "Speaker 4", "Speaker 5"])
+    }
+
+    func testBehaviorACorrectionNeedingReviewIsShiftedOntoTheMergedTimeline() throws {
+        let survivor = recorded("Standup", at: start, seconds: 60)
+        var later = recorded("Planning", at: start.addingTimeInterval(3_600), seconds: 40)
+        let trackID = later.tracks[0].id
+        let passage = TranscriptSegment(trackID: trackID, start: 10, end: 14, text: "Welcome to pricing.")
+        later.correctionTransferIssues = [CorrectionTransferIssue(originalSegment: passage, reason: "No passage matched")]
+        var merged = survivor
+        let copies = fold(later, into: &merged, placement: ConversationMerge.placements([survivor, later])[later.id]!)
+        let issue = try XCTUnwrap(merged.correctionTransferIssues?.first)
+        XCTAssertEqual(issue.originalSegment.start, 70, "10 s into the planning, which starts at 60")
+        XCTAssertEqual(issue.originalSegment.end, 74)
+        XCTAssertEqual(issue.originalSegment.trackID, copies[trackID])
+    }
+
+    func testBehaviorWhatWasTimedBeforeTheMergedTimelineBeginsIsKeptWhereTheModelAllowsIt() throws {
+        let survivor = recorded("Standup", at: start, seconds: 600)
+        var later = recorded("Planning", at: start.addingTimeInterval(-30), seconds: 600)
+        later.tracks[0].offset = 20
+        later.highlights = [Highlight(time: 5, text: "Before its recording"), Highlight(time: 40, text: "During it")]
+        later.notes = "Early note"
+        later.timedNotes = [TimedNote(time: 5, text: "Early note")]
+        later.photos = [MeetingPhoto(relativePath: "Originals/Photos/p.jpg", fileName: "p.jpg", sha256: "p", capturedAt: start, time: 5)]
+        var merged = survivor
+        let copies = copying(later, into: &merged)
+        let photo = try XCTUnwrap(later.photos?.first)
+        ConversationMerge.fold(later, into: &merged, placement: .init(kind: .alongside, shift: -30), copies: copies, fresh: Set(copies.values),
+                               photos: [photo.id: photo], at: start)
+        // A note may sit before zero, as a passage another recording heard first does; a bookmark's time can't (the library
+        // refuses it), so one before even its recording sits at zero; a photo then goes by when it was taken.
+        XCTAssertEqual(merged.timedNotes?.first { $0.text == "Early note" }?.time, -25)
+        XCTAssertEqual(merged.highlights.first { $0.text == "Before its recording" }?.time, 0)
+        XCTAssertNil(merged.highlights.first { $0.text == "Before its recording" }?.trackID)
+        XCTAssertEqual(merged.highlights.first { $0.text == "During it" }?.trackID, copies[later.tracks[0].id], "held by its recording")
+        XCTAssertNil(merged.photos?.first?.time)
+        XCTAssertTrue(merged.highlights.allSatisfy { $0.time >= 0 }, "the library can save it")
     }
 
     func testBehaviorTheSameVoiceProfileUnderTwoNamesIsOneSpeakerWithTheSurvivorsName() throws {

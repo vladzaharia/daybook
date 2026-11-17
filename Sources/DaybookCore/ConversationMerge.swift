@@ -49,41 +49,80 @@ public enum ConversationMerge {
         return meeting.revisions.contains { $0.field == field }
     }
 
+    /// A stretch of the wall clock a conversation's recordings cover, on the timeline they share: when it was, and when the
+    /// timeline's zero was by that clock (a recording placed there starts at its own start less this).
+    struct Stretch {
+        var span: DateInterval
+        var zero: Date
+        /// The conversation's own, with the recordings made alongside it, not a stretch an earlier merge put after it.
+        var isOwn: Bool
+    }
+
+    /// The stretches a conversation's recordings cover: its own and what was made alongside it as one, and each
+    /// conversation an earlier merge placed after it (`RecordingTrack.stretch`) as another, each from its recordings' own
+    /// starts (`startOf`), never from where they sit on the timeline: the timeline's span isn't the wall clock's.
+    static func stretches(of meeting: Meeting, startOf: (RecordingTrack) -> Date?) -> [Stretch] {
+        let present = meeting.tracks.filter { !$0.isRemoved }
+        var result: [Stretch] = []
+        let keys: [UUID?] = [nil] + Set(present.compactMap(\.stretch)).sorted { $0.uuidString < $1.uuidString }
+        for key in keys {
+            let group = present.filter { $0.stretch == key }
+            func place(_ track: RecordingTrack) -> TimeInterval? {
+                meeting.clock(of: track.id)?.offset ?? track.alignment?.clockOffset
+            }
+            let ordered = group.filter { $0.source == .microphone || $0.source == .systemAudio } + group.filter { $0.source != .microphone && $0.source != .systemAudio }
+            var known: Date?
+            for track in ordered where known == nil {
+                if let begin = startOf(track), let offset = place(track) { known = begin.addingTimeInterval(-offset) }
+            }
+            guard let zero = known else { continue }
+            var lower: Date?, upper: Date?
+            for track in group {
+                guard let begin = startOf(track) ?? place(track).map({ zero.addingTimeInterval($0) }) else { continue }
+                let end = begin.addingTimeInterval(max(0, recordedLength(of: track, in: meeting)))
+                lower = min(lower ?? begin, begin); upper = max(upper ?? end, end)
+            }
+            guard let lower, let upper else { continue }
+            result.append(Stretch(span: DateInterval(start: lower, end: upper), zero: zero, isOwn: key == nil))
+        }
+        return result
+    }
+
     /// Where each conversation after the survivor goes, by ID. `startOf` says when a recording started by the wall clock
     /// (the Mac knows more than `startedAt`); a conversation with no recording whose start is known follows what's
-    /// before it.
+    /// before it. A conversation that holds a merge is told apart by stretch: one recorded alongside what an earlier merge
+    /// put after the survivor goes alongside that, and one recorded at a time none covers goes after everything.
     public static func placements(_ meetings: [Meeting], policy: SourceMatcher.Policy = .init(),
                                   startOf: (RecordingTrack) -> Date? = { $0.startedAt }) -> [UUID: Placement] {
         let ordered = ordered(meetings)
         guard let survivor = ordered.first else { return [:] }
-        // The stretches of the wall clock already on the merged timeline: when they were, where their zero landed, and
-        // whether they're the survivor's.
-        struct Stretch { var span: DateInterval; var zero: Date; var shift: TimeInterval; var isSurvivor: Bool }
-        var stretches: [Stretch] = []
-        if let zero = survivor.knownTimelineStart(startOf: startOf), let span = survivor.wallClockSpan(startOf: startOf) {
-            stretches.append(Stretch(span: span, zero: zero, shift: 0, isSurvivor: true))
-        }
+        // The stretches of the wall clock already on the merged timeline, and whether the survivor's own.
+        var stretches = Self.stretches(of: survivor, startOf: startOf)
         var end = timelineEnd(of: survivor, shift: 0) ?? 0
         var result: [UUID: Placement] = [:]
         for folded in ordered.dropFirst() {
+            let own = Self.stretches(of: folded, startOf: startOf)
+            let primary = own.first { $0.isOwn }
             var best: (index: Int, overlap: TimeInterval)?
-            let zero = folded.knownTimelineStart(startOf: startOf), span = folded.wallClockSpan(startOf: startOf)
-            if let span {
+            if let primary {
                 for index in stretches.indices {
-                    guard let overlap = sharedTime(stretches[index].span, span, policy: policy), overlap > best?.overlap ?? 0 else { continue }
+                    guard let overlap = sharedTime(stretches[index].span, primary.span, policy: policy), overlap > best?.overlap ?? 0 else { continue }
                     best = (index, overlap)
                 }
             }
             let placement: Placement
-            if let best, let zero, let span {
+            if let best, let primary {
                 let stretch = stretches[best.index]
-                placement = Placement(kind: stretch.isSurvivor ? .alongside : .alongsideLater, shift: stretch.shift + zero.timeIntervalSince(stretch.zero))
-                stretches[best.index].span = DateInterval(start: min(stretch.span.start, span.start), end: max(stretch.span.end, span.end))
+                placement = Placement(kind: stretch.isOwn ? .alongside : .alongsideLater, shift: primary.zero.timeIntervalSince(stretch.zero))
+                stretches[best.index].span = DateInterval(start: min(stretch.span.start, primary.span.start), end: max(stretch.span.end, primary.span.end))
+                for other in own where !other.isOwn {
+                    stretches.append(Stretch(span: other.span, zero: other.zero.addingTimeInterval(-placement.shift), isOwn: false))
+                }
             } else {
                 // Its earliest recording (one that began before its timeline's zero too) starts where what's before it ends.
                 let earliest = folded.tracks.filter { !$0.isMovedOut }.compactMap { folded.clock(of: $0.id)?.offset }.min() ?? 0
                 placement = Placement(kind: .after, shift: end - min(0, earliest))
-                if let zero, let span { stretches.append(Stretch(span: span, zero: zero, shift: placement.shift, isSurvivor: false)) }
+                for stretch in own { stretches.append(Stretch(span: stretch.span, zero: stretch.zero.addingTimeInterval(-placement.shift), isOwn: false)) }
             }
             result[folded.id] = placement
             if let folds = timelineEnd(of: folded, shift: placement.shift) { end = max(end, folds) }
@@ -159,9 +198,11 @@ public enum ConversationMerge {
             moved.duration = track.duration ?? merged.tracks[index].duration
             moved.derivedFrom = track.derivedFrom.flatMap(copy)
             moved.removal = track.removal.map { RecordingRemoval(removedAt: $0.removedAt) }
-            moved.mergedFrom = folded.id
+            moved.mergedFrom = track.mergedFrom ?? folded.id
             let own = folded.clock(of: track.id)
-            if placement.kind == .after, let own {
+            // Placed after the rest, or already after the rest of the conversation it comes from (an earlier merge): at another
+            // time than what it's compared with, so its place is kept, never taken from the sound.
+            if let own, placement.kind == .after || track.stretch != nil {
                 moved.alignment = SourceAlignment(method: .manual, offset: shift + own.offset, rate: own.rate, date: now)
                 moved.offset = shift + own.offset
             } else {
@@ -238,7 +279,7 @@ public enum ConversationMerge {
         let knownIssues = Set((merged.correctionTransferIssues ?? []).map(\.id))
         let issues = (folded.correctionTransferIssues ?? []).filter { !knownIssues.contains($0.id) }.map { issue in
             var copied = issue
-            copied.originalSegment = moved(issue.originalSegment, shifting: false)
+            copied.originalSegment = moved(issue.originalSegment, shifting: true)
             return copied
         }
         if !issues.isEmpty { merged.correctionTransferIssues = (merged.correctionTransferIssues ?? []) + issues }
@@ -263,7 +304,9 @@ public enum ConversationMerge {
             copied.sourceTrackID = original.sourceTrackID.flatMap(copy)
             // A number Daybook gave goes on from the speakers here ("Speaker 4"), so two aren't called the same.
             if SpeakerProfile.isPlaceholder(original.name), !folded.renamedSpeakerIDs.contains(original.id) {
-                copied.name = "Speaker \(merged.speakers.count + 1)"
+                var number = merged.speakers.count + 1
+                while merged.speakers.contains(where: { $0.name == "Speaker \(number)" }) { number += 1 }
+                copied.name = "Speaker \(number)"
             }
             merged.speakers.append(copied)
         }
@@ -296,6 +339,8 @@ public enum ConversationMerge {
                 copied.trackID = held.trackID
                 copied.time = held.time
             } else {
+                // Before the merged timeline's zero a bookmark has no time to keep (the library refuses a negative one), so
+                // it sits at zero; a note keeps its negative time, and a photo goes by when it was taken.
                 copied.time = max(0, mark.time + shift)
             }
             return copied
@@ -313,7 +358,7 @@ public enum ConversationMerge {
                 copied.trackID = copy(track)
                 if copied.trackID == nil { copied.time = nil }
             } else if let time = photo.time {
-                if let held = onLead(time) { copied.trackID = held.trackID; copied.time = held.time } else { copied.time = max(0, time + shift) }
+                if let held = onLead(time) { copied.trackID = held.trackID; copied.time = held.time } else { copied.time = time + shift >= 0 ? time + shift : nil }
             }
             return copied
         }
