@@ -179,6 +179,13 @@ final class LongConversationTests: XCTestCase {
         XCTAssertNil(place, "Declined: nowhere to run it")
         placements.update(preferences: preferences(.always))
         XCTAssertEqual(placements.beginAfterLocalFailure(UUID()), .cloud(sonnet))
+        // With nothing to try, it settles waiting at once, and waiting for its place returns rather than hanging.
+        placements.update(options: options(cloud: false))
+        let nothing = UUID()
+        XCTAssertNil(placements.beginAfterLocalFailure(nothing))
+        XCTAssertEqual(placements[nothing]?.phase, .waiting)
+        let settled = await placements.place(nothing)
+        XCTAssertNil(settled)
     }
 
     @MainActor

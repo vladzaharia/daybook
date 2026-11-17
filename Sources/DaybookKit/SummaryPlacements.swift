@@ -117,7 +117,8 @@ public final class SummaryPlacements {
     /// (cancelled, paused, or it settled with nowhere to run it). Cancelling the waiting task ends it.
     public func place(_ id: UUID, immediately: Bool = false) async -> SummaryPlace? {
         if let started = begin(id, immediately: immediately) { return started }
-        guard planners[id] != nil else { return nil }
+        // Already settled with nowhere to run it (a retry after a failure the cloud can't take): nothing to wait for.
+        guard let planner = planners[id], planner.phase != .waiting else { return nil }
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 if Task.isCancelled { continuation.resume(returning: nil); return }
