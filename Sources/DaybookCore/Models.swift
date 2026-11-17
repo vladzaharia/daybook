@@ -609,7 +609,11 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
     /// Words the transcript may have wrong (`TranscriptFlags`), derived with the unified transcript and merged with it.
     /// Nil when there are none, and for conversations fused before flags.
     public var transcriptFlags: [TranscriptFlag]?
-    /// The person's answers to flags (`TranscriptFlagDismissal`). Nil until the first; merged one answer at a time.
+    /// The version of the unsure-words algorithm that worked out `transcriptFlags` (`TranscriptFlags.version`), as
+    /// `FusionSummary.version` stamps the fusion. Nil for flags worked out before it, and until the first fusion.
+    public var transcriptFlagsVersion: Int?
+    /// The person's answers to flags (`TranscriptFlagDismissal`), never removed: taking one back marks it withdrawn.
+    /// Nil until the first; merged as a union, answer by answer.
     public var transcriptFlagDismissals: [TranscriptFlagDismissal]?
     /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
     public var unknownFields = UnknownFields()
@@ -687,6 +691,7 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         speakers += result.addedSpeakers.filter { added in !speakers.contains { $0.id == added.id } }
         let flags = flags ?? TranscriptFlags.flags(for: self, ranking: ranking)
         transcriptFlags = flags.isEmpty ? nil : flags
+        transcriptFlagsVersion = TranscriptFlags.version
         return transferred.issues
     }
     /// Explicit review either applies the saved correction to a chosen passage or dismisses transfer.
@@ -738,7 +743,7 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
             placement, tracks, transcripts, unifiedTranscript, alignmentReports, summary, revisions, highlights,
             speakers, status, errorMessage, correctionTransferIssues, speakerMatches, companions, sourceSuggestions,
             audioAlignments, fusionSummary, processingRequests, photos, ink, backgroundPassages, includesBackgroundAudio,
-            speakerIdentities, upgradeDismissals, transcriptFlags, transcriptFlagDismissals
+            speakerIdentities, upgradeDismissals, transcriptFlags, transcriptFlagsVersion, transcriptFlagDismissals
     }
     private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
 
@@ -780,9 +785,10 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         speakerIdentities = try values.decodeIfPresent([SpeakerIdentity].self, forKey: .speakerIdentities)
         // A dismissal a newer Daybook wrote differently is dropped: at worst an offer shows again.
         upgradeDismissals = (try? values.decodeIfPresent([UpgradeDismissal].self, forKey: .upgradeDismissals)) ?? nil
-        // Flags a newer Daybook wrote differently are worked out again at the next fusion; answers it wrote differently
-        // are dropped: at worst a flag shows again.
+        // Flags and answers are read one at a time: one a newer Daybook wrote in a shape this version can't read is kept
+        // as it came, and written back (`TranscriptFlag.unread`).
         transcriptFlags = (try? values.decodeIfPresent([TranscriptFlag].self, forKey: .transcriptFlags)) ?? nil
+        transcriptFlagsVersion = (try? values.decodeIfPresent(Int.self, forKey: .transcriptFlagsVersion)) ?? nil
         transcriptFlagDismissals = (try? values.decodeIfPresent([TranscriptFlagDismissal].self, forKey: .transcriptFlagDismissals)) ?? nil
         unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
     }
@@ -825,6 +831,7 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         try values.encodeIfPresent(speakerIdentities, forKey: .speakerIdentities)
         try values.encodeIfPresent(upgradeDismissals, forKey: .upgradeDismissals)
         try values.encodeIfPresent(transcriptFlags, forKey: .transcriptFlags)
+        try values.encodeIfPresent(transcriptFlagsVersion, forKey: .transcriptFlagsVersion)
         try values.encodeIfPresent(transcriptFlagDismissals, forKey: .transcriptFlagDismissals)
         try unknownFields.encode(to: encoder)
     }

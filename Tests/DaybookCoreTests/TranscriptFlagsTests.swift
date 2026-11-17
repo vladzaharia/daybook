@@ -457,50 +457,187 @@ final class TranscriptFlagsTests: XCTestCase {
 
     // MARK: Sync
 
-    func testAnswersMergeOneAtATimeAndAnUndoneAnswerStaysUndone() throws {
+    private func date(_ seconds: Double) -> Date { Date(timeIntervalSince1970: seconds) }
+
+    private func merge(_ base: Meeting?, _ a: Meeting, _ b: Meeting) -> Meeting {
+        let merged = MeetingMerge.merge(base: base, local: a, remote: b)
+        XCTAssertEqual(merged.meeting, MeetingMerge.merge(base: base, local: b, remote: a).meeting, "Either order")
+        XCTAssertEqual(MeetingMerge.merge(base: base, local: merged.meeting, remote: merged.meeting).meeting, merged.meeting, "Again")
+        XCTAssertFalse(merged.meeting.revisions.contains { if case .sync = $0.kind { return true } else { return false } }, "No conflict")
+        return merged.meeting
+    }
+
+    func testAnswersFromTwoDevicesAreAUnionWithNoConflict() throws {
         var base = meeting(run(["We ship on Thursday and then Priya owns pricing"], at: 1),
                            run(["We ship on Friday and then Maria owns pricing"], at: 2))
         let flags = try XCTUnwrap(base.transcriptFlags)
         XCTAssertEqual(flags.map(\.text), ["Friday", "Maria"])
-        base.updatedAt = Date(timeIntervalSince1970: 10)
+        base.updatedAt = date(10)
         var local = base, remote = base
-        local.keepFlaggedWords(flags[0].id, at: Date(timeIntervalSince1970: 20))
-        remote.useFlagAlternative(flags[1].id, at: Date(timeIntervalSince1970: 30))
-        let merged = MeetingMerge.merge(base: base, local: local, remote: remote)
-        XCTAssertEqual(merged.meeting.transcriptFlagDismissals?.count, 2)
-        XCTAssertTrue(merged.warnings.isEmpty, "\(merged.warnings)")
-        XCTAssertTrue(shown(merged.meeting).isEmpty)
-        XCTAssertEqual(merged.meeting, MeetingMerge.merge(base: base, local: remote, remote: local).meeting, "Either order")
-        XCTAssertEqual(MeetingMerge.merge(base: base, local: merged.meeting, remote: merged.meeting).meeting, merged.meeting)
+        local.keepFlaggedWords(flags[0].id, at: date(20))
+        remote.useFlagAlternative(flags[1].id, at: date(30))
+        let merged = merge(base, local, remote)
+        XCTAssertEqual(merged.transcriptFlagDismissals?.count, 2)
+        XCTAssertTrue(shown(merged).isEmpty)
+        // Without a common ancestor, every answer either side has.
+        XCTAssertEqual(MeetingMerge.merge(base: nil, local: local, remote: remote).meeting.transcriptFlagDismissals?.count, 2)
 
-        // Both devices answer the same flag at once: one answer, the earlier, and no conflict.
+        // Both answer one flag at once: one answer, the later.
         var a = base, b = base
-        a.keepFlaggedWords(flags[0].id, at: Date(timeIntervalSince1970: 40))
-        b.keepFlaggedWords(flags[0].id, at: Date(timeIntervalSince1970: 35))
-        let both = MeetingMerge.merge(base: base, local: a, remote: b)
-        XCTAssertEqual(both.meeting.transcriptFlagDismissals?.map(\.dismissedAt), [Date(timeIntervalSince1970: 35)])
-        XCTAssertFalse(both.meeting.revisions.contains { if case .sync = $0.kind { return true } else { return false } })
+        a.keepFlaggedWords(flags[0].id, at: date(40))
+        b.keepFlaggedWords(flags[0].id, at: date(35))
+        XCTAssertEqual(merge(base, a, b).transcriptFlagDismissals?.map(\.dismissedAt), [date(40)])
+    }
 
-        // Undo on one device takes the answer back while the other didn't touch it.
-        var answered = base
-        answered.keepFlaggedWords(flags[0].id, at: Date(timeIntervalSince1970: 50))
-        var undone = answered
-        undone.transcriptFlagDismissals = nil
-        let afterUndo = MeetingMerge.merge(base: answered, local: undone, remote: answered)
-        XCTAssertNil(afterUndo.meeting.transcriptFlagDismissals)
-        XCTAssertEqual(shown(afterUndo.meeting).count, 2)
+    func testTakingAnAnswerBackWithdrawsThatAnswerAloneEverywhere() throws {
+        var base = meeting(run(["We ship on Thursday and then Priya owns pricing"], at: 1),
+                           run(["We ship on Friday and then Maria owns pricing"], at: 2))
+        let flags = try XCTUnwrap(base.transcriptFlags)
+        base.updatedAt = date(10)
+        // The Mac keeps Friday; sync brings the iPhone's answer to Maria; Undo on the Mac takes back the first alone.
+        var mac = base, phone = base
+        mac.keepFlaggedWords(flags[0].id, at: date(20))
+        phone.keepFlaggedWords(flags[1].id, at: date(25))
+        let synced = merge(base, mac, phone)
+        mac = synced
+        XCTAssertTrue(mac.withdrawFlagAnswer(flags[0].id, at: date(40)))
+        XCTAssertEqual(mac.transcriptFlagDismissals?.count, 2, "An answer is never removed from the list")
+        XCTAssertEqual(shown(mac).map(\.flag.text), ["Friday"], "Only the Mac's answer was taken back")
+        // The next merge, with the iPhone's copy as it was, on every device.
+        let again = merge(synced, mac, phone)
+        XCTAssertEqual(shown(again).map(\.flag.text), ["Friday"])
+        XCTAssertEqual(again.transcriptFlagDismissals?.count, 2)
+        XCTAssertEqual(merge(base, again, phone).transcriptFlagDismissals, again.transcriptFlagDismissals)
+        // A copy that lacks every answer, or an older Daybook that kept the whole list as it was when it last saw it, takes
+        // nothing away.
+        XCTAssertEqual(merge(synced, mac, base).transcriptFlagDismissals, mac.transcriptFlagDismissals)
+        var stale = base
+        stale.transcriptFlagDismissals = synced.transcriptFlagDismissals?.filter { $0.id == flags[0].id }
+        XCTAssertEqual(shown(merge(synced, mac, stale)).map(\.flag.text), ["Friday"], "The iPhone's answer survives")
+        XCTAssertEqual(merge(synced, mac, stale).transcriptFlagDismissals?.count, 2)
+    }
 
-        // Answered again on one device while the other took the answer back: the new answer stays.
-        var again = answered
-        again.transcriptFlagDismissals = nil
-        again.useFlagAlternative(flags[0].id, at: Date(timeIntervalSince1970: 60))
-        for merged in [MeetingMerge.merge(base: answered, local: again, remote: undone), MeetingMerge.merge(base: answered, local: undone, remote: again)] {
-            XCTAssertEqual(merged.meeting.transcriptFlagDismissals?.map(\.outcome), [.alternative])
+    func testAnAnswerGivenAgainAfterItWasTakenBackStandsWhicheverDeviceDidWhat() throws {
+        var base = meeting(run(["We ship on Thursday"], at: 1), run(["We ship on Friday"], at: 2))
+        let flag = try XCTUnwrap(base.transcriptFlags?.first)
+        base.keepFlaggedWords(flag.id, at: date(20))
+        var withdrawn = base, again = base
+        XCTAssertTrue(withdrawn.withdrawFlagAnswer(flag.id, at: date(30)))
+        XCTAssertEqual(shown(withdrawn).count, 1)
+        // The other device answered it again, later than the withdrawal, or earlier.
+        again.keepFlaggedWords(flag.id, at: date(20))
+        again.transcriptFlagDismissals?[0].dismissedAt = date(50)
+        XCTAssertTrue(shown(merge(base, withdrawn, again)).isEmpty, "Answered again after it was taken back")
+        again.transcriptFlagDismissals?[0].dismissedAt = date(25)
+        XCTAssertEqual(shown(merge(base, withdrawn, again)).count, 1, "Taken back after it was answered")
+        // The same device answers once more after taking it back (Redo).
+        XCTAssertTrue(withdrawn.keepFlaggedWords(flag.id, at: date(60)))
+        XCTAssertTrue(shown(withdrawn).isEmpty)
+        XCTAssertEqual(withdrawn.transcriptFlagDismissals?.count, 1, "The same answer, given again")
+        XCTAssertTrue(shown(merge(base, withdrawn, base)).isEmpty)
+        // The same time for both: taken back.
+        var tie = base
+        let answeredAt = tie.transcriptFlagDismissals?[0].dismissedAt
+        tie.transcriptFlagDismissals?[0].withdrawnAt = answeredAt
+        XCTAssertEqual(shown(tie).count, 1)
+    }
+
+    func testAnswersMergeTheSameInAnyOrderAndGrouping() throws {
+        let flag = TranscriptFlag(trackID: track, start: 5, end: 5.4, text: "Friday", reason: .lowConfidence)
+        let kept = TranscriptFlagDismissal(flag: flag, outcome: .kept, at: date(10))
+        var withdrawn = kept
+        withdrawn.withdrawnAt = date(20)
+        var again = kept
+        again.dismissedAt = date(30)
+        again.withdrawnAt = date(20)
+        let other = TranscriptFlagDismissal(flag: TranscriptFlag(trackID: track, start: 9, end: 9.4, text: "Maria", reason: .lowConfidence),
+                                            outcome: .alternative, at: date(12))
+        let lists: [[TranscriptFlagDismissal]?] = [nil, [], [kept], [withdrawn], [again], [other], [kept, other], [withdrawn, other]]
+        for x in lists {
+            XCTAssertEqual(TranscriptFlagDismissal.merged(x, x), x?.isEmpty == true ? nil : x?.sorted { $0.id.uuidString < $1.id.uuidString })
+            for y in lists {
+                XCTAssertEqual(TranscriptFlagDismissal.merged(x, y), TranscriptFlagDismissal.merged(y, x))
+                for z in lists {
+                    XCTAssertEqual(TranscriptFlagDismissal.merged(TranscriptFlagDismissal.merged(x, y), z),
+                                   TranscriptFlagDismissal.merged(x, TranscriptFlagDismissal.merged(y, z)))
+                }
+            }
         }
+        XCTAssertEqual(TranscriptFlagDismissal.merged([withdrawn], [again])?.first?.isActive, true)
+        XCTAssertEqual(TranscriptFlagDismissal.merged([kept], [withdrawn])?.first?.isActive, false)
+    }
 
-        // Two devices that made the same conversation apart keep every answer.
-        let apart = MeetingMerge.merge(base: nil, local: local, remote: remote)
-        XCTAssertEqual(apart.meeting.transcriptFlagDismissals?.count, 2)
+    // MARK: What an answer covers
+
+    private func flag(_ text: String, at start: Double, _ alternative: String? = nil, track: UUID? = nil) -> TranscriptFlag {
+        TranscriptFlag(trackID: track ?? self.track, start: start, end: start + 0.4 * Double(text.split(separator: " ").count) - 0.05,
+                       text: text, reason: alternative == nil ? .lowConfidence : .disagreement, alternative: alternative)
+    }
+
+    private func answered(_ flags: [TranscriptFlag], by answered: [TranscriptFlag]) -> [String] {
+        let answers = answered.map { TranscriptFlagDismissal(flag: $0, outcome: .kept, at: date(10)) }
+        let covered = TranscriptFlags.answered(flags, by: answers)
+        return flags.filter { covered.contains($0.id) }.map(\.text)
+    }
+
+    func testAnAnswerCoversWordsWhateverWayALaterRunGroupsThem() {
+        let whole = flag("Siobhan Ni Bhriain", at: 10)
+        XCTAssertEqual(answered([flag("Siobhan", at: 10)], by: [whole]), ["Siobhan"], "Only one of its words is unsure now")
+        XCTAssertEqual(answered([flag("Ni Bhriain", at: 10.4)], by: [whole]), ["Ni Bhriain"])
+        let phrase = flag("Friday with Maria", at: 10, "Thursday with Priya")
+        XCTAssertEqual(answered([flag("Friday with", at: 10, "Thursday with"), flag("Maria", at: 10.8, "Priya")], by: [phrase]),
+                       ["Friday with", "Maria"], "A speaker refresh that splits the phrase")
+        XCTAssertEqual(answered([flag("Siobhan Ni Bhriain Smith", at: 10)], by: [whole]), [], "A word that wasn't answered")
+        XCTAssertEqual(answered([flag("Siobhan", at: 10, track: UUID())], by: [whole]), [], "Another recording")
+    }
+
+    func testAnAnswerCoversAWordReadAgainAFewTenthsOfASecondOffButNotAnotherSeparateWord() {
+        let friday = flag("Friday", at: 10)
+        XCTAssertEqual(answered([flag("Friday", at: 11)], by: [friday]), ["Friday"], "Re-read about a second later")
+        XCTAssertEqual(answered([flag("Friday", at: 9.2)], by: [friday]), ["Friday"], "and earlier")
+        XCTAssertEqual(answered([flag("Friday", at: 14)], by: [friday]), [], "Far from it")
+        XCTAssertEqual(answered([flag("Monday", at: 10)], by: [friday]), [], "Another word")
+        // Two of the word 0.45 s apart: the answer is for the one it was given to.
+        let first = flag("Friday", at: 10), second = flag("Friday", at: 10.45)
+        XCTAssertEqual(answered([first, second], by: [first]).count, 1)
+        let covered = TranscriptFlags.answered([second, first], by: [TranscriptFlagDismissal(flag: first, outcome: .kept, at: date(10))])
+        XCTAssertEqual(covered, [first.id], "Not the repeat")
+        XCTAssertEqual(TranscriptFlags.answered([second, first], by: [TranscriptFlagDismissal(flag: second, outcome: .kept, at: date(10))]), [second.id])
+    }
+
+    func testAnAnswerCoversALaterFlagOnlyWhereItOffersTheSameEarlierReadingOrNone() {
+        let friday = flag("Friday", at: 10, "Thursday")
+        XCTAssertEqual(answered([flag("Friday", at: 10, "Thursday")], by: [friday]), ["Friday"])
+        XCTAssertEqual(answered([flag("Friday", at: 10, "thursday.")], by: [friday]), ["Friday"], "Punctuation and case aren't another reading")
+        XCTAssertEqual(answered([flag("Friday", at: 10)], by: [friday]), ["Friday"], "No earlier reading offered: the words are what was kept")
+        XCTAssertEqual(answered([flag("Friday", at: 10, "Monday")], by: [friday]), [], "Another earlier reading is new evidence")
+        XCTAssertEqual(answered([flag("Friday", at: 10, "Thursday")], by: [flag("Friday", at: 10)]), [], "Kept as unsure of itself, then a disagreement")
+        var taken = TranscriptFlagDismissal(flag: friday, outcome: .kept, at: date(10))
+        taken.withdrawnAt = date(99)
+        XCTAssertEqual(TranscriptFlags.answered([friday], by: [taken]), [], "Taken back")
+    }
+
+    func testAnsweredFlagsStayAnsweredThroughRegroupingASpeakerRefreshAndATimingShift() throws {
+        var meeting = meeting(run(["We met Siobhan Ni Bhriain at the depot"], at: 1, confidence: ["Siobhan": 0.2, "Ni": 0.2, "Bhriain": 0.2]))
+        let whole = try XCTUnwrap(shown(meeting).first?.flag)
+        XCTAssertEqual(whole.text, "Siobhan Ni Bhriain")
+        meeting.keepFlaggedWords(whole.id)
+        // Transcribed again: the words are read the same, a little later, and only "Siobhan" is unsure.
+        meeting.transcripts.append(run(["We met Siobhan Ni Bhriain at the depot"], start: 10.3, at: 2, confidence: ["Siobhan": 0.2]))
+        fuse(&meeting)
+        XCTAssertEqual(meeting.transcriptFlags?.map(\.text), ["Siobhan"])
+        XCTAssertTrue(shown(meeting).isEmpty, "Kept once: still kept")
+        // A speaker refresh repeats the run's words.
+        var refresh = meeting.transcripts[1]
+        refresh.id = UUID()
+        refresh.createdAt = date(3)
+        meeting.transcripts.append(refresh)
+        fuse(&meeting)
+        XCTAssertTrue(shown(meeting).isEmpty)
+        // Read differently by a later run: a new question.
+        meeting.transcripts.append(run(["We met Siobhán Ni Briain at the depot"], at: 4, confidence: ["Briain": 0.2], model: "parakeet/ultra"))
+        fuse(&meeting)
+        XCTAssertEqual(shown(meeting).map(\.flag.text), ["Briain"])
     }
 
     func testDevicesFusingTheSameTranscriptsStoreTheSameFlagsWhateverAnswersReachedThem() throws {
@@ -560,6 +697,82 @@ final class TranscriptFlagsTests: XCTestCase {
         let answer0 = try XCTUnwrap((written["transcriptFlagDismissals"] as? [[String: Any]])?.first)
         XCTAssertEqual(answer0["outcome"] as? String, "laterReview")
         XCTAssertEqual(answer0["device"] as? String, "Mac")
+    }
+
+    func testFlagsAndAnswersANewerDaybookWroteInAShapeThisOneCantReadAreKeptAsTheyCame() throws {
+        var meeting = meeting(run(["We ship on Thursday and then Priya owns pricing"], at: 1),
+                              run(["We ship on Friday and then Maria owns pricing"], at: 2))
+        let flags = try XCTUnwrap(meeting.transcriptFlags)
+        meeting.keepFlaggedWords(flags[0].id)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(meeting)) as? [String: Any])
+        let newFlag: [String: Any] = ["id": UUID().uuidString, "span": ["from": 1, "to": 2], "kind": "overlap"]
+        let newAnswer: [String: Any] = ["id": UUID().uuidString, "verdict": ["kept": true]]
+        json["transcriptFlags"] = try XCTUnwrap(json["transcriptFlags"] as? [[String: Any]]) + [newFlag]
+        json["transcriptFlagDismissals"] = try XCTUnwrap(json["transcriptFlagDismissals"] as? [[String: Any]]) + [newAnswer]
+        let newer = try JSONDecoder().decode(Meeting.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertEqual(newer.transcriptFlags?.count, 3, "The flags this version reads, and the one it can't")
+        XCTAssertEqual(newer.transcriptFlagDismissals?.count, 2)
+        XCTAssertEqual(shown(newer).map(\.flag.text), ["Maria"], "What it can read works as before")
+        XCTAssertEqual(newer.transcriptFlags?.last?.id.uuidString, newFlag["id"] as? String)
+        // Written back as it came.
+        let written = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(newer)) as? [String: Any])
+        let flagsOut = try XCTUnwrap(written["transcriptFlags"] as? [[String: Any]])
+        XCTAssertEqual(flagsOut.count, 3)
+        XCTAssertTrue(NSDictionary(dictionary: flagsOut[2]).isEqual(to: newFlag))
+        let answersOut = try XCTUnwrap(written["transcriptFlagDismissals"] as? [[String: Any]])
+        XCTAssertTrue(NSDictionary(dictionary: answersOut[1]).isEqual(to: newAnswer))
+        // An answer taken back and one given later round-trip too, and the unread one survives a merge by its ID.
+        var edited = newer
+        edited.withdrawFlagAnswer(flags[0].id, at: date(50))
+        let merged = merge(newer, edited, newer)
+        XCTAssertEqual(merged.transcriptFlagDismissals?.count, 2)
+        XCTAssertEqual(merged.transcriptFlagDismissals?.filter { $0.unread != nil }.count, 1)
+        // A flag this version can't read is no change to the transcript when merged: the same view on both sides.
+        var other = newer
+        other.transcriptFlags = flags
+        XCTAssertTrue(MeetingMerge.merge(base: newer, local: newer, remote: other).warnings.isEmpty)
+        XCTAssertEqual(MeetingMerge.merge(base: newer, local: newer, remote: other).meeting.transcriptFlags, flags,
+                       "Only one side changed them")
+    }
+
+    func testDevicesOnDifferentVersionsOfTheFlagAlgorithmDontFightOverTheFlags() throws {
+        let base = meeting(run(["We ship on Thursday and then Priya owns pricing"], at: 1),
+                           run(["We ship on Friday and then Maria owns pricing"], at: 2))
+        XCTAssertEqual(base.transcriptFlagsVersion, TranscriptFlags.version)
+        let flags = try XCTUnwrap(base.transcriptFlags)
+        var older = base, newer = base
+        older.transcriptFlags = [flags[0]]
+        older.transcriptFlagsVersion = TranscriptFlags.version
+        newer.transcriptFlags = [flags[1]]
+        newer.transcriptFlagsVersion = TranscriptFlags.version + 1
+        for ancestor in [base, nil] {
+            let merged = MeetingMerge.merge(base: ancestor, local: older, remote: newer)
+            XCTAssertEqual(merged.meeting.transcriptFlags, [flags[1]], "The newer algorithm's")
+            XCTAssertEqual(merged.meeting.transcriptFlagsVersion, TranscriptFlags.version + 1)
+            XCTAssertEqual(merged.meeting, MeetingMerge.merge(base: ancestor, local: newer, remote: older).meeting)
+            XCTAssertTrue(merged.warnings.isEmpty, "No conflict in the transcript's view: \(merged.warnings)")
+            XCTAssertFalse(merged.meeting.revisions.contains { if case .sync = $0.kind { return true } else { return false } })
+        }
+        // A newer algorithm that found nothing beats an older one that found something; none stamped is the oldest.
+        newer.transcriptFlags = nil
+        XCTAssertNil(MeetingMerge.merge(base: base, local: older, remote: newer).meeting.transcriptFlags)
+        var unstamped = base
+        unstamped.transcriptFlagsVersion = nil
+        unstamped.transcriptFlags = [flags[1]]
+        XCTAssertEqual(MeetingMerge.merge(base: base, local: unstamped, remote: older).meeting.transcriptFlags, [flags[0]])
+        // The same version with different flags: one pick, the same either way round.
+        var same = base
+        same.transcriptFlags = [flags[1]]
+        XCTAssertEqual(MeetingMerge.merge(base: nil, local: older, remote: same).meeting,
+                       MeetingMerge.merge(base: nil, local: same, remote: older).meeting)
+    }
+
+    func testFlagIDsComeOutForAnyTimes() {
+        for time in [Double.infinity, -.infinity, .nan, 1e300, -1e300, Double(Int.max), 0] {
+            let a = TranscriptFlag(trackID: track, start: time, end: time, text: "Friday", reason: .lowConfidence)
+            let b = TranscriptFlag(trackID: track, start: time, end: time, text: "Friday", reason: .lowConfidence)
+            XCTAssertEqual(a.id, b.id)
+        }
     }
 
     // MARK: Alignment

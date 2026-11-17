@@ -48,25 +48,47 @@ public struct TranscriptFlag: Codable, Equatable, Identifiable, Sendable {
         self.confidence = confidence; self.alternative = alternative
     }
 
+    /// The whole of a flag this version can't read (a newer Daybook's shape), written back as it came. Such a flag marks
+    /// nothing here.
+    public private(set) var unread: SyncJSONValue?
+
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case id, trackID, start, end, text, reason, confidence, alternative
     }
     private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
 
+    private init(unread value: SyncJSONValue) {
+        if case .object(let fields) = value, case .string(let text)? = fields["id"], let found = UUID(uuidString: text) { id = found }
+        else { id = SyncEncoding.uuid("unread-transcript-flag:\(SyncEncoding.string(value))") }
+        trackID = UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)); start = 0; end = 0; text = ""
+        _reason = Extensible(wrappedValue: .lowConfidence)
+        unread = value
+    }
+
+    /// Reads one flag; one this version can't read is kept as it came (`unread`), so a list never fails as a whole and a
+    /// newer version's flags survive a round trip.
     public init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        id = try values.decode(UUID.self, forKey: .id)
-        trackID = try values.decode(UUID.self, forKey: .trackID)
-        start = try values.decode(TimeInterval.self, forKey: .start)
-        end = try values.decode(TimeInterval.self, forKey: .end)
-        text = try values.decode(String.self, forKey: .text)
-        _reason = try values.decode(Extensible<Reason>.self, forKey: .reason)
-        confidence = try values.decodeIfPresent(Double.self, forKey: .confidence)
-        alternative = try values.decodeIfPresent(String.self, forKey: .alternative)
-        unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
+        do {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            var flag = TranscriptFlag(unread: .null)
+            flag.id = try values.decode(UUID.self, forKey: .id)
+            flag.trackID = try values.decode(UUID.self, forKey: .trackID)
+            flag.start = try values.decode(TimeInterval.self, forKey: .start)
+            flag.end = try values.decode(TimeInterval.self, forKey: .end)
+            flag.text = try values.decode(String.self, forKey: .text)
+            flag._reason = try values.decode(Extensible<Reason>.self, forKey: .reason)
+            flag.confidence = try values.decodeIfPresent(Double.self, forKey: .confidence)
+            flag.alternative = try values.decodeIfPresent(String.self, forKey: .alternative)
+            flag.unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
+            flag.unread = nil
+            self = flag
+        } catch {
+            self = TranscriptFlag(unread: try SyncJSONValue(from: decoder))
+        }
     }
 
     public func encode(to encoder: Encoder) throws {
+        if let unread { try unread.encode(to: encoder); return }
         var values = encoder.container(keyedBy: CodingKeys.self)
         try values.encode(id, forKey: .id)
         try values.encode(trackID, forKey: .trackID)
@@ -76,103 +98,6 @@ public struct TranscriptFlag: Codable, Equatable, Identifiable, Sendable {
         try values.encode(_reason, forKey: .reason)
         try values.encodeIfPresent(confidence, forKey: .confidence)
         try values.encodeIfPresent(alternative, forKey: .alternative)
-        try unknownFields.encode(to: encoder)
-    }
-}
-
-/// The person's answer to a flag: the words kept as they are, or the earlier reading taken (which is also a correction,
-/// in Version History). Synced with the conversation; it keeps the flag cleared on every device and after the transcript
-/// is fused again, for as long as the words it was about read the same.
-public struct TranscriptFlagDismissal: Codable, Equatable, Identifiable, Sendable {
-    public enum Outcome: String, ExtensibleSyncEnum {
-        case kept
-        case alternative
-        public static let syncFallback = Outcome.kept
-    }
-
-    /// The flag's ID.
-    public var id: UUID
-    public var trackID: UUID
-    public var start: TimeInterval
-    public var end: TimeInterval
-    /// The words as they read when the person answered.
-    public var text: String
-    @Extensible public var outcome: Outcome
-    public var dismissedAt: Date
-    /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
-    public var unknownFields = UnknownFields()
-
-    public init(flag: TranscriptFlag, outcome: Outcome, at date: Date = Date()) {
-        id = flag.id; trackID = flag.trackID; start = flag.start; end = flag.end; text = flag.text
-        self.outcome = outcome; dismissedAt = date
-    }
-
-    /// The same flag, or a flag worked out again over the same words of the same recording at about the same place
-    /// (a later transcript that reads them the same way).
-    public func answers(_ flag: TranscriptFlag) -> Bool {
-        if flag.id == id { return true }
-        guard flag.trackID == trackID, min(end, flag.end) - max(start, flag.start) > -TranscriptFlags.timeSlack else { return false }
-        return TranscriptFlags.key(of: flag.text) == TranscriptFlags.key(of: text)
-    }
-
-    /// Three copies' answers merged one by one: every answer either side gave, once; where both changed one (two devices
-    /// answered at once), the earlier. An answer both had before that one side took back (Undo) is gone, unless the other
-    /// side answered it again. Without a common ancestor, every answer either side has. Deterministic, commutative, and
-    /// idempotent; two devices answering at once never conflict.
-    public static func merged(base: [TranscriptFlagDismissal]?, _ lhs: [TranscriptFlagDismissal]?,
-                              _ rhs: [TranscriptFlagDismissal]?) -> [TranscriptFlagDismissal]? {
-        guard lhs != nil || rhs != nil else { return nil }
-        let ancestor = Dictionary((base ?? []).map { ($0.id, $0) }, uniquingKeysWith: earlier)
-        let a = Dictionary((lhs ?? []).map { ($0.id, $0) }, uniquingKeysWith: earlier)
-        let b = Dictionary((rhs ?? []).map { ($0.id, $0) }, uniquingKeysWith: earlier)
-        var kept: [TranscriptFlagDismissal] = []
-        for id in Set(a.keys).union(b.keys) {
-            let old = ancestor[id]
-            switch (a[id], b[id]) {
-            case let (x?, y?):
-                // The side that changed it wins; both changed it, the earlier.
-                if x == old { kept.append(y) } else if y == old { kept.append(x) } else { kept.append(earlier(x, y)) }
-            case let (x?, nil), let (nil, x?):
-                // New on one side, or answered again there while the other took it back.
-                if old == nil || x != old { kept.append(x) }
-            case (nil, nil): break
-            }
-        }
-        kept.sort { $0.id.uuidString < $1.id.uuidString }
-        return kept.isEmpty ? nil : kept
-    }
-
-    private static func earlier(_ x: TranscriptFlagDismissal, _ y: TranscriptFlagDismissal) -> TranscriptFlagDismissal {
-        let a = (x.dismissedAt, SyncEncoding.string(x)), b = (y.dismissedAt, SyncEncoding.string(y))
-        return b < a ? y : x
-    }
-
-    private enum CodingKeys: String, CodingKey, CaseIterable {
-        case id, trackID, start, end, text, outcome, dismissedAt
-    }
-    private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
-
-    public init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        id = try values.decode(UUID.self, forKey: .id)
-        trackID = try values.decode(UUID.self, forKey: .trackID)
-        start = try values.decode(TimeInterval.self, forKey: .start)
-        end = try values.decode(TimeInterval.self, forKey: .end)
-        text = try values.decode(String.self, forKey: .text)
-        _outcome = try values.decode(Extensible<Outcome>.self, forKey: .outcome)
-        dismissedAt = try values.decode(Date.self, forKey: .dismissedAt)
-        unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var values = encoder.container(keyedBy: CodingKeys.self)
-        try values.encode(id, forKey: .id)
-        try values.encode(trackID, forKey: .trackID)
-        try values.encode(start, forKey: .start)
-        try values.encode(end, forKey: .end)
-        try values.encode(text, forKey: .text)
-        try values.encode(_outcome, forKey: .outcome)
-        try values.encode(dismissedAt, forKey: .dismissedAt)
         try unknownFields.encode(to: encoder)
     }
 }
@@ -203,6 +128,11 @@ public struct TranscriptFlagMark: Equatable, Sendable {
 }
 
 public enum TranscriptFlags {
+    /// The version of the algorithm that works flags out, stored with them (`Meeting.transcriptFlagsVersion`). Raised when
+    /// it would flag differently, so devices on different versions can tell whose flags are the newer: where two copies
+    /// of a conversation were fused apart, the higher version's flags win, and devices don't undo each other's.
+    public static let version = 1
+
     /// Seconds two readings of the same words may sit apart and still be the same place.
     static let timeSlack = 0.5
     /// Words compared only with words of the other transcript within this many seconds: two runs over the same audio
@@ -339,8 +269,9 @@ public enum TranscriptFlags {
     /// passage still reads.
     public static func marks(in meeting: Meeting) -> [UUID: [TranscriptFlagMark]] {
         guard let flags = meeting.transcriptFlags, !flags.isEmpty else { return [:] }
-        let dismissals = meeting.transcriptFlagDismissals ?? []
-        let open = flags.filter { flag in !dismissals.contains { $0.answers(flag) } }
+        let readable = flags.filter { $0.unread == nil }
+        let answered = answered(readable, by: meeting.transcriptFlagDismissals ?? [])
+        let open = readable.filter { !answered.contains($0.id) }
         var bySegment: [UUID: [TranscriptFlagMark]] = [:]
         for mark in locate(open, in: meeting) {
             // Two flags over the same words show once.
@@ -353,7 +284,12 @@ public enum TranscriptFlags {
 
     /// The ID a flag over `text` of a recording at `start`–`end` gets, the same on every device.
     static func id(trackID: UUID, reason: String, start: TimeInterval, end: TimeInterval, text: String) -> UUID {
-        SyncEncoding.uuid("transcript-flag:\(trackID.uuidString):\(reason):\(Int((start * 1000).rounded())):\(Int((end * 1000).rounded())):\(key(of: text))")
+        SyncEncoding.uuid("transcript-flag:\(trackID.uuidString):\(reason):\(milliseconds(start)):\(milliseconds(end)):\(key(of: text))")
+    }
+
+    /// A time as the ID has it, in whole milliseconds: a time that isn't finite, or is absurdly far off, can't trap.
+    private static func milliseconds(_ seconds: TimeInterval) -> Int {
+        seconds.isFinite ? Int((min(max(seconds, -1e9), 1e9) * 1000).rounded()) : 0
     }
 
     // MARK: Words
@@ -763,34 +699,5 @@ public enum TranscriptFlags {
             else if length[i + 1][j] >= length[i][j + 1] { i += 1 } else { j += 1 }
         }
         return paired
-    }
-}
-
-extension Meeting {
-    /// The flags that show now, by passage (`TranscriptFlags.marks`).
-    public var transcriptFlagMarks: [UUID: [TranscriptFlagMark]] { TranscriptFlags.marks(in: self) }
-
-    /// Keeps a flag's words as they are: the flag is cleared here and on every device. Nothing in the transcript changes.
-    @discardableResult public mutating func keepFlaggedWords(_ flagID: UUID, at date: Date = Date()) -> Bool {
-        guard let flag = transcriptFlags?.first(where: { $0.id == flagID }) else { return false }
-        return answer(flag, .kept, at: date)
-    }
-
-    /// Takes a flag's alternative reading: the passage is corrected with it (in Version History, as any correction), and
-    /// the flag is cleared. False when the flag has no alternative or doesn't show.
-    @discardableResult public mutating func useFlagAlternative(_ flagID: UUID, at date: Date = Date()) -> Bool {
-        guard let mark = transcriptFlagMarks.values.lazy.flatMap({ $0 }).first(where: { $0.flag.id == flagID }),
-              let index = unifiedTranscript.firstIndex(where: { $0.id == mark.segmentID }),
-              let text = mark.replacing(in: unifiedTranscript[index].text) else { return false }
-        correctSegment(id: mark.segmentID, text: text)
-        answer(mark.flag, .alternative, at: date)
-        return true
-    }
-
-    @discardableResult private mutating func answer(_ flag: TranscriptFlag, _ outcome: TranscriptFlagDismissal.Outcome, at date: Date) -> Bool {
-        guard !(transcriptFlagDismissals ?? []).contains(where: { $0.answers(flag) }) else { return false }
-        transcriptFlagDismissals = (transcriptFlagDismissals ?? []) + [TranscriptFlagDismissal(flag: flag, outcome: outcome, at: date)]
-        updatedAt = max(updatedAt, date)
-        return true
     }
 }

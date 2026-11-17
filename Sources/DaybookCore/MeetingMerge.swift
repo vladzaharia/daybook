@@ -167,10 +167,23 @@ public enum MeetingMerge {
         result.correctionTransferIssues = view.correctionIssues
         result.fusionSummary = view.fusionSummary
         result.backgroundPassages = view.backgroundPassages
-        result.transcriptFlags = view.flags
-        // The person's answers to flags: every device's, once each; one taken back (Undo) stays taken back.
-        result.transcriptFlagDismissals = TranscriptFlagDismissal.merged(base: base?.transcriptFlagDismissals,
-                                                                         local.transcriptFlagDismissals, remote.transcriptFlagDismissals)
+        // The flags are derived from the transcript, but not part of the view merged above: two devices on different
+        // versions of the algorithm fusing the same transcripts differ only here, and that is no conflict. From the sides
+        // holding the transcript that was chosen, those of the higher algorithm version win (of one version, the side that
+        // changed them, else the greater encoding, the same either way round), so devices never undo each other's.
+        var holders = [local, remote].filter { MergedTranscriptView($0) == view }
+        if holders.isEmpty { holders = [local, remote] }
+        // Of the same version, the side that changed them from the ancestor's.
+        if holders.count == 2, let base, local.transcriptFlagsVersion == remote.transcriptFlagsVersion {
+            if local.transcriptFlags == base.transcriptFlags { holders = [remote] }
+            else if remote.transcriptFlags == base.transcriptFlags { holders = [local] }
+        }
+        if let flagged = holders.max(by: { Meeting.flagsOrder($0) < Meeting.flagsOrder($1) }) {
+            result.transcriptFlags = flagged.transcriptFlags
+            result.transcriptFlagsVersion = flagged.transcriptFlagsVersion
+        }
+        // The person's answers to flags: every device's, once each, whatever either copy lacks (`TranscriptFlagDismissal`).
+        result.transcriptFlagDismissals = TranscriptFlagDismissal.merged(local.transcriptFlagDismissals, remote.transcriptFlagDismissals)
         if local.includesBackgroundAudio != nil || remote.includesBackgroundAudio != nil {
             result.includesBackgroundAudio = choose("background-audio", local.includesBackgroundAudio, remote.includesBackgroundAudio,
                 base.map(\.includesBackgroundAudio) ?? unset(local.includesBackgroundAudio, remote.includesBackgroundAudio, isDefault: { $0 == nil }, otherwise: nil))
@@ -269,6 +282,11 @@ extension Meeting {
         return result
     }
 
+    /// Which copy's flags are the newer: the version of the algorithm that worked them out, then their encoding.
+    fileprivate static func flagsOrder(_ meeting: Meeting) -> (Int, String) {
+        (meeting.transcriptFlagsVersion ?? 0, SyncEncoding.string(meeting.transcriptFlags ?? []))
+    }
+
     /// The titles Daybook gives a conversation before anyone names it; with no common ancestor, a
     /// title someone chose wins over one of these.
     static func isPlaceholderTitle(_ title: String) -> Bool {
@@ -283,16 +301,14 @@ private struct MergedTranscriptView: Codable, Equatable {
     var correctionIssues: [CorrectionTransferIssue]?
     var fusionSummary: FusionSummary?
     var backgroundPassages: [TranscriptSegment]?
-    /// Worked out with the passages, so they stay with the transcript they mark.
-    var flags: [TranscriptFlag]?
     init() {}
     init(_ meeting: Meeting) {
         segments = meeting.unifiedTranscript; alignments = meeting.alignmentReports
         correctionIssues = meeting.correctionTransferIssues; fusionSummary = meeting.fusionSummary
-        backgroundPassages = meeting.backgroundPassages; flags = meeting.transcriptFlags
+        backgroundPassages = meeting.backgroundPassages
     }
     var isEmpty: Bool {
-        segments.isEmpty && alignments.isEmpty && correctionIssues == nil && fusionSummary == nil && backgroundPassages == nil && flags == nil
+        segments.isEmpty && alignments.isEmpty && correctionIssues == nil && fusionSummary == nil && backgroundPassages == nil
     }
 }
 private struct MergedNotes: Codable, Equatable {
