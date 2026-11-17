@@ -576,13 +576,21 @@ public enum TranscriptFlags {
     // MARK: Where flags show
 
     /// Each flag's place in the unified transcript: the passage citing its recording at its time (the passage's own
-    /// recording and time when it cites none) that reads its words, nearest where the time says. A flag is left out when
-    /// it falls in a passage the person corrected, when another recording heard every one of its words the same way
-    /// (`SegmentProvenance.wordIndices`), or when no passage reads it.
+    /// recording and time when it cites none) that reads its words, nearest where the time says. In a passage the person
+    /// corrected, a flag stays on the words they left alone, found in the corrected text, and goes where the correction
+    /// changed its words: what the person wrote is never flagged. A flag is also left out when another recording heard
+    /// every one of its words the same way (`SegmentProvenance.wordIndices`), or when no passage reads it.
     static func locate(_ flags: [TranscriptFlag], in meeting: Meeting) -> [TranscriptFlagMark] {
         guard !flags.isEmpty else { return [] }
         let segments = meeting.unifiedTranscript
         let corrected = meeting.correctedSegmentIDs
+        // The words a corrected passage read before the person's first correction: what fusion made of it.
+        var originals: [UUID: String] = [:]
+        if !corrected.isEmpty {
+            for revision in meeting.revisions.sorted(by: { $0.date < $1.date }) {
+                if case .segment(let id) = revision.kind, originals[id] == nil { originals[id] = revision.oldValue }
+            }
+        }
         // Per recording: the passages citing it, with the span they cite in its own time.
         var spans: [UUID: [(segment: Int, start: Double, end: Double)]] = [:]
         for (index, segment) in segments.enumerated() {
@@ -605,6 +613,28 @@ public enum TranscriptFlags {
             words[index] = found
             return found
         }
+        // The words a passage had when fusion numbered them (those with letters or digits), and where each stands in the
+        // passage now: the same place when nobody corrected it; in a corrected one, nil for a word the person changed.
+        var edits: [Int: (words: [String], now: [Int?])] = [:]
+        func editsOf(_ index: Int) -> (words: [String], now: [Int?]) {
+            if let cached = edits[index] { return cached }
+            let current = wordsOf(index).map(\.key).filter { !$0.isEmpty }
+            var found: (words: [String], now: [Int?]) = (current, current.indices.map { $0 })
+            if corrected.contains(segments[index].id) {
+                // Without what it read before, nothing in it is known to be the recognizer's.
+                found = ([], [])
+                if let text = originals[segments[index].id] {
+                    let before = text.split(whereSeparator: \.isWhitespace).map(wordKey).filter { !$0.isEmpty }
+                    if before.count * current.count <= 250_000 {
+                        var now = [Int?](repeating: nil, count: before.count)
+                        for (place, word) in unchanged(before, current).enumerated() { if let word { now[word] = place } }
+                        found = (before, now)
+                    }
+                }
+            }
+            edits[index] = found
+            return found
+        }
         var marks: [TranscriptFlagMark] = []
         for flag in flags {
             let keys = flag.text.split(whereSeparator: \.isWhitespace).map(wordKey).filter { !$0.isEmpty }
@@ -617,37 +647,57 @@ public enum TranscriptFlags {
             // Passages beside it count only when none holds its time.
             if candidates.contains(where: { $0.overlap > 0 }) { candidates.removeAll { $0.overlap <= 0 } }
             candidates.sort { $0.overlap == $1.overlap ? $0.segment < $1.segment : $0.overlap > $1.overlap }
-            // The person's words are theirs.
-            guard !candidates.contains(where: { $0.overlap > 0 && corrected.contains(segments[$0.segment].id) }) else { continue }
-            for span in candidates where !corrected.contains(segments[span.segment].id) {
+            for span in candidates {
                 let all = wordsOf(span.segment)
-                let positions: [Int] = all.indices.filter { !all[$0].key.isEmpty }
-                guard positions.count >= keys.count else { continue }
-                let starts: [Int] = (0...(positions.count - keys.count)).filter { offset in
-                    keys.indices.allSatisfy { all[positions[offset + $0]].key == keys[$0] }
+                let edit = editsOf(span.segment)
+                guard edit.words.count >= keys.count else { continue }
+                // Where the words were numbered, nearest where the time says: they're marked there if nobody changed them.
+                let starts: [Int] = (0...(edit.words.count - keys.count)).filter { offset in
+                    keys.indices.allSatisfy { edit.words[offset + $0] == keys[$0] }
                 }
                 guard !starts.isEmpty else { continue }
                 let length: Double = span.end - span.start
                 let share: Double = length > 0 ? min(1, max(0, (flag.start - span.start) / length)) : 0
-                let expected: Double = share * Double(all.count)
-                func distance(_ start: Int) -> Double { abs(Double(positions[start]) - expected) }
+                let expected: Double = share * Double(edit.words.count)
+                func distance(_ start: Int) -> Double { abs(Double(start) - expected) }
                 let chosen = starts.min { distance($0) < distance($1) }!
-                let indices: [Int] = keys.indices.map { positions[chosen + $0] }
+                guard let first = edit.now[chosen],
+                      keys.indices.allSatisfy({ edit.now[chosen + $0] == first + $0 }) else { continue }
                 let segment = segments[span.segment]
-                // Fusion numbers a passage's words with letters or digits (punctuation alone goes with the word before).
-                let fused = Set(keys.indices.map { chosen + $0 })
+                // Fusion numbered the words as `edit.words` does (punctuation alone goes with the word before).
+                let fused = Set(chosen..<(chosen + keys.count))
                 let corroborated = segment.provenance.contains { source in
                     guard source.trackID != flag.trackID, let supported = source.wordIndices else { return false }
                     return Set(supported).isSuperset(of: fused)
                 }
                 if !corroborated {
+                    let slots: [Int] = all.indices.filter { !all[$0].key.isEmpty }
                     marks.append(TranscriptFlagMark(flag: flag, segmentID: segment.id,
-                                                    range: all[indices.first!].range.lowerBound..<all[indices.last!].range.upperBound))
+                                                    range: all[slots[first]].range.lowerBound..<all[slots[first + keys.count - 1]].range.upperBound))
                 }
                 break
             }
         }
         return marks
+    }
+
+    /// For each word of `now`, the number of the word of `before` it's the same as when the two are laid side by side
+    /// (the longest run of words they share, in order); nil for a word that isn't one of them: written since.
+    static func unchanged(_ before: [String], _ now: [String]) -> [Int?] {
+        let n = before.count, m = now.count
+        var length = [[Int]](repeating: [Int](repeating: 0, count: m + 1), count: n + 1)
+        for i in stride(from: n - 1, through: 0, by: -1) {
+            for j in stride(from: m - 1, through: 0, by: -1) {
+                length[i][j] = before[i] == now[j] ? length[i + 1][j + 1] + 1 : max(length[i + 1][j], length[i][j + 1])
+            }
+        }
+        var paired = [Int?](repeating: nil, count: m)
+        var i = 0, j = 0
+        while i < n, j < m {
+            if before[i] == now[j] { paired[j] = i; i += 1; j += 1 }
+            else if length[i + 1][j] >= length[i][j + 1] { i += 1 } else { j += 1 }
+        }
+        return paired
     }
 }
 

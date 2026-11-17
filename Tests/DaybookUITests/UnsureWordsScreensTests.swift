@@ -96,8 +96,7 @@ final class UnsureWordsScreensTests: XCTestCase {
         undo.undo()
         XCTAssertEqual(library.meeting(id)?.unifiedTranscript.first?.text, "We ship the calendar on Friday.")
         XCTAssertNil(library.meeting(id)?.transcriptFlagDismissals)
-        // Version History holds the correction and its undoing: the passage stays the person's, as its corrected dot
-        // and the next fusion's correction transfer say, so the mark doesn't come back over it.
-        XCTAssertEqual(shown(), 0)
+        // Version History holds the correction and its undoing; the passage reads as it did, so its mark is back.
+        XCTAssertEqual(shown(), 1)
     }
 }

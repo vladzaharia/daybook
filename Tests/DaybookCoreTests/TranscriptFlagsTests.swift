@@ -176,16 +176,69 @@ final class TranscriptFlagsTests: XCTestCase {
 
     // MARK: The person's words
 
-    func testCorrectedTextIsNeverFlaggedAndCorrectingFlaggedTextClearsIt() throws {
+    func testCorrectingTheFlaggedWordsClearsThemAndNothingTheyWereMarkedOnIsFlaggedAgain() throws {
         var meeting = meeting(run(["We ship on Thursday"], at: 1), run(["We ship on Friday"], at: 2))
         let passage = try XCTUnwrap(meeting.unifiedTranscript.first)
         XCTAssertEqual(shown(meeting).count, 1)
-        meeting.correctSegment(id: passage.id, text: "We ship on Friday morning")
-        XCTAssertTrue(shown(meeting).isEmpty, "Editing the words clears the flag at once")
+        meeting.correctSegment(id: passage.id, text: "We ship on Monday")
+        XCTAssertTrue(shown(meeting).isEmpty, "Changing the flagged words clears the flag at once")
         XCTAssertEqual(meeting.revisions.last?.kind, .segment(passage.id))
         fuse(&meeting)
-        XCTAssertEqual(meeting.unifiedTranscript.first?.text, "We ship on Friday morning")
-        XCTAssertNil(meeting.transcriptFlags, "Fused again, the corrected passage gets no flags")
+        XCTAssertEqual(meeting.unifiedTranscript.first?.text, "We ship on Monday")
+        XCTAssertNil(meeting.transcriptFlags, "Fused again, the person's words get no flags")
+    }
+
+    func testACorrectionClearsOnlyTheFlagsOnTheWordsItChanged() throws {
+        var meeting = meeting(run(["We ship on Thursday and then Priya owns the pricing page"], at: 1),
+                              run(["We ship on Friday and then Maria owns the pricing page"], at: 2))
+        let passage = try XCTUnwrap(meeting.unifiedTranscript.first)
+        XCTAssertEqual(shown(meeting).map(\.flag.text), ["Friday", "Maria"])
+        // The person fixes the page's name: both flags are on words they left alone.
+        meeting.correctSegment(id: passage.id, text: "We ship on Friday and then Maria owns the Pricing Page")
+        XCTAssertEqual(shown(meeting).map(\.flag.text), ["Friday", "Maria"])
+        XCTAssertEqual(try shown(meeting).map { try XCTUnwrap(words($0, in: meeting)) }, ["Friday", "Maria"], "Found in the corrected text")
+        // Words are added before them: still found where they are.
+        meeting.correctSegment(id: passage.id, text: "Well, we ship on Friday and then Maria owns the Pricing Page")
+        XCTAssertEqual(try shown(meeting).map { try XCTUnwrap(words($0, in: meeting)) }, ["Friday", "Maria"])
+        fuse(&meeting)
+        XCTAssertEqual(shown(meeting).map(\.flag.text), ["Friday", "Maria"], "Fused again, the same")
+        // One of them changed: that flag goes, the other stays.
+        meeting.correctSegment(id: passage.id, text: "Well, we ship on Monday and then Maria owns the Pricing Page")
+        XCTAssertEqual(shown(meeting).map(\.flag.text), ["Maria"])
+        fuse(&meeting)
+        XCTAssertEqual(shown(meeting).map(\.flag.text), ["Maria"])
+        XCTAssertEqual(meeting.transcriptFlags?.map(\.text), ["Maria"])
+    }
+
+    func testTakingOneAlternativeLeavesTheOtherUnansweredFlagsInThePassage() throws {
+        var meeting = meeting(run(["We ship on Thursday and then Priya owns the pricing page"], at: 1),
+                              run(["We ship on Friday and then Maria owns the pricing page"], at: 2))
+        let marks = shown(meeting)
+        XCTAssertEqual(marks.map(\.flag.text), ["Friday", "Maria"])
+        XCTAssertTrue(meeting.useFlagAlternative(marks[0].flag.id))
+        XCTAssertEqual(meeting.unifiedTranscript.first?.text, "We ship on Thursday and then Maria owns the pricing page")
+        XCTAssertEqual(shown(meeting).map(\.flag.text), ["Maria"], "One answer stored, one flag answered")
+        XCTAssertEqual(meeting.transcriptFlagDismissals?.map(\.id), [marks[0].flag.id])
+        XCTAssertEqual(try words(XCTUnwrap(shown(meeting).first), in: meeting), "Maria")
+        XCTAssertTrue(meeting.useFlagAlternative(marks[1].flag.id))
+        XCTAssertEqual(meeting.unifiedTranscript.first?.text, "We ship on Thursday and then Priya owns the pricing page")
+        XCTAssertTrue(shown(meeting).isEmpty)
+        fuse(&meeting)
+        XCTAssertTrue(shown(meeting).isEmpty)
+    }
+
+    func testWordsAPersonTypedAreNeverFlaggedEvenWhereTheyMatchAFlag() throws {
+        var meeting = meeting(run(["Maria owns it and Mario checks"], at: 1), run(["Maria owns it and Maria checks"], at: 2))
+        let passage = try XCTUnwrap(meeting.unifiedTranscript.first)
+        let flag = try XCTUnwrap(shown(meeting).first?.flag)
+        XCTAssertEqual(flag.text, "Maria")
+        XCTAssertGreaterThan(flag.start, 11, "The second Maria")
+        // The person corrects the first Maria (not flagged) to another name, and the flagged one to "Mario".
+        meeting.correctSegment(id: passage.id, text: "Marie owns it and Mario checks")
+        XCTAssertTrue(shown(meeting).isEmpty)
+        // They type "Maria" over the first, and the flagged second one to Mario: nothing marks what they typed.
+        meeting.correctSegment(id: passage.id, text: "Maria owns it and Mario checks")
+        XCTAssertTrue(shown(meeting).isEmpty, "The Maria that shows is the one they typed, not the one that was heard")
     }
 
     func testKeepingTheWordsClearsTheFlagWithoutChangingTheTranscript() throws {
