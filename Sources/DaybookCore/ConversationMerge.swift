@@ -377,6 +377,17 @@ public enum ConversationMerge {
         let knownMarks = Set(merged.highlights.map(\.id))
         merged.highlights += folded.highlights.filter { !knownMarks.contains($0.id) }.compactMap(movedBookmark)
 
+        // Answers to unsure words, each on its recording's copy. An answer is about words at a time in its recording, so
+        // it still answers them when the merged conversation is transcribed again (`TranscriptFlags.answered`).
+        let knownAnswers = Set((merged.transcriptFlagDismissals ?? []).map(\.id))
+        let answers = (folded.transcriptFlagDismissals ?? []).filter { !knownAnswers.contains($0.id) }.compactMap { answer -> TranscriptFlagDismissal? in
+            guard let trackID = copy(answer.trackID) else { return nil }
+            var moved = answer
+            moved.trackID = trackID
+            return moved
+        }
+        if !answers.isEmpty { merged.transcriptFlagDismissals = (merged.transcriptFlagDismissals ?? []) + answers }
+
         // Photos, each as stored in the merged conversation's folder.
         let knownPhotos = Set((merged.photos ?? []).map(\.id))
         let carriedPhotos = (folded.photos ?? []).compactMap { photo -> MeetingPhoto? in
