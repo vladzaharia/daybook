@@ -79,9 +79,11 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
     /// The conversation this recording came from when it was merged into this one (`ConversationMerge`); nil for one
     /// recorded, imported, or moved here.
     public var mergedFrom: UUID?
-    /// The stretch of time a recording is on: the conversation it came from when a merge placed it after the rest
-    /// (`mergedFrom`, placed as by hand), else nil, the conversation's own (and recordings made alongside it).
-    public var stretch: UUID? { alignment?.method == .manual ? mergedFrom : nil }
+    /// The stretch of the wall clock a merged copy was recorded in, when that isn't the conversation's own
+    /// (`ConversationMerge.stretches`): the ID of the conversation a merge placed after the rest, for its recordings and
+    /// those recorded alongside them. Nil for the conversation's own and what was recorded alongside it. Set by the merge
+    /// (`ConversationMerge.fold`), never inferred from a recording's timing, so Adjust Timing doesn't move it.
+    public var stretch: UUID?
     /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
     public var unknownFields = UnknownFields()
     public init(id: UUID = UUID(), source: AudioSource = .imported, relativePath: String,
@@ -107,7 +109,7 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case id, source, relativePath, fileName, createdAt, duration, offset, sha256, deviceKind, deviceSerial,
-            deviceRecordingID, derivedFrom, processing, startedAt, alignment, capture, backgroundAudio, removal, mergedFrom
+            deviceRecordingID, derivedFrom, processing, startedAt, alignment, capture, backgroundAudio, removal, mergedFrom, stretch
     }
     private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
 
@@ -133,6 +135,7 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
         backgroundAudio = (try? values.decodeIfPresent(BackgroundAudioAnalysis.self, forKey: .backgroundAudio)) ?? nil
         removal = try values.decodeIfPresent(RecordingRemoval.self, forKey: .removal)
         mergedFrom = try values.decodeIfPresent(UUID.self, forKey: .mergedFrom)
+        stretch = try values.decodeIfPresent(UUID.self, forKey: .stretch)
         unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
     }
 
@@ -157,6 +160,7 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
         try values.encodeIfPresent(backgroundAudio, forKey: .backgroundAudio)
         try values.encodeIfPresent(removal, forKey: .removal)
         try values.encodeIfPresent(mergedFrom, forKey: .mergedFrom)
+        try values.encodeIfPresent(stretch, forKey: .stretch)
         try unknownFields.encode(to: encoder)
     }
 }

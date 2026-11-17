@@ -411,8 +411,9 @@ extension Meeting {
     }
 
     func captureGroups() -> [CaptureGroup] {
+        // A merge's copy (`RecordingTrack.mergedFrom`) was captured for another conversation, and the merge placed it.
         let captured = tracks.filter { track in
-            track.alignment == nil && track.deviceKind == nil && !track.isRemoved && track.capture != nil
+            track.alignment == nil && track.deviceKind == nil && !track.isRemoved && track.capture != nil && track.mergedFrom == nil
                 && (track.source == .microphone || track.source == .systemAudio) && track.offset?.isFinite == true
         }
         guard captured.count > 1 else { return [] }

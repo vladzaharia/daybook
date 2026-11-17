@@ -56,7 +56,7 @@ final class ConversationMergeTests: XCTestCase {
         later.photos = [MeetingPhoto(relativePath: "Originals/Photos/p.jpg", fileName: "p.jpg", sha256: "p", capturedAt: start, time: 30)]
 
         let placements = ConversationMerge.placements([later, survivor])
-        XCTAssertEqual(placements[later.id], .init(kind: .after, shift: 600), "right where the survivor's recording ends")
+        XCTAssertEqual(placements[later.id], .init(kind: .after, shift: 600, stretch: later.id), "right where the survivor's recording ends")
 
         var merged = survivor
         let copies = copying(later, into: &merged)
@@ -128,8 +128,8 @@ final class ConversationMergeTests: XCTestCase {
         said("Budget review first", in: &later)
         said("Hiring after lunch", in: &alongside)
         let placements = ConversationMerge.placements([alongside, later, survivor])
-        XCTAssertEqual(placements[later.id], .init(kind: .after, shift: 600))
-        XCTAssertEqual(placements[alongside.id], .init(kind: .alongsideLater, shift: 660), "60 s into the later one, by the clocks")
+        XCTAssertEqual(placements[later.id], .init(kind: .after, shift: 600, stretch: later.id))
+        XCTAssertEqual(placements[alongside.id], .init(kind: .alongsideLater, shift: 660, stretch: later.id), "60 s into the later one, by the clocks")
 
         var merged = survivor
         _ = fold(later, into: &merged, placement: placements[later.id]!)
@@ -150,16 +150,16 @@ final class ConversationMergeTests: XCTestCase {
         let afternoon = recorded("Afternoon", at: start.addingTimeInterval(14_400), seconds: 1_800)
         var merged = survivor
         let first = ConversationMerge.placements([survivor, afternoon])[afternoon.id]!
-        XCTAssertEqual(first, .init(kind: .after, shift: 1_800))
+        XCTAssertEqual(first, .init(kind: .after, shift: 1_800, stretch: afternoon.id))
         _ = fold(afternoon, into: &merged, placement: first)
 
         // Made alongside what was folded in (14:05 to 14:35): beside it, not after everything.
         let alongsideFolded = recorded("Afternoon on iPhone", at: start.addingTimeInterval(14_700), seconds: 1_800)
-        XCTAssertEqual(ConversationMerge.placements([merged, alongsideFolded])[alongsideFolded.id], .init(kind: .alongsideLater, shift: 2_100),
+        XCTAssertEqual(ConversationMerge.placements([merged, alongsideFolded])[alongsideFolded.id], .init(kind: .alongsideLater, shift: 2_100, stretch: afternoon.id),
                        "5 min into the afternoon, which sits at 30 min")
         // Made at another time that the folded one's place on the timeline (30 to 60 min) must not make look like the morning's.
         let elsewhere = recorded("Midday", at: start.addingTimeInterval(2_400), seconds: 1_800)
-        XCTAssertEqual(ConversationMerge.placements([merged, elsewhere])[elsewhere.id], .init(kind: .after, shift: 3_600),
+        XCTAssertEqual(ConversationMerge.placements([merged, elsewhere])[elsewhere.id], .init(kind: .after, shift: 3_600, stretch: elsewhere.id),
                        "never compared by sound with the morning's recording")
         // Alongside the survivor's own recording: still the sound's.
         let alongsideOwn = recorded("Morning on iPhone", at: start.addingTimeInterval(120), seconds: 600)
@@ -194,6 +194,61 @@ final class ConversationMergeTests: XCTestCase {
         XCTAssertEqual(later.alignment?.method, .manual, "made hours later: never offered to the sound")
         XCTAssertEqual(later.alignment?.offset, 60 + 600)
         XCTAssertEqual(later.mergedFrom, evening.id, "still the evening's")
+        XCTAssertEqual(later.stretch, evening.id, "on the evening's stretch")
+        XCTAssertNil(own.stretch, "the survivor's")
+    }
+
+    func testBehaviorACopyPlacedAlongsideALaterStretchStaysOnItSoAnotherIsPlacedByTheRealTimes() throws {
+        var merged = recorded("Morning", at: start, seconds: 1_800)
+        let afternoon = recorded("Afternoon", at: start.addingTimeInterval(18_000), seconds: 1_800)
+        let afternoonCopies = fold(afternoon, into: &merged, placement: ConversationMerge.placements([merged, afternoon])[afternoon.id]!)
+        let afternoonCopy = try XCTUnwrap(afternoonCopies[afternoon.tracks[0].id])
+        XCTAssertEqual(merged.tracks.first { $0.id == afternoonCopy }?.stretch, afternoon.id, "placed after: the afternoon's stretch")
+        // An iPhone recording of the afternoon, merged in next, waits to be lined up on the afternoon's stretch.
+        let phone = recorded("Afternoon on iPhone", at: start.addingTimeInterval(18_300), seconds: 1_200)
+        let placement = try XCTUnwrap(ConversationMerge.placements([merged, phone])[phone.id])
+        XCTAssertEqual(placement.kind, .alongsideLater)
+        let phoneCopies = fold(phone, into: &merged, placement: placement)
+        let copy = try XCTUnwrap(merged.tracks.first { $0.id == phoneCopies[phone.tracks[0].id] })
+        XCTAssertTrue(copy.alignment?.isPending == true)
+        XCTAssertEqual(copy.stretch, afternoon.id, "on the afternoon's stretch while it waits, not the morning's")
+        XCTAssertEqual(try JSONDecoder().decode(RecordingTrack.self, from: JSONEncoder().encode(copy)).stretch, afternoon.id, "kept as it's saved")
+        XCTAssertEqual(merged.alignmentReference(onStretchOf: copy.id)?.id, afternoonCopy, "what it would be lined up against is the afternoon's")
+
+        // Midday (11:40 to 12:20) is at a time neither stretch covers: the morning's isn't stretched to the afternoon's iPhone.
+        let midday = recorded("Midday", at: start.addingTimeInterval(9_600), seconds: 2_400)
+        XCTAssertEqual(ConversationMerge.placements([merged, midday])[midday.id]?.kind, .after, "never compared by sound with the morning's")
+    }
+
+    func testBehaviorAdjustingACopysTimingKeepsItOnItsStretch() throws {
+        var merged = recorded("Morning", at: start, seconds: 1_800)
+        let ownMic = merged.tracks[0].id
+        let afternoon = recorded("Afternoon", at: start.addingTimeInterval(18_000), seconds: 1_800)
+        let after = try XCTUnwrap(fold(afternoon, into: &merged, placement: ConversationMerge.placements([merged, afternoon])[afternoon.id]!)[afternoon.tracks[0].id])
+        let phone = recorded("Morning on iPhone", at: start.addingTimeInterval(120), seconds: 600)
+        let placement = try XCTUnwrap(ConversationMerge.placements([merged, phone])[phone.id])
+        XCTAssertEqual(placement.kind, .alongside)
+        let along = try XCTUnwrap(fold(phone, into: &merged, placement: placement)[phone.tracks[0].id])
+
+        // Adjust Timing places the morning's iPhone copy by hand (as `LibraryController.setOffset` does): still the morning's.
+        merged.applyPlacements([along: SourceAlignment(method: .manual, offset: 118)])
+        XCTAssertNil(merged.tracks.first { $0.id == along }?.stretch)
+        XCTAssertEqual(merged.alignmentReference(excluding: [ownMic], onStretchOf: ownMic)?.id, along, "a recording of the morning to line up against")
+
+        // Clearing the afternoon copy's timing leaves it on the afternoon's stretch: the morning's isn't stretched to it.
+        let index = try XCTUnwrap(merged.tracks.firstIndex { $0.id == after })
+        merged.tracks[index].alignment = nil
+        merged.tracks[index].offset = nil
+        XCTAssertEqual(merged.tracks[index].stretch, afternoon.id)
+        let own = try XCTUnwrap(ConversationMerge.stretches(of: merged, startOf: { $0.startedAt }).first(where: \.isOwn))
+        XCTAssertEqual(own.span.end, start.addingTimeInterval(1_800))
+
+        // Nor is it taken for one of the conversation's own captures and set waiting to be separated from them.
+        merged.tracks[0].capture = TrackCaptureDetails()
+        merged.tracks[index].capture = TrackCaptureDetails()
+        merged.tracks[index].offset = 1_800
+        XCTAssertNil(merged.separatingCaptureGroups(now: start)[after])
+        XCTAssertEqual(merged.tracks[index].stretch, afternoon.id)
     }
 
     // MARK: What comes along

@@ -93,6 +93,7 @@ final class SoundComparisonTests: XCTestCase {
             var later = RecordingTrack(source: .microphone, relativePath: "Originals/later.wav", fileName: "later.wav", duration: 3_600, offset: 700, sha256: "later",
                                        alignment: SourceAlignment(method: .manual, offset: 700, rate: 1, date: Date()))
             later.mergedFrom = UUID()
+            later.stretch = later.mergedFrom
             meeting.tracks.append(later)
         }
         let seen = BaseDigests()
