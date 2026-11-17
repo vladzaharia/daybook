@@ -467,6 +467,116 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         XCTAssertEqual(cloud.summarized, [id])
     }
 
+    /// The countdown to the cloud after a failure here, reached by Start Now on the countdown to this Mac.
+    private func failedHere(_ rig: MultiSourceRig, _ title: String, frequency: Double) async throws -> UUID {
+        let id = try await conversation(rig, title, frequency: frequency)
+        rig.state.processor.enqueue(id)
+        try await countingDown(rig, id)
+        rig.state.chooseSummaryPlacement(.startNow, for: id)
+        try await waitUntil("the countdown to the cloud") { rig.state.placements[id]?.conversation.localFailed == true }
+        return id
+    }
+
+    func testBehaviorARequestSyncingInDuringACountdownToTheCloudLeavesItAsItIs() async throws {
+        let cloud = FakeCloud()
+        let rig = try await rig(cloud: cloud, policy: .ask, seconds: 30)
+        rig.inference.failSummaries(with: LocalIntelligenceError.promptTooLong(needed: 9_000, window: 8_192))
+        let id = try await failedHere(rig, "Asked for elsewhere", frequency: 505)
+        let deadline = try XCTUnwrap(rig.state.placements[id]?.deadline)
+        // Summarize on an iPhone that isn't linked: its request arrives through sync while this Mac counts down.
+        rig.state.library.requestProcessing(id, mode: .summaryOnly, by: .phone)
+        rig.state.pickUpRequests()
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(rig.state.placements[id]?.endsInCloud, true, "The countdown goes on")
+        XCTAssertEqual(rig.state.placements[id]?.deadline, deadline, "with its time as it was")
+        XCTAssertTrue(cloud.summarized.isEmpty, "Nothing sent")
+        rig.state.chooseSummaryPlacement(.useLocal, for: id)
+        try await rig.processed(id)
+        XCTAssertTrue(cloud.summarized.isEmpty)
+        XCTAssertEqual(rig.meeting(id)?.status, .failed)
+    }
+
+    func testBehaviorTheRetryInTheCloudStandsDownForASummaryAnotherDeviceHasOrWrote() async throws {
+        let cloud = FakeCloud()
+        let rig = try await rig(cloud: cloud, policy: .ask, seconds: 30)
+        rig.inference.failSummaries(with: LocalIntelligenceError.promptTooLong(needed: 9_000, window: 8_192))
+        let phone = ProcessingRequest.Device.phone
+        // The phone summarized it while this Mac's summary failed and counted down to the cloud.
+        let written = try await failedHere(rig, "Written meanwhile", frequency: 515)
+        let theirs = MeetingSummary(title: "Call", overview: "From the phone", modelID: "gemma", createdAt: Date())
+            .placed(.thisDevice, by: phone, inputs: [:])
+        rig.state.update(written) { $0.setSummary(theirs) }
+        rig.state.chooseSummaryPlacement(.startNow, for: written)
+        try await rig.processed(written)
+        XCTAssertTrue(cloud.summarized.isEmpty, "Not sent: the conversation has its summary")
+        XCTAssertEqual(rig.meeting(written)?.summary?.overview, "From the phone", "and it's kept")
+        XCTAssertEqual(rig.meeting(written)?.status, .ready)
+        // The phone took the summary on meanwhile: its claim arrives through sync.
+        let held = try await failedHere(rig, "Held meanwhile", frequency: 525)
+        let request = try XCTUnwrap(ProcessingRequest(meetingID: held, mode: .summaryOnly, requestedBy: phone).claimed(by: phone, at: Date()))
+        rig.state.update(held) { $0.upsertProcessingRequest(request) }
+        rig.state.chooseSummaryPlacement(.startNow, for: held)
+        try await rig.processed()
+        XCTAssertTrue(cloud.summarized.isEmpty, "Not sent: the phone has it")
+        XCTAssertNotEqual(rig.meeting(held)?.status, .failed)
+    }
+
+    func testBehaviorACountdownToTheCloudRunsOnlyWhileThisMacShowsIt() async throws {
+        let cloud = FakeCloud()
+        let rig = try await rig(cloud: cloud, policy: .ask, seconds: 30)
+        smallModel(rig)
+        // Locked, asleep, hidden, or no window showing it: a long conversation is summarized here, never counted down to the cloud.
+        rig.state.placements.countdownsAreSeen = false
+        let unseen = try await longConversation(rig, "Overnight", frequency: 535)
+        rig.state.processor.enqueue(unseen)
+        try await rig.processed(unseen)
+        XCTAssertTrue(cloud.summarized.isEmpty)
+        XCTAssertEqual(rig.inference.summarized.count, 1)
+        // Seen: it counts down to the cloud. Unseen midway, it runs here; seen again, nothing resumes on its own.
+        rig.state.placements.countdownsAreSeen = true
+        let seen = try await longConversation(rig, "At the desk", frequency: 545)
+        rig.state.processor.enqueue(seen)
+        try await countingDown(rig, seen)
+        XCTAssertEqual(rig.state.placements[seen]?.endsInCloud, true)
+        rig.state.placements.countdownsAreSeen = false
+        rig.state.placements.countdownsAreSeen = true
+        try await rig.processed(seen)
+        XCTAssertTrue(cloud.summarized.isEmpty)
+        XCTAssertEqual(rig.inference.summarized.count, 2)
+    }
+
+    func testBehaviorAnIPhoneThatCantShowACountdownToTheCloudIsNeverAskedToChoose() async throws {
+        let cloud = FakeCloud()
+        let rig = try await rig(cloud: cloud, policy: .ask, seconds: 60)
+        smallModel(rig)
+        // An iPhone from before this version: it doesn't list `cloudCountdown`.
+        let phone = try await PhoneLinkRig.connect(rig.state)
+        let id = try await longConversation(rig, "Older iPhone", frequency: 555)
+        rig.state.processor.enqueue(id)
+        try await countingDown(rig, id)
+        XCTAssertEqual(rig.state.placements[id]?.endsInCloud, true)
+        try await waitUntil("the phone to hear it") { phone.events.progress.contains { $0.meetingID == id && $0.phase == .summaryCountdown } }
+        let heard = try XCTUnwrap(phone.events.progress.last { $0.meetingID == id && $0.phase == .summaryCountdown })
+        XCTAssertNil(heard.countdown, "No countdown to act on")
+        XCTAssertNil(heard.cloudModel)
+        XCTAssertEqual(LiveProgress(heard, from: phone.macID, receivedAt: Date()).placementActions, [])
+        // Start Now or Use the Cloud from it (a screen from before) isn't taken; Don't Use the Cloud is.
+        try await phone.client.send(.summaryChoice(LinkSummaryChoice(meetingID: id, choice: .startNow)), to: phone.macID)
+        try await phone.client.send(.summaryChoice(LinkSummaryChoice(meetingID: id, choice: .useCloud)), to: phone.macID)
+        try await phone.client.send(.summaryChoice(LinkSummaryChoice(meetingID: id, choice: .useLocal)), to: phone.macID)
+        try await rig.processed(id)
+        XCTAssertTrue(cloud.summarized.isEmpty)
+        XCTAssertEqual(rig.inference.summarized.count, 1)
+        // An iPhone that answers it gets the countdown as it is.
+        let progress = LinkProcessingProgress(meetingID: id, phase: .summaryCountdown, macName: "Mac",
+                                              countdown: LinkSummaryCountdown(secondsLeft: 10, cloudOffered: true), cloudModel: "Claude Sonnet 5.5")
+        XCTAssertEqual(progress.withoutCloudCountdown.countdown, nil)
+        var toMac = progress
+        toMac.cloudModel = nil
+        XCTAssertEqual(toMac.withoutCloudCountdown, toMac, "A countdown to the Mac itself reaches every phone")
+        await phone.tearDown(rig.state)
+    }
+
     func testBehaviorDeclinedForTheCloudAFailureHereDoesntBringItBack() async throws {
         let cloud = FakeCloud()
         let rig = try await rig(cloud: cloud, policy: .ask, seconds: 30)

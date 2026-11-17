@@ -307,6 +307,21 @@ final class PhoneLink {
         try? await service.send(message, to: nil)
     }
 
+    /// Processing progress to every connected phone. A countdown that ends in the cloud reaches a phone that doesn't answer
+    /// one (`answersCloudCountdowns`) without its countdown (`withoutCloudCountdown`): such a phone would show it as this
+    /// Mac's own countdown, and each of its choices would send the transcript to the cloud.
+    func broadcast(_ progress: LinkProcessingProgress) async {
+        guard let service, !peers.isEmpty else { return }
+        let bare = progress.withoutCloudCountdown
+        guard bare != progress, peers.values.contains(where: { !$0.capabilities.answersCloudCountdowns }) else {
+            try? await service.send(.processingProgress(progress), to: nil)
+            return
+        }
+        for peer in peers.values {
+            try? await service.send(.processingProgress(peer.capabilities.answersCloudCountdowns ? progress : bare), to: peer.deviceID)
+        }
+    }
+
     /// Sends to one connected phone (a recorder handoff's request, answer, or release).
     func send(_ message: LinkMessage, to phoneID: UUID) async throws {
         guard let service else { throw LinkError.notConnected }

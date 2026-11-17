@@ -1,6 +1,7 @@
 import DaybookCore
 import DaybookIntelligence
 import DaybookKit
+import AppKit
 import DaybookLink
 import Foundation
 
@@ -49,6 +50,11 @@ extension AppState {
                                                                                        ranks: self.upgradeRanks))
         }
         followConversationsWhilePlacing()
+        if environment.watchesScreen {
+            // Unseen until a window that shows the countdowns is on the screen.
+            placements.countdownsAreSeen = false
+            CountdownVisibility(placements).watch()
+        }
     }
 
     /// A conversation changing (moved to Personal, say) reaches its countdown at once: every change to the library asks
@@ -269,13 +275,18 @@ extension AppState {
                 throw error
             }
             try Task.checkCancellation()
-            let restarted = Date()
+            // As it's sent: another device holding the summary, or one it wrote since this step began, and this Mac stands
+            // down, as before its first try. The summary keeps that start, so one written meanwhile is never replaced.
+            if summaryHolderElsewhere(id, job: job) != nil
+                || meetings.first(where: { $0.id == id })?.summaryWrittenElsewhere(after: started, excluding: library.thisDevice.id) == true {
+                return nil
+            }
             reportToPhones(id, force: true)
             guard let current = meetings.first(where: { $0.id == id }),
                   let output = try await summarizeInCloud(current, model: model, template: template, vocabulary: vocabulary, progress: progress) else {
                 throw error
             }
-            return PlacedSummary(output: output, place: .cloud(model), meeting: current, started: restarted, cloudReason: .localFailed)
+            return PlacedSummary(output: output, place: .cloud(model), meeting: current, started: started, cloudReason: .localFailed)
         }
     }
 
@@ -330,8 +341,11 @@ extension AppState {
         processor.enqueue(id, mode: .summaryOnly, summarizesInCloud: true)
     }
 
-    /// A paired phone chose for a countdown this Mac shows it.
-    func phoneChoseSummaryPlacement(_ choice: LinkSummaryChoice) {
+    /// A paired phone chose for a countdown this Mac shows it. A phone that doesn't answer a countdown that ends in the cloud
+    /// (`answersCloudCountdowns`) was never shown one as it is (`PhoneLink.broadcast`): its Start Now or Use the Cloud is
+    /// never taken for one, which would send the transcript; this Mac's own countdown, while it's seen, is where it's chosen.
+    func phoneChoseSummaryPlacement(_ choice: LinkSummaryChoice, answersCloudCountdowns: Bool = true) {
+        if !answersCloudCountdowns, choice.choice != .useLocal, placements[choice.meetingID]?.endsInCloud == true { return }
         switch choice.choice {
         case .useCloud: chooseSummaryPlacement(.useCloud, for: choice.meetingID)
         case .startNow: chooseSummaryPlacement(.startNow, for: choice.meetingID)
@@ -366,6 +380,64 @@ extension AppState {
                                           macName: name, cloudModel: model.name)
         case .started, .waitingForMac, .waiting:
             return nil
+        }
+    }
+}
+
+/// Whether this Mac's countdowns are in front of the person (`SummaryPlacements.countdownsAreSeen`; docs/cloud.md, "When the
+/// cloud is chosen"): the session is this Mac's active one, its screen unlocked and awake, the Mac not going to sleep, and
+/// Daybook not hidden, with its library window (whose list and page show a running summary's countdown) or Floating Notes
+/// on the screen, not minimized and not covered (`NSWindow.occlusionState`). The menu bar item isn't counted: its menu
+/// shows the countdown only while it's open. Looked at again on each signal, for the app's life.
+@MainActor
+final class CountdownVisibility {
+    private let placements: SummaryPlacements
+    private var screenLocked = false, screensAsleep = false, sleeping = false, sessionInactive = false
+
+    init(_ placements: SummaryPlacements) { self.placements = placements }
+
+    func watch(distributed: NotificationCenter = DistributedNotificationCenter.default(),
+               workspace: NotificationCenter = NSWorkspace.shared.notificationCenter, app: NotificationCenter = .default) {
+        let signals: [(NotificationCenter, Notification.Name, (CountdownVisibility) -> Void)] = [
+            (distributed, PersonalLock.screenLocked, { $0.screenLocked = true }),
+            (distributed, Notification.Name("com.apple.screenIsUnlocked"), { $0.screenLocked = false }),
+            (workspace, NSWorkspace.screensDidSleepNotification, { $0.screensAsleep = true }),
+            (workspace, NSWorkspace.screensDidWakeNotification, { $0.screensAsleep = false }),
+            (workspace, NSWorkspace.willSleepNotification, { $0.sleeping = true }),
+            (workspace, NSWorkspace.didWakeNotification, { $0.sleeping = false }),
+            (workspace, NSWorkspace.sessionDidResignActiveNotification, { $0.sessionInactive = true }),
+            (workspace, NSWorkspace.sessionDidBecomeActiveNotification, { $0.sessionInactive = false }),
+            (app, NSWindow.didChangeOcclusionStateNotification, { _ in }),
+            (app, NSWindow.didMiniaturizeNotification, { _ in }),
+            (app, NSWindow.didDeminiaturizeNotification, { _ in }),
+            (app, NSWindow.willCloseNotification, { _ in }),
+            (app, NSApplication.didHideNotification, { _ in }),
+            (app, NSApplication.didUnhideNotification, { _ in }),
+        ]
+        for (center, name, change) in signals {
+            // Held for the app's life, as the observers are.
+            _ = center.addObserver(forName: name, object: nil, queue: .main) { [self] _ in
+                MainActor.assumeIsolated {
+                    change(self)
+                    // After the change settles: a window closing is still on the screen as it says so.
+                    DispatchQueue.main.async { self.update() }
+                }
+            }
+        }
+        update()
+    }
+
+    private func update() {
+        let seen = !screenLocked && !screensAsleep && !sleeping && !sessionInactive && Self.windowShowsCountdowns()
+        if placements.countdownsAreSeen != seen { placements.countdownsAreSeen = seen }
+    }
+
+    /// The library window or Floating Notes is on the screen and not covered.
+    static func windowShowsCountdowns() -> Bool {
+        guard !NSApp.isHidden else { return false }
+        return NSApp.windows.contains { window in
+            (window.identifier?.rawValue.hasPrefix(WindowID.library) == true || window is FloatingNotesPanel)
+                && window.isVisible && !window.isMiniaturized && window.occlusionState.contains(.visible)
         }
     }
 }
