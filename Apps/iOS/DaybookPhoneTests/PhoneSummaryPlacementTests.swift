@@ -91,7 +91,7 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         let link = link ?? PhoneLink(identity: PhoneLink.identity(installation: UUID().uuidString, name: "Test iPhone", libraryID: nil),
                                      keyStore: MemoryLinkKeyStore(), configuration: .loopback())
         let presence = PresenceBox(), clock = ClockBox()
-        let placement = PhoneSummaryPlacement(library: library, link: link, presence: { presence.devices }, clock: { clock.now }, runsTimer: false)
+        let placement = PhoneSummaryPlacement(library: library, link: link, presence: { presence.devices }, clock: { clock.now }, runsTimer: false, appIsActive: { true })
         if macSeen { presence.devices = [studio(at: clock.now)] }
         // Settings › Cloud: an Anthropic key with the catalog's models when there's a cloud, none otherwise.
         placement.cloud = CloudSetup.demo(providers: cloud == nil ? [] : [.anthropic], defaults: makeTestDefaults("PhoneSummaryPlacementTests"))
@@ -510,6 +510,41 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         XCTAssertEqual(rig.placement.planners[next]?.actions, [.startNow, .useLocal])
     }
 
+    func testBehaviorABackgroundLaunchNeverCountsDownToTheCloud() async throws {
+        let cloud = Cloud(models: [sonnet])
+        let rig = try await rig(cloud: cloud)
+        // Gemma 4 E4B on the Mac: a long conversation would count down to the cloud (53 against 94).
+        let macs = [studio(at: rig.clock.now, model: "gemma-4/e4b-4bit")]
+        rig.presence.devices = macs
+        rig.placement.refresh()
+        let id = long(rig.library)
+        await rig.placement.summaryIsDue(id)
+        XCTAssertEqual(rig.placement.planners[id]?.endsInCloud, true)
+        XCTAssertNotNil(summaryRequests(rig.library, id).first, "Held when Daybook stopped")
+        // iOS relaunches Daybook in the background: no scene phase has said so yet.
+        var active = false
+        let relaunched = PhoneSummaryPlacement(library: rig.library, link: rig.link, presence: { macs }, clock: { rig.clock.now }, runsTimer: false,
+                                               appIsActive: { active })
+        relaunched.cloud = CloudSetup.demo(providers: [.anthropic], defaults: makeTestDefaults("PhoneSummaryPlacementTests"))
+        relaunched.cloudSummarizer = cloud
+        XCTAssertFalse(relaunched.isOnScreen)
+        XCTAssertFalse(relaunched.placements.countdownsAreSeen)
+        await relaunched.resumeHeldSummaries()
+        XCTAssertNil(relaunched.planners[id], "Nothing counts down out of sight")
+        XCTAssertTrue(cloud.asked.isEmpty, "Never sent")
+        XCTAssertEqual(summaryRequests(rig.library, id).first?.claim?.lease, 0, "Given back, for the Mac it would have gone to")
+        // In front, a countdown to the cloud may begin; inactive (Control Center), it goes where it would have run.
+        active = true
+        relaunched.refresh()
+        XCTAssertTrue(relaunched.isOnScreen)
+        let next = long(rig.library, "In front")
+        await relaunched.summaryIsDue(next)
+        XCTAssertEqual(relaunched.planners[next]?.actions, [.startNow, .useLocal])
+        relaunched.becameInactive()
+        XCTAssertNil(relaunched.planners[next], "Sent to the Mac")
+        XCTAssertTrue(cloud.asked.isEmpty)
+    }
+
     // MARK: This iPhone's own summarizer
 
     func testBehaviorWithItsOwnSummarizerItCountsDownHereAndOffersWaitForAMac() async throws {
@@ -609,7 +644,7 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         rig.library.update(taken) { $0.upsertProcessingRequest(takenOver) }
 
         // Daybook is killed: everything in memory goes. The next launch finds what it held.
-        let relaunched = PhoneSummaryPlacement(library: rig.library, link: rig.link, presence: { [] }, clock: { rig.clock.now }, runsTimer: false)
+        let relaunched = PhoneSummaryPlacement(library: rig.library, link: rig.link, presence: { [] }, clock: { rig.clock.now }, runsTimer: false, appIsActive: { true })
         relaunched.cloud = CloudSetup.demo(providers: [.anthropic], defaults: makeTestDefaults("PhoneSummaryPlacementTests"))
         relaunched.cloudSummarizer = cloud
         XCTAssertEqual(relaunched.heldRequest(id)?.id, held.id)

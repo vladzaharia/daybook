@@ -43,7 +43,8 @@ extension LibraryController {
 /// - **A Mac's own countdown** (over the link) shows here, with Use the Cloud and Start Now sent to it; this
 ///   iPhone stops its own countdown for that conversation.
 /// - **In the background**, where a countdown can't run, each countdown's default happens at once, and a
-///   summary waiting for a Mac is left to one through the library.
+///   summary waiting for a Mac is left to one through the library. A countdown that ends in the cloud runs only while
+///   Daybook is active on the screen (`isOnScreen`); otherwise it runs where it would have without the cloud.
 /// - **Kept off the cloud**: a conversation whose placement Settings › Cloud keeps off it (Personal, unless the person
 ///   turns it on: `CloudPlacements`) is never sent there, whatever asks: no Use the Cloud, no cloud Upgrade, Always
 ///   doesn't send it, and one moved there (or a switch turned off) mid-countdown goes on here or to a Mac. This iPhone
@@ -104,18 +105,25 @@ final class PhoneSummaryPlacement {
     /// Conversations a failure here mustn't send to the cloud: the person declined its cloud countdown (Don't Use the
     /// Cloud), or the cloud model couldn't read it. Until its summary is done or given up.
     @ObservationIgnored private var keptHere: Set<UUID> = []
-    /// Daybook is on the screen. Away from it a countdown can't run, so one that would end in the cloud never begins
-    /// there: it runs where it would have without the cloud.
-    @ObservationIgnored private(set) var isOnScreen = true
+    /// iOS has Daybook active (`UIApplication.applicationState`), asked each time: a background launch has no scene phase
+    /// to say otherwise, as `PhoneAppModel.isInFront` knows.
+    @ObservationIgnored private let appIsActive: @MainActor () -> Bool
+    /// The scene's phase last said Daybook is active (`cameToForeground`, `leftForeground`, `becameInactive`).
+    @ObservationIgnored private var sceneIsActive = true
+    /// Daybook is active on the screen: its scene and iOS both say so. Only then can a countdown that ends in the cloud run
+    /// (`SummaryPlacements.countdownsAreSeen`); away from it, one runs where it would have without the cloud.
+    var isOnScreen: Bool { sceneIsActive && appIsActive() }
 
     init(library: LibraryController, link: PhoneLink, presence: @escaping () -> [KnownSyncDevice],
-         clock: @escaping () -> Date = Date.init, runsTimer: Bool = true) {
+         clock: @escaping () -> Date = Date.init, runsTimer: Bool = true, appIsActive: @escaping @MainActor () -> Bool) {
         self.library = library
         self.link = link
         self.presence = presence
         self.clock = clock
         self.runsTimer = runsTimer
+        self.appIsActive = appIsActive
         placements = SummaryPlacements(waitsForMacs: true, clock: clock, runsTimer: runsTimer)
+        placements.countdownsAreSeen = sceneIsActive && appIsActive()
         placements.onSettled = { [weak self] id, phase in self?.settled(id, phase) }
         placements.conversation = { [weak self] id, options in self?.conversation(id, options: options) ?? .init(cloudAllowed: false) }
         // A Mac's countdown or work on a conversation ends this iPhone's own countdown for it.
@@ -187,6 +195,8 @@ final class PhoneSummaryPlacement {
     /// follows, and one a Mac has taken meanwhile, or whose conversation went (to the Trash, or into a Mac's
     /// conversation of the same meeting), stops here.
     func refresh() {
+        // Whether the person can see a countdown, as iOS says now.
+        placements.countdownsAreSeen = isOnScreen
         placements.update(options: options, preferences: preferences)
         for id in placements.undecided where isTakenElsewhere(id) {
             // Another device has it: the request this iPhone held goes back, for whichever device finishes the work.
@@ -310,13 +320,24 @@ final class PhoneSummaryPlacement {
     /// summary waiting for a Mac is left to one through the library.
     /// A countdown that ends in the cloud doesn't go there: it runs where it would have without the cloud.
     func leftForeground() {
-        isOnScreen = false
+        sceneIsActive = false
+        placements.countdownsAreSeen = false
         placements.startDefaultsNow()
         for id in placements.undecided { send(id) }
     }
 
-    /// Back on the screen: countdowns can run again.
-    func cameToForeground() { isOnScreen = true }
+    /// Still on the screen but not active (Control Center, the app switcher, a call coming in): a countdown here goes on,
+    /// and one that ends in the cloud runs where it would have without the cloud.
+    func becameInactive() {
+        sceneIsActive = false
+        placements.countdownsAreSeen = false
+    }
+
+    /// Back on the screen: countdowns can run again, and a new one may end in the cloud.
+    func cameToForeground() {
+        sceneIsActive = true
+        placements.countdownsAreSeen = isOnScreen
+    }
 
     /// A sync pass applied: what Macs did may stop work here (a claim lost in a merge, a Mac on it).
     func syncApplied() { refresh() }

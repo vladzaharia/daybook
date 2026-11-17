@@ -210,7 +210,8 @@ final class PhoneAppModel: RecordingCommandHandling {
         let sync = self.sync, link = self.link
         // A network that comes back or changes sends what the courier holds now, rather than at its next retry.
         environment.network.onChange { [weak sync] in Task { @MainActor in sync?.networkChanged() } }
-        placement = PhoneSummaryPlacement(library: library.controller, link: link, presence: { sync.devices })
+        placement = PhoneSummaryPlacement(library: library.controller, link: link, presence: { sync.devices },
+                                          appIsActive: { UIApplication.shared.applicationState == .active })
         upgrades = PhoneUpgrades(library: library.controller, placement: placement, link: link, presence: { sync.devices })
         captions = LiveCaptionsController(store: LiveCaptionStore(libraryRoot: library.rootURL),
                                           makeCaptioner: Self.captioner(settings: settings, options: options, models: models,
@@ -561,6 +562,9 @@ final class PhoneAppModel: RecordingCommandHandling {
             protector.keep()
             remindMeetings()
             Task { await link.setActivity(recorder.isActive || multipoints.recorderOnly != nil ? .backgroundRecording : .background) }
+        case .inactive:
+            // A countdown that ends in the cloud runs only while Daybook is active on the screen.
+            placement.becameInactive()
         default:
             break
         }
