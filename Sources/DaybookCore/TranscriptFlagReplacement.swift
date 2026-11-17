@@ -11,7 +11,11 @@ extension TranscriptFlagMark {
         guard let alternative = alternativeWords,
               let range = Range(NSRange(location: range.lowerBound, length: range.count), in: text) else { return nil }
         let flagged = String(text[range])
-        let before = String(text[..<range.lowerBound]), after = String(text[range.upperBound...])
+        var before = String(text[..<range.lowerBound]), after = String(text[range.upperBound...])
+        // A symbol that belongs to the flagged words and sits against them ("$" of "$20", "%" of "20%") goes with them
+        // when the earlier reading already has it ("$20", or "twenty percent" for "%"); else it stays with its number.
+        while let last = before.last, Self.belongsToWord(last), Self.carries(alternative, last) { before.removeLast() }
+        while let first = after.first, Self.belongsToWord(first), Self.carries(alternative, first) { after.removeFirst() }
         // The flagged words began a sentence, with a capital: whatever now begins it gets one too.
         let capitalises = flagged.first(where: \.isLetter)?.isUppercase == true && Self.endsSentence(before)
         guard alternative.isEmpty else {
@@ -27,6 +31,33 @@ extension TranscriptFlagMark {
     private static func endsSentence(_ text: String) -> Bool {
         guard let last = text.last(where: { !$0.isWhitespace }) else { return true }
         return ".?!…".contains(last)
+    }
+
+    /// A symbol that is part of how a number or word is written, not punctuation round it: currency, "%", "°", and the like.
+    static func belongsToWord(_ character: Character) -> Bool {
+        "%‰°#&+@±×".contains(character)
+            || character.unicodeScalars.allSatisfy { $0.properties.generalCategory == .currencySymbol }
+    }
+
+    /// The words that say a symbol aloud, as an earlier reading may write them instead of it.
+    private static let spoken: [Character: Set<String>] = [
+        "%": ["percent", "percentage"], "‰": ["permille"], "°": ["degree", "degrees"], "¢": ["cent", "cents"],
+        "$": ["dollar", "dollars", "usd"], "€": ["euro", "euros", "eur"], "£": ["pound", "pounds", "gbp"], "¥": ["yen", "jpy"],
+    ]
+
+    /// Whether `reading` already says `symbol`: it holds it, or the word for it.
+    private static func carries(_ reading: String, _ symbol: Character) -> Bool {
+        reading.contains(symbol) || reading.split(whereSeparator: \.isWhitespace).contains { spoken[symbol]?.contains(TranscriptFlags.wordKey($0)) == true }
+    }
+
+    /// `reading` without the sentence punctuation, quotes, and brackets at its ends (the passage keeps its own) and the
+    /// spaces round it; the symbols that belong to its words stay ("$20", "20%"). Empty where it has no words.
+    static func edgesTrimmed(_ reading: String) -> String {
+        var trimmed = Substring(reading)
+        func strips(_ character: Character) -> Bool { character.isWhitespace || ((character.isPunctuation || character.isSymbol) && !belongsToWord(character)) }
+        while let first = trimmed.first, strips(first) { trimmed.removeFirst() }
+        while let last = trimmed.last, strips(last) { trimmed.removeLast() }
+        return TranscriptFlags.core(of: trimmed) == nil ? "" : String(trimmed)
     }
 
     private static func capitalised(_ text: String) -> String {

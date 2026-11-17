@@ -468,6 +468,19 @@ final class TranscriptFlagsTests: XCTestCase {
         XCTAssertEqual(replaced("We ship on Friday.", "Friday", with: "Thursday."), "We ship on Thursday.")
     }
 
+    func testTakingAnEarlierReadingKeepsItsSymbolsAndNeverDoublesOrDropsThePassages() {
+        XCTAssertEqual(replaced("We need 20 percent.", "20 percent", with: "twenty %"), "We need twenty %.", "The earlier reading's % stays")
+        XCTAssertEqual(replaced("We need 20%.", "20", with: "twenty percent"), "We need twenty percent.", "The % isn't doubled")
+        XCTAssertEqual(replaced("We need 20%.", "20", with: "twenty%"), "We need twenty%.", "Nor is one it has too")
+        XCTAssertEqual(replaced("Pay twenty dollars now.", "twenty dollars", with: "$20"), "Pay $20 now.", "The currency stays")
+        XCTAssertEqual(replaced("Pay $20 now.", "20", with: "twenty dollars"), "Pay twenty dollars now.", "The $ isn't left in front")
+        XCTAssertEqual(replaced("Pay $20 now.", "20", with: "$30"), "Pay $30 now.")
+        XCTAssertEqual(replaced("We need 20% growth.", "20", with: "thirty"), "We need thirty% growth.", "A symbol the earlier reading lacks stays with its number")
+        XCTAssertEqual(replaced("It was 5°.", "5", with: "five degrees"), "It was five degrees.")
+        let flag = TranscriptFlag(trackID: track, start: 0, end: 1, text: "x", reason: .disagreement, alternative: "“$20.”")
+        XCTAssertEqual(TranscriptFlagMark(flag: flag, segmentID: UUID(), range: 0..<1).alternativeWords, "$20", "Quotes and the full stop go, the $ stays")
+    }
+
     func testAFlagShowsOnlyWhereThePassageStillReadsIt() throws {
         var meeting = meeting(run(["We ship on Thursday"], at: 1), run(["We ship on Friday"], at: 2))
         XCTAssertEqual(shown(meeting).count, 1)
@@ -763,6 +776,44 @@ final class TranscriptFlagsTests: XCTestCase {
         XCTAssertTrue(MeetingMerge.merge(base: newer, local: newer, remote: other).warnings.isEmpty)
         XCTAssertEqual(MeetingMerge.merge(base: newer, local: newer, remote: other).meeting.transcriptFlags, flags,
                        "Only one side changed them")
+    }
+
+    func testAnAnswerANewerDaybookWroteToAFlagPresentHereIsNeverReplacedAndTheMarkStaysAway() throws {
+        let base = meeting(run(["We ship on Thursday and then Priya owns pricing"], at: 1),
+                           run(["We ship on Friday and then Maria owns pricing"], at: 2))
+        let flags = try XCTUnwrap(base.transcriptFlags)
+        XCTAssertEqual(flags.map(\.text), ["Friday", "Maria"])
+        // The newer Daybook's answer to the first flag, in a shape this one can't read, under that flag's own ID.
+        let json = #"{"id":"\#(flags[0].id.uuidString)","verdict":{"kept":true}}"#
+        let unread = try JSONDecoder().decode(TranscriptFlagDismissal.self, from: Data(json.utf8))
+        XCTAssertNotNil(unread.unread)
+        var local = base
+        local.transcriptFlagDismissals = [unread]
+        XCTAssertEqual(shown(local).map(\.flag.text), ["Maria"], "Answered on the newer version: no mark here")
+        // Nothing here answers it again, takes it back, or changes the record.
+        let passage = try XCTUnwrap(local.unifiedTranscript.first)
+        XCTAssertFalse(local.keepFlaggedWords(flags[0].id))
+        XCTAssertFalse(local.useFlagAlternative(flags[0].id))
+        XCTAssertFalse(local.withdrawFlagAnswer(flags[0].id))
+        XCTAssertFalse(local.takeBackFlagAlternative(flags[0].id, in: passage.id, from: passage.text, to: "We ship on Thursday"))
+        XCTAssertEqual(local.transcriptFlagDismissals, [unread])
+        XCTAssertEqual(local.unifiedTranscript.first?.text, passage.text, "Not even the passage")
+        XCTAssertEqual(local.revisions.count, base.revisions.count)
+        // Another device on this version answered the same flag: the merge keeps the newer one's record, and the mark
+        // stays away after every sync, in either order.
+        var remote = base
+        XCTAssertTrue(remote.keepFlaggedWords(flags[0].id, at: date(50)))
+        for ancestor in [base, nil] {
+            var merged = merge(ancestor, local, remote)
+            XCTAssertEqual(merged.transcriptFlagDismissals, [unread], "The unread record wins, whatever the readable one says")
+            XCTAssertEqual(shown(merged).map(\.flag.text), ["Maria"])
+            XCTAssertFalse(merged.keepFlaggedWords(flags[0].id))
+            XCTAssertEqual(merge(ancestor, merged, remote).transcriptFlagDismissals, [unread])
+        }
+        // A withdrawal there doesn't reach the newer version either.
+        var withdrawn = remote
+        XCTAssertTrue(withdrawn.withdrawFlagAnswer(flags[0].id, at: date(60)))
+        XCTAssertEqual(merge(base, local, withdrawn).transcriptFlagDismissals, [unread])
     }
 
     func testDevicesOnDifferentVersionsOfTheFlagAlgorithmDontFightOverTheFlags() throws {

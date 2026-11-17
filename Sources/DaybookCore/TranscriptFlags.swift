@@ -119,11 +119,11 @@ public struct TranscriptFlagMark: Equatable, Sendable {
         return String(text[range])
     }
 
-    /// The alternative reading as it goes in the flagged words' place: its words, without the punctuation at its ends
-    /// (the passage keeps its own). Nil without one; "" where the earlier transcript heard nothing.
+    /// The alternative reading as it goes in the flagged words' place: its words, without the sentence punctuation, quotes,
+    /// and brackets at its ends (the passage keeps its own), and with the symbols that belong to them ("$20", "20%").
+    /// Nil without one; "" where the earlier transcript heard nothing.
     public var alternativeWords: String? {
-        guard let alternative = flag.alternative?.trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
-        return TranscriptFlags.core(of: alternative).map { String(alternative[$0]) } ?? ""
+        flag.alternative.map(Self.edgesTrimmed)
     }
 }
 

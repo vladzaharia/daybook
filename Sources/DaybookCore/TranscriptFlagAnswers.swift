@@ -32,8 +32,9 @@ public struct TranscriptFlagDismissal: Codable, Equatable, Identifiable, Sendabl
     public var withdrawnAt: Date?
     /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
     public var unknownFields = UnknownFields()
-    /// The whole of an answer this version can't read (a newer Daybook's shape), written back as it came. Such an answer
-    /// answers nothing here, and is kept and merged by its `id` alone.
+    /// The whole of an answer this version can't read (a newer Daybook's shape), written back as it came. A flag with such
+    /// an answer counts as answered here (`TranscriptFlags.answered`): no mark, no actions, and nothing here replaces,
+    /// withdraws, or changes the record. It is kept and merged by its `id` alone, and always wins over a readable copy.
     public private(set) var unread: SyncJSONValue?
 
     public init(flag: TranscriptFlag, outcome: Outcome, at date: Date = Date()) {
@@ -41,7 +42,8 @@ public struct TranscriptFlagDismissal: Codable, Equatable, Identifiable, Sendabl
         self.outcome = outcome; dismissedAt = date; alternative = flag.alternative
     }
 
-    /// Whether the answer stands: not taken back, or given again since.
+    /// Whether this version's answer stands: not taken back, or given again since. False for an answer it can't read
+    /// (`unread`), which stands for the version that wrote it.
     public var isActive: Bool {
         guard unread == nil else { return false }
         guard let withdrawnAt else { return true }
@@ -164,8 +166,11 @@ extension TranscriptFlags {
     /// timing differences matter. A flag that offers an earlier reading answers only an answer to that reading: another
     /// is new evidence. Answers that were taken back answer nothing.
     static func answered(_ flags: [TranscriptFlag], by answers: [TranscriptFlagDismissal]) -> Set<UUID> {
+        // An answer this version can't read answers the flag with its ID, whatever its words: it is the newer version's.
+        let unread = Set(answers.filter { $0.unread != nil }.map(\.id))
+        let byID = Set(flags.filter { unread.contains($0.id) }.map(\.id))
         let active = answers.filter(\.isActive)
-        guard !active.isEmpty, !flags.isEmpty else { return [] }
+        guard !active.isEmpty, !flags.isEmpty else { return byID }
         struct Slot { var flag: Int; var word: Int; var start: Double; var end: Double }
         var slots: [UUID: [String: [Slot]]] = [:]
         var counts = [Int](repeating: 0, count: flags.count)
@@ -190,7 +195,7 @@ extension TranscriptFlags {
                 if let slot = nearest?.slot { covered[slot.flag].insert(slot.word) }
             }
         }
-        return Set(flags.indices.filter { counts[$0] > 0 && covered[$0].count == counts[$0] }.map { flags[$0].id })
+        return byID.union(flags.indices.filter { counts[$0] > 0 && covered[$0].count == counts[$0] }.map { flags[$0].id })
     }
 }
 
@@ -216,7 +221,8 @@ extension Meeting {
     }
 
     /// Takes back the answer to a flag (Undo): it's marked withdrawn, never removed, so merging it with another device's
-    /// copy takes it back there too and nothing else with it. False when it isn't answered.
+    /// copy takes it back there too and nothing else with it. False when it isn't answered here: an answer a newer
+    /// version wrote that this one can't read is never touched.
     @discardableResult public mutating func withdrawFlagAnswer(_ flagID: UUID, at date: Date = Date()) -> Bool {
         guard var answers = transcriptFlagDismissals, let index = answers.firstIndex(where: { $0.id == flagID && $0.isActive }) else { return false }
         answers[index].withdrawnAt = max(date, answers[index].dismissedAt)
@@ -230,6 +236,8 @@ extension Meeting {
     /// History keeps both corrections.
     @discardableResult public mutating func takeBackFlagAlternative(_ flagID: UUID, in passageID: UUID, from written: String, to original: String,
                                                                     at date: Date = Date()) -> Bool {
+        // An answer this version can't read (a newer Daybook's) is never taken back here, nor the passage with it.
+        guard transcriptFlagDismissals?.contains(where: { $0.id == flagID && $0.isActive }) == true else { return false }
         if unifiedTranscript.first(where: { $0.id == passageID })?.text == written { correctSegment(id: passageID, text: original) }
         return withdrawFlagAnswer(flagID, at: date)
     }
