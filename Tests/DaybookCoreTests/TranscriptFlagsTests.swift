@@ -120,6 +120,13 @@ final class TranscriptFlagsTests: XCTestCase {
         XCTAssertEqual(shown(meeting).first?.flag.alternative, "migration")
     }
 
+    func testASharedWordAloneInItsPassageBetweenTwoDifferencesIsntFlagged() {
+        let meeting = meeting(run(["we meet on Thursday okay late see you"], at: 1),
+                              run(["we meet on Friday", "Okay.", "Great see you"], at: 2))
+        XCTAssertEqual(shown(meeting).map(\.flag.text), ["Friday", "Great"])
+        XCTAssertEqual(shown(meeting).map(\.flag.alternative), ["Thursday", "late"])
+    }
+
     func testOneRunGivesNoDisagreement() {
         XCTAssertNil(meeting(run(["We ship on Friday"], at: 1)).transcriptFlags)
     }
@@ -232,7 +239,7 @@ final class TranscriptFlagsTests: XCTestCase {
         meeting.keepFlaggedWords(flag.id)
         fuse(&meeting)
         XCTAssertTrue(shown(meeting).isEmpty)
-        XCTAssertNil(meeting.transcriptFlags, "Fused again, an answered flag isn't kept")
+        XCTAssertEqual(meeting.transcriptFlags?.map(\.id), [flag.id], "Stored with the transcript, answered or not")
         // A third run reads the words the same way, a little later: still answered.
         meeting.transcripts.append(run(["We ship on Friday with Maria"], start: 10.08, at: 3))
         fuse(&meeting)
@@ -258,6 +265,30 @@ final class TranscriptFlagsTests: XCTestCase {
         XCTAssertTrue(shown(meeting).isEmpty)
         meeting.unifiedTranscript[0].provenance[1].wordIndices = [0, 1, 2]
         XCTAssertEqual(shown(meeting).count, 1, "Unless it heard the flagged word differently")
+    }
+
+    func testAgreementCountsWordsAsFusionDoesWithPunctuationOnTheWordBefore() throws {
+        var meeting = meeting(run(["I think — we ship on Thursday"], at: 1), run(["I think — we ship on Friday"], at: 2))
+        let mark = try XCTUnwrap(shown(meeting).first)
+        XCTAssertEqual(mark.flag.text, "Friday")
+        // Fusion's words: I, think —, we, ship, on, Friday: "Friday" is its sixth.
+        meeting.unifiedTranscript[0].provenance.append(SegmentProvenance(trackID: UUID(), segmentID: UUID(), start: 3, end: 6,
+                                                                         text: meeting.unifiedTranscript[0].text, wordIndices: [5]))
+        XCTAssertTrue(shown(meeting).isEmpty, "The other recording heard \"Friday\" too")
+        meeting.unifiedTranscript[0].provenance[1].wordIndices = [4]
+        XCTAssertEqual(shown(meeting).map(\.flag.text), ["Friday"], "It heard \"on\", not \"Friday\"")
+    }
+
+    func testTakingAnAlternativeChangesOnlyTheFlaggedWords() throws {
+        let flag = TranscriptFlag(trackID: track, start: 0, end: 1, text: "Vraiment", reason: .disagreement, alternative: "Exactement")
+        let text = "Vraiment\u{00A0}? Oui,  bien sûr ."
+        XCTAssertEqual(TranscriptFlagMark(flag: flag, segmentID: UUID(), range: 0..<8).replacing(in: text),
+                       "Exactement\u{00A0}? Oui,  bien sûr .", "The rest of the passage as it was")
+        var removal = flag
+        removal.alternative = ""
+        XCTAssertEqual(TranscriptFlagMark(flag: removal, segmentID: UUID(), range: 0..<8).replacing(in: "Vraiment, on y va"), "on y va",
+                       "Taken out at the start, with the comma after it")
+        XCTAssertEqual(TranscriptFlagMark(flag: removal, segmentID: UUID(), range: 3..<9).replacing(in: "We really, should"), "We, should")
     }
 
     func testAFlagShowsOnlyWhereThePassageStillReadsIt() throws {
@@ -302,9 +333,27 @@ final class TranscriptFlagsTests: XCTestCase {
         XCTAssertNil(afterUndo.meeting.transcriptFlagDismissals)
         XCTAssertEqual(shown(afterUndo.meeting).count, 2)
 
+        // Answered again on one device while the other took the answer back: the new answer stays.
+        var again = answered
+        again.transcriptFlagDismissals = nil
+        again.useFlagAlternative(flags[0].id, at: Date(timeIntervalSince1970: 60))
+        for merged in [MeetingMerge.merge(base: answered, local: again, remote: undone), MeetingMerge.merge(base: answered, local: undone, remote: again)] {
+            XCTAssertEqual(merged.meeting.transcriptFlagDismissals?.map(\.outcome), [.alternative])
+        }
+
         // Two devices that made the same conversation apart keep every answer.
         let apart = MeetingMerge.merge(base: nil, local: local, remote: remote)
         XCTAssertEqual(apart.meeting.transcriptFlagDismissals?.count, 2)
+    }
+
+    func testDevicesFusingTheSameTranscriptsStoreTheSameFlagsWhateverAnswersReachedThem() throws {
+        var answered = meeting(run(["We ship on Thursday"], at: 1), run(["We ship on Friday"], at: 2))
+        let unanswered = answered
+        try answered.keepFlaggedWords(XCTUnwrap(answered.transcriptFlags?.first?.id))
+        fuse(&answered)
+        XCTAssertEqual(answered.transcriptFlags, unanswered.transcriptFlags, "No conflict in the transcript's view")
+        XCTAssertTrue(shown(answered).isEmpty)
+        XCTAssertEqual(shown(unanswered).count, 1)
     }
 
     func testFlagsTravelWithTheTranscriptTheyMark() throws {

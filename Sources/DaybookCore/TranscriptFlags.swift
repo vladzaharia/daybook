@@ -115,20 +115,26 @@ public struct TranscriptFlagDismissal: Codable, Equatable, Identifiable, Sendabl
         return TranscriptFlags.key(of: flag.text) == TranscriptFlags.key(of: text)
     }
 
-    /// Three copies' answers merged one by one: every answer either side gave, once (the earlier when both answered the
-    /// same flag); one that both had before and one side took back (Undo) is gone. Without a common ancestor, every
-    /// answer either side has. Deterministic, commutative, and idempotent; two devices answering at once never conflict.
+    /// Three copies' answers merged one by one: every answer either side gave, once; where both changed one (two devices
+    /// answered at once), the earlier. An answer both had before that one side took back (Undo) is gone, unless the other
+    /// side answered it again. Without a common ancestor, every answer either side has. Deterministic, commutative, and
+    /// idempotent; two devices answering at once never conflict.
     public static func merged(base: [TranscriptFlagDismissal]?, _ lhs: [TranscriptFlagDismissal]?,
                               _ rhs: [TranscriptFlagDismissal]?) -> [TranscriptFlagDismissal]? {
         guard lhs != nil || rhs != nil else { return nil }
-        let ancestor = Set((base ?? []).map(\.id))
+        let ancestor = Dictionary((base ?? []).map { ($0.id, $0) }, uniquingKeysWith: earlier)
         let a = Dictionary((lhs ?? []).map { ($0.id, $0) }, uniquingKeysWith: earlier)
         let b = Dictionary((rhs ?? []).map { ($0.id, $0) }, uniquingKeysWith: earlier)
         var kept: [TranscriptFlagDismissal] = []
         for id in Set(a.keys).union(b.keys) {
+            let old = ancestor[id]
             switch (a[id], b[id]) {
-            case let (x?, y?): kept.append(earlier(x, y))
-            case let (x?, nil), let (nil, x?): if !ancestor.contains(id) { kept.append(x) }
+            case let (x?, y?):
+                // The side that changed it wins; both changed it, the earlier.
+                if x == old { kept.append(y) } else if y == old { kept.append(x) } else { kept.append(earlier(x, y)) }
+            case let (x?, nil), let (nil, x?):
+                // New on one side, or answered again there while the other took it back.
+                if old == nil || x != old { kept.append(x) }
             case (nil, nil): break
             }
         }
@@ -200,10 +206,18 @@ public struct TranscriptFlagMark: Equatable, Sendable {
     public func replacing(in text: String) -> String? {
         guard let alternative = alternativeWords,
               let range = Range(NSRange(location: range.lowerBound, length: range.count), in: text) else { return nil }
-        let replaced = text.replacingCharacters(in: range, with: alternative)
-        let tidy = replaced.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-            .replacingOccurrences(of: #" ([,.;:!?…])"#, with: "$1", options: .regularExpression)
-        return tidy.isEmpty ? nil : tidy
+        guard alternative.isEmpty else {
+            return text.replacingCharacters(in: range, with: alternative)
+        }
+        // Words taken out: the space on one side goes with them, and at the start, the punctuation after them too.
+        var before = String(text[..<range.lowerBound]), after = String(text[range.upperBound...])
+        while before.last?.isWhitespace == true { before.removeLast() }
+        while after.first?.isWhitespace == true { after.removeFirst() }
+        if before.isEmpty {
+            while let first = after.first, first.isPunctuation || first.isWhitespace { after.removeFirst() }
+        }
+        let joined = before.isEmpty || after.isEmpty || after.first?.isPunctuation == true ? before + after : before + " " + after
+        return joined.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : joined
     }
 }
 
@@ -242,9 +256,10 @@ public enum TranscriptFlags {
 
     /// The flags of a conversation's transcript as it is now, for storing with it (`Meeting.transcriptFlags`): for each
     /// recording in the unified transcript, where its latest transcript and the previous one that reads differently
-    /// disagree, and the words its latest transcript is unsure of, less those the person answered, those in passages
-    /// the person corrected, those another recording heard the same way, and those not in the transcript. Pure; run it
-    /// off the main actor.
+    /// disagree, and the words its latest transcript is unsure of, less those in passages the person corrected, those
+    /// another recording heard the same way, and those not in the transcript. The person's answers aren't read here
+    /// (`marks` reads them), so two devices fusing the same transcripts store the same flags whatever answers have
+    /// reached each. Pure; run it off the main actor.
     public static func flags(for meeting: Meeting) -> [TranscriptFlag] {
         var heard = Set<UUID>()
         for segment in meeting.unifiedTranscript {
@@ -256,13 +271,16 @@ public enum TranscriptFlags {
                               by: \.trackID)
         var found: [TranscriptFlag] = []
         for (trackID, transcripts) in runs {
-            let ordered = transcripts.sorted { $0.createdAt == $1.createdAt ? $0.id.uuidString < $1.id.uuidString : $0.createdAt < $1.createdAt }
-            guard let latest = ordered.last else { continue }
+            // The latest run as fusion picks it (the first of the newest), and the others newest first.
+            guard let latest = transcripts.max(by: { $0.createdAt < $1.createdAt }) else { continue }
+            let others = transcripts.enumerated().filter { $0.element.id != latest.id }
+                .sorted { $0.element.createdAt == $1.element.createdAt ? $0.offset > $1.offset : $0.element.createdAt > $1.element.createdAt }
+                .map(\.element)
             let words = tokens(latest)
             var covered = Set<Int>()
             // The run before the latest that reads differently: a speaker-only run repeats its run's words.
             let keys = words.map(\.key)
-            if let previous = ordered.dropLast().reversed().lazy.map(tokens).first(where: { $0.map(\.key) != keys }) {
+            if let previous = others.lazy.map(tokens).first(where: { $0.map(\.key) != keys }) {
                 for flag in disagreements(words, previous, trackID: trackID) {
                     found.append(flag.flag)
                     covered.formUnion(flag.indices)
@@ -272,10 +290,8 @@ public enum TranscriptFlags {
                 found += unsure(words, below: floor, skipping: covered, trackID: trackID)
             }
         }
-        let dismissals = meeting.transcriptFlagDismissals ?? []
-        let open = found.filter { flag in !dismissals.contains { $0.answers(flag) } }
         var seen = Set<UUID>()
-        return locate(open, in: meeting).map(\.flag).filter { seen.insert($0.id).inserted }
+        return locate(found, in: meeting).map(\.flag).filter { seen.insert($0.id).inserted }
             .sorted { $0.start == $1.start ? $0.id.uuidString < $1.id.uuidString : $0.start < $1.start }
     }
 
@@ -340,12 +356,14 @@ public enum TranscriptFlags {
         var result: [Token] = []
         if let words = run.words, !words.isEmpty {
             let starts = segments.map(\.start)
+            var last = 0
             for word in words.enumerated().sorted(by: { $0.element.start == $1.element.start ? $0.offset < $1.offset : $0.element.start < $1.element.start }).map(\.element) {
                 let pieces = word.text.split(whereSeparator: \.isWhitespace)
-                guard !pieces.isEmpty else { continue }
-                // The passage holding the word: the last starting by its middle.
+                guard !pieces.isEmpty, word.start.isFinite, word.end.isFinite else { continue }
+                // The passage holding the word: the last starting by its middle, never one before the last word's.
                 let middle = (word.start + word.end) / 2
-                let segment = max(0, firstIndex(in: starts) { $0 > middle + 0.001 } - 1)
+                let segment = max(last, firstIndex(in: starts) { $0 > middle + 0.001 } - 1)
+                last = segment
                 let share = (word.end - word.start) / Double(pieces.count)
                 for (index, piece) in pieces.enumerated() {
                     let key = wordKey(piece)
@@ -355,7 +373,7 @@ public enum TranscriptFlags {
                 }
             }
         } else {
-            for (index, segment) in segments.enumerated() {
+            for (index, segment) in segments.enumerated() where segment.start.isFinite && segment.end.isFinite {
                 let pieces = segment.text.split(whereSeparator: \.isWhitespace)
                 let length = Double(max(1, pieces.reduce(0) { $0 + $1.count }))
                 var offset = 0.0
@@ -495,6 +513,14 @@ public enum TranscriptFlags {
     static func disagreements(_ latest: [Token], _ earlier: [Token], trackID: UUID) -> [(flag: TranscriptFlag, indices: Range<Int>)] {
         guard !latest.isEmpty, let steps = alignment(latest, earlier) else { return [] }
         let differences = differences(steps, latest, earlier)
+        // Each earlier word's place among the latest run's words: the word it was aligned with, else the latest word
+        // before it (the first, before any).
+        var partner = [Int](repeating: 0, count: earlier.count)
+        var lastA: Int?
+        for step in steps {
+            if let x = step.a { lastA = x }
+            if let y = step.b { partner[y] = step.a ?? lastA ?? 0 }
+        }
         let differing = differences.reduce(0) { $0 + max($1.a.count, $1.b.count) }
         guard Double(differing) <= comparableShare * Double(max(latest.count, earlier.count)) else { return [] }
         func text(_ words: some Sequence<Token>) -> String { words.map(\.text).joined(separator: " ") }
@@ -515,20 +541,21 @@ public enum TranscriptFlags {
             } else {
                 guard a.count <= longestDisagreement, b.count <= longestDisagreement else { continue }
             }
-            // One flag per passage of the latest run; the earlier words go with the part nearest them in time.
+            // One flag per passage of the latest run; the earlier words go with the part holding the words they were
+            // aligned with, and a part that reads the same as its earlier words (a shared word between two
+            // differences, alone in its passage) isn't one.
             let parts = Dictionary(grouping: a, by: { latest[$0].segment }).values.map { $0.min()!..<($0.max()! + 1) }
                 .sorted { $0.lowerBound < $1.lowerBound }
             var alternatives = Array(repeating: [Token](), count: parts.count)
             for index in b {
-                let word = earlier[index], middle = (word.start + word.end) / 2
-                let nearest = parts.indices.min { x, y in
-                    distance(middle, latest[parts[x].lowerBound].start, latest[parts[x].upperBound - 1].end)
-                        < distance(middle, latest[parts[y].lowerBound].start, latest[parts[y].upperBound - 1].end)
-                }!
-                alternatives[nearest].append(word)
+                let place = partner[index]
+                let part = parts.firstIndex { $0.contains(place) }
+                    ?? parts.indices.min { distance(Double(place), parts[$0]) < distance(Double(place), parts[$1]) }!
+                alternatives[part].append(earlier[index])
             }
             for (part, alternative) in zip(parts, alternatives) {
                 let words = latest[part]
+                guard words.map(\.key).joined() != alternative.map(\.key).joined() else { continue }
                 let confidences = words.compactMap(\.confidence)
                 let flag = TranscriptFlag(trackID: trackID, start: words.first!.start, end: words.last!.end, text: text(words),
                                           reason: .disagreement, confidence: confidences.min(), alternative: text(alternative))
@@ -538,9 +565,9 @@ public enum TranscriptFlags {
         return flags
     }
 
-    /// How far `time` is from the span `start`–`end`: zero inside it.
-    private static func distance(_ time: Double, _ start: Double, _ end: Double) -> Double {
-        time < start ? start - time : time > end ? time - end : 0
+    /// How far word `place` is from the words `part`: zero inside it.
+    private static func distance(_ place: Double, _ part: Range<Int>) -> Double {
+        place < Double(part.lowerBound) ? Double(part.lowerBound) - place : max(0, place - Double(part.upperBound - 1))
     }
 
     /// Flags over the words the recognizer gave less than `floor`, neighbours in one passage together, leaving out the
@@ -606,6 +633,8 @@ public enum TranscriptFlags {
                 let overlap: Double = min(span.end, flag.end) - max(span.start, flag.start)
                 if overlap > -timeSlack { candidates.append((span.segment, span.start, span.end, overlap)) }
             }
+            // Passages beside it count only when none holds its time.
+            if candidates.contains(where: { $0.overlap > 0 }) { candidates.removeAll { $0.overlap <= 0 } }
             candidates.sort { $0.overlap == $1.overlap ? $0.segment < $1.segment : $0.overlap > $1.overlap }
             // The person's words are theirs.
             guard !candidates.contains(where: { $0.overlap > 0 && corrected.contains(segments[$0.segment].id) }) else { continue }
@@ -624,9 +653,11 @@ public enum TranscriptFlags {
                 let chosen = starts.min { distance($0) < distance($1) }!
                 let indices: [Int] = keys.indices.map { positions[chosen + $0] }
                 let segment = segments[span.segment]
+                // Fusion numbers a passage's words with letters or digits (punctuation alone goes with the word before).
+                let fused = Set(keys.indices.map { chosen + $0 })
                 let corroborated = segment.provenance.contains { source in
                     guard source.trackID != flag.trackID, let supported = source.wordIndices else { return false }
-                    return Set(supported).isSuperset(of: indices)
+                    return Set(supported).isSuperset(of: fused)
                 }
                 if !corroborated {
                     marks.append(TranscriptFlagMark(flag: flag, segmentID: segment.id,
