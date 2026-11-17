@@ -3,7 +3,7 @@
 A summary can be written by a cloud model, Anthropic's or OpenAI's, with the person's own key. Everything else stays on
 the device: transcription, speaker detection, voice profiles, and audio. With no key nothing changes and nothing is
 offered. With a key, Settings › Cloud chooses when summaries use the cloud (offered with a countdown first, always, or
-never), for which conversations (a switch for each placement: Work, Personal), and which model. Where a summary runs is decided by the placement planner (`SummaryPlacementPlanner`, the
+never), for which conversations (a switch for each placement, Work and Personal, and one for Not Filed), and which model. Where a summary runs is decided by the placement planner (`SummaryPlacementPlanner`, the
 placement stream); this page is the cloud side: the catalog, keys, discovery, the requests, and the summary itself.
 
 ## What is sent
@@ -14,14 +14,20 @@ audio, no photos or their captions, no voiceprints, no speaker profiles. Photo c
 summary places photos by time only (`PhotoPlacement.arrange`). OpenAI's request sets `store: false`, so the response
 isn't kept on OpenAI's side. The same is sent whatever brought the summary to the cloud ("When the cloud is chosen").
 
-**Which conversations.** Settings › Cloud has a switch for each placement (`LibraryPlacement`: Work, Personal), kept in
-this device's preferences (`CloudSummaryPreferences.placements`, `CloudPlacements`). A conversation's placement is the
-person's filing, else what its template or summary says (`Meeting.effectivePlacement`: the Therapy and Personal
-templates and kinds are Personal, the rest Work). Personal is off and Work on until the person changes them, which is
-what Daybook did before there were switches; preferences saved before them read as those defaults. A conversation not
-filed yet (its kind isn't known until a summary finds it) follows Work's switch, as it followed Always before. A
-placement written by a newer Daybook, which this version can't read, is never sent: what the person chose for it is
-unknown here. A conversation whose switch is off is never sent to the cloud, whatever asks: Use the Cloud isn't offered
+**Which conversations.** Settings › Cloud has a switch for each placement this version knows (`LibraryPlacement.allCases`:
+Work, Personal) and one for Not Filed, kept in this device's preferences (`CloudSummaryPreferences.placements`,
+`CloudPlacements`). A conversation's placement is the person's filing, else what its template or summary says
+(`Meeting.effectivePlacement`: the Therapy and Personal templates and kinds are Personal, the rest Work). A conversation
+not filed yet (neither the person nor its kind has placed it: every new recording's first summary) follows Not Filed's
+switch, never Work's. Personal is off, and Work and Not Filed on, until the person changes them, which is what Daybook did
+before there were switches (Always sent a conversation not filed yet); preferences saved before them read as those
+defaults. A conversation whose placement or kind (or, while its kind is Automatic, its summary's kind) was written by a
+newer Daybook, which this version can't read, is never sent: what the person chose for it is unknown here. Switches stored
+in a shape this version can't read (malformed, or a newer version's) let nothing go, and Settings shows them all off; they're
+written back as they were, so the version that wrote them reads them again, until the person sets a switch here, which
+replaces them (that switch as set, the rest off). Switches in this version's shape keep any key it doesn't know. An older
+Daybook that predates the switches drops them when it saves its preferences, so after going back to it and forward again
+they're the defaults. A conversation whose switch is off is never sent to the cloud, whatever asks: Use the Cloud isn't offered
 for it (the countdown, the wait for a Mac, the wait for this Mac's summary model, the status sheet and Floating Notes),
 the cloud's Upgrade isn't offered, Always doesn't send it, and a countdown has nothing to offer, so it starts where it
 can at once. Below the interface, the code that sends a summary checks again with the conversation as it is then
@@ -39,6 +45,17 @@ Always inside the privacy rule: the person's own key, a policy that isn't Never,
 switch is on (above). Within it:
 
 - **Use the Cloud**, an Upgrade to the cloud's model, and **Always**, as before.
+- **Only while the countdown is seen.** A countdown that ends in the cloud, whatever brought it there, runs only while the
+  person can see it (`SummaryPlacements.countdownsAreSeen`). On the Mac (`CountdownVisibility`): its login session is the
+  active one (`NSWorkspace` session notifications), the screen is unlocked (`com.apple.screenIsLocked`/`Unlocked`) and
+  awake (`screensDidSleep`/`Wake`), the Mac isn't going to sleep (`willSleep`/`didWake`), Daybook isn't hidden, and the
+  library window (whose list and page show a running summary's countdown) or Floating Notes is on the screen, not
+  minimized and not covered (`NSWindow.occlusionState`); the menu bar item isn't counted. On the iPhone
+  (`PhoneSummaryPlacement.isOnScreen`): the scene is active and iOS says the app is (`UIApplication.applicationState`, read
+  each time, so a background launch starts unseen). When that stops being true, the countdown doesn't end in the cloud:
+  the summary runs where it would have without the cloud (this device, or a Mac; after a failure here, the job fails), and
+  it never goes back to the cloud on its own. A countdown that would begin, or come to end in the cloud, while unseen does
+  the same. Always is unchanged: the person chose to send without asking.
 - **A conversation the local model reads in more than one pass** (`LongConversations.cloudDoesBetter`): one longer than
   the model it would run on (this device's, or on an iPhone the Mac it would go to) reads whole, by the catalog's
   whole-read limit or its window (docs/model-runtime.md, "Usable window"; 5,400 tokens for every built-in model, about 17
@@ -50,15 +67,21 @@ switch is on (above). Within it:
   never sent without a whole countdown: one that comes to end in the cloud partway (a Mac's model changed) starts its
   time again, and an iPhone that leaves the screen mid-countdown, or whose summary falls due out of sight (where a
   countdown can't run), runs it where it would have run instead. Use the Cloud or an Upgrade to the cloud's model
-  during it sends it at once, as the person's choice; Summarize Again runs it where it would have run. Under Always it goes at once, as anything does. A summary someone asked for
-  (Summarize Again) starts at once where it can, so never in the cloud on its own. A Mac's countdown seen on an iPhone
-  names the model (`LinkProcessingProgress.cloudModel` during `summaryCountdown`) and sends Don't Use the Cloud back as
-  `processing.choice` `useLocal`; a Mac before this one ignores it, and an iPhone before this one shows the countdown
-  as the Mac's own, whose Start Now starts it in the cloud.
+  during it sends it at once, as the person's choice. Under Always it goes at once, as anything does. A summary someone
+  asked for (Summarize Again, a template, Try Again, or another device's request syncing in) starts at once where it can,
+  so never in the cloud on its own; asked for during a countdown that ends in the cloud, it leaves that countdown as it
+  is, and only Start Now on it, where it's shown as it is, starts it early. A Mac's countdown seen on an iPhone names
+  the model (`LinkProcessingProgress.cloudModel` during `summaryCountdown`) and sends Don't Use the Cloud back as
+  `processing.choice` `useLocal`; a Mac before this one ignores it. An iPhone lists `cloudCountdown` when it shows such a
+  countdown as one (`LinkCapabilities.cloudCountdownFeature`); one before this version, which would show it as the
+  Mac's own, gets it with no countdown and no model ("Summarizing", nothing to choose), and the Mac ignores its Start Now
+  and Use the Cloud for it, so the Mac's own countdown, while seen, is where it's chosen.
 - **A summary that failed on the device** tries the cloud before the job fails, under the same rules: at once under
   Always, after a countdown to the cloud under Offer First (declined, the job fails with what went wrong on the
   device), never for a conversation kept off the cloud, one the person asked to summarize on this Mac, one whose cloud
-  countdown they declined (Don't Use the Cloud), or one the cloud already couldn't read. On the
+  countdown they declined (Don't Use the Cloud) or that ran here because nobody could see it, or one the cloud already
+  couldn't read. On the Mac, as it's sent, another device holding the summary or one it wrote since the summary step
+  began stands this Mac down (the step's first start is kept, so a summary written meanwhile is never replaced). On the
   iPhone the processor asks the placement first (`PhoneProcessor.Services.summaryFailed`), and the request stays the
   iPhone's while the cloud is tried.
 - **A conversation longer than the cloud model can read** (`CloudError.inputTooLong`, checked before sending) is
@@ -312,7 +335,7 @@ Settings › Cloud (a pane of its own on the Mac, between Models and Devices; a 
   (iPhone) with a secure field; it checks the key before keeping it.
 - **Summaries** (once a key is set): Use the cloud (Offer First, Always, Never), and Countdown (15 or 30 seconds) while
   it offers first.
-- **Use the cloud for** (unless Never): a switch for each placement, Work and Personal; labels only.
+- **Use the cloud for** (unless Never): a switch for each placement, Work and Personal, then Not Filed; labels only.
 - **Quality** (unless Never): Best, Balanced, and Economy, each with its recommended model and what an hour costs; Model,
   Recommended or a model of the tier (with its cost when one is chosen); Effort, the efforts the model takes (a segmented
   control on the Mac, a menu on the iPhone), showing the level a summary would ask for: Extra High until one is chosen.
