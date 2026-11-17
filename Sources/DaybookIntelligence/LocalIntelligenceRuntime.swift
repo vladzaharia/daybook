@@ -447,10 +447,14 @@ public actor LocalIntelligenceRuntime {
         do { try engine.validate(installed.installation) }
         catch { throw LocalIntelligenceError.modelNotInstalled(reference.id) }
         // Engine options are how the engine runs the files, not the files: the catalog's current ones apply to
-        // an install made before they changed (a receipt keeps those of its day).
-        guard let listed, listed.engineOptions != installed.installation.engineOptions else { return (installed.installation, engine) }
+        // an install made before they changed (a receipt keeps those of its day). Capabilities describe the files, so
+        // the catalog's current ones apply while it still lists the installed revision: a corrected context window or
+        // cache size reaches an install made before the correction.
+        guard let listed else { return (installed.installation, engine) }
         var receipt = installed.installation.receipt
         receipt.engineOptions.merge(listed.engineOptions) { _, current in current }
+        if listed.revisions.contains(where: { $0.id == installed.key.revision }) { receipt.capabilities = listed.capabilities }
+        guard receipt != installed.installation.receipt else { return (installed.installation, engine) }
         return (ModelInstallation(receipt: receipt, directory: installed.installation.directory), engine)
     }
 

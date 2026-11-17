@@ -31,6 +31,7 @@
           },
           "capabilities": {
             "contextLength": 262144,
+            "kvCacheBytesPerToken": 32768,
             "structuredOutput": true,
             "languages": [
               "*"
@@ -38,7 +39,11 @@
           },
           "engineOptions": {
             "architecture": "qwen3_5",
-            "thinking": "off"
+            "thinking": "off",
+            "wholeReadTokens": "5400",
+            "partTokens": "12000",
+            "evidenceTokens": "24000",
+            "commitmentPartTokens": "5400"
           },
           "minimumEngineVersion": 2,
           "homepage": "https://huggingface.co/mlx-community/Qwen3.5-4B-MLX-4bit",
@@ -125,6 +130,7 @@
           },
           "capabilities": {
             "contextLength": 262144,
+            "kvCacheBytesPerToken": 32768,
             "structuredOutput": true,
             "languages": [
               "*"
@@ -132,7 +138,11 @@
           },
           "engineOptions": {
             "architecture": "qwen3_5",
-            "thinking": "off"
+            "thinking": "off",
+            "wholeReadTokens": "5400",
+            "partTokens": "12000",
+            "evidenceTokens": "24000",
+            "commitmentPartTokens": "5400"
           },
           "minimumEngineVersion": 2,
           "homepage": "https://huggingface.co/mlx-community/Qwen3.5-9B-MLX-4bit",

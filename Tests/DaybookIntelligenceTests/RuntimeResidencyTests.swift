@@ -116,6 +116,52 @@ final class RuntimeResidencyTests: XCTestCase {
         XCTAssertEqual(receipt?.engineOptions, ["architecture": "toy"], "The receipt still says what it was installed with")
     }
 
+    /// Records the context window and cache size each load gets.
+    private struct CapabilitiesEngine: ModelEngine {
+        let log: CallLog
+        var descriptor: ModelEngineDescriptor {
+            ModelEngineDescriptor(id: "toyEngine", name: "Toy", version: 1, runtime: "Toy 1.0", roles: [.transcription],
+                                  platforms: [.macOS, .iOS], residency: .shared)
+        }
+        func validate(_ installation: ModelInstallation) throws {}
+        func proposeAddition(_ request: ModelAdditionRequest, repository: ModelRepositorySnapshot) async throws -> ModelAdditionProposal {
+            throw ModelAdditionError.invalid(["Not in this test."])
+        }
+        func load(_ installation: ModelInstallation, role: ModelRole, progress: @escaping IntelligenceProgressHandler) async throws -> any LoadedModel {
+            let capabilities = installation.capabilities
+            log.add("context=\(capabilities.contextLength ?? 0),kv=\(capabilities.kvCacheBytesPerToken ?? 0)")
+            return GatedEngine.Model(log: log, gate: Gate())
+        }
+    }
+
+    func testAnInstallRunsWithTheCatalogsCurrentCapabilitiesWhileItListsTheRevision() async throws {
+        let log = CallLog(), fetcher = FakeFetcher()
+        var entries: [ModelRevisionEntry] = []
+        for (index, id) in ["rev-a", "rev-b"].enumerated() {
+            let (artifact, contents) = SyntheticModels.artifact("model", repository: "toy/speech", revision: id, files: [("weights.bin", "weights \(id)")])
+            fetcher.add(contents)
+            entries.append(ModelRevisionEntry(id: id, releaseDate: "2026-10-0\(index + 1)", artifacts: [artifact]))
+        }
+        func runtime(_ capabilities: ModelCapabilities, revisions: [ModelRevisionEntry]) -> LocalIntelligenceRuntime {
+            LocalIntelligenceRuntime(modelsDirectory: root, registry: ModelEngineRegistry([CapabilitiesEngine(log: log)]),
+                                     builtIn: .init(manifest: SyntheticModels.manifest(engine: "toyEngine", variant: "v1", revisions: revisions,
+                                                                                        capabilities: capabilities)),
+                                     fetcher: fetcher)
+        }
+        try await runtime(ModelCapabilities(contextLength: 32_768), revisions: entries).download(modelID: "toy/v1@rev-a")
+        // A later catalog corrects the window of the same files and adds the cache's size.
+        let corrected = ModelCapabilities(contextLength: 131_072, kvCacheBytesPerToken: 6_144)
+        let later = runtime(corrected, revisions: entries)
+        _ = try await later.transcribe(url: root.appendingPathComponent("a.caf"), model: "toy/v1@rev-a")
+        XCTAssertEqual(log.calls.first, "context=131072,kv=6144")
+        let receipt = await later.store.inventory().resolve("toy/v1", revision: "rev-a")?.installation.receipt
+        XCTAssertEqual(receipt?.capabilities.contextLength, 32_768, "The receipt still says what it was installed with")
+        // A catalog that no longer lists the installed revision describes other files: the receipt's capabilities stand.
+        let moved = runtime(corrected, revisions: [entries[1]])
+        _ = try await moved.transcribe(url: root.appendingPathComponent("a.caf"), model: "toy/v1@rev-a")
+        XCTAssertEqual(log.calls.filter { $0.hasPrefix("context=") }.last, "context=32768,kv=0")
+    }
+
     private func waitUntil(_ condition: () async -> Bool) async throws {
         for _ in 0..<300 where !(await condition()) { try await Task.sleep(for: .milliseconds(10)) }
     }

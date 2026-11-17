@@ -35,6 +35,7 @@
           },
           "capabilities": {
             "contextLength": 131072,
+            "kvCacheBytesPerToken": 6144,
             "memoryGB": 3.2,
             "structuredOutput": true,
             "languages": [
@@ -45,7 +46,11 @@
           "engineOptions": {
             "architecture": "gemma4",
             "thinking": "off",
-            "commitments": "brief"
+            "commitments": "brief",
+            "wholeReadTokens": "5400",
+            "partTokens": "12000",
+            "evidenceTokens": "24000",
+            "commitmentPartTokens": "5400"
           },
           "minimumEngineVersion": 2,
           "supersedes": [
@@ -129,6 +134,7 @@
           },
           "capabilities": {
             "contextLength": 131072,
+            "kvCacheBytesPerToken": 16384,
             "memoryGB": 5.0,
             "structuredOutput": true,
             "languages": [
@@ -138,7 +144,11 @@
           },
           "engineOptions": {
             "architecture": "gemma4",
-            "thinking": "off"
+            "thinking": "off",
+            "wholeReadTokens": "5400",
+            "partTokens": "12000",
+            "evidenceTokens": "24000",
+            "commitmentPartTokens": "5400"
           },
           "minimumEngineVersion": 2,
           "supersedes": [
@@ -218,6 +228,7 @@
           },
           "capabilities": {
             "contextLength": 262144,
+            "kvCacheBytesPerToken": 16384,
             "structuredOutput": true,
             "languages": [
               "*"
@@ -225,7 +236,11 @@
           },
           "engineOptions": {
             "architecture": "gemma4_unified",
-            "thinking": "off"
+            "thinking": "off",
+            "wholeReadTokens": "5400",
+            "partTokens": "12000",
+            "evidenceTokens": "24000",
+            "commitmentPartTokens": "5400"
           },
           "minimumEngineVersion": 2,
           "supersedes": [
@@ -310,6 +325,7 @@
           },
           "capabilities": {
             "contextLength": 262144,
+            "kvCacheBytesPerToken": 20480,
             "structuredOutput": true,
             "languages": [
               "*"
@@ -318,7 +334,11 @@
           "engineOptions": {
             "architecture": "gemma4",
             "thinking": "off",
-            "noteCheck": "on"
+            "noteCheck": "on",
+            "wholeReadTokens": "5400",
+            "partTokens": "12000",
+            "evidenceTokens": "24000",
+            "commitmentPartTokens": "5400"
           },
           "minimumEngineVersion": 2,
           "homepage": "https://huggingface.co/mlx-community/gemma-4-26B-A4B-it-qat-4bit",
@@ -405,6 +425,7 @@
           },
           "capabilities": {
             "contextLength": 262144,
+            "kvCacheBytesPerToken": 81920,
             "structuredOutput": true,
             "languages": [
               "*"
@@ -413,7 +434,11 @@
           "engineOptions": {
             "architecture": "gemma4",
             "thinking": "off",
-            "noteCheck": "on"
+            "noteCheck": "on",
+            "wholeReadTokens": "5400",
+            "partTokens": "12000",
+            "evidenceTokens": "24000",
+            "commitmentPartTokens": "5400"
           },
           "minimumEngineVersion": 2,
           "homepage": "https://huggingface.co/mlx-community/gemma-4-31b-it-8bit",
