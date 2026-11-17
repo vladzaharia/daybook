@@ -31,6 +31,19 @@ public enum TranscriptEdits {
         }
     }
 
+    /// Keeps words marked unsure as they are: the mark goes, on every device. The transcript doesn't change.
+    @discardableResult
+    public static func keep(_ flagID: UUID, in meetingID: UUID, library: LibraryController, undoManager: UndoManager?) -> Bool {
+        library.update(meetingID, actionName: "Keep Words", undoManager: undoManager) { $0.keepFlaggedWords(flagID) }
+    }
+
+    /// Puts the earlier reading in place of words marked unsure: a correction, in Version History.
+    @discardableResult
+    public static func useAlternative(_ flagID: UUID, in meetingID: UUID, library: LibraryController,
+                                      undoManager: UndoManager?) -> Bool {
+        library.update(meetingID, actionName: "Correct Passage", undoManager: undoManager) { $0.useFlagAlternative(flagID) }
+    }
+
     /// A bookmark at a passage, in the recording it came from.
     public static func bookmark(_ segment: TranscriptSegment, in meetingID: UUID, library: LibraryController) {
         let start = segment.provenance.first { $0.trackID == segment.trackID }?.start ?? segment.start

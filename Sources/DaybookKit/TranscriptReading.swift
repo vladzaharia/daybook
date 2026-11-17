@@ -191,21 +191,24 @@ extension Meeting {
     public var primaryRecording: RecordingTrack? { transcribableTracks.first ?? presentTracks.first }
 }
 
-/// A conversation's transcript as a page draws it: blocks, bookmark marks, the playhead index, and the
-/// passages the person corrected, worked out once per version of the conversation (`cached(for:)`) rather
-/// than at every redraw.
+/// A conversation's transcript as a page draws it: blocks, bookmark marks, the playhead index, the
+/// passages the person corrected, and the words that may be heard wrong, worked out once per version of the
+/// conversation (`cached(for:)`) rather than at every redraw.
 public struct TranscriptLayout: Sendable {
     public let blocks: [TranscriptBlock]
     public let marks: BookmarkMarks
     public let playhead: PlayheadIndex
     /// Passages the person corrected (`Meeting.correctedSegmentIDs`): a row asks the set, never the history.
     public let correctedSegmentIDs: Set<UUID>
+    /// Unsure words that show, by passage, in reading order (`Meeting.transcriptFlagMarks`).
+    public let unsure: [UUID: [TranscriptFlagMark]]
 
     public init(_ meeting: Meeting) {
         blocks = TranscriptBlock.blocks(in: meeting)
         marks = BookmarkMarks(meeting: meeting)
         playhead = PlayheadIndex(meeting: meeting)
         correctedSegmentIDs = meeting.correctedSegmentIDs
+        unsure = meeting.transcriptFlagMarks
     }
 
     /// The layout for this version of the conversation: worked out again only when it changed. An
