@@ -59,6 +59,7 @@ public enum CloudSynthesis {
             custom = String(custom.prefix(limit))
             warnings.append("Only the first \(templateTokens) tokens of the custom summary instructions were used.")
         }
+        if let warning = MeetingSynthesis.Limits.glossaryWarning(glossary) { warnings.append(warning) }
         let structured = source.isStructured
         let findings = structured && source.anchors.contains { $0.kind == .note && !$0.text.isEmpty }
         let prompt = MeetingSynthesis.finalPrompt(evidence: .conversation(SourcePayload(source)), template: template,
