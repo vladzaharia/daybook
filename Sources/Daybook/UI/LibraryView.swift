@@ -31,6 +31,8 @@ struct LibraryView: View {
     @State private var columnCap = ColumnFit.all
     /// What `adaptColumns` set last, so the change it makes isn't taken for the person's.
     @State private var adaptedColumns: NavigationSplitViewVisibility?
+    /// When `adaptColumns` last changed the columns: the sidebar is still moving for a moment after.
+    @State private var columnsAdaptedAt = Date.distantPast
     @State private var windowWidth: CGFloat = 1280
     /// The visible width of the window's screen, once it's on one: a screen narrower than the inspector needs shows it
     /// in a window as wide as the screen (`ColumnFit.inspectorFits`).
@@ -115,6 +117,9 @@ struct LibraryView: View {
         .environment(\.readingScale, CGFloat(state.window.readingScale))
         .focusedSceneValue(\.shownConversation, toolbarMeeting?.id)
         .toolbarVisibility(toolbarShown ? .automatic : .hidden, for: .windowToolbar)
+        // One surface across the title bar: the list's column doesn't end under the window's title.
+        .toolbarBackground(DaybookPalette.paper, for: .windowToolbar)
+        .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
         .focusedSceneValue(\.libraryToolbarShown, $toolbarShown)
         .focusedSceneValue(\.libraryInspectorShown, inspectorCommand)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { windowWidth = $0; noteScreen() }
@@ -134,6 +139,8 @@ struct LibraryView: View {
         .onChange(of: state.inspectorRequest) { _, _ in askForInspector() }
         .onChange(of: inspectorPresented) { _, _ in adaptColumns() }
         .onChange(of: showsConversation) { _, _ in adaptColumns() }
+        // Once the window is back as it was, the inspector counts only if it really shows.
+        .onChange(of: restored) { _, _ in adaptColumns() }
         .onChange(of: columns) { old, shown in columnsChanged(from: old, to: shown) }
         .onChange(of: state.isReady, initial: true) { _, ready in if ready { restore() } }
         .onChange(of: state.window.place) { _, place in if restored { storedPlace = LibraryRestoration.encode(place) } }
@@ -234,19 +241,47 @@ struct LibraryView: View {
     /// The sidebar steps aside in narrow windows, and when the inspector would leave the page under 560 pt, and comes
     /// back once there's room again (`ColumnFit`), never past what the person chose to show. (The window itself stays
     /// wide enough for the page beside the list and the inspector: `ColumnFit.narrowestWithInspector`.)
-    private func adaptColumns() {
-        columnCap = ColumnFit.cap(window: windowWidth, inspector: inspectorShown, previous: columnCap)
+    ///
+    /// Until the window is back as the person left it (`restored`), the inspector they left open counts as showing, and
+    /// nothing animates: the window opens in the arrangement it will have, not with a sidebar that then steps aside.
+    @discardableResult private func adaptColumns() -> Bool {
+        let inspector = restored ? inspectorShown
+            : inspectorPresented && ColumnFit.inspectorFits(window: windowWidth, screen: screenWidth)
+        columnCap = ColumnFit.cap(window: windowWidth, inspector: inspector, previous: columnCap)
         let target = min(ColumnFit(storedColumns), columnCap).visibility
-        guard ColumnFit(columns) != ColumnFit(target) else { return }
+        guard ColumnFit(columns) != ColumnFit(target) else { return false }
         adaptedColumns = target
-        withAnimation { columns = target }
+        columnsAdaptedAt = Date()
+        if restored {
+            withAnimation { columns = target }
+        } else {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { columns = target }
+        }
+        return true
     }
 
     /// The cap applied again as the window shows and comes forward, and the sidebar the window shows put aside when
     /// `columns` says it is: `columns` set before the window was on screen isn't taken as proof of what it shows.
+    ///
+    /// Never while the sidebar is on its way aside: collapsing it in AppKit in the middle of SwiftUI's own change left
+    /// its panel drawn over the list. A change just made is checked once it has settled.
     private func matchShownColumns() {
-        adaptColumns()
-        guard ColumnFit(columns) < .all, let window = shareAnchor.window,
+        let changed = adaptColumns()
+        guard !changed, Date().timeIntervalSince(columnsAdaptedAt) > Self.columnSettle else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.columnSettle) { collapseShownSidebar() }
+            return
+        }
+        collapseShownSidebar()
+    }
+
+    /// How long a change of columns takes to settle.
+    private static let columnSettle: TimeInterval = 0.7
+
+    private func collapseShownSidebar() {
+        guard Date().timeIntervalSince(columnsAdaptedAt) >= Self.columnSettle, ColumnFit(columns) < .all,
+              let window = shareAnchor.window,
               let sidebar = ColumnFit.sidebarItem(in: window.contentView), !sidebar.isCollapsed else { return }
         sidebar.isCollapsed = true
     }
