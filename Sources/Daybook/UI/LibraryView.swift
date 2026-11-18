@@ -76,6 +76,10 @@ struct LibraryView: View {
                 if state.window.place.isDevice && !state.window.isSearching { DeviceRecordingsList(state: state) }
                 else { ConversationList(state: state) }
             }
+            // The list sits on the page's paper, as the title bar does: the system's own list ground is a different
+            // surface in dark appearance.
+            .scrollContentBackground(.hidden)
+            .background(DaybookPalette.paper)
             // A wide window gives the list room for two lines of gist (`ConversationRowView.twoLineGistWidth`).
             .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 440)
         } detail: {
