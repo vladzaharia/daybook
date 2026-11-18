@@ -257,6 +257,10 @@ public actor MeetingStore {
         let inkIDs = Set((result.ink ?? []).map(\.id))
         let missingInk = (stored.ink ?? []).filter { !inkIDs.contains($0.id) }
         if !missingInk.isEmpty { result.ink = (result.ink ?? []) + missingInk }
+        // And notebook pages: deleting one marks it.
+        let pageIDs = Set((result.pages ?? []).map(\.id))
+        let missingPages = (stored.pages ?? []).filter { !pageIDs.contains($0.id) }
+        if !missingPages.isEmpty { result.pages = (result.pages ?? []) + missingPages }
         return result
     }
 
@@ -469,6 +473,17 @@ public actor MeetingStore {
             guard photo.relativePath.hasPrefix(MeetingPhoto.folder + "/") else { throw LibraryError.unsafePath(photo.relativePath) }
             _ = try LocalFiles.relativeURL(photo.relativePath, in: directory)
             guard photo.time.map({ $0.isFinite && $0 >= 0 }) ?? true else { throw LibraryError.invalidHighlight }
+        }
+        let pagesFolder = directory.appendingPathComponent(PageDrawing.folder, isDirectory: true)
+        for page in meeting.pages ?? [] {
+            for drawing in (page.drawing.map { [$0] } ?? []) + (page.setAside ?? []) {
+                guard drawing.relativePath.hasPrefix(PageDrawing.folder + "/") else { throw LibraryError.unsafePath(drawing.relativePath) }
+                try LocalFiles.requireContained(try LocalFiles.relativeURL(drawing.relativePath, in: directory), in: pagesFolder)
+            }
+            guard page.width.isFinite, page.width > 0, page.height.isFinite, page.height > 0 else { throw LibraryError.corruptMeeting(expectedID) }
+            for passage in page.passages {
+                guard passage.time.map({ $0.isFinite && $0 >= 0 }) ?? true else { throw LibraryError.invalidHighlight }
+            }
         }
     }
 }

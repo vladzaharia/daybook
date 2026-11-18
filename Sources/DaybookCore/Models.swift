@@ -491,6 +491,10 @@ public enum RevisionField: Hashable, Sendable {
     case photo(UUID)
     /// A photo's caption.
     case photoCaption(UUID)
+    /// A notebook page added, deleted, or put back (`NotebookPage`).
+    case page(UUID)
+    /// The person's own words for a handwritten passage (`PassageCorrection`), by the passage's ID.
+    case passage(UUID)
     /// A bookmark deleted or put back (`Meeting.removeBookmark`); the entry keeps the whole bookmark.
     case bookmark(UUID)
     /// A correction carried over from an earlier transcript, applied or dismissed, by its issue's ID.
@@ -518,6 +522,8 @@ public enum RevisionField: Hashable, Sendable {
         case "segment": self = UUID(uuidString: target).map(Self.segment) ?? .unknown(rawValue)
         case "photo": self = UUID(uuidString: target).map(Self.photo) ?? .unknown(rawValue)
         case "photo-caption": self = UUID(uuidString: target).map(Self.photoCaption) ?? .unknown(rawValue)
+        case "page": self = UUID(uuidString: target).map(Self.page) ?? .unknown(rawValue)
+        case "passage": self = UUID(uuidString: target).map(Self.passage) ?? .unknown(rawValue)
         case "bookmark": self = UUID(uuidString: target).map(Self.bookmark) ?? .unknown(rawValue)
         case "correction-transfer": self = UUID(uuidString: target).map(Self.correctionTransfer) ?? .unknown(rawValue)
         case "source": self = .source(target)
@@ -534,6 +540,8 @@ public enum RevisionField: Hashable, Sendable {
         case .segment(let id): return "segment:\(id.uuidString)"
         case .photo(let id): return "photo:\(id.uuidString)"
         case .photoCaption(let id): return "photo-caption:\(id.uuidString)"
+        case .page(let id): return "page:\(id.uuidString)"
+        case .passage(let id): return "passage:\(id.uuidString)"
         case .bookmark(let id): return "bookmark:\(id.uuidString)"
         case .correctionTransfer(let id): return "correction-transfer:\(id.uuidString)"
         case .source(let target): return "source:\(target)"
@@ -545,7 +553,7 @@ public enum RevisionField: Hashable, Sendable {
     /// The person's own words or names: a correction, a rename, or notes.
     public var isPersonsEdit: Bool {
         switch self {
-        case .notes, .segment, .speaker: return true
+        case .notes, .segment, .speaker, .passage: return true
         default: return false
         }
     }
@@ -607,6 +615,8 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
     public var photos: [MeetingPhoto]?
     /// Handwriting in the notes (`NoteInk.swift`), one block per ink paragraph. Nil until the first stroke.
     public var ink: [NoteInk]?
+    /// Notebook pages (`NotebookPages.swift`), deleted ones included. Nil until the first page.
+    public var pages: [NotebookPage]?
     /// Passages left out of `unifiedTranscript` as background audio (a TV, radio, or music;
     /// `BackgroundAudio`), on the timeline as fusion placed them. Derived with the unified transcript;
     /// nil when there are none. The transcript runs still hold every word.
@@ -754,7 +764,7 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         case schemaVersion, id, title, date, updatedAt, kind, notes, timedNotes, folderID, tags, templateID,
             placement, tracks, transcripts, unifiedTranscript, alignmentReports, summary, revisions, highlights,
             speakers, status, errorMessage, correctionTransferIssues, speakerMatches, companions, sourceSuggestions,
-            audioAlignments, fusionSummary, processingRequests, photos, ink, backgroundPassages, includesBackgroundAudio,
+            audioAlignments, fusionSummary, processingRequests, photos, ink, pages, backgroundPassages, includesBackgroundAudio,
             speakerIdentities, upgradeDismissals, transcriptFlags, transcriptFlagsVersion, transcriptFlagDismissals
     }
     private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
@@ -792,6 +802,7 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         processingRequests = try values.decodeIfPresent([ProcessingRequest].self, forKey: .processingRequests)
         photos = try values.decodeIfPresent([MeetingPhoto].self, forKey: .photos)
         ink = try values.decodeIfPresent([NoteInk].self, forKey: .ink)
+        pages = try values.decodeIfPresent([NotebookPage].self, forKey: .pages)
         backgroundPassages = try values.decodeIfPresent([TranscriptSegment].self, forKey: .backgroundPassages)
         includesBackgroundAudio = try values.decodeIfPresent(Bool.self, forKey: .includesBackgroundAudio)
         speakerIdentities = try values.decodeIfPresent([SpeakerIdentity].self, forKey: .speakerIdentities)
@@ -838,6 +849,7 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         try values.encodeIfPresent(processingRequests, forKey: .processingRequests)
         try values.encodeIfPresent(photos, forKey: .photos)
         try values.encodeIfPresent(ink, forKey: .ink)
+        try values.encodeIfPresent(pages, forKey: .pages)
         try values.encodeIfPresent(backgroundPassages, forKey: .backgroundPassages)
         try values.encodeIfPresent(includesBackgroundAudio, forKey: .includesBackgroundAudio)
         try values.encodeIfPresent(speakerIdentities, forKey: .speakerIdentities)

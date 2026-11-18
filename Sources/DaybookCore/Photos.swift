@@ -285,8 +285,14 @@ extension Meeting {
     /// Nil for a conversation without a known start, or a photo of another moment (more than
     /// `photoTimelineMargin` outside the recordings).
     public func timelineTime(of photo: MeetingPhoto) -> TimeInterval? {
-        if let time = photo.time, time.isFinite {
-            guard let trackID = photo.trackID else { return time }
+        timelineTime(trackID: photo.trackID, time: photo.time, moment: photo.capturedAt, origin: photo.origin)
+    }
+
+    /// `timelineTime(of:)` for anything placed like a photo: a recording and seconds into it (`trackID`, `time`), or a
+    /// moment by a device's clock (`moment`, `origin`). A notebook passage is placed the same way (`timelineTime(of:on:)`).
+    public func timelineTime(trackID: UUID?, time: TimeInterval?, moment: Date, origin: PhotoOrigin?) -> TimeInterval? {
+        if let time, time.isFinite {
+            guard let trackID else { return time }
             if let placement = timelinePlacement(of: trackID) { return placement.offset + placement.rate * time }
             if let prior = tracks.first(where: { $0.id == trackID })?.alignment?.clockOffset, prior.isFinite { return prior + time }
         }
@@ -298,14 +304,14 @@ extension Meeting {
             let upper = span.end.timeIntervalSince(zero) + Self.photoTimelineMargin
             return value >= lower && value <= upper ? value : nil
         }
-        if let origin = photo.origin {
+        if let origin {
             for track in tracks where origin.recorded(track) {
                 guard let start = track.startedAt, let placement = timelinePlacement(of: track.id) else { continue }
-                return nearby(placement.offset + placement.rate * photo.capturedAt.timeIntervalSince(start))
+                return nearby(placement.offset + placement.rate * moment.timeIntervalSince(start))
             }
         }
         guard let zero = knownTimelineStart() else { return nil }
-        return nearby(photo.capturedAt.timeIntervalSince(zero))
+        return nearby(moment.timeIntervalSince(zero))
     }
 
     // MARK: Editing
