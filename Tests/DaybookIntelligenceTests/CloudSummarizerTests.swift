@@ -301,6 +301,17 @@ final class CloudSummarizerTests: XCTestCase {
 
     // MARK: Prompt and schema
 
+    func testBehaviorTheCloudPromptWarnsWhenTermsOfTheVocabularyAreLeftOut() {
+        let source = MeetingEvidence.summarySource(meeting())
+        let terms = (1...81).map { "Term\($0)x" }
+        let over = CloudSynthesis.prompt(source: source, template: .auto, glossary: terms, templateInstructions: nil, provider: .anthropic)
+        XCTAssertTrue(over.warnings.contains("Only the first 80 vocabulary terms were used."))
+        XCTAssertTrue(over.prompt.contains("Term80x"))
+        XCTAssertFalse(over.prompt.contains("Term81x"))
+        let within = CloudSynthesis.prompt(source: source, template: .auto, glossary: Array(terms.prefix(80)), templateInstructions: nil, provider: .anthropic)
+        XCTAssertTrue(within.warnings.isEmpty)
+    }
+
     func testBehaviorTheCloudPromptIsTheLocalOneWithQuotedCommitmentsAndTheNotesWorkedOutFirst() throws {
         let source = MeetingEvidence.summarySource(meeting())
         let built = CloudSynthesis.prompt(source: source, template: .auto, glossary: ["Flagpost"], templateInstructions: nil, provider: .anthropic)

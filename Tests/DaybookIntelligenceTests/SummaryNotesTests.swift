@@ -302,6 +302,140 @@ final class SummaryNotesTests: XCTestCase {
         XCTAssertFalse(short.warnings.contains { $0.contains("didn’t fit") })
     }
 
+    // MARK: Everything the conversation holds
+
+    private let recorder = UUID()
+
+    /// `meeting()` with a bookmark on a recording that isn't lined up, ink that was read, and ink with no words in it.
+    private func fullMeeting() -> Meeting {
+        var meeting = meeting()
+        meeting.tracks = [RecordingTrack(id: recorder, source: .soundcore, relativePath: "r.m4a", fileName: "r.m4a")]
+        meeting.transcripts = [TrackTranscript(trackID: recorder, segments: [
+            TranscriptSegment(trackID: recorder, start: 50, end: 55, text: "Only the recorder heard this.")])]
+        meeting.alignmentReports = [TrackAlignment(trackID: recorder, method: .unaligned)]
+        meeting.highlights.append(Highlight(trackID: recorder, time: 52, text: "Side chat"))
+        meeting.addInk(NoteInk(drawing: Data([1]), width: 300, height: 80, recognized: "Sketch of the venue layout"), after: nil, time: 150)
+        meeting.addInk(NoteInk(drawing: Data([2]), width: 300, height: 80, recognized: ""), after: nil, time: 160)
+        return meeting
+    }
+
+    private let photos = [PhotoEvidence(id: UUID(), label: "P1", time: 30, caption: "Whiteboard with the venue plan", text: "Hall B holds 120")]
+
+    func testBehaviorEverySourceTheConversationHoldsReachesTheFinalPrompt() async throws {
+        let model = WordModel()
+        let summary = self.summary
+        model.reply = { prompt, _ in prompt.contains("Extract ALL explicit agreed tasks") ? #"{"actions":[]}"# : summary }
+        _ = try await MeetingSynthesis.generate(model: model, modelID: "gemma", source: MeetingEvidence.summarySource(fullMeeting()),
+                                                template: .auto, glossary: ["Flagpost", "Kestrel"],
+                                                templateInstructions: "Keep every section to two sentences for the board.",
+                                                photos: photos, progress: { _ in })
+        let final = flat(try XCTUnwrap(model.prompts.first { $0.contains("Write a concise summary") }))
+        XCTAssertTrue(final.contains("Alex: Thanks for joining, let's start with the launch."), "Speakers")
+        XCTAssertTrue(final.contains("Sam: The venue still hasn't confirmed the date."))
+        XCTAssertTrue(final.contains("NOTE N2, written by the user (not spoken): Budget cap is firm at 40k"), "A timed typed note")
+        XCTAssertTrue(final.contains("Prep: bring last quarter's numbers"), "An untimed note")
+        XCTAssertTrue(final.contains(#""placement":"written outside the recording""#))
+        XCTAssertTrue(final.contains("BOOKMARK B2, marked by the user: Pricing decision"), "An aligned bookmark with words")
+        XCTAssertTrue(final.contains("Sketch of the venue layout"), "Ink with words")
+        XCTAssertTrue(final.contains("Only the recorder heard this."), "A bookmark's own recording")
+        XCTAssertTrue(final.contains("Whiteboard with the venue plan") && final.contains("Hall B holds 120"), "A photo, its caption and its text")
+        XCTAssertTrue(final.contains("Flagpost") && final.contains("Kestrel"), "Vocabulary")
+        XCTAssertTrue(final.contains("Keep every section to two sentences for the board."), "Template instructions")
+        XCTAssertFalse(final.contains("Handwriting"), "Ink with no words is no note")
+    }
+
+    func testBehaviorALongConversationReachesTheFinalPassWithItsNotesContextVocabularyAndPhotos() async throws {
+        var meeting = fullMeeting()
+        meeting.unifiedTranscript += (0..<2_000).map { index in
+            TranscriptSegment(trackID: track, start: 300 + Double(index) * 6, end: 305 + Double(index) * 6,
+                              text: "We went over routine item number \(index) for the quarterly review.", speakerID: "sam")
+        }
+        let model = WordModel()
+        let summary = self.summary
+        model.reply = { prompt, _ in
+            if prompt.contains("Extract ALL explicit agreed tasks") { return #"{"actions":[]}"# }
+            if prompt.contains("Extract concise factual evidence") || prompt.contains("Compress these evidence notes") { return "Routine review." }
+            return summary
+        }
+        _ = try await MeetingSynthesis.generate(model: model, modelID: "gemma", source: MeetingEvidence.summarySource(meeting),
+                                                template: .auto, glossary: ["Flagpost"], photos: photos, progress: { _ in })
+        XCTAssertTrue(model.prompts.contains { $0.contains("Extract concise factual evidence") }, "It was read in parts")
+        let final = flat(try XCTUnwrap(model.prompts.first { $0.contains("Write a concise summary") }))
+        XCTAssertTrue(final.contains("Budget cap is firm at 40k"), "Notes")
+        XCTAssertTrue(final.contains("Sketch of the venue layout"), "Ink with words")
+        XCTAssertTrue(final.contains("Only the recorder heard this."), "A bookmark's own recording")
+        XCTAssertTrue(final.contains("Flagpost"), "Vocabulary")
+        XCTAssertTrue(final.contains("Hall B holds 120"), "Photos")
+        XCTAssertFalse(final.contains("Handwriting"))
+    }
+
+    // MARK: Ink with no words
+
+    func testBehaviorInkWithNoWordsIsNotANoteAndTheNotesAfterItKeepTheirLabels() {
+        var meeting = Meeting(title: "Sketches", notes: "First thought")
+        meeting.timedNotes = [TimedNote(time: 10, text: "First thought")]
+        meeting.addInk(NoteInk(drawing: Data([1]), width: 300, height: 80), after: nil, time: 20)
+        meeting.notes += "\nSecond thought"
+        let source = MeetingEvidence.summarySource(meeting)
+        XCTAssertEqual(source.anchors.map(\.text), ["First thought", "Second thought"])
+        XCTAssertEqual(source.anchors.map(\.label), ["N1", "N3"], "Labels follow the paragraphs, so a note keeps its label")
+        XCTAssertFalse(source.annotatedTranscript.contains("Handwriting") || source.notesPayload.contains { ($0["text"] as? String) == "Handwriting" })
+
+        // Once its words are read, it is a note like any other.
+        let id = try? XCTUnwrap(meeting.ink?.first?.id)
+        meeting.updateInk(NoteInk(id: id ?? UUID(), drawing: Data([1]), width: 300, height: 80, recognized: "Ask Priya"))
+        XCTAssertEqual(MeetingEvidence.summarySource(meeting).anchors.map(\.text), ["First thought", "Ask Priya", "Second thought"])
+    }
+
+    func testBehaviorTheWordHandwritingTypedByThePersonIsStillSent() {
+        let meeting = Meeting(title: "Typed", notes: "Handwriting")
+        XCTAssertEqual(MeetingEvidence.summarySource(meeting).anchors.map(\.text), ["Handwriting"])
+    }
+
+    // MARK: Bookmarks on a recording that isn't lined up, in notes read in parts
+
+    func testBehaviorLongNotesReadInPartsStillCarryAnUnalignedBookmarksPassages() async throws {
+        var meeting = fullMeeting()
+        meeting.unifiedTranscript += (0..<2_000).map { index in
+            TranscriptSegment(trackID: track, start: 300 + Double(index) * 6, end: 305 + Double(index) * 6,
+                              text: "We went over routine item number \(index) for the quarterly review.", speakerID: "sam")
+        }
+        let long = (0..<40).map { index in "Follow up on item \(index * 50): " + Array(repeating: "context", count: 60).joined(separator: " ") }
+        meeting.timedNotes = long.enumerated().map { TimedNote(time: 300 + Double($0.offset) * 300, text: $0.element) }
+        meeting.notes = long.joined(separator: "\n")
+        meeting.ink = nil
+        let model = WordModel()
+        let summary = self.summary
+        model.reply = { prompt, _ in
+            if prompt.contains("Extract ALL explicit agreed tasks") { return #"{"actions":[]}"# }
+            if prompt.contains("Extract concise factual evidence") || prompt.contains("Compress these evidence notes") { return "Routine review." }
+            return summary
+        }
+        _ = try await MeetingSynthesis.generate(model: model, modelID: "gemma", source: MeetingEvidence.summarySource(meeting),
+                                                template: .auto, glossary: [], progress: { _ in })
+        let reading = model.prompts.filter { $0.contains("Extract concise factual evidence") }
+        XCTAssertTrue(reading.contains { $0.contains("BOOKMARK B") && $0.contains("Only the recorder heard this.") },
+                      "The notes list, read in parts, keeps the passages from the bookmark's own recording")
+    }
+
+    // MARK: The vocabulary's limit
+
+    func testBehaviorTermsLeftOutOfTheVocabularyAreAWarning() async throws {
+        let model = WordModel()
+        let summary = self.summary
+        model.reply = { prompt, _ in prompt.contains("Extract ALL explicit agreed tasks") ? #"{"actions":[]}"# : summary }
+        let terms = (1...81).map { "Term\($0)x" }
+        let over = try await MeetingSynthesis.generate(model: model, modelID: "gemma", source: MeetingEvidence.summarySource(meeting()),
+                                                       template: .auto, glossary: terms, progress: { _ in })
+        XCTAssertTrue(over.warnings.contains("Only the first 80 vocabulary terms were used."))
+        let final = try XCTUnwrap(model.prompts.first { $0.contains("Write a concise summary") })
+        XCTAssertTrue(final.contains("Term80x"))
+        XCTAssertFalse(final.contains("Term81x"))
+        let within = try await MeetingSynthesis.generate(model: model, modelID: "gemma", source: MeetingEvidence.summarySource(meeting()),
+                                                         template: .auto, glossary: Array(terms.prefix(80)), progress: { _ in })
+        XCTAssertFalse(within.warnings.contains { $0.contains("vocabulary") })
+    }
+
     func testTemplatesStillShapeTheSummary() async throws {
         let model = WordModel()
         let summary = self.summary

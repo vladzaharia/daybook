@@ -207,7 +207,11 @@ extension MeetingEvidence {
         let paragraphs = meeting.notes.components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         let times = meeting.paragraphTimes()
+        let ink = meeting.inkPlacements()
         for (index, text) in paragraphs.enumerated() {
+            // Ink with no words (a sketch, or not read yet) has the placeholder for a paragraph: not something the person
+            // wrote. It's left out, and the notes after it keep their labels (N1, N3).
+            if text == NoteInk.placeholder, index < ink.count, ink[index] != nil { continue }
             let time = index < times.count ? times[index] : nil
             anchors.append(.init(label: "N\(index + 1)", kind: .note, time: time, text: text,
                                  window: time.map { ($0 - windows.noteBefore)...($0 + windows.noteAfter) }, recording: nil, context: []))

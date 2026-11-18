@@ -224,6 +224,11 @@ public enum MeetingSynthesis {
 
         /// The vocabulary as the final pass is given it.
         static func glossary(_ terms: [String]) -> [String] { terms.prefix(glossaryTerms).map { String($0.prefix(glossaryTermLength)) } }
+
+        /// What is said when `terms` has more than the final pass is given.
+        static func glossaryWarning(_ terms: [String]) -> String? {
+            terms.count > glossaryTerms ? "Only the first \(glossaryTerms) vocabulary terms were used." : nil
+        }
     }
 
     /// Where each step puts the summary's progress: the note check, then reading a long conversation's
@@ -311,6 +316,7 @@ public enum MeetingSynthesis {
         if templateTokens.count > Limits.instructionTokens {
             warnings.append("Only the first \(Limits.instructionTokens) tokens of the custom summary instructions were used.")
         }
+        if let warning = Limits.glossaryWarning(glossary) { warnings.append(warning) }
         let budget = Budget(model)
         let repeating = source.isStructured && model.checksNotes
             ? try await notesRepeatingWhatWasSaid(source, model: model, budget: budget, progress: progress) : []
@@ -357,7 +363,11 @@ public enum MeetingSynthesis {
         if prepared.structured {
             // Notes too long to travel with every part are read in parts too.
             if !notes.isEmpty && !notesTravel {
-                let listed = source.anchors.map { SummarySource.marker($0) }.joined(separator: "\n")
+                // A bookmark on a recording that isn't lined up keeps its passages, as it does beside the evidence.
+                let listed = source.anchors.map { anchor in
+                    anchor.context.isEmpty ? SummarySource.marker(anchor)
+                        : SummarySource.marker(anchor) + "\nPassages from its own recording:\n" + anchor.context.joined(separator: "\n")
+                }.joined(separator: "\n")
                 sources += await chunks(listed, model: model, tokenLimit: partTokens).map { SourcePart(kind: .userNotesAndBookmarks, content: $0) }
             }
         } else {
