@@ -55,10 +55,63 @@ public struct SummarySource: Sendable, Equatable {
     /// `.highlights`), for inference that takes strings and for small tasks.
     public var notesText: String
     public var highlightText: String?
+    /// The conversation's title when the person or the calendar gave it (`Context.title`), never one Daybook
+    /// made up or a model wrote, cut to `Context.titleLength` characters. Context for the model, not evidence.
+    public var title: String?
+    /// When the conversation began, as `Context.when` writes it ("Wednesday 2026-11-18, 14:05, America/Vancouver"); nil when
+    /// no recording's start is known. Context for the model, not evidence.
+    public var started: String?
 
-    public init(lines: [Line], anchors: [Anchor], transcript: String, notesText: String, highlightText: String?) {
+    public init(lines: [Line], anchors: [Anchor], transcript: String, notesText: String, highlightText: String?,
+                title: String? = nil, started: String? = nil) {
         self.lines = lines; self.anchors = anchors; self.transcript = transcript
         self.notesText = notesText; self.highlightText = highlightText
+        self.title = title; self.started = started
+    }
+
+    /// What the summary model is told about the conversation beside what was said: its title and when it began.
+    /// Nothing else about it (docs/cloud.md, "What is sent").
+    public enum Context {
+        /// The most characters of a title a model is given.
+        public static let titleLength = 120
+
+        /// A title the person or the calendar gave: the conversation's own, with the time Daybook adds to a recording's
+        /// ("Weekly sync at 10:15 AM") taken off, and nil for a placeholder (none, "Untitled Conversation", "Note",
+        /// "Conversation", "Microphone", an iPhone or recorder's name) or a title that is only a time. The title a summary
+        /// model wrote is the summary's (`MeetingSummary.title`), never the conversation's, and is never sent: a
+        /// re-summary would be anchored on the earlier one's guess.
+        public static func title(_ meeting: Meeting) -> String? {
+            var title = meeting.title.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
+            if let time = title.range(of: #" at \d{1,2}[:.]\d{2}.*$"#, options: .regularExpression) { title.removeSubrange(time.lowerBound...) }
+            let lowered = title.lowercased()
+            guard !title.isEmpty, !placeholders.contains(lowered), !lowered.contains("iphone"), !lowered.contains("apple watch"),
+                  title.contains(where: \.isLetter) else { return nil }
+            return title.count > titleLength ? String(title.prefix(titleLength)) + "…" : title
+        }
+
+        private static let placeholders = Set((["Untitled meeting", "Untitled Conversation", "Imported recording", "Conversation", "Note", "Recorder"]
+            + AudioSource.allCases.map(\.recordingName)).map { $0.lowercased() })
+
+        /// When the conversation began: the earliest start any of its recordings has by its own clock, which a recording
+        /// made here or by a recorder that dates its files has, and a file imported by hand does not. The conversation's
+        /// date alone is not used: for a file imported by hand it is the day it was imported. Nil when no recording knows
+        /// its start. Written as "Wednesday 2026-11-18, 14:05, America/Vancouver" in `timeZone`, the same whatever the
+        /// person's language or region, so the model can count to "next Tuesday".
+        public static func started(_ meeting: Meeting, in timeZone: TimeZone = .current) -> String? {
+            guard let start = meeting.tracks.filter({ !$0.isRemoved }).compactMap(\.startedAt).min() else { return nil }
+            return when(start, in: timeZone)
+        }
+
+        public static func when(_ date: Date, in timeZone: TimeZone) -> String {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = timeZone
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.calendar = calendar
+            formatter.timeZone = timeZone
+            formatter.dateFormat = "EEEE yyyy-MM-dd, HH:mm"
+            return "\(formatter.string(from: date)), \(timeZone.identifier)"
+        }
     }
 
     /// A source from strings alone (inference that predates notes in place): the transcript as it
@@ -201,8 +254,8 @@ public struct SummarySource: Sendable, Equatable {
 extension MeetingEvidence {
     /// The summary's source for a conversation: its unified transcript (background audio already left
     /// out), each note paragraph and bookmark placed at its time, and the passages in each one's window
-    /// marked to carry more weight.
-    public static func summarySource(_ meeting: Meeting, windows: SummarySource.Windows = .init()) -> SummarySource {
+    /// marked to carry more weight, with its title and start (`SummarySource.Context`).
+    public static func summarySource(_ meeting: Meeting, windows: SummarySource.Windows = .init(), timeZone: TimeZone = .current) -> SummarySource {
         var anchors: [SummarySource.Anchor] = []
         let paragraphs = meeting.notes.components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
@@ -238,6 +291,7 @@ extension MeetingEvidence {
             return .init(time: segment.start, speaker: name, text: segment.text, near: near)
         }
         return SummarySource(lines: lines, anchors: anchors, transcript: transcript(meeting),
-                             notesText: notes(meeting), highlightText: highlights(meeting))
+                             notesText: notes(meeting), highlightText: highlights(meeting),
+                             title: SummarySource.Context.title(meeting), started: SummarySource.Context.started(meeting, in: timeZone))
     }
 }

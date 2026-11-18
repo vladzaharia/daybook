@@ -91,7 +91,18 @@ final class SynthesisPayloadTests: XCTestCase {
             "evidence": whole, "glossary_spellings": ["Ä", "b/c", "_x"], "user_notes_and_bookmarks": source.notesPayload,
             "passages_near_notes_and_bookmarks": "[01:10] near", "photos": "P1 / board"]))
         let extracted = FinalSource(evidence: .extracted("Topic\n- \(awkward)"), glossarySpellings: [])
-        XCTAssertEqual(SynthesisJSON.string(extracted), try serialized(["evidence": "Topic\n- \(awkward)", "glossary_spellings": [String]()]))
+        XCTAssertEqual(SynthesisJSON.string(extracted), try serialized(["evidence": "Topic\n- \(awkward)", "glossary_spellings": [String]()]),
+                       "A conversation without a title or a start encodes as it did")
+
+        // The conversation's title and start, when it has them, beside the rest.
+        let dated = FinalSource(evidence: .conversation(payload), glossarySpellings: ["b/c"], userNotesAndBookmarks: NotePayload.all(source),
+                                photos: "P1", conversationTitle: "Q3 / \"launch\" é", conversationStarted: "Wednesday 2026-11-18, 14:05, America/Vancouver")
+        XCTAssertEqual(SynthesisJSON.string(dated), try serialized([
+            "evidence": whole, "glossary_spellings": ["b/c"], "user_notes_and_bookmarks": source.notesPayload, "photos": "P1",
+            "conversation_title": "Q3 / \"launch\" é", "conversation_started": "Wednesday 2026-11-18, 14:05, America/Vancouver"]))
+        let datedPrompt = MeetingSynthesis.finalPrompt(evidence: .extracted("Topic"), template: .auto, glossary: [], title: "Launch", started: "Wednesday 2026-11-18, 14:05, America/Vancouver")
+        XCTAssertTrue(datedPrompt.hasSuffix(SynthesisJSON.string(FinalSource(evidence: .extracted("Topic"), glossarySpellings: [], conversationTitle: "Launch",
+                                                                         conversationStarted: "Wednesday 2026-11-18, 14:05, America/Vancouver"))))
 
         let prompt = MeetingSynthesis.finalPrompt(evidence: .conversation(payload), template: .auto, glossary: ["Daybook"])
         XCTAssertTrue(prompt.hasSuffix(SynthesisJSON.string(FinalSource(evidence: .conversation(payload), glossarySpellings: ["Daybook"]))))

@@ -262,6 +262,26 @@ final class CloudSummarizerTests: XCTestCase {
         XCTAssertGreaterThan(try XCTUnwrap(high), estimate)
     }
 
+    func testBehaviorTheCloudPromptCarriesTheConversationsTitleAndDateAndNothingMoreAboutIt() {
+        var meeting = meeting()
+        meeting.title = "Weekly sync at 10:15 AM"
+        meeting.date = Date(timeIntervalSince1970: 0)
+        meeting.tracks = [RecordingTrack(source: .microphone, relativePath: "m.caf", fileName: "m.caf", startedAt: Date(timeIntervalSince1970: 1_795_035_900))]
+        let zone = TimeZone(identifier: "America/Phoenix")!
+        let built = CloudSynthesis.prompt(source: MeetingEvidence.summarySource(meeting, timeZone: zone), template: .auto, glossary: [],
+                                          templateInstructions: nil, provider: .anthropic)
+        XCTAssertTrue(built.prompt.contains(#""conversation_title":"Weekly sync""#))
+        XCTAssertTrue(built.prompt.contains(#""conversation_started":"Wednesday 2026-11-18, 14:05, America/Phoenix""#))
+        XCTAssertFalse(built.prompt.contains("1970"), "The conversation's own date is not what it began")
+        XCTAssertTrue(built.instructions.contains("title and date, when given, are context"))
+
+        meeting.title = "Untitled Conversation"
+        meeting.tracks[0].startedAt = nil
+        let bare = CloudSynthesis.prompt(source: MeetingEvidence.summarySource(meeting, timeZone: zone), template: .auto, glossary: [],
+                                         templateInstructions: nil, provider: .anthropic)
+        XCTAssertFalse(bare.prompt.contains("conversation_title") || bare.prompt.contains("conversation_started"), "A placeholder and no known start send neither")
+    }
+
     func testBehaviorWithoutAKeyOrATranscriptThereIsNoSummary() async throws {
         let server = FakeCloudServer()
         let summarizer = await summarizer(server, keys: [:]) { _ in .anthropicReply(["{}"]) }
