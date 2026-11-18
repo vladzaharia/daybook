@@ -77,17 +77,22 @@ public struct SummarySource: Sendable, Equatable {
 
         /// A title the person or the calendar gave: the conversation's own, with the time Daybook adds to a recording's
         /// ("Weekly sync at 10:15 AM") taken off, and nil for a placeholder (none, "Untitled Conversation", "Note",
-        /// "Conversation", "Microphone", an iPhone or recorder's name) or a title that is only a time. The title a summary
+        /// "Conversation", "Microphone", a device's name alone such as "Alex’s iPhone") or a title that is only a time. The title a summary
         /// model wrote is the summary's (`MeetingSummary.title`), never the conversation's, and is never sent: a
         /// re-summary would be anchored on the earlier one's guess.
         public static func title(_ meeting: Meeting) -> String? {
             var title = meeting.title.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
             if let time = title.range(of: #" at \d{1,2}[:.]\d{2}.*$"#, options: .regularExpression) { title.removeSubrange(time.lowerBound...) }
             let lowered = title.lowercased()
-            guard !title.isEmpty, !placeholders.contains(lowered), !lowered.contains("iphone"), !lowered.contains("apple watch"),
+            guard !title.isEmpty, !placeholders.contains(lowered), lowered.range(of: deviceName, options: .regularExpression) == nil,
                   title.contains(where: \.isLetter) else { return nil }
             return title.count > titleLength ? String(title.prefix(titleLength)) + "…" : title
         }
+
+        /// A title that is a device's name and nothing more: the name Daybook gives a recording made on an iPhone, an iPad, or
+        /// an Apple Watch ("iPhone", "Apple Watch", "Alex’s iPhone"; `Meeting.defaultTitle` with `RecordingWords.baseName`).
+        /// "iPhone launch review" is a title.
+        private static let deviceName = #"^(.+['’]s )?(iphone|ipad|apple watch)$"#
 
         private static let placeholders = Set((["Untitled meeting", "Untitled Conversation", "Imported recording", "Conversation", "Note", "Recorder"]
             + AudioSource.allCases.map(\.recordingName)).map { $0.lowercased() })

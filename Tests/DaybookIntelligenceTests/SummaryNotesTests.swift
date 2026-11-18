@@ -424,13 +424,16 @@ final class SummaryNotesTests: XCTestCase {
     func testBehaviorOnlyATitleThePersonOrTheCalendarGaveIsSent() {
         func title(_ value: String) -> String? { SummarySource.Context.title(Meeting(title: value)) }
         for placeholder in ["", "  \n ", "Untitled meeting", "Untitled Conversation", "untitled conversation", "Imported recording", "Note at 10:15 AM",
-                            "Conversation at 10:15 AM", "Microphone at 3:50 PM", "Soundcore Work at 10:02 AM", "Alex’s iPhone at 3:50 PM",
+                            "Conversation at 10:15 AM", "Microphone at 3:50 PM", "Soundcore Work at 10:02 AM", "Alex’s iPhone at 3:50 PM", "Alex's iPhone", "Alex’s iPhone", "iPhone", "Apple Watch", "Alex’s Apple Watch at 9:00 AM", "iPad",
                             "Apple Watch at 9:00 AM", "Conversation at 10:15", "Imported file", "2026-11-18", "10:15"] {
             XCTAssertNil(title(placeholder), "“\(placeholder)” is a placeholder")
         }
         XCTAssertEqual(title("Q4 launch review"), "Q4 launch review", "Typed")
         XCTAssertEqual(title("Weekly sync at 10:15 AM"), "Weekly sync", "A calendar event's name, without the time Daybook added")
         XCTAssertEqual(title("Interview"), "Interview", "A file's name")
+        XCTAssertEqual(title("iPhone launch review"), "iPhone launch review", "A subject that starts with a device's name")
+        XCTAssertEqual(title("Apple Watch battery complaints"), "Apple Watch battery complaints")
+        XCTAssertEqual(title("Alex’s iPhone trade-in"), "Alex’s iPhone trade-in")
         XCTAssertEqual(title("Budget\nreview \n"), "Budget review", "One line")
         let long = String(repeating: "Roadmap ", count: 40)
         XCTAssertEqual(try XCTUnwrap(title(long)).count, SummarySource.Context.titleLength + 1, "Bounded, with an ellipsis")
