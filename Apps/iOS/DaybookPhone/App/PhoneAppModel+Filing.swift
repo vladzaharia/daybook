@@ -479,7 +479,7 @@ enum UnrecordedCapture {
             meeting.adoptInk(journal.ink ?? [])
         }
         // Pages written meanwhile: the timeline's seconds when there was one (the first sample arrived), nothing without.
-        try await library.filePages(journal.pages ?? [], clock: [], from: folder, in: id, placing: .timeline(shift: shift))
+        try await library.filePages(journal.pages ?? [], clock: [], turns: journal.pageTurns ?? [], from: folder, in: id, placing: .timeline(shift: shift))
         for photo in journal.photos ?? [] {
             let url = folder.appendingPathComponent(photo.fileName)
             guard FileManager.default.fileExists(atPath: url.path) else { continue }
@@ -528,7 +528,7 @@ extension PhoneLibrary {
     /// drawing it was loaded with), is placed (`placed`), and joins through `Meeting.adoptRecordedPages`. A page the recording
     /// made and wrote nothing on isn't filed. `clock` is the recorder's samples, kept with the track once.
     /// Throws `PhoneRecorderError.locked` while a file can't be read until the iPhone is unlocked: the folder then stays.
-    func filePages(_ captured: [CapturePage], clock: [RecordingClockSample], from folder: URL, in id: UUID, placing: PagePlacement) async throws {
+    func filePages(_ captured: [CapturePage], clock: [RecordingClockSample], turns: [PageTurn] = [], from folder: URL, in id: UUID, placing: PagePlacement) async throws {
         var recorded: [RecordedPage] = []
         for entry in captured {
             var page = entry.page
@@ -548,7 +548,23 @@ extension PhoneLibrary {
             }
             recorded.append(RecordedPage(page: Self.placed(page, base: entry.base, placing: placing), base: entry.base))
         }
-        if !recorded.isEmpty { controller.update(id) { $0.adoptRecordedPages(recorded) } }
+        if !recorded.isEmpty {
+            controller.update(id) { $0.adoptRecordedPages(recorded) }
+            // What was written last may not have been read yet (Stop never waits for reading): read now, quietly.
+            Task(priority: .utility) { await self.readPages(in: id) }
+        }
+        // Turns of pages that were filed: one that names a page the conversation never got (a blank page) leaves it out.
+        if !turns.isEmpty {
+            controller.update(id) { meeting in
+                let known = Set((meeting.pages ?? []).map(\.id))
+                for turn in turns {
+                    let open = turn.pages.filter(known.contains)
+                    if open.isEmpty, !turn.pages.isEmpty { continue }
+                    let placed = Self.placed(trackID: turn.trackID, time: turn.time, placing: placing)
+                    meeting.logPageTurn(PageTurn(at: turn.at, pages: open, trackID: placed.0, time: placed.1))
+                }
+            }
+        }
         if case .track(let track) = placing, !clock.isEmpty {
             controller.update(id) { meeting in
                 if let index = meeting.tracks.firstIndex(where: { $0.id == track }), meeting.tracks[index].clockSamples == nil {
@@ -562,16 +578,19 @@ extension PhoneLibrary {
     /// (the recording's own) and that carries seconds into the recording, with no track yet. One the conversation had (the same
     /// ID and start, though its strokes, words and bounds may have changed since) keeps the track and seconds it had: it was
     /// written in an earlier recording, or on the timeline, and this recording's clock says nothing of it.
-    static func placed(_ page: NotebookPage, base: NotebookPage?, placing: PagePlacement) -> NotebookPage {
-        func place(_ trackID: UUID?, _ time: TimeInterval?) -> (UUID?, TimeInterval?) {
-            guard trackID == nil, let time else { return (trackID, time) }
-            switch placing {
-            case .track(let track): return (track, time)
-            case .timeline(let shift):
-                guard let shift else { return (nil, nil) }
-                return (nil, time + shift)
-            }
+    /// Where a moment written during the recording falls: a time with no track yet follows `placing`.
+    static func placed(trackID: UUID?, time: TimeInterval?, placing: PagePlacement) -> (UUID?, TimeInterval?) {
+        guard trackID == nil, let time else { return (trackID, time) }
+        switch placing {
+        case .track(let track): return (track, time)
+        case .timeline(let shift):
+            guard let shift else { return (nil, nil) }
+            return (nil, time + shift)
         }
+    }
+
+    static func placed(_ page: NotebookPage, base: NotebookPage?, placing: PagePlacement) -> NotebookPage {
+        func place(_ trackID: UUID?, _ time: TimeInterval?) -> (UUID?, TimeInterval?) { placed(trackID: trackID, time: time, placing: placing) }
         var result = page
         let known = base?.reading?.passages ?? []
         if var reading = result.reading {
