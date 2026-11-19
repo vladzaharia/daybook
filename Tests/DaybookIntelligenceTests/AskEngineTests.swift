@@ -55,7 +55,7 @@ final class AskEngineTests: XCTestCase {
         func add(_ event: AskProgress) { lock.withLock { _all.append(event) } }
     }
 
-    private func ask(_ engine: AskEngine, _ question: String = "What did Sam commit to?", scope: AskScope = AskScope(), events: Events = Events()) async throws -> AskReply {
+    private func ask(_ engine: AskEngine, _ question: String = "What did Sam commit to about the comparison sheet?", scope: AskScope = AskScope(), events: Events = Events()) async throws -> AskReply {
         try await engine.ask(question, scope: scope, in: library, now: Date(timeIntervalSince1970: 1_763_000_000), progress: { events.add($0) })
     }
 
@@ -112,9 +112,62 @@ final class AskEngineTests: XCTestCase {
         let reply = try await ask(engine, events: events)
         XCTAssertEqual(reply.answer.status, .answered)
         XCTAssertEqual(answerer.asked, 4)
-        XCTAssertEqual(events.all.filter { $0 == .waiting }.count, 1, "it says so once")
+        XCTAssertEqual(events.all.filter { $0 == .waiting }.count, 3, "it says so on every try, so the interface keeps showing it")
         let waiting = try XCTUnwrap(events.all.firstIndex(of: .waiting)), answering = try XCTUnwrap(events.all.firstIndex(of: .answering))
         XCTAssertLessThan(waiting, answering)
+    }
+
+    func testAQuestionGivesUpAfterTheWaitLimit() async {
+        let answerer = Answerer(model: ScriptedSynthesisModel { _ in self.good }, busy: .max)
+        let engine = AskEngine(answerer: answerer, retryDelay: .milliseconds(5), waitLimit: .milliseconds(40))
+        let events = Events()
+        do {
+            _ = try await ask(engine, events: events)
+            XCTFail("It waited too long")
+        } catch AskError.waitedTooLong {
+            XCTAssertTrue(events.all.contains(.waiting))
+        } catch {
+            XCTFail("\(error)")
+        }
+    }
+
+    func testPersonalPassagesAreNotGivenToTheModelWhenTheLockLockedWhileTheQuestionWaited() async throws {
+        let model = ScriptedSynthesisModel { _ in self.good }
+        let answerer = Answerer(model: model, busy: 2)
+        let state = Access(.included)
+        let engine = AskEngine(answerer: answerer, retryDelay: .milliseconds(5))
+        let events = Events()
+        let sentTo = Task { try await engine.ask("Whose comparison sheet is ready?", scope: AskScope(personal: .included), in: self.library,
+                                                 now: Date(timeIntervalSince1970: 1_763_000_000), personal: { state.value }, progress: { events.add($0) }) }
+        while answerer.asked < 1 { try await Task.sleep(for: .milliseconds(2)) }
+        state.value = .locked
+        let reply = try await sentTo.value
+        XCTAssertFalse(model.prompts.joined().contains("vacation"), "the evidence was read again without Personal")
+        XCTAssertNotNil(reply.answer.query)
+    }
+
+    func testAnAnswerMadeFromPersonalPassagesIsNotReturnedWhenTheLockLockedMeanwhile() async throws {
+        let state = Access(.included)
+        let model = ScriptedSynthesisModel { prompt in
+            if prompt.contains("vacation") { state.value = .locked }
+            return #"{"status":"answered","sentences":[{"text":"It is ready.","cites":["P1"],"quote":"comparison sheet for the vacation fund is ready"}]}"#
+        }
+        let engine = AskEngine(answerer: Answerer(model: model))
+        let events = Events()
+        var personalOnly = AskScope(search: .personal, personal: .included)
+        personalOnly.conversation = library[1].id
+        let reply = try await engine.ask("Whose comparison sheet is ready?", scope: personalOnly, in: library, now: Date(timeIntervalSince1970: 1_763_000_000),
+                                         personal: { state.value }, progress: { events.add($0) })
+        XCTAssertEqual(reply.answer.status, .notFound(.nothingFound), "asked again without Personal, nothing is left")
+        XCTAssertTrue(reply.answer.sentences.isEmpty)
+        XCTAssertFalse(events.all.contains { if case .sentence = $0 { return true } else { return false } }, "nothing from it was shown")
+    }
+
+    private final class Access: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _value: AskScope.Personal
+        init(_ value: AskScope.Personal) { _value = value }
+        var value: AskScope.Personal { get { lock.withLock { _value } } set { lock.withLock { _value = newValue } } }
     }
 
     func testCancellingWhileWaitingStopsAndShowsNothing() async throws {

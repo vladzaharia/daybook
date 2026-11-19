@@ -147,6 +147,55 @@ final class AskIndexTests: XCTestCase {
         XCTAssertFalse(open.contains(personal.id), "an update while locked drops it too")
     }
 
+    func testAConversationMovedIntoPersonalIsDroppedByItsPlacementNow() {
+        var moved = meeting("Moved", passages: [("s", "The vacation budget is eighty dollars.")], speakers: ["s": "Sam"])
+        let index = LibraryPassageIndex()
+        index.update([moved], personal: .included)
+        XCTAssertTrue(index.contains(moved.id))
+        moved.placement = .personal
+        index.update([moved], personal: .locked)
+        XCTAssertFalse(index.contains(moved.id), "an update while locked drops it by where it is filed now")
+        index.update([moved], personal: .included)
+        XCTAssertTrue(index.contains(moved.id))
+        index.dropPersonal(in: [moved])
+        XCTAssertFalse(index.contains(moved.id))
+        var other = moved
+        other.placement = .work
+        index.update([other], personal: .included)
+        other.placement = .personal
+        index.dropPersonal(in: [other])
+        XCTAssertFalse(index.contains(other.id), "moved to Personal since it was indexed")
+    }
+
+    func testAPersonalPieceBeingBuiltWhenTheLockLocksIsNotKept() {
+        let personal = meeting("Private", placement: .personal, passages: [("s", "The vacation budget is eighty dollars.")])
+        let work = meeting("Work", passages: [("s", "The budget review is Thursday.")])
+        let index = LibraryPassageIndex()
+        _ = index.index(for: personal, afterBuild: { index.dropPersonal() })
+        XCTAssertFalse(index.contains(personal.id))
+        _ = index.index(for: work, afterBuild: { index.dropPersonal() })
+        XCTAssertTrue(index.contains(work.id), "only Personal pieces are kept out")
+    }
+
+    func testAPromiseThatIsRefusedIsNotAPromise() {
+        XCTAssertFalse(ConversationAskIndex.promises("I can't make Thursday."))
+        XCTAssertFalse(ConversationAskIndex.promises("I cannot make Thursday."))
+        XCTAssertFalse(ConversationAskIndex.promises("I will not send it."))
+        XCTAssertFalse(ConversationAskIndex.promises("I'll not be there."))
+        XCTAssertTrue(ConversationAskIndex.promises("I can send it Thursday."))
+        XCTAssertTrue(ConversationAskIndex.promises("I'll send it."))
+        XCTAssertTrue(ConversationAskIndex.promises("Let me check."))
+    }
+
+    func testHowAPromiseWasSaidAloneNeverBringsAPieceOverTheFloor() throws {
+        let sam = meeting("Sync", passages: [("s", "I'll bring the donuts on Friday afternoon."), ("p", "Thanks, that will be lovely.")])
+        let found = try retrieve("What did Sam commit to?", [sam] + filler())
+        XCTAssertEqual(found.query.kind, .commitment)
+        XCTAssertNil(found.evidence, "no word is shared with the question, so nothing is read")
+        let shared = try retrieve("What did Sam commit to bringing?", [sam] + filler())
+        XCTAssertNotNil(shared.evidence)
+    }
+
     func testUnlockedPersonalIsInAllAndPersonalAndAFocusLeavesItOutOfEveryScope() throws {
         let work = meeting("Work", passages: [("s", "The vacation budget is a work topic too.")])
         let personal = meeting("Private", placement: .personal, passages: [("s", "The vacation budget is eighty dollars.")])
@@ -221,7 +270,7 @@ final class AskIndexTests: XCTestCase {
     func testAQuestionNamingAPersonReadsTheirWordsAndCommitments() throws {
         let one = meeting("One", passages: [("s", "I'll send the comparison sheet to finance by Friday."), ("p", "I will rewrite the welcome email this week.")])
         let two = meeting("Two", passages: [("p", "Priya here, the comparison sheet looks fine to me.")])
-        let found = try retrieve("What did Sam commit to?", [one, two])
+        let found = try retrieve("What did Sam commit to about the comparison sheet?", [one, two])
         XCTAssertEqual(found.query.people, ["Sam"])
         XCTAssertTrue(found.query.filtersPeople)
         XCTAssertEqual(found.query.kind, .commitment)

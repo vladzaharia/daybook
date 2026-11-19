@@ -101,9 +101,9 @@ struct ConversationAskIndex: Sendable {
                     start: transcript[range.lowerBound].start, speakers: speakers, committers: committers))
     }
 
-    /// Whether a passage says someone will do something.
+    /// Whether a passage says someone will do something. "I can't", "I won't", "I will not", and "I'll not" don't.
     static func promises(_ text: String) -> Bool {
-        text.range(of: #"\b(I'll|I’ll|I will|let me|I can|I'm going to|I’m going to|we'll|we’ll|we will)\b"#,
+        text.range(of: #"\b(I'll|I’ll|I will|let me|I can|I'm going to|I’m going to|we'll|we’ll|we will)\b(?!['’]t)(?!\s+not\b)"#,
                    options: [.regularExpression, .caseInsensitive]) != nil
     }
 

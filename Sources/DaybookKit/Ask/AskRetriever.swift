@@ -103,17 +103,11 @@ public struct AskRetriever: Sendable {
                 }
             }
             let recency = 1 + 0.03 * candidates[position].date.timeIntervalSince(oldest) / span
-            // What someone promised is found by how they said it ("I'll", "let me") as much as by the question's words,
-            // which rarely include "I'll": a question about commitments reads those passages and the summaries'
-            // commitments even where it shares no word with them.
-            if query.kind == .commitment {
-                for (unit, piece) in conversation.units.enumerated() where sums[Int32(unit)] == nil && Self.promised(piece, by: query.people) {
-                    sums[Int32(unit)] = 0
-                }
-            }
             for (unit, sum) in sums {
                 let piece = conversation.units[Int(unit)]
                 guard let factor = factor(of: piece, for: query) else { continue }
+                // A piece in the words of a promise, by the person asked about, counts more, but only when it shares a word
+                // with the question: nothing rises over the floor on how it was said alone.
                 let bonus = query.kind == .commitment && Self.promised(piece, by: query.people) ? Self.promiseBonus : 0
                 scored.append(Scored(conversation: position, unit: Int(unit), score: (sum + bonus) * factor * recency))
             }

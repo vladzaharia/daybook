@@ -9,6 +9,10 @@ public enum AskWords {
     /// The same when the search was narrower than the whole library: "Nothing in Work answers that."
     public static func notFound(in place: String) -> String { "Nothing in \(place) answers that." }
 
+    /// Under a partial answer: some of what the model wrote was left out because its quote wasn't in a passage, or the
+    /// passages answer only part of the question. A fixed phrase: the model's own words about what is missing are never shown.
+    public static let partial = "This answers only part of the question."
+
     /// What a citation of the person's own writing reads as, in place of a speaker.
     public static let fromYourNotes = "from your notes"
     public static let fromABookmark = "from a bookmark"
