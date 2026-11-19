@@ -113,6 +113,7 @@ struct LibraryView: View {
             Label(token.text, systemImage: token.symbol)
         }
         .searchSuggestions { suggestions }
+        .modifier(AskSearchModifier(state: state))
         .searchFocused($searchFocused)
         .onChange(of: state.searchFocusRequest) { _, _ in searchFocused = true }
         .onChange(of: state.window.searchText) { _, text in promoteHashTag(text) }
@@ -182,6 +183,8 @@ struct LibraryView: View {
     @ViewBuilder private var detail: some View {
         if let problem = state.libraryProblem {
             LibraryProblemPage(state: state, problem: problem)
+        } else if state.ask.isShown {
+            AnswerPage(state: state, ask: state.ask)
         } else if state.window.place.isDevice && !state.window.isSearching {
             DevicePage(state: state)
         } else if state.window.place.isTrash && !state.window.isSearching {
@@ -746,5 +749,40 @@ struct ElapsedTime: View {
                 .contentTransition(reduceMotion ? .opacity : .numericText(countsDown: false))
                 .animation(DaybookMotion.resolved(DaybookMotion.tick, reduceMotion: reduceMotion), value: Int(elapsed))
         }
+    }
+}
+
+/// Asking from the search field (docs/interface.md, "Asking a question"): Return asks a text that reads as a question
+/// (`AskQuestion`), ⌘Return asks anything, clearing the field or closing the window closes the answer, and the index of
+/// what Ask reads follows the library once it has loaded, and what the lock and a Focus allow.
+private struct AskSearchModifier: ViewModifier {
+    let state: AppState
+
+    private var indexKey: [Int] {
+        [state.isReady ? 1 : 0, state.libraryRevision, state.personalLock.isLocked ? 1 : 0, state.personalLock.focus.showsPersonal ? 1 : 0]
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .onSubmit(of: .search) { submit(command: NSApp.currentEvent?.modifierFlags.contains(.command) == true) }
+            .background {
+                Button("") { submit(command: true) }
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .frame(width: 0, height: 0)
+                    .opacity(0)
+                    .accessibilityHidden(true)
+            }
+            .onChange(of: state.window.searchText) { _, text in
+                if text.trimmingCharacters(in: .whitespaces).isEmpty { state.ask.close() }
+            }
+            .task(id: indexKey) { if state.isReady { state.ask.refreshIndex() } }
+            .onDisappear { state.ask.close() }
+    }
+
+    /// Return in the search field: text that reads as a question asks it; ⌘Return asks whatever is typed.
+    private func submit(command: Bool) {
+        let text = state.window.searchText
+        guard command ? !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty : AskQuestion.readsAsQuestion(text) else { return }
+        state.ask.ask(text)
     }
 }

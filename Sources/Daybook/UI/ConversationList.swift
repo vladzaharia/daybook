@@ -240,6 +240,11 @@ private struct SearchResults: View {
             // The control's edges line up with the result rows' highlight.
             .listRowInsets(EdgeInsets())
             .padding(.horizontal, -6.5)
+            if let question = askRowQuestion {
+                AskRowView(question: question) { state.ask.ask(question) }
+                    .selectionDisabled()
+                    .listRowSeparator(.hidden)
+            }
             ForEach(hits) { hit in
                 if let meeting = byID[hit.meetingID] {
                     SearchResultRowView(meeting: meeting, hit: hit).tag(hit.meetingID).listRowSeparator(.hidden)
@@ -253,7 +258,7 @@ private struct SearchResults: View {
         }
         .listStyle(.inset)
         .softTopScrollEdge()
-        .overlay { if hits.isEmpty && captionHits.isEmpty { ContentUnavailableView.search(text: state.window.searchText) } }
+        .overlay { if hits.isEmpty && captionHits.isEmpty && askRowQuestion == nil { ContentUnavailableView.search(text: state.window.searchText) } }
         .task(id: CaptionQuery(text: state.window.searchText, tokens: state.window.searchTokens, scope: state.window.searchScope, revision: state.libraryRevision)) {
             // The conversations the search could list (its scope and tokens), less those the text search found.
             let scoped = Set(LibrarySearch.hits(in: state.meetings, text: "", tokens: state.window.searchTokens, scope: state.window.searchScope).map(\.meetingID))
@@ -262,6 +267,12 @@ private struct SearchResults: View {
             guard !Task.isCancelled else { return }
             captionHits = found
         }
+    }
+
+    /// The question the first row asks: the typed text when it reads as a question, else the one that is open.
+    private var askRowQuestion: String? {
+        let typed = state.window.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return AskQuestion.readsAsQuestion(typed) ? typed : state.ask.question
     }
 
     /// The folder being viewed, which the scopes offer too.
@@ -278,6 +289,7 @@ enum MacSearch {
     /// both read until a newer transcript replaces the captions (`SavedCaptions`, as on the iPhone); a note at Your
     /// notes on the summary page (`LibraryWindowModel.showOnSummary`); the page's top for a title or a summary.
     static func open(_ id: UUID?, hits: [SearchHit], captionHits: [LibraryCaptionSearch.Hit], state: AppState) {
+        state.ask.leavePage()
         state.window.selection = []
         state.window.openID = id
         if let caption = captionHits.first(where: { $0.meeting.id == id }) {
@@ -753,5 +765,28 @@ private extension View {
     @ViewBuilder
     func softTopScrollEdge() -> some View {
         if #available(macOS 26, *) { scrollEdgeEffectStyle(.soft, for: .top) } else { self }
+    }
+}
+
+// MARK: - Ask
+
+/// The search results' first row when the words read as a question, or one is open: Return asks it, and so does the row.
+private struct AskRowView: View {
+    let question: String
+    let ask: () -> Void
+
+    var body: some View {
+        Button(action: ask) {
+            HStack(spacing: DaybookSpacing.s2) {
+                Image(systemName: "text.bubble").foregroundStyle(DaybookPalette.accent).accessibilityHidden(true)
+                Text(AskPageWords.askRow(question)).lineLimit(1).truncationMode(.tail)
+                Spacer(minLength: 0)
+            }
+            .daybookFont(.rowTitle)
+            .foregroundStyle(DaybookPalette.Ink.title)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.vertical, DaybookSpacing.s1)
     }
 }
