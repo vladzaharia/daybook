@@ -149,25 +149,37 @@ struct AnswerPage: View {
         }
     }
 
-    /// A sentence, then the numbers of the sources it rests on: VoiceOver reads the sentence, then each source.
+    /// A sentence with its source marks inline after the full stop, as a footnote reference sits: the words flow, and the
+    /// last word travels with the marks so a mark never starts a line alone. VoiceOver reads the sentence, then each source.
     private func sentenceRow(_ sentence: AskSentence, sources: [AskCitation]) -> some View {
-        MarginRow {
-            VStack(alignment: .leading, spacing: DaybookSpacing.s1) {
-                Text(ModelText.inlineMarkdown(sentence.text))
-                    .daybookFont(.body)
-                    .foregroundStyle(DaybookPalette.Ink.body)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-                HStack(spacing: DaybookSpacing.s1) {
-                    ForEach(Array(sentence.citations.enumerated()), id: \.offset) { _, citation in
-                        if let number = sources.firstIndex(where: { Self.same($0, citation) }).map({ $0 + 1 }) {
-                            CitationMark(number: number, label: spoken(number, citation)) { state.openCitation(citation) }
-                        }
+        let text = ModelText.inlineMarkdown(sentence.text)
+        let words = text.characters.split(whereSeparator: \.isWhitespace).map { AttributedString(text[$0.startIndex..<$0.endIndex]) }
+        let marks = sentence.citations.compactMap { citation in
+            sources.firstIndex(where: { Self.same($0, citation) }).map { (number: $0 + 1, citation: citation) }
+        }
+        return MarginRow {
+            FlowLayout(spacing: 4, lineSpacing: 2) {
+                ForEach(Array(words.dropLast().enumerated()), id: \.offset) { _, word in wordText(word) }
+                HStack(alignment: .firstTextBaseline, spacing: 2) {
+                    if let last = words.last { wordText(last) }
+                    ForEach(Array(marks.enumerated()), id: \.offset) { _, mark in
+                        CitationMark(number: mark.number, label: spoken(mark.number, mark.citation)) { state.openCitation(mark.citation) }
                     }
                 }
+                .fixedSize()
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(sentence.text)
         }
-        .accessibilityElement(children: .contain)
+    }
+
+    private func wordText(_ word: AttributedString) -> some View {
+        Text(word)
+            .daybookFont(.body)
+            .foregroundStyle(DaybookPalette.Ink.body)
+            .fixedSize()
+            .accessibilityHidden(true)
     }
 
     private func spoken(_ number: Int, _ citation: AskCitation) -> String {
@@ -302,7 +314,8 @@ struct AnswerPage: View {
     }
 }
 
-/// A small numbered mark after a sentence: the source it rests on. A button, so the keyboard reaches it.
+/// A small numbered mark after a sentence, set like a footnote reference in the link ink: the source it rests on. A
+/// button, so the keyboard reaches it.
 private struct CitationMark: View {
     let number: Int
     let label: String
@@ -313,9 +326,9 @@ private struct CitationMark: View {
             Text("\(number)")
                 .font(.system(size: 10, weight: .semibold).monospacedDigit())
                 .foregroundStyle(DaybookPalette.Ink.link)
-                .frame(minWidth: 16, minHeight: 16)
-                .background(Circle().stroke(DaybookPalette.Ink.faint, lineWidth: 1))
-                .contentShape(Circle())
+                .baselineOffset(5)
+                .padding(.horizontal, 1)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)

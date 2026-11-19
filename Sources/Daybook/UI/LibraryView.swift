@@ -55,7 +55,8 @@ struct LibraryView: View {
 
     /// The conversation whose controls the toolbar shows; on the device page, an imported recording's conversation.
     private var toolbarMeeting: Meeting? {
-        guard state.window.selection.count < 2 else { return nil }
+        // An answer is on the page: nothing of a conversation's applies.
+        guard state.window.selection.count < 2, !state.ask.isShown else { return nil }
         if state.window.place.isDevice && !state.window.isSearching {
             return state.deviceConversationID.flatMap { id in state.meetings.first { $0.id == id } }
         }
@@ -64,7 +65,7 @@ struct LibraryView: View {
 
     /// Whether the page is a conversation chosen in the list, which the inspector is for. A device's page has none.
     private var showsConversation: Bool {
-        !(state.window.place.isDevice && !state.window.isSearching) && state.window.selection.count < 2 && state.selectedMeeting != nil
+        !state.ask.isShown && !(state.window.place.isDevice && !state.window.isSearching) && state.window.selection.count < 2 && state.selectedMeeting != nil
     }
 
     var body: some View {
