@@ -264,6 +264,8 @@ final class AppState {
     /// Whether `cloud` has been made: until then nothing is being placed with it.
     var hasCloudSetup: Bool { cloudSetup != nil }
     let runtime: LocalIntelligenceRuntime
+    /// Asking across conversations: the question and its answer while the page is open (AskController.swift).
+    @ObservationIgnored lazy var ask = makeAskController()
     /// Keeps speaker profiles and conversations in step (AppState+SpeakerProfiles.swift).
     @ObservationIgnored lazy var speakerProfileCoordinator = makeSpeakerProfileCoordinator()
     /// Gives voices to speakers found without them, when this Mac is idle (AppState+SpeakerProfiles.swift).
@@ -615,8 +617,10 @@ final class AppState {
         switch event {
         case .locked:
             window.lockReturned { personalLock.firstShown(in: visibleMeetings)?.id }
+            ask.personalHidden()
         case .focusChanged:
             if !personalLock.focus.showsPersonal, window.place == .section(.personal) { window.place = .section(.all) }
+            if !personalLock.focus.showsPersonal { ask.personalHidden() }
         }
     }
 
