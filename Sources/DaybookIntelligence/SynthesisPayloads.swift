@@ -157,16 +157,21 @@ public enum FinalEvidence: Encodable, Equatable, Sendable {
 }
 
 /// The final pass's source data: the evidence and the vocabulary, with the notes and the passages near them
-/// in a long conversation, and the photos.
+/// in a long conversation, the photos, and the conversation's title and start when it has them
+/// (`SummarySource.Context`), left out of the encoding when it doesn't.
 struct FinalSource: Encodable {
     var evidence: FinalEvidence
     var glossarySpellings: [String]
     var userNotesAndBookmarks: [NotePayload]?
     var passagesNearNotesAndBookmarks: String?
     var photos: String?
+    var conversationTitle: String?
+    var conversationStarted: String?
 
     enum CodingKeys: String, CodingKey {
         case evidence
+        case conversationTitle = "conversation_title"
+        case conversationStarted = "conversation_started"
         case glossarySpellings = "glossary_spellings"
         case userNotesAndBookmarks = "user_notes_and_bookmarks"
         case passagesNearNotesAndBookmarks = "passages_near_notes_and_bookmarks"
