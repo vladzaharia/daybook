@@ -108,6 +108,8 @@ public final class NotebookSession {
         self.model = model
         // The first time, it opens at the pages written last; after that, where it was (a fold, table mode, and back).
         if !opened { opened = true; showLastPage() } else { reconcile() }
+        // Where the player is when the notebook opens, so the first passage written is timed.
+        model.sampleClock?()
     }
 
     /// The person's own words for a passage.
@@ -151,15 +153,32 @@ public final class NotebookSession {
     }
 
     private func open(_ page: NotebookPage) {
-        guard canvases[page.id] == nil, let model else { return }
+        guard let model else { return }
+        if let view = canvases[page.id] { refresh(page.id, view, model); return }
         let view = PageCanvasView(pageID: page.id, size: CGSize(width: page.width, height: page.height), paper: page.paper)
         view.began = { [weak self] view in self?.began(view) }
         view.changed = { [weak self] view in self?.changed(view) }
         view.sawPencil = { [weak self] in self?.pencilTouched() }
         view.touching = { [weak self] point in self?.writingPoint = point }
+        view.longPressed = { [weak self] point in self?.play(at: point, on: page.id) }
+        view.longPressEnabled = canPlay && pencilSeen
         canvases[page.id] = view
         view.apply(tool: ink.tool.pencilTool(color: ink.color), pencilOnly: pencilSeen)
         load(page.id, into: view, content: model.content(page.id))
+    }
+
+    /// A canvas nobody has written on since it loaded follows its page: strokes that arrived by sync replace it, and a page that
+    /// couldn't be fetched is tried again when it's shown again. A canvas written on is merged with them when it commits.
+    private func refresh(_ id: UUID, _ view: PageCanvasView, _ model: NotebookModel) {
+        guard !loading.contains(id), !dirty.contains(id) else { return }
+        switch model.content(id) {
+        case .strokes(let data):
+            if Self.sha256(data) != committed[id] { load(id, into: view, content: .strokes(data)) }
+        case .notLoaded:
+            load(id, into: view, content: .notLoaded)
+        case .blank:
+            break
+        }
     }
 
     private func load(_ id: UUID, into view: PageCanvasView, content: NotebookPageContent) {
@@ -172,9 +191,10 @@ public final class NotebookSession {
             view.load(drawing)
             committed[id] = Self.sha256(data)
             baseline[id] = NotebookReader.strokes(of: drawing)
+            erasedAt[id] = [:]
             view.isWritable = model?.isEditable ?? false
             loading.remove(id)
-            unavailable.remove(id)
+            if unavailable.remove(id) != nil { problem = nil }
         case .blank:
             view.load(PKDrawing())
             baseline[id] = []
@@ -209,6 +229,26 @@ public final class NotebookSession {
 
     public func isWritable(_ id: UUID) -> Bool { (model?.isEditable ?? false) && !loading.contains(id) && !unavailable.contains(id) }
 
+    // MARK: Playing
+
+    /// Whether a passage can be played from (a saved conversation's notebook).
+    public var canPlay: Bool { model?.play != nil }
+
+    /// Plays the conversation from when a passage was written.
+    public func play(_ passage: NotebookPassage, on page: NotebookPage) { model?.play?(passage, page) }
+
+    /// A long press on the handwriting: plays from the passage whose strokes are there (page points), the nearest when several are.
+    func play(at point: CGPoint, on id: UUID) {
+        guard let page = pages.first(where: { $0.id == id }) else { return }
+        let hits = page.passages.filter { CGRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height).insetBy(dx: -12, dy: -12).contains(point) }
+        let nearest = hits.min { distance(from: point, to: $0) < distance(from: point, to: $1) }
+        if let nearest { play(nearest, on: page) }
+    }
+
+    private func distance(from point: CGPoint, to passage: NotebookPassage) -> CGFloat {
+        hypot(point.x - (passage.x + passage.width / 2), point.y - (passage.y + passage.height / 2))
+    }
+
     // MARK: Writing
 
     private func began(_ view: PageCanvasView) {
@@ -242,6 +282,8 @@ public final class NotebookSession {
     private func pencilTouched() {
         guard !pencilSeen else { return }
         pencilSeen = true
+        // A finger no longer writes, so holding one on handwriting plays it.
+        for view in canvases.values { view.longPressEnabled = canPlay }
         applyTool()
     }
 
@@ -266,7 +308,7 @@ public final class NotebookSession {
         draftTasks[id] = Task { [weak self, delay = draftDelay] in
             try? await Task.sleep(for: delay)
             guard !Task.isCancelled, let self, let view = self.canvases[id], !self.pending.contains(where: { $0.id == id }) else { return }
-            _ = self.model?.saveDraft(id, view.drawing.dataRepresentation())
+            _ = self.model?.saveDraft(id, view.drawing.dataRepresentation(), self.committed[id])
         }
     }
 
@@ -298,10 +340,15 @@ public final class NotebookSession {
         guard let model, let view = canvases[id], isWritable(id) else { return }
         idleTasks[id]?.cancel()
         draftTasks[id]?.cancel()
-        let drawing = view.drawing
+        var drawing = view.drawing
         let marker = changes[id, default: 0]
         // A page with nothing on it that never had anything isn't kept.
         guard !drawing.strokes.isEmpty || committed[id] != nil else { dirty.remove(id); return }
+        // Strokes that reached the page by sync since this canvas loaded come along; when they can't be read, nothing is committed
+        // (the draft keeps the strokes) rather than replacing them.
+        guard let joined = await joiningStored(id, drawing), changes[id, default: 0] == marker else { return }
+        if joined.strokes.count != drawing.strokes.count { view.load(joined) }
+        drawing = joined
         let data = drawing.dataRepresentation()
         let sha = Self.sha256(data)
         if sha == committed[id] { if changes[id] == marker { dirty.remove(id) }; return }
@@ -312,10 +359,36 @@ public final class NotebookSession {
             problem = nil
             let strokes = NotebookReader.strokes(of: drawing)
             captureErasures(id, now: strokes)
-            if changes[id, default: 0] == marker { dirty.remove(id) }
+            // Strokes written while it committed: the draft the commit removed is written again.
+            if changes[id, default: 0] == marker { dirty.remove(id) } else { scheduleDraft(id) }
             read(id, drawing, sha: confirmed)
         } catch {
             problem = error.localizedDescription
+        }
+    }
+
+    /// The canvas's strokes with those the page has stored now that this canvas hasn't seen (it was loaded from, or last committed,
+    /// another drawing), minus the ones erased here since; the strokes as they are when the page is unchanged. Nil when the stored
+    /// drawing isn't on this iPhone (it's fetched first) or can't be opened.
+    private func joiningStored(_ id: UUID, _ drawing: PKDrawing) async -> PKDrawing? {
+        guard let model else { return drawing }
+        var content = model.content(id)
+        if case .notLoaded = content, let fetch = model.fetch, await fetch(id) { content = model.content(id) }
+        switch content {
+        case .blank:
+            return drawing
+        case .notLoaded:
+            problem = "This page’s writing isn’t available."
+            return nil
+        case .strokes(let data):
+            guard Self.sha256(data) != committed[id] else { return drawing }
+            guard let stored = try? PKDrawing(data: data) else {
+                problem = "This page’s writing couldn’t be opened."
+                return nil
+            }
+            let here = Set(NotebookReader.strokes(of: drawing).map(\.key))
+            let erasedHere = Set((baseline[id] ?? []).map(\.key)).subtracting(here)
+            return NotebookReader.merging(drawing, with: stored, erasedHere: erasedHere)
         }
     }
 

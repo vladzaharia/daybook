@@ -25,6 +25,18 @@ final class PageCanvasView: UIView, PKCanvasViewDelegate {
     /// Where a touch is on screen while it's down (window coordinates), and nil when it lifts: what floating controls step aside for.
     var touching: ((CGPoint?) -> Void)? { didSet { watcher.onTouch = touching } }
     private let watcher = PencilWatcher()
+    /// A finger held on the page (page points): what plays the conversation from that handwriting.
+    var longPressed: ((CGPoint) -> Void)?
+    /// Only once Apple Pencil has been used on a page, since until then a finger writes.
+    var longPressEnabled = false { didSet { holder.isEnabled = longPressEnabled } }
+    private lazy var holder: UILongPressGestureRecognizer = {
+        let recognizer = UILongPressGestureRecognizer(target: self, action: #selector(held(_:)))
+        recognizer.minimumPressDuration = 0.6
+        recognizer.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        recognizer.cancelsTouchesInView = false
+        recognizer.isEnabled = false
+        return recognizer
+    }()
 
     init(pageID: UUID, size: CGSize, paper: PagePaper) {
         self.pageID = pageID
@@ -48,11 +60,17 @@ final class PageCanvasView: UIView, PKCanvasViewDelegate {
         canvas.delegate = self
         content.addSubview(canvas)
         canvas.addGestureRecognizer(watcher)
+        canvas.addGestureRecognizer(holder)
         isAccessibilityElement = false
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    @objc private func held(_ recognizer: UILongPressGestureRecognizer) {
+        guard recognizer.state == .began else { return }
+        longPressed?(recognizer.location(in: content))
+    }
 
     var drawing: PKDrawing { canvas.drawing }
 

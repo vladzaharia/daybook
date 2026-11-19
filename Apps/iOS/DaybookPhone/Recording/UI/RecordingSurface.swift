@@ -102,7 +102,7 @@ struct RecorderScreen: View {
             let crease: CGFloat? = style == .notebook
                 ? CreaseGeometry.crease(width: proxy.size.width, leadingInset: proxy.safeAreaInsets.leading, trailingInset: proxy.safeAreaInsets.trailing)
                 : nil
-            NotebookScreen(session: notebook, notesInk: inkSession, state: surfaceState(asleep: false), actions: surfaceActions(), levels: levels,
+            NotebookScreen(session: notebook, notesInk: inkSession, source: .recording(state: surfaceState(asleep: false), actions: surfaceActions(), levels: levels),
                            close: { notebookOpen = false }, crease: crease)
         }
     }

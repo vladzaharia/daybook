@@ -21,7 +21,7 @@ extension NotebookModel {
             },
             fetch: { id in await model.fetchPageDrawing(id) },
             add: { recorder.addPage($0) },
-            saveDraft: { recorder.saveDraft($0, data: $1) },
+            saveDraft: { page, data, _ in recorder.saveDraft(page, data: data) },
             commit: { id, data, count, version in try recorder.commitPage(id, data: data, strokeCount: count, contentVersion: version) },
             applyReading: { recorder.applyPageReading($0, $1) },
             correct: { recorder.correctPassage(pageID: $0, passageID: $1, text: $2) },

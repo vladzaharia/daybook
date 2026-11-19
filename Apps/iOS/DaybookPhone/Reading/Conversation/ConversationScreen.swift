@@ -103,10 +103,13 @@ struct ConversationMoreMenu: View {
             PhoneActions.perform(id, on: [meeting.id], library: library, session: session, provider: provider,
                                  placement: placement, undoManager: undoManager)
         } custom: { action in
-            // Write by Hand under Take Photo, on a conversation being read; never on the open Duo's preview of one.
-            guard action.id == .addPhotos, session.reading else { return nil }
+            // Notebook, and Write by Hand (on a conversation being read, never on the open Duo's preview of one), under Take Photo.
+            guard action.id == .addPhotos else { return nil }
             return AnyView(Group {
-                Button { session.writeByHand(meeting.id) } label: { Label(InkWords.writeByHand, systemImage: InkWords.writeByHandSymbol) }
+                Button { session.notebookFor = meeting.id } label: { Label("Notebook", systemImage: "book.pages") }
+                if session.reading {
+                    Button { session.writeByHand(meeting.id) } label: { Label(InkWords.writeByHand, systemImage: InkWords.writeByHandSymbol) }
+                }
                 Button {
                     PhoneActions.perform(action.id, on: [meeting.id], library: library, session: session, provider: provider,
                                          placement: placement, undoManager: undoManager)

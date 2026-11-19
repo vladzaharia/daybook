@@ -58,12 +58,49 @@ extension PhoneAppModel {
         }
     }
 
+    /// `--notebook-conversation --demo-pages`: the same three pages in a saved conversation, read and timed on its timeline.
+    func seedDemoPages(in id: UUID) async {
+        let controller = library.controller
+        guard controller.meeting(id)?.pages == nil else { return }
+        let ink = InkColor.self
+        func words(_ text: String, _ y: CGFloat, after: TimeInterval, _ colour: InkColor = .black) -> SyntheticInk.Passage {
+            .init(.words(text), at: CGPoint(x: 66, y: y), size: 34, after: after, color: colour.uiColor.cgColor)
+        }
+        let begun = Date()
+        let drawings: [PKDrawing] = [
+            SyntheticInk.page(passages: [words("hello world", 110, after: 0), words("world hello", 190, after: 8, ink.blue),
+                                         words("hello", 276, after: 14, ink.red)], start: begun),
+            SyntheticInk.page(passages: [.init(.sketch, at: CGPoint(x: 80, y: 160), size: 150, after: 4, color: ink.blue.uiColor.cgColor),
+                                         words("hello", 420, after: 12, ink.red)], start: begun),
+        ]
+        for (index, drawing) in drawings.enumerated() {
+            var page = NotebookPage(order: Double(index + 1), origin: .thisIPhone(installation: library.installationID))
+            if index == 1 { page.paper = .plain }
+            controller.addPage(page, to: id)
+            let data = drawing.dataRepresentation()
+            guard let stored = try? await controller.commitPageDrawing(data, page: page.id, in: id, strokeCount: drawing.strokes.count,
+                                                                       contentVersion: drawing.requiredContentVersion.rawValue, device: nil) else { continue }
+            // Written during the conversation: timed on its timeline, from 30 s in.
+            let reading = await NotebookReader.read(drawing, sha256: stored.sha256, page: page) { moment in (nil, 30 + moment.timeIntervalSince(begun)) }
+            controller.applyPageReading(reading, to: page.id, in: id)
+        }
+    }
+
     /// What the launch arguments ask for, once the library, sync, and the link are up.
     func runLaunchDemos() {
         if options.deviceAutopilot { runDeviceAutopilot() }
         if options.handoffDemo != nil || options.demoLiveCaptions || options.demoTransfer != nil { runStatusDemo() }
         if PhonePlacementDemo.scenario != nil { Task { await PhonePlacementDemo.apply(to: self) } }
         if PhoneUpgradeDemo.scenario != nil { Task { await PhoneUpgradeDemo.apply(to: self) } }
+        if options.notebookConversation {
+            Task {
+                for _ in 0..<100 where !(library.controller.isLoaded && !library.controller.meetings.isEmpty) { try? await Task.sleep(for: .milliseconds(200)) }
+                try? await Task.sleep(for: .seconds(2))
+                guard let newest = library.controller.meetings.max(by: { $0.updatedAt < $1.updatedAt }) else { return }
+                if options.demoPages { await seedDemoPages(in: newest.id) }
+                pendingNotebook = newest.id
+            }
+        }
         Task {
             if options.startRecording, !recorder.isActive {
                 try? await startRecording()

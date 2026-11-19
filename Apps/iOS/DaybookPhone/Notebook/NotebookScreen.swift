@@ -4,21 +4,28 @@ import DaybookKit
 import DaybookUI
 import SwiftUI
 
-/// The notebook while recording: the pages the recording writes on, with the recorder as a pill in the top-right corner
-/// (docs/notebook.md). Typed notes are a card over the right page (a sheet when only one page shows). It shows in place of the
-/// recorder on the open Duo, and as one page when the Duo is folded shut with it open.
+/// The notebook: the pages a recording writes on, with the recorder as a floating pill (docs/notebook.md), or a saved
+/// conversation's pages, with Done in its place. Typed notes are a card over the right page (a sheet when only one page shows). A
+/// recording's shows in place of the recorder on the open Duo, and as one page when the Duo is folded shut with it open; a
+/// conversation's is full screen in any posture.
 struct NotebookScreen: View {
+    /// What the pages belong to.
+    enum Source {
+        case recording(state: RecorderSurfaceState, actions: RecorderSurfaceActions, levels: RecorderLevels)
+        case conversation(UUID)
+    }
+
     let session: NotebookSession
     /// The notes' own pen state, shared with the recorder's, so Write by Hand means the same in both.
     let notesInk: InkSession
-    let state: RecorderSurfaceState
-    let actions: RecorderSurfaceActions
-    let levels: RecorderLevels
-    /// The notebook closes, back to the recorder.
+    let source: Source
+    /// The notebook closes: back to the recorder, or Done.
     let close: () -> Void
     /// Where the display folds, nil when it's one display.
     let crease: CGFloat?
     @Environment(PhoneAppModel.self) private var model
+    @Environment(ReadingSession.self) private var reading
+    @Environment(\.audioProvider) private var provider
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var panel: Panel?
@@ -38,8 +45,7 @@ struct NotebookScreen: View {
         NotebookSpread(session: session, crease: crease) { collapsed, set, _ in
             tools(collapsed: collapsed, set: set)
         } pill: { collapsed, set, available in
-            RecorderPill(state: state, levels: levels, actions: actions, paging: paging, close: close,
-                         collapsed: collapsed, expand: { set(false) }, available: available)
+            pill(collapsed: collapsed, set: set, available: available)
         } caption: {
             caption
         } card: { frame, isSpread in
@@ -51,8 +57,18 @@ struct NotebookScreen: View {
         }
         .overlay(alignment: .bottom) { problem }
         .onAppear {
-            session.bind(.recording(model))
-            model.settleNotebook = { [weak session] in await session?.settleForStop() }
+            switch source {
+            case .recording:
+                session.bind(.recording(model))
+                model.settleNotebook = { [weak session] in await session?.settleForStop() }
+            case .conversation(let id):
+                let drafts = PageDrafts(root: model.library.rootURL, meeting: id)
+                Task {
+                    // What a crash cut off is committed before the pages open.
+                    await drafts.recover(in: id, library: model.library.controller)
+                    session.bind(.conversation(id, model: model, player: reading.player, provider: provider, drafts: drafts))
+                }
+            }
             if let page = model.options.notebookPage {
                 Task { try? await Task.sleep(for: .seconds(16)); session.show(slot: page - 1) }
             }
@@ -64,11 +80,25 @@ struct NotebookScreen: View {
             }
         }
         .onDisappear {
-            model.settleNotebook = nil
+            if case .recording = source { model.settleNotebook = nil }
+            if case .conversation = source { reading.player.moved = nil }
             Task { await session.close() }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { Task { await session.settle(.background) } }
+        }
+        // Strokes that arrive by sync replace a page nobody has written on since it loaded, and a page that couldn't be fetched is tried again.
+        .onChange(of: session.pages.map { $0.drawing?.sha256 }) { _, _ in session.reconcile() }
+    }
+
+    @ViewBuilder private func pill(collapsed: Bool, set: @escaping (Bool) -> Void, available: CGFloat) -> some View {
+        switch source {
+        case .recording(let state, let actions, let levels):
+            RecorderPill(state: state, levels: levels, actions: actions, paging: paging, close: close,
+                         collapsed: collapsed, expand: { set(false) }, available: available)
+        case .conversation:
+            RecorderPill(state: nil, levels: RecorderLevels(), actions: RecorderSurfaceActions(bookmark: {}, stop: {}), paging: paging,
+                         close: close, collapsed: collapsed, expand: { set(false) }, available: available)
         }
     }
 
@@ -176,11 +206,52 @@ struct NotebookScreen: View {
     @ViewBuilder private func content(_ panel: Panel) -> some View {
         switch panel {
         case .notes:
-            RecordingNotes(session: notesInk)
+            switch source {
+            case .recording: RecordingNotes(session: notesInk)
+            case .conversation(let id): ConversationNotesCard(id: id, library: model.library.controller, session: notesInk)
+            }
         case .words(let id):
             if let page = session.pages.first(where: { $0.id == id }) {
-                PageWordsList(page: page, correct: { passage, text in session.correct(page: id, passage: passage, text: text) })
+                PageWordsList(page: page, correct: { passage, text in session.correct(page: id, passage: passage, text: text) },
+                              play: session.canPlay ? { session.play($0, on: page) } : nil)
             }
+        }
+    }
+}
+
+/// A saved conversation's typed notes, in the card over the right page: the editor the conversation's page uses.
+private struct ConversationNotesCard: View {
+    let id: UUID
+    let library: LibraryController
+    let session: InkSession
+
+    var body: some View {
+        if let meeting = library.meeting(id) {
+            let notes = Binding(get: { library.meeting(id)?.notes ?? meeting.notes }, set: { library.editNotes(id, text: $0) })
+            WritableNotes(session: session) {
+                MarginNotesEditor(text: notes, times: meeting.paragraphTimes(), placeholder: "Add a note…", lane: 0, scrolls: true,
+                                  ink: .conversation(id, library: library, session: session))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+}
+
+/// A saved conversation's notebook over the whole display, in any posture: two pages split at the crease when the Duo is open, one
+/// page otherwise.
+struct ConversationNotebook: View {
+    let id: UUID
+    let done: () -> Void
+    @Environment(\.surfaceStyle) private var style
+    @State private var notebook = NotebookSession()
+    @State private var notesInk = InkSession()
+
+    var body: some View {
+        GeometryReader { proxy in
+            let crease: CGFloat? = style == .notebook
+                ? CreaseGeometry.crease(width: proxy.size.width, leadingInset: proxy.safeAreaInsets.leading, trailingInset: proxy.safeAreaInsets.trailing)
+                : nil
+            NotebookScreen(session: notebook, notesInk: notesInk, source: .conversation(id), close: done, crease: crease)
         }
     }
 }
