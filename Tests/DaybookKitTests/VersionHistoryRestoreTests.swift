@@ -35,6 +35,53 @@ final class VersionHistoryRestoreTests: XCTestCase {
                       "a caption's words are compared")
     }
 
+    func testBehaviorPageChangesAreSaidByTheirTitleAndADeletedPageCanBePutBack() {
+        var meeting = Meeting(title: "Notebook")
+        let page = NotebookPage(order: 1)
+        meeting.addPage(page)
+        meeting.removePage(page.id)
+        let removal = meeting.revisions[1]
+        XCTAssertEqual(meeting.revisions.map { RevisionText.title($0, in: meeting) }, ["Page added", "Page deleted"])
+        for revision in meeting.revisions { XCTAssertFalse(RevisionText.showsComparison(revision), revision.newValue) }
+        XCTAssertFalse(RevisionRestore.canRestore(meeting.revisions[0], in: meeting), "adding isn't undone from here")
+        XCTAssertTrue(RevisionRestore.canRestore(removal, in: meeting))
+        RevisionRestore.apply(removal, to: &meeting)
+        XCTAssertEqual(meeting.visiblePages.map(\.id), [page.id])
+        XCTAssertEqual(RevisionText.title(meeting.revisions[2], in: meeting), "Page put back")
+        XCTAssertFalse(RevisionRestore.canRestore(removal, in: meeting), "nothing left to put back")
+        XCTAssertEqual(RevisionText.symbol(removal), "doc")
+    }
+
+    func testBehaviorRestoringAHandwritingCorrectionPutsBackTheEarlierWordsAndKeepsTheReplacedOnes() throws {
+        let id = UUID()
+        let passage = NotebookPassage(id: UUID(), kind: .writing, x: 0, y: 0, width: 10, height: 10, strokeCount: 1, strokeDigest: "d",
+                                      start: Date(timeIntervalSince1970: 1), end: Date(timeIntervalSince1970: 2), words: "hello wrld")
+        var page = NotebookPage(id: id, order: 1)
+        page.drawing = PageDrawing(relativePath: PageDrawing.relativePath(page: id, sha256: "ab"), sha256: "ab", byteCount: 1, strokeCount: 1,
+                                   editedAt: Date(timeIntervalSince1970: 1))
+        page.reading = PageReading(drawingSHA256: "ab", passages: [passage])
+        var meeting = Meeting(title: "Notebook")
+        meeting.pages = [page]
+        meeting.correctPassage(pageID: id, passageID: passage.id, text: "hello world")
+        meeting.correctPassage(pageID: id, passageID: passage.id, text: "hello planet")
+        let second = meeting.revisions[1]
+        XCTAssertEqual(RevisionText.title(second, in: meeting), "Handwriting corrected")
+        XCTAssertEqual(RevisionText.subject(second, in: meeting), "Handwriting on page 1")
+        XCTAssertTrue(RevisionText.showsComparison(second))
+        XCTAssertTrue(RevisionRestore.canRestore(second, in: meeting))
+        RevisionRestore.apply(second, to: &meeting)
+        XCTAssertEqual(meeting.page(id)?.words(of: passage), "hello world")
+        XCTAssertEqual(meeting.revisions.last?.oldValue, "hello planet", "what it replaces stays in History")
+        XCTAssertFalse(RevisionRestore.canRestore(second, in: meeting))
+        // The first correction's earlier words are the ones that were read.
+        RevisionRestore.apply(meeting.revisions[0], to: &meeting)
+        XCTAssertEqual(meeting.page(id)?.words(of: passage), "hello wrld")
+        XCTAssertNil(meeting.page(id)?.corrections)
+        // A passage no page has can't be restored.
+        let ghost = MeetingRevision(kind: .passage(UUID()), oldValue: "x", newValue: "y")
+        XCTAssertFalse(RevisionRestore.canRestore(ghost, in: meeting))
+    }
+
     func testRestoringNotesKeepsTheirTimesForUnchangedParagraphs() {
         var meeting = Meeting(title: "Sync", notes: "Beta date\nExport", timedNotes: [TimedNote(time: 2, text: "Beta date"), TimedNote(time: 24, text: "Export")])
         meeting.setNotes("Beta date\nExport\nKenji joining?")

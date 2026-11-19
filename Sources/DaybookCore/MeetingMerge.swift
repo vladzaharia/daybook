@@ -141,6 +141,13 @@ public enum MeetingMerge {
                 conflicted.insert("a photo")
             }
         }
+        // Pages are originals too: every copy's survive, merged field by field (NotebookPages+Merge.swift).
+        if local.pages != nil || remote.pages != nil || base?.pages != nil {
+            result.pages = NotebookPage.mergedList(base: base?.pages ?? [], local: local.pages ?? [], remote: remote.pages ?? []) { field, smaller, larger in
+                record(field, smaller, larger)
+                conflicted.insert("a page")
+            }
+        }
         // Handwriting is an original too: every copy's blocks survive, the newer strokes of a block both changed.
         if local.ink != nil || remote.ink != nil {
             result.ink = NoteInk.mergedList(base: base?.ink ?? [], local: local.ink ?? [], remote: remote.ink ?? [])

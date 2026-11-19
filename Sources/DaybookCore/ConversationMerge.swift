@@ -178,7 +178,8 @@ public enum ConversationMerge {
     /// are in `merged` already as `copies` maps them (the caller copied their audio in); `fresh` are the copies this merge
     /// made, which take the recording's details and its place on the merged timeline, while a copy that was there
     /// before (the same audio was in both) keeps its own. A recording moved out of `folded` before is in the conversation
-    /// it moved to, and isn't carried. `photos` are its photos as stored in `merged`'s folder, by ID. `profiles` says
+    /// it moved to, and isn't carried. `photos` are its photos as stored in `merged`'s folder, by ID, and `pageFiles` the IDs of its pages whose drawing
+    /// files are copied there (paths stay the same: page IDs are global; a page without them isn't carried). `profiles` says
     /// which voice profile a merged profile stands for. `restoring` are copies that were this conversation's moved out of
     /// `merged` (Move to New Conversation) and are back with it: they're put back, as Info puts one back, with the words
     /// Version History says it in. Everything it makes is the same whichever device folds it (IDs and dates come from
@@ -186,7 +187,7 @@ public enum ConversationMerge {
     /// end with one result. Does nothing when it's folded in already.
     public static func fold(_ folded: Meeting, into merged: inout Meeting, placement: Placement, copies: [UUID: UUID],
                             fresh: Set<UUID>, restoring: [UUID: String] = [:], photos: [UUID: MeetingPhoto] = [:],
-                            profiles: SpeakerProfileMerges? = nil, at now: Date = Date()) {
+                            pageFiles: Set<UUID> = [], profiles: SpeakerProfileMerges? = nil, at now: Date = Date()) {
         guard !hasFolded(folded.id, into: merged) else { return }
         let shift = placement.shift
         var putBack: [MeetingRevision] = []
@@ -419,6 +420,27 @@ public enum ConversationMerge {
             merged.notes = text + folded.notes
             merged.timedNotes = anchors
         }
+        // Pages after the survivor's, each with its drawing files in the merged conversation's folder; what was read from a
+        // page follows the timeline as photos do.
+        let knownPages = Set((merged.pages ?? []).map(\.id))
+        let firstOrder = merged.nextPageOrder
+        let carriedPages = (folded.pages ?? []).filter { !knownPages.contains($0.id) && pageFiles.contains($0.id) }
+            .sorted(by: NotebookPage.precedes).enumerated().map { position, page -> NotebookPage in
+                var copied = page
+                copied.order = firstOrder + Double(position)
+                for index in copied.reading?.passages.indices ?? 0..<0 {
+                    guard var passage = copied.reading?.passages[index] else { continue }
+                    if let track = passage.trackID {
+                        passage.trackID = copy(track)
+                        if passage.trackID == nil { passage.time = nil }
+                    } else if let time = passage.time {
+                        if let held = onLead(time) { passage.trackID = held.trackID; passage.time = held.time } else { passage.time = time + shift >= 0 ? time + shift : nil }
+                    }
+                    copied.reading?.passages[index] = passage
+                }
+                return copied
+            }
+        if !carriedPages.isEmpty { merged.pages = (merged.pages ?? []) + carriedPages }
         let knownInk = Set((merged.ink ?? []).map(\.id))
         let ink = (folded.ink ?? []).filter { !knownInk.contains($0.id) }
         if !ink.isEmpty { merged.ink = (merged.ink ?? []) + ink }
@@ -456,16 +478,20 @@ public enum ConversationMerge {
             merged.sourceSuggestions = suggestions.isEmpty ? nil : suggestions
         }
 
-        // Version History: the names and corrections the person gave there, and what was done to its bookmarks and photos,
+        // Version History: the names and corrections the person gave there, and what was done to its bookmarks, photos, and pages,
         // on what they're about here; then the merge itself.
         let knownRevisions = Set(merged.revisions.map(\.id))
         let carriedPhotoIDs = Set(carriedPhotos.map(\.id))
+        let carriedPageIDs = Set(carriedPages.map(\.id))
+        let carriedPassageIDs = Set(carriedPages.flatMap { page in page.passages.map(\.id) + (page.corrections ?? []).map(\.passageID) })
         let revisions = folded.revisions.filter { !knownRevisions.contains($0.id) }.compactMap { revision -> MeetingRevision? in
             var copied = revision
             switch revision.kind {
             case .speaker(let id): copied.kind = .speaker(historyID(id))
             case .segment, .correctionTransfer: break
             case .photo(let id), .photoCaption(let id): guard carriedPhotoIDs.contains(id) else { return nil }
+            case .page(let id): guard carriedPageIDs.contains(id) else { return nil }
+            case .passage(let id): guard carriedPassageIDs.contains(id) else { return nil }
             case .bookmark:
                 func movedValue(_ value: String) -> String? {
                     guard value != MeetingRevision.bookmarkRemoved else { return value }

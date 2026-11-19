@@ -4476,6 +4476,14 @@ The summary model is told the conversation's title (only one the person or the c
 - `SummaryNotesTests`, `SynthesisPayloadTests`, `CloudSummarizerTests`: both appear in the short path, the long path, and the cloud prompt; placeholders and a title a summary wrote are not sent; a conversation with no recording whose start is known sends no date; the date reads the same in any locale; a source without them encodes as before.
 - **Not measured:** no model was run. Whether models resolve relative dates better with the date, and whether a title anchors a summary on its subject, is unknown. Check on the weekly and the three-hour offsite fixtures with the local models and one cloud model: a "next Tuesday" is written with the right date, an unclear one stays relative, and nothing is said to have been decided because the title implies it.
 
+## Notebook pages, stored format (2026-11-18)
+
+Pages (`Meeting.pages`) are stored and merged in DaybookCore; nothing shows them yet.
+
+- `NotebookPageTests`, `PassageGroupingTests`, `RecordingClockMapTests`, `NotebookMergeTests` (package): a conversation without pages encoding byte for byte as before, unknown keys and values kept on every record, corrections standing only while their strokes do, readings made by a newer grouping standing here, and merges that are commutative and stable when merged again, with later strokes winning, the other set aside, and a stale snapshot unable to drop a page or take its strokes back.
+- **Limits across versions:** a Mac running a version from before pages keeps `pages` as an unknown key, and it can move a conversation whose only content is pages to the Trash, because it can't see them as content. An older version that publishes a merge of two devices' changes keeps one `pages` array whole; the newer reader gets the other pages back only through `restoringPages`, which the sync engine doesn't call yet (it comes with the storage and sync work). Until then such a merge can lose a page's record on the older device's publication, never its files.
+- `PhotoOrigin`, `ProcessingSettings`, and `PhotoAnalysis` (nested in pages) now keep keys a newer Daybook adds, as the page records do; their encoding for existing data is unchanged.
+
 ## Ask across conversations: the Mac interface (2026-11-18)
 
 The search field's Return and ⌘Return, the answer page, its waiting and cancelling, the queue rule, and what the Personal lock and a Focus do to an answer (docs/interface.md, "The answer page").
