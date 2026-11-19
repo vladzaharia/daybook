@@ -404,6 +404,158 @@ final class LibrarySyncPageTests: XCTestCase {
         XCTAssertEqual(arrived.page(second.id)?.drawing, second.drawing)
     }
 
+    /// The same older Mac, with the sequence a page's edit is lost in: one device deletes a page, another commits new strokes on
+    /// another page, and the older Daybook keeps the first's whole `pages` array, in which every page is present. A newer Mac
+    /// takes the merge of the two, with the strokes and the deletion both.
+    func testBehaviorLegacyMergeKeepingAWholeArrayDoesNotLoseEditsToPagesItHas() async throws {
+        let store = try MeetingStore(rootURL: local("A"))
+        var base = Meeting(title: "Whiteboard session")
+        func page(_ tag: String, order: Double) async throws -> NotebookPage {
+            var page = NotebookPage(id: UUID(), order: order, now: start)
+            page.drawing = try await store.storePageDrawing(bytes(tag), page: page.id, in: base, strokeCount: 3, contentVersion: 1, device: nil,
+                                                            after: nil, now: start.addingTimeInterval(order))
+            return page
+        }
+        let first = try await page("first", order: 1), second = try await page("second", order: 2)
+        base.addPage(first); base.addPage(second)
+        try await store.save(base)
+        let a = try engine("A"), b = try engine("B"), c = try engine("C")
+        try await apply(try await a.synchronize(meetings: [base]), to: "A", using: a)
+        let legacy = try LegacyLibrarySyncEngine(localRoot: local("Old"), remoteRoot: remote, deviceID: "Old")
+        let pulled = try await legacy.synchronize(meetings: [])
+        for meeting in pulled.meetings { try await MeetingStore(rootURL: local("Old")).save(meeting) }
+        try await legacy.acknowledge(pulled.checkpointID)
+        let onA = try await apply(try await a.synchronize(meetings: []), to: "A", using: a).meetings[0]
+        let onB = try await apply(try await b.synchronize(meetings: []), to: "B", using: b).meetings[0]
+
+        // B commits new strokes on the first page; its event is kept out of sight of A, which deletes the second page.
+        let storeB = try MeetingStore(rootURL: local("B"))
+        var strokes = onB
+        let newer = try await storeB.storePageDrawing(bytes("first, more"), page: first.id, in: onB, strokeCount: 8, contentVersion: 1, device: nil,
+                                                      after: first.drawing?.editedAt, now: start.addingTimeInterval(100))
+        strokes.commitPageDrawing(first.id, drawing: newer, now: start.addingTimeInterval(100))
+        try await storeB.save(strokes)
+        let before = try events()
+        try await apply(try await b.synchronize(meetings: [strokes]), to: "B", using: b)
+        let strokesName = try XCTUnwrap(try events().subtracting(before).first)
+        let aside = root.appendingPathComponent("aside.json"), withheld = remote.appendingPathComponent("Events/\(strokesName).json")
+        try FileManager.default.moveItem(at: withheld, to: aside)
+        var deleted = onA
+        deleted.removePage(second.id, at: start.addingTimeInterval(110))
+        try await MeetingStore(rootURL: local("A")).save(deleted)
+        try await apply(try await a.synchronize(meetings: [deleted]), to: "A", using: a)
+        let deletionName = try XCTUnwrap(try events().subtracting(before).first)
+        try FileManager.default.moveItem(at: aside, to: withheld)
+
+        // The older Mac merges them and keeps the deleting side's `pages`: both pages are in it, so nothing is missing.
+        var merged = try XCTUnwrap(JSONSerialization.jsonObject(with: SyncEncoding.data(deleted)) as? [String: Any])
+        merged["pages"] = try pages(inEvent: deletionName)
+        merged["notes"] = "Merged on the older Mac"
+        let record: [String: Any] = ["schemaVersion": 1, "meetingID": base.id.uuidString, "deviceID": "Old", "sequence": 9,
+                                     "parents": [deletionName, strokesName].sorted(), "snapshot": merged, "deleted": false, "assets": []]
+        let eventBytes = try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys])
+        try eventBytes.write(to: remote.appendingPathComponent("Events/\(SyncDigest.sha256(data: eventBytes)).json"))
+        let kept = try pages(inEvent: deletionName).compactMap { $0["id"] as? String }
+        XCTAssertEqual(Set(kept), [first.id.uuidString, second.id.uuidString], "every page is in the array the older Mac kept")
+
+        let result = try await c.synchronize(meetings: [])
+        XCTAssertEqual(result.pendingDownloads, 0)
+        let arrived = try XCTUnwrap(result.meetings.first)
+        XCTAssertEqual(arrived.notes, "Merged on the older Mac")
+        XCTAssertEqual(arrived.page(first.id)?.drawing?.sha256, newer.sha256, "the strokes committed on the other side are not lost")
+        XCTAssertNotNil(arrived.page(second.id)?.removedAt, "and neither is the deletion")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: local("C").appendingPathComponent("Meetings/\(base.id)/\(newer.relativePath)").path))
+    }
+
+    func testBehaviorRepairingNotebookReplacesAWholeArrayThatIsOneParentsAndNotTheirMerge() {
+        let one = NotebookFixtures.page(UUID(), order: 1, tag: "one"), two = NotebookFixtures.page(UUID(), order: 2, tag: "two")
+        var strokes = one
+        strokes.drawing = NotebookFixtures.drawing(one.id, "more", at: start.addingTimeInterval(50))
+        var removed = two
+        removed.removedAt = start.addingTimeInterval(20)
+        let turn = PageTurn(at: start, pages: [one.id])
+        let meetingID = UUID()
+        func meeting(_ pages: [NotebookPage], turns: [PageTurn]? = nil) -> Meeting { var m = NotebookFixtures.meeting(meetingID, pages: pages); m.pageTurns = turns; return m }
+        let earlier = PageTurn(at: start.addingTimeInterval(-5), pages: [two.id])
+        let parentA = meeting([one, removed], turns: [earlier]), parentB = meeting([strokes, two], turns: [earlier, turn])
+        let base = meeting([one, two], turns: [earlier])
+        let merged = MeetingMerge.merge(base: base, local: parentA, remote: parentB).meeting
+        XCTAssertEqual(merged.page(one.id)?.drawing, strokes.drawing)
+        XCTAssertNotNil(merged.page(two.id)?.removedAt)
+        // An older Daybook's merge kept A's arrays whole (turns absent there).
+        let kept = parentA.repairingNotebook(parents: [parentA, parentB], merged: merged)
+        XCTAssertEqual(kept.pages, merged.pages)
+        XCTAssertEqual(kept.pageTurns, [earlier, turn], "the log is repaired the same way")
+        // One that already is the merge, or equals neither parent's, is left as it is.
+        XCTAssertEqual(merged.repairingNotebook(parents: [parentA, parentB], merged: merged), merged)
+        var edited = merged
+        edited.pages?[0].paper = .grid
+        XCTAssertEqual(edited.repairingNotebook(parents: [parentA, parentB], merged: merged).pages?[0].paper, .grid)
+    }
+
+    /// A page's file the replica doesn't have (a merge named it before it was copied, or it was deleted by hand), whose object is
+    /// in the journal: the conversation publishes by reference as any other, and the same pass copies the file back.
+    func testBehaviorEagerReplicaMissingAPageFilePublishesByReferenceAndRepairsIt() async throws {
+        let (meeting, page, written) = try await meetingWithPage()
+        let a = try engine("A")
+        try await apply(try await a.synchronize(meetings: [meeting]), to: "A", using: a)
+        let file = local("A").appendingPathComponent("Meetings/\(meeting.id)/\(page.drawing!.relativePath)")
+        try FileManager.default.removeItem(at: file)
+        var edited = meeting
+        edited.setNotes("Edited while a page's file is missing")
+        let result = try await a.synchronize(meetings: [edited])
+        XCTAssertEqual(result.publishedEvents, 1, "not stuck on a file the journal has")
+        XCTAssertEqual(try Data(contentsOf: file), written, "and the file is back")
+        XCTAssertEqual(result.warnings, [])
+        // One the journal doesn't have can't be named: it waits (and says so) rather than publishing a page it can't back.
+        let gone = try await meetingWithPage(on: "A", tag: "never uploaded")
+        let url = local("A").appendingPathComponent("Meetings/\(gone.0.id)/\(gone.1.drawing!.relativePath)")
+        try FileManager.default.removeItem(at: url)
+        let stuck = try await a.synchronize(meetings: [edited, gone.0])
+        XCTAssertGreaterThan(stuck.pendingUploads, 0)
+    }
+
+    /// A file that becomes named again after sitting unnamed is as new as the day it was named (an applied revert, the same bytes
+    /// stored again), so a prune that read the conversation before it can't take it.
+    func testBehaviorAFileNamedAgainByARevertSurvivesAPruneInFlight() async throws {
+        let (meeting, page, _) = try await meetingWithPage()
+        let a = try engine("A"), b = try engine("B")
+        let store = try MeetingStore(rootURL: local("A"))
+        try await apply(try await a.synchronize(meetings: [meeting]), to: "A", using: a)
+        // B takes the conversation, then writes newer strokes; A takes those, so the first drawing is named by nothing here.
+        let onB = try await apply(try await b.synchronize(meetings: []), to: "B", using: b).meetings[0]
+        let storeB = try MeetingStore(rootURL: local("B"))
+        var newer = onB
+        let second = try await storeB.storePageDrawing(bytes("second"), page: page.id, in: onB, strokeCount: 9, contentVersion: 1, device: nil,
+                                                       after: page.drawing?.editedAt, now: start.addingTimeInterval(100))
+        newer.commitPageDrawing(page.id, drawing: second, now: start.addingTimeInterval(100))
+        try await storeB.save(newer)
+        try await apply(try await b.synchronize(meetings: [newer]), to: "B", using: b)
+        let onA = try await apply(try await a.synchronize(meetings: [meeting]), to: "A", using: a).meetings[0]
+        XCTAssertEqual(onA.page(page.id)?.drawing?.sha256, second.sha256)
+        let oldFile = local("A").appendingPathComponent("Meetings/\(meeting.id)/\(page.drawing!.relativePath)")
+        let longAgo = Date().addingTimeInterval(-3 * 86_400)
+        try FileManager.default.setAttributes([.modificationDate: longAgo], ofItemAtPath: oldFile.path)
+
+        // A prune starts from the conversation as it was read (the first drawing named by nothing)...
+        let stale = onA
+        // ...and meanwhile a revert to the first drawing is applied: pass B publishes it, A receives and applies it.
+        var reverted = newer
+        reverted.pages?[0].drawing = page.drawing
+        try await storeB.save(reverted)
+        try await apply(try await b.synchronize(meetings: [reverted]), to: "B", using: b)
+        try await apply(try await a.synchronize(meetings: [onA]), to: "A", using: a)
+        let deleted = await store.prunePageDrawings(of: stale, now: Date())
+        XCTAssertEqual(deleted, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: oldFile.path), "the drawing that is named again is still there")
+        // The same bytes stored again (a revert made here) count as used.
+        try FileManager.default.setAttributes([.modificationDate: longAgo], ofItemAtPath: oldFile.path)
+        _ = try await store.storePageDrawing(bytes("first"), page: page.id, in: onA, strokeCount: 7, contentVersion: 1, device: nil, after: nil, now: Date())
+        let again = await store.prunePageDrawings(of: stale, now: Date())
+        XCTAssertEqual(again, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: oldFile.path))
+    }
+
     private func events() throws -> Set<String> {
         Set(try FileManager.default.contentsOfDirectory(atPath: remote.appendingPathComponent("Events").path).filter { $0.hasSuffix(".json") }.map { String($0.dropLast(5)) })
     }

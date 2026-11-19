@@ -51,13 +51,16 @@ public enum RecordingClockMap {
     public static let capacity = 4_000
 
     /// The recording time at `moment`: from the latest sample at or before it (or the earliest within `trailing` after
-    /// it), `elapsed + (moment − at)` while running, `elapsed` while paused. Nil with no sample within `reach` before it.
+    /// it), `elapsed + (moment − at)` while running, `elapsed` while paused. Nil with no sample before it, or none within `reach` before it and none after.
     public static func elapsed(at moment: Date, samples: [RecordingClockSample], reach: TimeInterval = RecordingClockMap.reach) -> TimeInterval? {
         func time(_ sample: RecordingClockSample) -> TimeInterval? {
             let value = sample.running ? sample.elapsed + moment.timeIntervalSince(sample.at) : sample.elapsed
             return value.isFinite ? max(0, value) : nil
         }
-        if let before = samples.filter({ $0.at <= moment }).max(by: { $0.at < $1.at }), moment.timeIntervalSince(before.at) <= reach {
+        // A moment between two samples is mapped from the earlier, however far: that's what a filed clock (`filed`), which keeps
+        // one sample every few minutes, is for. Past the last sample, only within `reach`.
+        if let before = samples.filter({ $0.at <= moment }).max(by: { $0.at < $1.at }),
+           moment.timeIntervalSince(before.at) <= reach || samples.contains(where: { $0.at > moment }) {
             return time(before)
         }
         if let after = samples.filter({ $0.at > moment && $0.at.timeIntervalSince(moment) <= trailing }).min(by: { $0.at < $1.at }) {
@@ -71,13 +74,40 @@ public enum RecordingClockMap {
     /// recording (the first and last, and every change between running and paused, stay).
     public static func appending(_ sample: RecordingClockSample, to samples: [RecordingClockSample]) -> [RecordingClockSample] {
         if let last = samples.last, sample.running == last.running, sample.at.timeIntervalSince(last.at) < interval { return samples }
-        var result = samples + [sample]
-        guard result.count > capacity else { return result }
+        let result = samples + [sample]
+        return result.count > capacity ? bounded(result, to: capacity * 3 / 4, atMost: capacity) : result
+    }
+
+    /// The most samples a recording's filed clock keeps (`filed`).
+    public static let filedCapacity = 400
+    /// The gap the filed clock keeps one anchor in while nothing changes.
+    public static let filedAnchorInterval: TimeInterval = 300
+
+    /// The samples a recording is filed with: the first and last, every one where `running` changes (and the one before it),
+    /// and one anchor each `filedAnchorInterval` seconds, at most `filedCapacity`. The recorder's clock keeps counting through a
+    /// pause and the audio holds the pause as silence, so between two changes the map is linear and nothing else is needed:
+    /// a recording an hour long with no pause files a dozen samples, not the thousands the live clock kept. A moment inside a
+    /// pause maps to where the pause began.
+    public static func filed(_ samples: [RecordingClockSample]) -> [RecordingClockSample] {
+        let sorted = samples.sorted { $0.at < $1.at }
+        guard sorted.count > 2 else { return sorted }
+        var kept: [RecordingClockSample] = []
+        for (index, sample) in sorted.enumerated() {
+            let changes = index == 0 || index == sorted.count - 1 || sample.running != sorted[index - 1].running || sample.running != sorted[index + 1].running
+            if changes || sample.at.timeIntervalSince(kept.last?.at ?? sample.at) >= filedAnchorInterval { kept.append(sample) }
+        }
+        return kept.count > filedCapacity ? bounded(kept, to: filedCapacity * 3 / 4, atMost: filedCapacity) : kept
+    }
+
+    /// `samples` with the ones whose neighbours are closest taken out until at most `target` remain, never the first, the last,
+    /// or one beside a change between running and paused.
+    private static func bounded(_ samples: [RecordingClockSample], to target: Int, atMost capacity: Int) -> [RecordingClockSample] {
+        var result = samples
         func gap(_ index: Int) -> TimeInterval { result[index + 1].at.timeIntervalSince(result[index - 1].at) }
         var removable = (1..<(result.count - 1)).filter { result[$0].running == result[$0 - 1].running && result[$0].running == result[$0 + 1].running }
         removable.sort { gap($0) != gap($1) ? gap($0) < gap($1) : $0 < $1 }
         var dropped = Set<Int>()
-        for index in removable where dropped.count < result.count - capacity * 3 / 4 {
+        for index in removable where dropped.count < result.count - target {
             if !dropped.contains(index - 1) && !dropped.contains(index + 1) { dropped.insert(index) }
         }
         result = result.enumerated().filter { !dropped.contains($0.offset) }.map(\.element)

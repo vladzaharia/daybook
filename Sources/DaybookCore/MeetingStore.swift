@@ -567,6 +567,13 @@ enum LocalFiles {
         try excludeFromBackup(temporary)
         guard rename(temporary.path, url.path) == 0 else { throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path]) }
     }
+    /// Marks a file as used now: pruning keeps what was written lately (`MeetingStore.prunePageDrawings`), and a file that
+    /// becomes named again (the same bytes stored again, or a revert applied) is as new as that.
+    static func touch(_ url: URL, now: Date = Date(), unlessWithin interval: TimeInterval = 0) {
+        if interval > 0, let modified = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+           now.timeIntervalSince(modified) < interval { return }
+        try? FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: url.path)
+    }
     /// Marks a file to stay out of backups. The mark moves with the file when it's renamed into place.
     static func excludeFromBackup(_ url: URL) throws {
         var url = url

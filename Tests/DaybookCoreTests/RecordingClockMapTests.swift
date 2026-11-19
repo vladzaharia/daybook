@@ -78,4 +78,58 @@ final class RecordingClockMapTests: XCTestCase {
         // A passage written early still gets a time late in the recording.
         XCTAssertNotNil(RecordingClockMap.elapsed(at: start.addingTimeInterval(1_000), samples: samples))
     }
+
+    // MARK: Filed with the recording
+
+    /// What the recorder samples: its clock counts through a pause (the audio holds the pause as silence), a sample is taken as
+    /// a stroke begins, and the state change itself is sampled.
+    private func recorded(pauses: [(from: Double, to: Double)], length: Double, every: Double = 5) -> [RecordingClockSample] {
+        var samples: [RecordingClockSample] = []
+        var time = 0.0
+        while time <= length {
+            let paused = pauses.contains { time >= $0.from && time < $0.to }
+            samples = RecordingClockMap.appending(sample(time, time, running: !paused), to: samples)
+            time += every
+        }
+        return samples
+    }
+
+    func testBehaviorFiledClockMapsLikeTheFullOneAcrossTwoPauses() {
+        let pauses = [(from: 900.0, to: 1_100.0), (from: 2_400.0, to: 2_450.0)]
+        let full = recorded(pauses: pauses, length: 3_600)
+        let filed = RecordingClockMap.filed(full)
+        XCTAssertGreaterThan(full.count, 600)
+        XCTAssertLessThan(filed.count, 40)
+        XCTAssertEqual(filed.first, full.first)
+        XCTAssertEqual(filed.last, full.last)
+        XCTAssertEqual(filed.map(\.at), filed.map(\.at).sorted())
+        for change in full.indices.dropFirst() where full[change].running != full[change - 1].running {
+            XCTAssertTrue(filed.contains(full[change]) && filed.contains(full[change - 1]), "every change of state is kept")
+        }
+        // A moment while recording, anywhere in the hour, is mapped the same way (the clock is linear between changes).
+        for moment in stride(from: 3.0, to: 3_590.0, by: 7.3) where !pauses.contains(where: { moment >= $0.from - 10 && moment < $0.to }) {
+            let a = RecordingClockMap.elapsed(at: start.addingTimeInterval(moment), samples: full)
+            let b = RecordingClockMap.elapsed(at: start.addingTimeInterval(moment), samples: filed)
+            XCTAssertEqual(try XCTUnwrap(a), try XCTUnwrap(b), accuracy: 0.005, "at \(moment)")
+        }
+        // A moment inside a pause is where the pause began, the start of the silence in the audio.
+        XCTAssertEqual(RecordingClockMap.elapsed(at: start.addingTimeInterval(1_000), samples: filed), 900)
+        // Filed again, nothing more goes.
+        XCTAssertEqual(RecordingClockMap.filed(filed), filed)
+    }
+
+    func testBehaviorAnHourOfContinuousWritingFilesUnderFiveKilobytes() throws {
+        let full = recorded(pauses: [], length: 3_600)
+        XCTAssertEqual(full.count, 721)
+        let filed = RecordingClockMap.filed(full)
+        XCTAssertLessThanOrEqual(filed.count, 14, "the ends and one anchor every five minutes")
+        let bytes = try SyncEncoding.data(filed).count
+        XCTAssertLessThan(bytes, 5_000, "\(bytes) bytes")
+        XCTAssertEqual(RecordingClockMap.filed([]), [])
+        XCTAssertEqual(RecordingClockMap.filed(Array(full.prefix(2))), Array(full.prefix(2)))
+        // However often it pauses, a filed clock is bounded.
+        let flapping = (0..<2_000).map { sample(Double($0), Double($0), running: $0 % 2 == 0) }
+        XCTAssertLessThanOrEqual(RecordingClockMap.filed(flapping).count, RecordingClockMap.filedCapacity)
+    }
 }
+

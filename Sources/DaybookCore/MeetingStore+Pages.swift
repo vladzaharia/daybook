@@ -16,6 +16,7 @@ extension MeetingStore {
         let destination = try LocalFiles.relativeURL(drawing.relativePath, in: directory)
         if (try? destination.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
            (try? AudioDigest.sha256(fileURL: destination)) == digest {
+            LocalFiles.touch(destination, now: now)
             return drawing
         }
         let folder = destination.deletingLastPathComponent()
@@ -42,7 +43,7 @@ extension MeetingStore {
         let directory = try meetingDirectory(for: meetingID)
         let destination = try LocalFiles.relativeURL(relativePath, in: directory)
         if (try? destination.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
-           (try? AudioDigest.sha256(fileURL: destination)) == sha256 { return }
+           (try? AudioDigest.sha256(fileURL: destination)) == sha256 { LocalFiles.touch(destination); return }
         let data = try Data(contentsOf: url)
         guard AudioDigest.sha256(data: data) == sha256 else { throw LibraryError.invalidAudio((relativePath as NSString).lastPathComponent) }
         try LocalFiles.directory(destination.deletingLastPathComponent())

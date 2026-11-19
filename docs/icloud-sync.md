@@ -78,13 +78,18 @@ background `<page>-background-<sha16>.<ext>`), derived from the page's ID and th
 - **Deleting and merging** keep files: a deleted page keeps its drawings so it can be put back, and a drawing a merge set aside
   stays so Version History can put it back. `MeetingStore.prunePageDrawings` deletes a file only when no page names it, the
   applied copy in the sync history doesn't (`pageFilesInHistory`), and it's more than a day old.
-- **A Daybook from before pages** that merges two devices' changes keeps one side's whole `pages` array as the unknown key it
-  is, so a page only the other side had isn't in its event. When the engine reads a snapshot that has no pages, or a merge
-  of two or more parents, from a lineage that had them, it puts back every page of the parents' merge that the snapshot lacks
-  (`Meeting.restoringPages`). Daybook 0.3.0 and earlier, which drop unknown keys, are covered the same way. What it can't
-  put back is the other side's edits to a page both sides changed: the array kept stands.
+- **A Daybook from before pages** that merges two devices' changes keeps one side's whole `pages` array (and `pageTurns`) as
+  the unknown key it is, so a page only the other side had, and any edit or deletion the other side made to a page, aren't in
+  its event. When the engine reads a snapshot with no pages, or a merge of two or more parents, from a lineage that had them
+  (`resolvedSnapshot`), it puts back every page of the parents' merge the snapshot lacks, and replaces a whole array that equals
+  one parent's and not the merge of the parents (with their common ancestor as base) by that merge
+  (`Meeting.repairingNotebook`): a Daybook that knows pages never keeps one side's array unless it is the merge. Daybook 0.3.0
+  and earlier, which drop unknown keys, are covered the same way. A merge by an older Daybook loses nothing in the notebook.
 - **The recording clock.** The samples a notebook took of the recorder's clock are written once, with the track, when the
-  recording is filed (`RecordingTrack.clockSamples`, at most 4,000), and merged so a copy with samples beats one without.
+  recording is filed, thinned to the first and last, every change between recording and paused, and one anchor every five
+  minutes (`RecordingClockMap.filed`, at most 400: an hour of continuous writing is about a dozen samples, under 1 KB), and
+  merged so a copy with samples beats one without. The erased-stroke log of a page and the conversation's page-turn log keep
+  200 entries each; together with a clock at its cap they add under 128 KB to a snapshot.
 
 ## Transport and durability
 

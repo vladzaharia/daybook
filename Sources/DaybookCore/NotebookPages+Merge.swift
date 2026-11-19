@@ -184,3 +184,18 @@ extension Meeting {
         return result
     }
 }
+
+extension Meeting {
+    /// This snapshot of an event with several parents, with the notebook it should have: written by a Daybook that predates
+    /// pages, it keeps one parent's whole `pages` (and `pageTurns`) as the unknown keys they are, so edits and deletions made
+    /// to a page on the other side are lost, not only the pages that side added. A Daybook that knows pages never keeps one
+    /// side's array unless it already equals the merge, so an array that equals one parent's and not the merge of them is
+    /// replaced by the merge (`merged`, the parents merged with their common ancestor as base). Then every page of the merge the
+    /// snapshot lacks is put back (`restoringPages`).
+    func repairingNotebook(parents: [Meeting], merged: Meeting) -> Meeting {
+        var result = self
+        if let kept = pages, kept != merged.pages, parents.contains(where: { $0.pages == kept }) { result.pages = merged.pages }
+        if let kept = pageTurns, kept != merged.pageTurns, parents.contains(where: { $0.pageTurns == kept }) { result.pageTurns = merged.pageTurns }
+        return result.restoringPages(from: merged)
+    }
+}
