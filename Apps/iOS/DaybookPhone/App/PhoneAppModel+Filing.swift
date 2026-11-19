@@ -101,6 +101,8 @@ extension PhoneAppModel {
             if !options.isRunningTests { sync.synchronizeFinishing(.filed) }
             // Transcribed here when this iPhone has the models (it claimed the request as it filed it).
             processor.pickUp()
+            // What was written last may not have been read yet (Stop never waits for reading): read it now, quietly.
+            if !options.isRunningTests { Task(priority: .utility) { await library.readPages(in: filed.meeting.id) } }
         } catch {
             say(Self.notFiled, details: error.localizedDescription)
             filing = .failed(Self.notFiled)
@@ -550,8 +552,6 @@ extension PhoneLibrary {
         }
         if !recorded.isEmpty {
             controller.update(id) { $0.adoptRecordedPages(recorded) }
-            // What was written last may not have been read yet (Stop never waits for reading): read now, quietly.
-            Task(priority: .utility) { await self.readPages(in: id) }
         }
         // Turns of pages that were filed: one that names a page the conversation never got (a blank page) leaves it out.
         if !turns.isEmpty {
