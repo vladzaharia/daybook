@@ -18,6 +18,8 @@ public struct NotebookSpread<Tools: View, Pill: View, Caption: View, Card: View>
     private let card: (_ pageFrame: CGRect, _ isSpread: Bool) -> Card
     private let words: (UUID) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// How far down the right page the card starts, clear of the pill.
+    private static var cardTop: CGFloat { 72 }
 
     /// - Parameters:
     ///   - crease: Where the display folds, in the safe area; nil for one display.
@@ -53,6 +55,8 @@ public struct NotebookSpread<Tools: View, Pill: View, Caption: View, Card: View>
                 }
                 if let last = frames.last, let first = frames.first {
                     let inset = NotebookLayout.margin
+                    // The card is under the pill and the tools, over the rest of the right page: Stop is never covered.
+                    card(CGRect(x: last.minX, y: last.minY + Self.cardTop, width: last.width, height: last.height - Self.cardTop), layout.isSpread)
                     // The tools: top-left of the left page, the foot of a single page.
                     NotebookFloating(session: session, edge: .leading) { collapsed, set in
                         tools(collapsed, set, first.width - 2 * inset)
@@ -66,7 +70,6 @@ public struct NotebookSpread<Tools: View, Pill: View, Caption: View, Card: View>
                     }
                     .frame(width: last.width - 2 * inset, height: last.height - 2 * inset, alignment: .topTrailing)
                     .offset(x: last.minX + inset, y: last.minY + inset)
-                    card(last, layout.isSpread)
                     if !layout.hasStrip(under: last, in: size) {
                         NotebookFloatingCaption(session: session, pageFrame: last, origin: proxy.frame(in: .global).origin) { caption }
                     }
