@@ -181,12 +181,7 @@ public enum InkRecognizer {
     static func textWithBoxes(in drawing: PKDrawing) async -> (words: String, boxes: [CGRect])? {
         guard let image = await image(of: drawing) else { return nil }
         let bounds = drawing.bounds.insetBy(dx: -16, dy: -16)
-        return await Task.detached(priority: .utility) {
-            let request = VNRecognizeTextRequest()
-            request.recognitionLevel = .accurate
-            request.usesLanguageCorrection = true
-            request.automaticallyDetectsLanguage = true
-            do { try VNImageRequestHandler(cgImage: image, options: [:]).perform([request]) } catch { return nil }
+        return await Self.recognize(image) { request -> (words: String, boxes: [CGRect]) in
             let lines = (request.results ?? []).sorted { $0.boundingBox.midY > $1.boundingBox.midY }
             let words = lines.compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
             let boxes = lines.map { line -> CGRect in
@@ -195,26 +190,35 @@ public enum InkRecognizer {
                               width: box.width * bounds.width, height: box.height * bounds.height)
             }
             return (words, boxes)
-        }.value
+        }
     }
 
     private static func vision(_ drawing: PKDrawing) async -> String? {
         guard let image = await image(of: drawing) else { return nil }
-        return await Task.detached(priority: .utility) {
-            let request = VNRecognizeTextRequest()
-            request.recognitionLevel = .accurate
-            request.usesLanguageCorrection = true
-            request.automaticallyDetectsLanguage = true
-            do {
-                try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
-            } catch {
-                return nil
-            }
-            return (request.results ?? [])
+        return await Self.recognize(image) { request in
+            (request.results ?? [])
                 .sorted { $0.boundingBox.midY > $1.boundingBox.midY }
                 .compactMap { $0.topCandidates(1).first?.string }
                 .joined(separator: "\n")
-        }.value
+        }
+    }
+
+    /// Vision reads one picture at a time on a queue of its own. `perform` blocks its thread until the picture is read, which on a
+    /// slow or virtual machine can be very long: on Swift concurrency's pool (`Task.detached`) a few such readings take every thread
+    /// and nothing else async in the app (Stop's filing, saves) can run until they end.
+    private static let visionQueue = DispatchQueue(label: "local.daybook.vision", qos: .utility)
+
+    private static func recognize<Result: Sendable>(_ image: CGImage, _ read: @escaping @Sendable (VNRecognizeTextRequest) -> Result) async -> Result? {
+        await withCheckedContinuation { (done: CheckedContinuation<Result?, Never>) in
+            visionQueue.async {
+                let request = VNRecognizeTextRequest()
+                request.recognitionLevel = .accurate
+                request.usesLanguageCorrection = true
+                request.automaticallyDetectsLanguage = true
+                do { try VNImageRequestHandler(cgImage: image, options: [:]).perform([request]) } catch { done.resume(returning: nil); return }
+                done.resume(returning: read(request))
+            }
+        }
     }
 
     /// Dark ink on opaque white, whatever the phone's appearance: `PKDrawing.image` draws for the current traits, so in
