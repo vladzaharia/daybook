@@ -237,4 +237,179 @@ final class CaptureRecoveryTests: XCTestCase {
         let recovered = try await PhoneRecorder.recover(in: moved)
         XCTAssertEqual(recovered.duration, 1, accuracy: frame, "once it can be read, it's all there")
     }
+
+    // MARK: Notebook pages
+
+    private func strokes(_ tag: String) -> Data { Data((tag + String(repeating: "ink", count: 40)).utf8) }
+
+    private func reading(of data: Data, page: UUID, words: String, key: String, time: TimeInterval?) -> PageReading {
+        let passage = NotebookPassage(id: NotebookPassage.id(page: page, firstStroke: key), kind: .writing, x: 0, y: 0, width: 10, height: 10, strokeCount: 3,
+                                      strokeDigest: PassageGrouping.digest(of: [key]), start: started.addingTimeInterval(time ?? 0),
+                                      end: started.addingTimeInterval((time ?? 0) + 2), time: time, words: words)
+        return PageReading(drawingSHA256: AudioDigest.sha256(data: data), passages: [passage], readAt: started,
+                           settings: ProcessingSettings(modelID: "test", parameters: ["grouping": String(PassageGrouping.version)]))
+    }
+
+    /// A capture folder a crash left, with one closed part and the notebook's journal and staged strokes.
+    private func crashedFolder(pages: [CapturePage], files: [UUID: Data], clock: [RecordingClockSample]) throws -> URL {
+        let folder = try newFolder("notebook")
+        let frames = try CaptureFiles.writeClosedSegment(to: folder.appendingPathComponent("segment-000.m4a"), seconds: 2, frequency: 440)
+        var crashed = journal("Notebook", segments: [segment(0, at: 0, frames: frames, closed: true)])
+        crashed.pages = pages
+        crashed.pageClock = clock
+        try crashed.write(to: folder)
+        for (id, data) in files { try data.write(to: folder.appendingPathComponent(CapturePage.fileName(for: id))) }
+        return folder
+    }
+
+    func testBehaviorRecoveredRecordingFilesPages() async throws {
+        let committedID = UUID(), draftID = UUID(), emptyID = UUID()
+        let committed = strokes("committed"), draft = strokes("draft-newer-than-the-journal")
+        var written = NotebookPage(id: committedID, order: 1, origin: PhotoOrigin(kind: "daybook.iphone", serial: "INSTALL-1", name: "Alex's iPhone"), now: started)
+        written.reading = reading(of: committed, page: committedID, words: "Budget", key: "1-3-1-1", time: 1.5)
+        let pages = [CapturePage(page: written, drawingFile: CapturePage.fileName(for: committedID), drawingSHA256: AudioDigest.sha256(data: committed),
+                                 strokeCount: 6, contentVersion: 1, committedAt: started.addingTimeInterval(2)),
+                     // Written on and never committed: only the draft file says so.
+                     CapturePage(page: NotebookPage(id: draftID, order: 2, now: started)),
+                     // Never written on: not filed.
+                     CapturePage(page: NotebookPage(id: emptyID, order: 3, now: started))]
+        let clock = [RecordingClockSample(at: started, elapsed: 0, running: true), RecordingClockSample(at: started.addingTimeInterval(1), elapsed: 1, running: true)]
+        let folder = try crashedFolder(pages: pages, files: [committedID: committed, draftID: draft], clock: clock)
+
+        let recording = try await PhoneRecorder.recover(in: folder)
+        XCTAssertTrue(recording.recovered)
+        XCTAssertEqual(recording.pages.map(\.page.id), [committedID, draftID, emptyID])
+        XCTAssertEqual(recording.pageClock, clock)
+
+        let library = PhoneLibrary(rootURL: try temporaryDirectory(), installation: "INSTALL-1")
+        let filed = try await library.file(recording)
+        XCTAssertEqual(filed.visiblePages.map(\.id), [committedID, draftID], "the page nothing was written on isn't filed")
+        let page = try XCTUnwrap(filed.page(committedID))
+        let drawing = try XCTUnwrap(page.drawing)
+        XCTAssertEqual(drawing.sha256, AudioDigest.sha256(data: committed))
+        XCTAssertEqual(drawing.strokeCount, 6)
+        XCTAssertEqual(drawing.device, "Alex's iPhone")
+        let stored = try await library.controller.pageDrawingURL(for: drawing, in: filed.id)
+        XCTAssertEqual(try Data(contentsOf: stored), committed, "stored in the conversation's folder")
+        XCTAssertTrue(page.isReadingCurrent, "the reading is of the committed strokes")
+        let late = try XCTUnwrap(filed.page(draftID)?.drawing)
+        let lateURL = try await library.controller.pageDrawingURL(for: late, in: filed.id)
+        XCTAssertEqual(try Data(contentsOf: lateURL), draft, "the draft the crash left is filed")
+        XCTAssertTrue(filed.page(draftID)?.needsReading == true)
+        // The passage is on the phone's track, seconds into it, and the clock samples are kept with the track.
+        let track = try XCTUnwrap(filed.tracks.first)
+        let passage = try XCTUnwrap(page.passages.first)
+        XCTAssertEqual(passage.trackID, track.id)
+        XCTAssertEqual(passage.time, 1.5)
+        XCTAssertEqual(track.clockSamples, clock)
+        XCTAssertEqual(filed.timelineTime(of: passage, on: page), 1.5)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.path), "the staging folder goes once the pages are on disk")
+        XCTAssertTrue(filed.revisions.contains { $0.kind == .page(committedID) })
+    }
+
+    func testBehaviorFilingShiftsPhoneLedTimesAndAnchorsMacLedToTrack() async throws {
+        let id = UUID()
+        var page = NotebookPage(id: id, order: 1, now: started)
+        let data = strokes("ink")
+        let earlier = NotebookPassage(id: NotebookPassage.id(page: id, firstStroke: "0-1-1-1"), kind: .writing, x: 0, y: 0, width: 5, height: 5, strokeCount: 1,
+                                      strokeDigest: "d0", start: started, end: started, trackID: UUID(), time: 100, words: "from before")
+        let new = reading(of: data, page: id, words: "now", key: "1-3-1-1", time: 12).passages[0]
+        page.reading = PageReading(drawingSHA256: AudioDigest.sha256(data: data), passages: [earlier, new], readAt: started)
+        page.erased = [ErasedStroke(key: "9-9-9-9", madeAt: started, erasedAt: started, time: 7)]
+        var base = page
+        base.reading?.passages = [earlier]
+        base.erased = nil
+        let track = UUID()
+
+        // With audio, on the phone's track as photos are, whoever leads: the seconds are the recording's, and follow it.
+        let onTrack = PhoneLibrary.placed(page, base: base, placing: .track(track))
+        XCTAssertEqual(onTrack.reading?.passages.map(\.trackID), [earlier.trackID, track])
+        XCTAssertEqual(onTrack.reading?.passages.map(\.time), [100, 12], "what the conversation had keeps its own place")
+        XCTAssertEqual(onTrack.erased?.first?.trackID, track)
+        XCTAssertEqual(onTrack.erased?.first?.time, 7)
+        // Without audio (filed as notes), on the timeline: its own, as the phone started it, or moved to where it started on a Mac's.
+        let led = PhoneLibrary.placed(page, base: base, placing: .timeline(shift: 0))
+        XCTAssertEqual(led.reading?.passages.map(\.time), [100, 12])
+        XCTAssertNil(led.reading?.passages[1].trackID)
+        let joined = PhoneLibrary.placed(page, base: base, placing: .timeline(shift: 30))
+        XCTAssertEqual(joined.reading?.passages.map(\.time), [100, 42], "moved by where this iPhone started on the Mac's timeline")
+        XCTAssertEqual(joined.erased?.first?.time, 37)
+        XCTAssertNil(joined.reading?.passages[1].trackID)
+        // Never had a first sample: its seconds mean nothing.
+        let unplaced = PhoneLibrary.placed(page, base: base, placing: .timeline(shift: nil))
+        XCTAssertNil(unplaced.reading?.passages[1].time)
+        XCTAssertEqual(unplaced.reading?.passages[0].time, 100)
+        // A passage with no time (no recording clock) stays without.
+        var bare = page
+        bare.reading?.passages[1].time = nil
+        XCTAssertNil(PhoneLibrary.placed(bare, base: base, placing: .track(track)).reading?.passages[1].trackID)
+
+        // Filed as notes through `UnrecordedCapture`: a Mac-led one is moved by where it started on the Mac's timeline.
+        let library = PhoneLibrary(rootURL: try temporaryDirectory(), installation: "INSTALL-1")
+        for (name, role, expected) in [("phone", CaptureMultipoint.Role.phoneLed, 12.0), ("mac", .macLed, 42.0)] {
+            let folder = try newFolder(name)
+            var capture = journal(name, segments: [])
+            capture.multipoint = CaptureMultipoint(role: role, leadMacID: role == .macLed ? UUID() : nil, leadStartedAt: started.addingTimeInterval(-30),
+                                                   timelineStart: started.addingTimeInterval(-30), leadClockOffset: 0, title: "Standup", date: started.addingTimeInterval(-30))
+            var notes = NotebookPage(id: UUID(), order: 1, now: started)
+            notes.reading = reading(of: data, page: notes.id, words: "ink", key: "1-3-1-1", time: 12)
+            capture.pages = [CapturePage(page: notes, drawingFile: CapturePage.fileName(for: notes.id), drawingSHA256: AudioDigest.sha256(data: data), strokeCount: 3,
+                                         contentVersion: 1, committedAt: started)]
+            try capture.write(to: folder)
+            try data.write(to: folder.appendingPathComponent(CapturePage.fileName(for: notes.id)))
+            XCTAssertTrue(UnrecordedCapture.hasContent(capture), "pages are content: a recording with only them isn't discarded")
+            let filedID = try await UnrecordedCapture.file(capture, in: folder, library: library)
+            let filed = try XCTUnwrap(library.controller.meeting(filedID))
+            let passage = try XCTUnwrap(filed.page(notes.id)?.passages.first)
+            XCTAssertNil(passage.trackID, name)
+            XCTAssertEqual(passage.time, expected, name)
+        }
+    }
+
+    func testBehaviorFilingEditOfLoadedPageMergesWithBase() async throws {
+        // A conversation with a written page; the iPhone records into it while the person edits it elsewhere.
+        let library = PhoneLibrary(rootURL: try temporaryDirectory(), installation: "INSTALL-1")
+        try await library.reload()
+        let conversation = UUID()
+        let pageID = UUID()
+        let old = strokes("old")
+        library.controller.add(Meeting(id: conversation, title: "Weekly", date: started, status: .draft))
+        library.controller.addPage(NotebookPage(id: pageID, order: 1, now: started), to: conversation)
+        let first = try await library.controller.commitPageDrawing(old, page: pageID, in: conversation, strokeCount: 3, contentVersion: 1, device: "Alex's iPhone", now: started)
+        library.controller.applyPageReading(reading(of: old, page: pageID, words: "first draft", key: "1-3-1-1", time: nil), to: pageID, in: conversation)
+        let page = try XCTUnwrap(library.controller.meeting(conversation)?.page(pageID))
+
+        // The recording loads it, writes more strokes, and reads them.
+        let rig = RecorderRig()
+        let folder = library.stagingURL.appendingPathComponent(conversation.uuidString)
+        try await rig.recorder.start(in: folder, id: conversation, title: "Weekly")
+        rig.recorder.loadPages(from: library.controller.meeting(conversation))
+        rig.pump(3)
+        let newer = strokes("old and new")
+        let sha = try XCTUnwrap(rig.recorder.commitPage(pageID, data: newer, strokeCount: 5, contentVersion: 1))
+        rig.recorder.applyPageReading(pageID, reading(of: newer, page: pageID, words: "second draft", key: "2-3-1-1", time: 3))
+        rig.pump(1)
+        let recording = try await rig.stop()
+
+        // Meanwhile elsewhere the person corrected the first passage and added a page.
+        let passage = try XCTUnwrap(page.passages.first)
+        library.controller.correctPassage(pageID: pageID, passageID: passage.id, text: "first draft, fixed", in: conversation)
+        let other = NotebookPage(id: UUID(), order: 2, now: started)
+        library.controller.addPage(other, to: conversation)
+
+        let filed = try await library.file(recording)
+        let merged = try XCTUnwrap(filed.page(pageID))
+        XCTAssertEqual(merged.drawing?.sha256, sha, "the strokes written during the recording are the page's")
+        XCTAssertGreaterThan(merged.drawing?.editedAt ?? .distantPast, first.editedAt, "stamped after the drawing it was loaded with")
+        XCTAssertEqual(merged.corrections?.first?.text, "first draft, fixed", "what was changed elsewhere meanwhile survives")
+        XCTAssertTrue(merged.isReadingCurrent)
+        XCTAssertEqual(merged.passages.first?.words, "second draft")
+        let track = try XCTUnwrap(filed.tracks.first)
+        XCTAssertEqual(merged.passages.first?.trackID, track.id, "the new reading follows the track")
+        XCTAssertEqual(merged.passages.first?.time, 3)
+        XCTAssertEqual(Set(filed.visiblePages.map(\.id)), [pageID, other.id], "the page added elsewhere meanwhile is still there")
+        XCTAssertNil(merged.setAside, "one side changed the strokes, so nothing is set aside")
+        let stored = try await library.controller.pageDrawingURL(for: try XCTUnwrap(merged.drawing), in: conversation)
+        XCTAssertEqual(try Data(contentsOf: stored), newer)
+    }
 }

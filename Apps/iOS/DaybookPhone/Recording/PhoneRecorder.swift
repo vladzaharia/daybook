@@ -98,6 +98,11 @@ final class PhoneRecorder {
     private(set) var photos: [CapturePhoto] = []
     /// Handwriting in this recording's notes: one paragraph of `notes` per block.
     private(set) var ink: [NoteInk] = []
+    /// Notebook pages written, or loaded from the conversation, during this recording (`CapturePage`). Their strokes are
+    /// files in the staging folder; they're filed with the recording (`PhoneLibrary.filePages`).
+    private(set) var pages: [CapturePage] = []
+    /// The recorder's clock as the notebook sampled it (`sampleClock`): filed with the recording's track.
+    private(set) var pageClock: [RecordingClockSample] = []
     private(set) var inputRoute: AudioInputRoute?
     /// The interruption ended; recording can continue.
     private(set) var canResume = false
@@ -157,6 +162,15 @@ final class PhoneRecorder {
     /// counts from there.
     @ObservationIgnored private var listeningSince: TimeInterval = 0
     @ObservationIgnored private var notesSave: Task<Void, Never>?
+    /// Strokes the canvas changed that aren't in a file yet, by page, and the task that writes each after `pageDraftDelay`.
+    @ObservationIgnored private var drafts: [UUID: Data] = [:]
+    @ObservationIgnored private var draftWrites: [UUID: Task<Void, Never>] = [:]
+    /// Every write of a page's file goes through here, in order, so an older draft never lands over a newer commit.
+    @ObservationIgnored private let pageQueue = DispatchQueue(label: "local.daybook.phone.pages", qos: .utility)
+    /// How long after the canvas last changed its strokes are written to the staging folder (`saveDraft`).
+    @ObservationIgnored var pageDraftDelay: Duration = .seconds(2)
+    /// Reads a drawing of the conversation this recording loaded pages from (`loadPages`), for `pageDrawingData`.
+    @ObservationIgnored var conversationDrawing: ((PageDrawing) -> Data?)?
     @ObservationIgnored private var cancelStart = false
     @ObservationIgnored private let journalQueue = DispatchQueue(label: "local.daybook.phone.journal", qos: .utility)
     /// Whether the last journal write failed, touched only on `journalQueue`: a failure is reported
@@ -214,6 +228,7 @@ final class PhoneRecorder {
         lastError = nil; lastFailure = nil; unexpectedStop = nil; unfinishedFolder = nil; waitingCapture = nil; canResume = false; pauseMessage = nil
         captureID = id; self.recordingID = recordingID; self.title = title; startedAt = nil
         notes = ""; timedNotes = []; ink = []; highlights = []; photos = []; sharedNotes = [:]; sharedBookmarks = [:]
+        pages = []; pageClock = []; drafts = [:]; draftWrites.values.forEach { $0.cancel() }; draftWrites = [:]
         level = .silent; isMicrophoneSilent = false; lastHeardSpeechAt = nil
         do {
             guard !FileManager.default.fileExists(atPath: PhoneCaptureJournal.url(in: directory).path) else {
@@ -306,6 +321,7 @@ final class PhoneRecorder {
         onChange?()
         stopTicks()
         notesSave?.cancel()
+        writePendingDrafts()
         writer?.setAcceptingAudio(false)
         input?.stop()
         input = nil
@@ -376,6 +392,7 @@ final class PhoneRecorder {
     func flush() async {
         await writer?.waitUntilWritten()
         notesSave?.cancel()
+        writePendingDrafts()
         guard var journal, let directory else { return }
         sync(&journal)
         self.journal = journal
@@ -386,6 +403,7 @@ final class PhoneRecorder {
     /// a complete recording.
     func prepareForTermination() {
         guard isCapturing else { return }
+        writePendingDrafts()
         writer?.setAcceptingAudio(false)
         input?.stop()
         input = nil
@@ -485,6 +503,160 @@ final class PhoneRecorder {
         persistJournal()
         onChange?()
         return entry
+    }
+
+    // MARK: Notebook pages
+
+    /// Takes the pages of the conversation this recording goes into (Keep Recording, or a recording into an existing
+    /// conversation), each with the copy it was loaded as, so filing merges what was changed elsewhere meanwhile with what's
+    /// written here. Pages already taken stay as they are.
+    func loadPages(from meeting: Meeting?) {
+        guard let meeting else { return }
+        for page in meeting.pages ?? [] where !pages.contains(where: { $0.page.id == page.id }) {
+            pages.append(CapturePage(page: page, base: page))
+        }
+        savePages()
+    }
+
+    /// A page made during this recording. Its strokes come with the first commit; one that never gets any isn't filed.
+    func addPage(_ page: NotebookPage) {
+        guard !pages.contains(where: { $0.page.id == page.id }) else { return }
+        pages.append(CapturePage(page: page, base: nil))
+        savePages()
+    }
+
+    /// A page's strokes as last written: a draft not yet in its file, else the staging file, else the conversation's drawing
+    /// (`conversationDrawing`). Nil when there are none.
+    func pageDrawingData(_ pageID: UUID) -> Data? {
+        guard let entry = pages.first(where: { $0.page.id == pageID }) else { return nil }
+        if let pending = drafts[pageID] { return pending }
+        if let directory {
+            let url = directory.appendingPathComponent(CapturePage.fileName(for: pageID))
+            if let data = pageQueue.sync(execute: { try? Data(contentsOf: url) }) { return data }
+        }
+        return entry.page.drawing.flatMap { conversationDrawing?($0) }
+    }
+
+    /// The canvas changed: its strokes are written to the staging file `pageDraftDelay` after the last change, so a crash
+    /// loses the last couple of seconds at most. Only the file: the journal isn't written, and what the file holds is the
+    /// page's strokes whether or not a commit has said so.
+    func saveDraft(_ pageID: UUID, data: Data) {
+        guard directory != nil, pages.contains(where: { $0.page.id == pageID }) else { return }
+        drafts[pageID] = data
+        draftWrites[pageID]?.cancel()
+        draftWrites[pageID] = Task { [weak self, delay = pageDraftDelay] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            self?.writeDraft(pageID)
+        }
+    }
+
+    /// The canvas settled (a page turn, Stop, idle, the notebook closing): its strokes are written to the staging file, and
+    /// the journal says so. Returns the strokes' SHA-256, which a reading of them is checked against; nil when the file
+    /// couldn't be written (`lastError` says so) or the page isn't one of this recording's.
+    @discardableResult
+    func commitPage(_ pageID: UUID, data: Data, strokeCount: Int, contentVersion: Int) -> String? {
+        guard let directory, let index = pages.firstIndex(where: { $0.page.id == pageID }) else { return nil }
+        drafts[pageID] = nil
+        draftWrites.removeValue(forKey: pageID)?.cancel()
+        let name = CapturePage.fileName(for: pageID)
+        do { try pageQueue.sync { try Self.writeStaged(data, to: directory.appendingPathComponent(name)) } }
+        catch { journalWriteFailed(error.localizedDescription); return nil }
+        let now = environment.clock.now()
+        pages[index].drawingFile = name
+        pages[index].drawingSHA256 = AudioDigest.sha256(data: data)
+        pages[index].strokeCount = strokeCount
+        pages[index].contentVersion = contentVersion
+        pages[index].committedAt = now
+        pages[index].page.updatedAt = now
+        savePages()
+        return pages[index].drawingSHA256
+    }
+
+    /// What reading the page's strokes found, only when it read the strokes last committed (or, before a commit, the page's
+    /// drawing as loaded): a result for strokes since replaced is dropped.
+    func applyPageReading(_ pageID: UUID, _ reading: PageReading) {
+        editPage(pageID) { $0.applyPageReading(pageID, reading: reading, now: environment.clock.now()) }
+    }
+
+    /// The person's own words for a passage.
+    func correctPassage(pageID: UUID, passageID: UUID, text: String) {
+        editPage(pageID) { $0.correctPassage(pageID: pageID, passageID: passageID, text: text, now: environment.clock.now()) }
+    }
+
+    /// Deletes a page; its strokes stay in the file, and it can be put back.
+    func removePage(_ pageID: UUID) {
+        editPage(pageID) { $0.removePage(pageID, at: environment.clock.now()) }
+    }
+
+    func restorePage(_ pageID: UUID) {
+        editPage(pageID) { $0.restorePage(pageID, at: environment.clock.now()) }
+    }
+
+    /// Samples the recorder's clock against the wall clock, as a stroke begins: it maps each passage's start to seconds into
+    /// the recording (`RecordingClockMap`). Filed with the recording's track.
+    func sampleClock() {
+        guard isCapturing else { return }
+        pageClock = RecordingClockMap.appending(RecordingClockSample(at: environment.clock.now(), elapsed: elapsedTime, running: state == .recording),
+                                                to: pageClock)
+        journal?.pageClock = pageClock
+    }
+
+    /// One page's record changed by a Core edit made on a stand-in conversation, so the rules (a reading for replaced
+    /// strokes is dropped, a correction stands while the strokes do) are the conversation's. The stand-in's drawing names
+    /// the strokes last committed, which a reading is checked against.
+    private func editPage(_ pageID: UUID, _ change: (inout Meeting) -> Void) {
+        guard let index = pages.firstIndex(where: { $0.page.id == pageID }) else { return }
+        var page = pages[index].page
+        let loaded = page.drawing
+        if let sha = pages[index].drawingSHA256 {
+            page.drawing = PageDrawing(relativePath: "", sha256: sha, byteCount: 0, strokeCount: pages[index].strokeCount ?? 0, editedAt: .distantPast)
+        }
+        var scratch = Meeting(title: title)
+        scratch.pages = [page]
+        change(&scratch)
+        guard var edited = scratch.pages?.first, edited != page else { return }
+        edited.drawing = loaded
+        pages[index].page = edited
+        savePages()
+    }
+
+    private func savePages() {
+        journal?.pages = pages.isEmpty ? nil : pages
+        journal?.pageClock = pageClock.isEmpty ? nil : pageClock
+        persistJournal()
+        onChange?()
+    }
+
+    /// Hands a page's pending draft to the file queue.
+    private func writeDraft(_ pageID: UUID) {
+        draftWrites[pageID] = nil
+        guard let data = drafts.removeValue(forKey: pageID), let directory else { return }
+        let url = directory.appendingPathComponent(CapturePage.fileName(for: pageID))
+        pageQueue.async { [weak self] in
+            do { try Self.writeStaged(data, to: url) } catch {
+                let message = error.localizedDescription
+                Task { @MainActor in self?.journalWriteFailed(message) }
+            }
+        }
+    }
+
+    /// Every pending draft is written now, before the recording ends or the app does.
+    private func writePendingDrafts() {
+        for id in drafts.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
+            draftWrites[id]?.cancel()
+            guard let data = drafts[id], let directory else { continue }
+            let url = directory.appendingPathComponent(CapturePage.fileName(for: id))
+            do { try pageQueue.sync { try Self.writeStaged(data, to: url) } } catch { journalWriteFailed(error.localizedDescription) }
+        }
+        drafts = [:]
+        draftWrites = [:]
+    }
+
+    /// Owner-only, atomic, and kept until unlock, like the journal (`StagingProtection`).
+    nonisolated private static func writeStaged(_ data: Data, to url: URL) throws {
+        try data.write(to: url, options: [.atomic, StagingProtection.writing])
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 
     // MARK: Notes and bookmarks from a Mac recording along

@@ -65,6 +65,28 @@ struct CapturePhoto: Codable, Equatable, Sendable {
     var time: TimeInterval
 }
 
+/// A notebook page written while recording: its record as it'll be filed, and its strokes in the staging folder
+/// (`fileName(for:)`). `page.drawing` is the conversation's drawing as it was loaded (nil for a page made during the
+/// recording); the strokes written since are in the staging file, committed at the notebook's settle points (`commit`)
+/// and kept fresh between them by drafts, which are files only: the file can hold newer strokes than the journal says.
+struct CapturePage: Codable, Equatable, Sendable {
+    /// The page record. Its `reading` may be of the committed strokes (`drawingSHA256`), not of a draft's.
+    var page: NotebookPage
+    /// The staging file as last committed. Nil until the first commit.
+    var drawingFile: String?
+    /// SHA-256 of that file's bytes as last committed: what a reading made during the recording is checked against.
+    var drawingSHA256: String?
+    /// What the last commit knew of the strokes, for the drawing filed from the file.
+    var strokeCount: Int?
+    var contentVersion: Int?
+    var committedAt: Date?
+    /// The conversation's copy when the recording loaded it; nil for a page made during the recording.
+    var base: NotebookPage?
+
+    /// "page-<UUID>.pkdrawing" in the staging folder.
+    static func fileName(for page: UUID) -> String { "page-\(page.uuidString).\(PageDrawing.fileExtension)" }
+}
+
 /// The Macs a recording is made with (docs/multipoint.md), kept in its journal so that one
 /// recovered after Daybook was killed still joins its conversation and its Macs are still stopped.
 struct CaptureMultipoint: Codable, Equatable, Sendable {
@@ -161,6 +183,11 @@ struct PhoneCaptureJournal: Codable, Equatable, Sendable {
     var highlights: [Highlight] = []
     /// Optional, so journals written before photos still load.
     var photos: [CapturePhoto]?
+    /// Notebook pages. Optional, so journals written before pages still load. Nil when none was written or loaded.
+    var pages: [CapturePage]?
+    /// The recorder's clock as the notebook sampled it (`RecordingClockMap`), so a recovered recording can still time
+    /// passages and keep the samples with its track. Nil when no page was written.
+    var pageClock: [RecordingClockSample]?
     /// The Macs it's recorded with; nil when none (and in journals written before multipoint was kept).
     var multipoint: CaptureMultipoint?
     /// Paragraphs and bookmarks a Mac recording this conversation too wrote over the link, as that Mac
@@ -248,6 +275,10 @@ struct PhoneRecording: Sendable, Equatable {
     var photos: [CapturePhoto] = []
     /// Handwriting in the notes.
     var ink: [NoteInk] = []
+    /// Notebook pages written or loaded while recording; the strokes are in `stagingDirectory`.
+    var pages: [CapturePage] = []
+    /// The recorder's clock as the notebook sampled it.
+    var pageClock: [RecordingClockSample] = []
     /// The Macs it was recorded with, as the journal kept them (for a recovered recording).
     var multipoint: CaptureMultipoint?
     /// What a Mac recording along wrote over the link, as that Mac files it (`PhoneCaptureJournal.sharedNotes`).
