@@ -236,7 +236,7 @@ struct LibraryPage: View {
     let hits = LibrarySearch.hits(
       in: personalLock?.listed(library.meetings) ?? library.meetings, text: session.searchText,
       tokens: session.searchTokens,
-      scope: session.searchScope)
+      scope: session.searchScope, people: library.searchPeople)
     return List {
       // The scopes, on one page and on two, as on the Mac.
       // Its rows line up with the list's, clear of the crease on two pages.
@@ -284,7 +284,7 @@ struct LibraryPage: View {
     ) {
       let candidates = Self.captionCandidates(
         in: personalLock?.listed(library.meetings) ?? library.meetings, tokens: session.searchTokens,
-        scope: session.searchScope)
+        scope: session.searchScope, people: library.searchPeople)
       let found = await LibraryCaptionSearch.hits(
         in: candidates, query: session.searchText,
         excluding: Set(hits.map(\.meetingID)), libraryRoot: library.rootURL)
@@ -296,11 +296,12 @@ struct LibraryPage: View {
   /// The conversations whose saved captions search reads: those the search could list (its scope and tokens). Which
   /// captions still show is the transcript page's own rule (`SavedCaptions.shown`), which the search reads too, so a
   /// caption result always opens at them.
-  static func captionCandidates(in meetings: [Meeting], tokens: [SearchToken], scope: SearchScope)
-    -> [Meeting]
+  static func captionCandidates(
+    in meetings: [Meeting], tokens: [SearchToken], scope: SearchScope, people: SearchPeople = .none
+  ) -> [Meeting]
   {
     let scoped = Set(
-      LibrarySearch.hits(in: meetings, text: "", tokens: tokens, scope: scope).map(\.meetingID))
+      LibrarySearch.hits(in: meetings, text: "", tokens: tokens, scope: scope, people: people).map(\.meetingID))
     return meetings.filter { scoped.contains($0.id) }
   }
 
@@ -521,7 +522,8 @@ private struct SearchWhilePresented: ViewModifier {
             suggestedTokens: .constant(
               LibrarySearchSuggestions.tokens(
                 for: session.searchText, tags: library.allTags,
-                meetings: library.meetings, chosen: session.searchTokens)),
+                meetings: library.meetings, chosen: session.searchTokens,
+                people: library.searchPeople)),
             isPresented: $session.isSearchPresented,
             placement: .navigationBarDrawer(displayMode: .always),
             prompt: LibraryWords.searchPrompt
