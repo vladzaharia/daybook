@@ -74,6 +74,9 @@ final class ReadingSession {
     var isSelecting = false
     var selection: Set<UUID> = []
 
+    /// The conversation whose notebook is open, full screen (More › Notebook).
+    var notebookFor: UUID?
+
     // Sheets
     var sheet: ReadingSheet?
     /// The camera is open to add a photo to this conversation.

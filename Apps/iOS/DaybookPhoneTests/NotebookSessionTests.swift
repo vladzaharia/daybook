@@ -21,6 +21,7 @@ final class NotebookSessionTests: XCTestCase {
         var turns: [PageTurn] = []
         var erased: [UUID: [ErasedStroke]] = [:]
         var clock = Date(timeIntervalSinceReferenceDate: 800_000_100)
+        var played: [UUID] = []
 
         var model: NotebookModel {
             NotebookModel(
@@ -32,7 +33,8 @@ final class NotebookSessionTests: XCTestCase {
                 },
                 applyReading: { self.readings.append(($0, $1)) }, correct: { _, _, _ in }, remove: { _ in nil },
                 recordErasures: { self.erased[$0, default: []] += $1 }, logTurn: { self.turns.append($0) },
-                anchor: { (nil, $0.timeIntervalSince(self.clock) + 40) })
+                anchor: { (nil, $0.timeIntervalSince(self.clock) + 40) },
+                play: { passage, _ in self.played.append(passage.id) })
         }
     }
 
@@ -188,5 +190,22 @@ final class NotebookSessionTests: XCTestCase {
         XCTAssertEqual(session.writingPoint, CGPoint(x: 120, y: 300), "controls near it step aside")
         view.touching?(nil)
         XCTAssertNil(session.writingPoint, "and come back when the stroke ends")
+    }
+
+    func testBehaviorHoldingOnHandwritingPlaysThePassageUnderIt() throws {
+        let store = store(pages: 1)
+        let id = store.pages[0].id
+        func passage(_ x: Double, _ y: Double) -> NotebookPassage {
+            NotebookPassage(id: UUID(), kind: .writing, x: x, y: y, width: 100, height: 30, strokeCount: 3, strokeDigest: "\(x)", start: began, end: began,
+                            time: 5, words: "hi")
+        }
+        let upper = passage(40, 60), lower = passage(40, 300)
+        store.pages[0].reading = PageReading(drawingSHA256: "abc", passages: [upper, lower], readAt: began)
+        let session = session(store)
+        session.play(at: CGPoint(x: 90, y: 310), on: id)
+        XCTAssertEqual(store.played, [lower.id], "the passage whose strokes are there")
+        session.play(at: CGPoint(x: 300, y: 500), on: id)
+        XCTAssertEqual(store.played.count, 1, "nothing is under a press on bare paper")
+        XCTAssertTrue(session.canPlay)
     }
 }

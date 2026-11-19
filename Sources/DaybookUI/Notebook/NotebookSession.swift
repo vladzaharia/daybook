@@ -157,6 +157,8 @@ public final class NotebookSession {
         view.changed = { [weak self] view in self?.changed(view) }
         view.sawPencil = { [weak self] in self?.pencilTouched() }
         view.touching = { [weak self] point in self?.writingPoint = point }
+        view.longPressed = { [weak self] point in self?.play(at: point, on: page.id) }
+        view.longPressEnabled = canPlay && pencilSeen
         canvases[page.id] = view
         view.apply(tool: ink.tool.pencilTool(color: ink.color), pencilOnly: pencilSeen)
         load(page.id, into: view, content: model.content(page.id))
@@ -209,6 +211,26 @@ public final class NotebookSession {
 
     public func isWritable(_ id: UUID) -> Bool { (model?.isEditable ?? false) && !loading.contains(id) && !unavailable.contains(id) }
 
+    // MARK: Playing
+
+    /// Whether a passage can be played from (a saved conversation's notebook).
+    public var canPlay: Bool { model?.play != nil }
+
+    /// Plays the conversation from when a passage was written.
+    public func play(_ passage: NotebookPassage, on page: NotebookPage) { model?.play?(passage, page) }
+
+    /// A long press on the handwriting: plays from the passage whose strokes are there (page points), the nearest when several are.
+    func play(at point: CGPoint, on id: UUID) {
+        guard let page = pages.first(where: { $0.id == id }) else { return }
+        let hits = page.passages.filter { CGRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height).insetBy(dx: -12, dy: -12).contains(point) }
+        let nearest = hits.min { distance(from: point, to: $0) < distance(from: point, to: $1) }
+        if let nearest { play(nearest, on: page) }
+    }
+
+    private func distance(from point: CGPoint, to passage: NotebookPassage) -> CGFloat {
+        hypot(point.x - (passage.x + passage.width / 2), point.y - (passage.y + passage.height / 2))
+    }
+
     // MARK: Writing
 
     private func began(_ view: PageCanvasView) {
@@ -242,6 +264,8 @@ public final class NotebookSession {
     private func pencilTouched() {
         guard !pencilSeen else { return }
         pencilSeen = true
+        // A finger no longer writes, so holding one on handwriting plays it.
+        for view in canvases.values { view.longPressEnabled = canPlay }
         applyTool()
     }
 

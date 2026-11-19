@@ -36,6 +36,8 @@ public struct NotebookModel {
     /// Where a moment falls: seconds into the recording, or on a track while playing; nil without a clock.
     public var anchor: (Date) -> (trackID: UUID?, time: TimeInterval?)
     public var isEditable: Bool
+    /// Plays the conversation from when a passage was written; nil where nothing plays (while recording).
+    public var play: ((NotebookPassage, NotebookPage) -> Void)?
     /// The device pages made here are credited to (`NotebookPage.origin`).
     public var origin: PhotoOrigin?
 
@@ -47,10 +49,10 @@ public struct NotebookModel {
                 remove: @escaping (UUID) -> (() -> Void)?, recordErasures: @escaping (UUID, [ErasedStroke]) -> Void,
                 logTurn: @escaping (PageTurn) -> Void, sampleClock: (() -> Void)? = nil,
                 anchor: @escaping (Date) -> (trackID: UUID?, time: TimeInterval?), isEditable: Bool = true,
-                origin: PhotoOrigin? = nil) {
+                play: ((NotebookPassage, NotebookPage) -> Void)? = nil, origin: PhotoOrigin? = nil) {
         self.pages = pages; self.content = content; self.fetch = fetch; self.add = add; self.saveDraft = saveDraft
         self.commit = commit; self.applyReading = applyReading; self.correct = correct; self.remove = remove
         self.recordErasures = recordErasures; self.logTurn = logTurn; self.sampleClock = sampleClock; self.anchor = anchor
-        self.isEditable = isEditable; self.origin = origin
+        self.isEditable = isEditable; self.play = play; self.origin = origin
     }
 }

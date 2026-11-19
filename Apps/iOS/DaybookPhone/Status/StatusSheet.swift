@@ -147,7 +147,7 @@ struct StatusSheetHost: ViewModifier {
 
   private var placement: StatusSheetModel.Placement {
     StatusSheetModel.placement(
-      twoPages: onPage, compactHeight: heightClass == .compact, reading: session.reading,
+      twoPages: onPage, compactHeight: heightClass == .compact, reading: session.reading || session.notebookFor != nil,
       searching: session.isSearchPresented, selecting: session.isSelecting, inTrash: session.place.isTrash)
   }
 
