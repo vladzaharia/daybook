@@ -157,7 +157,7 @@ private struct NotebookFloatingCaption<Caption: View>: View {
             .frame(width: pageFrame.width - 16)
             .offset(x: pageFrame.minX + 8, y: pageFrame.maxY - 48)
             .opacity(PenProximity.isNear(session.writingPoint, CGRect(x: zone.minX, y: zone.maxY - 80, width: zone.width, height: 80)) ? 0 : 1)
-            .animation(.easeOut(duration: 0.2), value: session.writingPoint == nil)
+            .daybookMotion(DaybookMotion.fade, value: session.writingPoint == nil)
     }
 }
 

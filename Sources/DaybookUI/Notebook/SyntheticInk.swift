@@ -3,14 +3,22 @@ import Foundation
 import PencilKit
 #if canImport(UIKit)
 import UIKit
-public typealias SyntheticColor = UIColor
 #else
 import AppKit
-public typealias SyntheticColor = NSColor
 #endif
 
 /// Single-stroke letters, smoothed, in the shape a pen draws them: enough to exercise the recognizer without a Pencil.
 public enum SyntheticInk {
+    /// Black ink, the default.
+    public static let black = CGColor(gray: 0, alpha: 1)
+
+    /// The platform's colour for PencilKit, which takes `UIColor` on iOS and `NSColor` on the Mac.
+    #if canImport(UIKit)
+    static func native(_ color: CGColor) -> UIColor { UIColor(cgColor: color) }
+    #else
+    static func native(_ color: CGColor) -> NSColor { NSColor(cgColor: color) ?? .black }
+    #endif
+
     private static let glyphs: [Character: [[CGPoint]]] = [
         "h": [[.init(x: 0.1, y: 0), .init(x: 0.1, y: 1)],
               [.init(x: 0.1, y: 0.55), .init(x: 0.3, y: 0.42), .init(x: 0.6, y: 0.42), .init(x: 0.75, y: 0.55), .init(x: 0.75, y: 1)]],
@@ -30,9 +38,9 @@ public enum SyntheticInk {
     ///   - start: When the first stroke began; each stroke follows the one before by a third of a second.
     ///   - color: The ink's colour, stored as it is (a page is always light paper).
     public static func drawing(_ text: String, size: CGFloat = 46, origin: CGPoint = CGPoint(x: 20, y: 20), start: Date = Date(),
-                               color: SyntheticColor = .black) -> PKDrawing {
+                               color: CGColor = SyntheticInk.black) -> PKDrawing {
         var strokes: [PKStroke] = []
-        let ink = PKInk(.pen, color: color)
+        let ink = PKInk(.pen, color: native(color))
         var x = origin.x
         var clock: TimeInterval = 0
         var began = start
@@ -61,9 +69,9 @@ public enum SyntheticInk {
         public var size: CGFloat
         /// Seconds after the page's start that its first stroke began.
         public var at: TimeInterval
-        public var color: SyntheticColor
+        public var color: CGColor
 
-        public init(_ content: Content, at origin: CGPoint, size: CGFloat = 46, after at: TimeInterval = 0, color: SyntheticColor = .black) {
+        public init(_ content: Content, at origin: CGPoint, size: CGFloat = 46, after at: TimeInterval = 0, color: CGColor = SyntheticInk.black) {
             self.content = content; self.origin = origin; self.size = size; self.at = at; self.color = color
         }
     }
@@ -85,8 +93,8 @@ public enum SyntheticInk {
 
     /// A house with a roof and a sun: enough strokes of no letters to be read as a drawing.
     public static func sketch(origin: CGPoint = CGPoint(x: 40, y: 300), size: CGFloat = 120, start: Date = Date(),
-                              color: SyntheticColor = .black) -> PKDrawing {
-        let ink = PKInk(.pen, color: color)
+                              color: CGColor = SyntheticInk.black) -> PKDrawing {
+        let ink = PKInk(.pen, color: native(color))
         func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: origin.x + x * size, y: origin.y + y * size) }
         var lines: [[CGPoint]] = [
             [point(0, 0.5), point(0, 1), point(1, 1), point(1, 0.5), point(0, 0.5)],
