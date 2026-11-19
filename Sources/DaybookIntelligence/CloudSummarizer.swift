@@ -6,7 +6,7 @@ import Synchronization
 /// Summarizes a conversation with a cloud model (docs/cloud.md, "The summary"): `CloudSynthesis`'s single pass,
 /// streamed, with the reply's limit raised once when it runs into it, and the provider and model, tokens, estimated
 /// cost, and sending device recorded in the summary's provenance. Only the transcript text, the notes and bookmarks,
-/// the template, and the vocabulary are sent: never audio, photos, or voiceprints.
+/// the template, the vocabulary, and the conversation's title and date are sent: never audio, photos, or voiceprints.
 public struct CloudSummarizer: CloudSummarizing {
     public let directory: CloudDirectory
     /// The device sending the conversation, for provenance: "Vlad's MacBook Pro".

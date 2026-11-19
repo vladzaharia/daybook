@@ -4450,3 +4450,10 @@ Replaces the modal "draw, recognize, review, add" sheet. Typing and ink share on
 - Inspected the cover and inner displays: typed and handwritten paragraphs alternating with their times in the lane, ink inverted in Dark Mode, a block written wider than the column scaled whole, the writing tools, and the recorder sheet at rest in each posture.
 
 **Still to check on a real iPhone Duo with Apple Pencil:** the simulator has no Pencil, so every stroke above was synthetic or a finger's. Check that Pencil writes past the last paragraph with no mode on, that a finger on that empty page still places the caret, Scribble over typed words beside a canvas, double-tap and squeeze for the eraser, a block's long-press menu, undo across strokes and typing, and the recognizer's accuracy on real handwriting. On the Mac, handwriting appears as its recognized words, not as ink.
+
+## The conversation's title and date in the summary prompt (2026-11-18)
+
+The summary model is told the conversation's title (only one the person or the calendar gave) and when it began, so it can resolve "next Tuesday" and has a hint of the subject (docs/cloud.md, "What is sent"). The cloud summary is sent them too.
+
+- `SummaryNotesTests`, `SynthesisPayloadTests`, `CloudSummarizerTests`: both appear in the short path, the long path, and the cloud prompt; placeholders and a title a summary wrote are not sent; a conversation with no recording whose start is known sends no date; the date reads the same in any locale; a source without them encodes as before.
+- **Not measured:** no model was run. Whether models resolve relative dates better with the date, and whether a title anchors a summary on its subject, is unknown. Check on the weekly and the three-hour offsite fixtures with the local models and one cloud model: a "next Tuesday" is written with the right date, an unclear one stays relative, and nothing is said to have been decided because the title implies it.

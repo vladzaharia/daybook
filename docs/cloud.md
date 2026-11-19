@@ -9,8 +9,12 @@ placement stream); this page is the cloud side: the catalog, keys, discovery, th
 ## What is sent
 
 A cloud summary sends the conversation's transcript text (with each note and bookmark in place, and the passages near
-them marked), the notes and bookmarks, the template (its kind and instructions), and the vocabulary. Nothing else: no
-audio, no photos or their captions, no voiceprints, no speaker profiles. Photo captions stay on the device, so a cloud
+them marked), the notes and bookmarks, the template (its kind and instructions), the vocabulary, and the conversation's
+title and date. The title goes only when the person or the calendar gave it (never "Untitled Conversation", a recording's
+placeholder, or a title a summary wrote earlier), cut to 120 characters; the date is when the conversation began as the
+person's local day, time, and time zone, sent only when a recording's start is known, so the model can resolve "next
+Tuesday" (`SummarySource.Context`). Nothing else: no audio, no photos or their captions, no voiceprints, no speaker
+profiles, no calendar attendees or other calendar detail. Photo captions stay on the device, so a cloud
 summary places photos by time only (`PhotoPlacement.arrange`). OpenAI's request sets `store: false`, so the response
 isn't kept on OpenAI's side. The same is sent whatever brought the summary to the cloud ("When the cloud is chosen").
 
@@ -277,7 +281,7 @@ conversation, checked against the model's window first (a prompt longer than it 
 1M-token window holds far more than a day of talk), through `CloudSynthesis`:
 
 - **Prompt:** `MeetingSynthesis.finalPrompt` with the template's kind and instructions (bounded to about 700 tokens, as
-  locally), the vocabulary, the transcript with notes and bookmarks in place, and two cloud additions:
+  locally), the vocabulary, the conversation's title and date, the transcript with notes and bookmarks in place, and two cloud additions:
   `quotesActions` (each action item with an exact quote from the transcript) and `findsWhatNotesAdd` (below). Local
   prompts are unchanged.
 - **Schema:** `CloudSynthesis.schema`, the local `summarySchema`'s properties in the same order as structured outputs
@@ -339,7 +343,7 @@ Settings › Cloud (a pane of its own on the Mac, between Models and Devices; a 
 - **Quality** (unless Never): Best, Balanced, and Economy, each with its recommended model and what an hour costs; Model,
   Recommended or a model of the tier (with its cost when one is chosen); Effort, the efforts the model takes (a segmented
   control on the Mac, a menu on the iPhone), showing the level a summary would ask for: Extra High until one is chosen.
-- One footer line: "Sends the transcript, notes, and vocabulary, never audio."
+- One footer line: "Sends the transcript, notes, vocabulary, and the title and date, never audio."
 
 Preferences (`CloudSummaryPreferences`) are each device's own, in its UserDefaults (`cloudSummaryPreferences`), read and
 written only through `CloudSetup.preferences`; the Mac's `--library` runs keep their own suite. The countdown's length
