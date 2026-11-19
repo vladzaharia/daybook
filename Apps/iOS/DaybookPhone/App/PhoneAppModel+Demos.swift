@@ -32,13 +32,13 @@ extension PhoneAppModel {
         recorder.sampleClock()
         let begun = Date()
         func words(_ text: String, _ x: CGFloat, _ y: CGFloat, after: TimeInterval, _ colour: InkColor = .black) -> SyntheticInk.Passage {
-            .init(.words(text), at: CGPoint(x: x, y: y), size: 34, after: after, color: colour.uiColor)
+            .init(.words(text), at: CGPoint(x: x, y: y), size: 34, after: after, color: colour.uiColor.cgColor)
         }
         let drawings: [PKDrawing] = [
             SyntheticInk.page(passages: [words("hello world", 66, 70, after: 0), words("world hello", 66, 150, after: 8, ink.blue),
                                          words("hello", 66, 236, after: 14, ink.red), words("world", 66, 320, after: 20, ink.green),
                                          words("hello hello", 66, 400, after: 26, ink.orange)], start: begun),
-            SyntheticInk.page(passages: [.init(.sketch, at: CGPoint(x: 80, y: 120), size: 150, after: 4, color: ink.blue.uiColor),
+            SyntheticInk.page(passages: [.init(.sketch, at: CGPoint(x: 80, y: 120), size: 150, after: 4, color: ink.blue.uiColor.cgColor),
                                          words("hello", 66, 400, after: 12, ink.red)], start: begun),
             SyntheticInk.page(passages: [words("world hello", 66, 70, after: 0), words("hello", 66, 160, after: 8, ink.green)], start: begun),
         ]
