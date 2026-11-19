@@ -1,5 +1,70 @@
 # Validation record
 
+## Ask across conversations, engine (2026-11-18)
+
+The first half of "Ask across conversations": the in-memory index, the question parser, retrieval, and the answering step
+with its quote check, with no interface yet (docs/architecture.md, "Ask across conversations"). On `feature/ask-engine`.
+
+**The evaluation library.** `Tests/DaybookKitTests/AskEvaluation`: 20 invented conversations (people Sam, Priya, Alex,
+Dana, and Tomas; customers and vendors such as Orchard & Vane, Kestrel Logistics, and Fennimore Cloud) from September
+to November 2026, 7 of them with a summary, 2 of them Personal decoys, with decisions made and reversed, the same
+person's commitments across months, one person taking another's, a "pricing page" design review beside the pricing
+decision, facts said only in other words than the question's, and facts only in a note or a bookmark; and 60 questions
+with expected key facts and expected passages (decision 10, commitment 10, latest wins 6, counts and lists 6, one
+conversation 6, paraphrase 8, note or bookmark 3, Personal decoys 2, unanswerable 9). A third (20, every third in file
+order) is held out. Nothing in it comes from a real library.
+
+**Retrieval recall** (`AskRetrievalEvaluationTests`, deterministic, no model, in CI). Over the 49 answerable questions
+that aren't Personal decoys. "At 1" and "at 3": an expected passage, note, or bookmark is among the first one or three
+ranked pieces; "given to the model": it is in the passages, notes, and bookmarks the model would read (the 4,000-token
+budget).
+
+| Questions | Count | At 1 | At 3 | Given to the model |
+| --- | --- | --- | --- | --- |
+| Tuning | 33 | 20 (60.6%) | 26 (78.8%) | 28 (84.8%) |
+| Held out | 16 | 12 (75.0%) | 14 (87.5%) | 15 (93.8%) |
+
+**Only the questions are held out, not the conversations.** The 16 held-out questions share the library with the 33
+tuning ones: every one of the 11 conversations that hold held-out evidence also holds tuning evidence, so tuning on the library
+could still help them. The held-out score says the ranking wasn't fitted to those questions' wording, not that it works
+on conversations it has never seen. The CI bars sit one question under what retrieval finds on each split (28 of 33 and
+15 of 16 given to the model; at 3, 26 and 14; at 1, 20 and 12), and retrieval is deterministic, so a regression of two
+questions fails.
+
+Tuning changed three things, each chosen from the tuning set's misses and what retrieval should do, not from the held-out
+questions: a question about commitments reads passages in the words of a promise by the person it names (and the
+summaries' commitments) more favourably; a question asked about one conversation reads it whatever it shares; and the
+floor is lower in a small library, where no word can weigh as much. A review then found the promise bonus lifted pieces
+that shared no word with the question over the floor, so no commitment question could end at retrieval, and counted "I
+can't make Thursday" as a promise. It now excludes can't, cannot, won't, will not, and 'll not, and applies only to
+pieces that share a word with the question. That cost three tuning questions (all "what did Sam commit to in
+<month>"-style questions that share no word with how a promise is said): given to the model 31 to 28 of 33, at 3 29
+to 26, at 1 23 to 20; held out unchanged at 12, 14, and 15 of 16. It was left that way rather than weighted back.
+Before tuning at all, the tuning set found the evidence for 24 of 33, and the held-out set's 13 of 16 had been printed
+once by the test's first run. Honestly: that aggregate was seen before tuning, and no held-out question was looked at.
+Still missed: "when did we talk about someone being burned out?" (the passage says "wiped out"; no shared word: the
+paraphrase gap the design expected), "what did I mark in the launch retro?" (the bookmark's words share nothing with
+the question and titles aren't indexed), and the three commitment questions above. The synthetic score is an upper
+bound: the same hands wrote the library and the ranking.
+
+**What the quote check guarantees.** Each kept sentence cites a passage, note, or bookmark that contains the quoted
+words, whole and word for word (case, apostrophes, spacing, and timestamps ignored; no word is matched inside another;
+no ellipsis joins pieces and no sentences are split). It does not prove the sentence says what the quote says: a model
+can quote real words and draw a wrong conclusion from them. Summary lines are never the evidence. The commitments
+check, which shares the matcher, got the whole-word rule too.
+
+**Before any model runs.** Retrieval alone ended 4 of the 9 unanswerable questions (the August one, whose dates hold no
+conversation, and three with no word in the library); the other 5 reach the model, which has to say "not found" (not
+measured). With the Personal lock locked, none of the 60 questions read or ranked either Personal conversation.
+
+**Not measured.** Answer quality (correct, wrong, not found, and how many sentences the quote check drops), the bars
+for abstention and correctness, and latency: `Daybook --ask-eval` needs an installed summary model, and this Mac has
+none for this session to use (`~/Library/Application Support/Daybook Development` doesn't exist, and no model was
+downloaded). The flag was run against an empty models folder and stops saying so. The model-free tests cover the
+prompt byte for byte, the quote check (case, apostrophes, timestamps, ellipsis, unknown labels, quotes that are
+elsewhere, a broken-off reply, the free-form fallback, notes and bookmarks), the three "not found" cases, waiting
+behind a running job, and cancelling.
+
 ## Long summaries: the usable window, the cloud when it does better, effort, and placements (2026-11-16)
 
 The owner: smaller models can't handle large transcripts; use each local model's whole usable context, fall back to a

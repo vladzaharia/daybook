@@ -30,6 +30,10 @@ enum DaybookEntry {
         if CommandLine.arguments.contains("--cloud-check") {
             Darwin.exit(await CloudCheck.run(arguments: CommandLine.arguments))
         }
+        // Ask's evaluation questions answered by the installed summary model, with counts (docs/validation.md).
+        if CommandLine.arguments.contains("--ask-eval") {
+            Darwin.exit(await AskEvaluationRun.run(arguments: CommandLine.arguments))
+        }
         // Whether process taps work in the App Sandbox (docs/sandbox.md): the tap alone, nothing recorded.
         if CommandLine.arguments.contains("--capture-probe") {
             let code = await CaptureProbe.run(arguments: CommandLine.arguments)

@@ -1,0 +1,1364 @@
+{
+ "today": "2026-11-18T12:00",
+ "timeZone": "America/Vancouver",
+ "questions": [
+  {
+   "text": "Where is the offsite going to be?",
+   "category": "decision",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "tallinn"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "offsite-1112",
+     "line": 3
+    }
+   ],
+   "id": "q01",
+   "split": "tune"
+  },
+  {
+   "text": "How many columns should the pricing page have?",
+   "category": "decision",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "three"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "design-0904",
+     "line": 3
+    }
+   ],
+   "id": "q02",
+   "split": "tune"
+  },
+  {
+   "text": "Which hosting plan did Alex choose with Fennimore, monthly or annual?",
+   "category": "decision",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "monthly"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "fennimore-0918",
+     "line": 3
+    }
+   ],
+   "id": "q03",
+   "split": "held"
+  },
+  {
+   "text": "Who are we making the contractor offer to?",
+   "category": "decision",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "rowan"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "debrief-1022",
+     "line": 3
+    }
+   ],
+   "id": "q04",
+   "split": "tune"
+  },
+  {
+   "text": "How long is the contractor hired for?",
+   "category": "decision",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "three months",
+     "3 months"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "one-one-0915",
+     "line": 4
+    }
+   ],
+   "id": "q05",
+   "split": "tune"
+  },
+  {
+   "text": "What color is the main button on the pricing page?",
+   "category": "decision",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "teal"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "design-0904",
+     "line": 6
+    },
+    {
+     "c": "design-0904",
+     "line": 5
+    }
+   ],
+   "id": "q06",
+   "split": "held"
+  },
+  {
+   "text": "How long did Kestrel renew for?",
+   "category": "decision",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "two years",
+     "2 years"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "weekly-1111",
+     "line": 4
+    }
+   ],
+   "id": "q07",
+   "split": "tune"
+  },
+  {
+   "text": "What did we agree to do about data residency for Harrowgate?",
+   "category": "decision",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "canad"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "harrowgate-1027",
+     "line": 3
+    },
+    {
+     "c": "harrowgate-1027",
+     "line": 2
+    }
+   ],
+   "id": "q08",
+   "split": "tune"
+  },
+  {
+   "text": "What did we decide for the support rotation?",
+   "category": "decision",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "weekly"
+    ],
+    [
+     "noor"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "support-1116",
+     "line": 3
+    }
+   ],
+   "id": "q09",
+   "split": "held"
+  },
+  {
+   "text": "What did we decide about the export bug?",
+   "category": "decision",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "priority",
+     "before"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "weekly-0930",
+     "line": 3
+    }
+   ],
+   "id": "q10",
+   "split": "tune"
+  },
+  {
+   "text": "What did Sam commit to in September?",
+   "category": "commitment",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "comparison sheet",
+     "finance"
+    ],
+    [
+     "sso",
+     "single sign-on"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "weekly-0902",
+     "line": 4
+    },
+    {
+     "c": "orchard-0909",
+     "line": 4
+    }
+   ],
+   "id": "q11",
+   "split": "tune"
+  },
+  {
+   "text": "What did Priya promise to review in September?",
+   "category": "commitment",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "contract"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "fennimore-0918",
+     "line": 6
+    }
+   ],
+   "id": "q12",
+   "split": "held"
+  },
+  {
+   "text": "What did Tomas commit to fix?",
+   "category": "commitment",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "export"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "weekly-0930",
+     "line": 5
+    },
+    {
+     "c": "retro-1105",
+     "line": 6
+    }
+   ],
+   "id": "q13",
+   "split": "tune"
+  },
+  {
+   "text": "What did Sam commit to last month?",
+   "category": "commitment",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "audit"
+    ],
+    [
+     "questionnaire"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "kestrel-1007",
+     "line": 3
+    },
+    {
+     "c": "weekly-1021",
+     "line": 4
+    },
+    {
+     "c": "harrowgate-1027",
+     "line": 5
+    }
+   ],
+   "id": "q14",
+   "split": "tune"
+  },
+  {
+   "text": "What did Dana commit to book?",
+   "category": "commitment",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "venue"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "offsite-1112",
+     "line": 7
+    }
+   ],
+   "id": "q15",
+   "split": "held"
+  },
+  {
+   "text": "What did Priya commit to in October?",
+   "category": "commitment",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "billing"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "pricing-1014",
+     "line": 7
+    }
+   ],
+   "id": "q16",
+   "split": "tune"
+  },
+  {
+   "text": "What did Sam promise Tidewell Foods?",
+   "category": "commitment",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "spanish"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "tidewell-1113",
+     "line": 3
+    }
+   ],
+   "id": "q17",
+   "split": "tune"
+  },
+  {
+   "text": "What does Sam owe Kestrel?",
+   "category": "commitment",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "renewal",
+     "paperwork"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "weekly-1111",
+     "line": 6
+    }
+   ],
+   "id": "q18",
+   "split": "held"
+  },
+  {
+   "text": "What did Priya take over from Sam?",
+   "category": "commitment",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "harrowgate",
+     "questionnaire"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "one-one-1103",
+     "line": 5
+    }
+   ],
+   "id": "q19",
+   "split": "tune"
+  },
+  {
+   "text": "What did Sam promise Harrowgate Bank?",
+   "category": "commitment",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "questionnaire"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "harrowgate-1027",
+     "line": 5
+    }
+   ],
+   "id": "q20",
+   "split": "tune"
+  },
+  {
+   "text": "What did we set the Pro tier price at?",
+   "category": "latest",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "twelve",
+     "12"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "pricing-1014",
+     "line": 4
+    },
+    {
+     "c": "weekly-0902",
+     "line": 3
+    }
+   ],
+   "id": "q21",
+   "split": "held"
+  },
+  {
+   "text": "What price do existing customers pay for the Pro tier?",
+   "category": "latest",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "nine",
+     "9"
+    ],
+    [
+     "march"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "weekly-1111",
+     "line": 1
+    },
+    {
+     "c": "weekly-1111",
+     "line": 2
+    }
+   ],
+   "id": "q22",
+   "split": "tune"
+  },
+  {
+   "text": "What is the launch date?",
+   "category": "latest",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "november 3",
+     "november third",
+     "3 november"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "weekly-0930",
+     "line": 2
+    },
+    {
+     "c": "weekly-1021",
+     "line": 2
+    }
+   ],
+   "id": "q23",
+   "split": "tune"
+  },
+  {
+   "text": "When will Sam deliver the audit log spec?",
+   "category": "latest",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "twenty-third",
+     "23"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "weekly-1021",
+     "line": 4
+    }
+   ],
+   "id": "q24",
+   "split": "held"
+  },
+  {
+   "text": "Who owns the onboarding email rewrite?",
+   "category": "latest",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "sam"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "one-one-0915",
+     "line": 2
+    },
+    {
+     "c": "one-one-0915",
+     "line": 1
+    }
+   ],
+   "id": "q25",
+   "split": "tune"
+  },
+  {
+   "text": "How many seats does Orchard and Vane have?",
+   "category": "latest",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "two hundred",
+     "200"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "weekly-1111",
+     "line": 7
+    }
+   ],
+   "id": "q26",
+   "split": "tune"
+  },
+  {
+   "text": "How many outages did we have in the third quarter?",
+   "category": "count",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "two",
+     "2"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "retro-1002",
+     "line": 4
+    }
+   ],
+   "id": "q27",
+   "split": "held"
+  },
+  {
+   "text": "What went well in the third quarter retro?",
+   "category": "count",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "faster releases"
+    ],
+    [
+     "docs site"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "retro-1002",
+     "line": 1
+    }
+   ],
+   "id": "q28",
+   "split": "tune"
+  },
+  {
+   "text": "What are the top support issues?",
+   "category": "count",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "login"
+    ],
+    [
+     "export"
+    ],
+    [
+     "billing"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "support-1116",
+     "line": 0
+    }
+   ],
+   "id": "q29",
+   "split": "tune"
+  },
+  {
+   "text": "How many sign-ups did we get in the first two days after launch?",
+   "category": "count",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "412",
+     "four hundred"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "retro-1105",
+     "line": 1
+    }
+   ],
+   "id": "q30",
+   "split": "held"
+  },
+  {
+   "text": "How many P1 bugs are open?",
+   "category": "count",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "seven",
+     "7"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "support-1116",
+     "line": 2
+    }
+   ],
+   "id": "q31",
+   "split": "tune"
+  },
+  {
+   "text": "Which customers asked for single sign-on or an audit log?",
+   "category": "count",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "orchard"
+    ],
+    [
+     "kestrel"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "orchard-0909",
+     "line": 3
+    },
+    {
+     "c": "kestrel-1007",
+     "line": 2
+    }
+   ],
+   "id": "q32",
+   "split": "tune"
+  },
+  {
+   "text": "What discount does Fennimore offer?",
+   "category": "one",
+   "scope": "all",
+   "conversation": "fennimore-0918",
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "fifteen",
+     "15"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "fennimore-0918",
+     "line": 2
+    }
+   ],
+   "id": "q33",
+   "split": "held"
+  },
+  {
+   "text": "What do they quote per month for hosting?",
+   "category": "one",
+   "scope": "all",
+   "conversation": "fennimore-0918",
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "4,200",
+     "4200",
+     "four thousand two hundred"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "fennimore-0918",
+     "line": 0
+    }
+   ],
+   "id": "q34",
+   "split": "tune"
+  },
+  {
+   "text": "What is the offer for the contractor?",
+   "category": "one",
+   "scope": "all",
+   "conversation": "debrief-1022",
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "7,500",
+     "7500",
+     "seven thousand five hundred"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "debrief-1022",
+     "line": 3
+    }
+   ],
+   "id": "q35",
+   "split": "tune"
+  },
+  {
+   "text": "How many people are going to the offsite?",
+   "category": "one",
+   "scope": "all",
+   "conversation": "offsite-1112",
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "eleven",
+     "11"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "offsite-1112",
+     "line": 6
+    },
+    {
+     "c": "offsite-1112",
+     "line": 5
+    }
+   ],
+   "id": "q36",
+   "split": "held"
+  },
+  {
+   "text": "How many other vendors is Harrowgate evaluating?",
+   "category": "one",
+   "scope": "all",
+   "conversation": "harrowgate-1027",
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "two",
+     "2"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "harrowgate-1027",
+     "line": 0
+    }
+   ],
+   "id": "q37",
+   "split": "tune"
+  },
+  {
+   "text": "How many seats does Tidewell have?",
+   "category": "one",
+   "scope": "all",
+   "conversation": "tidewell-1113",
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "sixty",
+     "60"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "tidewell-1113",
+     "line": 0
+    }
+   ],
+   "id": "q38",
+   "split": "tune"
+  },
+  {
+   "text": "How did retention change after launch?",
+   "category": "paraphrase",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "churn",
+     "three point two",
+     "3.2"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "retro-1105",
+     "line": 2
+    }
+   ],
+   "id": "q39",
+   "split": "held"
+  },
+  {
+   "text": "When did we talk about someone being burned out?",
+   "category": "paraphrase",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "priya"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "one-one-1103",
+     "line": 1
+    }
+   ],
+   "id": "q40",
+   "split": "tune"
+  },
+  {
+   "text": "What did the bank want regarding where their data is stored?",
+   "category": "paraphrase",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "canad"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "harrowgate-1027",
+     "line": 2
+    },
+    {
+     "c": "harrowgate-1027",
+     "line": 3
+    }
+   ],
+   "id": "q41",
+   "split": "tune"
+  },
+  {
+   "text": "Which customer might leave us?",
+   "category": "paraphrase",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "kestrel"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "kestrel-1007",
+     "line": 2
+    },
+    {
+     "c": "kestrel-1007",
+     "note": 0
+    }
+   ],
+   "id": "q42",
+   "split": "held"
+  },
+  {
+   "text": "Did anyone worry about the server bill?",
+   "category": "paraphrase",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "alex",
+     "hosting"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "fennimore-0918",
+     "line": 1
+    }
+   ],
+   "id": "q43",
+   "split": "tune"
+  },
+  {
+   "text": "What did the designer think of the layout with four panels?",
+   "category": "paraphrase",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "three"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "design-0904",
+     "line": 3
+    }
+   ],
+   "id": "q44",
+   "split": "tune"
+  },
+  {
+   "text": "What was said about getting everyone together in person in the winter?",
+   "category": "paraphrase",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "tallinn"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "offsite-1112",
+     "line": 3
+    }
+   ],
+   "id": "q45",
+   "split": "held"
+  },
+  {
+   "text": "What did we say about the mistake in the spelling on the price page?",
+   "category": "paraphrase",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "typo",
+     "recieve",
+     "patch"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "retro-1105",
+     "bookmark": 0
+    },
+    {
+     "c": "retro-1105",
+     "line": 6
+    }
+   ],
+   "id": "q46",
+   "split": "tune"
+  },
+  {
+   "text": "What is the budget cap for the offsite?",
+   "category": "note",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "18k",
+     "18,000"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "retro-1002",
+     "note": 0
+    }
+   ],
+   "id": "q47",
+   "split": "tune"
+  },
+  {
+   "text": "What did I write down about the retention goal for the fourth quarter?",
+   "category": "note",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "92"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "retro-1002",
+     "note": 1
+    }
+   ],
+   "id": "q48",
+   "split": "held"
+  },
+  {
+   "text": "What did I mark in the launch retro?",
+   "category": "bookmark",
+   "scope": "all",
+   "conversation": null,
+   "answerable": true,
+   "personal": false,
+   "facts": [
+    [
+     "typo"
+    ]
+   ],
+   "forbidden": [],
+   "evidence": [
+    {
+     "c": "retro-1105",
+     "bookmark": 0
+    }
+   ],
+   "id": "q49",
+   "split": "tune"
+  },
+  {
+   "text": "Is Sam planning to leave Lumenpath?",
+   "category": "personal",
+   "scope": "all",
+   "conversation": null,
+   "answerable": false,
+   "personal": true,
+   "facts": [
+    [
+     "montreal"
+    ]
+   ],
+   "forbidden": [
+    "montreal"
+   ],
+   "evidence": [
+    {
+     "c": "personal-1010",
+     "line": 1
+    }
+   ],
+   "id": "q50",
+   "split": "tune"
+  },
+  {
+   "text": "When is Sam's dentist appointment?",
+   "category": "personal",
+   "scope": "all",
+   "conversation": null,
+   "answerable": false,
+   "personal": true,
+   "facts": [
+    [
+     "twenty-fourth",
+     "24"
+    ]
+   ],
+   "forbidden": [
+    "dentist"
+   ],
+   "evidence": [
+    {
+     "c": "personal-1109",
+     "line": 0
+    }
+   ],
+   "id": "q51",
+   "split": "held"
+  },
+  {
+   "text": "What did we decide about the Series A?",
+   "category": "unanswerable",
+   "scope": "all",
+   "conversation": null,
+   "answerable": false,
+   "personal": false,
+   "facts": [],
+   "forbidden": [],
+   "evidence": [],
+   "id": "q52",
+   "split": "tune"
+  },
+  {
+   "text": "Who is the chief executive of Harrowgate Bank?",
+   "category": "unanswerable",
+   "scope": "all",
+   "conversation": null,
+   "answerable": false,
+   "personal": false,
+   "facts": [],
+   "forbidden": [],
+   "evidence": [],
+   "id": "q53",
+   "split": "tune"
+  },
+  {
+   "text": "What did Sam commit to in August?",
+   "category": "unanswerable",
+   "scope": "all",
+   "conversation": null,
+   "answerable": false,
+   "personal": false,
+   "facts": [],
+   "forbidden": [],
+   "evidence": [],
+   "id": "q54",
+   "split": "held"
+  },
+  {
+   "text": "What was our revenue in October?",
+   "category": "unanswerable",
+   "scope": "all",
+   "conversation": null,
+   "answerable": false,
+   "personal": false,
+   "facts": [],
+   "forbidden": [],
+   "evidence": [],
+   "id": "q55",
+   "split": "tune"
+  },
+  {
+   "text": "What did Dana say about hotel prices in Tallinn?",
+   "category": "unanswerable",
+   "scope": "all",
+   "conversation": null,
+   "answerable": false,
+   "personal": false,
+   "facts": [],
+   "forbidden": [],
+   "evidence": [],
+   "id": "q56",
+   "split": "tune"
+  },
+  {
+   "text": "Which conference are we speaking at?",
+   "category": "unanswerable",
+   "scope": "all",
+   "conversation": null,
+   "answerable": false,
+   "personal": false,
+   "facts": [],
+   "forbidden": [],
+   "evidence": [],
+   "id": "q57",
+   "split": "held"
+  },
+  {
+   "text": "What did Marcus promise about uptime?",
+   "category": "unanswerable",
+   "scope": "all",
+   "conversation": null,
+   "answerable": false,
+   "personal": false,
+   "facts": [],
+   "forbidden": [],
+   "evidence": [],
+   "id": "q58",
+   "split": "tune"
+  },
+  {
+   "text": "What is the refund policy?",
+   "category": "unanswerable",
+   "scope": "all",
+   "conversation": null,
+   "answerable": false,
+   "personal": false,
+   "facts": [],
+   "forbidden": [],
+   "evidence": [],
+   "id": "q59",
+   "split": "tune"
+  },
+  {
+   "text": "How many employees does Orchard and Vane have?",
+   "category": "unanswerable",
+   "scope": "all",
+   "conversation": null,
+   "answerable": false,
+   "personal": false,
+   "facts": [],
+   "forbidden": [],
+   "evidence": [],
+   "id": "q60",
+   "split": "held"
+  }
+ ]
+}
