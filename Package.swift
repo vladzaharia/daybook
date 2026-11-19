@@ -131,7 +131,9 @@ let package = Package(
         // Device tests decode transferred audio with DaybookIntelligence's reader (macOS).
         .testTarget(name: "DaybookDevicesTests", dependencies: ["DaybookDevices", "DaybookCore", "DaybookIntelligence", "DaybookCaptions",
                                                                "DaybookTestSupport"]),
-        .testTarget(name: "DaybookKitTests", dependencies: ["DaybookKit", "DaybookCore", "DaybookDevices", "DaybookLink", "DaybookTestSupport"]),
+        // Fixtures: the invented library and questions Ask is evaluated on (Tests/DaybookKitTests/AskEvaluation).
+        .testTarget(name: "DaybookKitTests", dependencies: ["DaybookKit", "DaybookCore", "DaybookDevices", "DaybookLink", "DaybookTestSupport"],
+                    resources: [.copy("AskEvaluation")]),
         .testTarget(name: "DaybookIntelligenceTests", dependencies: [
             "DaybookIntelligence",
             "DaybookModelStore",

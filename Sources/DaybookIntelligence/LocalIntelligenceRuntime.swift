@@ -394,6 +394,14 @@ public actor LocalIntelligenceRuntime {
         return results
     }
 
+    /// Runs `operation` with the language model for `role` loaded, as one operation (`busy` while it runs).
+    func withModel<T: Sendable>(_ reference: ModelReference, role: ModelRole, message: String?, progress: @escaping IntelligenceProgressHandler,
+                                _ operation: (any LoadedModel, ModelProvenance) async throws -> T) async throws -> T {
+        try begin(); defer { finish() }
+        let (loaded, provenance) = try await use(reference, for: role, message: message, progress: progress)
+        return try await operation(loaded, provenance)
+    }
+
     // MARK: Loading
 
     /// Resolves `reference` to a verified install (failing before anything is released or read),
