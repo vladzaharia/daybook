@@ -35,11 +35,12 @@ struct NotebookScreen: View {
     }
 
     var body: some View {
-        NotebookSpread(session: session, crease: crease) {
-            leadingBand
-        } pill: {
-            RecorderPill(state: state, levels: levels, actions: actions, paging: paging, close: close)
-        } foot: { _ in
+        NotebookSpread(session: session, crease: crease) { collapsed, set, _ in
+            tools(collapsed: collapsed, set: set)
+        } pill: { collapsed, set, available in
+            RecorderPill(state: state, levels: levels, actions: actions, paging: paging, close: close,
+                         collapsed: collapsed, expand: { set(false) }, available: available)
+        } caption: {
             caption
         } card: { frame, isSpread in
             if isSpread, let panel { card(panel, frame: frame) }
@@ -85,21 +86,26 @@ struct NotebookScreen: View {
 
     // MARK: Pieces
 
-    private var leadingBand: some View {
-        HStack(spacing: DaybookSpacing.s2) {
-            Button { panel = panel == .notes ? nil : .notes } label: {
-                Image(systemName: "note.text")
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(panel == .notes ? DaybookPalette.Ink.link : DaybookPalette.Ink.title)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Circle())
+    /// Notes and the pen, floating over the left page's top; collapsed, one button showing the tool and colour.
+    @ViewBuilder private func tools(collapsed: Bool, set: @escaping (Bool) -> Void) -> some View {
+        if collapsed {
+            NotebookToolsChip(ink: session.ink) { set(false) }
+        } else {
+            HStack(spacing: DaybookSpacing.s2) {
+                Button { panel = panel == .notes ? nil : .notes } label: {
+                    Image(systemName: "note.text")
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(panel == .notes ? DaybookPalette.Ink.link : DaybookPalette.Ink.title)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Circle())
+                }
+                .daybookControl(.standard, shape: .circle)
+                .accessibilityLabel("Notes")
+                .accessibilityAddTraits(panel == .notes ? .isSelected : [])
+                NotebookTools(ink: session.ink)
             }
-            .daybookControl(.standard, shape: .circle)
-            .accessibilityLabel("Notes")
-            .accessibilityAddTraits(panel == .notes ? .isSelected : [])
-            NotebookTools(ink: session.ink)
+            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
         }
-        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
     }
 
     /// The newest live caption under the last open page, hidden with a tap and brought back the same way.

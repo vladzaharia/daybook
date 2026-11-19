@@ -178,4 +178,15 @@ final class NotebookSessionTests: XCTestCase {
         XCTAssertEqual(store.pages.count, 3, "kept with its first strokes")
         XCTAssertEqual(session.number(of: blank.id), 3)
     }
+
+    func testBehaviorWritingPointFollowsTouchesOnAPage() throws {
+        let store = store(pages: 1)
+        let session = session(store)
+        let view = try XCTUnwrap(session.canvas(for: store.pages[0].id))
+        XCTAssertNil(session.writingPoint)
+        view.touching?(CGPoint(x: 120, y: 300))
+        XCTAssertEqual(session.writingPoint, CGPoint(x: 120, y: 300), "controls near it step aside")
+        view.touching?(nil)
+        XCTAssertNil(session.writingPoint, "and come back when the stroke ends")
+    }
 }

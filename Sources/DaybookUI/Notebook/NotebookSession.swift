@@ -28,6 +28,10 @@ public final class NotebookSession {
     public private(set) var unavailable: Set<UUID> = []
     /// Why the last save or load failed, in plain words; nil when none.
     public private(set) var problem: String?
+    /// Where the pen or a finger is on the screen while it writes (window coordinates); floating controls near it step aside.
+    public internal(set) var writingPoint: CGPoint?
+    /// The floating controls begin collapsed (a debug launch's picture of that state).
+    @ObservationIgnored public var startsCollapsed = false
     /// Bumped when what the pages show changed, for views that draw from the model.
     public private(set) var revision = 0
 
@@ -152,6 +156,7 @@ public final class NotebookSession {
         view.began = { [weak self] view in self?.began(view) }
         view.changed = { [weak self] view in self?.changed(view) }
         view.sawPencil = { [weak self] in self?.pencilTouched() }
+        view.touching = { [weak self] point in self?.writingPoint = point }
         canvases[page.id] = view
         view.apply(tool: ink.tool.pencilTool(color: ink.color), pencilOnly: pencilSeen)
         load(page.id, into: view, content: model.content(page.id))

@@ -25,6 +25,7 @@ import SwiftUI
 ///                                turns it each way in turn, three seconds apart
 ///     --notebook                 open the notebook in the recorder (use with --start-recording --synthetic-audio)
 ///     --notebook-page <n>        with --notebook: open at page n (1 is the first)
+///     --notebook-collapsed       with --notebook: the pill and the tools start collapsed
 ///     --notebook-panel notes|words   with --notebook: the notes card, or the words of the open page, showing
 ///     --demo-pages               with --start-recording: three synthetic pages in the recording, writing in several colours and a sketch
 ///     --write-notes              table mode opens with Write Notes on (notes on the standing half, the keyboard below)
@@ -112,6 +113,7 @@ struct DebugLaunch {
     var demoPages = false
     var notebookPage: Int?
     var notebookPanel: String?
+    var notebookCollapsed = false
     var demoInk = false
     var demoInkWriting = false
     var interfaceOrientation: String?
@@ -244,6 +246,7 @@ struct DebugLaunch {
         demoPages = has("--demo-pages")
         notebookPage = value("--notebook-page").flatMap(Int.init)
         notebookPanel = value("--notebook-panel")
+        notebookCollapsed = has("--notebook-collapsed")
         demoInk = has("--demo-ink")
         demoInkWriting = has("--demo-ink-writing")
         interfaceOrientation = value("--interface-orientation")

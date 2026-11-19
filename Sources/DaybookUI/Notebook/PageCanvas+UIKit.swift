@@ -22,6 +22,8 @@ final class PageCanvasView: UIView, PKCanvasViewDelegate {
     var changed: ((PageCanvasView) -> Void)?
     /// Apple Pencil touched this page.
     var sawPencil: (() -> Void)? { didSet { watcher.onPencil = sawPencil } }
+    /// Where a touch is on screen while it's down (window coordinates), and nil when it lifts: what floating controls step aside for.
+    var touching: ((CGPoint?) -> Void)? { didSet { watcher.onTouch = touching } }
     private let watcher = PencilWatcher()
 
     init(pageID: UUID, size: CGSize, paper: PagePaper) {
@@ -90,9 +92,11 @@ final class PageCanvasView: UIView, PKCanvasViewDelegate {
         changed?(self)
     }
 
-    /// Whether any touch on this page was Apple Pencil: from then on fingers don't write (palm rejection).
+    /// Watches the touches on the canvas without taking any: whether one was Apple Pencil (from then on fingers don't write, so a
+    /// resting palm doesn't), and where a touch is while it's down.
     private final class PencilWatcher: UIGestureRecognizer {
         var onPencil: (() -> Void)?
+        var onTouch: ((CGPoint?) -> Void)?
 
         override init(target: Any?, action: Selector?) {
             super.init(target: target, action: action)
@@ -105,7 +109,15 @@ final class PageCanvasView: UIView, PKCanvasViewDelegate {
 
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
             if touches.contains(where: { $0.type == .pencil }) { onPencil?() }
-            state = .failed
+            report(touches)
+        }
+
+        override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) { report(touches) }
+        override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) { onTouch?(nil); state = .failed }
+        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) { onTouch?(nil); state = .failed }
+
+        private func report(_ touches: Set<UITouch>) {
+            if let touch = touches.first { onTouch?(touch.location(in: nil)) }
         }
     }
 }

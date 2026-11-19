@@ -52,6 +52,7 @@ struct RecorderScreen: View {
         .background(DaybookPalette.paper.ignoresSafeArea())
         .onAppear {
             if let launch = model.options.recorderSheet { sheetExpansion = launch }
+            notebook.startsCollapsed = model.options.notebookCollapsed
             if model.options.notebook { notebookOpen = true }
             levels.adopt(model.levels, for: .microphone)
             runLevels()
