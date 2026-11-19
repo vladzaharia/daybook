@@ -488,7 +488,7 @@ enum PhoneCaptureFinisher {
             hostTimeSeconds: journal.hostTimeSeconds, notes: journal.notes, timedNotes: journal.timedNotes,
             highlights: journal.highlights, capture: captureDetails(journal, final: final),
             warnings: journal.warnings.uniqued(),
-            stagingDirectory: directory, recovery: recovery, photos: journal.photos ?? [], ink: journal.ink ?? [], pages: journal.pages ?? [],
+            stagingDirectory: directory, recovery: recovery, photos: journal.photos ?? [], ink: journal.ink ?? [], pages: CapturePage.restoringBases(journal.pages ?? [], in: directory),
             pageClock: journal.pageClock ?? [], multipoint: journal.multipoint,
             sharedNotes: journal.sharedNotes ?? [], sharedBookmarks: journal.sharedBookmarks ?? [])
     }

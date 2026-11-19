@@ -85,6 +85,25 @@ struct CapturePage: Codable, Equatable, Sendable {
 
     /// "page-<UUID>.pkdrawing" in the staging folder.
     static func fileName(for page: UUID) -> String { "page-\(page.uuidString).\(PageDrawing.fileExtension)" }
+
+    /// "page-<UUID>.base.json": the copy of the conversation's page the recording loaded, written once when it was loaded, so the
+    /// journal rewritten every few seconds doesn't carry it. Encoded as the conversation is (full-precision dates), so
+    /// the three-way merge at filing sees the copy it was loaded as, unchanged.
+    static func baseFileName(for page: UUID) -> String { "page-\(page.uuidString).base.json" }
+    static func encodeBase(_ page: NotebookPage) throws -> Data { try JSONEncoder().encode(page) }
+
+    /// These pages with each one's `base` read back from its file in `folder` where the journal holds none (a recovered recording,
+    /// or one Stop finished from the journal on disk).
+    static func restoringBases(_ pages: [CapturePage], in folder: URL) -> [CapturePage] {
+        pages.map { entry in
+            guard entry.base == nil,
+                  let data = try? Data(contentsOf: folder.appendingPathComponent(baseFileName(for: entry.page.id))),
+                  let base = try? JSONDecoder().decode(NotebookPage.self, from: data) else { return entry }
+            var restored = entry
+            restored.base = base
+            return restored
+        }
+    }
 }
 
 /// The Macs a recording is made with (docs/multipoint.md), kept in its journal so that one

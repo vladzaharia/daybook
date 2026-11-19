@@ -831,7 +831,7 @@ final class PhoneRecorderTests: XCTestCase {
         let folder = try await startRecording(rig)
         let page = NotebookPage(order: 1, origin: PhotoOrigin(kind: "daybook.iphone", serial: "INSTALL-1", name: "Alex's iPhone"), now: rig.clock.now())
         rig.recorder.addPage(page)
-        XCTAssertNil(rig.recorder.pageDrawingData(page.id), "nothing written yet")
+        XCTAssertEqual(rig.recorder.pageStrokes(page.id), .blank, "nothing written yet")
         rig.recorder.sampleClock()
         rig.pump(1)
         rig.recorder.sampleClock()
@@ -839,11 +839,11 @@ final class PhoneRecorderTests: XCTestCase {
         rig.pump(5)
         rig.recorder.sampleClock()
 
-        let committed = try XCTUnwrap(rig.recorder.commitPage(page.id, data: strokes("first"), strokeCount: 5, contentVersion: 1))
+        let committed = try rig.recorder.commitPage(page.id, data: strokes("first"), strokeCount: 5, contentVersion: 1)
         XCTAssertEqual(committed, AudioDigest.sha256(data: strokes("first")))
         let file = folder.appendingPathComponent(CapturePage.fileName(for: page.id))
         XCTAssertEqual(try Data(contentsOf: file), strokes("first"))
-        XCTAssertEqual(rig.recorder.pageDrawingData(page.id), strokes("first"))
+        XCTAssertEqual(rig.recorder.pageStrokes(page.id), .strokes(strokes("first")))
         await rig.recorder.flush()
         var journal = try PhoneCaptureJournal.load(from: folder)
         let entry = try XCTUnwrap(journal.pages?.first)
@@ -875,7 +875,7 @@ final class PhoneRecorderTests: XCTestCase {
         XCTAssertNil(rig.recorder.pages.first?.page.removedAt)
 
         // New strokes are another commit: the file and the digest change, the reading waits to be made again.
-        let next = try XCTUnwrap(rig.recorder.commitPage(page.id, data: strokes("second"), strokeCount: 8, contentVersion: 1))
+        let next = try rig.recorder.commitPage(page.id, data: strokes("second"), strokeCount: 8, contentVersion: 1)
         XCTAssertNotEqual(next, committed)
         XCTAssertEqual(try Data(contentsOf: file), strokes("second"))
         await rig.recorder.flush()
@@ -883,7 +883,7 @@ final class PhoneRecorderTests: XCTestCase {
         XCTAssertEqual(journal.pages?.first?.drawingSHA256, next)
         XCTAssertEqual(journal.pages?.first?.page.corrections?.first?.text, "Budget review")
         // A page the recorder doesn't have isn't committed.
-        XCTAssertNil(rig.recorder.commitPage(UUID(), data: strokes("stray"), strokeCount: 1, contentVersion: 1))
+        XCTAssertThrowsError(try rig.recorder.commitPage(UUID(), data: strokes("stray"), strokeCount: 1, contentVersion: 1)) { XCTAssertEqual($0 as? PageWriteError, .unknownPage) }
 
         // Stop carries the pages and the clock with the recording.
         let recording = try await rig.stop()
@@ -905,16 +905,16 @@ final class PhoneRecorderTests: XCTestCase {
         rig.recorder.saveDraft(page.id, data: strokes("one"))
         rig.recorder.saveDraft(page.id, data: strokes("two"))
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path), "not yet: it waits for the canvas to be still")
-        XCTAssertEqual(rig.recorder.pageDrawingData(page.id), strokes("two"), "the draft is what the page holds")
+        XCTAssertEqual(rig.recorder.pageStrokes(page.id), .strokes(strokes("two")), "the draft is what the page holds")
         rig.recorder.saveDraft(page.id, data: strokes("three"))
         try await waitUntil("the draft to be written") { (try? Data(contentsOf: file)) == self.strokes("three") }
         XCTAssertEqual(try Data(contentsOf: PhoneCaptureJournal.url(in: folder)), before, "the journal isn't written for a draft")
         XCTAssertNil(try PhoneCaptureJournal.load(from: folder).pages?.first?.drawingFile, "and doesn't say the strokes were committed")
-        XCTAssertEqual(rig.recorder.pageDrawingData(page.id), strokes("three"))
+        XCTAssertEqual(rig.recorder.pageStrokes(page.id), .strokes(strokes("three")))
 
         // A commit supersedes a draft not yet written; a draft the recording ends over is written by Stop.
         rig.recorder.saveDraft(page.id, data: strokes("four"))
-        rig.recorder.commitPage(page.id, data: strokes("five"), strokeCount: 2, contentVersion: 1)
+        try rig.recorder.commitPage(page.id, data: strokes("five"), strokeCount: 2, contentVersion: 1)
         try await Task.sleep(for: .milliseconds(400))
         XCTAssertEqual(try Data(contentsOf: file), strokes("five"), "the older draft never lands over the commit")
         rig.recorder.saveDraft(page.id, data: strokes("six"))
@@ -925,7 +925,7 @@ final class PhoneRecorderTests: XCTestCase {
 
     func testBehaviorLoadedPagesComeWithTheirBaseAndTheConversationsFile() async throws {
         let rig = RecorderRig()
-        _ = try await startRecording(rig)
+        let folder = try await startRecording(rig)
         let id = UUID()
         var loaded = NotebookPage(id: id, order: 1, now: rig.clock.now())
         loaded.drawing = PageDrawing(relativePath: PageDrawing.relativePath(page: id, sha256: String(repeating: "c", count: 64)), sha256: String(repeating: "c", count: 64),
@@ -937,10 +937,75 @@ final class PhoneRecorderTests: XCTestCase {
         rig.recorder.loadPages(from: meeting)
         XCTAssertEqual(rig.recorder.pages.count, 1, "loaded once")
         XCTAssertEqual(rig.recorder.pages.first?.base, loaded)
-        XCTAssertEqual(rig.recorder.pageDrawingData(id), strokes("conversation"), "no staging file yet: the conversation's")
-        rig.recorder.commitPage(id, data: strokes("written"), strokeCount: 3, contentVersion: 1)
-        XCTAssertEqual(rig.recorder.pageDrawingData(id), strokes("written"))
+        XCTAssertEqual(rig.recorder.pageStrokes(id), .strokes(strokes("conversation")), "no staging file yet: the conversation's")
+        try rig.recorder.commitPage(id, data: strokes("written"), strokeCount: 3, contentVersion: 1)
+        XCTAssertEqual(rig.recorder.pageStrokes(id), .strokes(strokes("written")))
         XCTAssertEqual(rig.recorder.pages.first?.page.drawing, loaded.drawing, "the drawing as loaded stays the page's until filing")
+
+        // The copy it was loaded as is a file of its own, written once; the journal rewritten every few seconds doesn't carry it.
+        let baseFile = folder.appendingPathComponent(CapturePage.baseFileName(for: id))
+        XCTAssertEqual(try JSONDecoder().decode(NotebookPage.self, from: Data(contentsOf: baseFile)), loaded, "exactly as loaded")
+        let baseWritten = try FileManager.default.attributesOfItem(atPath: baseFile.path)[.modificationDate] as? Date
+        await rig.recorder.flush()
+        XCTAssertNil(try PhoneCaptureJournal.load(from: folder).pages?.first?.base, "not in the journal")
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: baseFile.path)[.modificationDate] as? Date, baseWritten, "not written again")
+        let recording = try await rig.stop()
+        XCTAssertEqual(recording.pages.first?.base, loaded, "and back with the recording")
+    }
+
+    /// The conversation's drawing isn't on the iPhone (never fetched, or evicted): the page isn't blank, it isn't loaded, and
+    /// nothing can be written over it until it is, so filing never replaces strokes nobody saw.
+    func testBehaviorAPageWhoseDrawingIsNotLoadedCannotBeWrittenOver() async throws {
+        let rig = RecorderRig()
+        let folder = try await startRecording(rig)
+        let id = UUID(), made = NotebookPage(order: 2, now: rig.clock.now())
+        var loaded = NotebookPage(id: id, order: 1, now: rig.clock.now())
+        loaded.drawing = PageDrawing(relativePath: PageDrawing.relativePath(page: id, sha256: String(repeating: "d", count: 64)), sha256: String(repeating: "d", count: 64),
+                                     byteCount: 10, strokeCount: 2, editedAt: rig.clock.now())
+        var meeting = Meeting(title: "Existing")
+        meeting.pages = [loaded, NotebookPage(id: UUID(), order: 3, now: rig.clock.now())]
+        var available = false
+        rig.recorder.conversationDrawing = { _ in available ? self.strokes("conversation") : nil }
+        rig.recorder.loadPages(from: meeting)
+        rig.recorder.addPage(made)
+        XCTAssertEqual(rig.recorder.pageStrokes(id), .notLoaded, "not blank: it has strokes, on a device it can't reach yet")
+        XCTAssertFalse(rig.recorder.canWritePage(id))
+        XCTAssertFalse(rig.recorder.saveDraft(id, data: strokes("blind")), "no draft over it either")
+        XCTAssertThrowsError(try rig.recorder.commitPage(id, data: strokes("blind"), strokeCount: 1, contentVersion: 1)) { XCTAssertEqual($0 as? PageWriteError, .drawingNotLoaded) }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent(CapturePage.fileName(for: id)).path), "nothing was written")
+        XCTAssertNil(rig.recorder.pages.first { $0.page.id == id }?.drawingFile)
+        // A page the conversation has no drawing for, and one made here, are blank and writable.
+        let emptyID = try XCTUnwrap(meeting.pages?.last?.id)
+        XCTAssertEqual(rig.recorder.pageStrokes(emptyID), .blank)
+        XCTAssertTrue(rig.recorder.canWritePage(emptyID))
+        XCTAssertTrue(rig.recorder.canWritePage(made.id))
+        try rig.recorder.commitPage(made.id, data: strokes("mine"), strokeCount: 1, contentVersion: 1)
+        // Once the drawing has been fetched and read, writing continues it.
+        available = true
+        XCTAssertEqual(rig.recorder.pageStrokes(id), .strokes(strokes("conversation")))
+        XCTAssertTrue(rig.recorder.canWritePage(id))
+        try rig.recorder.commitPage(id, data: strokes("conversation and more"), strokeCount: 3, contentVersion: 1)
+        _ = try await rig.stop()
+    }
+
+    func testBehaviorTheJournalCarriesTheClockAsItIsFiledNotEverySample() async throws {
+        let rig = RecorderRig()
+        let folder = try await startRecording(rig)
+        let page = NotebookPage(order: 1, now: rig.clock.now())
+        rig.recorder.addPage(page)
+        for _ in 0..<120 { rig.recorder.sampleClock(); rig.clock.advance(6) }
+        rig.pump(1)
+        XCTAssertEqual(rig.recorder.pageClock.count, 120)
+        await rig.recorder.flush()
+        let journal = try PhoneCaptureJournal.load(from: folder)
+        let kept = try XCTUnwrap(journal.pageClock)
+        XCTAssertEqual(kept, RecordingClockMap.filed(rig.recorder.pageClock))
+        XCTAssertLessThan(kept.count, 12, "the ends and an anchor every five minutes, not all 120")
+        XCTAssertEqual(kept.last, rig.recorder.pageClock.last)
+        // A pause and the resume are sampled as they happen, so the filed clock has them though no stroke was made.
+        rig.session.send(.interruptionBegan(reason: nil))
+        try await waitUntil("the pause") { rig.recorder.isPaused }
+        XCTAssertEqual(rig.recorder.pageClock.last?.running, false)
         _ = try await rig.stop()
     }
 }

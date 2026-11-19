@@ -339,6 +339,19 @@ final class CaptureRecoveryTests: XCTestCase {
         let unplaced = PhoneLibrary.placed(page, base: base, placing: .timeline(shift: nil))
         XCTAssertNil(unplaced.reading?.passages[1].time)
         XCTAssertEqual(unplaced.reading?.passages[0].time, 100)
+        // A passage filed earlier on the timeline that gained strokes in this recording keeps its ID and start with new words
+        // and bounds: it keeps the place it had, and this recording's track says nothing of it.
+        var gained = page
+        var revised = earlier
+        revised.trackID = nil; revised.time = 300; revised.words = "from before, and more"; revised.width = 90
+        var timelineBase = base
+        timelineBase.reading?.passages = [{ var p = earlier; p.trackID = nil; p.time = 300; return p }()]
+        gained.reading?.passages = [revised, new]
+        let kept = PhoneLibrary.placed(gained, base: timelineBase, placing: .track(track))
+        XCTAssertNil(kept.reading?.passages[0].trackID, "it was on the timeline, and stays there")
+        XCTAssertEqual(kept.reading?.passages[0].time, 300)
+        XCTAssertEqual(kept.reading?.passages[0].words, "from before, and more")
+        XCTAssertEqual(kept.reading?.passages[1].trackID, track, "what this recording wrote is on its track")
         // A passage with no time (no recording clock) stays without.
         var bare = page
         bare.reading?.passages[1].time = nil
@@ -383,10 +396,12 @@ final class CaptureRecoveryTests: XCTestCase {
         let rig = RecorderRig()
         let folder = library.stagingURL.appendingPathComponent(conversation.uuidString)
         try await rig.recorder.start(in: folder, id: conversation, title: "Weekly")
+        rig.recorder.conversationDrawing = { _ in old }
         rig.recorder.loadPages(from: library.controller.meeting(conversation))
         rig.pump(3)
+        XCTAssertEqual(rig.recorder.pageStrokes(pageID), .strokes(old), "read first, so what's written continues it")
         let newer = strokes("old and new")
-        let sha = try XCTUnwrap(rig.recorder.commitPage(pageID, data: newer, strokeCount: 5, contentVersion: 1))
+        let sha = try rig.recorder.commitPage(pageID, data: newer, strokeCount: 5, contentVersion: 1)
         rig.recorder.applyPageReading(pageID, reading(of: newer, page: pageID, words: "second draft", key: "2-3-1-1", time: 3))
         rig.pump(1)
         let recording = try await rig.stop()
@@ -411,5 +426,20 @@ final class CaptureRecoveryTests: XCTestCase {
         XCTAssertNil(merged.setAside, "one side changed the strokes, so nothing is set aside")
         let stored = try await library.controller.pageDrawingURL(for: try XCTUnwrap(merged.drawing), in: conversation)
         XCTAssertEqual(try Data(contentsOf: stored), newer)
+    }
+
+    func testBehaviorRecoveredRecordingGetsLoadedPagesBasesBackFromTheirFiles() async throws {
+        let id = UUID()
+        var loaded = NotebookPage(id: id, order: 1, now: started)
+        loaded.reading = reading(of: strokes("old"), page: id, words: "old", key: "1-3-1-1", time: nil)
+        let committed = strokes("old and new")
+        // As the recorder leaves it: no base in the journal, the base in a file of its own.
+        var entry = CapturePage(page: loaded, drawingFile: CapturePage.fileName(for: id), drawingSHA256: AudioDigest.sha256(data: committed), strokeCount: 5,
+                                contentVersion: 1, committedAt: started)
+        entry.base = nil
+        let folder = try crashedFolder(pages: [entry], files: [id: committed], clock: [])
+        try CapturePage.encodeBase(loaded).write(to: folder.appendingPathComponent(CapturePage.baseFileName(for: id)))
+        let recording = try await PhoneRecorder.recover(in: folder)
+        XCTAssertEqual(recording.pages.first?.base, loaded, "exactly the copy it was loaded as")
     }
 }

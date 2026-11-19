@@ -552,15 +552,16 @@ extension PhoneLibrary {
         if case .track(let track) = placing, !clock.isEmpty {
             controller.update(id) { meeting in
                 if let index = meeting.tracks.firstIndex(where: { $0.id == track }), meeting.tracks[index].clockSamples == nil {
-                    meeting.tracks[index].clockSamples = clock
+                    meeting.tracks[index].clockSamples = RecordingClockMap.filed(clock)
                 }
             }
         }
     }
 
     /// The page with what this recording wrote on it placed: a passage or erased stroke the conversation's copy didn't have
-    /// (the recording's own) and that carries seconds into the recording, with no track yet. What the conversation had
-    /// before, from earlier recordings or elsewhere, keeps its own place.
+    /// (the recording's own) and that carries seconds into the recording, with no track yet. One the conversation had (the same
+    /// ID and start, though its strokes, words and bounds may have changed since) keeps the track and seconds it had: it was
+    /// written in an earlier recording, or on the timeline, and this recording's clock says nothing of it.
     static func placed(_ page: NotebookPage, base: NotebookPage?, placing: PagePlacement) -> NotebookPage {
         func place(_ trackID: UUID?, _ time: TimeInterval?) -> (UUID?, TimeInterval?) {
             guard trackID == nil, let time else { return (trackID, time) }
@@ -574,19 +575,31 @@ extension PhoneLibrary {
         var result = page
         let known = base?.reading?.passages ?? []
         if var reading = result.reading {
-            for index in reading.passages.indices where !known.contains(reading.passages[index]) {
-                let moved = place(reading.passages[index].trackID, reading.passages[index].time)
-                reading.passages[index].trackID = moved.0
-                reading.passages[index].time = moved.1
+            for index in reading.passages.indices {
+                let passage = reading.passages[index]
+                if let before = known.first(where: { $0.id == passage.id && $0.start == passage.start }) {
+                    reading.passages[index].trackID = before.trackID
+                    reading.passages[index].time = before.time
+                } else {
+                    let moved = place(passage.trackID, passage.time)
+                    reading.passages[index].trackID = moved.0
+                    reading.passages[index].time = moved.1
+                }
             }
             result.reading = reading
         }
         let erased = base?.erased ?? []
         if var strokes = result.erased {
-            for index in strokes.indices where !erased.contains(strokes[index]) {
-                let moved = place(strokes[index].trackID, strokes[index].time)
-                strokes[index].trackID = moved.0
-                strokes[index].time = moved.1
+            for index in strokes.indices {
+                let stroke = strokes[index]
+                if let before = erased.first(where: { $0.key == stroke.key }) {
+                    strokes[index].trackID = before.trackID
+                    strokes[index].time = before.time
+                } else {
+                    let moved = place(stroke.trackID, stroke.time)
+                    strokes[index].trackID = moved.0
+                    strokes[index].time = moved.1
+                }
             }
             result.erased = strokes
         }
