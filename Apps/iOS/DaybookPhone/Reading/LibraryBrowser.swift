@@ -53,6 +53,9 @@ private struct ReadingLayout: View {
   @Environment(\.audioProvider) private var provider
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+  /// The notebook's cover is up (after the standing status sheet has stepped aside).
+  @State private var notebookShows = false
+
   var body: some View {
     @Bindable var session = session
     Group {
@@ -74,6 +77,21 @@ private struct ReadingLayout: View {
     // The status: in the hand the standing sheet over the library, open at the left page's foot with more on the right
     // page.
     .statusSheet(onPage: style != .pocket)
+    // A conversation's notebook, over the whole display. Presented here, beside the camera's cover and above the standing
+    // status sheet: a cover presented from further up can't stand while that sheet does.
+    .onChange(of: session.notebookFor) { _, id in
+      // The standing status sheet steps aside for it first (it can't stand under a cover), then the cover comes up.
+      Task {
+        try? await Task.sleep(for: .milliseconds(id == nil ? 0 : 700))
+        notebookShows = id != nil
+      }
+    }
+    .fullScreenCover(item: Binding(get: { notebookShows ? session.notebookFor.map(NotebookCover.init) : nil },
+                                   set: { if $0 == nil { notebookShows = false; session.notebookFor = nil } })) { cover in
+      ConversationNotebook(id: cover.id) { session.notebookFor = nil }
+        .environment(session)
+        .tint(DaybookPalette.accent)
+    }
     .fullScreenCover(
       isPresented: Binding(
         get: { session.cameraFor != nil }, set: { if !$0 { session.cameraFor = nil } })

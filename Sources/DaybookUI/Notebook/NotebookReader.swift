@@ -19,6 +19,18 @@ public enum NotebookReader {
         }
     }
 
+    /// The canvas's strokes together with the ones `stored` (the library's copy, changed since the canvas was loaded) has that the
+    /// canvas lacks, matched by stroke key, in creation order. `erasedHere` are the keys the person took out since then: they stay out.
+    public static func merging(_ canvas: PKDrawing, with stored: PKDrawing, erasedHere: Set<String>) -> PKDrawing {
+        let here = Set(strokes(of: canvas).map(\.key))
+        let theirs = zip(stored.strokes, strokes(of: stored).map(\.key))
+            .filter { !here.contains($0.1) && !erasedHere.contains($0.1) }.map(\.0)
+        guard !theirs.isEmpty else { return canvas }
+        let ordered = (canvas.strokes + theirs).enumerated()
+            .sorted { ($0.element.path.creationDate, $0.offset) < ($1.element.path.creationDate, $1.offset) }.map(\.element)
+        return PKDrawing(strokes: ordered)
+    }
+
     /// The key a stroke has before duplicates are told apart. The first point is the path's, before the stroke's transform,
     /// so a stroke the lasso moved keeps its key.
     static func key(of stroke: PKStroke) -> String {

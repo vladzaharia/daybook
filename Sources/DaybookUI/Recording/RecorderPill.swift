@@ -25,7 +25,7 @@ public struct NotebookPaging {
 /// closes the notebook back to the recorder. Short of room it drops the meter, and then puts the page controls on a second row;
 /// collapsed it's a chip of the dot and the clock, which expands on a tap (docs/notebook.md, "The pill").
 public struct RecorderPill: View {
-    private let state: RecorderSurfaceState
+    private let state: RecorderSurfaceState?
     private let levels: RecorderLevels
     private let actions: RecorderSurfaceActions
     private let paging: NotebookPaging
@@ -36,17 +36,18 @@ public struct RecorderPill: View {
     @Environment(\.dynamicTypeSize) private var typeSize
 
     /// - Parameters:
-    ///   - close: The status tapped: the notebook closes back to the recorder.
+    ///   - state: The recording's; nil in a saved conversation's notebook, where the top is Done.
+    ///   - close: The status tapped (the notebook closes back to the recorder), or Done.
     ///   - collapsed: Drawn as the small chip.
     ///   - expand: The chip tapped.
     ///   - available: The width the pill may take.
-    public init(state: RecorderSurfaceState, levels: RecorderLevels, actions: RecorderSurfaceActions, paging: NotebookPaging,
+    public init(state: RecorderSurfaceState?, levels: RecorderLevels, actions: RecorderSurfaceActions, paging: NotebookPaging,
                 close: @escaping () -> Void, collapsed: Bool, expand: @escaping () -> Void, available: CGFloat) {
         self.state = state; self.levels = levels; self.actions = actions; self.paging = paging; self.close = close
         self.collapsed = collapsed; self.expand = expand; self.available = available
     }
 
-    private var parts: RecorderPieces {
+    private func parts(_ state: RecorderSurfaceState) -> RecorderPieces {
         RecorderPieces(state: state, levels: levels, actions: actions, slots: RecorderSlots(notes: AnyView(EmptyView())), clockFocus: nil)
     }
 
@@ -83,8 +84,12 @@ public struct RecorderPill: View {
     private var chip: some View {
         Button(action: expand) {
             HStack(spacing: DaybookSpacing.s2) {
-                if let phase = state.phase { RecordingPhaseLabel(phase.phase, title: "") }
-                parts.clock(17)
+                if let state {
+                    if let phase = state.phase { RecordingPhaseLabel(phase.phase, title: "") }
+                    parts(state).clock(17)
+                } else {
+                    Text(paging.label).font(.footnote.monospacedDigit()).foregroundStyle(DaybookPalette.Ink.secondary)
+                }
             }
             .padding(.horizontal, DaybookSpacing.s2)
             .frame(minHeight: 40)
@@ -94,8 +99,19 @@ public struct RecorderPill: View {
         .accessibilityHint("Shows the recorder")
     }
 
-    private func status(meter: Bool) -> some View {
-        let parts = parts
+    @ViewBuilder private func status(meter: Bool) -> some View {
+        if let state { recordingStatus(state, meter: meter) } else {
+            Button("Done", action: close)
+                .font(.headline)
+                .foregroundStyle(DaybookPalette.Ink.link)
+                .padding(.horizontal, DaybookSpacing.s3)
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+        }
+    }
+
+    private func recordingStatus(_ state: RecorderSurfaceState, meter: Bool) -> some View {
+        let parts = parts(state)
         return HStack(spacing: DaybookSpacing.s2) {
             Button(action: close) {
                 HStack(spacing: DaybookSpacing.s2) {

@@ -121,6 +121,8 @@ final class PhoneAppModel: RecordingCommandHandling {
     @ObservationIgnored private var speakerPass: (id: UUID, task: Task<Void, Never>)?
     /// Recorders recording along: their live audio's captions join this iPhone's.
     @ObservationIgnored let recorderCaptions = LiveCaptureCaptions()
+    /// A conversation whose notebook a debug launch asks to open (`--notebook-conversation`); the root takes it.
+    var pendingNotebook: UUID?
     /// Settles the open notebook's pages (commits their strokes): Stop waits for it, from wherever it came, so what was just
     /// written is in the recording. Set while the notebook is open.
     @ObservationIgnored var settleNotebook: (() async -> Void)?

@@ -21,8 +21,9 @@ public struct NotebookModel {
     public var fetch: ((UUID) async -> Bool)?
     /// A page made in the notebook: kept with the first strokes written on it, so an empty page never exists elsewhere.
     public var add: (NotebookPage) -> Void
-    /// The strokes changed: written to a file a moment later, never to the journal. False when refused.
-    public var saveDraft: (UUID, Data) -> Bool
+    /// The strokes changed: written to a file a moment later, never to the journal, with the SHA-256 of the drawing the canvas was
+    /// loaded or last committed from (nil for none). False when refused.
+    public var saveDraft: (_ page: UUID, _ data: Data, _ base: String?) -> Bool
     /// The strokes settled. Returns their SHA-256, which a reading of them is checked against. Throws when they weren't kept
     /// (the page's earlier strokes aren't here, the file couldn't be written); the error says why in plain words.
     public var commit: (_ page: UUID, _ data: Data, _ strokeCount: Int, _ contentVersion: Int) async throws -> String
@@ -36,21 +37,23 @@ public struct NotebookModel {
     /// Where a moment falls: seconds into the recording, or on a track while playing; nil without a clock.
     public var anchor: (Date) -> (trackID: UUID?, time: TimeInterval?)
     public var isEditable: Bool
+    /// Plays the conversation from when a passage was written; nil where nothing plays (while recording).
+    public var play: ((NotebookPassage, NotebookPage) -> Void)?
     /// The device pages made here are credited to (`NotebookPage.origin`).
     public var origin: PhotoOrigin?
 
     public init(pages: @escaping () -> [NotebookPage], content: @escaping (UUID) -> NotebookPageContent,
                 fetch: ((UUID) async -> Bool)? = nil, add: @escaping (NotebookPage) -> Void,
-                saveDraft: @escaping (UUID, Data) -> Bool,
+                saveDraft: @escaping (UUID, Data, String?) -> Bool,
                 commit: @escaping (UUID, Data, Int, Int) async throws -> String,
                 applyReading: @escaping (UUID, PageReading) -> Void, correct: @escaping (UUID, UUID, String) -> Void,
                 remove: @escaping (UUID) -> (() -> Void)?, recordErasures: @escaping (UUID, [ErasedStroke]) -> Void,
                 logTurn: @escaping (PageTurn) -> Void, sampleClock: (() -> Void)? = nil,
                 anchor: @escaping (Date) -> (trackID: UUID?, time: TimeInterval?), isEditable: Bool = true,
-                origin: PhotoOrigin? = nil) {
+                play: ((NotebookPassage, NotebookPage) -> Void)? = nil, origin: PhotoOrigin? = nil) {
         self.pages = pages; self.content = content; self.fetch = fetch; self.add = add; self.saveDraft = saveDraft
         self.commit = commit; self.applyReading = applyReading; self.correct = correct; self.remove = remove
         self.recordErasures = recordErasures; self.logTurn = logTurn; self.sampleClock = sampleClock; self.anchor = anchor
-        self.isEditable = isEditable; self.origin = origin
+        self.isEditable = isEditable; self.play = play; self.origin = origin
     }
 }
