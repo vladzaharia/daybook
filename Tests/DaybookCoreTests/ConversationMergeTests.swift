@@ -517,6 +517,121 @@ final class ConversationMergeTests: XCTestCase {
         XCTAssertEqual(stopped, waiting)
     }
 
+    // MARK: Pages
+
+    /// A conversation with two notebook pages, the first read: a passage on its recording and one on the timeline's own clock.
+    private func writtenIn(_ meeting: Meeting, orders: [Double] = [3, 1]) -> (meeting: Meeting, pages: [NotebookPage]) {
+        var meeting = meeting
+        let track = meeting.tracks[0].id
+        let ids = orders.map { _ in UUID() }
+        var pages = zip(ids, orders).map { NotebookFixtures.page($0, order: $1, tag: "page-\($0)") }
+        let held = NotebookFixtures.passage(ids[0], key: "1-3-10-10", words: "on the recording", trackID: track, time: 12)
+        let own = NotebookFixtures.passage(ids[0], key: "2-3-10-60", words: "on the clock", at: 30, time: 40)
+        pages[0].reading = NotebookFixtures.reading(of: pages[0].drawing!, [held, own])
+        meeting.pages = pages
+        return (meeting, pages)
+    }
+
+    func testBehaviorFoldCarriesPagesAfterSurvivorsWithCopiedTrackAnchors() throws {
+        var survivor = recorded("Standup", at: start, seconds: 600)
+        survivor.pages = [NotebookFixtures.page(UUID(), order: 7, tag: "mine")]
+        let (later, pages) = writtenIn(recorded("Planning", at: start.addingTimeInterval(3_600), seconds: 300))
+        var merged = survivor
+        let copies = copying(later, into: &merged)
+        ConversationMerge.fold(later, into: &merged, placement: ConversationMerge.placements([survivor, later])[later.id]!, copies: copies,
+                               fresh: Set(copies.values), pageFiles: Set(pages.map(\.id)), at: start)
+        XCTAssertEqual(merged.pages?.count, 3)
+        XCTAssertEqual(merged.pages?.first, survivor.pages?.first, "the survivor's own, untouched")
+        let carried = Array(try XCTUnwrap(merged.pages).dropFirst())
+        XCTAssertEqual(carried.map(\.id), [pages[1].id, pages[0].id], "in the folded conversation's order, after the survivor's")
+        XCTAssertEqual(carried.map(\.order), [8, 9])
+        XCTAssertEqual(carried[1].drawing, pages[0].drawing, "the same files: page IDs are global")
+        let held = try XCTUnwrap(carried[1].passages.first { $0.words == "on the recording" })
+        XCTAssertEqual(held.trackID, copies[later.tracks[0].id], "on the recording's copy")
+        XCTAssertEqual(held.time, 12)
+        XCTAssertEqual(carried[1].reading?.passages.map(\.id), pages[0].reading?.passages.map(\.id), "passage IDs follow their page")
+        XCTAssertNotNil(merged.visiblePages.last)
+        // A recording that wasn't carried leaves its passages on the timeline by when they were written.
+        var orphaned = survivor
+        ConversationMerge.fold(later, into: &orphaned, placement: .init(kind: .after, shift: 0), copies: [:], fresh: [], pageFiles: Set(pages.map(\.id)), at: start)
+        let unplaced = try XCTUnwrap(orphaned.pages?.last?.passages.first { $0.words == "on the recording" })
+        XCTAssertNil(unplaced.trackID)
+        XCTAssertNil(unplaced.time)
+    }
+
+    func testBehaviorFoldShiftsTimelinePassages() throws {
+        let survivor = recorded("Standup", at: start, seconds: 600)
+        let (later, pages) = writtenIn(recorded("Planning", at: start.addingTimeInterval(3_600), seconds: 300))
+        // After: the timeline moves, and what was written on its own clock moves with it; what would land before zero has no time.
+        var after = survivor
+        let copies = copying(later, into: &after)
+        ConversationMerge.fold(later, into: &after, placement: .init(kind: .after, shift: 700), copies: copies, fresh: Set(copies.values),
+                               pageFiles: [pages[0].id], at: start)
+        let moved = try XCTUnwrap(after.page(pages[0].id)?.passages.first { $0.words == "on the clock" })
+        XCTAssertNil(moved.trackID)
+        XCTAssertEqual(moved.time, 740)
+        var early = later
+        early.pages?[1] = pages[1]
+        early.pages?[0].reading?.passages[1].time = 5
+        var before = survivor
+        let earlyCopies = copying(early, into: &before)
+        ConversationMerge.fold(early, into: &before, placement: .init(kind: .after, shift: -30), copies: earlyCopies, fresh: Set(earlyCopies.values),
+                               pageFiles: [pages[0].id], at: start)
+        XCTAssertNil(before.page(pages[0].id)?.passages.first { $0.words == "on the clock" }?.time)
+        // Alongside, with its recording lined up later: held by the lead recording, so it follows it.
+        var lead = later
+        lead.tracks[0].offset = 20
+        var alongside = survivor
+        let leadCopies = copying(lead, into: &alongside)
+        ConversationMerge.fold(lead, into: &alongside, placement: .init(kind: .alongside, shift: -30), copies: leadCopies, fresh: Set(leadCopies.values),
+                               pageFiles: [pages[0].id], at: start)
+        let held = try XCTUnwrap(alongside.page(pages[0].id)?.passages.first { $0.words == "on the clock" })
+        XCTAssertEqual(held.trackID, leadCopies[lead.tracks[0].id], "40 s on the timeline is 20 s into the lead recording")
+        XCTAssertEqual(held.time, 20)
+    }
+
+    func testBehaviorFoldCarriesPageAndPassageRevisions() throws {
+        let survivor = recorded("Standup", at: start, seconds: 600)
+        var (later, pages) = writtenIn(recorded("Planning", at: start.addingTimeInterval(3_600), seconds: 300))
+        let passage = try XCTUnwrap(pages[0].passages.first)
+        later.addPage(NotebookFixtures.page(UUID(), order: 9, tag: "unfiled"))
+        let lone = try XCTUnwrap(later.pages?.last)
+        later.correctPassage(pageID: pages[0].id, passageID: passage.id, text: "fixed words", now: start.addingTimeInterval(5))
+        later.removePage(pages[1].id, at: start.addingTimeInterval(6))
+        later.removePage(lone.id, at: start.addingTimeInterval(7))
+        var merged = survivor
+        let copies = copying(later, into: &merged)
+        ConversationMerge.fold(later, into: &merged, placement: ConversationMerge.placements([survivor, later])[later.id]!, copies: copies,
+                               fresh: Set(copies.values), pageFiles: [pages[0].id, pages[1].id], at: start)
+        let fields = merged.revisions.map(\.field)
+        XCTAssertTrue(fields.contains("passage:\(passage.id.uuidString)"), "the correction is in the merged conversation's History")
+        XCTAssertTrue(fields.contains("page:\(pages[1].id.uuidString)"))
+        XCTAssertFalse(fields.contains("page:\(lone.id.uuidString)"), "a page that wasn't carried has no History here")
+        XCTAssertEqual(merged.revisions.first { $0.kind == .passage(passage.id) }?.newValue, "fixed words")
+        XCTAssertEqual(merged.revisions.filter { $0.kind == .page(pages[1].id) }.map(\.newValue), ["removed"])
+        XCTAssertEqual(merged.page(pages[0].id)?.corrections?.first?.text, "fixed words", "the correction came with its page")
+    }
+
+    func testBehaviorFoldSkipsPageWhoseFilesWerentCopied() throws {
+        let survivor = recorded("Standup", at: start, seconds: 600)
+        var (later, pages) = writtenIn(recorded("Planning", at: start.addingTimeInterval(3_600), seconds: 300))
+        // One of its pages is the survivor's already (the two held the same page).
+        var merged = survivor
+        merged.pages = [pages[1]]
+        later.correctPassage(pageID: pages[0].id, passageID: pages[0].passages[0].id, text: "typed")
+        let copies = copying(later, into: &merged)
+        let placement = ConversationMerge.placements([survivor, later])[later.id]!
+        ConversationMerge.fold(later, into: &merged, placement: placement, copies: copies, fresh: Set(copies.values), pageFiles: [pages[1].id], at: start)
+        XCTAssertEqual(merged.pages?.map(\.id), [pages[1].id], "no files copied for the other page, so it isn't carried; the known one isn't repeated")
+        XCTAssertEqual(merged.pages?.first, pages[1], "and isn't touched")
+        XCTAssertFalse(merged.revisions.contains { $0.kind == .passage(pages[0].passages[0].id) })
+        // Nothing copied at all (the default): no pages.
+        var none = survivor
+        let noneCopies = copying(later, into: &none)
+        ConversationMerge.fold(later, into: &none, placement: placement, copies: noneCopies, fresh: Set(noneCopies.values), at: start)
+        XCTAssertNil(none.pages)
+    }
+
     func testBehaviorSyncCountsARecordingMovedToTheConversationItWasMergedIntoOnce() async throws {
         let root = makeTemporaryFolder("DaybookMergeSync")
         let local = root.appendingPathComponent("A")

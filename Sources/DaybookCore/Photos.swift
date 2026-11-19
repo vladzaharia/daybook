@@ -30,9 +30,35 @@ public struct PhotoOrigin: Codable, Equatable, Hashable, Sendable {
     public var serial: String?
     /// "Studio Mac", "Alex's iPhone".
     public var name: String?
+    /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
+    public var unknownFields = UnknownFields()
 
     public init(kind: String, serial: String? = nil, name: String? = nil) {
         self.kind = kind; self.serial = serial; self.name = name
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case kind, serial, name }
+    private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try values.decode(String.self, forKey: .kind)
+        serial = try values.decodeIfPresent(String.self, forKey: .serial)
+        name = try values.decodeIfPresent(String.self, forKey: .name)
+        unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(kind, forKey: .kind)
+        try values.encodeIfPresent(serial, forKey: .serial)
+        try values.encodeIfPresent(name, forKey: .name)
+        try unknownFields.encode(to: encoder)
+    }
+
+    /// Equal origins hash alike; keys this version doesn't know don't take part.
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(kind); hasher.combine(serial); hasher.combine(name)
     }
 
     public static let macKind = "mac"
@@ -64,6 +90,39 @@ public struct PhotoAnalysis: Codable, Equatable, Sendable {
     /// text reader's, and `model` the caption model's exact provenance.
     public var settings: ProcessingSettings?
     public var createdAt: Date
+    /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
+    public var unknownFields = UnknownFields()
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case caption, recognizedText, labels, sharpness, duplicateOf, isInformative, settings, createdAt
+    }
+    private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        caption = try values.decodeIfPresent(String.self, forKey: .caption)
+        recognizedText = try values.decodeIfPresent(String.self, forKey: .recognizedText)
+        labels = try values.decodeIfPresent([String].self, forKey: .labels)
+        sharpness = try values.decodeIfPresent(Double.self, forKey: .sharpness)
+        duplicateOf = try values.decodeIfPresent(UUID.self, forKey: .duplicateOf)
+        isInformative = try values.decode(Bool.self, forKey: .isInformative)
+        settings = try values.decodeIfPresent(ProcessingSettings.self, forKey: .settings)
+        createdAt = try values.decode(Date.self, forKey: .createdAt)
+        unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encodeIfPresent(caption, forKey: .caption)
+        try values.encodeIfPresent(recognizedText, forKey: .recognizedText)
+        try values.encodeIfPresent(labels, forKey: .labels)
+        try values.encodeIfPresent(sharpness, forKey: .sharpness)
+        try values.encodeIfPresent(duplicateOf, forKey: .duplicateOf)
+        try values.encode(isInformative, forKey: .isInformative)
+        try values.encodeIfPresent(settings, forKey: .settings)
+        try values.encode(createdAt, forKey: .createdAt)
+        try unknownFields.encode(to: encoder)
+    }
 
     public init(caption: String? = nil, recognizedText: String? = nil, labels: [String]? = nil, sharpness: Double? = nil,
                 duplicateOf: UUID? = nil, isInformative: Bool = true, settings: ProcessingSettings? = nil, createdAt: Date = Date()) {
@@ -285,8 +344,14 @@ extension Meeting {
     /// Nil for a conversation without a known start, or a photo of another moment (more than
     /// `photoTimelineMargin` outside the recordings).
     public func timelineTime(of photo: MeetingPhoto) -> TimeInterval? {
-        if let time = photo.time, time.isFinite {
-            guard let trackID = photo.trackID else { return time }
+        timelineTime(trackID: photo.trackID, time: photo.time, moment: photo.capturedAt, origin: photo.origin)
+    }
+
+    /// `timelineTime(of:)` for anything placed like a photo: a recording and seconds into it (`trackID`, `time`), or a
+    /// moment by a device's clock (`moment`, `origin`). A notebook passage is placed the same way (`timelineTime(of:on:)`).
+    public func timelineTime(trackID: UUID?, time: TimeInterval?, moment: Date, origin: PhotoOrigin?) -> TimeInterval? {
+        if let time, time.isFinite {
+            guard let trackID else { return time }
             if let placement = timelinePlacement(of: trackID) { return placement.offset + placement.rate * time }
             if let prior = tracks.first(where: { $0.id == trackID })?.alignment?.clockOffset, prior.isFinite { return prior + time }
         }
@@ -298,14 +363,14 @@ extension Meeting {
             let upper = span.end.timeIntervalSince(zero) + Self.photoTimelineMargin
             return value >= lower && value <= upper ? value : nil
         }
-        if let origin = photo.origin {
+        if let origin {
             for track in tracks where origin.recorded(track) {
                 guard let start = track.startedAt, let placement = timelinePlacement(of: track.id) else { continue }
-                return nearby(placement.offset + placement.rate * photo.capturedAt.timeIntervalSince(start))
+                return nearby(placement.offset + placement.rate * moment.timeIntervalSince(start))
             }
         }
         guard let zero = knownTimelineStart() else { return nil }
-        return nearby(photo.capturedAt.timeIntervalSince(zero))
+        return nearby(moment.timeIntervalSince(zero))
     }
 
     // MARK: Editing
