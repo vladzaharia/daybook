@@ -53,7 +53,7 @@ let package = Package(
         // compile it out. TTS and the NeMo text-normalization binary stay off; Daybook uses neither.
         .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.18.0", traits: ["Diarizer"]),
         // Hub: the model store's downloads. Tokenizers: MLX's tokenizer and chat templates (MLXTokenizerAdapter).
-        .package(url: "https://github.com/huggingface/swift-transformers.git", exact: "1.3.5")
+        .package(url: "https://github.com/huggingface/swift-transformers.git", exact: "1.4.0")
     ],
     targets: [
         // Complete concurrency checking (the package stays in Swift 5 mode): a data race in the library's core is a
