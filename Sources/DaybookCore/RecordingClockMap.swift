@@ -11,9 +11,32 @@ public struct RecordingClockSample: Codable, Equatable, Sendable {
     public var elapsed: TimeInterval
     /// Recording (not paused, not starting) at `at`.
     public var running: Bool
+    /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
+    public var unknownFields = UnknownFields()
 
     public init(at: Date, elapsed: TimeInterval, running: Bool) {
         self.at = at; self.elapsed = elapsed; self.running = running
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case at, elapsed, running
+    }
+    private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        at = try values.decode(Date.self, forKey: .at)
+        elapsed = try values.decode(TimeInterval.self, forKey: .elapsed)
+        running = try values.decode(Bool.self, forKey: .running)
+        unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(at, forKey: .at)
+        try values.encode(elapsed, forKey: .elapsed)
+        try values.encode(running, forKey: .running)
+        try unknownFields.encode(to: encoder)
     }
 }
 

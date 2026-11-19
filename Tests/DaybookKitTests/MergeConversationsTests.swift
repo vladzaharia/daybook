@@ -85,6 +85,78 @@ final class MergeConversationsTests: XCTestCase {
                                              context: context ?? self.context, process: process)
     }
 
+    /// A page written in a conversation: strokes stored and committed through the controller, then read.
+    private func writePage(_ library: LibraryController, in id: UUID, _ tag: String, order: Double = 1) async throws -> NotebookPage {
+        var page = NotebookPage(id: UUID(), order: order, now: start)
+        page.order = order
+        library.addPage(page, to: id)
+        let data = Data((tag + String(repeating: "stroke", count: 30)).utf8)
+        let drawing = try await library.commitPageDrawing(data, page: page.id, in: id, strokeCount: 3, contentVersion: 1, device: "Alex's iPhone", now: start)
+        let passage = NotebookPassage(id: NotebookPassage.id(page: page.id, firstStroke: "1-3-1-1"), kind: .writing, x: 0, y: 0, width: 10, height: 10,
+                                      strokeCount: 3, strokeDigest: PassageGrouping.digest(of: ["1-3-1-1"]), start: start, end: start.addingTimeInterval(2),
+                                      trackID: library.meeting(id)?.tracks.first?.id, time: 12, words: tag)
+        library.applyPageReading(PageReading(drawingSHA256: drawing.sha256, passages: [passage], readAt: start,
+                                             settings: ProcessingSettings(modelID: "test", parameters: ["grouping": String(PassageGrouping.version)])),
+                                 to: page.id, in: id)
+        return try XCTUnwrap(library.meeting(id)?.page(page.id))
+    }
+
+    func testBehaviorMergeConversationsCopiesPageFiles() async throws {
+        let library = try await open()
+        let standup = try await conversation(library, "Standup", at: start, said: "Morning everyone")
+        let planning = try await conversation(library, "Planning", at: start.addingTimeInterval(3_600), said: "Budget review first")
+        let own = try await writePage(library, in: standup, "mine", order: 1)
+        let written = try await writePage(library, in: planning, "budget", order: 1)
+        let folded = try XCTUnwrap(library.meeting(planning))
+        var asked: [UUID] = []
+
+        let survivor = try await library.mergeConversations([standup, planning], audio: { track, id in try await library.audioURL(for: track, in: id) },
+                                                             photo: { photo, id in try await library.photoURL(for: photo, in: id) },
+                                                             pageDrawing: { drawing, id in asked.append(id); return try await library.pageDrawingURL(for: drawing, in: id) },
+                                                             context: context)
+        XCTAssertEqual(survivor, standup)
+        XCTAssertEqual(asked, [planning], "the folded conversation's files are asked for, once each")
+        let merged = try XCTUnwrap(library.meeting(survivor))
+        XCTAssertEqual(merged.pages?.map(\.id), [own.id, written.id], "the survivor's own page first, then the folded one")
+        let carried = try XCTUnwrap(merged.page(written.id))
+        XCTAssertEqual(carried.drawing, written.drawing, "the same file: page IDs are global")
+        let drawing = try XCTUnwrap(carried.drawing)
+        let bytes = try Data(contentsOf: try await library.pageDrawingURL(for: drawing, in: survivor))
+        XCTAssertEqual(AudioDigest.sha256(data: bytes), drawing.sha256, "its strokes are in the survivor's folder")
+        XCTAssertEqual(carried.passages.first?.trackID, merged.tracks.first { $0.mergedFrom == planning }?.id, "its passage follows the recording's copy")
+        XCTAssertEqual(carried.passages.first?.time, 12)
+        XCTAssertEqual(folded.page(written.id)?.drawing, drawing)
+        XCTAssertTrue(merged.revisions.contains { $0.kind == .page(written.id) })
+    }
+
+    func testBehaviorMergeConversationsLeavesAPageWhoseFilesAreNotHereAndStillMerges() async throws {
+        let library = try await open()
+        let standup = try await conversation(library, "Standup", at: start, said: "Morning everyone")
+        let planning = try await conversation(library, "Planning", at: start.addingTimeInterval(3_600), said: "Budget review first")
+        let lost = try await writePage(library, in: planning, "lost", order: 1)
+        let kept = try await writePage(library, in: planning, "kept", order: 2)
+        // The folded conversation's copy of one page's strokes isn't in this library (never fetched, or lost).
+        let gone = try await library.pageDrawingURL(for: try XCTUnwrap(lost.drawing), in: planning)
+        try FileManager.default.removeItem(at: gone)
+        _ = try await merge([standup, planning], in: library)
+        let merged = try XCTUnwrap(library.meeting(standup))
+        XCTAssertEqual(merged.pages?.map(\.id), [kept.id], "a page whose files weren't copied isn't carried")
+        let url = try await library.pageDrawingURL(for: try XCTUnwrap(merged.page(kept.id)?.drawing), in: standup)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+        // A drawing that can't be fetched stops the merge before anything changes, as a recording does.
+        let again = try await conversation(library, "Retro", at: start.addingTimeInterval(7_200), said: "What went well")
+        _ = try await writePage(library, in: again, "retro", order: 1)
+        struct Offline: Error {}
+        do {
+            _ = try await library.mergeConversations([standup, again], audio: { track, id in try await library.audioURL(for: track, in: id) },
+                                                     photo: { photo, id in try await library.photoURL(for: photo, in: id) },
+                                                     pageDrawing: { _, _ in throw Offline() }, context: context)
+            XCTFail("merged without a page's strokes")
+        } catch is Offline { }
+        XCTAssertEqual(library.meeting(standup)?.pages?.count, 1)
+        XCTAssertNotNil(library.meeting(again), "nothing moved to the Trash")
+    }
+
     func testBehaviorTheOthersFoldIntoTheEarliestWithTheirRecordingsAndPhotosAndGoToTheTrash() async throws {
         let library = try await open()
         let standup = try await conversation(library, "Standup", at: start, said: "Morning everyone")

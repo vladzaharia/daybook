@@ -482,11 +482,14 @@ public actor MeetingStore {
         }
         let pagesFolder = directory.appendingPathComponent(PageDrawing.folder, isDirectory: true)
         for page in meeting.pages ?? [] {
-            for drawing in (page.drawing.map { [$0] } ?? []) + (page.setAside ?? []) {
-                guard drawing.relativePath.hasPrefix(PageDrawing.folder + "/") else { throw LibraryError.unsafePath(drawing.relativePath) }
-                try LocalFiles.requireContained(try LocalFiles.relativeURL(drawing.relativePath, in: directory), in: pagesFolder)
+            for file in page.files {
+                guard file.relativePath.hasPrefix(PageDrawing.folder + "/") else { throw LibraryError.unsafePath(file.relativePath) }
+                try LocalFiles.requireContained(try LocalFiles.relativeURL(file.relativePath, in: directory), in: pagesFolder)
             }
-            guard page.width.isFinite, page.width > 0, page.height.isFinite, page.height > 0 else { throw LibraryError.corruptMeeting(expectedID) }
+            guard page.width.isFinite, page.width > 0, page.height.isFinite, page.height > 0, page.hasBackgroundSize,
+                  page.background.map({ $0.width.isFinite && $0.width > 0 && $0.height.isFinite && $0.height > 0 }) ?? true else {
+                throw LibraryError.corruptMeeting(expectedID)
+            }
             for passage in page.passages {
                 guard passage.time.map({ $0.isFinite && $0 >= 0 }) ?? true else { throw LibraryError.invalidHighlight }
             }

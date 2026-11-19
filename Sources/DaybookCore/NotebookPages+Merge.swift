@@ -42,6 +42,11 @@ extension NotebookPage {
                                                hasBase: base != nil, conflict: conflict)
         result.sketches = mergedSketches(local.sketches, remote.sketches, reading: result.reading)
         result.hiddenFromSummary = pick("page-summary:\(id)", local.hiddenFromSummary, remote.hiddenFromSummary, base.map(\.hiddenFromSummary))
+        // The picture under the strokes: a three-way pick, and the page takes its aspect (the A5 width, the background's
+        // height), so the size is the same on every device whichever picture stands. A page without one keeps the greater size.
+        result.background = pick("page-background:\(id)", local.background, remote.background, base.map(\.background))
+        if result.background != nil { (result.width, result.height) = NotebookPage.size(for: result.background) }
+        result.erased = ErasedStroke.merged(local.erased, remote.erased)
         // A deletion and an edit made apart: the deletion stands, and a Put Back made later wins over it.
         // When both changed it (one put the page back, the other deleted it again) the greater encoding stays, and `null`
         // is greater than any date: the page comes back, and nothing is hidden by a conflict. A decision, pinned by a test.

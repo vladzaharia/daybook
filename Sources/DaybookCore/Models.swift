@@ -84,6 +84,9 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
     /// those recorded alongside them. Nil for the conversation's own and what was recorded alongside it. Set by the merge
     /// (`ConversationMerge.fold`), never inferred from a recording's timing, so Adjust Timing doesn't move it.
     public var stretch: UUID?
+    /// The recorder's clock as a notebook sampled it while this recording ran (`RecordingClockMap`), written once when the
+    /// recording is filed: it maps the wall clock to seconds into this recording across pauses. Nil when nothing was written.
+    public var clockSamples: [RecordingClockSample]?
     /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
     public var unknownFields = UnknownFields()
     public init(id: UUID = UUID(), source: AudioSource = .imported, relativePath: String,
@@ -109,7 +112,8 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case id, source, relativePath, fileName, createdAt, duration, offset, sha256, deviceKind, deviceSerial,
-            deviceRecordingID, derivedFrom, processing, startedAt, alignment, capture, backgroundAudio, removal, mergedFrom, stretch
+            deviceRecordingID, derivedFrom, processing, startedAt, alignment, capture, backgroundAudio, removal, mergedFrom, stretch,
+            clockSamples
     }
     private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
 
@@ -136,6 +140,7 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
         removal = try values.decodeIfPresent(RecordingRemoval.self, forKey: .removal)
         mergedFrom = try values.decodeIfPresent(UUID.self, forKey: .mergedFrom)
         stretch = try values.decodeIfPresent(UUID.self, forKey: .stretch)
+        clockSamples = try values.decodeIfPresent([RecordingClockSample].self, forKey: .clockSamples)
         unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
     }
 
@@ -161,6 +166,7 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
         try values.encodeIfPresent(removal, forKey: .removal)
         try values.encodeIfPresent(mergedFrom, forKey: .mergedFrom)
         try values.encodeIfPresent(stretch, forKey: .stretch)
+        try values.encodeIfPresent(clockSamples, forKey: .clockSamples)
         try unknownFields.encode(to: encoder)
     }
 }
@@ -630,6 +636,8 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
     public var ink: [NoteInk]?
     /// Notebook pages (`NotebookPages.swift`), deleted ones included. Nil until the first page.
     public var pages: [NotebookPage]?
+    /// When the notebook's open pages changed, against the recording clock (`PageTurn`). Nil until the first.
+    public var pageTurns: [PageTurn]?
     /// Passages left out of `unifiedTranscript` as background audio (a TV, radio, or music;
     /// `BackgroundAudio`), on the timeline as fusion placed them. Derived with the unified transcript;
     /// nil when there are none. The transcript runs still hold every word.
@@ -777,7 +785,7 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         case schemaVersion, id, title, date, updatedAt, kind, notes, timedNotes, folderID, tags, templateID,
             placement, tracks, transcripts, unifiedTranscript, alignmentReports, summary, revisions, highlights,
             speakers, status, errorMessage, correctionTransferIssues, speakerMatches, companions, sourceSuggestions,
-            audioAlignments, fusionSummary, processingRequests, photos, ink, pages, backgroundPassages, includesBackgroundAudio,
+            audioAlignments, fusionSummary, processingRequests, photos, ink, pages, pageTurns, backgroundPassages, includesBackgroundAudio,
             speakerIdentities, upgradeDismissals, transcriptFlags, transcriptFlagsVersion, transcriptFlagDismissals
     }
     private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
@@ -816,6 +824,7 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         photos = try values.decodeIfPresent([MeetingPhoto].self, forKey: .photos)
         ink = try values.decodeIfPresent([NoteInk].self, forKey: .ink)
         pages = try values.decodeIfPresent([NotebookPage].self, forKey: .pages)
+        pageTurns = try values.decodeIfPresent([PageTurn].self, forKey: .pageTurns)
         backgroundPassages = try values.decodeIfPresent([TranscriptSegment].self, forKey: .backgroundPassages)
         includesBackgroundAudio = try values.decodeIfPresent(Bool.self, forKey: .includesBackgroundAudio)
         speakerIdentities = try values.decodeIfPresent([SpeakerIdentity].self, forKey: .speakerIdentities)
@@ -863,6 +872,7 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         try values.encodeIfPresent(photos, forKey: .photos)
         try values.encodeIfPresent(ink, forKey: .ink)
         try values.encodeIfPresent(pages, forKey: .pages)
+        try values.encodeIfPresent(pageTurns, forKey: .pageTurns)
         try values.encodeIfPresent(backgroundPassages, forKey: .backgroundPassages)
         try values.encodeIfPresent(includesBackgroundAudio, forKey: .includesBackgroundAudio)
         try values.encodeIfPresent(speakerIdentities, forKey: .speakerIdentities)

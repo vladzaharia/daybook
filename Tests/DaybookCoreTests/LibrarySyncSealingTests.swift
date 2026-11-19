@@ -618,6 +618,55 @@ final class LibrarySyncSealingTests: XCTestCase {
         XCTAssertEqual(phoneAgain.publishedEvents, 0); XCTAssertEqual(phoneAgain.pendingDownloads, 0); XCTAssertEqual(phoneAgain.warnings, [])
     }
 
+    /// A page's files are what a conversation uses: the drawing, a drawing a merge set aside (Version History can put it back),
+    /// and the background all survive the retirement of the plaintext, and a device that joins afterwards gets them.
+    func testBehaviorSetAsideDrawingsAreLiveForSealer() async throws {
+        let mac = try mac()
+        let store = try MeetingStore(rootURL: local("Mac"))
+        var meeting = Meeting(title: "Zanzibar offsite")
+        let page = UUID()
+        func bytes(_ tag: String) -> Data { Data((tag + String(repeating: "ink", count: 50)).utf8) }
+        let current = try await store.storePageDrawing(bytes("current"), page: page, in: meeting, strokeCount: 3, contentVersion: 1, device: nil,
+                                                       after: nil, now: Date(timeIntervalSince1970: 1_780_000_000))
+        let aside = try await store.storePageDrawing(bytes("aside"), page: page, in: meeting, strokeCount: 2, contentVersion: 1, device: nil,
+                                                     after: nil, now: Date(timeIntervalSince1970: 1_779_999_000))
+        let picture = bytes("picture")
+        let backgroundPath = PageBackground.relativePath(page: page, sha256: AudioDigest.sha256(data: picture), fileExtension: "png")
+        try picture.write(to: try LocalFiles.relativeURL(backgroundPath, in: try await store.meetingDirectory(for: meeting.id)))
+        var written = NotebookPage(id: page, order: 1, now: Date(timeIntervalSince1970: 1_780_000_000))
+        written.drawing = current
+        written.setAside = [aside]
+        written.setBackground(PageBackground(relativePath: backgroundPath, sha256: AudioDigest.sha256(data: picture), byteCount: picture.count, kind: .image,
+                                             fileExtension: "png", width: 600, height: 800, editedAt: Date(timeIntervalSince1970: 1_780_000_000)),
+                              now: Date(timeIntervalSince1970: 1_780_000_000))
+        meeting.addPage(written)
+        meeting.setNotes("Quokka budget is approved")
+        try await store.save(meeting)
+        try await pass(mac, "Mac", [meeting])
+        let start = Date()
+        await mac.setSealerClock { start }
+        try await mac.enableSealing(recovery: RecoveryKey.generate())
+        try await pass(mac, "Mac", [meeting])
+        XCTAssertEqual(files("Blobs").count, 3, "the drawing, the one set aside, and the background are in the journal")
+        await mac.setSealerClock { start.addingTimeInterval(LibrarySyncEngine.retirementGrace + 60) }
+        try await pass(mac, "Mac", [meeting])
+        let retiredValue = await mac.sealerProgress
+        let retired = try XCTUnwrap(retiredValue)
+        XCTAssertTrue(retired.legacyRetired, "\(retired)")
+        XCTAssertTrue(files("Blobs").isEmpty)
+        XCTAssertEqual(files("Sealed/Blobs").count, 3, "the sealer counted every page file as live")
+        let fresh = try await pass(try self.mac("Fresh"), "Fresh")
+        XCTAssertEqual(fresh.pendingDownloads, 0)
+        XCTAssertEqual(fresh.warnings, [])
+        let arrived = try XCTUnwrap(fresh.meetings.first?.pages?.first)
+        for file in arrived.files {
+            let copy = local("Fresh").appendingPathComponent("Meetings/\(meeting.id)/\(file.relativePath)")
+            XCTAssertEqual(AudioDigest.sha256(data: try Data(contentsOf: copy)), file.sha256, file.relativePath)
+        }
+        XCTAssertEqual(arrived.setAside?.map(\.sha256), [aside.sha256])
+        try assertNoPlaintext()
+    }
+
     func testBehaviorPlaintextGoesObjectByObjectAsItsSealedCopyUploads() async throws {
         let mac = try mac()
         let first = try await record(audioBytes(5000, seed: 21), on: "Mac", into: Meeting(title: "First"))

@@ -217,6 +217,10 @@ public enum ConversationMerge {
         // Recordings: details from the original, and a place on the merged timeline.
         let clockID = SyncEncoding.uuid("merge:\(folded.id.uuidString)")
         for track in carried {
+            // The same audio was in both: the copy that has the notebook's clock samples is the one that keeps them.
+            if let copyID = copy(track.id), !fresh.contains(copyID), let index = merged.tracks.firstIndex(where: { $0.id == copyID }) {
+                merged.tracks[index].clockSamples = RecordingClockSample.merged(merged.tracks[index].clockSamples, track.clockSamples)
+            }
             guard let copyID = copy(track.id), fresh.contains(copyID), let index = merged.tracks.firstIndex(where: { $0.id == copyID }) else { continue }
             var moved = track
             moved.id = copyID
@@ -424,23 +428,42 @@ public enum ConversationMerge {
         // page follows the timeline as photos do.
         let knownPages = Set((merged.pages ?? []).map(\.id))
         let firstOrder = merged.nextPageOrder
+        /// A moment of the folded conversation's notebook on the merged timeline: the copy of its recording, or, written on the
+        /// conversation's own clock, where its lead recording or the shift puts it (as a photo's).
+        func placed(trackID: UUID?, time: TimeInterval?) -> (trackID: UUID?, time: TimeInterval?) {
+            if let track = trackID {
+                let copied = copy(track)
+                return (copied, copied == nil ? nil : time)
+            }
+            guard let time else { return (nil, nil) }
+            if let held = onLead(time) { return (held.trackID, held.time) }
+            return (nil, time + shift >= 0 ? time + shift : nil)
+        }
         let carriedPages = (folded.pages ?? []).filter { !knownPages.contains($0.id) && pageFiles.contains($0.id) }
             .sorted(by: NotebookPage.precedes).enumerated().map { position, page -> NotebookPage in
                 var copied = page
                 copied.order = firstOrder + Double(position)
                 for index in copied.reading?.passages.indices ?? 0..<0 {
                     guard var passage = copied.reading?.passages[index] else { continue }
-                    if let track = passage.trackID {
-                        passage.trackID = copy(track)
-                        if passage.trackID == nil { passage.time = nil }
-                    } else if let time = passage.time {
-                        if let held = onLead(time) { passage.trackID = held.trackID; passage.time = held.time } else { passage.time = time + shift >= 0 ? time + shift : nil }
-                    }
+                    (passage.trackID, passage.time) = placed(trackID: passage.trackID, time: passage.time)
                     copied.reading?.passages[index] = passage
+                }
+                for index in copied.erased?.indices ?? 0..<0 {
+                    guard var stroke = copied.erased?[index] else { continue }
+                    (stroke.trackID, stroke.time) = placed(trackID: stroke.trackID, time: stroke.time)
+                    copied.erased?[index] = stroke
                 }
                 return copied
             }
         if !carriedPages.isEmpty { merged.pages = (merged.pages ?? []) + carriedPages }
+        // When its pages were turned, for the pages that are here.
+        let hereIDs = Set((merged.pages ?? []).map(\.id))
+        let turns = (carriedPages.isEmpty ? [] : folded.pageTurns ?? []).filter { turn in turn.pages.allSatisfy(hereIDs.contains) }.map { turn -> PageTurn in
+            var placedTurn = turn
+            (placedTurn.trackID, placedTurn.time) = placed(trackID: turn.trackID, time: turn.time)
+            return placedTurn
+        }
+        if !turns.isEmpty { merged.pageTurns = PageTurn.merged(merged.pageTurns, turns) }
         let knownInk = Set((merged.ink ?? []).map(\.id))
         let ink = (folded.ink ?? []).filter { !knownInk.contains($0.id) }
         if !ink.isEmpty { merged.ink = (merged.ink ?? []) + ink }
