@@ -4523,3 +4523,10 @@ The search field's Return and ⌘Return, the answer page, its waiting and cancel
 - **Checked in pictures:** the answered, partial, not found, waiting, and failed pages, each in light and dark, from a debug build on this Mac with `--ask-demo` over the demo library (a scripted answerer). Not checked: other window widths, Reduce Motion, VoiceOver, and the keyboard by hand.
 - **Not measured: any real model.** No real summary model has answered a question through this interface. How good its answers are, how often it declines, how many sentences the quote check drops, and how long a question takes on any Mac are unknown, and so is whether a person finds the page clear. The owner decided to ship without that measurement.
 - **Known limits:** photo reading, giving voices, and listening to earlier recordings are not held by a question; if one has the model when a question starts, the question waits for it behind the engine's own retry. Back (⌘[) to the answer is not built: the first row of the results returns to it.
+
+## Caption source failure shown (2026-11-19)
+
+While one caption source listens and the other has failed or is unavailable, the strip on the conversation page and in Floating Notes adds "You: <reason>" or "Call: <reason>" after the lines (`LiveCaptionStatus.problem`); the reason is logged once per source.
+
+- **Checked in tests, fakes only:** `LiveCaptionsTests` (a failed call captioner beside a listening You names "Call: Captions stopped: test" while the recording and You's lines go on; both listening shows nothing; both ended shows nothing, the state line says it).
+- **Not checked:** the strip in a screenshot, and which real failure the owner hit (the reason is now visible and logged). The iPhone's strip follows its microphone alone, so it has no masking; the Floating Notes compact strip is one clipped line and shows no notice.

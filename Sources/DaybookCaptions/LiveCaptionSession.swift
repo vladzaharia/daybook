@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import os
 
 /// One recording's live captions on the device recording it, the part the Mac and the iPhone share:
 /// a captioner per source (the Mac's You and Call, the iPhone's microphone), other devices' lines
@@ -221,12 +222,24 @@ public final class LiveCaptionSession {
             Task { [weak self] in
                 for await state in captioner.states {
                     guard let self, self.generation == current else { return }
+                    if self.states[source] != state { Self.logEnd(state, of: source) }
                     self.states[source] = state
                     self.statesChanged?()
                     if state == .listening { self.startSaving() }
                 }
             },
         ]
+    }
+
+    private static let log = Logger(subsystem: "local.daybook", category: "LiveCaptions")
+
+    /// A captioner that ended without finishing, once, with its source and its own reason (never text or audio).
+    private static func logEnd(_ state: LiveCaptionState, of source: LiveCaptionSource) {
+        switch state {
+        case .failed(let reason): log.error("\(source.rawValue, privacy: .public) captions failed: \(reason, privacy: .public)")
+        case .unavailable(let reason): log.error("\(source.rawValue, privacy: .public) captions unavailable: \(reason, privacy: .public)")
+        default: break
+        }
     }
 
     /// Changes go to the mixer one after another, in the order they were made; what it shows comes back here.

@@ -80,6 +80,20 @@ public enum LiveCaptionStatus {
         case .off, .finished: return nil
         }
     }
+
+    /// While one source listens, a source that ended says so beside the lines: "You: <reason>" (the
+    /// captioner's own reason), in the order You, Call. Nil when none listens or none ended.
+    public static func problem(_ states: [LiveCaptionSource: LiveCaptionState], names: [String: String] = [:]) -> String? {
+        guard states.values.contains(.listening) else { return nil }
+        let problems: [String] = states.keys.sorted { $0 == .microphone || ($1 != .microphone && $0.rawValue < $1.rawValue) }.compactMap { source in
+            switch states[source] {
+            case .failed(let reason)?, .unavailable(let reason)?:
+                return "\(LiveCaptionLabels.label(for: source, names: names)): \(reason)"
+            default: return nil
+            }
+        }
+        return problems.isEmpty ? nil : problems.joined(separator: " · ")
+    }
 }
 
 /// The languages live captions can be asked for on a device, and what Settings says about the choice.
