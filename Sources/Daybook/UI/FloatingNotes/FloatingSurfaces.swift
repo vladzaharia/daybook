@@ -60,7 +60,12 @@ struct FloatingRecording: View {
 
     private var slots: RecorderSlots {
         RecorderSlots(
-            notes: AnyView(PanelNotes(state: state, meeting: meeting, isRecording: true, showsLane: true)),
+            notes: AnyView(VStack(spacing: 0) {
+                if !context.compact, let last = state.lastTime {
+                    LastTimeCard(last: last) { context.openConversation(last.meetingID) }
+                }
+                PanelNotes(state: state, meeting: meeting, isRecording: true, showsLane: true)
+            }),
             captions: AnyView(Group {
                 if captionsShowing {
                     PanelCaptions(captions: state.captions, compact: context.compact)

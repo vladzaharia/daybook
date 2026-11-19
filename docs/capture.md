@@ -706,6 +706,13 @@ leave it. Only a meeting's title is kept, as its conversation's title, as a type
   never recorded on its own, and Record Automatically doesn't change that. Unanswered is Not Now.
 - **Once it's over** (its end time, while the recording it started still goes on), the prompt asks
   "Weekly product sync ended · Stop recording?" once, and keeps recording without an answer.
+- **Last time.** A recording named after a calendar meeting looks for the same meeting's last conversation
+  (`LastTime.find`, DaybookKit). The library keeps no calendar identity with a conversation, so the meeting is the same
+  when its title is: the " at 10:15 AM" Daybook adds is left off both, and case and accents don't matter. A title that
+  only starts the same way ("Weekly product sync review") is another meeting. The newest earlier conversation that is
+  in the library (not the Trash), isn't still recording, and isn't in the other of Work and Personal than the
+  recording shows, as Floating Notes' "Last time". If that one is Personal and the lock or a Focus hides it, nothing
+  shows, rather than an older conversation. It lists the next steps that aren't done yet.
 
 `AppState.checkCalendar(at:)` is the whole of it, called every 30 seconds while Use Calendar is on,
 in the app only (`MacEnvironment.watchesCalendar`). Tests stand in their own calendar
