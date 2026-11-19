@@ -104,6 +104,7 @@ public enum MeetingMerge {
             tracks.map { track in
                 var track = track
                 track.removal = nil
+                track.clockSamples = nil
                 return track
             }
         }
@@ -127,8 +128,11 @@ public enum MeetingMerge {
             if let a, let b {
                 // In the conversation is the ancestor where there's none: a mark made on one side is that side's.
                 result.tracks[index].removal = choose("track-removal:\(id)", a.removal, b.removal, .some(old?.removal))
+                // Written once, at filing: a copy with samples beats one without, and never a conflict.
+                result.tracks[index].clockSamples = RecordingClockSample.merged(a.clockSamples, b.clockSamples)
             } else {
                 result.tracks[index].removal = (a ?? b ?? old)?.removal
+                result.tracks[index].clockSamples = (a ?? b ?? old)?.clockSamples
             }
         }
         result.transcripts = items("transcript-run", local.transcripts, remote.transcripts, base?.transcripts ?? [])
@@ -147,6 +151,10 @@ public enum MeetingMerge {
                 record(field, smaller, larger)
                 conflicted.insert("a page")
             }
+        }
+        // When the notebook's pages were turned: a log, both copies' entries (bounded, the oldest go).
+        if local.pageTurns != nil || remote.pageTurns != nil {
+            result.pageTurns = PageTurn.merged(local.pageTurns, remote.pageTurns)
         }
         // Handwriting is an original too: every copy's blocks survive, the newer strokes of a block both changed.
         if local.ink != nil || remote.ink != nil {

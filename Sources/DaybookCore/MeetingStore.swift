@@ -482,11 +482,14 @@ public actor MeetingStore {
         }
         let pagesFolder = directory.appendingPathComponent(PageDrawing.folder, isDirectory: true)
         for page in meeting.pages ?? [] {
-            for drawing in (page.drawing.map { [$0] } ?? []) + (page.setAside ?? []) {
-                guard drawing.relativePath.hasPrefix(PageDrawing.folder + "/") else { throw LibraryError.unsafePath(drawing.relativePath) }
-                try LocalFiles.requireContained(try LocalFiles.relativeURL(drawing.relativePath, in: directory), in: pagesFolder)
+            for file in page.files {
+                guard file.relativePath.hasPrefix(PageDrawing.folder + "/") else { throw LibraryError.unsafePath(file.relativePath) }
+                try LocalFiles.requireContained(try LocalFiles.relativeURL(file.relativePath, in: directory), in: pagesFolder)
             }
-            guard page.width.isFinite, page.width > 0, page.height.isFinite, page.height > 0 else { throw LibraryError.corruptMeeting(expectedID) }
+            guard page.width.isFinite, page.width > 0, page.height.isFinite, page.height > 0, page.hasBackgroundSize,
+                  page.background.map({ $0.width.isFinite && $0.width > 0 && $0.height.isFinite && $0.height > 0 }) ?? true else {
+                throw LibraryError.corruptMeeting(expectedID)
+            }
             for passage in page.passages {
                 guard passage.time.map({ $0.isFinite && $0 >= 0 }) ?? true else { throw LibraryError.invalidHighlight }
             }
@@ -563,6 +566,13 @@ enum LocalFiles {
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
         try excludeFromBackup(temporary)
         guard rename(temporary.path, url.path) == 0 else { throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path]) }
+    }
+    /// Marks a file as used now: pruning keeps what was written lately (`MeetingStore.prunePageDrawings`), and a file that
+    /// becomes named again (the same bytes stored again, or a revert applied) is as new as that.
+    static func touch(_ url: URL, now: Date = Date(), unlessWithin interval: TimeInterval = 0) {
+        if interval > 0, let modified = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+           now.timeIntervalSince(modified) < interval { return }
+        try? FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: url.path)
     }
     /// Marks a file to stay out of backups. The mark moves with the file when it's renamed into place.
     static func excludeFromBackup(_ url: URL) throws {

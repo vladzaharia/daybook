@@ -42,6 +42,11 @@ extension NotebookPage {
                                                hasBase: base != nil, conflict: conflict)
         result.sketches = mergedSketches(local.sketches, remote.sketches, reading: result.reading)
         result.hiddenFromSummary = pick("page-summary:\(id)", local.hiddenFromSummary, remote.hiddenFromSummary, base.map(\.hiddenFromSummary))
+        // The picture under the strokes: a three-way pick, and the page takes its aspect (the A5 width, the background's
+        // height), so the size is the same on every device whichever picture stands. A page without one keeps the greater size.
+        result.background = pick("page-background:\(id)", local.background, remote.background, base.map(\.background))
+        if result.background != nil { (result.width, result.height) = NotebookPage.size(for: result.background) }
+        result.erased = ErasedStroke.merged(local.erased, remote.erased)
         // A deletion and an edit made apart: the deletion stands, and a Put Back made later wins over it.
         // When both changed it (one put the page back, the other deleted it again) the greater encoding stays, and `null`
         // is greater than any date: the page comes back, and nothing is hidden by a conflict. A decision, pinned by a test.
@@ -177,5 +182,20 @@ extension Meeting {
         var result = self
         result.pages = ((pages ?? []) + missing).sorted(by: NotebookPage.precedes)
         return result
+    }
+}
+
+extension Meeting {
+    /// This snapshot of an event with several parents, with the notebook it should have: written by a Daybook that predates
+    /// pages, it keeps one parent's whole `pages` (and `pageTurns`) as the unknown keys they are, so edits and deletions made
+    /// to a page on the other side are lost, not only the pages that side added. A Daybook that knows pages never keeps one
+    /// side's array unless it already equals the merge, so an array that equals one parent's and not the merge of them is
+    /// replaced by the merge (`merged`, the parents merged with their common ancestor as base). Then every page of the merge the
+    /// snapshot lacks is put back (`restoringPages`).
+    func repairingNotebook(parents: [Meeting], merged: Meeting) -> Meeting {
+        var result = self
+        if let kept = pages, kept != merged.pages, parents.contains(where: { $0.pages == kept }) { result.pages = merged.pages }
+        if let kept = pageTurns, kept != merged.pageTurns, parents.contains(where: { $0.pageTurns == kept }) { result.pageTurns = merged.pageTurns }
+        return result.restoringPages(from: merged)
     }
 }

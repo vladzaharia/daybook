@@ -17,12 +17,15 @@ import Foundation
 /// being folded in (Move to New Conversation) is put back by the fold.
 extension LibraryController {
     /// Merges the conversations `ids` into the earliest by date and returns its ID. `audio` and `photo` find a folded
-    /// conversation's files (on the iPhone they may download); `context` is what the app knows of each conversation, and
+    /// conversation's files (on the iPhone they may download), `pageDrawing` a page's drawing file or background (described as
+    /// a `PageDrawing`, whose path and digest are what finds it; without it, the folded conversation's own copy in this library,
+    /// and a page whose files aren't there isn't carried); `context` is what the app knows of each conversation, and
     /// one that's busy (`ConversationActions.Context.mergeBusy`) stops the merge. `startOf` says when a recording started
     /// by the wall clock and `policy` how much recordings made at once share of it (`ConversationMerge.placements`).
     @discardableResult
     public func mergeConversations(_ ids: [UUID], audio: (RecordingTrack, UUID) async throws -> URL,
                                    photo: (MeetingPhoto, UUID) async throws -> URL,
+                                   pageDrawing: ((PageDrawing, UUID) async throws -> URL)? = nil,
                                    context: (Meeting) -> ConversationActions.Context,
                                    policy: SourceMatcher.Policy = .init(), startOf: (RecordingTrack) -> Date? = { $0.startedAt },
                                    at now: Date = Date(),
@@ -47,6 +50,28 @@ extension LibraryController {
         // Every file first: nothing changes until they're all here.
         var recordings: [(meetingID: UUID, track: RecordingTrack, url: URL)] = []
         var pictures: [(meetingID: UUID, photo: MeetingPhoto, url: URL)] = []
+        // A page the survivor lacks comes with its files: `pageIDs` are every page the folded conversation had as the files came,
+        // `pageFiles` the files collected, and `carriablePages` the paths each page's came with. A page whose files can't be had
+        // stops the merge: its record, words and corrections would go to the Trash with the conversation.
+        var pageIDs: [UUID: Set<UUID>] = [:]
+        var pageFiles: [(meetingID: UUID, file: PageDrawing, url: URL)] = []
+        var carriablePages: [UUID: [UUID: Set<String>]] = [:]
+        for folded in folding {
+            pageIDs[folded.id] = Set((folded.pages ?? []).map(\.id))
+            for page in folded.pages ?? [] where self.meeting(survivorID)?.page(page.id) == nil {
+                var found: [(PageDrawing, URL)] = []
+                for file in page.files {
+                    let drawing = PageDrawing(relativePath: file.relativePath, sha256: file.sha256, byteCount: 0, strokeCount: 0, editedAt: page.updatedAt)
+                    if let pageDrawing { found.append((drawing, try await pageDrawing(drawing, folded.id))) }
+                    else if hasLocalPageDrawing(drawing, in: folded.id) {
+                        found.append((drawing, rootURL.appendingPathComponent("Meetings/\(folded.id.uuidString)/\(file.relativePath)")))
+                    }
+                }
+                guard found.count == page.files.count else { throw ConversationMergeError.pageFilesMissing(folded.title) }
+                pageFiles += found.map { (folded.id, $0.0, $0.1) }
+                carriablePages[folded.id, default: [:]][page.id] = Set(page.files.map(\.relativePath))
+            }
+        }
         for folded in folding {
             for track in folded.tracks where !track.isMovedOut { recordings.append((folded.id, track, try await audio(track, folded.id))) }
             for item in folded.photos ?? [] where self.meeting(survivorID)?.photo(item.id) == nil {
@@ -87,6 +112,9 @@ extension LibraryController {
             for file in pictures {
                 stored[file.meetingID, default: [:]][file.photo.id] = try await storedPhoto(file.photo, from: file.url, in: survivorID)
             }
+            for file in pageFiles {
+                try await store.copyPageFile(from: file.url, relativePath: file.file.relativePath, sha256: file.file.sha256, into: survivorID)
+            }
         } catch {
             releaseLock()
             throw error
@@ -99,11 +127,16 @@ extension LibraryController {
         guard latest[0].id == survivorID else { throw ConversationMergeError.changed }
         let toFold = latest.dropFirst().filter { !ConversationMerge.hasFolded($0.id, into: latest[0]) }
         for folded in toFold {
-            // A recording or photo it gained meanwhile isn't here: it waits for the next try. One it lost (moved elsewhere)
+            // A recording, photo, or page it gained meanwhile isn't here: it waits for the next try. One it lost (moved elsewhere)
             // isn't carried: its copy stays a file in the survivor's folder.
             let carried = folded.tracks.filter { !$0.isMovedOut }
             guard carried.allSatisfy({ copies[folded.id]?[$0.id] != nil }),
-                  (folded.photos ?? []).allSatisfy({ stored[folded.id]?[$0.id] != nil || latest[0].photo($0.id) != nil }) else { throw ConversationMergeError.changed }
+                  (folded.photos ?? []).allSatisfy({ stored[folded.id]?[$0.id] != nil || latest[0].photo($0.id) != nil }),
+                  (folded.pages ?? []).allSatisfy({ page in
+                      // One it gained, or a drawing it gained (a new commit), since the files were collected isn't here yet.
+                      if let copied = carriablePages[folded.id]?[page.id] { return Set(page.files.map(\.relativePath)).isSubset(of: copied) }
+                      return pageIDs[folded.id]?.contains(page.id) == true && latest[0].page(page.id) != nil
+                  }) else { throw ConversationMergeError.changed }
         }
         // Where each goes, from the survivor as it is: the recordings coming back are on its timeline, and a copy an earlier
         // Daybook left waiting isn't.
@@ -134,7 +167,7 @@ extension LibraryController {
                 guard let placement = placements[folded.id] else { continue }
                 ConversationMerge.fold(folded, into: &survivor, placement: placement, copies: copies[folded.id] ?? [:], fresh: fresh[folded.id] ?? [],
                                        restoring: words.filter { restored[folded.id]?.contains($0.key) == true },
-                                       photos: stored[folded.id] ?? [:], profiles: profiles, at: now)
+                                       photos: stored[folded.id] ?? [:], pageFiles: Set(carriablePages[folded.id]?.keys.map { $0 } ?? []), profiles: profiles, at: now)
             }
             survivor.status = survivor.summary == nil ? .imported : .ready
             survivor.errorMessage = nil
@@ -176,6 +209,8 @@ public enum ConversationMergeError: LocalizedError, Equatable, PlainSentenceErro
     case busy(String)
     /// One of them gained a recording while the files were fetched.
     case changed
+    /// A page of a conversation being folded in has files that aren't on this device (never downloaded, or lost).
+    case pageFilesMissing(String)
 
     public var errorDescription: String? {
         switch self {
@@ -184,6 +219,9 @@ public enum ConversationMergeError: LocalizedError, Equatable, PlainSentenceErro
             let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
             return name.isEmpty ? "A conversation is busy. Try again when it’s done." : "“\(name)” is busy. Try again when it’s done."
         case .changed: return "A conversation changed while merging. Try again."
+        case .pageFilesMissing(let title):
+            let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            return name.isEmpty ? "A page of a conversation isn’t on this device. Try again when it has downloaded." : "A page of “\(name)” isn’t on this device. Try again when it has downloaded."
         }
     }
 }

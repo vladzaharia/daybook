@@ -312,6 +312,10 @@ public struct NotebookPage: Codable, Equatable, Identifiable, Sendable {
     public var sketches: [SketchAnalysis]?
     /// The person took it out of summaries.
     public var hiddenFromSummary: Bool?
+    /// A picture or PDF page drawn under the strokes (`PageBackground`), which gives the page its aspect. Nil when none.
+    public var background: PageBackground?
+    /// Strokes taken out of the page, oldest first, bounded (`ErasedStroke`). Nil when none.
+    public var erased: [ErasedStroke]?
     /// When it was deleted. A deleted page keeps its record and files so it can be put back, and so an older copy of the
     /// conversation can't bring it back by itself.
     public var removedAt: Date?
@@ -331,7 +335,7 @@ public struct NotebookPage: Codable, Equatable, Identifiable, Sendable {
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case id, order, width, height, paper, createdAt, origin, drawing, setAside, reading, corrections, sketches,
-            hiddenFromSummary, removedAt, updatedAt
+            hiddenFromSummary, background, erased, removedAt, updatedAt
     }
     private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
 
@@ -350,6 +354,8 @@ public struct NotebookPage: Codable, Equatable, Identifiable, Sendable {
         corrections = try values.decodeIfPresent([PassageCorrection].self, forKey: .corrections)
         sketches = try values.decodeIfPresent([SketchAnalysis].self, forKey: .sketches)
         hiddenFromSummary = try values.decodeIfPresent(Bool.self, forKey: .hiddenFromSummary)
+        background = try values.decodeIfPresent(PageBackground.self, forKey: .background)
+        erased = try values.decodeIfPresent([ErasedStroke].self, forKey: .erased)
         removedAt = try values.decodeIfPresent(Date.self, forKey: .removedAt)
         updatedAt = try values.decode(Date.self, forKey: .updatedAt)
         unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
@@ -370,6 +376,8 @@ public struct NotebookPage: Codable, Equatable, Identifiable, Sendable {
         try values.encodeIfPresent(corrections, forKey: .corrections)
         try values.encodeIfPresent(sketches, forKey: .sketches)
         try values.encodeIfPresent(hiddenFromSummary, forKey: .hiddenFromSummary)
+        try values.encodeIfPresent(background, forKey: .background)
+        try values.encodeIfPresent(erased, forKey: .erased)
         try values.encodeIfPresent(removedAt, forKey: .removedAt)
         try values.encode(updatedAt, forKey: .updatedAt)
         try unknownFields.encode(to: encoder)

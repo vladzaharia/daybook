@@ -29,6 +29,26 @@ final class NotebookPageTests: XCTestCase {
         XCTAssertFalse(written.contains("pages"))
     }
 
+    func testBehaviorRecordsWithoutTheOptionalDetailsEncodeUnchanged() throws {
+        // A track and a page as 1a and before wrote them: none of the optional records (clock samples, background, erasures, page
+        // turns) is written, and what is read is written back byte for byte.
+        let track = "7A1B2C3D-0000-4000-8000-000000000001", page = "7A1B2C3D-0000-4000-8000-000000000002"
+        let legacy = """
+        {"alignmentReports":[],"date":780000000,"highlights":[],"id":"6F3C1D2A-9B8E-4C7D-A1B2-3C4D5E6F7A8B","kind":"general","notes":"",\
+        "pages":[{"createdAt":780000000,"height":595,"id":"\(page)","order":1,"paper":"ruled","updatedAt":780000000,"width":420}],\
+        "revisions":[],"schemaVersion":1,"speakers":[],"status":"ready","title":"Planning",\
+        "tracks":[{"createdAt":780000000,"fileName":"a.wav","id":"\(track)","relativePath":"Originals\\/a.wav","sha256":"","source":"microphone"}],\
+        "transcripts":[],"unifiedTranscript":[],"updatedAt":780000100}
+        """
+        let meeting = try JSONDecoder().decode(Meeting.self, from: Data(legacy.utf8))
+        XCTAssertNil(meeting.tracks[0].clockSamples)
+        XCTAssertNil(meeting.pages?[0].background)
+        XCTAssertNil(meeting.pages?[0].erased)
+        XCTAssertNil(meeting.pageTurns)
+        let written = try XCTUnwrap(String(data: try encoded(meeting), encoding: .utf8))
+        XCTAssertEqual(written, legacy, "byte for byte as before")
+    }
+
     /// A page with every optional present, as a dictionary, so unknown keys can be put into each record.
     private func fullPageJSON() throws -> (meeting: Meeting, json: [String: Any]) {
         let id = UUID()
@@ -41,7 +61,15 @@ final class NotebookPageTests: XCTestCase {
         page.corrections = [PassageCorrection(passageID: passage.id, strokeDigest: passage.strokeDigest, text: "hello world", editedAt: start)]
         page.sketches = [SketchAnalysis(passageID: passage.id, strokeDigest: passage.strokeDigest, analysis: PhotoAnalysis(caption: "A box", createdAt: start))]
         page.hiddenFromSummary = true
-        let meeting = NotebookFixtures.meeting(pages: [page])
+        let picture = AudioDigest.sha256(data: Data("picture".utf8))
+        page.setBackground(PageBackground(relativePath: PageBackground.relativePath(page: id, sha256: picture, fileExtension: "pdf"), sha256: picture,
+                                          byteCount: 900, kind: .pdf, fileExtension: "pdf", pageIndex: 2, width: 595, height: 842, editedAt: start), now: start)
+        page.erased = [ErasedStroke(key: "1-3-10-10", madeAt: start, erasedAt: start.addingTimeInterval(9), trackID: UUID(), time: 4)]
+        var meeting = NotebookFixtures.meeting(pages: [page])
+        meeting.pageTurns = [PageTurn(at: start.addingTimeInterval(20), pages: [id], trackID: UUID(), time: 15)]
+        var recording = RecordingTrack(source: .microphone, relativePath: "Originals/a.wav", fileName: "a.wav", createdAt: start)
+        recording.clockSamples = [RecordingClockSample(at: start, elapsed: 0, running: true), RecordingClockSample(at: start.addingTimeInterval(30), elapsed: 30, running: false)]
+        meeting.tracks = [recording]
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: try encoded(meeting)) as? [String: Any])
         return (meeting, json)
     }
@@ -71,8 +99,23 @@ final class NotebookPageTests: XCTestCase {
         var sketches = try XCTUnwrap(page["sketches"] as? [[String: Any]])
         sketches[0]["sketchFuture"] = "s"
         page["sketches"] = sketches
+        var background = try XCTUnwrap(page["background"] as? [String: Any])
+        background["backgroundFuture"] = "b"
+        page["background"] = background
+        var erased = try XCTUnwrap(page["erased"] as? [[String: Any]])
+        erased[0]["erasedFuture"] = "e"
+        page["erased"] = erased
         pages[0] = page
         json["pages"] = pages
+        var turns = try XCTUnwrap(json["pageTurns"] as? [[String: Any]])
+        turns[0]["turnFuture"] = "t"
+        json["pageTurns"] = turns
+        var tracks = try XCTUnwrap(json["tracks"] as? [[String: Any]])
+        var samples = try XCTUnwrap(tracks[0]["clockSamples"] as? [[String: Any]])
+        samples[0]["sampleFuture"] = "s"
+        tracks[0]["clockSamples"] = samples
+        tracks[0]["trackFuture"] = "k"
+        json["tracks"] = tracks
 
         let decoded = try JSONDecoder().decode(Meeting.self, from: JSONSerialization.data(withJSONObject: json))
         let stored = try XCTUnwrap(decoded.pages?.first)
@@ -83,6 +126,10 @@ final class NotebookPageTests: XCTestCase {
         XCTAssertFalse(try XCTUnwrap(stored.setAside?.first).unknownFields.isEmpty)
         XCTAssertFalse(try XCTUnwrap(stored.corrections?.first).unknownFields.isEmpty)
         XCTAssertFalse(try XCTUnwrap(stored.sketches?.first).unknownFields.isEmpty)
+        XCTAssertFalse(try XCTUnwrap(stored.background).unknownFields.isEmpty)
+        XCTAssertFalse(try XCTUnwrap(stored.erased?.first).unknownFields.isEmpty)
+        XCTAssertFalse(try XCTUnwrap(decoded.pageTurns?.first).unknownFields.isEmpty)
+        XCTAssertFalse(try XCTUnwrap(decoded.tracks[0].clockSamples?.first).unknownFields.isEmpty)
 
         let again = try XCTUnwrap(JSONSerialization.jsonObject(with: try encoded(decoded)) as? [String: Any])
         let writtenPage = try XCTUnwrap((again["pages"] as? [[String: Any]])?.first)
@@ -94,6 +141,12 @@ final class NotebookPageTests: XCTestCase {
         XCTAssertEqual((writtenPage["setAside"] as? [[String: Any]])?.first?["asideFuture"] as? Bool, true)
         XCTAssertEqual((writtenPage["corrections"] as? [[String: Any]])?.first?["correctionFuture"] as? String, "c")
         XCTAssertEqual((writtenPage["sketches"] as? [[String: Any]])?.first?["sketchFuture"] as? String, "s")
+        XCTAssertEqual((writtenPage["background"] as? [String: Any])?["backgroundFuture"] as? String, "b")
+        XCTAssertEqual((writtenPage["erased"] as? [[String: Any]])?.first?["erasedFuture"] as? String, "e")
+        XCTAssertEqual((again["pageTurns"] as? [[String: Any]])?.first?["turnFuture"] as? String, "t")
+        let writtenTrack = try XCTUnwrap((again["tracks"] as? [[String: Any]])?.first)
+        XCTAssertEqual(writtenTrack["trackFuture"] as? String, "k")
+        XCTAssertEqual((writtenTrack["clockSamples"] as? [[String: Any]])?.first?["sampleFuture"] as? String, "s")
         XCTAssertEqual(try JSONDecoder().decode(Meeting.self, from: encoded(decoded)), decoded)
     }
 
@@ -101,6 +154,9 @@ final class NotebookPageTests: XCTestCase {
         var (_, json) = try fullPageJSON()
         var pages = try XCTUnwrap(json["pages"] as? [[String: Any]])
         pages[0]["paper"] = "watercolour"
+        var background = try XCTUnwrap(pages[0]["background"] as? [String: Any])
+        background["kind"] = "svg"
+        pages[0]["background"] = background
         var reading = try XCTUnwrap(pages[0]["reading"] as? [String: Any])
         var passages = try XCTUnwrap(reading["passages"] as? [[String: Any]])
         passages[0]["kind"] = "diagram"
@@ -111,9 +167,11 @@ final class NotebookPageTests: XCTestCase {
         let page = try XCTUnwrap(decoded.pages?.first)
         XCTAssertEqual(page.paper, .plain)
         XCTAssertEqual(page.passages.first?.kind, .writing, "a newer kind reads as writing, so its words count")
+        XCTAssertEqual(page.background?.kind, .image, "a newer background kind reads as a picture")
         let text = try XCTUnwrap(String(data: try encoded(decoded), encoding: .utf8))
         XCTAssertTrue(text.contains("\"paper\":\"watercolour\""))
         XCTAssertTrue(text.contains("\"kind\":\"diagram\""))
+        XCTAssertTrue(text.contains("\"kind\":\"svg\""))
         // Setting a known value replaces the unknown one.
         var edited = decoded
         edited.pages?[0].paper = .grid
