@@ -4403,3 +4403,11 @@ Replaces the modal "draw, recognize, review, add" sheet. Typing and ink share on
 - Inspected the cover and inner displays: typed and handwritten paragraphs alternating with their times in the lane, ink inverted in Dark Mode, a block written wider than the column scaled whole, the writing tools, and the recorder sheet at rest in each posture.
 
 **Still to check on a real iPhone Duo with Apple Pencil:** the simulator has no Pencil, so every stroke above was synthetic or a finger's. Check that Pencil writes past the last paragraph with no mode on, that a finger on that empty page still places the caret, Scribble over typed words beside a canvas, double-tap and squeeze for the eraser, a block's long-press menu, undo across strokes and typing, and the recognizer's accuracy on real handwriting. On the Mac, handwriting appears as its recognized words, not as ink.
+
+## Notebook pages, stored format (2026-11-18)
+
+Pages (`Meeting.pages`) are stored and merged in DaybookCore; nothing shows them yet.
+
+- `NotebookPageTests`, `PassageGroupingTests`, `RecordingClockMapTests`, `NotebookMergeTests` (package): a conversation without pages encoding byte for byte as before, unknown keys and values kept on every record, corrections standing only while their strokes do, readings made by a newer grouping standing here, and merges that are commutative and stable when merged again, with later strokes winning, the other set aside, and a stale snapshot unable to drop a page or take its strokes back.
+- **Limits across versions:** a Mac running a version from before pages keeps `pages` as an unknown key, and it can move a conversation whose only content is pages to the Trash, because it can't see them as content. An older version that publishes a merge of two devices' changes keeps one `pages` array whole; the newer reader gets the other pages back only through `restoringPages`, which the sync engine doesn't call yet (it comes with the storage and sync work). Until then such a merge can lose a page's record on the older device's publication, never its files.
+- `PhotoOrigin`, `ProcessingSettings`, and `PhotoAnalysis` (nested in pages) now keep keys a newer Daybook adds, as the page records do; their encoding for existing data is unchanged.

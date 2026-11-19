@@ -44,17 +44,20 @@ public enum RecordingClockMap {
     }
 
     /// Adds a sample when the last is at least `interval` old or `running` changed, and keeps at most `capacity`: past that
-    /// the oldest half is thinned to every other sample (every change between running and paused stays).
+    /// a quarter of them go, always the ones whose neighbours are closest, so the gaps stay about even across the whole
+    /// recording (the first and last, and every change between running and paused, stay).
     public static func appending(_ sample: RecordingClockSample, to samples: [RecordingClockSample]) -> [RecordingClockSample] {
         if let last = samples.last, sample.running == last.running, sample.at.timeIntervalSince(last.at) < interval { return samples }
         var result = samples + [sample]
         guard result.count > capacity else { return result }
-        let older = result.count / 2
-        var thinned: [RecordingClockSample] = []
-        for index in 0..<older where index % 2 == 0 || result[index].running != result[index - 1].running {
-            thinned.append(result[index])
+        func gap(_ index: Int) -> TimeInterval { result[index + 1].at.timeIntervalSince(result[index - 1].at) }
+        var removable = (1..<(result.count - 1)).filter { result[$0].running == result[$0 - 1].running && result[$0].running == result[$0 + 1].running }
+        removable.sort { gap($0) != gap($1) ? gap($0) < gap($1) : $0 < $1 }
+        var dropped = Set<Int>()
+        for index in removable where dropped.count < result.count - capacity * 3 / 4 {
+            if !dropped.contains(index - 1) && !dropped.contains(index + 1) { dropped.insert(index) }
         }
-        result = thinned + result[older...]
+        result = result.enumerated().filter { !dropped.contains($0.offset) }.map(\.element)
         return result.count > capacity ? Array(result.suffix(capacity)) : result
     }
 }

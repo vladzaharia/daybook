@@ -42,6 +42,9 @@ extension Meeting {
     public mutating func applyPageReading(_ pageID: UUID, reading: PageReading, now: Date = Date()) {
         guard let index = pages?.firstIndex(where: { $0.id == pageID }),
               reading.drawingSHA256 == pages?[index].drawing?.sha256 else { return }
+        // Not one made by an older grouping than the reading of these strokes it would replace.
+        if let current = pages?[index].reading, current.drawingSHA256 == reading.drawingSHA256,
+           current.groupingVersion > reading.groupingVersion { return }
         var stored = reading
         let earlier = pages?[index].reading?.passages ?? []
         for position in stored.passages.indices where stored.passages[position].trackID == nil && stored.passages[position].time == nil {
@@ -99,17 +102,23 @@ extension Meeting {
 
     /// Takes the pages a recording wrote on filing. A page made during the recording is added; one the recording loaded
     /// from the conversation is merged three-way with the copy it loaded (`NotebookPage.merged`), so what was changed
-    /// elsewhere meanwhile survives.
+    /// elsewhere meanwhile survives, and a drawing the merge sets aside is in Version History as in any merge.
     public mutating func adoptRecordedPages(_ recorded: [RecordedPage], now: Date = Date()) {
         for entry in recorded {
             guard let index = pages?.firstIndex(where: { $0.id == entry.page.id }) else {
                 addPage(entry.page)
                 continue
             }
-            guard let base = entry.base else { continue }
-            let merged = NotebookPage.merged(base: base, local: pages![index], remote: entry.page) { _, _, _ in }
+            // With no base (filing tried again after a crash) the merge has no ancestor, and still keeps both sides' strokes.
+            var conflicts: [MeetingRevision] = []
+            let merged = NotebookPage.merged(base: entry.base, local: pages![index], remote: entry.page) { field, smaller, larger in
+                conflicts.append(MeetingRevision(id: SyncEncoding.uuid("\(id):\(field):\(smaller):\(larger)"), date: now, kind: .sync(field),
+                                                 oldValue: smaller, newValue: larger))
+            }
             guard merged != pages![index] else { continue }
             pages?[index] = merged
+            let known = Set(revisions.map(\.id))
+            revisions += conflicts.filter { !known.contains($0.id) }
             updatedAt = now
         }
     }

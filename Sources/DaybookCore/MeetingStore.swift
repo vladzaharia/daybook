@@ -260,6 +260,12 @@ public actor MeetingStore {
         // And notebook pages: deleting one marks it.
         let pageIDs = Set((result.pages ?? []).map(\.id))
         let missingPages = (stored.pages ?? []).filter { !pageIDs.contains($0.id) }
+        // And it can't take back strokes written since it was made.
+        let storedPages = Dictionary((stored.pages ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        if let pages = result.pages {
+            let kept = pages.map { page in storedPages[page.id].map(page.keepingStrokes(of:)) ?? page }
+            if kept != pages { result.pages = kept }
+        }
         if !missingPages.isEmpty { result.pages = (result.pages ?? []) + missingPages }
         return result
     }

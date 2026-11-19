@@ -19,8 +19,12 @@ final class NotebookMergeTests: XCTestCase {
         let reverse = MeetingMerge.merge(base: base, local: b, remote: a)
         XCTAssertEqual(forward.meeting, reverse.meeting, "commutative", file: file, line: line)
         XCTAssertEqual(forward.warnings, reverse.warnings, file: file, line: line)
-        XCTAssertEqual(MeetingMerge.merge(base: base, local: forward.meeting, remote: forward.meeting).meeting, forward.meeting, "idempotent", file: file, line: line)
-        XCTAssertEqual(MeetingMerge.merge(base: base, local: forward.meeting, remote: a).meeting.pages?.map(\.id), forward.meeting.pages?.map(\.id), file: file, line: line)
+        // Merging the result again with either input changes nothing, byte for byte (a merge of equal copies would return early).
+        let bytes = try? SyncEncoding.data(forward.meeting)
+        for input in [a, b] {
+            XCTAssertEqual(try? SyncEncoding.data(MeetingMerge.merge(base: base, local: forward.meeting, remote: input).meeting), bytes, "idempotent", file: file, line: line)
+            XCTAssertEqual(try? SyncEncoding.data(MeetingMerge.merge(base: base, local: input, remote: forward.meeting).meeting), bytes, "idempotent", file: file, line: line)
+        }
         return forward
     }
 
@@ -273,7 +277,7 @@ final class NotebookMergeTests: XCTestCase {
         XCTAssertEqual(restored.pages, [kept])
         XCTAssertEqual(restored.title, "Renamed", "everything else is the snapshot's")
         // One that kept them, or whose parent had none, is left as it is.
-        XCTAssertEqual(parent.restoringPages(from: meeting([page()])).pages, [kept])
+        XCTAssertEqual(parent.restoringPages(from: parent), parent)
         XCTAssertNil(snapshot.restoringPages(from: meeting(nil)).pages)
         // Merging it with the copy that has them keeps them too, however the sides fall.
         let merged = assertLaws(parent, snapshot, parent).meeting
@@ -338,5 +342,98 @@ final class NotebookMergeTests: XCTestCase {
         XCTAssertNotNil(slow)
         let finite = await saving { $0.reading = NotebookFixtures.reading(of: $0.drawing!, [NotebookFixtures.passage($0.id, time: 5)]) }
         XCTAssertNil(finite)
+    }
+
+    // MARK: Fixes from review
+
+    func testBehaviorStaleSnapshotCannotRevertAPagesStrokes() async throws {
+        let root = makeTemporaryFolder("DaybookNotebookStale")
+        let store = try MeetingStore(rootURL: root.appendingPathComponent("Library"))
+        let first = NotebookFixtures.drawing(id, "d1", at: start.addingTimeInterval(10))
+        var meeting = Meeting(title: "Notebook")
+        var made = NotebookPage(id: id, order: 1, now: start)
+        made.drawing = first
+        meeting.addPage(made)
+        try await store.save(meeting)
+        let stale = meeting
+        // Strokes are committed and read, and an older one had been set aside.
+        let aside = NotebookFixtures.drawing(id, "aside", at: start.addingTimeInterval(5))
+        meeting.pages?[0].setAside = [aside]
+        meeting.commitPageDrawing(id, drawing: NotebookFixtures.drawing(id, "d2"), now: start.addingTimeInterval(100))
+        let second = try XCTUnwrap(meeting.page(id)?.drawing)
+        meeting.applyPageReading(id, reading: NotebookFixtures.reading(of: second, [NotebookFixtures.passage(id)]))
+        try await store.save(meeting)
+        try await store.save(stale)
+        let loaded = try await store.load(meeting.id)
+        let page = try XCTUnwrap(loaded.page(id))
+        XCTAssertEqual(page.drawing, second, "the later strokes stay the page's")
+        XCTAssertEqual(page.setAside?.map(\.sha256), [first.sha256, aside.sha256], "the snapshot's strokes are set aside, with what was set aside before")
+        XCTAssertEqual(page.reading?.drawingSHA256, second.sha256, "and the reading of them")
+        // A snapshot with no strokes at all can't take them either.
+        var bare = meeting
+        bare.pages = [NotebookPage(id: id, order: 1, now: start)]
+        try await store.save(bare)
+        let after = try await store.load(meeting.id)
+        XCTAssertEqual(after.page(id)?.drawing, second)
+        // A snapshot that is newer wins as always.
+        var newer = after
+        newer.commitPageDrawing(id, drawing: NotebookFixtures.drawing(id, "d3"), now: start.addingTimeInterval(300))
+        try await store.save(newer)
+        let latest = try await store.load(meeting.id)
+        XCTAssertEqual(latest.page(id)?.drawing?.sha256, NotebookFixtures.drawing(id, "d3").sha256)
+    }
+
+    func testBehaviorReadingByNewerGroupingWinsMergeAgainstOlderLaterOne() throws {
+        let base = page(tag: "base")
+        var a = base, b = base
+        let passage = NotebookFixtures.passage(id)
+        a.reading = NotebookFixtures.reading(of: base.drawing!, [passage], at: 100, grouping: PassageGrouping.version + 1)
+        b.reading = NotebookFixtures.reading(of: base.drawing!, [NotebookFixtures.passage(id, words: "older grouping")], at: 900)
+        let merged = try XCTUnwrap(assertLaws(meeting([base]), meeting([a]), meeting([b])).meeting.pages?.first)
+        XCTAssertEqual(merged.reading, a.reading, "the newer grouping, though read earlier")
+        XCTAssertTrue(merged.isReadingCurrent, "and this version takes it as current: nothing reads it again")
+        // Of one grouping, the later reading; of a reading of the chosen drawing against another, the chosen drawing's.
+        var c = b
+        c.reading = NotebookFixtures.reading(of: base.drawing!, [passage], at: 950)
+        XCTAssertEqual(assertLaws(meeting([base]), meeting([b]), meeting([c])).meeting.pages?.first?.reading, c.reading)
+    }
+
+    func testBehaviorMergeKeepsAncestorsPagesWhenBothSidesLackThem() {
+        let kept = page(UUID(), tag: "kept")
+        let base = meeting([kept])
+        let bare = meeting(nil, updated: 10), other = meeting(nil, updated: 20)
+        let merged = assertLaws(base, bare, other).meeting
+        XCTAssertEqual(merged.pages, [kept], "an older Daybook on both sides dropped them; neither means to")
+        XCTAssertNil(assertLaws(nil, bare, other).meeting.pages)
+    }
+
+    func testBehaviorRestoringPagesReaddsEveryMissingParentPage() {
+        let one = page(UUID(), order: 1, tag: "one"), two = page(UUID(), order: 2, tag: "two"), three = page(UUID(), order: 3, tag: "three")
+        let parent = meeting([three, one, two])
+        // A merge that kept one device's array whole: it has `one` and a page of its own, and lacks the others.
+        let own = page(UUID(), order: 2.5, tag: "own")
+        var snapshot = parent
+        snapshot.pages = [one, own]
+        let restored = snapshot.restoringPages(from: parent)
+        XCTAssertEqual(restored.pages?.map(\.id), [one.id, two.id, own.id, three.id], "in page order, nothing lost")
+        XCTAssertEqual(restored.restoringPages(from: parent), restored, "once")
+        // The snapshot's own copy of a page it has is kept, not replaced by the parent's.
+        var edited = one
+        edited.paper = .grid
+        snapshot.pages = [edited]
+        XCTAssertEqual(snapshot.restoringPages(from: parent).pages?.first { $0.id == one.id }?.paper, .grid)
+        XCTAssertEqual(snapshot.restoringPages(from: meeting(nil)), snapshot)
+    }
+
+    func testBehaviorPageDeletedAgainAndPutBackComesBack() throws {
+        var removedBase = page(tag: "base")
+        removedBase.removedAt = start.addingTimeInterval(100)
+        var putBack = removedBase
+        putBack.removedAt = nil
+        var deletedAgain = removedBase
+        deletedAgain.removedAt = start.addingTimeInterval(200)
+        let result = assertLaws(meeting([removedBase]), meeting([putBack], updated: 150), meeting([deletedAgain], updated: 250))
+        XCTAssertEqual(result.meeting.visiblePages.map(\.id), [id], "both changed it, and the page is back: nothing is hidden by a conflict")
+        XCTAssertTrue(result.meeting.revisions.contains { $0.field == "sync:page-removed:\(id)" }, "and the conflict is in History")
     }
 }

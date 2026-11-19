@@ -142,7 +142,7 @@ public enum MeetingMerge {
             }
         }
         // Pages are originals too: every copy's survive, merged field by field (NotebookPages+Merge.swift).
-        if local.pages != nil || remote.pages != nil {
+        if local.pages != nil || remote.pages != nil || base?.pages != nil {
             result.pages = NotebookPage.mergedList(base: base?.pages ?? [], local: local.pages ?? [], remote: remote.pages ?? []) { field, smaller, larger in
                 record(field, smaller, larger)
                 conflicted.insert("a page")

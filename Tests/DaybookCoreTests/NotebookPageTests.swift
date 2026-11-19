@@ -378,4 +378,75 @@ final class NotebookPageTests: XCTestCase {
         XCTAssertEqual(meeting.revisions.filter { $0.kind == .page(made.id) }.count, 1)
         XCTAssertEqual(meeting.revisions.filter { $0.kind == .page(kept.id) }.count, 0)
     }
+
+    // MARK: Fixes from review
+
+    func testBehaviorReadingByNewerGroupingIsCurrentHere() throws {
+        let id = UUID()
+        var page = NotebookFixtures.page(id)
+        page.reading = NotebookFixtures.reading(of: page.drawing!, [NotebookFixtures.passage(id)], grouping: PassageGrouping.version + 1)
+        XCTAssertTrue(page.isReadingCurrent, "a newer grouping's reading isn't read again by an older version")
+        XCTAssertFalse(page.needsReading)
+        XCTAssertEqual(page.reading?.groupingVersion, PassageGrouping.version + 1)
+        page.reading?.settings?.parameters["grouping"] = "garbage"
+        XCTAssertEqual(page.reading?.groupingVersion, 0)
+        XCTAssertTrue(page.needsReading)
+    }
+
+    func testBehaviorReadingByOlderGroupingIsRefusedForTheSameStrokes() throws {
+        let id = UUID()
+        let newer = PassageGrouping.version + 1
+        var meeting = NotebookFixtures.meeting(pages: [NotebookFixtures.page(id)])
+        let drawing = try XCTUnwrap(meeting.page(id)?.drawing)
+        meeting.applyPageReading(id, reading: NotebookFixtures.reading(of: drawing, [NotebookFixtures.passage(id, words: "newer")], grouping: newer))
+        meeting.applyPageReading(id, reading: NotebookFixtures.reading(of: drawing, [NotebookFixtures.passage(id, words: "older")], at: 500))
+        XCTAssertEqual(meeting.page(id)?.passages.first?.words, "newer")
+        // The same grouping again, or a newer, replaces it; and the first reading of other strokes is accepted whatever its grouping.
+        meeting.applyPageReading(id, reading: NotebookFixtures.reading(of: drawing, [NotebookFixtures.passage(id, words: "again")], at: 600, grouping: newer))
+        XCTAssertEqual(meeting.page(id)?.passages.first?.words, "again")
+        meeting.commitPageDrawing(id, drawing: NotebookFixtures.drawing(id, "next"), now: start.addingTimeInterval(900))
+        let next = try XCTUnwrap(meeting.page(id)?.drawing)
+        meeting.applyPageReading(id, reading: NotebookFixtures.reading(of: next, [NotebookFixtures.passage(id, words: "fresh")], at: 1_000))
+        XCTAssertEqual(meeting.page(id)?.passages.first?.words, "fresh")
+    }
+
+    func testBehaviorAdoptingRecordedPageWithNoBaseKeepsStrokesAndNotesAConflict() throws {
+        let existing = NotebookFixtures.page(order: 1, tag: "filed-before")
+        var meeting = NotebookFixtures.meeting(pages: [existing])
+        // Filing ran once and crashed before the staging folder went: it runs again with the same recorded page.
+        var recorded = existing
+        recorded.drawing = NotebookFixtures.drawing(existing.id, "recorded", at: start.addingTimeInterval(400))
+        meeting.adoptRecordedPages([RecordedPage(page: recorded, base: nil)], now: start.addingTimeInterval(500))
+        let page = try XCTUnwrap(meeting.page(existing.id))
+        XCTAssertEqual(page.drawing?.sha256, recorded.drawing?.sha256, "the recorded strokes aren't dropped")
+        XCTAssertEqual(page.setAside?.map(\.sha256), [existing.drawing!.sha256], "and the other are set aside, files kept")
+        XCTAssertTrue(meeting.revisions.contains { $0.field == "sync:page-drawing:\(existing.id)" }, "with the usual History entry")
+        // Again: nothing changes, and the entry isn't repeated.
+        let again = meeting
+        meeting.adoptRecordedPages([RecordedPage(page: recorded, base: nil)], now: start.addingTimeInterval(600))
+        XCTAssertEqual(meeting.pages, again.pages)
+        XCTAssertEqual(meeting.revisions.count, again.revisions.count)
+    }
+
+    func testBehaviorNestedTypesKeepUnknownKeys() throws {
+        func roundTrip<T: Codable & Equatable>(_ type: T.Type, _ json: String, key: String, file: StaticString = #filePath, line: UInt = #line) throws {
+            let decoded = try JSONDecoder().decode(T.self, from: Data(json.utf8))
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+            let written = try XCTUnwrap(JSONSerialization.jsonObject(with: encoder.encode(decoded)) as? [String: Any])
+            XCTAssertNotNil(written[key], "\(T.self) keeps \(key)", file: file, line: line)
+            XCTAssertEqual(try JSONDecoder().decode(T.self, from: encoder.encode(decoded)), decoded, file: file, line: line)
+        }
+        try roundTrip(PhotoOrigin.self, #"{"kind":"mac","name":"Studio","future":{"a":1}}"#, key: "future")
+        try roundTrip(ProcessingSettings.self, #"{"modelID":"m","parameters":{"a":"b"},"createdAt":1,"future":[1,2]}"#, key: "future")
+        try roundTrip(PhotoAnalysis.self, #"{"isInformative":true,"createdAt":1,"future":"x"}"#, key: "future")
+        // Known data is written exactly as before: no extra keys.
+        let origin = PhotoOrigin(kind: "mac", serial: nil, name: "Studio")
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        XCTAssertEqual(String(decoding: try encoder.encode(origin), as: UTF8.self), #"{"kind":"mac","name":"Studio"}"#)
+        XCTAssertEqual(origin.hashValue, PhotoOrigin(kind: "mac", serial: nil, name: "Studio").hashValue)
+        let settings = ProcessingSettings(modelID: "m", parameters: [:], createdAt: Date(timeIntervalSinceReferenceDate: 1))
+        XCTAssertEqual(String(decoding: try encoder.encode(settings), as: UTF8.self), #"{"createdAt":1,"modelID":"m","parameters":{}}"#)
+        XCTAssertEqual(String(decoding: try encoder.encode(PhotoAnalysis(createdAt: Date(timeIntervalSinceReferenceDate: 1))), as: UTF8.self),
+                       #"{"createdAt":1,"isInformative":true}"#)
+    }
 }

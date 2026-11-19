@@ -58,10 +58,24 @@ final class RecordingClockMapTests: XCTestCase {
         XCTAssertLessThanOrEqual(long.count, RecordingClockMap.capacity)
         XCTAssertEqual(long.last?.at, start.addingTimeInterval(5_999 * 6))
         XCTAssertEqual(long.map(\.at), long.map(\.at).sorted())
-        XCTAssertGreaterThan(long.count, 3_000, "thinned, not emptied")
+        XCTAssertGreaterThanOrEqual(long.count, RecordingClockMap.capacity * 3 / 4, "thinned, not emptied")
         for index in stride(from: 999, to: 6_000, by: 1_000) {
             XCTAssertTrue(long.contains { $0.at == start.addingTimeInterval(Double(index) * 6) && !$0.running }, "the pause at \(index) is kept")
         }
         XCTAssertEqual(long.first?.at, start, "the very first sample is kept")
+    }
+
+    func testBehaviorThinningKeepsGapsEvenAcrossAVeryLongRecording() {
+        var samples: [RecordingClockSample] = []
+        for index in 0..<20_000 { samples = RecordingClockMap.appending(sample(Double(index) * 5, Double(index) * 5), to: samples) }
+        let length = 19_999 * 5.0
+        XCTAssertLessThanOrEqual(samples.count, RecordingClockMap.capacity)
+        XCTAssertEqual(samples.first?.at, start)
+        XCTAssertEqual(samples.last?.at, start.addingTimeInterval(length))
+        let gaps = zip(samples, samples.dropFirst()).map { $1.at.timeIntervalSince($0.at) }
+        let even = length / Double(RecordingClockMap.capacity)
+        XCTAssertLessThanOrEqual(gaps.max() ?? 0, even * 4, "no stretch of the recording is left without a sample")
+        // A passage written early still gets a time late in the recording.
+        XCTAssertNotNil(RecordingClockMap.elapsed(at: start.addingTimeInterval(1_000), samples: samples))
     }
 }

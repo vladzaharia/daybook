@@ -219,11 +219,14 @@ public struct ProcessingSettings: Codable, Equatable, Sendable {
     /// (docs/models.md). Nil for results made before the model system recorded it; those name their
     /// model through `modelID`, which the catalog's migration table still resolves.
     public var model: ModelProvenance?
+    /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
+    public var unknownFields = UnknownFields()
     public init(modelID: String, parameters: [String: String] = [:], createdAt: Date = Date(), model: ModelProvenance? = nil) {
         self.modelID = modelID; self.parameters = parameters; self.createdAt = createdAt; self.model = model
     }
 
-    private enum CodingKeys: String, CodingKey { case modelID, parameters, createdAt, model }
+    private enum CodingKeys: String, CodingKey, CaseIterable { case modelID, parameters, createdAt, model }
+    private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
 
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -232,6 +235,16 @@ public struct ProcessingSettings: Codable, Equatable, Sendable {
         createdAt = try values.decode(Date.self, forKey: .createdAt)
         // Provenance a newer Daybook wrote differently is dropped, never a reason to reject the meeting.
         model = (try? values.decodeIfPresent(ModelProvenance.self, forKey: .model)) ?? nil
+        unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(modelID, forKey: .modelID)
+        try values.encode(parameters, forKey: .parameters)
+        try values.encode(createdAt, forKey: .createdAt)
+        try values.encodeIfPresent(model, forKey: .model)
+        try unknownFields.encode(to: encoder)
     }
 }
 

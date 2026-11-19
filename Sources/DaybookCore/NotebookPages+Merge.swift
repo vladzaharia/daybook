@@ -43,6 +43,8 @@ extension NotebookPage {
         result.sketches = mergedSketches(local.sketches, remote.sketches, reading: result.reading)
         result.hiddenFromSummary = pick("page-summary:\(id)", local.hiddenFromSummary, remote.hiddenFromSummary, base.map(\.hiddenFromSummary))
         // A deletion and an edit made apart: the deletion stands, and a Put Back made later wins over it.
+        // When both changed it (one put the page back, the other deleted it again) the greater encoding stays, and `null`
+        // is greater than any date: the page comes back, and nothing is hidden by a conflict. A decision, pinned by a test.
         // With no ancestor, a deletion on one side is a deletion.
         if base == nil, local.removedAt == nil || remote.removedAt == nil {
             result.removedAt = local.removedAt ?? remote.removedAt
@@ -87,7 +89,7 @@ extension NotebookPage {
     }
 
     /// Drawings no copy chose, by digest, newest first, without the one chosen. Nil when none.
-    private static func mergedSetAside(_ a: [PageDrawing]?, _ b: [PageDrawing]?, _ beaten: PageDrawing?, chosen: PageDrawing?) -> [PageDrawing]? {
+    static func mergedSetAside(_ a: [PageDrawing]?, _ b: [PageDrawing]?, _ beaten: PageDrawing?, chosen: PageDrawing?) -> [PageDrawing]? {
         var byDigest: [String: PageDrawing] = [:]
         for drawing in (a ?? []) + (b ?? []) + [beaten].compactMap({ $0 }) where drawing.sha256 != chosen?.sha256 {
             if let held = byDigest[drawing.sha256],
@@ -98,13 +100,14 @@ extension NotebookPage {
         return sorted.isEmpty ? nil : sorted
     }
 
-    /// A reading is a measurement: of the two, one of the chosen drawing, the later; with none of it, the later.
+    /// A reading is a measurement. Of the two, the better: one of the chosen drawing, then by the newer grouping (so a
+    /// version never undoes a newer one's reading, which it would then be read again for forever), then the later, then
+    /// the greater encoding.
     private static func mergedReading(_ a: PageReading?, _ b: PageReading?, drawing: PageDrawing?) -> PageReading? {
-        let all = [a, b].compactMap { $0 }
-        let ofChosen = all.filter { $0.drawingSHA256 == drawing?.sha256 }
-        return (ofChosen.isEmpty ? all : ofChosen).max { lhs, rhs in
-            (lhs.readAt, SyncEncoding.string(lhs)) < (rhs.readAt, SyncEncoding.string(rhs))
+        func rank(_ reading: PageReading) -> (Int, Int, Date, String) {
+            (reading.drawingSHA256 == drawing?.sha256 ? 1 : 0, reading.groupingVersion, reading.readAt, SyncEncoding.string(reading))
         }
+        return [a, b].compactMap { $0 }.max { rank($0) < rank($1) }
     }
 
     /// Each passage's correction, three-way: absence on one side where the ancestor had it is a removal. With no
@@ -145,13 +148,34 @@ extension NotebookPage {
     }
 }
 
-extension Meeting {
-    /// This snapshot with the pages of `parent`, when it carries none while its parent did: it was written by a Daybook
-    /// that predates pages and drops what it doesn't know on edit.
-    func restoringPages(from parent: Meeting) -> Meeting {
-        guard pages == nil, let parentPages = parent.pages else { return self }
+extension NotebookPage {
+    /// This page, a snapshot's copy, with the strokes the stored copy has that it lacks: a snapshot made before the
+    /// stored copy's later commit can't take them back. The later drawing stays the page's, the other is set aside (its
+    /// file is kept), and the stored copy's set-aside drawings and reading of the kept drawing come along.
+    func keepingStrokes(of stored: NotebookPage) -> NotebookPage {
         var result = self
-        result.pages = parentPages
+        if let kept = stored.drawing, drawing == nil || (kept.sha256 != drawing?.sha256 && kept.editedAt > drawing!.editedAt) {
+            let replaced = drawing
+            result.drawing = kept
+            result.setAside = Self.mergedSetAside(setAside, stored.setAside, replaced, chosen: kept)
+            if let reading = stored.reading, reading.drawingSHA256 == kept.sha256 { result.reading = reading }
+        } else if let stored = stored.setAside {
+            result.setAside = Self.mergedSetAside(setAside, stored, nil, chosen: drawing)
+        }
+        return result
+    }
+}
+
+extension Meeting {
+    /// This snapshot with every page of `parent` it lacks, in page order: it was written by a Daybook that predates pages,
+    /// which drops what it doesn't know on edit, or keeps one whole `pages` array when two changed apart. No Daybook that
+    /// knows pages ever removes one (deleting marks it), so a page missing here was lost.
+    func restoringPages(from parent: Meeting) -> Meeting {
+        let known = Set((pages ?? []).map(\.id))
+        let missing = (parent.pages ?? []).filter { !known.contains($0.id) }
+        guard !missing.isEmpty else { return self }
+        var result = self
+        result.pages = ((pages ?? []) + missing).sorted(by: NotebookPage.precedes)
         return result
     }
 }

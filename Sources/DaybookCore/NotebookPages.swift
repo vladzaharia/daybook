@@ -183,6 +183,11 @@ public struct PageReading: Codable, Equatable, Sendable {
         self.drawingSHA256 = drawingSHA256; self.passages = passages; self.readAt = readAt; self.settings = settings
     }
 
+    /// The grouping that made the passages (0 when none is recorded). A newer version's grouping stands here: a page is
+    /// read again only by an older grouping than this version's, never by a newer one, so two versions never undo each
+    /// other's readings.
+    public var groupingVersion: Int { Int(settings?.parameters["grouping"] ?? "") ?? 0 }
+
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case drawingSHA256, passages, readAt, settings
     }
@@ -377,7 +382,7 @@ extension NotebookPage {
     /// The reading was made from the current strokes, by this version's grouping.
     public var isReadingCurrent: Bool {
         guard let reading, let drawing else { return false }
-        return reading.drawingSHA256 == drawing.sha256 && reading.settings?.parameters["grouping"] == String(PassageGrouping.version)
+        return reading.drawingSHA256 == drawing.sha256 && reading.groupingVersion >= PassageGrouping.version
     }
 
     /// There are strokes, and no reading of them by this version's grouping yet.
