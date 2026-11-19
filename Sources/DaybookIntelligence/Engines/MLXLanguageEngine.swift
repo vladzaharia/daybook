@@ -176,7 +176,7 @@ public struct MLXLanguageEngine: ModelEngine {
 }
 
 /// A loaded MLX language model.
-final class MLXSummarizer: Summarizing, Sendable {
+final class MLXSummarizer: Summarizing, AnsweringQuestions, Sendable {
     private let model: Mutex<MLXSynthesisModel?>
     private let loadSeconds: Double
 
@@ -199,6 +199,17 @@ final class MLXSummarizer: Summarizing, Sendable {
         statistics.loadSeconds = loadSeconds
         notes.statistics = statistics
         return notes
+    }
+
+    func answer(_ evidence: AskEvidence, closest: [UUID], query: AskQuery?, progress: @escaping IntelligenceProgressHandler,
+                sentence: @escaping @Sendable (AskSentence) -> Void) async throws -> AskReply {
+        guard let model = model.withLock({ $0 }) else { throw LocalIntelligenceError.modelNotInstalled("") }
+        model.resetStatistics()
+        progress(.init(0, "Answering"))
+        let answer = try await AskSynthesis.answer(evidence, model: model, closest: closest, query: query, sentence: sentence)
+        var statistics = model.statistics
+        statistics.loadSeconds = loadSeconds
+        return AskReply(answer: answer, statistics: statistics)
     }
 
     /// Drops the weights, then the MLX allocator's cache, which otherwise keeps freed buffers.
