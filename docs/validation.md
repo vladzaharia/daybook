@@ -1,5 +1,52 @@
 # Validation record
 
+## Ask across conversations, engine (2026-11-18)
+
+The first half of "Ask across conversations": the in-memory index, the question parser, retrieval, and the answering step
+with its quote check, with no interface yet (docs/architecture.md, "Ask across conversations"). On `feature/ask-engine`.
+
+**The evaluation library.** `Tests/DaybookKitTests/AskEvaluation`: 20 invented conversations (people Sam, Priya, Alex,
+Dana, and Tomas; customers and vendors such as Orchard & Vane, Kestrel Logistics, and Fennimore Cloud) from September
+to November 2026, 7 of them with a summary, 2 of them Personal decoys, with decisions made and reversed, the same
+person's commitments across months, one person taking another's, a "pricing page" design review beside the pricing
+decision, facts said only in other words than the question's, and facts only in a note or a bookmark; and 60 questions
+with expected key facts and expected passages (decision 10, commitment 10, latest wins 6, counts and lists 6, one
+conversation 6, paraphrase 8, note or bookmark 3, Personal decoys 2, unanswerable 9). A third (20, every third in file
+order) is held out. Nothing in it comes from a real library.
+
+**Retrieval recall** (`AskRetrievalEvaluationTests`, deterministic, no model, in CI). Over the 49 answerable questions
+that aren't Personal decoys. "At 1" and "at 3": an expected passage, note, or bookmark is among the first one or three
+ranked pieces; "given to the model": it is in the passages, notes, and bookmarks the model would read (the 4,000-token
+budget).
+
+| Questions | Count | At 1 | At 3 | Given to the model |
+| --- | --- | --- | --- | --- |
+| Tuning | 33 | 23 (69.7%) | 29 (87.9%) | 31 (93.9%) |
+| Held out | 16 | 12 (75.0%) | 14 (87.5%) | 15 (93.8%) |
+
+Tuning changed three things, each chosen from the tuning set's misses and what retrieval should do, not from the held-out
+questions: a question about commitments reads passages in the words of a promise by the person it names even when it
+shares no word with them ("what did Sam commit to" shares none with "I'll send it"); a question asked about one
+conversation reads it whatever it shares; and the floor is lower in a small library, where no word can weigh as much.
+Before these, the tuning set found the evidence for 72.7% (24 of 33), and the held-out set's 13 of 16 had been printed
+once by the test's first run. Honestly: that aggregate was seen before tuning, and no held-out question was looked at.
+Still missed: "when did we talk about someone being burned out?" (the passage says "wiped out"; no shared word: the
+paraphrase gap the design expected) and "what did I mark in the launch retro?" (the bookmark's words share nothing
+with the question and titles aren't indexed). The synthetic score is an upper bound: the same hands wrote the library
+and the ranking.
+
+**Before any model runs.** Retrieval alone ended 3 of the 9 unanswerable questions (the August one, whose dates hold no
+conversation, and two with no word in the library); the other 6 reach the model, which has to say "not found" (not
+measured). With the Personal lock locked, none of the 60 questions read or ranked either Personal conversation.
+
+**Not measured.** Answer quality (correct, wrong, not found, and how many sentences the quote check drops), the bars
+for abstention and correctness, and latency: `Daybook --ask-eval` needs an installed summary model, and this Mac has
+none for this session to use (`~/Library/Application Support/Daybook Development` doesn't exist, and no model was
+downloaded). The flag was run against an empty models folder and stops saying so. The model-free tests cover the
+prompt byte for byte, the quote check (case, apostrophes, timestamps, ellipsis, unknown labels, quotes that are
+elsewhere, a broken-off reply, the free-form fallback, notes and bookmarks), the three "not found" cases, waiting
+behind a running job, and cancelling.
+
 ## Long summaries: the usable window, the cloud when it does better, effort, and placements (2026-11-16)
 
 The owner: smaller models can't handle large transcripts; use each local model's whole usable context, fall back to a
