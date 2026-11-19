@@ -381,6 +381,7 @@ private struct PhoneMergeConfirmation: ViewModifier {
               })
           },
           photo: { photo, id in try await provider.localPhoto(for: photo, in: id) },
+          pageDrawing: { drawing, id in try await provider.localPageDrawing(for: drawing, in: id) },
           context: { PhoneActions.mergeContext($0, recordingOnMac: recordingOnMac()) },
           process: { id, mode in PhoneActions.process(id, mode, library: library, placement: placement) })
         for id in ids where id != survivor { session.forget(id) }
