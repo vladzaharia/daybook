@@ -207,6 +207,8 @@ struct PhoneCaptureJournal: Codable, Equatable, Sendable {
     /// The recorder's clock as the notebook sampled it (`RecordingClockMap`), so a recovered recording can still time
     /// passages and keep the samples with its track. Nil when no page was written.
     var pageClock: [RecordingClockSample]?
+    /// When the notebook's open pages changed, against the recording clock (`PageTurn`). Nil when none did.
+    var pageTurns: [PageTurn]?
     /// The Macs it's recorded with; nil when none (and in journals written before multipoint was kept).
     var multipoint: CaptureMultipoint?
     /// Paragraphs and bookmarks a Mac recording this conversation too wrote over the link, as that Mac
@@ -298,6 +300,8 @@ struct PhoneRecording: Sendable, Equatable {
     var pages: [CapturePage] = []
     /// The recorder's clock as the notebook sampled it.
     var pageClock: [RecordingClockSample] = []
+    /// The notebook's page turns, in the recording's seconds.
+    var pageTurns: [PageTurn] = []
     /// The Macs it was recorded with, as the journal kept them (for a recovered recording).
     var multipoint: CaptureMultipoint?
     /// What a Mac recording along wrote over the link, as that Mac files it (`PhoneCaptureJournal.sharedNotes`).

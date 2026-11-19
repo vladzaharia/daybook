@@ -33,11 +33,17 @@ struct RecorderScreen: View {
     @State private var sheetExpansion: RecorderSheetSize?
     /// How the notes are being written: shared by the notes and Write by Hand in the sheet, and kept through folding.
     @State private var inkSession = InkSession()
+    /// The notebook is open in place of the recorder (docs/notebook.md): kept through folds, so folding shut shows one page and
+    /// opening it again returns to two; table mode replaces it while partly open and gives it back when flat again.
+    @State private var notebookOpen = false
+    @State private var notebook = NotebookSession()
 
     var body: some View {
         Group {
             if let afterStop, !model.recorder.isActive {
                 PhoneAfterStop(afterStop: afterStop, style: style, done: done)
+            } else if notebookOpen, style != .table {
+                notebookScreen
             } else {
                 recorder
             }
@@ -46,6 +52,8 @@ struct RecorderScreen: View {
         .background(DaybookPalette.paper.ignoresSafeArea())
         .onAppear {
             if let launch = model.options.recorderSheet { sheetExpansion = launch }
+            notebook.startsCollapsed = model.options.notebookCollapsed
+            if model.options.notebook { notebookOpen = true }
             levels.adopt(model.levels, for: .microphone)
             runLevels()
             // VoiceOver: the screen changed under the person's finger; it starts on the clock.
@@ -75,20 +83,41 @@ struct RecorderScreen: View {
                 .daybookSurface(.column, density: .touch)
         case .notebook:
             GeometryReader { proxy in
-                surface(asleep: false)
-                    .daybookSurface(.spread(crease: CreaseGeometry.crease(width: proxy.size.width, leadingInset: proxy.safeAreaInsets.leading,
-                                                                          trailingInset: proxy.safeAreaInsets.trailing)), density: .touch)
+                let crease = CreaseGeometry.crease(width: proxy.size.width, leadingInset: proxy.safeAreaInsets.leading,
+                                                   trailingInset: proxy.safeAreaInsets.trailing)
+                surface(asleep: false, notebookFits: NotebookLayout.resolve(size: proxy.size, crease: crease, page: Self.pageSize).isSpread)
+                    .daybookSurface(.spread(crease: crease), density: .touch)
             }
         case .table:
             TableRecording { asleep, writing in surface(asleep: asleep, writing: writing) }
         }
     }
 
-    private func surface(asleep: Bool, writing: Binding<Bool> = .constant(false)) -> RecorderSurface {
+    private static let pageSize = CGSize(width: NotebookPage.a5.width, height: NotebookPage.a5.height)
+
+    /// The notebook in place of the recorder: two pages split at the crease when they fit, one page otherwise (folded shut,
+    /// or any display too narrow for two).
+    @ViewBuilder private var notebookScreen: some View {
+        GeometryReader { proxy in
+            let crease: CGFloat? = style == .notebook
+                ? CreaseGeometry.crease(width: proxy.size.width, leadingInset: proxy.safeAreaInsets.leading, trailingInset: proxy.safeAreaInsets.trailing)
+                : nil
+            NotebookScreen(session: notebook, notesInk: inkSession, state: surfaceState(asleep: false), actions: surfaceActions(), levels: levels,
+                           close: { notebookOpen = false }, crease: crease)
+        }
+    }
+
+    private func surface(asleep: Bool, writing: Binding<Bool> = .constant(false), notebookFits: Bool = false) -> RecorderSurface {
+        RecorderSurface(state: surfaceState(asleep: asleep), levels: levels, actions: surfaceActions(),
+                        slots: slots(writing: writing, notebookFits: notebookFits), writing: writing, clockFocus: $clockFocused,
+                        sheetExpansion: $sheetExpansion)
+    }
+
+    private func surfaceState(asleep: Bool) -> RecorderSurfaceState {
         let inputs = PhoneRecorderStatus.inputs(model)
         let recorder = model.recorder
         let started = recorder.startedAt ?? Date()
-        let state = RecorderSurfaceState(
+        return RecorderSurfaceState(
             phase: RecordingStatusWords.phase(inputs),
             title: recorder.title,
             byline: ["Today", started.formatted(date: .omitted, time: .shortened)].joined(separator: " · "),
@@ -102,16 +131,17 @@ struct RecorderScreen: View {
             pause: PhoneRecorderStatus.pause(recorder.state, message: recorder.pauseMessage, canResume: recorder.canResume),
             asleep: asleep,
             hasNotice: RecordingNotice.isShowing(model))
+    }
+
+    private func surfaceActions() -> RecorderSurfaceActions {
         let model = self.model
-        let actions = RecorderSurfaceActions(
+        return RecorderSurfaceActions(
             bookmark: { Task { try? await model.addBookmark() } },
             stop: { Task { try? await model.stopRecording() } },
             resume: { Task { try? await model.resumeRecording() } })
-        return RecorderSurface(state: state, levels: levels, actions: actions, slots: slots(writing: writing), writing: writing,
-                               clockFocus: $clockFocused, sheetExpansion: $sheetExpansion)
     }
 
-    private func slots(writing: Binding<Bool>) -> RecorderSlots {
+    private func slots(writing: Binding<Bool>, notebookFits: Bool = false) -> RecorderSlots {
         let session = inkSession
         // Write by Hand between Bookmark and Stop: a finger writes on the notes, and the tools dock under them.
         let write: (RecorderControlMetrics) -> AnyView = { AnyView(WriteByHandControl(session: session, metrics: $0)) }
@@ -141,8 +171,13 @@ struct RecorderScreen: View {
                 ? AnyView(PhoneCaptions(style: typeSize.isAccessibilitySize ? .stripNewest : .page)
                     .dynamicTypeSize(...DynamicTypeSize.xxxLarge))
                 : AnyView(ScrollView { BookmarkLog().padding(.top, DaybookSpacing.s1) }.scrollBounceBehavior(.basedOnSize))
+            // Notebook sits beside the camera while two pages fit.
+            let accessory = AnyView(HStack(spacing: DaybookSpacing.s1) {
+                if notebookFits { NotebookButton { notebookOpen = true } }
+                CameraControl.phaseRow
+            })
             return RecorderSlots(notes: AnyView(RecordingNotes(session: session, focusOnAppear: focus)), captions: captions,
-                                 accessory: AnyView(CameraControl.phaseRow), details: AnyView(LiveTimelineBar()), notice: AnyView(RecordingNotice()),
+                                 accessory: accessory, details: AnyView(LiveTimelineBar()), notice: AnyView(RecordingNotice()),
                                  write: write, menu: { AnyView(PhoneChipMenu(chip: $0)) })
         case .table:
             return RecorderSlots(notes: AnyView(RecordingNotes(session: session, focusOnAppear: writing.wrappedValue)),
@@ -309,5 +344,22 @@ private struct TableTools: View {
             .foregroundStyle(DaybookPalette.Ink.secondary)
             .lineLimit(1)
             .accessibilityHidden(true)
+    }
+}
+
+/// Opens the notebook from the recorder: the same size as the camera beside it, a 44 pt target.
+struct NotebookButton: View {
+    let open: () -> Void
+
+    var body: some View {
+        Button(action: open) {
+            Image(systemName: "book.pages")
+                .font(.system(size: 34 * 0.4, weight: .medium))
+                .foregroundStyle(DaybookPalette.Ink.title)
+                .frame(width: 34, height: 34)
+                .contentShape(Circle().inset(by: -5))
+        }
+        .padding(.vertical, -DaybookSpacing.s2)
+        .accessibilityLabel("Notebook")
     }
 }

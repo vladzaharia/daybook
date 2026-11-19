@@ -193,7 +193,7 @@ final class PhoneLibrary {
         }
         try await addCapturedPhotos(recording, track: track.id)
         // Pages follow the track as photos do, and the recorder's clock samples go with it.
-        try await filePages(recording.pages, clock: recording.pageClock, from: recording.stagingDirectory, in: id, placing: .track(track.id))
+        try await filePages(recording.pages, clock: recording.pageClock, turns: recording.pageTurns, from: recording.stagingDirectory, in: id, placing: .track(track.id))
         let request = requestTranscription ? controller.requestProcessing(id, mode: .newAudio) : nil
         claimIfProcessedHere(request, in: id)
         // This conversation is on disk before its staging goes; another one that can't be saved

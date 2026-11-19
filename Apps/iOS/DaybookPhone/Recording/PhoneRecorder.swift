@@ -128,6 +128,8 @@ final class PhoneRecorder {
     private(set) var pages: [CapturePage] = []
     /// The recorder's clock as the notebook sampled it (`sampleClock`): filed with the recording's track.
     private(set) var pageClock: [RecordingClockSample] = []
+    /// When the notebook's open pages changed during this recording (`logPageTurn`): filed with the conversation.
+    private(set) var pageTurns: [PageTurn] = []
     private(set) var inputRoute: AudioInputRoute?
     /// The interruption ended; recording can continue.
     private(set) var canResume = false
@@ -255,7 +257,7 @@ final class PhoneRecorder {
         lastError = nil; lastFailure = nil; unexpectedStop = nil; unfinishedFolder = nil; waitingCapture = nil; canResume = false; pauseMessage = nil
         captureID = id; self.recordingID = recordingID; self.title = title; startedAt = nil
         notes = ""; timedNotes = []; ink = []; highlights = []; photos = []; sharedNotes = [:]; sharedBookmarks = [:]
-        pages = []; pageClock = []; loadedDrawings = []; drafts = [:]; draftWrites.values.forEach { $0.cancel() }; draftWrites = [:]
+        pages = []; pageClock = []; pageTurns = []; loadedDrawings = []; drafts = [:]; draftWrites.values.forEach { $0.cancel() }; draftWrites = [:]
         level = .silent; isMicrophoneSilent = false; lastHeardSpeechAt = nil
         do {
             guard !FileManager.default.fileExists(atPath: PhoneCaptureJournal.url(in: directory).path) else {
@@ -638,6 +640,12 @@ final class PhoneRecorder {
         editPage(pageID) { $0.correctPassage(pageID: pageID, passageID: passageID, text: text, now: environment.clock.now()) }
     }
 
+    /// Strokes taken out of a page since its last commit, with when they were made and erased (`ErasedStroke`); a page's erasures are
+    /// filed with it, merged with those the conversation already held.
+    func recordErasures(pageID: UUID, _ erased: [ErasedStroke]) {
+        editPage(pageID) { $0.recordErasures(erased, on: pageID, now: environment.clock.now()) }
+    }
+
     /// Deletes a page; its strokes stay in the file, and it can be put back.
     func removePage(_ pageID: UUID) {
         editPage(pageID) { $0.removePage(pageID, at: environment.clock.now()) }
@@ -654,6 +662,16 @@ final class PhoneRecorder {
         pageClock = RecordingClockMap.appending(RecordingClockSample(at: environment.clock.now(), elapsed: elapsedTime, running: state == .recording),
                                                 to: pageClock)
         journal?.pageClock = RecordingClockMap.filed(pageClock)
+    }
+
+    /// The notebook's open pages changed (or it closed: no pages), `turn.time` in the recording's seconds. Oldest first, bounded
+    /// as a conversation's turns are (`PageTurn.capacity`).
+    func logPageTurn(_ turn: PageTurn) {
+        var scratch = Meeting(title: title)
+        scratch.pageTurns = pageTurns
+        scratch.logPageTurn(turn)
+        pageTurns = scratch.pageTurns ?? []
+        savePages()
     }
 
     /// The pages as the journal holds them: without the copy each was loaded as, which is in a file of its own, written once.
@@ -689,6 +707,7 @@ final class PhoneRecorder {
     private func savePages() {
         journal?.pages = pages.isEmpty ? nil : pagesForJournal
         journal?.pageClock = pageClock.isEmpty ? nil : RecordingClockMap.filed(pageClock)
+        journal?.pageTurns = pageTurns.isEmpty ? nil : pageTurns
         persistJournal()
         onChange?()
     }

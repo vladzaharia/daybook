@@ -100,6 +100,25 @@ extension Meeting {
         updatedAt = date
     }
 
+    /// Keeps the strokes taken out of a page since its last commit (`ErasedStroke`) with the page, since PencilKit keeps only the
+    /// strokes a drawing has now. One entry per stroke; the oldest go past `ErasedStroke.capacity`. Not recorded in Version History.
+    public mutating func recordErasures(_ erased: [ErasedStroke], on pageID: UUID, now: Date = Date()) {
+        guard !erased.isEmpty, let index = pages?.firstIndex(where: { $0.id == pageID }) else { return }
+        let merged = ErasedStroke.merged(pages?[index].erased, erased)
+        guard merged != pages?[index].erased else { return }
+        pages?[index].erased = merged
+        pages?[index].updatedAt = now
+        updatedAt = max(updatedAt, now)
+    }
+
+    /// Logs the notebook's open pages changing (`PageTurn`), against the recording clock. Turns are kept oldest first and bounded.
+    public mutating func logPageTurn(_ turn: PageTurn) {
+        let merged = PageTurn.merged(pageTurns, [turn])
+        guard merged != pageTurns else { return }
+        pageTurns = merged
+        updatedAt = max(updatedAt, turn.at)
+    }
+
     /// Takes the pages a recording wrote on filing. A page made during the recording is added; one the recording loaded
     /// from the conversation is merged three-way with the copy it loaded (`NotebookPage.merged`), so what was changed
     /// elsewhere meanwhile survives, and a drawing the merge sets aside is in Version History as in any merge.

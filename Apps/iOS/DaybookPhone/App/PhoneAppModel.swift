@@ -121,6 +121,11 @@ final class PhoneAppModel: RecordingCommandHandling {
     @ObservationIgnored private var speakerPass: (id: UUID, task: Task<Void, Never>)?
     /// Recorders recording along: their live audio's captions join this iPhone's.
     @ObservationIgnored let recorderCaptions = LiveCaptureCaptions()
+    /// Settles the open notebook's pages (commits their strokes): Stop waits for it, from wherever it came, so what was just
+    /// written is in the recording. Set while the notebook is open.
+    @ObservationIgnored var settleNotebook: (() async -> Void)?
+    /// Drawings of the conversation's pages fetched to this iPhone, by SHA-256, for a recording that loaded them (`NotebookModel.recording`).
+    @ObservationIgnored var fetchedPageDrawings: [String: URL] = [:]
     /// Heat, power, and battery changes the processor backs off for.
     @ObservationIgnored private var processingObservers: [NSObjectProtocol] = []
     /// The iPhone locking and unlocking, which the Live Activity's caption follows.
@@ -729,6 +734,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         do {
             try await recorder.start(in: directory, id: id, recordingID: recordingID, title: title)
             recorder.setMultipoint(multipoints.session?.journaled)
+            loadNotebookPages(of: id)
         } catch {
             multipoints.session = nil
             recorder.audioTap = nil
@@ -783,6 +789,8 @@ final class PhoneAppModel: RecordingCommandHandling {
             return
         }
         guard recorder.isActive else { throw RecordingCommandError.notRecording }
+        // The notebook's open pages are committed first (at most two seconds), so what was just written is in the recording.
+        await settleNotebook?()
         // A stop from a Mac (it asked, or this iPhone follows it) doesn't go back to that Mac.
         let cascadesUp = !multipoints.stopIsFromMac
         multipoints.stopIsFromMac = false

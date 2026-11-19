@@ -4,7 +4,10 @@ import DaybookCore
 import DaybookDevices
 import DaybookKit
 import DaybookLink
+import DaybookUI
 import Foundation
+import PencilKit
+import UIKit
 
 // The debug launch scripts (`DebugLaunch`): a scripted recording, a paired Mac, the simulated recorder
 // added and importing, its handoff states, and a Mac's presence in a sync folder, for screenshots. Nothing
@@ -19,6 +22,42 @@ extension PhoneAppModel {
         addInk(NoteInk(drawing: SyntheticInk.drawing("world hello").dataRepresentation(), width: 440, height: 96), after: nil)
     }
 
+    /// `--demo-pages`: three pages written during the recording, in several colours with a sketch, read and one corrected: what
+    /// the notebook's screenshots show. Written some seconds in, so the passages have recording times.
+    func runPagesDemo() async {
+        try? await Task.sleep(for: .seconds(12))
+        guard recorder.isActive else { return }
+        let ink = InkColor.self
+        // Strokes are stamped from now on, so the clock sample taken now places each passage.
+        recorder.sampleClock()
+        let begun = Date()
+        func words(_ text: String, _ x: CGFloat, _ y: CGFloat, after: TimeInterval, _ colour: InkColor = .black) -> SyntheticInk.Passage {
+            .init(.words(text), at: CGPoint(x: x, y: y), size: 34, after: after, color: colour.uiColor.cgColor)
+        }
+        let drawings: [PKDrawing] = [
+            SyntheticInk.page(passages: [words("hello world", 66, 70, after: 0), words("world hello", 66, 150, after: 8, ink.blue),
+                                         words("hello", 66, 236, after: 14, ink.red), words("world", 66, 320, after: 20, ink.green),
+                                         words("hello hello", 66, 400, after: 26, ink.orange)], start: begun),
+            SyntheticInk.page(passages: [.init(.sketch, at: CGPoint(x: 80, y: 120), size: 150, after: 4, color: ink.blue.uiColor.cgColor),
+                                         words("hello", 66, 400, after: 12, ink.red)], start: begun),
+            SyntheticInk.page(passages: [words("world hello", 66, 70, after: 0), words("hello", 66, 160, after: 8, ink.green)], start: begun),
+        ]
+        var pages: [NotebookPage] = []
+        for (index, drawing) in drawings.enumerated() {
+            var page = NotebookPage(order: Double(index + 1), origin: .thisIPhone(installation: library.installationID))
+            if index == 1 { page.paper = .plain }
+            recorder.addPage(page)
+            pages.append(page)
+            let data = drawing.dataRepresentation()
+            guard let sha = try? recorder.commitPage(page.id, data: data, strokeCount: drawing.strokes.count,
+                                                     contentVersion: drawing.requiredContentVersion.rawValue) else { continue }
+            let samples = recorder.pageClock
+            let reading = await NotebookReader.read(drawing, sha256: sha, page: page) { moment in (nil, RecordingClockMap.elapsed(at: moment, samples: samples)) }
+            recorder.applyPageReading(page.id, reading)
+            if index == 0, let passage = reading.passages.first { recorder.correctPassage(pageID: page.id, passageID: passage.id, text: "Hello, world: agenda") }
+        }
+    }
+
     /// What the launch arguments ask for, once the library, sync, and the link are up.
     func runLaunchDemos() {
         if options.deviceAutopilot { runDeviceAutopilot() }
@@ -30,6 +69,7 @@ extension PhoneAppModel {
                 try? await startRecording()
                 runDemoScript()
                 if options.demoInk { await runInkDemo() }
+                if options.demoPages { await runPagesDemo() }
             }
             if let name = options.demoRecorderOnly, !recorder.isActive {
                 // After the scene has come forward, which would otherwise record along at once.
