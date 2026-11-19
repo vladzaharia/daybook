@@ -80,6 +80,15 @@ public struct PhotoProcessingInput: Sendable {
     public init(photo: MeetingPhoto, url: URL) { self.photo = photo; self.url = url }
 }
 
+/// One sketch passage to read: a picture of its strokes on light paper, in a file the caller makes and deletes.
+public struct SketchProcessingInput: Sendable {
+    public var passageID: UUID
+    /// The passage's `strokeDigest`: the reading is of these strokes.
+    public var strokeDigest: String
+    public var url: URL
+    public init(passageID: UUID, strokeDigest: String, url: URL) { self.passageID = passageID; self.strokeDigest = strokeDigest; self.url = url }
+}
+
 /// What processing found in a conversation's photos, by photo.
 public struct PhotoProcessingOutput: Sendable {
     public var analyses: [UUID: PhotoAnalysis]
@@ -121,6 +130,9 @@ public protocol ProcessingEngine: Sendable {
     /// each is worth a place in a summary. The default reads nothing (an engine without image models).
     func describePhotos(_ meeting: Meeting, photos: [PhotoProcessingInput],
                         progress: @escaping ProcessingProgressHandler) async throws -> PhotoProcessingOutput
+    /// Reads sketch passages as photos are read (text, what each shows, a caption), by passage. The default reads nothing.
+    func describeSketches(_ sketches: [SketchProcessingInput],
+                          progress: @escaping ProcessingProgressHandler) async throws -> [UUID: SketchAnalysis]
 }
 
 extension ProcessingEngine {
@@ -128,6 +140,9 @@ extension ProcessingEngine {
                                progress: @escaping ProcessingProgressHandler) async throws -> PhotoProcessingOutput {
         PhotoProcessingOutput()
     }
+
+    public func describeSketches(_ sketches: [SketchProcessingInput],
+                                 progress: @escaping ProcessingProgressHandler) async throws -> [UUID: SketchAnalysis] { [:] }
 }
 
 extension ProcessingEngine {

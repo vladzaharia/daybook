@@ -35,6 +35,9 @@ public struct SummarySource: Sendable, Equatable {
         /// A note found to repeat what was said around it: passed on without its words, as a moment the
         /// person marked (`MeetingSynthesis.notesRepeatingWhatWasSaid`).
         public var repeatsWhatWasSaid = false
+        /// For handwriting ("H1", …): the notebook page it is on (1-based); nil for typed notes and bookmarks.
+        public var page: Int?
+        public var isHandwriting: Bool { page != nil }
     }
 
     /// How far around a note or a bookmark its passages carry more weight. A note is usually written
@@ -133,17 +136,34 @@ public struct SummarySource: Sendable, Equatable {
     ///
     ///     [11:30] (near N1) Alex: We could keep the budget flat.
     ///     [12:04] NOTE N1, written by the user (not spoken): Budget cap is firm at 40k
-    public var annotatedTranscript: String {
-        guard isStructured else { return transcript }
+    public var annotatedTranscript: String { annotatedTranscript(placing: []) }
+
+    /// The same, with pictures (photos and sketches with a time) on lines of their own at their times, as a part of a long
+    /// conversation reads them: "[12:04] PICTURE [S1]; drawn at 12:04 on page 2; shows: …".
+    public func annotatedTranscript(placing pictures: [PhotoEvidence]) -> String {
+        let timed = pictures.filter { $0.time != nil }
+        guard isStructured || !timed.isEmpty else { return transcript }
         var result: [String] = []
-        let placed = anchors.filter { $0.time != nil && $0.context.isEmpty }.sorted { ($0.time!, $0.label) < ($1.time!, $1.label) }
+        if lines.isEmpty, !anchors.isEmpty || !pictures.isEmpty { result.append(Self.noSpeech) }
+        var placed = anchors.filter { $0.time != nil && $0.context.isEmpty }.map { (time: $0.time!, order: $0.label, text: Self.marker($0)) }
+        placed += timed.map { (time: $0.time!, order: $0.label, text: "[\(TimeLabel.format($0.time!))] PICTURE " + PhotoPlacement.line($0)) }
+        placed.sort { ($0.time, $0.order) < ($1.time, $1.order) }
         var next = 0
         for line in lines {
-            while next < placed.count, placed[next].time! < line.time { result.append(Self.marker(placed[next])); next += 1 }
+            while next < placed.count, placed[next].time < line.time { result.append(placed[next].text); next += 1 }
             result.append(Self.format(line))
         }
-        while next < placed.count { result.append(Self.marker(placed[next])); next += 1 }
+        while next < placed.count { result.append(placed[next].text); next += 1 }
         return result.joined(separator: "\n")
+    }
+
+    /// Said first in a source with notes or pages and no speech, so the model never takes the notes for a conversation.
+    public static let noSpeech = "[No speech was recorded in this conversation. The notes below are all there is to summarize.]"
+
+    /// Whether there is anything to summarize: speech, or notes, handwriting, or bookmarks.
+    public var hasContent: Bool {
+        !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || anchors.contains { !$0.text.isEmpty || !$0.context.isEmpty }
     }
 
     /// Every note and bookmark, for the model: label, kind, time (null when it has none), and text;
@@ -155,6 +175,7 @@ public struct SummarySource: Sendable, Equatable {
                                         "text": anchor.repeatsWhatWasSaid ? "" : anchor.text]
             if anchor.repeatsWhatWasSaid { entry["repeats_what_was_said"] = true }
             if anchor.kind == .note && anchor.time == nil { entry["placement"] = "written outside the recording" }
+            if let page = anchor.page { entry["page"] = page; entry["source"] = "handwriting" }
             if let recording = anchor.recording { entry["recording"] = recording; entry["context"] = anchor.context }
             return entry
         }
@@ -249,7 +270,9 @@ public struct SummarySource: Sendable, Equatable {
     public static func marker(_ anchor: Anchor) -> String {
         let time = anchor.time.map { "[\(TimeLabel.format($0))] " } ?? ""
         switch anchor.kind {
-        case .note where anchor.repeatsWhatWasSaid: return "\(time)NOTE \(anchor.label), written by the user, repeats what was said around it"
+        case .note where anchor.repeatsWhatWasSaid: return "\(time)NOTE \(anchor.label), \(anchor.page != nil ? "handwritten" : "written") by the user, repeats what was said around it"
+        case .note where anchor.page != nil:
+            return "\(time)NOTE \(anchor.label), handwritten on page \(anchor.page!) by the user (not spoken; read from handwriting, so a word may be misread): \(anchor.text)"
         case .note: return "\(time)NOTE \(anchor.label), written by the user (not spoken): \(anchor.text)"
         case .bookmark: return "\(time)BOOKMARK \(anchor.label), marked by the user" + (anchor.text.isEmpty ? "" : ": \(anchor.text)")
         }
@@ -273,6 +296,12 @@ extension MeetingEvidence {
             let time = index < times.count ? times[index] : nil
             anchors.append(.init(label: "N\(index + 1)", kind: .note, time: time, text: text,
                                  window: time.map { ($0 - windows.noteBefore)...($0 + windows.noteAfter) }, recording: nil, context: []))
+        }
+        for (index, writing) in meeting.pageWriting().enumerated() {
+            let time = writing.time
+            anchors.append(.init(label: "H\(index + 1)", kind: .note, time: time, text: writing.text,
+                                 window: time.map { ($0 - windows.noteBefore)...($0 + writing.duration + windows.noteAfter) },
+                                 recording: nil, context: [], page: writing.page))
         }
         let contexts = meeting.highlightContexts(before: windows.bookmarkBefore, after: windows.bookmarkAfter)
         for (index, context) in contexts.sorted(by: { ($0.isAligned ? 0 : 1, $0.markerTime) < ($1.isAligned ? 0 : 1, $1.markerTime) }).enumerated() {

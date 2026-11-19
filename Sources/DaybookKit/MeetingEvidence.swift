@@ -15,8 +15,13 @@ public enum MeetingEvidence {
             let position = note.time.map { "written at meeting time \(TimeLabel.format($0))" } ?? "written outside recording; time unknown"
             return "[USER NOTE — \(position)] \(note.text)"
         }.joined(separator: "\n")
+        let writing = meeting.pageWriting().map { passage in
+            let position = passage.time.map { "written at meeting time \(TimeLabel.format($0))" } ?? "written outside recording; time unknown"
+            return "[USER HANDWRITING — page \(passage.page), \(position)] \(passage.text)"
+        }.joined(separator: "\n")
         return "User's original notes (intent and context, not a spoken quotation):\n\(meeting.notes)"
             + (anchors.isEmpty ? "" : "\n\nTiming of those same notes (not additional evidence):\n\(anchors)")
+            + (writing.isEmpty ? "" : "\n\nHandwritten pages (the user's own notes, read from handwriting; words may be misread):\n\(writing)")
     }
 
     public static func highlights(_ meeting: Meeting) -> String? {

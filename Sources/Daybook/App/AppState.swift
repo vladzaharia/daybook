@@ -1068,8 +1068,9 @@ final class AppState {
             do {
                 try await detachedWork(priority: .userInitiated) {
                     if json {
-                        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-                        try encoder.encode(meeting).write(to: url, options: .atomic)
+                        let drawings = Dictionary((meeting.pages ?? []).compactMap(\.drawing).map { ($0.relativePath, directory.appendingPathComponent($0.relativePath)) },
+                                                  uniquingKeysWith: { first, _ in first })
+                        try MeetingExport.json(meeting, pageDrawings: drawings).write(to: url, options: .atomic)
                     } else {
                         try MeetingExport.write(meeting, markdownURL: url) { directory.appendingPathComponent($0.relativePath) }
                     }

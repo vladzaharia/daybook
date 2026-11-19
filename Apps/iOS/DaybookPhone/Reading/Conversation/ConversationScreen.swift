@@ -125,7 +125,7 @@ enum ConversationShare {
     static func share(_ id: ConversationAction.ID, meeting: Meeting, session: ReadingSession, provider: any AudioProviding) {
         switch id {
         case .shareMarkdown: markdown(meeting, session: session, provider: provider)
-        case .shareJSON: json(meeting, session: session)
+        case .shareJSON: json(meeting, session: session, provider: provider)
         case .shareAudio: audio(meeting, session: session, provider: provider)
         default: break
         }
@@ -143,10 +143,16 @@ enum ConversationShare {
         }
     }
 
-    private static func json(_ meeting: Meeting, session: ReadingSession) {
+    private static func json(_ meeting: Meeting, session: ReadingSession, provider: any AudioProviding) {
         Task {
             do {
-                let url = try await Task.detached { try ExportFiles.json(meeting) }.value
+                // The page drawings this iPhone has or can fetch travel in the file with the rest of the conversation's data.
+                var drawings: [String: URL] = [:]
+                for drawing in (meeting.pages ?? []).compactMap(\.drawing) {
+                    if let url = try? await provider.localPageDrawing(for: drawing, in: meeting.id) { drawings[drawing.relativePath] = url }
+                }
+                let files = drawings
+                let url = try await Task.detached { try ExportFiles.json(meeting, pageDrawings: files) }.value
                 session.sheet = .share([url])
             } catch { session.alert = ReadingAlert(title: "Couldn’t Share", error: error, fallback: "The conversation couldn’t be prepared. Try again.") }
         }

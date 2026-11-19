@@ -3,7 +3,7 @@ import Foundation
 
 /// One conversation that matches a library search, and where it matched.
 public struct SearchHit: Identifiable, Equatable, Sendable {
-    public enum Field: Equatable, Sendable { case title, summary, notes, transcript }
+    public enum Field: Equatable, Sendable { case title, summary, notes, pages, transcript }
     public let meetingID: UUID
     public var id: UUID { meetingID }
     public let field: Field
@@ -72,6 +72,14 @@ public enum LibrarySearch {
         if let range = meeting.notes.range(of: query, options: options) {
             let (snippet, match) = excerpt(meeting.notes, around: range)
             return (SearchHit(meetingID: meeting.id, field: .notes, snippet: snippet, match: match, segmentID: nil, speaker: nil, time: nil, matchCount: 1), 2)
+        }
+        // The words on notebook pages (a correction in place of what was read; deleted pages left out), with the notes' rank.
+        for page in meeting.visiblePages {
+            for passage in page.passages {
+                guard let words = page.words(of: passage), let range = words.range(of: query, options: options) else { continue }
+                let (snippet, match) = excerpt(words, around: range)
+                return (SearchHit(meetingID: meeting.id, field: .pages, snippet: snippet, match: match, segmentID: nil, speaker: nil, time: nil, matchCount: 1), 2)
+            }
         }
         let matches = meeting.unifiedTranscript.filter { $0.text.range(of: query, options: options) != nil }
         if let first = matches.first, let range = first.text.range(of: query, options: options) {

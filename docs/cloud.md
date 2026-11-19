@@ -9,13 +9,13 @@ placement stream); this page is the cloud side: the catalog, keys, discovery, th
 ## What is sent
 
 A cloud summary sends the conversation's transcript text (with each note and bookmark in place, and the passages near
-them marked), the notes and bookmarks, the template (its kind and instructions), the vocabulary, and the conversation's
+them marked), the notes (including words read from notebook pages) and bookmarks, the template (its kind and instructions), the vocabulary, and the conversation's
 title and date. The title goes only when the person or the calendar gave it (never "Untitled Conversation", a recording's
 placeholder, or a title a summary wrote earlier), cut to 120 characters; the date is when the conversation began as the
 person's local day, time, and time zone, sent only when a recording's start is known, so the model can resolve "next
-Tuesday" (`SummarySource.Context`). Nothing else: no audio, no photos or their captions, no voiceprints, no speaker
-profiles, no calendar attendees or other calendar detail. Photo captions stay on the device, so a cloud
-summary places photos by time only (`PhotoPlacement.arrange`). OpenAI's request sets `store: false`, so the response
+Tuesday" (`SummarySource.Context`). Nothing else: no audio, no photos or their captions, no notebook page pictures or sketches (nor a sketch's description or label), no voiceprints, no speaker
+profiles, no calendar attendees or other calendar detail. Photo captions and sketch descriptions stay on the device, so a cloud
+summary places photos and sketches by time only (`PhotoPlacement.arrange`, `NotebookPlacement.arrange`). OpenAI's request sets `store: false`, so the response
 isn't kept on OpenAI's side. The same is sent whatever brought the summary to the cloud ("When the cloud is chosen").
 
 **Which conversations.** Settings › Cloud has a switch for each placement this version knows (`LibraryPlacement.allCases`:

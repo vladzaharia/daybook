@@ -1,6 +1,7 @@
 import DaybookCore
 import DaybookKit
 import DaybookLive
+import DaybookUI
 import Foundation
 import Observation
 
@@ -354,9 +355,10 @@ final class PhoneProcessor {
 
     private func summarize(_ id: UUID, request: ProcessingRequest, with summarizer: any LocalSummarizing) async throws {
         guard let current = library.meeting(id) else { return }
-        guard !MeetingEvidence.transcript(current).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw DaybookError.noSpeech }
+        guard MeetingEvidence.summarySource(current).hasContent else { throw DaybookError.noSpeech }
         setStage(.summarizing)
         try await readPhotos(id)
+        try await readSketches(id)
         guard let meeting = library.meeting(id) else { return }
         let template = request.templateID.map { SummaryTemplate.resolved(id: $0, kind: meeting.kind, templates: library.templates) }
             ?? library.resolvedTemplate(for: meeting)
@@ -386,6 +388,20 @@ final class PhoneProcessor {
         let read = try await engine.describePhotos(meeting, photos: inputs, progress: { _ in })
         try Task.checkCancellation()
         if !read.analyses.isEmpty { library.update(id) { $0.applyPhotoAnalyses(read.analyses) } }
+    }
+
+    /// Sketches from notebook pages, read the way photos are (their text, what they show), so the summary can place them. A
+    /// sketch is read once: its reading stands until its strokes change. The pictures are written to a private folder and
+    /// deleted after; a sketch that can't be read is left for the next summary.
+    private func readSketches(_ id: UUID) async throws {
+        guard let meeting = library.meeting(id), let engine = services.engine(), !meeting.sketchesNeedingReading.isEmpty else { return }
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("Daybook Sketches \(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let inputs = await SketchReading.inputs(for: meeting, in: folder) { [library] drawing in try? await library.pageDrawingURL(for: drawing, in: id) }
+        guard !inputs.isEmpty else { return }
+        let read = try await engine.describeSketches(inputs, progress: { _ in })
+        try Task.checkCancellation()
+        if !read.isEmpty { library.update(id) { $0.applySketchAnalyses(read) } }
     }
 
     private func vocabulary(for id: UUID) -> [String] {
