@@ -42,6 +42,9 @@ final class NotebookSessionTests: XCTestCase {
 
     private func session(_ store: Store, idle: Duration = .seconds(60), layout: NotebookLayout = .single(scale: 1)) -> NotebookSession {
         let session = NotebookSession(now: { store.clock }, idleSettle: idle, draftDelay: .seconds(60))
+        // These tests are about when pages settle, not about reading: a real reading (PencilKit, then Vision when it can't) outlives
+        // the test and, on a slow runner, holds threads the next tests' recorders need.
+        session.reader = { [began] _, sha, _, _ in PageReading(drawingSHA256: sha, passages: [], readAt: began) }
         session.resolve(layout)
         session.bind(store.model)
         session.show(slot: 0)
