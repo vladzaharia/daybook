@@ -22,13 +22,15 @@ final class NotebookSessionTests: XCTestCase {
         var erased: [UUID: [ErasedStroke]] = [:]
         var clock = Date(timeIntervalSinceReferenceDate: 800_000_100)
         var played: [UUID] = []
+        var fetch: ((UUID) async -> Bool)?
 
         var model: NotebookModel {
             NotebookModel(
-                pages: { self.pages }, content: { self.content[$0] ?? .blank }, add: { self.pages.append($0) },
-                saveDraft: { _, _ in true },
+                pages: { self.pages }, content: { self.content[$0] ?? .blank }, fetch: fetch, add: { self.pages.append($0) },
+                saveDraft: { _, _, _ in true },
                 commit: { id, data, _, _ in
                     self.commits.append((id, data))
+                    self.content[id] = .strokes(data)
                     return NotebookSession.sha256(data)
                 },
                 applyReading: { self.readings.append(($0, $1)) }, correct: { _, _, _ in }, remove: { _ in nil },
@@ -168,6 +170,101 @@ final class NotebookSessionTests: XCTestCase {
         try write(session, page: id, SyntheticInk.drawing("hello", start: began))
         await session.settle(.close)
         XCTAssertTrue(store.commits.isEmpty)
+    }
+
+    private func keys(_ drawing: PKDrawing) -> Set<String> { Set(NotebookReader.strokes(of: drawing).map(\.key)) }
+
+    func testBehaviorCommitKeepsStrokesThatArrivedBySyncWhileOpen() async throws {
+        let store = store(pages: 1, written: 1)
+        let session = session(store)
+        let id = store.pages[0].id
+        let first = SyntheticInk.drawing("hello", start: began)
+        // Another device wrote on the page: its strokes reach the library while this one is open.
+        let theirs = SyntheticInk.drawing("hi", start: began.addingTimeInterval(500))
+        store.content[id] = .strokes(PKDrawing(strokes: first.strokes + theirs.strokes).dataRepresentation())
+        let mine = SyntheticInk.drawing("ok", start: began.addingTimeInterval(900))
+        try write(session, page: id, PKDrawing(strokes: first.strokes + mine.strokes))
+        await session.settle(.close)
+        let committed = try PKDrawing(data: try XCTUnwrap(store.commits.last?.data))
+        XCTAssertEqual(keys(committed), keys(first).union(keys(theirs)).union(keys(mine)), "both sides' strokes")
+        let dates = committed.strokes.map(\.path.creationDate)
+        XCTAssertEqual(dates, dates.sorted(), "in creation order")
+        XCTAssertEqual(keys(try XCTUnwrap(session.canvas(for: id)).drawing), keys(committed), "and the canvas shows them")
+    }
+
+    func testBehaviorStrokesErasedHereStayErasedWhenAnotherDeviceAddedOthers() async throws {
+        let store = store(pages: 1, written: 1)
+        let session = session(store)
+        let id = store.pages[0].id
+        let first = SyntheticInk.drawing("hello", start: began)
+        let theirs = SyntheticInk.drawing("hi", start: began.addingTimeInterval(500))
+        store.content[id] = .strokes(PKDrawing(strokes: first.strokes + theirs.strokes).dataRepresentation())
+        let kept = Array(first.strokes.dropLast(2))
+        try write(session, page: id, PKDrawing(strokes: kept))
+        await session.settle(.close)
+        let committed = try PKDrawing(data: try XCTUnwrap(store.commits.last?.data))
+        XCTAssertEqual(keys(committed), keys(PKDrawing(strokes: kept)).union(keys(theirs)), "erased here stays erased, theirs stay")
+    }
+
+    func testBehaviorPageBlankWhenOpenedKeepsStrokesThatArrivedLater() async throws {
+        let store = store(pages: 1)
+        let session = session(store)
+        let id = store.pages[0].id
+        let theirs = SyntheticInk.drawing("hi", start: began.addingTimeInterval(500))
+        store.content[id] = .strokes(theirs.dataRepresentation())
+        let mine = SyntheticInk.drawing("ok", start: began.addingTimeInterval(900))
+        try write(session, page: id, mine)
+        await session.settle(.close)
+        let committed = try PKDrawing(data: try XCTUnwrap(store.commits.last?.data))
+        XCTAssertEqual(keys(committed), keys(theirs).union(keys(mine)))
+    }
+
+    func testBehaviorCommitIsRefusedWhenTheStoredStrokesAreNotHere() async throws {
+        let store = store(pages: 1, written: 1)
+        let session = session(store)
+        let id = store.pages[0].id
+        store.content[id] = .notLoaded
+        try write(session, page: id, SyntheticInk.drawing("hello ok", start: began))
+        await session.settle(.close)
+        XCTAssertTrue(store.commits.isEmpty, "never over strokes that can't be seen; the draft keeps them")
+        XCTAssertNotNil(session.problem)
+    }
+
+    func testBehaviorCleanCanvasFollowsItsPageWhenStrokesArrive() throws {
+        let store = store(pages: 1, written: 1)
+        let session = session(store)
+        let id = store.pages[0].id
+        let theirs = SyntheticInk.drawing("hi there", start: began.addingTimeInterval(500))
+        store.content[id] = .strokes(theirs.dataRepresentation())
+        session.reconcile()
+        XCTAssertEqual(keys(try XCTUnwrap(session.canvas(for: id)).drawing), keys(theirs))
+    }
+
+    func testBehaviorWrittenCanvasIsNotReplacedWhenStrokesArrive() throws {
+        let store = store(pages: 1, written: 1)
+        let session = session(store)
+        let id = store.pages[0].id
+        let mine = SyntheticInk.drawing("ok", start: began.addingTimeInterval(900))
+        try write(session, page: id, mine)
+        store.content[id] = .strokes(SyntheticInk.drawing("hi", start: began.addingTimeInterval(500)).dataRepresentation())
+        session.reconcile()
+        XCTAssertEqual(keys(try XCTUnwrap(session.canvas(for: id)).drawing), keys(mine), "the commit merges them")
+    }
+
+    func testBehaviorPageThatCouldNotBeFetchedIsTriedAgainWhenShownAgain() async throws {
+        let store = store(pages: 1)
+        let id = store.pages[0].id
+        store.content[id] = .notLoaded
+        store.fetch = { _ in false }
+        let session = session(store)
+        for _ in 0..<500 where !session.unavailable.contains(id) { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(session.unavailable.contains(id), "offline: not writable")
+        XCTAssertFalse(session.isWritable(id))
+        store.content[id] = .strokes(SyntheticInk.drawing("hello", start: began).dataRepresentation())
+        session.show(slot: 0)
+        XCTAssertFalse(session.unavailable.contains(id))
+        XCTAssertTrue(session.isWritable(id), "the strokes came: the page opens")
+        XCTAssertNil(session.problem)
     }
 
     func testBehaviorNewPageMadeWithFirstStrokes() async throws {

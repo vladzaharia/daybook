@@ -31,7 +31,7 @@ final class PlaybackController: PlaybackControlling {
     /// Playback speed, kept when another recording loads.
     var rate: Float {
         get { engine.rate }
-        set { engine.rate = newValue; updateNowPlaying() }
+        set { engine.rate = newValue; updateNowPlaying(); moved?() }
     }
     private(set) var meetingID: UUID?
     private(set) var trackID: UUID?
@@ -46,6 +46,8 @@ final class PlaybackController: PlaybackControlling {
     @ObservationIgnored private var recordingWatch: ObservationWatch?
     @ObservationIgnored private var loading: Task<Void, Never>?
     @ObservationIgnored private var commandsInstalled = false
+    /// Told after the player plays, pauses, seeks, ends, changes speed, or lets go of a recording: the notebook samples where it is.
+    @ObservationIgnored var moved: (@MainActor () -> Void)?
 
     init() {
         engine.onEnding = { [weak self] ending in self?.ended(ending) }
@@ -153,22 +155,26 @@ final class PlaybackController: PlaybackControlling {
         installRemoteCommands()
         setRemoteCommands(enabled: true)
         updateNowPlaying()
+        moved?()
     }
 
     func pause() {
         guard engine.isLoaded else { return }
         engine.pause()
         if !isRecording() { updateNowPlaying() }
+        moved?()
     }
 
     func skip(_ seconds: TimeInterval) {
         engine.skip(seconds)
         updateNowPlaying()
+        moved?()
     }
 
     func seek(to seconds: TimeInterval) {
         engine.seek(to: seconds)
         updateNowPlaying()
+        moved?()
     }
 
     /// Stops and releases the recording, which hides the player. The audio session goes back to the system only when
@@ -180,6 +186,7 @@ final class PlaybackController: PlaybackControlling {
         meetingID = nil
         trackID = nil
         phase = .idle
+        moved?()
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         guard !isRecording() else { return }
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -189,6 +196,7 @@ final class PlaybackController: PlaybackControlling {
         switch ending {
         case .reachedEnd, .cutShort, .stoppedElsewhere:
             if !isRecording() { updateNowPlaying() }
+            moved?()
         case .undecodable:
             phase = .unavailable("This recording couldn’t be played.")
         }

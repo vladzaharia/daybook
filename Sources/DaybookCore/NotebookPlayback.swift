@@ -17,6 +17,19 @@ extension RecordingClockMap {
 }
 
 extension Meeting {
+    /// Where `moment` falls on a recording this conversation was filed with a clock for: the track whose samples span it, and the
+    /// seconds into it (`RecordingClockMap.elapsed`). Nil when no filed track's clock covers it.
+    public func recordingPlacement(at moment: Date) -> (trackID: UUID?, time: TimeInterval?)? {
+        for track in tracks where track.removal == nil {
+            guard let samples = track.clockSamples, let first = samples.map(\.at).min(), let last = samples.map(\.at).max(),
+                  moment >= first.addingTimeInterval(-RecordingClockMap.trailing),
+                  moment <= last.addingTimeInterval(RecordingClockMap.trailing),
+                  let seconds = RecordingClockMap.elapsed(at: moment, samples: samples) else { continue }
+            return (track.id, seconds)
+        }
+        return nil
+    }
+
     /// Where playing from a passage starts: seconds into the recording it was written during (`trackID`), or on the conversation's
     /// timeline when it wasn't written during one. A passage timed inside a pause starts at the end of the silence, not in it.
     /// Nil when nothing places it.

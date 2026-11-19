@@ -64,13 +64,13 @@ extension PhoneAppModel {
         guard controller.meeting(id)?.pages == nil else { return }
         let ink = InkColor.self
         func words(_ text: String, _ y: CGFloat, after: TimeInterval, _ colour: InkColor = .black) -> SyntheticInk.Passage {
-            .init(.words(text), at: CGPoint(x: 66, y: y), size: 34, after: after, color: colour.uiColor)
+            .init(.words(text), at: CGPoint(x: 66, y: y), size: 34, after: after, color: colour.uiColor.cgColor)
         }
         let begun = Date()
         let drawings: [PKDrawing] = [
             SyntheticInk.page(passages: [words("hello world", 110, after: 0), words("world hello", 190, after: 8, ink.blue),
                                          words("hello", 276, after: 14, ink.red)], start: begun),
-            SyntheticInk.page(passages: [.init(.sketch, at: CGPoint(x: 80, y: 160), size: 150, after: 4, color: ink.blue.uiColor),
+            SyntheticInk.page(passages: [.init(.sketch, at: CGPoint(x: 80, y: 160), size: 150, after: 4, color: ink.blue.uiColor.cgColor),
                                          words("hello", 420, after: 12, ink.red)], start: begun),
         ]
         for (index, drawing) in drawings.enumerated() {

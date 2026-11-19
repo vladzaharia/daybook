@@ -81,11 +81,14 @@ struct NotebookScreen: View {
         }
         .onDisappear {
             if case .recording = source { model.settleNotebook = nil }
+            if case .conversation = source { reading.player.moved = nil }
             Task { await session.close() }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { Task { await session.settle(.background) } }
         }
+        // Strokes that arrive by sync replace a page nobody has written on since it loaded, and a page that couldn't be fetched is tried again.
+        .onChange(of: session.pages.map { $0.drawing?.sha256 }) { _, _ in session.reconcile() }
     }
 
     @ViewBuilder private func pill(collapsed: Bool, set: @escaping (Bool) -> Void, available: CGFloat) -> some View {

@@ -72,7 +72,7 @@ final class NotebookRecordingTests: XCTestCase {
         let store = NotebookSession()
         var pages = [NotebookPage(order: 1)]
         store.resolve(.spread(scale: 0.86))
-        store.bind(NotebookModel(pages: { pages }, content: { _ in .blank }, add: { pages.append($0) }, saveDraft: { _, _ in true },
+        store.bind(NotebookModel(pages: { pages }, content: { _ in .blank }, add: { pages.append($0) }, saveDraft: { _, _, _ in true },
                                  commit: { _, _, _, _ in "" }, applyReading: { _, _ in }, correct: { _, _, _ in }, remove: { _ in nil },
                                  recordErasures: { _, _ in }, logTurn: { _ in }, anchor: { _ in (nil, nil) }))
         XCTAssertEqual(store.visible.count, 2)

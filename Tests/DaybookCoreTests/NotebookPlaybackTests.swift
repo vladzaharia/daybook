@@ -24,6 +24,16 @@ final class NotebookPlaybackTests: XCTestCase {
         return (meeting, page, passage, track.id)
     }
 
+    func testBehaviorMomentInsideAFiledClockIsPlacedOnItsTrack() throws {
+        let (meeting, _, _, track) = meeting(passageAt: 5, time: 5)
+        let placed = try XCTUnwrap(meeting.recordingPlacement(at: t0.addingTimeInterval(7)))
+        XCTAssertEqual(placed.trackID, track)
+        XCTAssertEqual(placed.time ?? 0, 7, accuracy: 0.001)
+        XCTAssertEqual(meeting.recordingPlacement(at: t0.addingTimeInterval(41))?.time ?? 0, 11, accuracy: 0.001, "after the pause, from the resume")
+        XCTAssertNil(meeting.recordingPlacement(at: t0.addingTimeInterval(-60)), "before the recording")
+        XCTAssertNil(meeting.recordingPlacement(at: t0.addingTimeInterval(4_000)), "long after its clock ended")
+    }
+
     func testBehaviorPassageWrittenWhileRunningStartsAtItsTime() throws {
         let (meeting, page, passage, track) = meeting(passageAt: 5, time: 5)
         let start = try XCTUnwrap(meeting.playbackStart(of: passage, on: page))
