@@ -68,8 +68,10 @@ extension LibraryController {
     /// Deletes the conversation's page files that nothing names and that are old (`MeetingStore.prunePageDrawings`), keeping
     /// those the sync history names (what other devices' unpublished edits may build on).
     public func prunePageDrawings(of id: UUID, now: Date = Date()) async {
-        guard let store, let meeting = meeting(id) else { return }
+        guard let store else { return }
         let history = await sync?.engine?.pageFilesInHistory(of: id) ?? []
+        // Read after the await: what a pass applied meanwhile (a revert naming an old drawing again) counts.
+        guard let meeting = meeting(id) else { return }
         await store.prunePageDrawings(of: meeting, keeping: history, now: now)
     }
 }

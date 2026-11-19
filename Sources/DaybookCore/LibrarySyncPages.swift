@@ -11,7 +11,7 @@ import Foundation
 extension LibrarySyncEngine {
     /// Adds each page's files to a publication's assets: every page, deleted ones included, its drawing, each drawing set aside,
     /// and its background. A file this replica holds is verified against the digest the page names; an on-demand replica
-    /// publishes one it never fetched by reference to the object already in the journal or `Blobs/`, as it does a photo.
+    /// publishes one it lacks by reference to the object already in the journal or `Blobs/`, as an on-demand replica does a photo.
     func appendPageAssets(_ meeting: Meeting, directory: URL, journalAssets: Set<String>,
                           assets: inout [SyncAsset], byReference: inout Set<String>) throws {
         for page in meeting.pages ?? [] {
@@ -23,7 +23,10 @@ extension LibrarySyncEngine {
                 try SyncFiles.noSymlinks(url, below: localRoot)
                 if fm.fileExists(atPath: url.path) {
                     guard try verified(url, digest: file.sha256) else { throw LibrarySyncError.missingLocalAudio(name) }
-                } else if audioPolicy == .onDemand, try mayPublishByReference(file.sha256, journalAssets: journalAssets) {
+                } else if try mayPublishByReference(file.sha256, journalAssets: journalAssets) {
+                    // The object is in the journal already, so the conversation publishes and receives as any other, and the
+                    // pass that applies it copies the file back (`hydrate`): a replica that lacks one of its pages' files
+                    // isn't stuck. (Nothing in the journal means the strokes are gone: it can't publish what it can't name.)
                     byReference.insert(file.relativePath)
                 } else {
                     throw LibrarySyncError.missingLocalAudio(name)

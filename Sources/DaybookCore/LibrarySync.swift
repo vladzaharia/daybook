@@ -1648,7 +1648,11 @@ public actor LibrarySyncEngine {
             try Task.checkCancellation()
             let destination = try LocalFiles.relativeURL(asset.relativePath, in: directory)
             try SyncFiles.noSymlinks(destination, below: localRoot)
-            if try verified(destination, digest: asset.sha256) { continue }
+            if try verified(destination, digest: asset.sha256) {
+                // A page's file that's named again (a revert) is used now, whatever its age: pruning must not take it.
+                if asset.relativePath.hasPrefix(PageDrawing.folder + "/") { LocalFiles.touch(destination, unlessWithin: 3_600) }
+                continue
+            }
             // Copying audio is the expensive part of an eager pass; respect the pass's time budget.
             if budget.timeExceeded { throw SyncDeferredWork() }
             // Sealed under a key held here, or plaintext from before an encrypted library's sealer reached it.
@@ -1796,10 +1800,12 @@ public actor LibrarySyncEngine {
             snapshot = snapshot.restoringPhotos(from: parent)
         }
         // A Daybook from before pages drops them on edit (no `pages`), or on a merge of two copies keeps one side's whole
-        // `pages` array as the unknown key it is: the pages its parents had are put back (`Meeting.restoringPages`).
+        // `pages` array as the unknown key it is: the pages its parents had are put back, and a whole array that is one parent's and
+        // not their merge is replaced by it (`Meeting.repairingNotebook`).
         if snapshot.pages == nil || event.parents.count >= 2, event.parents.contains(where: { ancestorHasPages($0, events: events) }),
            let parent = try mergedSnapshot(of: event.parents, events: events, memo: &memo) {
-            snapshot = snapshot.restoringPages(from: parent)
+            let parents = try event.parents.compactMap { try resolvedSnapshot($0, events: events, memo: &memo) }
+            snapshot = snapshot.repairingNotebook(parents: parents, merged: parent)
         }
         memo.resolved[id] = snapshot
         return snapshot

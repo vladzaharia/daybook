@@ -187,6 +187,34 @@ final class NotebookDetailsTests: XCTestCase {
         XCTAssertNil(PageTurn(at: start, pages: [], time: -3).time)
     }
 
+    // MARK: Size
+
+    /// What the notebook's logs may add to every snapshot of a conversation: a snapshot is published whole at every edit, and
+    /// the iPhone holds one this large (`LibrarySyncEngine.heldPublicationBytes`, 256 KB) on its own, so they stay well under.
+    private static let notebookLogBudget = 128 * 1024
+
+    func testBehaviorEveryNotebookLogAtItsCapStaysUnderTheSnapshotBudget() throws {
+        let plain = NotebookFixtures.page(id)
+        var full = plain
+        let trackID = UUID()
+        full.erased = (0..<ErasedStroke.capacity * 2).map { erased("\(1_800_000_000_000 + $0 * 4_321)-\(30 + $0 % 40)-\(100 + $0)-\(200 + $0)", made: Double($0), erased: Double($0) + 500, track: trackID, time: Double($0) * 1.37) }
+        full.erased = ErasedStroke.merged(full.erased, nil)
+        XCTAssertEqual(full.erased?.count, ErasedStroke.capacity)
+        let turns = (0..<PageTurn.capacity * 2).map { PageTurn(at: start.addingTimeInterval(Double($0) * 7.7), pages: [id, UUID()], trackID: trackID, time: Double($0) * 7.7) }
+        let flapping = (0..<2_000).map { RecordingClockSample(at: start.addingTimeInterval(Double($0) * 3.1), elapsed: Double($0) * 3.1, running: $0 % 2 == 0) }
+        var recording = track(nil)
+        var bare = meeting([plain], tracks: [recording])
+        recording.clockSamples = RecordingClockMap.filed(flapping)
+        XCTAssertEqual(recording.clockSamples?.count, RecordingClockMap.filedCapacity)
+        var loaded = meeting([full], tracks: [recording], turns: PageTurn.merged(turns, nil))
+        XCTAssertEqual(loaded.pageTurns?.count, PageTurn.capacity)
+        bare.pageTurns = nil
+        loaded.title = bare.title
+        let share = try SyncEncoding.data(loaded).count - SyncEncoding.data(bare).count
+        XCTAssertLessThan(share, Self.notebookLogBudget, "the notebook's logs add \(share) bytes")
+        XCTAssertGreaterThan(share, 0)
+    }
+
     // MARK: Recording clock on the track
 
     private func track(_ samples: [RecordingClockSample]?, id: UUID = UUID(uuidString: "CCCCCCCC-0000-0000-0000-000000000001")!, offset: TimeInterval = 0) -> RecordingTrack {

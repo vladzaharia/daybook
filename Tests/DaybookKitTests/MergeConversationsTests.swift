@@ -129,20 +129,20 @@ final class MergeConversationsTests: XCTestCase {
         XCTAssertTrue(merged.revisions.contains { $0.kind == .page(written.id) })
     }
 
-    func testBehaviorMergeConversationsLeavesAPageWhoseFilesAreNotHereAndStillMerges() async throws {
+    func testBehaviorMergeConversationsStopsForAPageWhoseFilesAreNotHere() async throws {
         let library = try await open()
         let standup = try await conversation(library, "Standup", at: start, said: "Morning everyone")
         let planning = try await conversation(library, "Planning", at: start.addingTimeInterval(3_600), said: "Budget review first")
         let lost = try await writePage(library, in: planning, "lost", order: 1)
-        let kept = try await writePage(library, in: planning, "kept", order: 2)
+        _ = try await writePage(library, in: planning, "kept", order: 2)
         // The folded conversation's copy of one page's strokes isn't in this library (never fetched, or lost).
         let gone = try await library.pageDrawingURL(for: try XCTUnwrap(lost.drawing), in: planning)
         try FileManager.default.removeItem(at: gone)
-        _ = try await merge([standup, planning], in: library)
-        let merged = try XCTUnwrap(library.meeting(standup))
-        XCTAssertEqual(merged.pages?.map(\.id), [kept.id], "a page whose files weren't copied isn't carried")
-        let url = try await library.pageDrawingURL(for: try XCTUnwrap(merged.page(kept.id)?.drawing), in: standup)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+        do { _ = try await merge([standup, planning], in: library); XCTFail("merged without a page's files, sending its words to the Trash") }
+        catch ConversationMergeError.pageFilesMissing(let title) { XCTAssertEqual(title, "Planning") }
+        XCTAssertNotNil(library.meeting(planning), "nothing went to the Trash")
+        XCTAssertNil(library.meeting(standup)?.pages)
+        XCTAssertEqual(library.meeting(planning)?.pages?.count, 2, "and its pages are as they were")
         // A drawing that can't be fetched stops the merge before anything changes, as a recording does.
         let again = try await conversation(library, "Retro", at: start.addingTimeInterval(7_200), said: "What went well")
         _ = try await writePage(library, in: again, "retro", order: 1)
@@ -153,8 +153,41 @@ final class MergeConversationsTests: XCTestCase {
                                                      pageDrawing: { _, _ in throw Offline() }, context: context)
             XCTFail("merged without a page's strokes")
         } catch is Offline { }
-        XCTAssertEqual(library.meeting(standup)?.pages?.count, 1)
+        XCTAssertNil(library.meeting(standup)?.pages)
         XCTAssertNotNil(library.meeting(again), "nothing moved to the Trash")
+    }
+
+    /// A page gaining strokes while the merge waits (for audio, or the lock) isn't carried naming a file the survivor lacks: the
+    /// merge asks to be tried again, as it does for a recording gained meanwhile.
+    func testBehaviorMergeConversationsRetriesWhenAFoldedPageGainsADrawingMeanwhile() async throws {
+        let library = try await open()
+        let standup = try await conversation(library, "Standup", at: start, said: "Morning everyone")
+        let planning = try await conversation(library, "Planning", at: start.addingTimeInterval(3_600), said: "Budget review first")
+        let written = try await writePage(library, in: planning, "first", order: 1)
+        var committed = false
+        do {
+            _ = try await library.mergeConversations([standup, planning], audio: { track, id in try await library.audioURL(for: track, in: id) },
+                                                     photo: { photo, id in try await library.photoURL(for: photo, in: id) },
+                                                     pageDrawing: { drawing, id in
+                                                         let url = try await library.pageDrawingURL(for: drawing, in: id)
+                                                         if !committed {
+                                                             committed = true
+                                                             _ = try await library.commitPageDrawing(Data("second strokes".utf8), page: written.id, in: planning,
+                                                                                                     strokeCount: 9, contentVersion: 1, device: nil, now: self.start.addingTimeInterval(9_000))
+                                                         }
+                                                         return url
+                                                     }, context: context)
+            XCTFail("carried a page naming a drawing the survivor doesn't have")
+        } catch ConversationMergeError.changed { }
+        XCTAssertNil(library.meeting(standup)?.pages, "nothing was folded in")
+        XCTAssertNotNil(library.meeting(planning))
+        // Tried again, it carries the new drawing with its file.
+        _ = try await merge([standup, planning], in: library)
+        let merged = try XCTUnwrap(library.meeting(standup)?.page(written.id))
+        let drawing = try XCTUnwrap(merged.drawing)
+        let stored = try await library.pageDrawingURL(for: drawing, in: standup)
+        XCTAssertEqual(try Data(contentsOf: stored), Data("second strokes".utf8))
+        for file in merged.files { XCTAssertTrue(library.hasLocalPageDrawing(PageDrawing(relativePath: file.relativePath, sha256: file.sha256, byteCount: 0, strokeCount: 0, editedAt: start), in: standup)) }
     }
 
     func testBehaviorTheOthersFoldIntoTheEarliestWithTheirRecordingsAndPhotosAndGoToTheTrash() async throws {

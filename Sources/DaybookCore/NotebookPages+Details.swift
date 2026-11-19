@@ -20,8 +20,8 @@ public struct ErasedStroke: Codable, Equatable, Sendable {
     /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
     public var unknownFields = UnknownFields()
 
-    /// How many a page keeps. Past that the oldest erasures go.
-    public static let capacity = 2_000
+    /// How many a page keeps. Past that the oldest erasures go: they ride in every snapshot of the conversation.
+    public static let capacity = 200
 
     public init(key: String, madeAt: Date, erasedAt: Date, trackID: UUID? = nil, time: TimeInterval? = nil) {
         self.key = key; self.madeAt = madeAt; self.erasedAt = erasedAt; self.trackID = trackID
@@ -199,7 +199,7 @@ public struct PageTurn: Codable, Equatable, Identifiable, Sendable {
     public var unknownFields = UnknownFields()
 
     /// How many a conversation keeps. Past that the oldest turns go.
-    public static let capacity = 2_000
+    public static let capacity = 200
 
     public init(at: Date, pages: [UUID], trackID: UUID? = nil, time: TimeInterval? = nil) {
         self.id = Self.id(at: at, pages: pages); self.at = at; self.pages = pages; self.trackID = trackID
