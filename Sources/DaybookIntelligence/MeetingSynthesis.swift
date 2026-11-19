@@ -1206,12 +1206,15 @@ struct SpokenPassages {
     /// word, in order, the gaps between them adding up to no more than 400 characters: the 26B quoted two of a
     /// three-hour meeting's commitments so ("Diego and I will write the new tracking plan together, by the end of
     /// February. I'll take the backend and technical events", with Diego's "Yes, end of February." between them).
-    func find(_ quote: String) -> Found? {
+    /// With `wholeOnly`, a quote counts only when it is found whole: no ellipsis joins pieces and no sentences are
+    /// split (Ask, where a sentence's quote must be words a passage holds as they are). Either way a quote matches
+    /// whole words: "signed contract" is not found in "unsigned contract".
+    func find(_ quote: String, wholeOnly: Bool = false) -> Found? {
         let start: Int, end: Int
-        if let range = text.range(of: quote) {
+        if let range = Self.wholeWords(quote, in: text, from: text.startIndex) {
             start = text.utf8.distance(from: text.startIndex, to: range.lowerBound)
             end = text.utf8.distance(from: text.startIndex, to: range.upperBound)
-        } else if let span = pieces(of: quote) {
+        } else if !wholeOnly, let span = pieces(of: quote) {
             start = text.utf8.distance(from: text.startIndex, to: span.lowerBound)
             end = text.utf8.distance(from: text.startIndex, to: span.upperBound)
         } else {
@@ -1221,6 +1224,21 @@ struct SpokenPassages {
         let last = passages.firstIndex(where: { $0.end >= end }) ?? first
         let speakers = Set(passages[first...last].map { $0.name?.lowercased() })
         return Found(name: speakers.count == 1 ? passages[first].name : nil, passage: first, words: start..<end)
+    }
+
+    /// The first place at or after `from` that `needle` is in `text` with no letter, digit, or apostrophe against its
+    /// ends, so a quote never starts or stops in the middle of a word.
+    static func wholeWords(_ needle: String, in text: String, from: String.Index) -> Range<String.Index>? {
+        guard !needle.isEmpty else { return nil }
+        func inWord(_ character: Character) -> Bool { character.isLetter || character.isNumber || character == "'" }
+        var search = from
+        while let range = text.range(of: needle, range: search..<text.endIndex) {
+            let beforeOK = !(needle.first.map(inWord) ?? false) || range.lowerBound == text.startIndex || !inWord(text[text.index(before: range.lowerBound)])
+            let afterOK = !(needle.last.map(inWord) ?? false) || range.upperBound == text.endIndex || !inWord(text[range.upperBound])
+            if beforeOK && afterOK { return range }
+            search = text.index(after: range.lowerBound)
+        }
+        return nil
     }
 
     /// Where a quote's pieces (between ellipses, "…", "[...]", and between sentences) are said in order, close
@@ -1233,10 +1251,10 @@ struct SpokenPassages {
         let length = pieces.reduce(0) { $0 + $1.utf8.count }
         // From each place the first piece is said, the rest in order after it.
         var from = text.startIndex
-        while let opening = text.range(of: first, range: from..<text.endIndex) {
+        while let opening = Self.wholeWords(first, in: text, from: from) {
             var last = opening, complete = true
             for piece in pieces.dropFirst() {
-                guard let range = text.range(of: piece, range: last.upperBound..<text.endIndex) else { complete = false; break }
+                guard let range = Self.wholeWords(piece, in: text, from: last.upperBound) else { complete = false; break }
                 last = range
             }
             guard complete else { return nil }

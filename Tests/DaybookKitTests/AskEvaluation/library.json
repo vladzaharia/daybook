@@ -1,0 +1,1123 @@
+[
+ {
+  "id": "weekly-0902",
+  "title": "Weekly sync",
+  "date": "2026-09-02T10:00",
+  "kind": "general",
+  "speakers": {
+   "s": "Sam",
+   "p": "Priya",
+   "a": "Alex"
+  },
+  "lines": [
+   [
+    "a",
+    "Okay, let's start. Three things today: pricing for the Pro tier, the onboarding emails, and the finance comparison sheet."
+   ],
+   [
+    "s",
+    "On pricing, I looked at what the other note-taking tools charge and I think we should set the Pro tier at nine dollars a month."
+   ],
+   [
+    "p",
+    "Nine feels low to me, but it keeps us under the threshold where people ask their manager for approval."
+   ],
+   [
+    "a",
+    "Fine. Let's go with nine dollars a month for the Pro tier for now and revisit after launch."
+   ],
+   [
+    "s",
+    "I'll get the comparison sheet over to finance by Friday the fourth."
+   ],
+   [
+    "a",
+    "Good. Priya, where are the onboarding emails?"
+   ],
+   [
+    "p",
+    "The first draft is rough. I want to rewrite the welcome email because it reads like a manual, nobody finishes it."
+   ],
+   [
+    "a",
+    "Agreed, the welcome email is the one that matters. How long will the rewrite take?"
+   ],
+   [
+    "p",
+    "A week, maybe less if Dana helps with the layout."
+   ],
+   [
+    "s",
+    "Dana is busy with the pricing page design review on Friday, so probably not before then."
+   ],
+   [
+    "a",
+    "Then take the week. Anything else? No? Thanks everyone."
+   ]
+  ],
+  "notes": [],
+  "bookmarks": [],
+  "summary": {
+   "overview": "The team set the Pro tier at nine dollars a month and Sam will send finance a comparison sheet; Priya will rewrite the welcome email.",
+   "sections": [
+    {
+     "heading": "Pricing",
+     "body": "- Pro tier set at nine dollars a month, to be revisited after launch"
+    }
+   ],
+   "actions": [
+    {
+     "text": "Send the comparison sheet to finance by Friday",
+     "owner": "Sam"
+    },
+    {
+     "text": "Rewrite the welcome email",
+     "owner": "Priya"
+    }
+   ]
+  }
+ },
+ {
+  "id": "design-0904",
+  "title": "Pricing page design review",
+  "date": "2026-09-04T14:00",
+  "kind": "general",
+  "speakers": {
+   "d": "Dana",
+   "a": "Alex",
+   "t": "Tomas"
+  },
+  "lines": [
+   [
+    "d",
+    "I brought two layouts for the pricing page. One has four panels across and one has three columns."
+   ],
+   [
+    "t",
+    "Four panels will be cramped on a laptop. The text for the Team plan alone is two lines."
+   ],
+   [
+    "a",
+    "I prefer the three columns. It reads more like a comparison and the price stands out."
+   ],
+   [
+    "d",
+    "Three columns it is. The Pro column gets the highlight because that is the one we want people to pick."
+   ],
+   [
+    "t",
+    "What about the main button? The mockup has it in orange."
+   ],
+   [
+    "d",
+    "Orange fights with our logo. I'd make the main button teal and keep orange only for warnings."
+   ],
+   [
+    "a",
+    "Teal works. Make the main button teal on the pricing page and on the sign-up page."
+   ],
+   [
+    "d",
+    "I'll deliver the full mockups by September eleventh."
+   ],
+   [
+    "t",
+    "Four panels would have looked busier anyway. Good call on the columns."
+   ],
+   [
+    "a",
+    "Great. Send the mockups to the channel when they're ready."
+   ]
+  ],
+  "notes": [
+   {
+    "after": "Orange fights",
+    "text": "Check contrast of teal button on white"
+   }
+  ],
+  "bookmarks": []
+ },
+ {
+  "id": "orchard-0909",
+  "title": "Call with Orchard & Vane",
+  "date": "2026-09-09T11:00",
+  "kind": "general",
+  "speakers": {
+   "g": "Ingrid",
+   "s": "Sam"
+  },
+  "lines": [
+   [
+    "s",
+    "Thanks for making time, Ingrid. Tell me how the team has been finding Lumenpath."
+   ],
+   [
+    "g",
+    "Honestly, people like it. The summaries save us an hour a day. We have a hundred and forty seats at Orchard & Vane now."
+   ],
+   [
+    "s",
+    "That's great to hear. What would make it better for you?"
+   ],
+   [
+    "g",
+    "Single sign-on. Our security group will not approve more seats without single sign-on."
+   ],
+   [
+    "s",
+    "Understood. We have a beta of single sign-on coming. I can promise you the SSO beta by the end of October."
+   ],
+   [
+    "g",
+    "End of October works. We'd like to be the first to try it."
+   ],
+   [
+    "s",
+    "You will be. I'll put your name on the list today."
+   ],
+   [
+    "g",
+    "One more thing, the export to our wiki loses the speaker names sometimes."
+   ],
+   [
+    "s",
+    "Noted. I'll pass that to Tomas, he's on exports."
+   ],
+   [
+    "g",
+    "Thank you, Sam. Talk again in October."
+   ]
+  ],
+  "notes": [],
+  "bookmarks": []
+ },
+ {
+  "id": "one-one-0915",
+  "title": "Sam and Alex 1:1",
+  "date": "2026-09-15T09:30",
+  "kind": "general",
+  "speakers": {
+   "a": "Alex",
+   "s": "Sam"
+  },
+  "lines": [
+   [
+    "a",
+    "Let's cover two things: the onboarding emails and whether we hire help."
+   ],
+   [
+    "s",
+    "Priya has been stretched with the billing work. I could take over the onboarding email rewrite from her."
+   ],
+   [
+    "a",
+    "Do it. Sam owns the onboarding email rewrite from now on. I'll tell Priya."
+   ],
+   [
+    "s",
+    "Okay. On hiring, I think one contractor for support and docs would help."
+   ],
+   [
+    "a",
+    "I agree. We'll hire one contractor for three months and see how it goes."
+   ],
+   [
+    "s",
+    "Do you have a budget in mind?"
+   ],
+   [
+    "a",
+    "Not yet. Let's ask Dana and Tomas to interview candidates in October."
+   ],
+   [
+    "s",
+    "Sounds good. I'll write the job description."
+   ],
+   [
+    "a",
+    "Perfect. That's all from me."
+   ]
+  ],
+  "notes": [],
+  "bookmarks": []
+ },
+ {
+  "id": "fennimore-0918",
+  "title": "Hosting call with Fennimore Cloud",
+  "date": "2026-09-18T13:00",
+  "kind": "general",
+  "speakers": {
+   "m": "Marcus",
+   "a": "Alex",
+   "p": "Priya"
+  },
+  "lines": [
+   [
+    "m",
+    "Thanks for joining. I'll walk through our plans. For your current usage the quote is four thousand two hundred dollars a month."
+   ],
+   [
+    "a",
+    "That's more than last quarter. The hosting bill keeps climbing as the transcripts pile up."
+   ],
+   [
+    "m",
+    "If you commit to an annual contract I can give you fifteen percent off."
+   ],
+   [
+    "a",
+    "I don't want to be locked in for a year while we still don't know our volumes. We'll stay on the monthly plan."
+   ],
+   [
+    "p",
+    "Can you send the contract so I can review the terms?"
+   ],
+   [
+    "m",
+    "I'll send it this afternoon."
+   ],
+   [
+    "p",
+    "Then I'll review the contract by September twenty-fifth."
+   ],
+   [
+    "a",
+    "Marcus, does the monthly plan include the storage tier?"
+   ],
+   [
+    "m",
+    "Storage is billed separately, about three hundred a month at your size."
+   ],
+   [
+    "a",
+    "Okay. We'll be in touch."
+   ]
+  ],
+  "notes": [],
+  "bookmarks": [],
+  "summary": {
+   "overview": "Fennimore quoted 4,200 dollars a month for hosting with 15 percent off for an annual contract; Alex chose to stay on the monthly plan.",
+   "sections": [
+    {
+     "heading": "Hosting",
+     "body": "- Quote of 4,200 dollars a month\n- Annual discount of 15 percent declined"
+    }
+   ],
+   "actions": [
+    {
+     "text": "Review the Fennimore contract by September 25",
+     "owner": "Priya"
+    }
+   ]
+  }
+ },
+ {
+  "id": "weekly-0930",
+  "title": "Weekly sync",
+  "date": "2026-09-30T10:00",
+  "kind": "general",
+  "speakers": {
+   "s": "Sam",
+   "p": "Priya",
+   "a": "Alex",
+   "t": "Tomas"
+  },
+  "lines": [
+   [
+    "a",
+    "The big item is the launch date. The single sign-on beta is slipping, and we promised it to Orchard."
+   ],
+   [
+    "s",
+    "If we hold the twentieth of October, we ship without it. I'd rather move the launch."
+   ],
+   [
+    "a",
+    "Then we move it. The launch is now November third, up from October twentieth."
+   ],
+   [
+    "t",
+    "That gives me time on the export bug. It's top priority before the launch, because exports lose speaker names."
+   ],
+   [
+    "a",
+    "Agreed, the export bug comes before everything else. Tomas, when?"
+   ],
+   [
+    "t",
+    "I'll fix the export bug by October seventh."
+   ],
+   [
+    "p",
+    "I'll send the onboarding email draft on October second."
+   ],
+   [
+    "s",
+    "I'm still on the email rewrite, so Priya, send me your notes on the welcome email and I'll fold them in."
+   ],
+   [
+    "p",
+    "Will do tonight."
+   ],
+   [
+    "a",
+    "Good. Anything blocking? No? Thanks."
+   ]
+  ],
+  "notes": [],
+  "bookmarks": [],
+  "summary": {
+   "overview": "The launch moved from October 20 to November 3 because the SSO beta slipped; fixing the export bug is the top priority.",
+   "sections": [
+    {
+     "heading": "Launch",
+     "body": "- Launch date is now November 3"
+    }
+   ],
+   "actions": [
+    {
+     "text": "Fix the export bug by October 7",
+     "owner": "Tomas"
+    },
+    {
+     "text": "Send the onboarding email draft on October 2",
+     "owner": "Priya"
+    }
+   ]
+  }
+ },
+ {
+  "id": "retro-1002",
+  "title": "Third quarter retro",
+  "date": "2026-10-02T15:00",
+  "kind": "general",
+  "speakers": {
+   "a": "Alex",
+   "s": "Sam",
+   "p": "Priya",
+   "d": "Dana",
+   "t": "Tomas"
+  },
+  "lines": [
+   [
+    "a",
+    "Let's do the retro for the third quarter. What went well?"
+   ],
+   [
+    "s",
+    "Three things stand out: faster releases, support response under four hours, and the new docs site."
+   ],
+   [
+    "p",
+    "I'd add that the docs site cut the questions we get about setup."
+   ],
+   [
+    "a",
+    "And what went badly?"
+   ],
+   [
+    "t",
+    "The outages. We had two outages, one on the twelfth of September and one on the twenty-seventh."
+   ],
+   [
+    "d",
+    "Both were during working hours, so customers noticed."
+   ],
+   [
+    "a",
+    "We need alerting that pages someone sooner. Tomas, can you look at it?"
+   ],
+   [
+    "t",
+    "Yes, after the export bug."
+   ],
+   [
+    "s",
+    "On the offsite, we should think about where."
+   ],
+   [
+    "a",
+    "Let's leave that for November. Thanks, everyone."
+   ]
+  ],
+  "notes": [
+   {
+    "after": "The outages",
+    "text": "Offsite budget cap is 18k"
+   },
+   {
+    "after": "And what went badly",
+    "text": "Retention goal for Q4: 92 percent"
+   }
+  ],
+  "bookmarks": []
+ },
+ {
+  "id": "kestrel-1007",
+  "title": "Call with Kestrel Logistics",
+  "date": "2026-10-07T10:30",
+  "kind": "general",
+  "speakers": {
+   "n": "Noor",
+   "s": "Sam"
+  },
+  "lines": [
+   [
+    "n",
+    "Thanks for the call. We've used Lumenpath for a year at Kestrel Logistics and the team likes it. We pay six thousand a year."
+   ],
+   [
+    "s",
+    "Glad to hear it. What are you missing?"
+   ],
+   [
+    "n",
+    "An audit log. Our compliance people need to see who opened and exported which transcript. Without an audit trail, we'll look elsewhere at renewal."
+   ],
+   [
+    "s",
+    "That's very reasonable. I'll have an audit log spec to you by October twenty-first."
+   ],
+   [
+    "n",
+    "That would help. We'd also like longer retention for exports."
+   ],
+   [
+    "s",
+    "I'll add that to the spec as well."
+   ],
+   [
+    "n",
+    "Thank you. Renewal is in January, so we have a little time."
+   ],
+   [
+    "s",
+    "Understood. Talk soon."
+   ]
+  ],
+  "notes": [
+   {
+    "after": "That's very reasonable",
+    "text": "Kestrel is a churn risk without the audit log"
+   }
+  ],
+  "bookmarks": []
+ },
+ {
+  "id": "pricing-1014",
+  "title": "Pricing review",
+  "date": "2026-10-14T11:00",
+  "kind": "general",
+  "speakers": {
+   "s": "Sam",
+   "p": "Priya",
+   "a": "Alex",
+   "d": "Dana"
+  },
+  "lines": [
+   [
+    "a",
+    "We've been at nine dollars for six weeks. Sam, what does the data say?"
+   ],
+   [
+    "s",
+    "Sign-up interest is fine, but at nine dollars we are leaving money on the table. Customers compare us to tools that charge fifteen."
+   ],
+   [
+    "p",
+    "Our support cost per user is higher than nine dollars covers, honestly."
+   ],
+   [
+    "d",
+    "A higher price also makes the pricing page look less like a bargain bin."
+   ],
+   [
+    "a",
+    "Then let's change it. We're setting the Pro tier at twelve dollars a month, starting November third, replacing the nine dollar price."
+   ],
+   [
+    "s",
+    "And the Team plan?"
+   ],
+   [
+    "a",
+    "Team stays at thirty dollars per seat."
+   ],
+   [
+    "p",
+    "I'll update the billing configuration by October twenty-eighth."
+   ],
+   [
+    "s",
+    "I'll move the comparison sheet to the board pack instead of finance, since the board asks about pricing."
+   ],
+   [
+    "a",
+    "Good. Dana, the pricing page needs the new number before the launch."
+   ],
+   [
+    "d",
+    "I'll have it ready."
+   ]
+  ],
+  "notes": [],
+  "bookmarks": [],
+  "summary": {
+   "overview": "The Pro tier price changes from nine to twelve dollars a month starting November 3; Team stays at thirty dollars per seat.",
+   "sections": [
+    {
+     "heading": "Decisions",
+     "body": "- Pro tier at twelve dollars a month from November 3"
+    }
+   ],
+   "actions": [
+    {
+     "text": "Update the billing configuration by October 28",
+     "owner": "Priya"
+    },
+    {
+     "text": "Move the comparison sheet to the board pack",
+     "owner": "Sam"
+    }
+   ]
+  }
+ },
+ {
+  "id": "weekly-1021",
+  "title": "Weekly sync",
+  "date": "2026-10-21T10:00",
+  "kind": "general",
+  "speakers": {
+   "s": "Sam",
+   "p": "Priya",
+   "a": "Alex",
+   "t": "Tomas"
+  },
+  "lines": [
+   [
+    "a",
+    "Quick status. The single sign-on beta went to Orchard and Vane yesterday, on the twentieth."
+   ],
+   [
+    "s",
+    "They already logged in with it. Ingrid says it works."
+   ],
+   [
+    "a",
+    "And the launch is still November third, nothing changes there."
+   ],
+   [
+    "t",
+    "The export bug is fixed and shipped. Speaker names survive now."
+   ],
+   [
+    "s",
+    "About the audit log spec for Kestrel, I need a few more days. I'll have it done by Friday the twenty-third."
+   ],
+   [
+    "a",
+    "Fine, tell Noor it's slipping two days."
+   ],
+   [
+    "p",
+    "The billing configuration for the new price is on track for next week."
+   ],
+   [
+    "a",
+    "Great. Thanks all."
+   ]
+  ],
+  "notes": [],
+  "bookmarks": [],
+  "summary": {
+   "overview": "SSO beta reached Orchard; the launch stays November 3; Sam moved the audit log spec to Friday the 23rd.",
+   "sections": [
+    {
+     "heading": "Status",
+     "body": "- Launch date unchanged\n- Export bug fixed"
+    }
+   ],
+   "actions": [
+    {
+     "text": "Deliver the audit log spec by Friday the 23rd",
+     "owner": "Sam"
+    }
+   ]
+  }
+ },
+ {
+  "id": "debrief-1022",
+  "title": "Contractor interview debrief",
+  "date": "2026-10-22T16:00",
+  "kind": "general",
+  "speakers": {
+   "a": "Alex",
+   "d": "Dana",
+   "t": "Tomas"
+  },
+  "lines": [
+   [
+    "a",
+    "We interviewed three people for the contractor role. Dana, your impressions?"
+   ],
+   [
+    "d",
+    "Rowan was the strongest. Clear writing, and she had already read our docs site and found two errors."
+   ],
+   [
+    "t",
+    "I agree. Rowan's support examples were concrete. The other two were more generic."
+   ],
+   [
+    "a",
+    "Then we make an offer to Rowan. Seven thousand five hundred dollars a month for the three months."
+   ],
+   [
+    "d",
+    "That's within what we discussed."
+   ],
+   [
+    "a",
+    "I'll send the offer tomorrow. If she accepts she starts on the second of November."
+   ],
+   [
+    "t",
+    "I'll prepare her laptop and accounts."
+   ],
+   [
+    "a",
+    "Thanks, Tomas."
+   ]
+  ],
+  "notes": [],
+  "bookmarks": []
+ },
+ {
+  "id": "harrowgate-1027",
+  "title": "Call with Harrowgate Bank",
+  "date": "2026-10-27T09:00",
+  "kind": "general",
+  "speakers": {
+   "l": "Lena",
+   "s": "Sam"
+  },
+  "lines": [
+   [
+    "l",
+    "We're evaluating Lumenpath for the compliance team at Harrowgate Bank. We're looking at two other vendors as well."
+   ],
+   [
+    "s",
+    "Thanks for including us. What matters most to you?"
+   ],
+   [
+    "l",
+    "Everything has to stay in a Canadian data center. We cannot have recordings crossing the border."
+   ],
+   [
+    "s",
+    "We can host Harrowgate's data in the Canadian region. That's possible with our setup."
+   ],
+   [
+    "l",
+    "Good. We also have a security questionnaire, four pages."
+   ],
+   [
+    "s",
+    "Send it over. I'll send the security questionnaire answers by November sixth."
+   ],
+   [
+    "l",
+    "That works. Our review meets the week after."
+   ],
+   [
+    "s",
+    "Then you'll have it in time."
+   ]
+  ],
+  "notes": [],
+  "bookmarks": [],
+  "summary": {
+   "overview": "Harrowgate Bank is comparing three vendors and needs data to stay in Canada; Sam will answer their security questionnaire by November 6.",
+   "sections": [
+    {
+     "heading": "Requirements",
+     "body": "- Data must stay in a Canadian data center"
+    }
+   ],
+   "actions": [
+    {
+     "text": "Send the security questionnaire answers by November 6",
+     "owner": "Sam"
+    }
+   ]
+  }
+ },
+ {
+  "id": "one-one-1103",
+  "title": "Priya and Alex 1:1",
+  "date": "2026-11-03T15:00",
+  "kind": "general",
+  "speakers": {
+   "a": "Alex",
+   "p": "Priya"
+  },
+  "lines": [
+   [
+    "a",
+    "How are you doing, really? The launch week was heavy."
+   ],
+   [
+    "p",
+    "Honestly, I'm wiped out. I haven't had a real break since August and I need a week off the week of Thanksgiving."
+   ],
+   [
+    "a",
+    "Take it. I'll cover the billing questions that week."
+   ],
+   [
+    "p",
+    "Thank you. Sam is traveling next week, so the Harrowgate questionnaire answers are going to slip."
+   ],
+   [
+    "a",
+    "Can you handle it?"
+   ],
+   [
+    "p",
+    "I'll take the Harrowgate questionnaire from Sam and finish it by Thursday."
+   ],
+   [
+    "a",
+    "Great. Let's tell Sam so he knows it's off his plate."
+   ],
+   [
+    "p",
+    "I'll message him now."
+   ]
+  ],
+  "notes": [],
+  "bookmarks": []
+ },
+ {
+  "id": "retro-1105",
+  "title": "Launch retro",
+  "date": "2026-11-05T14:00",
+  "kind": "general",
+  "speakers": {
+   "a": "Alex",
+   "s": "Sam",
+   "d": "Dana",
+   "t": "Tomas"
+  },
+  "lines": [
+   [
+    "a",
+    "The launch happened on Tuesday. Let's see the numbers."
+   ],
+   [
+    "s",
+    "We had four hundred and twelve sign-ups in the first two days."
+   ],
+   [
+    "s",
+    "And churn went from four percent to three point two after the new onboarding emails."
+   ],
+   [
+    "t",
+    "No outages during launch week, which is the first time."
+   ],
+   [
+    "d",
+    "I spotted a typo on the pricing page. It says 'recieve' under the Team plan."
+   ],
+   [
+    "a",
+    "Tomas, can you patch it?"
+   ],
+   [
+    "t",
+    "I'll push the patch by November ninth."
+   ],
+   [
+    "a",
+    "Good. Overall, a good launch. Let's keep the momentum."
+   ]
+  ],
+  "notes": [],
+  "bookmarks": [
+   {
+    "during": "I spotted a typo",
+    "text": "Typo on pricing page: fix before the weekend"
+   }
+  ]
+ },
+ {
+  "id": "weekly-1111",
+  "title": "Weekly sync",
+  "date": "2026-11-11T10:00",
+  "kind": "general",
+  "speakers": {
+   "s": "Sam",
+   "p": "Priya",
+   "a": "Alex",
+   "t": "Tomas"
+  },
+  "lines": [
+   [
+    "a",
+    "We have to talk about the Pro tier. Customers who joined at nine dollars are complaining about the increase."
+   ],
+   [
+    "s",
+    "We can keep it simple. New customers pay twelve dollars. Existing customers stay at nine dollars until March."
+   ],
+   [
+    "a",
+    "Okay. Existing customers keep nine dollars until March, and then they move to twelve."
+   ],
+   [
+    "p",
+    "I'll adjust the billing system again, then."
+   ],
+   [
+    "s",
+    "Kestrel renewed, by the way. They signed for two years."
+   ],
+   [
+    "a",
+    "Wonderful news. Who sends the paperwork?"
+   ],
+   [
+    "s",
+    "I'll send the renewal paperwork by November twentieth."
+   ],
+   [
+    "s",
+    "Orchard and Vane also went up to two hundred seats."
+   ],
+   [
+    "t",
+    "That's thirty percent more load on exports."
+   ],
+   [
+    "a",
+    "We can handle it. Thanks."
+   ]
+  ],
+  "notes": [],
+  "bookmarks": [],
+  "summary": {
+   "overview": "Existing Pro customers keep nine dollars until March; Kestrel renewed for two years and Orchard expanded to two hundred seats.",
+   "sections": [
+    {
+     "heading": "Pricing",
+     "body": "- Existing customers stay at nine dollars until March"
+    }
+   ],
+   "actions": [
+    {
+     "text": "Send the Kestrel renewal paperwork by November 20",
+     "owner": "Sam"
+    }
+   ]
+  }
+ },
+ {
+  "id": "offsite-1112",
+  "title": "Offsite planning",
+  "date": "2026-11-12T13:00",
+  "kind": "general",
+  "speakers": {
+   "a": "Alex",
+   "d": "Dana",
+   "s": "Sam"
+  },
+  "lines": [
+   [
+    "a",
+    "Time to settle the offsite. Where do we go?"
+   ],
+   [
+    "d",
+    "Tallinn is cheap in winter and the flights from here are fine. I'd pick Tallinn."
+   ],
+   [
+    "s",
+    "I like it. The old town is great and it's walkable."
+   ],
+   [
+    "a",
+    "Then it's decided: the offsite is in Tallinn, February ninth to twelfth."
+   ],
+   [
+    "a",
+    "How many people are going?"
+   ],
+   [
+    "d",
+    "Eleven, including Rowan."
+   ],
+   [
+    "a",
+    "Eleven people. Dana, can you handle the venue?"
+   ],
+   [
+    "d",
+    "I'll book the venue by November twenty-fifth."
+   ],
+   [
+    "s",
+    "I'll collect dietary needs."
+   ]
+  ],
+  "notes": [],
+  "bookmarks": []
+ },
+ {
+  "id": "tidewell-1113",
+  "title": "Call with Tidewell Foods",
+  "date": "2026-11-13T11:30",
+  "kind": "general",
+  "speakers": {
+   "g": "Greta",
+   "s": "Sam"
+  },
+  "lines": [
+   [
+    "g",
+    "We have sixty seats at Tidewell Foods and half of our kitchen managers speak Spanish."
+   ],
+   [
+    "s",
+    "Do they need transcripts in Spanish?"
+   ],
+   [
+    "g",
+    "Yes. They record in Spanish and want the transcript and summary in Spanish too."
+   ],
+   [
+    "s",
+    "We're working on it. I'll promise you Spanish transcripts by the end of January."
+   ],
+   [
+    "g",
+    "That would be a big help. Can we try a beta?"
+   ],
+   [
+    "s",
+    "Sure, I'll add you to the beta list."
+   ],
+   [
+    "g",
+    "Thanks. We'll look forward to it."
+   ]
+  ],
+  "notes": [],
+  "bookmarks": []
+ },
+ {
+  "id": "support-1116",
+  "title": "Support triage",
+  "date": "2026-11-16T10:00",
+  "kind": "general",
+  "speakers": {
+   "t": "Tomas",
+   "n": "Noor",
+   "a": "Alex"
+  },
+  "lines": [
+   [
+    "t",
+    "We had thirty-seven tickets last week. The top three issues were login loops, export timeouts, and billing emails."
+   ],
+   [
+    "a",
+    "How many P1 bugs are open right now?"
+   ],
+   [
+    "t",
+    "Seven open P1 bugs, most of them in exports."
+   ],
+   [
+    "a",
+    "That's too many. Let's rotate support. We'll run a weekly support rotation, starting with Noor."
+   ],
+   [
+    "n",
+    "Fine with me. I'll take this week."
+   ],
+   [
+    "t",
+    "I'll write down the runbook so the rotation is easy."
+   ],
+   [
+    "a",
+    "Thanks."
+   ]
+  ],
+  "notes": [],
+  "bookmarks": []
+ },
+ {
+  "id": "personal-1010",
+  "title": "Evening call",
+  "date": "2026-10-10T20:00",
+  "kind": "personal",
+  "speakers": {
+   "s": "Sam",
+   "l": "Lucas"
+  },
+  "lines": [
+   [
+    "l",
+    "How's work? You sounded stressed last time."
+   ],
+   [
+    "s",
+    "It's fine. Honestly, I've been thinking about leaving Lumenpath in the spring and moving to Montreal."
+   ],
+   [
+    "l",
+    "Does Alex know?"
+   ],
+   [
+    "s",
+    "No, and please don't mention it. I'll decide after the offsite."
+   ],
+   [
+    "l",
+    "Your secret is safe. Montreal is cold, though."
+   ],
+   [
+    "s",
+    "I can handle cold."
+   ]
+  ],
+  "notes": [],
+  "bookmarks": [],
+  "placement": "personal"
+ },
+ {
+  "id": "personal-1109",
+  "title": "Notes to self",
+  "date": "2026-11-09T21:00",
+  "kind": "personal",
+  "speakers": {
+   "s": "Sam"
+  },
+  "lines": [
+   [
+    "s",
+    "Reminder: my dentist appointment is on November twenty-fourth at three in the afternoon."
+   ],
+   [
+    "s",
+    "Also, I should buy a gift for my sister. Budget around eighty dollars."
+   ]
+  ],
+  "notes": [],
+  "bookmarks": [],
+  "placement": "personal"
+ }
+]
