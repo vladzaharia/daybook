@@ -24,6 +24,7 @@ final class AskControllerTests: XCTestCase {
         private var _calls: [AskEvidence] = []
         private var _open: Bool
         private let fails: Bool
+        var error: (any Error)?
         var calls: [AskEvidence] { lock.withLock { _calls } }
         init(open: Bool = true, fails: Bool = false) { _open = open; self.fails = fails }
         func release() { lock.withLock { _open = true } }
@@ -34,6 +35,7 @@ final class AskControllerTests: XCTestCase {
             lock.withLock { _calls.append(evidence) }
             progress(.init(0, "Answering"))
             while !isOpen { try await Task.sleep(for: .milliseconds(5)) }
+            if let error { throw error }
             if fails { struct Boom: Error {}; throw Boom() }
             guard let conversation = evidence.conversations.first, let passage = conversation.passages.first else {
                 return AskReply(answer: AskAnswer(status: .notFound(.modelSaidSo), closest: [], query: query))
@@ -118,6 +120,17 @@ final class AskControllerTests: XCTestCase {
         XCTAssertTrue(h.controller.isShown)
         h.controller.askAgain()
         try await waitUntil("a second try") { h.answerer.calls.count == 2 }
+    }
+
+    func testBehaviorAWaitThatRanOutSaysSoAndAsksAgain() async throws {
+        let h = harness()
+        h.answerer.error = AskError.waitedTooLong
+        h.controller.ask(question)
+        try await waitUntil("the wait to end") { h.controller.stage == .busy }
+        try await waitUntil("the hold to end") { h.balanced }
+        h.answerer.error = nil
+        h.controller.askAgain()
+        try await waitUntil("the answer") { h.controller.stage == .answered }
     }
 
     func testBehaviorWithoutTheSummaryModelItSaysSoAndHoldsNothing() {

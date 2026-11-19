@@ -68,6 +68,10 @@ struct AnswerPage: View {
                 Button(AskPageWords.download) { ModelManager(state: state).download(state.summaryModel) }
                     .buttonStyle(.daybookTinted)
             }
+        case .busy:
+            status(AskPageWords.modelBusy) {
+                Button(AskPageWords.askAgain) { ask.askAgain() }.buttonStyle(.daybookTinted)
+            }
         case .failed:
             status(AskPageWords.couldNotAnswer) {
                 Button(AskPageWords.askAgain) { ask.askAgain() }.buttonStyle(.daybookTinted)
@@ -114,7 +118,7 @@ struct AnswerPage: View {
             sentencesAndSources
             if ask.reply?.answer.status == .partial {
                 MarginRow {
-                    Text(AskPageWords.partial).daybookFont(.body).foregroundStyle(DaybookPalette.Ink.secondary)
+                    Text(AskWords.partial).daybookFont(.body).foregroundStyle(DaybookPalette.Ink.secondary)
                 }
             }
             colophon

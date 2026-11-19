@@ -45,8 +45,8 @@ public enum AskPageWords {
     public static let open = "Open"
     /// What a sentence's quoted words are: the words checked to be in the passage the sentence cites.
     public static let quoted = "Quoted"
-    /// What the page says of a partial answer's end.
-    public static let partial = "Only part of this is answered."
+    /// A question that waited too long behind another job.
+    public static let modelBusy = "Another job is still using the model."
 
     /// "Waiting for “Weekly sync”", or without a name when the model is held by something that has none.
     public static func waiting(for job: String?) -> String {

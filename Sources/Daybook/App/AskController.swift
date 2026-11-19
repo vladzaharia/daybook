@@ -53,7 +53,9 @@ final class AskController {
         case answered
         /// The summary model isn't on this Mac.
         case needsModel
-        /// It couldn't be answered (the model failed, or the wait ran out); asking again is the fix.
+        /// Another job held the model for longer than the engine waits; asking again is the fix.
+        case busy
+        /// It couldn't be answered; asking again is the fix.
         case failed
         /// Personal was hidden while it was open and the answer cited, or could have cited, a Personal conversation.
         case hidden
@@ -99,7 +101,7 @@ final class AskController {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         let (scope, name) = dependencies.scope()
-        if text == question, scope == self.scope, stage != .failed, stage != .hidden, stage != .needsModel { isShown = true; return }
+        if text == question, scope == self.scope, stage != .failed, stage != .busy, stage != .hidden, stage != .needsModel { isShown = true; return }
         begin(text, scope: scope, name: name)
     }
 
@@ -150,9 +152,11 @@ final class AskController {
                 for await progress in stream { self?.apply(progress, mine) }
             }
             let result: AskReply
+            // The engine reads the lock again before it gives anything to the model and before it returns.
+            let personalNow = dependencies.personal
             do {
                 result = try await engine.ask(text, scope: scope, in: meetings, vocabulary: vocabulary, people: people,
-                                              progress: { continuation.yield($0) })
+                                              personal: { await personalNow() }, progress: { continuation.yield($0) })
             } catch {
                 continuation.finish()
                 await consumer.value
@@ -169,6 +173,8 @@ final class AskController {
             if dependencies.personal() != .included, citesPersonal { clear() }
         } catch is CancellationError {
             return
+        } catch AskError.waitedTooLong {
+            if generation == mine { stage = .busy }
         } catch {
             if generation == mine { stage = .failed }
         }
