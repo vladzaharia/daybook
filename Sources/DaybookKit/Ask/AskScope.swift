@@ -19,7 +19,7 @@ public struct AskScope: Equatable, Sendable {
         }
 
         /// Whether a Personal conversation may be asked about.
-        var allowsPersonal: Bool { self == .included }
+        public var allowsPersonal: Bool { self == .included }
     }
 
     public var search: SearchScope

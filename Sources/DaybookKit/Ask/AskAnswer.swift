@@ -122,7 +122,7 @@ public struct AskSentence: Equatable, Sendable {
 public struct AskAnswer: Equatable, Sendable {
     public enum Status: Equatable, Sendable {
         case answered
-        /// Part is answered; `missing` says what isn't.
+        /// Part is answered, or sentences were dropped by the quote check. The interface says so with `AskWords.partial`.
         case partial
         /// "Nothing here answers that."
         case notFound(Reason)
@@ -140,7 +140,6 @@ public struct AskAnswer: Equatable, Sendable {
 
     public var status: Status
     public var sentences: [AskSentence]
-    public var missing: String?
     /// Sentences the model wrote that the quote check dropped.
     public var dropped: Int
     /// Conversations in the order retrieval ranked them, for the closest search results under a "not found".
@@ -148,9 +147,8 @@ public struct AskAnswer: Equatable, Sendable {
     /// What the question was read as: the people and dates it filtered by.
     public var query: AskQuery?
 
-    public init(status: Status, sentences: [AskSentence] = [], missing: String? = nil, dropped: Int = 0, closest: [UUID] = [],
-                query: AskQuery? = nil) {
-        self.status = status; self.sentences = sentences; self.missing = missing; self.dropped = dropped
+    public init(status: Status, sentences: [AskSentence] = [], dropped: Int = 0, closest: [UUID] = [], query: AskQuery? = nil) {
+        self.status = status; self.sentences = sentences; self.dropped = dropped
         self.closest = closest; self.query = query
     }
 

@@ -221,7 +221,8 @@ struct LibraryView: View {
     /// something is typed, so the field's menu doesn't open by itself.
     @ViewBuilder private var suggestions: some View {
         if !state.window.searchText.trimmingCharacters(in: .whitespaces).isEmpty {
-            ForEach(LibrarySearchSuggestions.tokens(for: state.window.searchText, tags: state.allTags, meetings: state.meetings, chosen: state.window.searchTokens)) { token in
+            ForEach(LibrarySearchSuggestions.tokens(for: state.window.searchText, tags: state.allTags, meetings: state.meetings, chosen: state.window.searchTokens,
+                                                     people: state.library.searchPeople)) { token in
                 Label(token.text, systemImage: token.symbol).searchCompletion(token)
             }
         }

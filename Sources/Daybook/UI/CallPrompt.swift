@@ -374,7 +374,10 @@ extension AppState {
             guard let self, answer == .record, self.recordingID == nil, !self.isStartingRecording else { return }
             Task {
                 await self.startRecording(title: meeting.title, from: .elsewhere)
-                if let id = self.recordingID { self.calendarMeeting = (id, meeting) }
+                if let id = self.recordingID {
+                    self.calendarMeeting = (id, meeting)
+                    self.findLastTime(forMeetingTitled: meeting.title)
+                }
             }
         }
     }
@@ -409,7 +412,10 @@ extension AppState {
             monitor.callRecordingStarted()
             guard recordingID == nil, !isStartingRecording else { return }
             // Started for a call, it stops when the call ends, as one recorded automatically does.
-            Task { await startRecording(title: event?.title ?? call.windowTitle, automatic: true, from: .elsewhere) }
+            Task {
+                await startRecording(title: event?.title ?? call.windowTitle, automatic: true, from: .elsewhere)
+                if let event { findLastTime(forMeetingTitled: event.title) }
+            }
         case .never:
             callAppChoices[call.bundleID] = .never
             monitor.suppressCurrentMeeting()

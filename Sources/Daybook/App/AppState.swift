@@ -193,6 +193,8 @@ final class AppState {
     @ObservationIgnored var askedMeetings: Set<String> = []
     /// The recording started from a meeting's prompt, and the meeting: asked about stopping once it's over.
     @ObservationIgnored var calendarMeeting: (recording: UUID, event: MeetingEvent)?
+    /// The earlier conversation of the meeting being recorded, found as the recording started (`LastTime`).
+    var lastTimeMeetingID: UUID?
     @ObservationIgnored var calendarWatch: Task<Void, Never>?
 
     /// Looks at this Mac for calls, only in the app (`MacEnvironment.watchesCalls`): a test's AppState must never read the
@@ -626,7 +628,8 @@ final class AppState {
     /// a large library is searched off the main actor (`LibrarySearchMemo`).
     var searchHits: [SearchHit] {
         _ = searchResultsArrived
-        let hits = searchMemo.hits(for: .init(text: window.searchText, tokens: window.searchTokens, scope: window.searchScope, revision: libraryRevision),
+        let hits = searchMemo.hits(for: .init(text: window.searchText, tokens: window.searchTokens, scope: window.searchScope, revision: libraryRevision,
+                                         people: library.searchPeople),
                                    in: meetings)
         // A Focus that leaves Personal out leaves it out of search too.
         guard !personalLock.focus.showsPersonal else { return hits }
@@ -1327,6 +1330,7 @@ extension AppState {
         if keepsRecording { afterStop.began(id, at: result.endedAt) } else { afterStop.end() }
         recordingID = nil; recordingStartedAt = nil; recordingWasAutomatic = false
         calendarMeeting = nil
+        lastTimeMeetingID = nil
         CallPromptWindow.shared.recordingEnded()
         sync.publishActivity(recording: nil)
         phones.recordingEnded(id)

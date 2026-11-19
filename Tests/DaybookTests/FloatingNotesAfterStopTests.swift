@@ -110,6 +110,24 @@ final class FloatingNotesAfterStopTests: XCTestCase {
         XCTAssertEqual(FloatingStatus.stoppedMessage(nil), "Everything up to then is saved.")
     }
 
+    func testBehaviorACalendarMeetingRecordingFindsItsLastTimeUntilTheRecordingEnds() async throws {
+        let microphone = FakeCaptureSource(method: "microphone")
+        let state = await state(microphone)
+        let earlier = state.library.newMeeting(title: "Weekly sync at 10:15 AM")
+        state.library.update(earlier) {
+            $0.date = Date(timeIntervalSinceNow: -7 * 86_400)
+            $0.summary = MeetingSummary(overview: "", actionItems: [ActionItem(text: "Send the budget"), ActionItem(text: "Done", completed: true)])
+        }
+        await state.startRecording(title: "Weekly sync")
+        XCTAssertNil(state.lastTime, "Looked for only when the calendar named the recording")
+        state.findLastTime(forMeetingTitled: "Weekly sync")
+        XCTAssertEqual(state.lastTime?.meetingID, earlier)
+        XCTAssertEqual(state.lastTime?.openSteps.map(\.text), ["Send the budget"])
+        speak(microphone)
+        await state.stopRecording()
+        XCTAssertNil(state.lastTime)
+    }
+
     func testBehaviorANormalStopIsSaved() async throws {
         let microphone = FakeCaptureSource(method: "microphone")
         let state = await state(microphone)

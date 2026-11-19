@@ -20,9 +20,9 @@ final class AskSynthesisTests: XCTestCase {
         ])
     }
 
-    private func reply(_ sentences: [(text: String, cites: [String], quote: String)], status: String = "answered", missing: String? = nil) -> String {
+    private func reply(_ sentences: [(text: String, cites: [String], quote: String)], status: String = "answered") -> String {
         let items = sentences.map { #"{"text":"\#($0.text)","cites":[\#($0.cites.map { "\"\($0)\"" }.joined(separator: ","))],"quote":"\#($0.quote)"}"# }
-        return #"{"status":"\#(status)","sentences":[\#(items.joined(separator: ","))],"missing":\#(missing.map { "\"\($0)\"" } ?? "null")}"#
+        return #"{"status":"\#(status)","sentences":[\#(items.joined(separator: ","))]}"#
     }
 
     private func answer(_ model: ScriptedSynthesisModel, evidence: AskEvidence? = nil) async throws -> AskAnswer {
@@ -49,7 +49,7 @@ final class AskSynthesisTests: XCTestCase {
         _ = try await answer(model)
         let schema = try XCTUnwrap(model.schemas.first)
         let object = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(schema.utf8)) as? [String: Any])
-        XCTAssertEqual(object["required"] as? [String], ["status", "sentences", "missing"])
+        XCTAssertEqual(object["required"] as? [String], ["status", "sentences"])
         let properties = try XCTUnwrap(object["properties"] as? [String: Any])
         XCTAssertEqual((properties["status"] as? [String: Any])?["enum"] as? [String], ["answered", "partial", "not_found"])
         let item = try XCTUnwrap(((properties["sentences"] as? [String: Any])?["items"] as? [String: Any]))
@@ -79,14 +79,50 @@ final class AskSynthesisTests: XCTestCase {
         XCTAssertEqual(model.calls, ["schema"])
     }
 
-    func testTheQuoteMatchesIgnoringCaseCurlyApostrophesWhitespaceTimestampsAndAnEllipsis() async throws {
+    func testTheQuoteMatchesIgnoringCaseCurlyApostrophesWhitespaceAndTimestamps() async throws {
         let model = ScriptedSynthesisModel { _ in
-            self.reply([("One.", ["P1"], "I'LL  get the   comparison sheet"), ("Two.", ["P1"], "[14:22] get the comparison sheet … by Friday"),
+            self.reply([("One.", ["P1"], "I'LL  get the   comparison sheet"), ("Two.", ["P1"], "[14:22] get the comparison sheet over to finance"),
                         ("Three.", ["P1"], #"\"comparison sheet over to finance\""#)])
         }
         let result = try await answer(model)
         XCTAssertEqual(result.sentences.count, 3, "\(result)")
         XCTAssertEqual(result.dropped, 0)
+    }
+
+    func testAQuoteIsFoundWholeWordsOnly() async throws {
+        var evidence = self.evidence
+        evidence.conversations[0].passages = [
+            .init(label: "P1", segmentID: segment1, time: 1, speaker: "Sam", text: "The unsigned contract stays with legal."),
+            .init(label: "P2", segmentID: segment2, time: 2, speaker: "Alex", text: "We will not ship on Friday.")]
+        let model = ScriptedSynthesisModel { _ in
+            self.reply([("The contract is signed.", ["P1"], "signed contract"), ("It ships on Friday.", ["P2"], "ship on Friday"),
+                        ("Legal keeps it.", ["P1"], "unsigned contract stays with legal"), ("Not Friday.", ["P2"], "will not ship on Friday")])
+        }
+        let result = try await answer(model, evidence: evidence)
+        XCTAssertEqual(result.sentences.map(\.text), ["It ships on Friday.", "Legal keeps it.", "Not Friday."], "words inside other words don't count")
+        XCTAssertEqual(result.dropped, 1)
+        // "ship on Friday" is in "We will not ship on Friday": the check proves the words are there, not what the sentence makes of them.
+    }
+
+    func testAQuoteAssembledFromPiecesIsDropped() async throws {
+        var evidence = self.evidence
+        evidence.conversations[0].passages = [
+            .init(label: "P1", segmentID: segment1, time: 1, speaker: "Sam", text: "We will not wait any longer, we ship on Friday."),
+            .init(label: "P2", segmentID: segment2, time: 2, speaker: "Alex", text: "No. Well, we decided to keep the old price, and we're done.")]
+        let model = ScriptedSynthesisModel { _ in
+            self.reply([("They ship Friday.", ["P1"], "we will … ship on friday"), ("Done.", ["P2"], "No. We're done."),
+                        ("Whole.", ["P1"], "we ship on Friday")])
+        }
+        let result = try await answer(model, evidence: evidence)
+        XCTAssertEqual(result.sentences.map(\.text), ["Whole."])
+    }
+
+    func testTheCommitmentsCheckStillJoinsPiecesButNotInsideWords() {
+        let transcript = SpokenPassages("[00:01] Alex: I'll email legal this week. The unsigned contract waits. Then I'll put both questions in the same email.")
+        XCTAssertNotNil(transcript.find("i'll email legal this week. [...] i'll put both questions in the same email"))
+        XCTAssertNil(transcript.find("signed contract"))
+        XCTAssertNotNil(transcript.find("unsigned contract"))
+        XCTAssertNil(transcript.find("i'll email legal this week. [...] i'll put both questions in the same email", wholeOnly: true))
     }
 
     func testAnUnknownLabelIsRemovedAndASentenceLeftWithNoneIsDropped() async throws {
@@ -152,20 +188,30 @@ final class AskSynthesisTests: XCTestCase {
         XCTAssertTrue(result.sentences.isEmpty)
     }
 
-    func testAPartialAnswerKeepsWhatItFoundAndWhatIsMissing() async throws {
+    func testNotFoundWinsOverSentencesThatCameWithIt() async throws {
+        let model = ScriptedSynthesisModel { _ in self.reply([("Sam sent it.", ["P1"], "comparison sheet over to finance")], status: "not_found") }
+        let result = try await answer(model)
+        XCTAssertEqual(result.status, .notFound(.modelSaidSo))
+        XCTAssertTrue(result.sentences.isEmpty)
+    }
+
+    func testADroppedSentenceMakesTheAnswerPartial() async throws {
         let model = ScriptedSynthesisModel { _ in
-            self.reply([("Sam said he would send the sheet.", ["P1"], "comparison sheet over to finance")], status: "partial", missing: "Nothing about the board pack date.")
+            self.reply([("Sam sent it.", ["P1"], "comparison sheet over to finance"), ("Made up.", ["P1"], "refund by Monday morning")])
         }
         let result = try await answer(model)
         XCTAssertEqual(result.status, .partial)
-        XCTAssertEqual(result.missing, "Nothing about the board pack date.")
+        XCTAssertEqual(result.dropped, 1)
+        XCTAssertEqual(AskWords.partial, "This answers only part of the question.")
     }
 
-    func testPartialWithNothingMissingIsAnswered() async throws {
-        let model = ScriptedSynthesisModel { _ in self.reply([("Sam sent it.", ["P1"], "comparison sheet over to finance")], status: "partial") }
+    func testThePartialStatusIsKeptAndTheModelsOwnWordsAboutWhatIsMissingAreNotUsed() async throws {
+        let model = ScriptedSynthesisModel { _ in
+            #"{"status":"partial","sentences":[{"text":"Sam said he would send the sheet.","cites":["P1"],"quote":"comparison sheet over to finance"}],"missing":"Invented claim."}"#
+        }
         let result = try await answer(model)
-        XCTAssertEqual(result.status, .answered)
-        XCTAssertNil(result.missing)
+        XCTAssertEqual(result.status, .partial)
+        XCTAssertEqual(result.sentences.count, 1)
     }
 
     func testAReplyBrokenOffPartwayKeepsItsCompleteSentences() async throws {
