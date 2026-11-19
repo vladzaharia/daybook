@@ -1,3 +1,4 @@
+import DaybookCore
 import DaybookKit
 import Foundation
 
@@ -64,6 +65,25 @@ extension AppState {
             }
         }
     }
+
+    /// Looks for the earlier conversation of the calendar's meeting that the recording under way is, for Floating Notes
+    /// (`lastTime`).
+    func findLastTime(forMeetingTitled title: String) {
+        guard let id = recordingID else { return }
+        lastTimeMeetingID = LastTime.find(title: title, startedAt: recordingStartedAt ?? Date(), excluding: id,
+                                          placement: meetings.first { $0.id == id }?.effectivePlacement, in: meetings,
+                                          isAllowed: canShowLastTime)?.meetingID
+    }
+
+    /// "Last time" for the recording under way, as the conversation is now (its steps change as they're done), unless
+    /// it left the library or the lock or a Focus hides it.
+    var lastTime: LastTime? {
+        guard recordingID != nil, let id = lastTimeMeetingID, let meeting = meetings.first(where: { $0.id == id }),
+              canShowLastTime(meeting) else { return nil }
+        return LastTime(meeting)
+    }
+
+    private func canShowLastTime(_ meeting: Meeting) -> Bool { personalLock.lists(meeting) && !personalLock.hides(meeting) }
 
     /// Turning Use Calendar on asks for access first (the system asks once); without it, it stays off.
     func setUsesCalendar(_ on: Bool) async {

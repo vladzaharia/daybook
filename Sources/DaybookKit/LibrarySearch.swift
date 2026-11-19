@@ -17,7 +17,8 @@ public struct SearchHit: Identifiable, Equatable, Sendable {
 }
 
 public enum LibrarySearch {
-    public static func hits(in meetings: [Meeting], text: String, tokens: [SearchToken], scope: SearchScope) -> [SearchHit] {
+    public static func hits(in meetings: [Meeting], text: String, tokens: [SearchToken], scope: SearchScope,
+                              people: SearchPeople = .none) -> [SearchHit] {
         let query = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let scoped = meetings.filter { meeting in
             switch scope {
@@ -31,7 +32,7 @@ public enum LibrarySearch {
             tokens.allSatisfy { token in
                 switch token {
                 case .tag(let tag): return (meeting.tags ?? []).contains { $0.caseInsensitiveCompare(tag) == .orderedSame }
-                case .speaker(let name): return meeting.speakers.contains { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+                case .speaker(let name): return people.spoke(name, in: meeting)
                 }
             }
         }
@@ -110,8 +111,9 @@ public final class LibrarySearchMemo {
         public var scope: SearchScope
         /// Changes whenever the library's conversations do.
         public var revision: Int
-        public init(text: String, tokens: [SearchToken], scope: SearchScope, revision: Int) {
-            self.text = text; self.tokens = tokens; self.scope = scope; self.revision = revision
+        public var people: SearchPeople
+        public init(text: String, tokens: [SearchToken], scope: SearchScope, revision: Int, people: SearchPeople = .none) {
+            self.text = text; self.tokens = tokens; self.scope = scope; self.revision = revision; self.people = people
         }
     }
 
@@ -126,7 +128,7 @@ public final class LibrarySearchMemo {
     private var pending: Task<Void, Never>?
     /// The search run off the main actor (tests replace it).
     var search: @Sendable ([Meeting], Key) -> [SearchHit] = { meetings, key in
-        LibrarySearch.hits(in: meetings, text: key.text, tokens: key.tokens, scope: key.scope)
+        LibrarySearch.hits(in: meetings, text: key.text, tokens: key.tokens, scope: key.scope, people: key.people)
     }
 
     public init() {}
@@ -138,7 +140,7 @@ public final class LibrarySearchMemo {
         searches += 1
         let passages = meetings.reduce(0) { $0 + $1.unifiedTranscript.count }
         guard passages >= backgroundThreshold else {
-            hits = LibrarySearch.hits(in: meetings, text: key.text, tokens: key.tokens, scope: key.scope)
+            hits = LibrarySearch.hits(in: meetings, text: key.text, tokens: key.tokens, scope: key.scope, people: key.people)
             return hits
         }
         let search = search
