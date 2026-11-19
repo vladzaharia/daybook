@@ -622,7 +622,8 @@ final class AppState {
     /// a large library is searched off the main actor (`LibrarySearchMemo`).
     var searchHits: [SearchHit] {
         _ = searchResultsArrived
-        let hits = searchMemo.hits(for: .init(text: window.searchText, tokens: window.searchTokens, scope: window.searchScope, revision: libraryRevision),
+        let hits = searchMemo.hits(for: .init(text: window.searchText, tokens: window.searchTokens, scope: window.searchScope, revision: libraryRevision,
+                                         people: library.searchPeople),
                                    in: meetings)
         // A Focus that leaves Personal out leaves it out of search too.
         guard !personalLock.focus.showsPersonal else { return hits }

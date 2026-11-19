@@ -256,7 +256,8 @@ private struct SearchResults: View {
         .overlay { if hits.isEmpty && captionHits.isEmpty { ContentUnavailableView.search(text: state.window.searchText) } }
         .task(id: CaptionQuery(text: state.window.searchText, tokens: state.window.searchTokens, scope: state.window.searchScope, revision: state.libraryRevision)) {
             // The conversations the search could list (its scope and tokens), less those the text search found.
-            let scoped = Set(LibrarySearch.hits(in: state.meetings, text: "", tokens: state.window.searchTokens, scope: state.window.searchScope).map(\.meetingID))
+            let scoped = Set(LibrarySearch.hits(in: state.meetings, text: "", tokens: state.window.searchTokens, scope: state.window.searchScope,
+                                                 people: state.library.searchPeople).map(\.meetingID))
             let found = await LibraryCaptionSearch.hits(in: state.meetings.filter { scoped.contains($0.id) }, query: state.window.searchText,
                                                         excluding: Set(hits.map(\.meetingID)), libraryRoot: state.library.rootURL)
             guard !Task.isCancelled else { return }
