@@ -35,6 +35,8 @@ final class PhoneDevices {
     /// The recorders recording along with this iPhone's shared recording (docs/multipoint.md): started
     /// with it, their audio saved into it as they record, stopped with it.
     let cascade: RecorderCascade
+    /// Apple Watch, when this iPhone has WatchConnectivity (never in tests' inert mode unless a test brings a watch).
+    let watch: PhoneWatch?
     let mode: Mode
     /// Recorders iOS handed back after relaunching Daybook in the background, and when.
     private(set) var restored: [UUID] = []
@@ -44,6 +46,11 @@ final class PhoneDevices {
 
     /// A recording was filed (the app model syncs at once and nudges a connected Mac).
     @ObservationIgnored var onImported: ((PhoneLibrary.Filed) -> Void)?
+    /// Whether this iPhone may still file a recording of its own into a conversation (the app model says so until its
+    /// launch recovery has filed what a previous run left). Apple Watch's recording for such a conversation, not in the
+    /// library yet, waits for it (`AppleWatchHooks.holdsImport`): this iPhone's recording makes the conversation, with its
+    /// title, date, and timeline, and the watch's joins it. Call `ownRecordingsFiled()` when the answer changes.
+    @ObservationIgnored var mayFileOwnRecording: (UUID) -> Bool = { _ in false }
     @ObservationIgnored private let library: PhoneLibrary
     @ObservationIgnored private let settings: PhoneSettings
     /// What this follows in the library and the recorders (`ObservationWatch`).
@@ -69,9 +76,10 @@ final class PhoneDevices {
         var cascade = RecorderCascade.Timing()
     }
 
-    /// `transport`, when given, replaces the mode's link to the recorder (tests: a simulated one).
+    /// `transport`, when given, replaces the mode's link to the recorder (tests: a simulated one); `watchTransport`, the
+    /// link to Apple Watch (tests: a `SimulatedWatch`).
     init(library: PhoneLibrary, settings: PhoneSettings, mode: Mode, defaults: UserDefaults = .standard,
-         timing: Timing = Timing(), transport: (() -> any SoundcoreTransport)? = nil) {
+         timing: Timing = Timing(), watchTransport: (any WatchTransport)? = nil, transport: (() -> any SoundcoreTransport)? = nil) {
         self.library = library
         self.settings = settings
         self.mode = mode
@@ -112,6 +120,9 @@ final class PhoneDevices {
             #endif
         }
         if let transport { environment.soundcoreTransport = transport }
+        // Apple Watch over WatchConnectivity, in the app only.
+        let watchTransport = watchTransport ?? (mode == .live ? WatchSessionTransport.ifSupported(stagingDirectory: staging) : nil)
+        environment.watch.transport = watchTransport
         hub = DeviceHub(environment: environment)
         #if DEBUG
         simulatedRecorder = simulator
@@ -120,6 +131,8 @@ final class PhoneDevices {
         let hub = self.hub
         cascade = RecorderCascade(sessions: { hub.sessions })
         cascade.timing = timing.cascade
+        let cascade = self.cascade
+        watch = watchTransport.map { PhoneWatch(transport: $0, hub: hub, cascade: cascade) }
         weakSelf = self
         hub.importer = { [weak self] url, identity, attachTo, source in
             guard let self else { throw DaybookError.libraryUnavailable }
@@ -129,13 +142,16 @@ final class PhoneDevices {
                 meeting.companions?.contains { $0.deviceKind == identity.kind && $0.recordingID == identity.recordingID } == true
             }?.id
             // A shared recording's conversation that isn't in this library yet (a Mac's, not synced here):
-            // made as the device leading it has it, so the copies agree when they meet.
-            if let linked, self.library.controller.meeting(linked) == nil, let pending = self.cascade.pendingConversation(linked) {
+            // made as the device leading it has it, so the copies agree when they meet. Apple Watch's recording
+            // names the conversation it was made for, which is made the same way whether or not the shared
+            // recording still remembers it (this iPhone relaunched since, say).
+            let pending = linked.flatMap(self.cascade.pendingConversation)
+            if let linked, self.library.controller.meeting(linked) == nil, pending != nil || identity.kind == AppleWatchIntegration.id {
                 try await self.library.reload()
                 if self.library.controller.meeting(linked) == nil {
-                    self.library.controller.add(Meeting(id: linked, title: pending.title ?? PhoneLibrary.deviceTitle(identity, fallback: url),
-                                                        date: pending.date ?? PhoneLibrary.deviceStart(identity) ?? Date(),
-                                                        status: pending.ledHere ? .imported : .draft))
+                    self.library.controller.add(Meeting(id: linked, title: pending?.title ?? PhoneLibrary.deviceTitle(identity, fallback: url),
+                                                        date: pending?.date ?? PhoneLibrary.deviceStart(identity) ?? Date(),
+                                                        status: pending?.ledHere == true ? .imported : .draft))
                 }
             }
             let filed = try await self.library.importDeviceRecording(url, identity: identity, attachTo: linked, source: source,
@@ -143,6 +159,10 @@ final class PhoneDevices {
             self.lastImported = filed
             self.onImported?(filed)
             return filed.meeting.id
+        }
+        hub.environment.watch.holdsImport = { [weak self] id in
+            guard let self else { return false }
+            return self.library.controller.meeting(id) == nil && self.mayFileOwnRecording(id)
         }
         if !LaunchOptions.isTestHost {
             let activity = RecorderActivityController { [weak self] in self?.hub.sessions ?? [] }
@@ -173,6 +193,8 @@ final class PhoneDevices {
             _ = controller?.isLoaded
         }) { [weak self] in self?.applyOwnership() })
         hub.start()
+        // WatchConnectivity activates now too, before the first scene: a message from the watch can launch Daybook.
+        watch?.start()
         holdRecorders()
         applyOwnership()
         recorderActivity?.follow()
@@ -202,6 +224,9 @@ final class PhoneDevices {
     }
 
     func shutDown() { hub.shutDown() }
+
+    /// What `mayFileOwnRecording` says changed: Apple Watch's recordings it held import now.
+    func ownRecordingsFiled() { hub.environment.watch.importHoldChanged() }
 
     /// Wi‑Fi Fast Transfer starts only in the foreground, and leaving it for more than a moment ends Fast
     /// Transfer, which carries on over Bluetooth. A system alert over Daybook makes the scene inactive, not

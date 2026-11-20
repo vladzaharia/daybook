@@ -12,6 +12,9 @@ extension FocusedValues {
     /// conversation of the imported recording it shows. Nil with none, or with several selected. For menus and other
     /// windows that act on what the person is looking at.
     @Entry var shownConversation: UUID?
+    /// The conversations the library window's list selects when it selects several, for Conversation › Merge…; nil
+    /// with one or none.
+    @Entry var selectedConversations: Set<UUID>?
     /// Whether the library window's toolbar shows, for View › Show/Hide Toolbar.
     @Entry var libraryToolbarShown: Binding<Bool>?
     /// Whether the library window's inspector shows, for View › Show/Hide Inspector (⌃⌘I); nil without a conversation
@@ -28,6 +31,8 @@ struct LibraryView: View {
     @State private var columnCap = ColumnFit.all
     /// What `adaptColumns` set last, so the change it makes isn't taken for the person's.
     @State private var adaptedColumns: NavigationSplitViewVisibility?
+    /// When `adaptColumns` last changed the columns: the sidebar is still moving for a moment after.
+    @State private var columnsAdaptedAt = Date.distantPast
     @State private var windowWidth: CGFloat = 1280
     /// The visible width of the window's screen, once it's on one: a screen narrower than the inspector needs shows it
     /// in a window as wide as the screen (`ColumnFit.inspectorFits`).
@@ -50,7 +55,8 @@ struct LibraryView: View {
 
     /// The conversation whose controls the toolbar shows; on the device page, an imported recording's conversation.
     private var toolbarMeeting: Meeting? {
-        guard state.window.selection.count < 2 else { return nil }
+        // An answer is on the page: nothing of a conversation's applies.
+        guard state.window.selection.count < 2, !state.ask.isShown else { return nil }
         if state.window.place.isDevice && !state.window.isSearching {
             return state.deviceConversationID.flatMap { id in state.meetings.first { $0.id == id } }
         }
@@ -59,7 +65,7 @@ struct LibraryView: View {
 
     /// Whether the page is a conversation chosen in the list, which the inspector is for. A device's page has none.
     private var showsConversation: Bool {
-        !(state.window.place.isDevice && !state.window.isSearching) && state.window.selection.count < 2 && state.selectedMeeting != nil
+        !state.ask.isShown && !(state.window.place.isDevice && !state.window.isSearching) && state.window.selection.count < 2 && state.selectedMeeting != nil
     }
 
     var body: some View {
@@ -71,6 +77,10 @@ struct LibraryView: View {
                 if state.window.place.isDevice && !state.window.isSearching { DeviceRecordingsList(state: state) }
                 else { ConversationList(state: state) }
             }
+            // The list sits on the page's paper, as the title bar does: the system's own list ground is a different
+            // surface in dark appearance.
+            .scrollContentBackground(.hidden)
+            .background(DaybookPalette.paper)
             // A wide window gives the list room for two lines of gist (`ConversationRowView.twoLineGistWidth`).
             .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 440)
         } detail: {
@@ -104,6 +114,7 @@ struct LibraryView: View {
             Label(token.text, systemImage: token.symbol)
         }
         .searchSuggestions { suggestions }
+        .modifier(AskSearchModifier(state: state))
         .searchFocused($searchFocused)
         .onChange(of: state.searchFocusRequest) { _, _ in searchFocused = true }
         .onChange(of: state.window.searchText) { _, text in promoteHashTag(text) }
@@ -112,6 +123,9 @@ struct LibraryView: View {
         .environment(\.readingScale, CGFloat(state.window.readingScale))
         .focusedSceneValue(\.shownConversation, toolbarMeeting?.id)
         .toolbarVisibility(toolbarShown ? .automatic : .hidden, for: .windowToolbar)
+        // One surface across the title bar: the list's column doesn't end under the window's title.
+        .toolbarBackground(DaybookPalette.paper, for: .windowToolbar)
+        .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
         .focusedSceneValue(\.libraryToolbarShown, $toolbarShown)
         .focusedSceneValue(\.libraryInspectorShown, inspectorCommand)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { windowWidth = $0; noteScreen() }
@@ -131,6 +145,8 @@ struct LibraryView: View {
         .onChange(of: state.inspectorRequest) { _, _ in askForInspector() }
         .onChange(of: inspectorPresented) { _, _ in adaptColumns() }
         .onChange(of: showsConversation) { _, _ in adaptColumns() }
+        // Once the window is back as it was, the inspector counts only if it really shows.
+        .onChange(of: restored) { _, _ in adaptColumns() }
         .onChange(of: columns) { old, shown in columnsChanged(from: old, to: shown) }
         .onChange(of: state.isReady, initial: true) { _, ready in if ready { restore() } }
         .onChange(of: state.window.place) { _, place in if restored { storedPlace = LibraryRestoration.encode(place) } }
@@ -151,6 +167,7 @@ struct LibraryView: View {
             Text(state.window.confirmingTrash.count > 1 ? "Their audio, notes, and summaries go with them."
                  : "Its audio, notes, and summary go with it.")
         }
+        .modifier(MacMergeConfirmation(state: state))
         .alert(state.shownProblem?.title ?? "", isPresented: Binding(get: { state.shownProblem != nil }, set: { if !$0 { state.dismissProblem() } }),
                presenting: state.shownProblem) { problem in
             Button("OK") { state.dismissProblem() }
@@ -167,6 +184,8 @@ struct LibraryView: View {
     @ViewBuilder private var detail: some View {
         if let problem = state.libraryProblem {
             LibraryProblemPage(state: state, problem: problem)
+        } else if state.ask.isShown {
+            AnswerPage(state: state, ask: state.ask)
         } else if state.window.place.isDevice && !state.window.isSearching {
             DevicePage(state: state)
         } else if state.window.place.isTrash && !state.window.isSearching {
@@ -203,7 +222,8 @@ struct LibraryView: View {
     /// something is typed, so the field's menu doesn't open by itself.
     @ViewBuilder private var suggestions: some View {
         if !state.window.searchText.trimmingCharacters(in: .whitespaces).isEmpty {
-            ForEach(LibrarySearchSuggestions.tokens(for: state.window.searchText, tags: state.allTags, meetings: state.meetings, chosen: state.window.searchTokens)) { token in
+            ForEach(LibrarySearchSuggestions.tokens(for: state.window.searchText, tags: state.allTags, meetings: state.meetings, chosen: state.window.searchTokens,
+                                                     people: state.library.searchPeople)) { token in
                 Label(token.text, systemImage: token.symbol).searchCompletion(token)
             }
         }
@@ -230,19 +250,47 @@ struct LibraryView: View {
     /// The sidebar steps aside in narrow windows, and when the inspector would leave the page under 560 pt, and comes
     /// back once there's room again (`ColumnFit`), never past what the person chose to show. (The window itself stays
     /// wide enough for the page beside the list and the inspector: `ColumnFit.narrowestWithInspector`.)
-    private func adaptColumns() {
-        columnCap = ColumnFit.cap(window: windowWidth, inspector: inspectorShown, previous: columnCap)
+    ///
+    /// Until the window is back as the person left it (`restored`), the inspector they left open counts as showing, and
+    /// nothing animates: the window opens in the arrangement it will have, not with a sidebar that then steps aside.
+    @discardableResult private func adaptColumns() -> Bool {
+        let inspector = restored ? inspectorShown
+            : inspectorPresented && ColumnFit.inspectorFits(window: windowWidth, screen: screenWidth)
+        columnCap = ColumnFit.cap(window: windowWidth, inspector: inspector, previous: columnCap)
         let target = min(ColumnFit(storedColumns), columnCap).visibility
-        guard ColumnFit(columns) != ColumnFit(target) else { return }
+        guard ColumnFit(columns) != ColumnFit(target) else { return false }
         adaptedColumns = target
-        withAnimation { columns = target }
+        columnsAdaptedAt = Date()
+        if restored {
+            withAnimation { columns = target }
+        } else {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { columns = target }
+        }
+        return true
     }
 
     /// The cap applied again as the window shows and comes forward, and the sidebar the window shows put aside when
     /// `columns` says it is: `columns` set before the window was on screen isn't taken as proof of what it shows.
+    ///
+    /// Never while the sidebar is on its way aside: collapsing it in AppKit in the middle of SwiftUI's own change left
+    /// its panel drawn over the list. A change just made is checked once it has settled.
     private func matchShownColumns() {
-        adaptColumns()
-        guard ColumnFit(columns) < .all, let window = shareAnchor.window,
+        let changed = adaptColumns()
+        guard !changed, Date().timeIntervalSince(columnsAdaptedAt) > Self.columnSettle else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.columnSettle) { collapseShownSidebar() }
+            return
+        }
+        collapseShownSidebar()
+    }
+
+    /// How long a change of columns takes to settle.
+    private static let columnSettle: TimeInterval = 0.7
+
+    private func collapseShownSidebar() {
+        guard Date().timeIntervalSince(columnsAdaptedAt) >= Self.columnSettle, ColumnFit(columns) < .all,
+              let window = shareAnchor.window,
               let sidebar = ColumnFit.sidebarItem(in: window.contentView), !sidebar.isCollapsed else { return }
         sidebar.isCollapsed = true
     }
@@ -650,6 +698,29 @@ private struct BatchSelectionView: View {
     }
 }
 
+/// Merge…'s question ("Merge 3 conversations?"), from whichever menu asked: it can't be undone. The selection of several
+/// is what Conversation › Merge… acts on (`FocusedValues.selectedConversations`).
+private struct MacMergeConfirmation: ViewModifier {
+    @Bindable var state: AppState
+
+    private var several: Set<UUID>? { state.window.selection.count > 1 ? state.window.selection : nil }
+
+    func body(content: Content) -> some View {
+        content
+            .focusedSceneValue(\.selectedConversations, several)
+            .alert(LibraryWords.mergeTitle(state.window.confirmingMerge.count),
+                      isPresented: Binding(get: { !state.window.confirmingMerge.isEmpty }, set: { if !$0 { state.window.confirmingMerge = [] } })) {
+            Button("Merge", role: .destructive) {
+                state.mergeConversations(state.window.confirmingMerge)
+                state.window.confirmingMerge = []
+            }
+            Button("Cancel", role: .cancel) { state.window.confirmingMerge = [] }
+        } message: {
+            Text(LibraryWords.mergeMessage)
+        }
+    }
+}
+
 /// Audio dropped on an open conversation joins it as another recording.
 private struct AddRecordingDrop: ViewModifier {
     @Bindable var state: AppState
@@ -680,5 +751,40 @@ struct ElapsedTime: View {
                 .contentTransition(reduceMotion ? .opacity : .numericText(countsDown: false))
                 .animation(DaybookMotion.resolved(DaybookMotion.tick, reduceMotion: reduceMotion), value: Int(elapsed))
         }
+    }
+}
+
+/// Asking from the search field (docs/interface.md, "Asking a question"): Return asks a text that reads as a question
+/// (`AskQuestion`), ⌘Return asks anything, clearing the field or closing the window closes the answer, and the index of
+/// what Ask reads follows the library once it has loaded, and what the lock and a Focus allow.
+private struct AskSearchModifier: ViewModifier {
+    let state: AppState
+
+    private var indexKey: [Int] {
+        [state.isReady ? 1 : 0, state.libraryRevision, state.personalLock.isLocked ? 1 : 0, state.personalLock.focus.showsPersonal ? 1 : 0]
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .onSubmit(of: .search) { submit(command: NSApp.currentEvent?.modifierFlags.contains(.command) == true) }
+            .background {
+                Button("") { submit(command: true) }
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .frame(width: 0, height: 0)
+                    .opacity(0)
+                    .accessibilityHidden(true)
+            }
+            .onChange(of: state.window.searchText) { _, text in
+                if text.trimmingCharacters(in: .whitespaces).isEmpty { state.ask.close() }
+            }
+            .task(id: indexKey) { if state.isReady { state.ask.refreshIndex() } }
+            .onDisappear { state.ask.close() }
+    }
+
+    /// Return in the search field: text that reads as a question asks it; ⌘Return asks whatever is typed.
+    private func submit(command: Bool) {
+        let text = state.window.searchText
+        guard command ? !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty : AskQuestion.readsAsQuestion(text) else { return }
+        state.ask.ask(text)
     }
 }

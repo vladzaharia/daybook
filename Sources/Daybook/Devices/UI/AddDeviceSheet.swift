@@ -147,7 +147,7 @@ private struct KindChooser: View {
         VStack(alignment: .leading, spacing: 0) {
             AddRecorderHeader(symbol: "plus.circle", title: "Add Device")
             VStack(spacing: DaybookSpacing.s2) {
-                ForEach(DeviceCatalog.kinds) { kind in
+                ForEach(DeviceCatalog.kindsAddedByHand) { kind in
                     KindCard(kind: kind, isSetUp: !kind.allowsMultiple && state.devices.session(kind: kind.id) != nil) { choose(kind) }
                 }
             }

@@ -169,7 +169,8 @@ public final class RecorderCascade {
     }
 
     private func run(_ session: DeviceSession, for id: UUID, role forced: Role?) async -> Member? {
-        guard let control = session.direct as? any RecordControlConnection else { return nil }
+        // One that can't take part now (Apple Watch without Daybook open on it) is left out quietly: no member, no line.
+        guard let control = session.direct as? any RecordControlConnection, control.canRecordAlong else { return nil }
         let name = session.device.name
         var member = Member(sessionID: session.id, kind: session.kind.id, serial: session.recorderSerial, name: name,
                             role: forced ?? .started, state: .starting)
@@ -190,9 +191,11 @@ public final class RecorderCascade {
         } else {
             // Now or not at all: ahead of any import, and a Start that confirms after this gives up is paused again.
             guard await session.recordCommand(.start, deadline: timing.confirm) == .confirmed else {
-                member.state = .unavailable("\(name) didn’t start recording.")
+                // A device that refused says why in its own words ("Apple Watch storage is full.").
+                let words = control.recordCommandIssue ?? "\(name) didn’t start recording."
+                member.state = .unavailable(words)
                 put(member)
-                say("\(name) didn’t start recording.")
+                say(words)
                 return member
             }
             member.role = forced ?? .started

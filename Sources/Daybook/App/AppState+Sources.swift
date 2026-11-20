@@ -120,9 +120,9 @@ extension AppState {
     /// as sure as a match that joins a conversation (`attachConfidence`). A clock that was minutes off is still found.
     /// The result is composed onto the reference's own clock (`Meeting.clock(of:)`), drift and all.
     func compareSound(of url: URL, digest: String? = nil, duration: TimeInterval?, in meetingID: UUID, clockOffset: TimeInterval?,
-                      reliableClock: Bool, excluding: Set<UUID> = []) async -> SoundComparison {
+                      reliableClock: Bool, excluding: Set<UUID> = [], track: UUID? = nil) async -> SoundComparison {
         guard let meeting = meetings.first(where: { $0.id == meetingID }),
-              let reference = meeting.alignmentReference(excluding: excluding),
+              let reference = meeting.alignmentReference(excluding: excluding, onStretchOf: track),
               let clock = meeting.clock(of: reference.id),
               let referenceURL = await availableAudioURL(for: reference, in: meetingID) else { return .unavailable }
         let placement = (offset: clock.offset, rate: clock.rate)
@@ -272,8 +272,11 @@ extension AppState {
             }
             return recorderClock(for: track, link: link)?.macDate(fromRecorder: startedAt) ?? startedAt
         }
-        // Capture sets a Mac recording's creation date to when its first sample arrived.
-        if track.source == .microphone || track.source == .systemAudio { return track.createdAt }
+        // Capture sets a Mac recording's creation date to when its first sample arrived. Not Apple Watch's microphone track:
+        // it was created when it was imported, which says nothing of when it started.
+        if track.deviceKind != AppleWatchIntegration.id, track.source == .microphone || track.source == .systemAudio {
+            return track.createdAt
+        }
         return track.device.flatMap(deviceRecordingStart)
     }
 
@@ -440,7 +443,7 @@ extension AppState {
             var placed: SourceAlignment?, compared = false
             if let url = await availableAudioURL(for: track, in: id) {
                 switch await compareSound(of: url, digest: track.sha256, duration: track.duration, in: id, clockOffset: pending.clockOffset,
-                                          reliableClock: pending.clockOffset != nil, excluding: unplaced.union([track.id])) {
+                                          reliableClock: pending.clockOffset != nil, excluding: unplaced.union([track.id]), track: track.id) {
                 case .unavailable, .failed: break
                 case .noMatch: compared = true
                 case .match(let found):

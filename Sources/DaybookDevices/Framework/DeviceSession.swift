@@ -543,7 +543,7 @@ public final class DeviceSession: Identifiable {
         #endif
         guard runner == nil, libraryReady, !isHandingOff, let item = queue.next else { return }
         // A recorder another device manages isn't reached for: its waiting imports move to that device.
-        guard device.isEnabled(item.method), let connection = connection(item.method), connection.state.isConnected,
+        guard device.isEnabled(item.method), let connection = connection(item.method), canImport(from: connection),
               item.method != .direct || managedElsewhere == nil else {
             queue.suspend()
             return
@@ -597,7 +597,8 @@ public final class DeviceSession: Identifiable {
                 // the library keeps the one it has rather than a second conversation.
                 var holder = DeviceLibraryLinks.meeting(holding: identity, in: meetings)
                 if holder == nil {
-                    holder = try await importer(audio.url, identity, item.attachTo ?? links.partial[item.recording.id], kind.audioSource)
+                    holder = try await importer(audio.url, identity, audio.conversationID ?? item.attachTo ?? links.partial[item.recording.id],
+                                                kind.audioSource)
                 }
                 connection.didImport(item.recording)
                 outcome = .imported(holder)
@@ -798,6 +799,11 @@ public final class DeviceSession: Identifiable {
         }
     }
 
+    /// Its recordings can be imported now: it's connected, or they're here already (`importsWithoutConnection`).
+    private func canImport(from connection: any DeviceConnection) -> Bool {
+        connection.state.isConnected || connection.importsWithoutConnection
+    }
+
     /// Resumes the queue when its method is back, and queues what should import on its own.
     private func evaluate() {
         evaluations += 1
@@ -805,10 +811,12 @@ public final class DeviceSession: Identifiable {
         if demoFrozen { return }
         #endif
         defer { pendingChanged() }
-        if queue.isSuspended, let next = queue.waiting.first, connection(next.method)?.state.isConnected == true { queue.resume() }
+        if queue.isSuspended, let next = queue.waiting.first, let connection = connection(next.method), canImport(from: connection) {
+            queue.resume()
+        }
         guard libraryReady, !isHandingOff else { return }
         importAdopted()
-        for connection in connections where device.isEnabled(connection.method) && connection.state.isConnected {
+        for connection in connections where device.isEnabled(connection.method) && canImport(from: connection) {
             let excluded = Set(queue.ids + failures.map(\.id) + arrivingThroughSync.keys)
             let candidates = connection.automaticImports(links: links, since: device.automaticImportsSince, excluding: excluded)
             enqueue(candidates, method: connection.method, attachTo: nil, automatic: true)
@@ -873,7 +881,7 @@ public final class DeviceSession: Identifiable {
     /// Queues adopted imports the recorder lists. Ones it doesn't list after a fresh listing are
     /// gone from it (or imported already), and are dropped.
     private func importAdopted() {
-        guard !adoptedImports.isEmpty, let direct, direct.state.isConnected, direct.isInventoryCurrent,
+        guard !adoptedImports.isEmpty, let direct, canImport(from: direct), direct.isInventoryCurrent,
               let listed = direct.inventoryUpdatedAt else { return }
         let recordings = Dictionary(direct.recordings.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         var remaining: [DeviceHandedOffImport] = []

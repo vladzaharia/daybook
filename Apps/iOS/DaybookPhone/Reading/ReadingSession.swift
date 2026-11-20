@@ -74,6 +74,9 @@ final class ReadingSession {
     var isSelecting = false
     var selection: Set<UUID> = []
 
+    /// The conversation whose notebook is open, full screen (More › Notebook).
+    var notebookFor: UUID?
+
     // Sheets
     var sheet: ReadingSheet?
     /// The camera is open to add a photo to this conversation.
@@ -93,6 +96,10 @@ final class ReadingSession {
     var alert: ReadingAlert?
     /// Conversations waiting for the person to confirm moving them to the Trash.
     var confirmingTrash: [UUID] = []
+    /// Conversations waiting for the person to confirm merging them (Merge…).
+    var confirmingMerge: [UUID] = []
+    /// How far a merge's downloads have come (0...1), while it runs; nil otherwise.
+    var mergeProgress: Double?
 
     let player = PlaybackController()
     /// Debug launch arguments for screenshots, applied once the library has loaded.

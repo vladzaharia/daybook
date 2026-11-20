@@ -343,6 +343,23 @@ final class LibraryControllerTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
     }
 
+    /// A recorder file whose start its device knows (Apple Watch's) keeps it as the track's start; one without keeps none.
+    func testARecordersFileKeepsTheStartItsDeviceKnows() async throws {
+        let library = try await open()
+        let id = library.newMeeting(title: "Walk")
+        let identity = DeviceRecordingIdentity(kind: AppleWatchIntegration.id, serial: "watch-1", recordingID: "rec-1")
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        var provenance = RecordingProvenance.file(source: .microphone, device: identity, duration: 60)
+        provenance.startedAt = start
+        await library.acquireLock()
+        _ = try await library.ingest(try file("rec-1.m4a", "watch audio"), into: id, provenance: provenance)
+        _ = try await library.ingest(try file("other.wav", "other audio"), into: id, provenance: .file(source: .imported))
+        library.releaseLock()
+        let tracks = try XCTUnwrap(library.meeting(id)?.tracks)
+        XCTAssertEqual(tracks.first { $0.device == identity }?.startedAt, start)
+        XCTAssertNil(tracks.first { $0.device == nil }?.startedAt)
+    }
+
     func testACaptureRecordsWhatThisDeviceMeasured() async throws {
         let library = try await open()
         let id = library.newMeeting(title: "Conversation")

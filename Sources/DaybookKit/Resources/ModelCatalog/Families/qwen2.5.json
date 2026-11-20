@@ -32,13 +32,18 @@
           },
           "capabilities": {
             "contextLength": 32768,
+            "kvCacheBytesPerToken": 28672,
             "structuredOutput": false,
             "languages": [
               "*"
             ]
           },
           "engineOptions": {
-            "architecture": "qwen2"
+            "architecture": "qwen2",
+            "wholeReadTokens": "5400",
+            "partTokens": "8000",
+            "evidenceTokens": "12000",
+            "commitmentPartTokens": "5400"
           },
           "supersededBy": "gemma-4/e2b-4bit",
           "homepage": "https://huggingface.co/mlx-community/Qwen2.5-1.5B-Instruct-4bit",
@@ -123,13 +128,18 @@
           },
           "capabilities": {
             "contextLength": 32768,
+            "kvCacheBytesPerToken": 36864,
             "structuredOutput": false,
             "languages": [
               "*"
             ]
           },
           "engineOptions": {
-            "architecture": "qwen2"
+            "architecture": "qwen2",
+            "wholeReadTokens": "5400",
+            "partTokens": "8000",
+            "evidenceTokens": "12000",
+            "commitmentPartTokens": "5400"
           },
           "supersededBy": "gemma-4/e4b-4bit",
           "homepage": "https://huggingface.co/mlx-community/Qwen2.5-3B-Instruct-4bit",
@@ -221,13 +231,18 @@
           },
           "capabilities": {
             "contextLength": 32768,
+            "kvCacheBytesPerToken": 57344,
             "structuredOutput": false,
             "languages": [
               "*"
             ]
           },
           "engineOptions": {
-            "architecture": "qwen2"
+            "architecture": "qwen2",
+            "wholeReadTokens": "5400",
+            "partTokens": "8000",
+            "evidenceTokens": "12000",
+            "commitmentPartTokens": "5400"
           },
           "supersededBy": "gemma-4/12b-4bit",
           "homepage": "https://huggingface.co/mlx-community/Qwen2.5-7B-Instruct-4bit",

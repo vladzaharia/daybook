@@ -15,6 +15,8 @@ final class RevisionFieldTests: XCTestCase {
             (.segment(id), "segment:\(id.uuidString)"),
             (.photo(id), "photo:\(id.uuidString)"),
             (.photoCaption(id), "photo-caption:\(id.uuidString)"),
+            (.page(id), "page:\(id.uuidString)"),
+            (.passage(id), "passage:\(id.uuidString)"),
             (.bookmark(id), "bookmark:\(id.uuidString)"),
             (.correctionTransfer(id), "correction-transfer:\(id.uuidString)"),
             (.source(id.uuidString), "source:\(id.uuidString)"),
@@ -30,6 +32,9 @@ final class RevisionFieldTests: XCTestCase {
     func testBehaviorAKindWhoseNameStartsAnothersIsReadAsItself() {
         XCTAssertEqual(RevisionField(rawValue: "photo-caption:\(id.uuidString)"), .photoCaption(id))
         XCTAssertEqual(RevisionField(rawValue: "photo:\(id.uuidString)"), .photo(id))
+        XCTAssertEqual(RevisionField(rawValue: "page:not-an-id"), .unknown("page:not-an-id"))
+        XCTAssertTrue(RevisionField.passage(id).isPersonsEdit)
+        XCTAssertFalse(RevisionField.page(id).isPersonsEdit)
         XCTAssertEqual(RevisionField(rawValue: "speakers:S1"), .unknown("speakers:S1"))
         XCTAssertEqual(RevisionField(rawValue: "notes:extra"), .unknown("notes:extra"))
         // A speaker's ID is whatever follows the first colon.

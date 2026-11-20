@@ -23,8 +23,9 @@ public struct RecorderMenuOffer: Equatable {
         recordControl = usable && session.direct is any RecordControlConnection
         listenLive = (usable && session.status?.isRecording == true || session.isListeningLive) && session.direct is any LiveListeningConnection
         details = session.direct is any DetailedConnection && (session.status != nil || session.isLinked)
-        // Daybook on iPhone connects to the Mac itself.
-        guard let direct = session.direct, direct.isSetUp, session.kind.id != DaybookPhoneIntegration.id else { return }
+        // Daybook on iPhone connects to the Mac itself, and Apple Watch to the iPhone through WatchConnectivity.
+        guard let direct = session.direct, direct.isSetUp, session.kind.id != DaybookPhoneIntegration.id,
+              session.kind.id != AppleWatchIntegration.id else { return }
         disconnect = direct.state.isConnected || direct.state.isBusy
         // Connect does nothing while another device manages it: Use on This Mac does.
         connect = !disconnect && session.managedElsewhere == nil && direct.state != .unavailable && session.device.isEnabled(.direct)

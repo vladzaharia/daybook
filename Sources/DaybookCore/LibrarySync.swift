@@ -435,8 +435,11 @@ public actor LibrarySyncEngine {
                 // A large conversation edited again soon after this device published it waits (`publicationInterval`): one
                 // publication carries the burst, rather than a full snapshot every time the person pauses typing. What
                 // others changed in it meanwhile waits too, as for any edit not yet published.
-                // One that brings a recording or photo goes at once, whatever else changed.
-                if !force, gone.isEmpty, let due = publicationHeld(supplied.id, bytes: encoded.count, now: publishedAt),
+                // One that brings a recording or photo goes at once, whatever else changed. One that only changes what pages
+                // draw is held like a large one: the strokes of a page being written change every few seconds.
+                if !force, gone.isEmpty,
+                   let due = publicationHeld(supplied.id, bytes: encoded.count, now: publishedAt,
+                                             changesPageDrawings: Self.changesPageDrawings(supplied, to: base(key))),
                    !Self.addsFiles(supplied, to: base(key)) {
                     pass.pendingUploads += 1; pass.failedPublications.insert(supplied.id); pass.heldPublications.insert(supplied.id)
                     pass.nextPublication = min(pass.nextPublication ?? due, due)
@@ -615,7 +618,11 @@ public actor LibrarySyncEngine {
         for id in pass.deletes { pass.output.removeValue(forKey: id); pass.changed.remove(id); pass.notLocalAudio.removeValue(forKey: id) }
         var sourceMeetings: [String: Set<UUID>] = [:]
         for meeting in pass.output.values {
-            for track in meeting.tracks where !track.sha256.isEmpty { sourceMeetings[track.sha256, default: []].insert(meeting.id) }
+            // A recording moved out (Move to New Conversation, or a merge not yet in the Trash) is the copy in the
+            // conversation it moved to.
+            for track in meeting.tracks where !track.sha256.isEmpty && !track.isMovedOut {
+                sourceMeetings[track.sha256, default: []].insert(meeting.id)
+            }
         }
         if sourceMeetings.values.contains(where: { $0.count > 1 }) {
             pass.warnings.append("The same recording is in more than one conversation. They stay separate.")
@@ -693,15 +700,16 @@ public actor LibrarySyncEngine {
     /// How soon after this device published a large conversation it publishes it again, on a replica that holds bursts
     /// (`SyncReplicaConfiguration.holdsEditBursts`): edits in between are held back and go together
     /// (`SyncResult.nextPublication`), or at once when the person leaves the conversation or the app (`publishHeldEdits`).
-    /// One that brings a recording or photo is never held.
+    /// One that brings a recording or photo is never held. One that changes the files of a notebook page is held whatever
+    /// its size (`changesPageDrawings`), unless it brings a recording or photo too.
     public static let publicationInterval: TimeInterval = 3 * 60
     /// A conversation is held back only when its snapshot is at least this large (an hour-long call with its transcripts
     /// is about 2 MB); a small one costs little to publish every time.
     public static let heldPublicationBytes = 256 * 1024
 
     /// When a publication of `id` (its snapshot `bytes` long) held back may go, or nil to publish it now.
-    func publicationHeld(_ id: UUID, bytes: Int, now: Date) -> Date? {
-        guard holdsEditBursts, bytes >= Self.heldPublicationBytes, let last = lastPublished[id] else { return nil }
+    func publicationHeld(_ id: UUID, bytes: Int, now: Date, changesPageDrawings: Bool = false) -> Date? {
+        guard holdsEditBursts, bytes >= Self.heldPublicationBytes || changesPageDrawings, let last = lastPublished[id] else { return nil }
         let due = last.addingTimeInterval(Self.publicationInterval)
         return due > now ? due : nil
     }
@@ -1543,6 +1551,7 @@ public actor LibrarySyncEngine {
             assets.append(SyncAsset(relativePath: track.relativePath, sha256: digest))
         }
         try appendPhotoAssets(&meeting, directory: directory, journalAssets: journalAssets, assets: &assets, byReference: &byReference)
+        try appendPageAssets(meeting, directory: directory, journalAssets: journalAssets, assets: &assets, byReference: &byReference)
         let originals = directory.appendingPathComponent("Originals", isDirectory: true)
         if let files = try? fm.contentsOfDirectory(at: originals, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) {
             // In name order, so publishing the same conversation again writes the same bytes.
@@ -1619,9 +1628,10 @@ public actor LibrarySyncEngine {
             guard SyncFiles.isHash(track.sha256), assets.contains(where: { $0.relativePath == track.relativePath && $0.sha256 == track.sha256 }) else { throw LibrarySyncError.invalidBlob(track.fileName) }
         }
         try validatePhotoAssets(snapshot, assets: assets)
+        try validatePageAssets(snapshot)
     }
     private func mergedAssets(for meeting: Meeting, eventIDs: [String], events: [String: SyncEventHeader]) -> [SyncAsset] {
-        var assets = meeting.tracks.map { SyncAsset(relativePath: $0.relativePath, sha256: $0.sha256) } + photoAssets(of: meeting)
+        var assets = meeting.tracks.map { SyncAsset(relativePath: $0.relativePath, sha256: $0.sha256) } + photoAssets(of: meeting) + pageAssets(of: meeting)
         for id in eventIDs.sorted() {
             for asset in events[id]?.assets ?? [] where asset.relativePath.contains(".highlights-") && !assets.contains(asset) { assets.append(asset) }
         }
@@ -1638,7 +1648,11 @@ public actor LibrarySyncEngine {
             try Task.checkCancellation()
             let destination = try LocalFiles.relativeURL(asset.relativePath, in: directory)
             try SyncFiles.noSymlinks(destination, below: localRoot)
-            if try verified(destination, digest: asset.sha256) { continue }
+            if try verified(destination, digest: asset.sha256) {
+                // A page's file that's named again (a revert) is used now, whatever its age: pruning must not take it.
+                if asset.relativePath.hasPrefix(PageDrawing.folder + "/") { LocalFiles.touch(destination, unlessWithin: 3_600) }
+                continue
+            }
             // Copying audio is the expensive part of an eager pass; respect the pass's time budget.
             if budget.timeExceeded { throw SyncDeferredWork() }
             // Sealed under a key held here, or plaintext from before an encrypted library's sealer reached it.
@@ -1785,6 +1799,14 @@ public actor LibrarySyncEngine {
            let parent = try mergedSnapshot(of: event.parents, events: events, memo: &memo) {
             snapshot = snapshot.restoringPhotos(from: parent)
         }
+        // A Daybook from before pages drops them on edit (no `pages`), or on a merge of two copies keeps one side's whole
+        // `pages` array as the unknown key it is: the pages its parents had are put back, and a whole array that is one parent's and
+        // not their merge is replaced by it (`Meeting.repairingNotebook`).
+        if snapshot.pages == nil || event.parents.count >= 2, event.parents.contains(where: { ancestorHasPages($0, events: events) }),
+           let parent = try mergedSnapshot(of: event.parents, events: events, memo: &memo) {
+            let parents = try event.parents.compactMap { try resolvedSnapshot($0, events: events, memo: &memo) }
+            snapshot = snapshot.repairingNotebook(parents: parents, merged: parent)
+        }
         memo.resolved[id] = snapshot
         return snapshot
     }
@@ -1828,6 +1850,20 @@ public actor LibrarySyncEngine {
             stack.removeLast()
         }
         return journalCache.photoLineage[id] ?? false
+    }
+    /// Whether the event or any ancestor carries pages. Immutable, so remembered across passes.
+    private func ancestorHasPages(_ id: String, events: [String: SyncEventHeader]) -> Bool {
+        if let known = journalCache.pageLineage[id] { return known }
+        var stack = [id]
+        while let current = stack.last {
+            if journalCache.pageLineage[current] != nil { stack.removeLast(); continue }
+            guard let event = events[current] else { journalCache.pageLineage[current] = false; stack.removeLast(); continue }
+            let unknown = event.parents.filter { journalCache.pageLineage[$0] == nil && !stack.contains($0) }
+            if !unknown.isEmpty { stack += unknown; continue }
+            journalCache.pageLineage[current] = event.hasPages || event.parents.contains { journalCache.pageLineage[$0] == true }
+            stack.removeLast()
+        }
+        return journalCache.pageLineage[id] ?? false
     }
     /// Files in the sync folder iCloud hasn't uploaded yet, and whether it refused any for lack of storage (then they
     /// won't upload until the person frees some). Remembered for the sealer (`storageFullLately`).
@@ -1897,9 +1933,10 @@ struct SyncEventHeader {
     var deleted: Bool
     var assets: [SyncAsset]
     var hasPhotos: Bool
+    var hasPages: Bool
     init(_ record: SyncEventRecord) {
         meetingID = record.meetingID; deviceID = record.deviceID; parents = record.parents; deleted = record.deleted
-        assets = record.assets; hasPhotos = record.snapshot?.photos != nil
+        assets = record.assets; hasPhotos = record.snapshot?.photos != nil; hasPages = record.snapshot?.pages != nil
     }
 }
 struct SyncCheckpoint: Codable {
@@ -1956,6 +1993,8 @@ struct JournalCache {
     var locations: [String: URL] = [:]
     /// Whether each event or one of its ancestors carries photos (`resolvedSnapshot`).
     var photoLineage: [String: Bool] = [:]
+    /// The same for pages.
+    var pageLineage: [String: Bool] = [:]
 }
 
 /// The bookkeeping of an encrypted library's sealed files (LibrarySyncSealing.swift, LibrarySyncSealer.swift,

@@ -1,3 +1,4 @@
+import DaybookCore
 import DaybookKit
 import Foundation
 
@@ -100,6 +101,8 @@ extension PhoneAppModel {
             if !options.isRunningTests { sync.synchronizeFinishing(.filed) }
             // Transcribed here when this iPhone has the models (it claimed the request as it filed it).
             processor.pickUp()
+            // What was written last may not have been read yet (Stop never waits for reading): read it now, quietly.
+            if !options.isRunningTests { Task(priority: .utility) { await library.readPages(in: filed.meeting.id) } }
         } catch {
             say(Self.notFiled, details: error.localizedDescription)
             filing = .failed(Self.notFiled)
@@ -289,6 +292,11 @@ extension PhoneAppModel {
                 say("Couldn’t recover a recording. Daybook tries again the next time it opens.", details: error.localizedDescription)
             }
         }
+        // Apple Watch's recordings of conversations this iPhone might have filed into import now.
+        if !recoveryWaitsForUnlock, !leftoversRecovered {
+            leftoversRecovered = true
+            devices.ownRecordingsFiled()
+        }
     }
 
     // MARK: Stopped while the iPhone was locked
@@ -428,7 +436,7 @@ enum UnrecordedCapture {
     static func hasContent(_ journal: PhoneCaptureJournal) -> Bool {
         let notes = journal.timedNotes.contains { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             || !journal.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        return notes || !journal.highlights.isEmpty || !(journal.photos ?? []).isEmpty
+        return notes || !journal.highlights.isEmpty || !(journal.photos ?? []).isEmpty || (journal.pages ?? []).contains { $0.base == nil || $0.drawingFile != nil }
     }
 
     /// Files it into the library and removes its folder. Into its conversation when that's here (recording
@@ -472,6 +480,8 @@ enum UnrecordedCapture {
             for mark in sharedMarks { _ = meeting.addSharedBookmark(mark) }
             meeting.adoptInk(journal.ink ?? [])
         }
+        // Pages written meanwhile: the timeline's seconds when there was one (the first sample arrived), nothing without.
+        try await library.filePages(journal.pages ?? [], clock: [], turns: journal.pageTurns ?? [], from: folder, in: id, placing: .timeline(shift: shift))
         for photo in journal.photos ?? [] {
             let url = folder.appendingPathComponent(photo.fileName)
             guard FileManager.default.fileExists(atPath: url.path) else { continue }
@@ -498,5 +508,120 @@ enum UnrecordedCapture {
         guard let started = journal.startedAt else { return nil }
         guard let session, session.isMacLed else { return 0 }
         return MultipointTimeline.offset(of: started, from: session.timelineZero).map { max(0, $0) } ?? 0
+    }
+}
+
+/// Filing the notebook pages a recording wrote (`PhoneRecorder.pages`): their strokes from the staging folder into the
+/// conversation's, the page records added or merged three way with the copy the recording loaded, and the recorder's clock
+/// samples kept with the recording's track.
+extension PhoneLibrary {
+    /// Where a page's passages, which carry seconds into the recording, are placed in the conversation.
+    enum PagePlacement: Equatable {
+        /// With the recording's audio: seconds into this recording's track, as photos are filed (`trackID`), so they follow the
+        /// track when a Mac places it in a multipoint conversation, and are the timeline's seconds when this iPhone leads it.
+        case track(UUID)
+        /// Without audio (a recording that captured none, filed as notes): seconds on the conversation's timeline, moved by
+        /// `shift` (zero for its own timeline, where it started on a Mac's for one a Mac led), and no time at all when it
+        /// never had a first sample (nil), as notes have none.
+        case timeline(shift: TimeInterval?)
+    }
+
+    /// Files `captured`: each page with strokes in `folder` gets them stored in the conversation's folder (stamped after the
+    /// drawing it was loaded with), is placed (`placed`), and joins through `Meeting.adoptRecordedPages`. A page the recording
+    /// made and wrote nothing on isn't filed. `clock` is the recorder's samples, kept with the track once.
+    /// Throws `PhoneRecorderError.locked` while a file can't be read until the iPhone is unlocked: the folder then stays.
+    func filePages(_ captured: [CapturePage], clock: [RecordingClockSample], turns: [PageTurn] = [], from folder: URL, in id: UUID, placing: PagePlacement) async throws {
+        var recorded: [RecordedPage] = []
+        for entry in captured {
+            var page = entry.page
+            let file = folder.appendingPathComponent(CapturePage.fileName(for: page.id))
+            if FileManager.default.fileExists(atPath: file.path) {
+                do {
+                    page.drawing = try await controller.storeRecordedPageDrawing(
+                        from: file, page: page.id, in: id, strokeCount: entry.strokeCount ?? entry.page.drawing?.strokeCount ?? 0,
+                        contentVersion: entry.contentVersion ?? entry.page.drawing?.contentVersion, device: page.origin?.name,
+                        after: entry.base?.drawing?.editedAt, now: entry.committedAt ?? Date())
+                } catch {
+                    if StagingProtection.cannotOpen(file) { throw PhoneRecorderError.locked }
+                    throw error
+                }
+            } else if entry.base == nil, page.drawing == nil {
+                continue
+            }
+            recorded.append(RecordedPage(page: Self.placed(page, base: entry.base, placing: placing), base: entry.base))
+        }
+        if !recorded.isEmpty {
+            controller.update(id) { $0.adoptRecordedPages(recorded) }
+        }
+        // Turns of pages that were filed: one that names a page the conversation never got (a blank page) leaves it out.
+        if !turns.isEmpty {
+            controller.update(id) { meeting in
+                let known = Set((meeting.pages ?? []).map(\.id))
+                for turn in turns {
+                    let open = turn.pages.filter(known.contains)
+                    if open.isEmpty, !turn.pages.isEmpty { continue }
+                    let placed = Self.placed(trackID: turn.trackID, time: turn.time, placing: placing)
+                    meeting.logPageTurn(PageTurn(at: turn.at, pages: open, trackID: placed.0, time: placed.1))
+                }
+            }
+        }
+        if case .track(let track) = placing, !clock.isEmpty {
+            controller.update(id) { meeting in
+                if let index = meeting.tracks.firstIndex(where: { $0.id == track }), meeting.tracks[index].clockSamples == nil {
+                    meeting.tracks[index].clockSamples = RecordingClockMap.filed(clock)
+                }
+            }
+        }
+    }
+
+    /// The page with what this recording wrote on it placed: a passage or erased stroke the conversation's copy didn't have
+    /// (the recording's own) and that carries seconds into the recording, with no track yet. One the conversation had (the same
+    /// ID and start, though its strokes, words and bounds may have changed since) keeps the track and seconds it had: it was
+    /// written in an earlier recording, or on the timeline, and this recording's clock says nothing of it.
+    /// Where a moment written during the recording falls: a time with no track yet follows `placing`.
+    static func placed(trackID: UUID?, time: TimeInterval?, placing: PagePlacement) -> (UUID?, TimeInterval?) {
+        guard trackID == nil, let time else { return (trackID, time) }
+        switch placing {
+        case .track(let track): return (track, time)
+        case .timeline(let shift):
+            guard let shift else { return (nil, nil) }
+            return (nil, time + shift)
+        }
+    }
+
+    static func placed(_ page: NotebookPage, base: NotebookPage?, placing: PagePlacement) -> NotebookPage {
+        func place(_ trackID: UUID?, _ time: TimeInterval?) -> (UUID?, TimeInterval?) { placed(trackID: trackID, time: time, placing: placing) }
+        var result = page
+        let known = base?.reading?.passages ?? []
+        if var reading = result.reading {
+            for index in reading.passages.indices {
+                let passage = reading.passages[index]
+                if let before = known.first(where: { $0.id == passage.id && $0.start == passage.start }) {
+                    reading.passages[index].trackID = before.trackID
+                    reading.passages[index].time = before.time
+                } else {
+                    let moved = place(passage.trackID, passage.time)
+                    reading.passages[index].trackID = moved.0
+                    reading.passages[index].time = moved.1
+                }
+            }
+            result.reading = reading
+        }
+        let erased = base?.erased ?? []
+        if var strokes = result.erased {
+            for index in strokes.indices {
+                let stroke = strokes[index]
+                if let before = erased.first(where: { $0.key == stroke.key }) {
+                    strokes[index].trackID = before.trackID
+                    strokes[index].time = before.time
+                } else {
+                    let moved = place(stroke.trackID, stroke.time)
+                    strokes[index].trackID = moved.0
+                    strokes[index].time = moved.1
+                }
+            }
+            result.erased = strokes
+        }
+        return result
     }
 }

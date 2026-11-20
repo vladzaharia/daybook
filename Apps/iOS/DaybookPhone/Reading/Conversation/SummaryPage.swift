@@ -240,7 +240,7 @@ extension ConversationStatusPresentation.Inputs {
             meetingID: meeting.id, now: now)
         inputs.link = model?.liveProgress[meeting.id].map(ConversationStatusPresentation.LinkWork.init(live:))
         inputs.placement = .init(planner: placement?.planners[meeting.id], run: placement?.runs[meeting.id],
-                                 cloudOffered: placement?.cloudOffer != nil)
+                                 cloudOffered: placement?.cloudOffer(for: meeting) != nil)
         inputs.pause = PhoneProcessor.current?.pause.map(ProcessingWords.PauseReason.init(phone:))
         inputs.cloudModel = placement?.cloud?.resolved?.model.name
         if let owns = model?.library.ownsTrack {
@@ -322,7 +322,7 @@ private struct PageColophon: View {
 
     /// Only while it can be asked for: a pending request already shows on the page.
     private var summarizeAgain: (() -> Void)? {
-        guard !meeting.unifiedTranscript.isEmpty, !ProcessingStatus.phone(meeting).isPending else { return nil }
+        guard meeting.hasSummarizableContent, !ProcessingStatus.phone(meeting).isPending else { return nil }
         return { [library, placement, id = meeting.id] in library.summarize(id, placement: placement) }
     }
 }
@@ -348,7 +348,7 @@ struct TemplatePicker: View {
     }
 
     private func choose(_ id: String) {
-        guard library.chooseTemplate(id, for: meeting.id), !meeting.unifiedTranscript.isEmpty else { return }
+        guard library.chooseTemplate(id, for: meeting.id), meeting.hasSummarizableContent else { return }
         library.summarize(meeting.id, templateID: id == "auto" ? nil : id, placement: placement)
     }
 }

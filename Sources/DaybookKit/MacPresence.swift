@@ -140,7 +140,7 @@ public struct LiveProgress: Equatable, Sendable {
     /// and whether Use the Cloud is on offer there.
     public var countdownUntil: Date?
     public var cloudOffered = false
-    /// Summarizing in the cloud: the model's name.
+    /// Summarizing in the cloud: the model's name; while it counts down, the cloud model the countdown ends with.
     public var cloudModel: String?
 
     public static let staleAfter: TimeInterval = 120
@@ -166,6 +166,7 @@ public struct LiveProgress: Equatable, Sendable {
     /// What the person may choose here for the Mac's countdown, in order.
     public var placementActions: [SummaryPlacementPlanner.Action] {
         guard isCountingDown, macID != nil else { return [] }
+        if cloudModel != nil { return [.startNow, .useLocal] }
         return (cloudOffered ? [.useCloud] : []) + [.startNow]
     }
 

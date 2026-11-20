@@ -31,6 +31,47 @@ public enum TranscriptEdits {
         }
     }
 
+    /// Keeps words marked unsure as they are: the mark goes, on every device. The transcript doesn't change. Undo takes
+    /// the answer back (`Meeting.withdrawFlagAnswer`), that answer alone, and Redo gives it again.
+    @discardableResult
+    public static func keep(_ flagID: UUID, in meetingID: UUID, library: LibraryController, undoManager: UndoManager?) -> Bool {
+        var kept = false
+        library.update(meetingID) { kept = $0.keepFlaggedWords(flagID) }
+        guard kept else { return false }
+        registerUndo(library, meetingID, undoManager, "Keep Words",
+                     undo: { $0.withdrawFlagAnswer(flagID) }, redo: { $0.keepFlaggedWords(flagID) })
+        return true
+    }
+
+    /// Puts the earlier reading in place of words marked unsure: a correction, in Version History. Undo puts back that
+    /// passage's words and takes back that answer, nothing else (`Meeting.takeBackFlagAlternative`); Redo uses it again.
+    @discardableResult
+    public static func useAlternative(_ flagID: UUID, in meetingID: UUID, library: LibraryController,
+                                      undoManager: UndoManager?) -> Bool {
+        guard let before = library.meeting(meetingID) else { return false }
+        var used = false
+        library.update(meetingID) { used = $0.useFlagAlternative(flagID) }
+        guard used, let after = library.meeting(meetingID),
+              let changed = after.unifiedTranscript.first(where: { passage in before.unifiedTranscript.first { $0.id == passage.id }?.text != passage.text }),
+              let original = before.unifiedTranscript.first(where: { $0.id == changed.id })?.text else { return used }
+        registerUndo(library, meetingID, undoManager, "Correct Passage",
+                     undo: { $0.takeBackFlagAlternative(flagID, in: changed.id, from: changed.text, to: original) },
+                     redo: { $0.useFlagAlternative(flagID) })
+        return true
+    }
+
+    /// An edit that Undo takes back with `undo` and Redo does again with `redo`, each a change of its own that touches
+    /// only what it names, so whatever arrived meanwhile (another device's answers) stays.
+    private static func registerUndo(_ library: LibraryController, _ meetingID: UUID, _ undoManager: UndoManager?, _ actionName: String,
+                                     undo: @escaping (inout Meeting) -> Void, redo: @escaping (inout Meeting) -> Void) {
+        guard let undoManager else { return }
+        undoManager.registerUndo(withTarget: library) { library in
+            library.update(meetingID) { undo(&$0) }
+            registerUndo(library, meetingID, undoManager, actionName, undo: redo, redo: undo)
+        }
+        undoManager.setActionName(actionName)
+    }
+
     /// A bookmark at a passage, in the recording it came from.
     public static func bookmark(_ segment: TranscriptSegment, in meetingID: UUID, library: LibraryController) {
         let start = segment.provenance.first { $0.trackID == segment.trackID }?.start ?? segment.start

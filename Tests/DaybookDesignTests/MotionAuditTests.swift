@@ -20,8 +20,11 @@ final class MotionAuditTests: XCTestCase {
     /// No animation on purpose: allowed, as `nil` would be.
     static let noAnimation = try! NSRegularExpression(pattern: #"\.linear\(duration:\s*0(?:\.0+)?\)"#)
 
-    /// The places that may name curves: DaybookDesign, where the tokens are.
-    static func isAllowed(_ relativePath: String) -> Bool { relativePath.hasPrefix("Sources/DaybookDesign/") }
+    /// The places that may name curves: DaybookDesign, where the tokens are, and the watch app's copy of them
+    /// (`WatchMotion`: the watch app doesn't link DaybookDesign, which is for iOS and macOS).
+    static func isAllowed(_ relativePath: String) -> Bool {
+        relativePath.hasPrefix("Sources/DaybookDesign/") || relativePath == "Apps/iOS/DaybookWatch/UI/WatchMotion.swift"
+    }
 
     /// Curves still written out, by file, each until it moves to a token. Other packages of the 2026-11-10 design pass
     /// own these files and move them there: the call prompt's draining time bar and the library's drop outline. Take a file

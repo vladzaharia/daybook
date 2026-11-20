@@ -271,7 +271,7 @@ jobs:
       - name: Date the files by their content
         run: scripts/ci/stable-mtimes.sh
       - name: Select Xcode
-        run: scripts/ci/select-xcode.sh --sdk iphoneos27.1 --expect-build "$DAYBOOK_RELEASE_XCODE_BUILD"
+        run: scripts/ci/select-xcode.sh --sdk iphoneos27.1 --sdk watchos27.0 --expect-build "$DAYBOOK_RELEASE_XCODE_BUILD"
       - name: Install XcodeGen
         run: scripts/ci/install-xcodegen.sh
       # Secrets: each step that needs the API key gets it from the environment and runs inside

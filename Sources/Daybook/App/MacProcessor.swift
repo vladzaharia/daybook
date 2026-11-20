@@ -23,6 +23,11 @@ final class MacProcessor {
     private var lastClaimRenewal = Date.distantPast
     private var lastRenewedStage: ProcessingRequest.Stage?
 
+    /// How many questions across conversations are open (`AskController`). While any is, no job starts: the question
+    /// goes ahead of the jobs that wait and behind the one that runs, and a job that becomes ready while it answers waits
+    /// for it, since the model runtime serves one operation at a time and a job that met it busy would be marked failed.
+    private(set) var askHolds = 0
+
     /// `owedURL` is the library's `local-queue.json` (`ProcessingQueue`).
     init(owedURL: URL?) {
         queue = ProcessingQueue(owedURL: owedURL)
@@ -57,17 +62,27 @@ final class MacProcessor {
         runQueue()
     }
 
+    /// A question is open: the queue starts no new job until it is released. Every hold is released once, however the
+    /// question ends (`AskController`).
+    func holdForAsk() { askHolds += 1 }
+
+    /// A question ended: the queue starts again when no question holds it.
+    func releaseAsk() {
+        askHolds = max(0, askHolds - 1)
+        if askHolds == 0 { runQueue() }
+    }
+
     func runQueue() {
         guard let app else { return }
         // Giving speakers voices gives way to real work: it stops, and starts the queue when it has.
         if app.voicingID != nil, !queue.jobs.isEmpty { app.voicingTask?.cancel(); return }
         // A model download doesn't hold it: every job queued has the models it needs here, with their revisions frozen,
         // so a transcript doesn't wait for the summary model's download (transcript first).
-        guard queue.task == nil, app.readingPhotoID == nil, !app.library.isApplyingSync, !queue.jobs.isEmpty else { return }
+        guard queue.task == nil, askHolds == 0, app.readingPhotoID == nil, !app.library.isApplyingSync, !queue.jobs.isEmpty else { return }
         queue.task = Task { [weak self, weak app] in
             guard let self, let app else { return }
             let queue = self.queue
-            while !Task.isCancelled, let job = queue.next() {
+            while !Task.isCancelled, self.askHolds == 0, let job = queue.next() {
                 let id = job.meetingID
                 // Never run a request another device holds, or one that finished elsewhere meanwhile.
                 guard app.mayRun(job) else { queue.settle(id); continue }
@@ -183,8 +198,7 @@ final class MacProcessor {
         _ = try await app.readPhotos(id, engine: engine, progress: progress)
         await app.labelSpeakers(before: id)
         guard let before = app.meetings.first(where: { $0.id == id }) else { return }
-        let transcript = MeetingEvidence.transcript(before)
-        guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AppError.noSpeech }
+        guard MeetingEvidence.summarySource(before).hasContent else { throw AppError.noSpeech }
         // Transcript first: without the summary model here, and with the cloud not taking the summary at once, the job ends
         // with the transcript, and the summary waits for the model or the person's Use the Cloud
         // (AppState+SummaryPlacement.swift).
@@ -214,7 +228,8 @@ final class MacProcessor {
             app.update(id) { $0.status = .ready }
             return
         }
-        let summary = generated.summary.placed(placed.place, by: app.library.thisDevice, inputs: current.modelsBehindTranscript)
+        let summary = generated.summary.placed(placed.place, by: app.library.thisDevice, inputs: current.modelsBehindTranscript,
+                                               cloudReason: placed.cloudReason)
         app.update(id) { meeting in
             meeting.setSummary(summary, writtenFrom: current)
             // Keep Auto selected so a new source or revised context can change the inferred kind.

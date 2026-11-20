@@ -80,6 +80,15 @@ public struct PhotoProcessingInput: Sendable {
     public init(photo: MeetingPhoto, url: URL) { self.photo = photo; self.url = url }
 }
 
+/// One sketch passage to read: a picture of its strokes on light paper, in a file the caller makes and deletes.
+public struct SketchProcessingInput: Sendable {
+    public var passageID: UUID
+    /// The passage's `strokeDigest`: the reading is of these strokes.
+    public var strokeDigest: String
+    public var url: URL
+    public init(passageID: UUID, strokeDigest: String, url: URL) { self.passageID = passageID; self.strokeDigest = strokeDigest; self.url = url }
+}
+
 /// What processing found in a conversation's photos, by photo.
 public struct PhotoProcessingOutput: Sendable {
     public var analyses: [UUID: PhotoAnalysis]
@@ -98,7 +107,7 @@ public struct ProcessingOutput: Sendable {
     public var meeting: Meeting
     public var transcripts: [TrackTranscript]
     public var speakers: [Speaker]
-    /// Nil when nothing was said, so there was nothing to summarize.
+    /// Nil when nothing was said or written, so there was nothing to summarize.
     public var summary: MeetingSummary?
     public var suggestedTerms: [String]
     public var notices: [String]
@@ -121,6 +130,9 @@ public protocol ProcessingEngine: Sendable {
     /// each is worth a place in a summary. The default reads nothing (an engine without image models).
     func describePhotos(_ meeting: Meeting, photos: [PhotoProcessingInput],
                         progress: @escaping ProcessingProgressHandler) async throws -> PhotoProcessingOutput
+    /// Reads sketch passages as photos are read (text, what each shows, a caption), by passage. The default reads nothing.
+    func describeSketches(_ sketches: [SketchProcessingInput],
+                          progress: @escaping ProcessingProgressHandler) async throws -> [UUID: SketchAnalysis]
 }
 
 extension ProcessingEngine {
@@ -128,6 +140,9 @@ extension ProcessingEngine {
                                progress: @escaping ProcessingProgressHandler) async throws -> PhotoProcessingOutput {
         PhotoProcessingOutput()
     }
+
+    public func describeSketches(_ sketches: [SketchProcessingInput],
+                                 progress: @escaping ProcessingProgressHandler) async throws -> [UUID: SketchAnalysis] { [:] }
 }
 
 extension ProcessingEngine {
@@ -161,11 +176,11 @@ extension ProcessingEngine {
                 notices += output.notices
             }
             let fusion = SourceFusion.fuse(working)
-            working.applyFusion(fusion.fusion)
+            working.applyFusion(fusion.fusion, ranking: UpgradeRanks.builtIn.transcriptionRanking)
             working.applyPlacements(fusion.settled)
         }
         try Task.checkCancellation()
-        guard !MeetingEvidence.transcript(working).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard working.hasSummarizableContent else {
             return ProcessingOutput(meeting: working, transcripts: transcripts, speakers: speakers, summary: nil, suggestedTerms: [], notices: notices)
         }
         let summary = try await summarize(working, template: template, vocabulary: vocabulary, progress: progress)

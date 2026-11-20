@@ -54,11 +54,35 @@ final class LibraryListPhoneTests: XCTestCase {
         library.controller.update(a) { $0.unifiedTranscript = [TranscriptSegment(trackID: UUID(), start: 0, end: 1, text: "Hello")] }
         let groups = PhoneActions.groups(for: [a, b], library: library.controller)
         let shown = ConversationActionMenuItems.shown(groups, on: .iPhone).flatMap(\.actions)
-        XCTAssertEqual(shown.map(ConversationActionMenuItems.shortTitle), ["Summarize", "Move", "Tags", "Personal", "Trash"])
+        XCTAssertEqual(shown.map(ConversationActionMenuItems.shortTitle), ["Summarize", "Move", "Tags", "Personal", "Merge", "Trash"])
         let one = PhoneActions.groups(for: [b], library: library.controller)
         let only = ConversationActionMenuItems.shown(one, on: .iPhone).flatMap(\.actions).map(\.id)
         XCTAssertFalse(only.contains(.copySummary), "no summary yet: left out on an iPhone")
         XCTAssertTrue(only.contains(.moveToTrash))
+        XCTAssertFalse(only.contains(.merge), "one conversation has nothing to merge with")
+    }
+
+    /// Merge… waits while a connected Mac records one of them, or its processing is asked for anywhere, and otherwise asks
+    /// first.
+    func testBehaviorMergeWaitsWhileAMacRecordsOneAndAsksFirst() async throws {
+        let library = PhoneLibrary(rootURL: try temporaryDirectory(), installation: "TEST")
+        try await library.reload()
+        let a = library.controller.newMeeting(title: "A"), b = library.controller.newMeeting(title: "B")
+        func merge(recordingOnMac: Set<UUID>) -> ConversationAction? {
+            ConversationActionMenuItems.action(.merge, in: PhoneActions.groups(for: [a, b], library: library.controller,
+                                                                               recordingOnMac: recordingOnMac))
+        }
+        XCTAssertEqual(merge(recordingOnMac: [])?.isAvailable, true)
+        XCTAssertEqual(merge(recordingOnMac: [b])?.availability, .unavailable("Recording now"))
+        library.controller.requestProcessing(a, mode: .newAudio)
+        XCTAssertEqual(merge(recordingOnMac: [])?.availability, .unavailable("Waiting to process"))
+
+        let session = ReadingSession()
+        PhoneActions.perform(.merge, on: [a, b], library: library.controller, session: session, provider: LocalAudioProvider(),
+                             placement: nil, undoManager: nil)
+        XCTAssertEqual(Set(session.confirmingMerge), [a, b], "it asks first: it can't be undone")
+        XCTAssertNotNil(library.controller.meeting(b), "nothing merged until then")
+        await library.controller.flush()
     }
 
     /// The conversation's More, a row's menu, and the selection bar carry an action out the same way: Work or Personal

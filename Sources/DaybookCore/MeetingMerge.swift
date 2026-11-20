@@ -104,18 +104,35 @@ public enum MeetingMerge {
             tracks.map { track in
                 var track = track
                 track.removal = nil
+                track.clockSamples = nil
                 return track
             }
         }
-        result.tracks = items("track", unmarked(local.tracks), unmarked(remote.tracks), unmarked(base?.tracks ?? []))
+        // A merge's copy one device left waiting (`RecordingTrack.isWaitingMergeCopy`) and the copy another folded in are one
+        // recording, and the folded one is it, whole: never a conflict, whichever side or ancestor holds which.
+        func folding(_ tracks: [RecordingTrack], over others: [RecordingTrack]) -> [RecordingTrack] {
+            tracks.map { track in
+                guard track.isWaitingMergeCopy else { return track }
+                return others.first { $0.id == track.id && !$0.isWaitingMergeCopy } ?? track
+            }
+        }
+        let localTracks = folding(local.tracks, over: remote.tracks)
+        let remoteTracks = folding(remote.tracks, over: local.tracks)
+        // What they had in common was the waiting copy: the folded ones are compared as made apart, so either order is the same.
+        let foldedIDs = Set((localTracks + remoteTracks).filter { $0.mergedFrom != nil && !$0.isWaitingMergeCopy }.map(\.id))
+        let baseTracks = (base?.tracks ?? []).filter { !($0.isWaitingMergeCopy && foldedIDs.contains($0.id)) }
+        result.tracks = items("track", unmarked(localTracks), unmarked(remoteTracks), unmarked(baseTracks))
         for index in result.tracks.indices {
             let id = result.tracks[index].id
-            let a = local.tracks.first { $0.id == id }, b = remote.tracks.first { $0.id == id }, old = base?.tracks.first { $0.id == id }
+            let a = localTracks.first { $0.id == id }, b = remoteTracks.first { $0.id == id }, old = baseTracks.first { $0.id == id }
             if let a, let b {
                 // In the conversation is the ancestor where there's none: a mark made on one side is that side's.
                 result.tracks[index].removal = choose("track-removal:\(id)", a.removal, b.removal, .some(old?.removal))
+                // Written once, at filing: a copy with samples beats one without, and never a conflict.
+                result.tracks[index].clockSamples = RecordingClockSample.merged(a.clockSamples, b.clockSamples)
             } else {
                 result.tracks[index].removal = (a ?? b ?? old)?.removal
+                result.tracks[index].clockSamples = (a ?? b ?? old)?.clockSamples
             }
         }
         result.transcripts = items("transcript-run", local.transcripts, remote.transcripts, base?.transcripts ?? [])
@@ -127,6 +144,17 @@ public enum MeetingMerge {
                 record(field, smaller, larger)
                 conflicted.insert("a photo")
             }
+        }
+        // Pages are originals too: every copy's survive, merged field by field (NotebookPages+Merge.swift).
+        if local.pages != nil || remote.pages != nil || base?.pages != nil {
+            result.pages = NotebookPage.mergedList(base: base?.pages ?? [], local: local.pages ?? [], remote: remote.pages ?? []) { field, smaller, larger in
+                record(field, smaller, larger)
+                conflicted.insert("a page")
+            }
+        }
+        // When the notebook's pages were turned: a log, both copies' entries (bounded, the oldest go).
+        if local.pageTurns != nil || remote.pageTurns != nil {
+            result.pageTurns = PageTurn.merged(local.pageTurns, remote.pageTurns)
         }
         // Handwriting is an original too: every copy's blocks survive, the newer strokes of a block both changed.
         if local.ink != nil || remote.ink != nil {
@@ -167,6 +195,23 @@ public enum MeetingMerge {
         result.correctionTransferIssues = view.correctionIssues
         result.fusionSummary = view.fusionSummary
         result.backgroundPassages = view.backgroundPassages
+        // The flags are derived from the transcript, but not part of the view merged above: two devices on different
+        // versions of the algorithm fusing the same transcripts differ only here, and that is no conflict. From the sides
+        // holding the transcript that was chosen, those of the higher algorithm version win (of one version, the side that
+        // changed them, else the greater encoding, the same either way round), so devices never undo each other's.
+        var holders = [local, remote].filter { MergedTranscriptView($0) == view }
+        if holders.isEmpty { holders = [local, remote] }
+        // Of the same version, the side that changed them from the ancestor's.
+        if holders.count == 2, let base, local.transcriptFlagsVersion == remote.transcriptFlagsVersion {
+            if local.transcriptFlags == base.transcriptFlags { holders = [remote] }
+            else if remote.transcriptFlags == base.transcriptFlags { holders = [local] }
+        }
+        if let flagged = holders.max(by: { Meeting.flagsOrder($0) < Meeting.flagsOrder($1) }) {
+            result.transcriptFlags = flagged.transcriptFlags
+            result.transcriptFlagsVersion = flagged.transcriptFlagsVersion
+        }
+        // The person's answers to flags: every device's, once each, whatever either copy lacks (`TranscriptFlagDismissal`).
+        result.transcriptFlagDismissals = TranscriptFlagDismissal.merged(local.transcriptFlagDismissals, remote.transcriptFlagDismissals)
         if local.includesBackgroundAudio != nil || remote.includesBackgroundAudio != nil {
             result.includesBackgroundAudio = choose("background-audio", local.includesBackgroundAudio, remote.includesBackgroundAudio,
                 base.map(\.includesBackgroundAudio) ?? unset(local.includesBackgroundAudio, remote.includesBackgroundAudio, isDefault: { $0 == nil }, otherwise: nil))
@@ -216,6 +261,8 @@ public enum MeetingMerge {
         }
         result.revisions = revisions.values.sorted { $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date < $1.date }
         result.updatedAt = max(local.updatedAt, remote.updatedAt)
+        // A copy still waiting whose conversation either side folded in is that fold's.
+        result.settleMergeCopies()
         let warnings = conflicted.map { "Concurrent edits to \($0) in \(result.title) were preserved in History." }
         return MeetingMergeResult(meeting: result, warnings: warnings.sorted())
     }
@@ -265,6 +312,11 @@ extension Meeting {
         return result
     }
 
+    /// Which copy's flags are the newer: the version of the algorithm that worked them out, then their encoding.
+    fileprivate static func flagsOrder(_ meeting: Meeting) -> (Int, String) {
+        (meeting.transcriptFlagsVersion ?? 0, SyncEncoding.string(meeting.transcriptFlags ?? []))
+    }
+
     /// The titles Daybook gives a conversation before anyone names it; with no common ancestor, a
     /// title someone chose wins over one of these.
     static func isPlaceholderTitle(_ title: String) -> Bool {
@@ -285,7 +337,9 @@ private struct MergedTranscriptView: Codable, Equatable {
         correctionIssues = meeting.correctionTransferIssues; fusionSummary = meeting.fusionSummary
         backgroundPassages = meeting.backgroundPassages
     }
-    var isEmpty: Bool { segments.isEmpty && alignments.isEmpty && correctionIssues == nil && fusionSummary == nil && backgroundPassages == nil }
+    var isEmpty: Bool {
+        segments.isEmpty && alignments.isEmpty && correctionIssues == nil && fusionSummary == nil && backgroundPassages == nil
+    }
 }
 private struct MergedNotes: Codable, Equatable {
     var text: String

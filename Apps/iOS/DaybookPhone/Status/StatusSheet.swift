@@ -147,7 +147,7 @@ struct StatusSheetHost: ViewModifier {
 
   private var placement: StatusSheetModel.Placement {
     StatusSheetModel.placement(
-      twoPages: onPage, compactHeight: heightClass == .compact, reading: session.reading,
+      twoPages: onPage, compactHeight: heightClass == .compact, reading: session.reading || session.notebookFor != nil,
       searching: session.isSearchPresented, selecting: session.isSelecting, inTrash: session.place.isTrash)
   }
 
@@ -682,7 +682,7 @@ enum StatusSheetInputs {
     inputs.queue = StatusOverviewModel.queue(
       meetings: library.meetings, liveProgress: model.liveProgress, words: words,
       planners: model.placement.planners, runs: model.placement.runs,
-      cloudOffered: model.placement.cloudOffer != nil)
+      cloudOffered: { model.placement.cloudOffer(for: $0) != nil })
     let work = localWork(model, library: library)
     inputs.local = work.line
     inputs.localQueue = work.entries
@@ -1161,7 +1161,10 @@ private struct StatusCaptions: View {
         let segments = session.liveCaptions
         let state = session.liveCaptionState
         if LiveCaptionStrip.shows(segments: segments, state: state, locale: locale) {
-          LiveCaptionStrip(segments: segments, state: state, locale: locale, style: .sheet)
+          LiveTranscriptLink(source: LiveTranscriptModel.Source(read: { LiveTranscriptModel.Reading(lines: session.liveCaptions) }),
+                             isEnabled: LiveTranscriptLink<EmptyView>.opens(state: state, lines: segments.count)) {
+            LiveCaptionStrip(segments: segments, state: state, locale: locale, style: .sheet)
+          }
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)

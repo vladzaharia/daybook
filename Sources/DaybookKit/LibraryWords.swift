@@ -95,4 +95,9 @@ extension LibraryWords {
         let title = meetings.first?.title.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return title.isEmpty ? "Move this conversation to the Trash?" : "Move “\(title)” to the Trash?"
     }
+
+    /// Merge…'s question: "Merge 3 conversations?".
+    public static func mergeTitle(_ count: Int) -> String { "Merge \(count) conversations?" }
+    /// Beneath it, what it costs.
+    public static let mergeMessage = "This can’t be undone."
 }

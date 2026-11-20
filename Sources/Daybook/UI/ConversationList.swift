@@ -240,6 +240,11 @@ private struct SearchResults: View {
             // The control's edges line up with the result rows' highlight.
             .listRowInsets(EdgeInsets())
             .padding(.horizontal, -6.5)
+            if let question = askRowQuestion {
+                AskRowView(question: question) { state.ask.ask(question) }
+                    .selectionDisabled()
+                    .listRowSeparator(.hidden)
+            }
             ForEach(hits) { hit in
                 if let meeting = byID[hit.meetingID] {
                     SearchResultRowView(meeting: meeting, hit: hit).tag(hit.meetingID).listRowSeparator(.hidden)
@@ -253,15 +258,22 @@ private struct SearchResults: View {
         }
         .listStyle(.inset)
         .softTopScrollEdge()
-        .overlay { if hits.isEmpty && captionHits.isEmpty { ContentUnavailableView.search(text: state.window.searchText) } }
+        .overlay { if hits.isEmpty && captionHits.isEmpty && askRowQuestion == nil { ContentUnavailableView.search(text: state.window.searchText) } }
         .task(id: CaptionQuery(text: state.window.searchText, tokens: state.window.searchTokens, scope: state.window.searchScope, revision: state.libraryRevision)) {
             // The conversations the search could list (its scope and tokens), less those the text search found.
-            let scoped = Set(LibrarySearch.hits(in: state.meetings, text: "", tokens: state.window.searchTokens, scope: state.window.searchScope).map(\.meetingID))
+            let scoped = Set(LibrarySearch.hits(in: state.meetings, text: "", tokens: state.window.searchTokens, scope: state.window.searchScope,
+                                                 people: state.library.searchPeople).map(\.meetingID))
             let found = await LibraryCaptionSearch.hits(in: state.meetings.filter { scoped.contains($0.id) }, query: state.window.searchText,
                                                         excluding: Set(hits.map(\.meetingID)), libraryRoot: state.library.rootURL)
             guard !Task.isCancelled else { return }
             captionHits = found
         }
+    }
+
+    /// The question the first row asks: the typed text when it reads as a question, else the one that is open.
+    private var askRowQuestion: String? {
+        let typed = state.window.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return AskQuestion.readsAsQuestion(typed) ? typed : state.ask.question
     }
 
     /// The folder being viewed, which the scopes offer too.
@@ -278,6 +290,7 @@ enum MacSearch {
     /// both read until a newer transcript replaces the captions (`SavedCaptions`, as on the iPhone); a note at Your
     /// notes on the summary page (`LibraryWindowModel.showOnSummary`); the page's top for a title or a summary.
     static func open(_ id: UUID?, hits: [SearchHit], captionHits: [LibraryCaptionSearch.Hit], state: AppState) {
+        state.ask.leavePage()
         state.window.selection = []
         state.window.openID = id
         if let caption = captionHits.first(where: { $0.meeting.id == id }) {
@@ -421,7 +434,8 @@ private struct RowMenu: View {
                                         perform: { MacActions.perform($0, on: [only.id], state: state, undoManager: undoManager, window: window) },
                                         custom: { MacActions.custom($0, ids: [only.id], state: state) })
         } else if !meetings.isEmpty {
-            ConversationActionMenuItems(ConversationActions.batch(ids, in: state.meetings, context: .init(platform: .mac)), platform: .mac,
+            ConversationActionMenuItems(ConversationActions.batch(ids, in: state.meetings, context: .init(platform: .mac),
+                                                                  each: { MeetingInspector.context(state, $0) }, merging: state.library.mergingIDs), platform: .mac,
                                         perform: { MacActions.perform($0, on: ids, state: state, undoManager: undoManager, window: window) },
                                         custom: { MacActions.custom($0, ids: ids, state: state) })
         }
@@ -434,7 +448,7 @@ private struct RowMenu: View {
 }
 
 /// Several conversations selected, on the page: what can be done to all of them, from `ConversationActions.batch`
-/// (Summarize Again, Move to Folder, Tags…, Work or Personal, the Trash), as buttons.
+/// (Summarize Again, Move to Folder, Tags…, Work or Personal, Merge…, the Trash), as buttons.
 struct BatchActionButtons: View {
     let state: AppState
     let ids: [UUID]
@@ -442,7 +456,8 @@ struct BatchActionButtons: View {
     @Environment(\.undoManager) private var undoManager
 
     var body: some View {
-        let groups = ConversationActions.batch(ids, in: state.meetings, context: .init(platform: .mac))
+        let groups = ConversationActions.batch(ids, in: state.meetings, context: .init(platform: .mac),
+                                              each: { MeetingInspector.context(state, $0) }, merging: state.library.mergingIDs)
         let actions = groups.flatMap(\.actions)
         VStack(spacing: DaybookSpacing.s3) {
             HStack {
@@ -510,6 +525,7 @@ enum MacActions {
                     state.window.sheet = .versionHistory
                 case .moveToFolder: break // A menu of the folders (`custom`).
                 case .moveToTrash(let ids): state.window.confirmingTrash = ids
+                case .merge(let ids): if ids.count > 1 { state.window.confirmingMerge = ids }
                 }
             },
             copy: { LocalPasteboard.copy($0) },
@@ -533,7 +549,7 @@ enum MacActions {
                 break // The iPhone's.
             case .play, .adjustTiming, .showOriginalTranscript, .moveToNewConversation, .removeRecording:
                 break // A recording's, in the inspector.
-            case .copySummary, .process, .versionHistory, .moveToFolder, .tags, .moveTo, .moveToTrash:
+            case .copySummary, .process, .versionHistory, .moveToFolder, .tags, .moveTo, .merge, .moveToTrash:
                 break // The library's (`ConversationActionPerformer`).
             }
         }
@@ -750,5 +766,28 @@ private extension View {
     @ViewBuilder
     func softTopScrollEdge() -> some View {
         if #available(macOS 26, *) { scrollEdgeEffectStyle(.soft, for: .top) } else { self }
+    }
+}
+
+// MARK: - Ask
+
+/// The search results' first row when the words read as a question, or one is open: Return asks it, and so does the row.
+private struct AskRowView: View {
+    let question: String
+    let ask: () -> Void
+
+    var body: some View {
+        Button(action: ask) {
+            HStack(spacing: DaybookSpacing.s2) {
+                Image(systemName: "text.bubble").foregroundStyle(DaybookPalette.accent).accessibilityHidden(true)
+                Text(AskPageWords.askRow(question)).lineLimit(1).truncationMode(.tail)
+                Spacer(minLength: 0)
+            }
+            .daybookFont(.rowTitle)
+            .foregroundStyle(DaybookPalette.Ink.title)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.vertical, DaybookSpacing.s1)
     }
 }

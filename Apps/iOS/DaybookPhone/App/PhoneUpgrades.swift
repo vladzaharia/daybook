@@ -53,7 +53,7 @@ final class PhoneUpgrades {
         return UpgradeCandidates(thisDevice: capabilities(),
                                  redoesRecordings: { meeting in !meeting.transcribableTracks.isEmpty && meeting.transcribableTracks.allSatisfy(owns) },
                                  macs: ProcessingMac.reachable(connected: connected, presence: presence(), now: clock()),
-                                 cloud: placement.cloudOffer)
+                                 cloud: placement.cloudOffer, cloudPlacements: placement.preferences.placements)
     }
 
     /// The offer the page makes now; nil while the conversation's summary is held, counts down, or runs here or in the

@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookKit
 import Foundation
 import XCTest
 @testable import DaybookIntelligence
@@ -116,13 +117,16 @@ final class SummaryRepairTests: XCTestCase {
     /// Writes a summary and no commitments, recording each prompt and its limit; a word is a token.
     private final class BriefModel: SynthesisModel, @unchecked Sendable {
         let supportsStructuredOutput = true, briefCommitments: Bool, contextLength: Int?, outputTokens: Int?
+        let memoryTokens: Int?, readLimits: SummaryReadLimits
         /// Extraction and compression write all they may, as the 26B came close to doing.
         var verbose = false
         private let lock = NSLock()
         private var _passes: [(prompt: String, maxTokens: Int)] = []
         var prompts: [String] { lock.withLock { _passes.map(\.prompt) } }
         var passes: [(prompt: String, maxTokens: Int)] { lock.withLock { _passes } }
-        init(brief: Bool = false, context: Int? = nil, output: Int? = nil) { briefCommitments = brief; contextLength = context; outputTokens = output }
+        init(brief: Bool = false, context: Int? = nil, output: Int? = nil, memory: Int? = nil, limits: SummaryReadLimits = SummaryReadLimits()) {
+            briefCommitments = brief; contextLength = context; outputTokens = output; memoryTokens = memory; readLimits = limits
+        }
         private var vocabulary: [String] = [], index: [String: Int] = [:]
         func encode(_ text: String) async -> [Int] {
             lock.withLock {
@@ -153,9 +157,14 @@ final class SummaryRepairTests: XCTestCase {
 
     // MARK: Budgets
 
+    /// The catalog's limits for Gemma 4 26B A4B: the sizes it was measured at.
+    private func measured() throws -> SummaryReadLimits {
+        try XCTUnwrap(ModelCatalog.builtIn.model("gemma-4/26b-a4b-qat-4bit")).summaryReadLimits
+    }
+
     func testALargeContextWindowReadsALongConversationInFewerLongerPasses() async throws {
         let long = transcript(2_200)   // About 33,000 tokens.
-        let small = BriefModel(), large = BriefModel(context: 262_144)
+        let small = BriefModel(), large = BriefModel(context: 262_144, limits: try measured())
         for model in [small, large] {
             _ = try await MeetingSynthesis.generate(model: model, modelID: "m", transcript: long, notes: "", template: .auto, glossary: [], progress: { _ in })
         }
@@ -174,7 +183,7 @@ final class SummaryRepairTests: XCTestCase {
     func testAMeetingTheEvidenceBudgetHoldsIsReadAsBefore() async throws {
         // The weekly's size: parts of 4,800 tokens and 900 words each, as the 26B was tuned on.
         let weekly = transcript(500)
-        let small = BriefModel(), large = BriefModel(context: 262_144)
+        let small = BriefModel(), large = BriefModel(context: 262_144, limits: try measured())
         for model in [small, large] {
             _ = try await MeetingSynthesis.generate(model: model, modelID: "m", transcript: weekly, notes: "", template: .auto, glossary: [], progress: { _ in })
         }
@@ -199,23 +208,103 @@ final class SummaryRepairTests: XCTestCase {
         XCTAssertLessThanOrEqual(final.prompt.components(separatedBy: "evidence ").count - 1, MeetingSynthesis.evidenceBudget)
     }
 
-    func testAPassNeverAsksForMoreThanTheWindowHolds() async throws {
-        // An 8,192-token window with a 5,000-token conversation: the final pass may write what's left.
-        let model = BriefModel(context: 8_192)
-        _ = try await MeetingSynthesis.generate(model: model, modelID: "m", transcript: transcript(350), notes: "", template: .auto, glossary: [], progress: { _ in })
-        let final = try XCTUnwrap(model.passes.first { $0.prompt.hasPrefix("Write a concise summary") })
-        let promptTokens = (MeetingSynthesis.instructions + final.prompt).split(whereSeparator: \.isWhitespace).count
-        XCTAssertEqual(final.maxTokens, 8_192 - promptTokens - 1_024)
-        XCTAssertLessThan(final.maxTokens, MeetingSynthesis.finalTokens)
+    func testAConversationThatFitsTheWindowIsReadWholeInOnePass() async throws {
+        // About 33,000 tokens, with no catalog limit and a 128K window: one final pass and one commitments pass.
+        let model = BriefModel(context: 131_072)
+        _ = try await MeetingSynthesis.generate(model: model, modelID: "m", transcript: transcript(2_200), notes: "", template: .auto, glossary: [],
+                                                progress: { _ in })
+        XCTAssertFalse(model.prompts.contains { $0.hasPrefix("Extract concise") }, "No parts")
+        XCTAssertEqual(model.prompts.filter { $0.hasPrefix("Write a concise summary") }.count, 1)
+        XCTAssertEqual(model.prompts.filter { $0.hasPrefix("Extract ALL") }.count, 1, "Commitments follow the same rule")
+        let final = try XCTUnwrap(model.prompts.first { $0.hasPrefix("Write a concise summary") })
+        XCTAssertTrue(final.contains("routine item number 2199 for"), "The whole conversation, word for word")
     }
 
-    func testBudgetsFollowTheContextWindowAndTheCatalogsLimit() {
+    func testMemoryLimitsTheWindowAndALongerConversationIsReadInAsFewPartsAsFit() async throws {
+        // The same conversation where this device's memory holds 20,000 tokens of context: each pass reads at most the
+        // window less room for its reply (5,000) and instructions (4,096).
+        let model = BriefModel(context: 131_072, memory: 20_000)
+        _ = try await MeetingSynthesis.generate(model: model, modelID: "m", transcript: transcript(2_200), notes: "", template: .auto, glossary: [],
+                                                progress: { _ in })
+        let room = SummaryReadLimits.room(window: 20_000)
+        XCTAssertEqual(room, 10_904)
+        let parts = model.passes.filter { $0.prompt.hasPrefix("Extract concise") }
+        XCTAssertEqual(parts.count, 4, "33,000 tokens in parts of under 10,904")
+        let commitments = model.passes.filter { $0.prompt.hasPrefix("Extract ALL") }
+        XCTAssertEqual(commitments.count, 4)
+        for pass in model.passes {
+            let prompt = (MeetingSynthesis.instructions + pass.prompt).split(whereSeparator: \.isWhitespace).count
+            XCTAssertLessThanOrEqual(prompt + MeetingSynthesis.templateTokens + pass.maxTokens, 20_000, "Every pass fits the usable window")
+        }
+    }
+
+    func testAPassNeverAsksForMoreThanTheWindowHolds() async throws {
+        // An 8,192-token window with a 5,000-token conversation: too long to read whole with room for the reply, so it's
+        // read in parts, and no pass asks for more than the window holds after its prompt.
+        let model = BriefModel(context: 8_192)
+        _ = try await MeetingSynthesis.generate(model: model, modelID: "m", transcript: transcript(350), notes: "", template: .auto, glossary: [], progress: { _ in })
+        XCTAssertTrue(model.prompts.contains { $0.hasPrefix("Extract concise") })
+        for pass in model.passes {
+            let prompt = (MeetingSynthesis.instructions + pass.prompt).split(whereSeparator: \.isWhitespace).count
+            XCTAssertLessThanOrEqual(prompt + MeetingSynthesis.templateTokens + pass.maxTokens, 8_192)
+        }
+        let final = try XCTUnwrap(model.passes.first { $0.prompt.hasPrefix("Write a concise summary") })
+        XCTAssertLessThan(final.maxTokens, 16_384, "Asked for no more than the window holds")
+    }
+
+    func testASmallWindowReadsWhatFitsAndRefusesWhatDoesntBeforeAnyPart() async throws {
+        // A short conversation fits a small window whole, with its prompt and a reply: one final pass, one commitments pass.
+        let small = BriefModel(context: 4_096)
+        _ = try await MeetingSynthesis.generate(model: small, modelID: "m", transcript: transcript(20), notes: "", template: .auto, glossary: [],
+                                                progress: { _ in })
+        XCTAssertEqual(small.prompts.filter { $0.hasPrefix("Write a concise summary") }.count, 1)
+        XCTAssertFalse(small.prompts.contains { $0.hasPrefix("Extract concise") })
+        // A long one would have to be read in parts too small to hold anything: an error before any part is read.
+        let tiny = BriefModel(context: 6_000)
+        do {
+            _ = try await MeetingSynthesis.generate(model: tiny, modelID: "m", transcript: transcript(2_000), notes: "", template: .auto,
+                                                    glossary: [], progress: { _ in })
+            XCTFail("A window this small can't read it")
+        } catch LocalIntelligenceError.promptTooLong(_, let window) {
+            XCTAssertEqual(window, 6_000)
+        }
+        XCTAssertTrue(tiny.passes.isEmpty, "Nothing ran")
+    }
+
+    func testAPromptThatCannotFitIsAnErrorNeverAGuess() async throws {
+        // A final pass whose own words (here, the vocabulary) leave no room for its reply.
+        let glossary = (0..<80).map { _ in Array(repeating: "x", count: 100).joined(separator: " ") }   // 8,000 tokens, each term within 200 characters
+        let crowded = BriefModel(context: 10_000)
+        do {
+            _ = try await MeetingSynthesis.generate(model: crowded, modelID: "m", transcript: transcript(20), notes: "", template: .auto, glossary: glossary,
+                                                    progress: { _ in })
+            XCTFail("The final pass doesn't fit")
+        } catch LocalIntelligenceError.promptTooLong(let needed, let window) {
+            XCTAssertEqual(window, 10_000)
+            XCTAssertGreaterThan(needed, window)
+        }
+        XCTAssertFalse(crowded.prompts.contains { $0.hasPrefix("Write a concise summary") }, "It was never sent")
+    }
+
+    func testBudgetsFollowTheUsableWindowAndTheCatalogsLimits() throws {
         XCTAssertEqual(MeetingSynthesis.Budget(contextLength: nil), .standard)
-        XCTAssertEqual(MeetingSynthesis.Budget(contextLength: 8_192), .standard)
-        let qwen = MeetingSynthesis.Budget(contextLength: 32_768), gemma = MeetingSynthesis.Budget(contextLength: 262_144)
-        XCTAssertEqual([qwen.evidence, qwen.longPart, qwen.output], [12_000, 8_000, 16_384])
-        XCTAssertEqual([gemma.evidence, gemma.longPart, gemma.output], [24_000, 12_000, 16_384])
+        XCTAssertEqual(MeetingSynthesis.Budget(contextLength: nil, memoryTokens: 50_000), .standard, "No window, no budgets from memory")
+        // Without limits, every pass may read what the window holds less room for its reply and instructions.
+        let open = MeetingSynthesis.Budget(contextLength: 262_144)
+        XCTAssertEqual([open.wholeRead, open.evidence, open.longPart, open.commitmentPart, open.output], [241_664, 241_664, 241_664, 241_664, 16_384])
+        let small = MeetingSynthesis.Budget(contextLength: 131_072, memoryTokens: 20_000)
+        XCTAssertEqual([small.wholeRead, small.longPart, small.window], [10_904, 10_904, 20_000], "The smaller of the window and memory")
+        XCTAssertEqual(MeetingSynthesis.Budget(contextLength: 32_768).longPart, 20_480, "A quarter of a small window for the reply")
+        // The catalog's limits: the sizes each model was measured at, under the window.
+        let gemma = MeetingSynthesis.Budget(contextLength: 262_144, limits: try measured())
+        XCTAssertEqual([gemma.wholeRead, gemma.evidence, gemma.longPart, gemma.commitmentPart], [5_400, 24_000, 12_000, 5_400])
+        let qwenLimits = try XCTUnwrap(ModelCatalog.builtIn.model("qwen2.5/7b-4bit")).summaryReadLimits
+        let qwen = MeetingSynthesis.Budget(contextLength: 32_768, limits: qwenLimits)
+        XCTAssertEqual([qwen.wholeRead, qwen.evidence, qwen.longPart, qwen.commitmentPart, qwen.output], [5_400, 12_000, 8_000, 5_400, 16_384])
         XCTAssertEqual([gemma.part(transcript: 30_000), gemma.part(transcript: 10_000), qwen.part(transcript: 13_000)], [12_000, 4_800, 8_000])
+        // Memory short of the limits: the window wins.
+        let tight = MeetingSynthesis.Budget(contextLength: 262_144, memoryTokens: 20_000, limits: try measured())
+        XCTAssertEqual([tight.wholeRead, tight.evidence, tight.longPart, tight.commitmentPart], [5_400, 10_904, 10_904, 5_400])
         XCTAssertEqual(MeetingSynthesis.Budget(contextLength: 262_144, outputTokens: 8_192).output, 8_192)
         XCTAssertEqual(MeetingSynthesis.Budget(contextLength: 262_144, outputTokens: 99_999).output, 16_384)
         // Compression writes at most half what it reads, so every round shrinks the evidence.
@@ -226,6 +315,33 @@ final class SummaryRepairTests: XCTestCase {
         XCTAssertEqual(gemma.words(parts: 4, reading: 12_000), 2_250)
         XCTAssertEqual(gemma.words(parts: 2, reading: 4_800), 900)
         XCTAssertEqual(gemma.words(parts: 40, reading: 12_000), 400)
+    }
+
+    func testMemoryThatHoldsLessThanTheSmallBudgetsNeverFailsAShortSummary() async throws {
+        let short = transcript(20)
+        // Weights past the working set (0), or Gemma 4 E4B on 8 GB at the older working-set ratio (437 tokens).
+        for memory in [0, 437, MeetingSynthesis.memoryFloor - 1] {
+            let model = BriefModel(context: 131_072, memory: memory, limits: try measured())
+            XCTAssertEqual(model.usableWindow, 131_072, "\(memory): the model's own window, paging as before")
+            XCTAssertEqual(MeetingSynthesis.Budget(model), MeetingSynthesis.Budget(contextLength: 131_072, limits: try measured()))
+            _ = try await MeetingSynthesis.generate(model: model, modelID: "m", transcript: short, notes: "", template: .auto, glossary: [],
+                                                    progress: { _ in })
+            XCTAssertTrue(model.prompts.contains { $0.hasPrefix("Write a concise summary") }, "\(memory): summarized")
+        }
+        // Enough for the small budgets: a cap.
+        XCTAssertEqual(BriefModel(context: 131_072, memory: MeetingSynthesis.memoryFloor).usableWindow, MeetingSynthesis.memoryFloor)
+    }
+
+    func testWhatThisDevicesMemoryHoldsForAModel() {
+        let gib: Int64 = 1 << 30
+        // 48 GiB the GPU may use, 15.6 GB of weights, 20 KB a token (Gemma 4 26B A4B): far more than its window.
+        XCTAssertEqual(MeetingSynthesis.memoryTokens(memory: 48 * gib, weightBytes: 15_608_838_574, kvBytesPerToken: 20_480),
+                       Int((48 * gib - 15_608_838_574 - 48 * gib / 10) / 20_480))
+        // An iPhone with 1 GiB left after the weights: the margin is at least 512 MiB.
+        XCTAssertEqual(MeetingSynthesis.memoryTokens(memory: 4 * gib, weightBytes: 2 * gib, available: gib, kvBytesPerToken: 6_144),
+                       Int(gib / 2 / 6_144))
+        XCTAssertEqual(MeetingSynthesis.memoryTokens(memory: 8 * gib, weightBytes: 8 * gib, kvBytesPerToken: 6_144), 0, "Nothing left")
+        XCTAssertNil(MeetingSynthesis.memoryTokens(memory: 8 * gib, weightBytes: gib, kvBytesPerToken: nil), "Unknown cache size")
     }
 
     func testAModelMarkedBriefGetsTheShorterCommitmentsPrompt() async throws {

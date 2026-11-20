@@ -31,7 +31,11 @@ enum PhoneRecorderStatus {
         let conversation = recorder.captureID
         if recorder.isActive {
             let cascade = model.devices.cascade
-            inputs.recorders = model.devices.sessions.filter { $0.direct != nil || cascade.member($0.id) != nil }.map { session in
+            // Apple Watch only while it's part of this recording: left out (Daybook not open on it, unavailable), it
+            // has nothing to say here.
+            inputs.recorders = model.devices.sessions.filter { session in
+                session.kind.id == AppleWatchIntegration.id ? cascade.member(session.id) != nil : session.direct != nil || cascade.member(session.id) != nil
+            }.map { session in
                 RecorderFacts(session: session, handoff: model.devices.handoffState(session),
                               along: cascade.conversation?.id == conversation ? cascade.member(session.id).map { along($0.state, role: $0.role) } : nil)
             }
@@ -205,7 +209,8 @@ extension CaptionStripStyle {
 }
 
 /// Live captions in a layout's style, from this iPhone's captions: the newest lines, the person live speakers
-/// recognized (or the recorder that heard it) before the words, and why there are none yet.
+/// recognized (or the recorder that heard it) before the words, and why there are none yet. The lines open the
+/// whole live transcript.
 struct PhoneCaptions: View {
     @Environment(PhoneAppModel.self) private var model
     let style: CaptionStripStyle
@@ -214,12 +219,15 @@ struct PhoneCaptions: View {
         let captions = model.captions
         if captions.isShowing {
             let segments = captions.state == .listening ? captions.recent(style.lines) : []
-            LiveCaptionStrip(lines: segments.map { segment in
-                                 CaptionLine(id: segment.id, text: segment.text, isTentative: segment.isTentative,
-                                             speaker: LiveCaptionLabels.speaker(segment, names: captions.sourceNames))
-                             },
-                             status: Self.status(captions.state, model: model),
-                             style: style)
+            LiveTranscriptLink(source: captions.session.transcriptSource,
+                               isEnabled: LiveTranscriptLink<EmptyView>.opens(state: captions.state, lines: segments.count)) {
+                LiveCaptionStrip(lines: segments.map { segment in
+                                     CaptionLine(id: segment.id, text: segment.text, isTentative: segment.isTentative,
+                                                 speaker: LiveCaptionLabels.speaker(segment, names: captions.sourceNames))
+                                 },
+                                 status: Self.status(captions.state, model: model),
+                                 style: style)
+            }
         }
     }
 
@@ -240,7 +248,7 @@ struct PhoneCaptions: View {
 
 /// In the hand, on the sheet while it's smaller than the whole recorder: the newest caption on one line in Meta ink,
 /// its latest words kept, after the captions' glyph (the strip's label says "tentative"; the line's ink does). Nothing
-/// while captions are off.
+/// while captions are off. It opens the whole live transcript.
 struct PhoneCaptionLine: View {
     @Environment(PhoneAppModel.self) private var model
 
@@ -250,19 +258,21 @@ struct PhoneCaptionLine: View {
             let newest = captions.state == .listening ? captions.recent(1).last : nil
             let speaker = newest.flatMap { LiveCaptionLabels.speaker($0, names: captions.sourceNames) }
             let words = newest?.text ?? PhoneCaptions.status(captions.state, model: model) ?? ""
-            HStack(alignment: .firstTextBaseline, spacing: DaybookSpacing.s2) {
-                Image(systemName: "captions.bubble").imageScale(.small)
-                if let speaker { Text(speaker).fontWeight(.semibold).lineLimit(1).fixedSize() }
-                Text(words)
-                    .lineLimit(1)
-                    .truncationMode(.head)
+            LiveTranscriptLink(source: captions.session.transcriptSource, isEnabled: newest != nil) {
+                HStack(alignment: .firstTextBaseline, spacing: DaybookSpacing.s2) {
+                    Image(systemName: "captions.bubble").imageScale(.small)
+                    if let speaker { Text(speaker).fontWeight(.semibold).lineLimit(1).fixedSize() }
+                    Text(words)
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                }
+                .font(.subheadline)
+                .foregroundStyle(DaybookPalette.Ink.meta)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Live captions")
+                .accessibilityValue([speaker, words].compactMap { $0 }.joined(separator: ": "))
             }
-            .font(.subheadline)
-            .foregroundStyle(DaybookPalette.Ink.meta)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Live captions")
-            .accessibilityValue([speaker, words].compactMap { $0 }.joined(separator: ": "))
         }
     }
 }

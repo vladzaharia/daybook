@@ -21,6 +21,8 @@ public enum CloudError: Error, Equatable, Sendable, LocalizedError {
     case refused(model: String, category: String?, details: String)
     /// The summary ran past the most the model can write, even after raising the limit.
     case tooLong(model: String, details: String)
+    /// The conversation is longer than the model's context window: nothing was sent.
+    case inputTooLong(model: String, details: String)
     /// The provider couldn't take the request as sent.
     case rejected(CloudProvider, details: String)
     /// The reply couldn't be read.
@@ -43,6 +45,7 @@ public enum CloudError: Error, Equatable, Sendable, LocalizedError {
         case .modelUnavailable(_, let model, _): return "This key can’t use \(model)."
         case .refused(let model, _, _): return "\(model) declined to summarize this conversation."
         case .tooLong(let model, _): return "The summary was longer than \(model) can write."
+        case .inputTooLong(let model, _): return "This conversation is longer than \(model) can read."
         case .rejected(let provider, _): return "\(Self.providerName(provider)) couldn’t take this request."
         case .unreadable(let provider, _): return "\(Self.providerName(provider))’s reply couldn’t be read."
         }
@@ -54,7 +57,7 @@ public enum CloudError: Error, Equatable, Sendable, LocalizedError {
         case .noKey: return ""
         case .badKey(_, let details), .noCredit(_, let details), .rateLimited(_, _, let details), .busy(_, let details),
              .offline(let details), .connectionLost(_, let details), .modelUnavailable(_, _, let details), .refused(_, _, let details),
-             .tooLong(_, let details), .rejected(_, let details), .unreadable(_, let details):
+             .tooLong(_, let details), .inputTooLong(_, let details), .rejected(_, let details), .unreadable(_, let details):
             return details
         }
     }

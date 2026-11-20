@@ -64,8 +64,24 @@ public enum SettingsWords {
         case .low: return "Low"
         case .medium: return "Medium"
         case .high: return "High"
+        case .xhigh: return "Extra High"
+        case .max: return "Max"
         }
     }
+
+    /// Settings › Cloud's switches for which conversations may go to the cloud: "Work", "Personal".
+    public static func placement(_ placement: LibraryPlacement) -> String {
+        switch placement {
+        case .work: return "Work"
+        case .personal: return "Personal"
+        }
+    }
+
+    /// The switch for conversations not filed yet.
+    public static let notFiled = "Not filed"
+
+    /// The heading over those switches.
+    public static let cloudPlacements = "Use the cloud for"
 
     /// Use the cloud: "Offer first", "Always", "Never".
     public static func policy(_ policy: CloudSummaryPreferences.Policy) -> String {

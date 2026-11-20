@@ -4,8 +4,8 @@ import Foundation
 /// Carries out the library's half of a conversation's actions (DaybookKit's `ConversationActions`) once for both
 /// apps, from every menu that lists them (More, a row's, a selection's; on the iPhone its swipes and selection bar):
 /// Copy Summary, then "Copied" over the page; Reprocess ▸ a mode; Version History…; Move to Folder; Tags…; Move to
-/// Work or Personal, which Edit › Undo takes back ("Undo Move to Personal", for one conversation or several); and
-/// Move to Trash…, which asks first. Each app says how it processes, what it shows, and how it copies, and carries
+/// Work or Personal, which Edit › Undo takes back ("Undo Move to Personal", for one conversation or several); Merge…
+/// and Move to Trash…, which ask first. Each app says how it processes, what it shows, and how it copies, and carries
 /// out its own actions itself (share, export, Show in Finder, the camera, Floating Notes, rename).
 @MainActor
 public struct ConversationActionPerformer {
@@ -18,6 +18,8 @@ public struct ConversationActionPerformer {
         case moveToFolder([UUID])
         /// Move to Trash…: the question first ("Move “Weekly sync” to the Trash?").
         case moveToTrash([UUID])
+        /// Merge…: the question first ("Merge 3 conversations?"), for two or more; it can't be undone.
+        case merge([UUID])
     }
 
     public var library: LibraryController
@@ -44,7 +46,7 @@ public struct ConversationActionPerformer {
     /// Whether the performer carries `id` out; the rest are each app's own.
     public static func carriesOut(_ id: ConversationAction.ID) -> Bool {
         switch id {
-        case .copySummary, .process, .versionHistory, .moveToFolder, .tags, .moveTo, .moveToTrash:
+        case .copySummary, .process, .versionHistory, .moveToFolder, .tags, .moveTo, .merge, .moveToTrash:
             return true
         case .share, .shareMarkdown, .shareJSON, .shareAudio, .export, .exportMarkdown, .exportJSON,
              .showFloatingNotes, .takePhoto, .addPhotos, .addRecording, .addRecordingFromFile, .reprocess,
@@ -65,11 +67,12 @@ public struct ConversationActionPerformer {
             confirm(.copied)
         case .process(let mode):
             // A selection's Summarize Again passes over those with no transcript to summarize.
-            for meeting in meetings where mode != .summaryOnly || !meeting.unifiedTranscript.isEmpty { process(meeting.id, mode) }
+            for meeting in meetings where mode != .summaryOnly || meeting.hasSummarizableContent { process(meeting.id, mode) }
         case .versionHistory: show(.versionHistory(first.id))
         case .moveToFolder: show(.moveToFolder(chosen))
         case .tags: show(.tags(chosen))
         case .moveTo(let placement): library.setPlacement(chosen, placement, undoManager: undoManager)
+        case .merge: show(.merge(chosen))
         case .moveToTrash: show(.moveToTrash(chosen))
         case .share, .shareMarkdown, .shareJSON, .shareAudio, .export, .exportMarkdown, .exportJSON,
              .showFloatingNotes, .takePhoto, .addPhotos, .addRecording, .addRecordingFromFile, .reprocess,

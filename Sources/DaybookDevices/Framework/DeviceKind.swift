@@ -86,6 +86,8 @@ public struct DeviceKind: Identifiable, Hashable {
     public var technicalNotes: [String] = []
     /// The empty state when the recorder holds nothing yet.
     public var emptyHint: String?
+    /// Offered in Add Device. False for a kind Daybook adds by itself (Apple Watch, once Daybook is on the watch).
+    public var isAddedByHand = true
 
     public var implementedMethods: [ConnectionMethod] { methods.filter(\.isImplemented) }
     public func method(_ kind: ConnectionMethodKind) -> ConnectionMethod? { methods.first { $0.kind == kind } }
@@ -94,7 +96,7 @@ public struct DeviceKind: Identifiable, Hashable {
     public static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
     public func hash(into hasher: inout Hasher) { hasher.combine(id) }
 
-    public init(id: String, name: String, shortName: String, vendor: String?, systemImage: String, summary: String, methods: [ConnectionMethod], audioSource: AudioSource, allowsMultiple: Bool, discoveryTips: [DeviceTip] = [], technicalNotes: [String] = [], emptyHint: String? = nil) {
+    public init(id: String, name: String, shortName: String, vendor: String?, systemImage: String, summary: String, methods: [ConnectionMethod], audioSource: AudioSource, allowsMultiple: Bool, discoveryTips: [DeviceTip] = [], technicalNotes: [String] = [], emptyHint: String? = nil, isAddedByHand: Bool = true) {
         self.id = id
         self.name = name
         self.shortName = shortName
@@ -107,6 +109,7 @@ public struct DeviceKind: Identifiable, Hashable {
         self.discoveryTips = discoveryTips
         self.technicalNotes = technicalNotes
         self.emptyHint = emptyHint
+        self.isAddedByHand = isAddedByHand
     }
 }
 
@@ -134,8 +137,11 @@ public protocol DeviceIntegration {
 /// Every kind Daybook knows, in the order the Add Device chooser lists them.
 @MainActor
 public enum DeviceCatalog {
-    public static var integrations: [any DeviceIntegration] = [SoundcoreWorkIntegration(), DaybookPhoneIntegration(), OtherRecorderIntegration()]
+    public static var integrations: [any DeviceIntegration] = [SoundcoreWorkIntegration(), DaybookPhoneIntegration(), OtherRecorderIntegration(),
+                                                               AppleWatchIntegration()]
     public static var kinds: [DeviceKind] { integrations.map(\.kind) }
+    /// The kinds Add Device offers: every one but those Daybook adds by itself.
+    public static var kindsAddedByHand: [DeviceKind] { kinds.filter(\.isAddedByHand) }
     public static func integration(_ id: String) -> (any DeviceIntegration)? { integrations.first { $0.kind.id == id } }
     public static func kind(_ id: String) -> DeviceKind? { integration(id)?.kind }
 }
@@ -269,6 +275,9 @@ public struct DeviceEnvironment {
     /// What Daybook on iPhone's connections need from the app: its local link and whether the
     /// library syncs. Shared by reference, so the app can fill it in after the devices exist.
     public var phone = DaybookPhoneHooks()
+    /// What Apple Watch's connection needs from the iPhone app: the link to the watch, the shared recording, and
+    /// joining the watch's segments. Shared by reference. Empty on the Mac, which has no watch of its own.
+    public var watch = AppleWatchHooks()
 
     public func storage(for device: ConfiguredDevice, method: ConnectionMethodKind) -> DeviceStorage {
         DeviceStorage(defaults: defaults, prefix: "device.\(device.id).\(method.rawValue).")

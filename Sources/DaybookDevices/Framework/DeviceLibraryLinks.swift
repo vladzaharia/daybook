@@ -128,6 +128,8 @@ public struct DeviceLibraryIndex: Equatable {
 @MainActor
 public enum DeviceRecordingStart {
     public static func date(of identity: DeviceRecordingIdentity) -> Date? {
+        // Apple Watch's IDs don't carry a start: it's what its connection listed, on this iPhone's clock.
+        if identity.kind == AppleWatchIntegration.id { return WatchConnection.recordingStarts[identity.recordingID] }
         guard identity.kind == SoundcoreWorkIntegration.id,
               let seconds = UInt32(DeviceLibraryLinks.wholeRecordingID(identity.recordingID)) else { return nil }
         return SoundcoreRecording(id: seconds, size: 0).start(correction: SoundcoreClocks.clock(serial: identity.serial)?.correction ?? 0)

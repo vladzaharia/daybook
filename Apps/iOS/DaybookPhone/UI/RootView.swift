@@ -35,6 +35,11 @@ struct RootView: View {
             }
         }
         .environment(reading)
+        .onChange(of: model.pendingNotebook) { _, id in
+            guard let id else { return }
+            model.pendingNotebook = nil
+            reading.notebookFor = id
+        }
         .environment(\.surfaceStyle, SurfaceStyle(layout))
         .environment(\.audioProvider, boundAudioProvider)
         .daybookMotion(DaybookMotion.page, value: layout)
@@ -112,4 +117,9 @@ extension EnvironmentValues {
     /// The surface's layout, for what's presented over it: inside a sheet the size class is compact
     /// even across the open iPhone Duo.
     @Entry var surfaceStyle: SurfaceStyle = .pocket
+}
+
+/// A conversation's notebook, presented full screen.
+struct NotebookCover: Identifiable {
+    let id: UUID
 }

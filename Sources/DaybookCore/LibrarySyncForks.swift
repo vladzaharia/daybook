@@ -1,19 +1,21 @@
 import Foundation
 
 // A deletion is final for its conversation ID (docs/icloud-sync.md, "Conflicts and deletion"). What a device
-// added that the deletion never saw — a recording made while it was deleted elsewhere, notes or photos added
+// added that the deletion never saw — a recording made while it was deleted elsewhere, notes, photos, or pages added
 // offline — is kept under a new ID instead: as a new conversation, or when a conversation is restored from
 // the Trash after its deletion was synced.
 
 extension Meeting {
     /// Whether this copy holds person-made or captured content that `seen` (the copy a deletion was made
-    /// from) didn't: a recording, a photo, a bookmark, or a paragraph of notes. Derived work (transcripts,
+    /// from) didn't: a recording, a photo, a notebook page or new strokes on one, a bookmark, or a paragraph of notes. Derived work (transcripts,
     /// summaries) alone isn't. With no `seen`, anything of those counts.
     func hasContent(notIn seen: Meeting?) -> Bool {
         let tracks = Set(seen?.tracks.map(\.id) ?? []), photos = Set((seen?.photos ?? []).map(\.id))
         let marks = Set(seen?.highlights.map(\.id) ?? [])
         if self.tracks.contains(where: { !tracks.contains($0.id) }) { return true }
         if visiblePhotos.contains(where: { !photos.contains($0.id) }) { return true }
+        let seenPages = Dictionary((seen?.pages ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        if visiblePages.contains(where: { page in seenPages[page.id].map { $0.drawing?.sha256 != page.drawing?.sha256 } ?? true }) { return true }
         if highlights.contains(where: { !marks.contains($0.id) }) { return true }
         let seenParagraphs = Set(Self.paragraphs(seen?.notes ?? ""))
         return Self.paragraphs(notes).contains { !seenParagraphs.contains($0) }

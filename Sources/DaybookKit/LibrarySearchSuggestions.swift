@@ -5,8 +5,9 @@ import Foundation
 /// conversations name, never "Me" or an unnamed "Speaker 2", never a token already chosen.
 public enum LibrarySearchSuggestions {
     /// The suggestions for what's typed. Nothing typed: every tag, then every person. After "#": the tags that
-    /// start with what follows it. Otherwise: the tags and people whose names start with what's typed.
-    public static func tokens(for text: String, tags: [String], meetings: [Meeting], chosen: [SearchToken] = []) -> [SearchToken] {
+    /// start with what follows it. Otherwise: the tags and people (a profile's name too) whose names start with what's typed.
+    public static func tokens(for text: String, tags: [String], meetings: [Meeting], chosen: [SearchToken] = [],
+                              people profiles: SearchPeople = .none) -> [SearchToken] {
         let typed = text.trimmingCharacters(in: .whitespaces)
         let options: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive, .anchored]
         func starts(_ name: String, with prefix: some StringProtocol) -> Bool {
@@ -18,7 +19,7 @@ public enum LibrarySearchSuggestions {
             suggested = tags.filter { starts($0, with: prefix) }.map(SearchToken.tag)
         } else {
             suggested = tags.filter { starts($0, with: typed) }.map(SearchToken.tag)
-                + people(in: meetings).filter { starts($0, with: typed) }.map(SearchToken.speaker)
+                + people(in: meetings, profiles: profiles).filter { starts($0, with: typed) }.map(SearchToken.speaker)
         }
         return suggested.filter { token in !chosen.contains { $0.matches(token) } }
     }
@@ -31,12 +32,12 @@ public enum LibrarySearchSuggestions {
         return .tag(tag)
     }
 
-    /// The people conversations name, once each, in name order: not "Me" (this device's own microphone) and not a
-    /// speaker nobody has named yet.
-    public static func people(in meetings: [Meeting]) -> [String] {
+    /// The people conversations name and the profiles know, once each, in name order: not "Me" (this device's own
+    /// microphone) and not a speaker nobody has named yet.
+    public static func people(in meetings: [Meeting], profiles: SearchPeople = .none) -> [String] {
         var seen = Set<String>()
         var names: [String] = []
-        for name in meetings.lazy.flatMap({ $0.speakers.map(\.name) }) {
+        for name in profiles.names + meetings.flatMap({ $0.speakers.map(\.name) }) {
             let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
             guard isPerson(trimmed), seen.insert(trimmed.lowercased()).inserted else { continue }
             names.append(trimmed)

@@ -60,7 +60,12 @@ struct FloatingRecording: View {
 
     private var slots: RecorderSlots {
         RecorderSlots(
-            notes: AnyView(PanelNotes(state: state, meeting: meeting, isRecording: true, showsLane: true)),
+            notes: AnyView(VStack(spacing: 0) {
+                if !context.compact, let last = state.lastTime {
+                    LastTimeCard(last: last) { context.openConversation(last.meetingID) }
+                }
+                PanelNotes(state: state, meeting: meeting, isRecording: true, showsLane: true)
+            }),
             captions: AnyView(Group {
                 if captionsShowing {
                     PanelCaptions(captions: state.captions, compact: context.compact)
@@ -80,9 +85,13 @@ private struct PanelCaptions: View {
 
     var body: some View {
         let segments = captions.state == .listening ? captions.recent(compact ? 1 : 2) : []
-        LiveCaptionStrip(lines: segments.map { LiveCaptionLabels.line($0, names: captions.sourceNames) },
-                         status: LiveCaptionStatus.line(captions.state, locale: captions.locale),
-                         style: compact ? .panelCompact : .panel)
+        LiveTranscriptLink(source: captions.session.transcriptSource,
+                           isEnabled: LiveTranscriptLink<EmptyView>.opens(state: captions.state, lines: captions.segments.count)) {
+            LiveCaptionStrip(lines: segments.map { LiveCaptionLabels.line($0, names: captions.sourceNames) },
+                             status: LiveCaptionStatus.line(captions.state, locale: captions.locale),
+                             notice: captions.sourceNotice,
+                             style: compact ? .panelCompact : .panel)
+        }
             .padding(.leading, FloatingLayout.inset)
             .padding(.trailing, FloatingLayout.inset)
             // A fixed height, so the notes never move as words arrive.

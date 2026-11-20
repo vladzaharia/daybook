@@ -59,9 +59,10 @@ final class UpgradeTests: XCTestCase {
     }
 
     private func offer(_ meeting: Meeting, status: ProcessingStatus = .done, here: ProcessingCapabilities = .none,
-                       ownRecordings: Bool = true, macs: [ProcessingMac] = [], cloud: CloudModel? = nil) -> UpgradeOffer? {
+                       ownRecordings: Bool = true, macs: [ProcessingMac] = [], cloud: CloudModel? = nil,
+                       placements: CloudPlacements = CloudPlacements()) -> UpgradeOffer? {
         Upgrades.offer(for: meeting, status: status, candidates: UpgradeCandidates(thisDevice: here, redoesRecordings: { _ in ownRecordings },
-                                                                                 macs: macs, cloud: cloud))
+                                                                                 macs: macs, cloud: cloud, cloudPlacements: placements))
     }
 
     // MARK: Ranks
@@ -202,6 +203,38 @@ final class UpgradeTests: XCTestCase {
         var work = placed
         work.placement = .work
         XCTAssertEqual(offer(work, macs: [mac()], cloud: sonnet)?.place, .cloud(sonnet))
+    }
+
+    func testBehaviorTheCloudIsOfferedOnlyForPlacementsSettingsLetGoThere() throws {
+        let base = conversation(transcription: ["parakeet/ultra"], speakers: "nemotron-3-diarization/offline", summary: "gemma-4/e4b-4bit")
+        var personal = base
+        personal.placement = .personal
+        var work = base
+        work.placement = .work
+        var unsorted = base
+        unsorted.placement = nil
+        unsorted.kind = .auto
+        unsorted.summary?.kind = .auto
+        XCTAssertNil(unsorted.effectivePlacement)
+        var personalOn = CloudPlacements()
+        personalOn.set(.personal, allowed: true)
+        XCTAssertEqual(offer(personal, cloud: sonnet, placements: personalOn)?.place, .cloud(sonnet), "The person let Personal go")
+        var workOff = CloudPlacements()
+        workOff.set(.work, allowed: false)
+        XCTAssertNil(offer(work, cloud: sonnet, placements: workOff), "Work kept off")
+        XCTAssertEqual(offer(unsorted, cloud: sonnet, placements: workOff)?.place, .cloud(sonnet), "Not filed yet: its own switch, not Work's")
+        var notFiledOff = CloudPlacements()
+        notFiledOff.setNotFiled(allowed: false)
+        XCTAssertNil(offer(unsorted, cloud: sonnet, placements: notFiledOff))
+        XCTAssertEqual(offer(unsorted, cloud: sonnet)?.place, .cloud(sonnet), "…which is on by default")
+        // A placement a newer Daybook wrote is never sent: what the person chose for it is unknown here.
+        let json = String(decoding: try JSONEncoder().encode(work), as: UTF8.self).replacingOccurrences(of: #""placement":"work""#,
+                                                                                                         with: #""placement":"family""#)
+        let newer = try JSONDecoder().decode(Meeting.self, from: Data(json.utf8))
+        XCTAssertFalse(newer.$placement.isKnown)
+        var everything = CloudPlacements()
+        for placement in LibraryPlacement.allCases { everything.set(placement, allowed: true) }
+        XCTAssertNil(offer(newer, cloud: sonnet, placements: everything))
     }
 
     func testBehaviorTheWeakestRecordingsModelCounts() throws {

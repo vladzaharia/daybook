@@ -370,6 +370,10 @@ extension LinkCapabilities {
     /// Counts down before summarizing and says so (`processing.progress` with `summaryCountdown`), and takes
     /// the person's choice from the other device (`processing.choice`: Use the Cloud, Start Now).
     public static let summaryPlacementFeature = "summaryPlacement"
+    /// Shows a Mac's countdown that ends in the cloud as one (`cloudModel` during `summaryCountdown`) and answers it with
+    /// Start Now or Don't Use the Cloud (`processing.choice` `useLocal`). A Mac sends that countdown to an iPhone without it
+    /// with no countdown at all, and takes none of its choices for it: such an iPhone would show it as the Mac's own.
+    public static let cloudCountdownFeature = "cloudCountdown"
     /// Says whether the other device may start a recording on it, its Can start recording for that device
     /// (`record.permission`), as a session begins and whenever that changes, and takes the other's: a device
     /// doesn't ask one that wouldn't record for it.
@@ -384,6 +388,7 @@ extension LinkCapabilities {
     public var showsLevels: Bool { features.contains(Self.liveLevelsFeature) }
     public var sharesLevels: Bool { features.contains(Self.sharesLevelsFeature) }
     public var placesSummaries: Bool { features.contains(Self.summaryPlacementFeature) }
+    public var answersCloudCountdowns: Bool { features.contains(Self.cloudCountdownFeature) }
     public var hearsArrivals: Bool { features.contains(Self.recordingArrivalFeature) }
     public var stopsForPages: Bool { features.contains(Self.pageStopFeature) }
     public var tellsRecordPermission: Bool { features.contains(Self.recordPermissionFeature) }
@@ -704,6 +709,16 @@ public struct LinkProcessingProgress: Codable, Sendable, Equatable {
         self.cloudModel = cloudModel
     }
 
+    /// A countdown that ends in the cloud, as a phone that doesn't answer one (`cloudCountdownFeature`) gets it: work on the
+    /// Mac with no countdown and no model, so it offers nothing to act on.
+    public var withoutCloudCountdown: LinkProcessingProgress {
+        guard phase == .summaryCountdown, cloudModel != nil else { return self }
+        var bare = self
+        bare.countdown = nil
+        bare.cloudModel = nil
+        return bare
+    }
+
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         meetingID = try c.decode(UUID.self, forKey: .meetingID)
@@ -737,6 +752,8 @@ public struct LinkSummaryChoice: Codable, Sendable, Equatable {
         public init(rawValue: String) { self.rawValue = rawValue }
         public static let useCloud: Self = "useCloud"
         public static let startNow: Self = "startNow"
+        /// Don't Use the Cloud, for a countdown that ends there: a Mac before this one ignores it.
+        public static let useLocal: Self = "useLocal"
     }
 
     public var meetingID: UUID

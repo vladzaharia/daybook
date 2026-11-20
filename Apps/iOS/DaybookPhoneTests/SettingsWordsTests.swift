@@ -162,6 +162,6 @@ final class SettingsWordsTests: XCTestCase {
         openAI.preferences.policy = .never
         XCTAssertEqual(openAI.summary, "Never")
         XCTAssertEqual(CloudTier.allCases.map(CloudSettingsScreen.title), ["Best", "Balanced", "Economy"])
-        XCTAssertEqual(CloudEffort.allCases.map(CloudSettingsScreen.title), ["Low", "Medium", "High"])
+        XCTAssertEqual(CloudEffort.allCases.map(CloudSettingsScreen.title), ["Low", "Medium", "High", "Extra High", "Max"])
     }
 }

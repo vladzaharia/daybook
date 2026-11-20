@@ -26,7 +26,8 @@ public enum RecordingWords {
     /// on the iPhone) for a Mac's microphone and computer audio, the recorder a file was exported from.
     /// Nil when the name says it already.
     public static func place(_ track: RecordingTrack, in meeting: Meeting, mac: String) -> String? {
-        guard track.deviceKind != DaybookPhoneIntegration.id else { return nil }
+        // The iPhone's and Apple Watch's microphone tracks are named for the device already, never this Mac's.
+        guard track.deviceKind != DaybookPhoneIntegration.id, track.deviceKind != AppleWatchIntegration.id else { return nil }
         switch track.source {
         case .microphone, .systemAudio: return mac
         case .soundcore, .imported:

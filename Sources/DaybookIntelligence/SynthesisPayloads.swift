@@ -58,9 +58,11 @@ public struct NotePayload: Encodable, Equatable, Sendable {
     var placement: String?
     var recording: String?
     var context: [String]
+    /// For handwriting: the notebook page it is on.
+    var page: Int?
 
     enum CodingKeys: String, CodingKey {
-        case label, kind, time, text, placement, recording, context
+        case label, kind, time, text, placement, recording, context, page, source
         case repeatsWhatWasSaid = "repeats_what_was_said"
     }
 
@@ -73,6 +75,7 @@ public struct NotePayload: Encodable, Equatable, Sendable {
         placement = anchor.kind == .note && anchor.time == nil ? "written outside the recording" : nil
         recording = anchor.recording
         context = anchor.context
+        page = anchor.page
     }
 
     static func all(_ source: SummarySource) -> [NotePayload] { source.anchors.map(NotePayload.init) }
@@ -86,6 +89,10 @@ public struct NotePayload: Encodable, Equatable, Sendable {
         try container.encode(text, forKey: .text)
         if repeatsWhatWasSaid { try container.encode(true, forKey: .repeatsWhatWasSaid) }
         try container.encodeIfPresent(placement, forKey: .placement)
+        if let page {
+            try container.encode(page, forKey: .page)
+            try container.encode("handwriting", forKey: .source)
+        }
         if let recording {
             try container.encode(recording, forKey: .recording)
             try container.encode(context, forKey: .context)
@@ -157,16 +164,21 @@ public enum FinalEvidence: Encodable, Equatable, Sendable {
 }
 
 /// The final pass's source data: the evidence and the vocabulary, with the notes and the passages near them
-/// in a long conversation, and the photos.
+/// in a long conversation, the photos, and the conversation's title and start when it has them
+/// (`SummarySource.Context`), left out of the encoding when it doesn't.
 struct FinalSource: Encodable {
     var evidence: FinalEvidence
     var glossarySpellings: [String]
     var userNotesAndBookmarks: [NotePayload]?
     var passagesNearNotesAndBookmarks: String?
     var photos: String?
+    var conversationTitle: String?
+    var conversationStarted: String?
 
     enum CodingKeys: String, CodingKey {
         case evidence
+        case conversationTitle = "conversation_title"
+        case conversationStarted = "conversation_started"
         case glossarySpellings = "glossary_spellings"
         case userNotesAndBookmarks = "user_notes_and_bookmarks"
         case passagesNearNotesAndBookmarks = "passages_near_notes_and_bookmarks"

@@ -3,25 +3,97 @@
 A summary can be written by a cloud model, Anthropic's or OpenAI's, with the person's own key. Everything else stays on
 the device: transcription, speaker detection, voice profiles, and audio. With no key nothing changes and nothing is
 offered. With a key, Settings › Cloud chooses when summaries use the cloud (offered with a countdown first, always, or
-never) and which model. Where a summary runs is decided by the placement planner (`SummaryPlacementPlanner`, the
+never), for which conversations (a switch for each placement, Work and Personal, and one for Not Filed), and which model. Where a summary runs is decided by the placement planner (`SummaryPlacementPlanner`, the
 placement stream); this page is the cloud side: the catalog, keys, discovery, the requests, and the summary itself.
 
 ## What is sent
 
 A cloud summary sends the conversation's transcript text (with each note and bookmark in place, and the passages near
-them marked), the notes and bookmarks, the template (its kind and instructions), and the vocabulary. Nothing else: no
-audio, no photos or their captions, no voiceprints, no speaker profiles. Photo captions stay on the device, so a cloud
-summary places photos by time only (`PhotoPlacement.arrange`). OpenAI's request sets `store: false`, so the response
-isn't kept on OpenAI's side.
+them marked), the notes (including words read from notebook pages) and bookmarks, the template (its kind and instructions), the vocabulary, and the conversation's
+title and date. The title goes only when the person or the calendar gave it (never "Untitled Conversation", a recording's
+placeholder, or a title a summary wrote earlier), cut to 120 characters; the date is when the conversation began as the
+person's local day, time, and time zone, sent only when a recording's start is known, so the model can resolve "next
+Tuesday" (`SummarySource.Context`). Nothing else: no audio, no photos or their captions, no notebook page pictures or sketches (nor a sketch's description or label), no voiceprints, no speaker
+profiles, no calendar attendees or other calendar detail. Words from a page reading that isn't current, or of a passage kind this version doesn't know, are never sent. Photo captions and sketch descriptions stay on the device, so a cloud
+summary places photos and sketches by time only (`PhotoPlacement.arrange`, `NotebookPlacement.arrange`). OpenAI's request sets `store: false`, so the response
+isn't kept on OpenAI's side. The same is sent whatever brought the summary to the cloud ("When the cloud is chosen").
 
-**Personal.** A conversation that's Personal (filed there, given the Therapy or Personal template, or found Personal by
-its summary: `Meeting.effectivePlacement`) is never sent on its own. Under Always it counts down as Offer First does, or
-waits for a Mac, with Use the Cloud, and the cloud's Upgrade is never offered for it (docs/multipoint.md). Use the Cloud
-is the person's choice for that one conversation. A conversation whose kind isn't known yet follows Always until a
-summary finds it Personal.
+**Which conversations.** Settings › Cloud has a switch for each placement this version knows (`LibraryPlacement.allCases`:
+Work, Personal) and one for Not Filed, kept in this device's preferences (`CloudSummaryPreferences.placements`,
+`CloudPlacements`). A conversation's placement is the person's filing, else what its template or summary says
+(`Meeting.effectivePlacement`: the Therapy and Personal templates and kinds are Personal, the rest Work). A conversation
+not filed yet (neither the person nor its kind has placed it: every new recording's first summary) follows Not Filed's
+switch, never Work's. Personal is off, and Work and Not Filed on, until the person changes them, which is what Daybook did
+before there were switches (Always sent a conversation not filed yet); preferences saved before them read as those
+defaults. A conversation whose placement or kind (or, while its kind is Automatic, its summary's kind) was written by a
+newer Daybook, which this version can't read, is never sent: what the person chose for it is unknown here. Switches stored
+in a shape this version can't read (malformed, or a newer version's) let nothing go, and Settings shows them all off; they're
+written back as they were, so the version that wrote them reads them again, until the person sets a switch here, which
+replaces them (that switch as set, the rest off). Switches in this version's shape keep any key it doesn't know. An older
+Daybook that predates the switches drops them when it saves its preferences, so after going back to it and forward again
+they're the defaults. A conversation whose switch is off is never sent to the cloud, whatever asks: Use the Cloud isn't offered
+for it (the countdown, the wait for a Mac, the wait for this Mac's summary model, the status sheet and Floating Notes),
+the cloud's Upgrade isn't offered, Always doesn't send it, and a countdown has nothing to offer, so it starts where it
+can at once. Below the interface, the code that sends a summary checks again with the conversation as it is then
+(`AppState.placedSummary` on the Mac, `PhoneSummaryPlacement.run` on the iPhone): a queued Use the Cloud, a cloud
+upgrade accepted earlier, or a conversation moved to Personal (or a switch turned off) while it counts down is
+summarized on the device instead, or sent to a Mac. Preferences are each device's own, so the device that sends a
+summary applies its own switches; a Mac's countdown seen on an iPhone offers what the Mac's switches allow.
 
 OpenRouter's model list (for prices) is fetched without a key and carries nothing about the person: no key, no cookies,
 and a bare `User-Agent: Daybook`. It's fetched only once a key has been added.
+
+## When the cloud is chosen
+
+Always inside the privacy rule: the person's own key, a policy that isn't Never, and a conversation whose placement's
+switch is on (above). Within it:
+
+- **Use the Cloud**, an Upgrade to the cloud's model, and **Always**, as before.
+- **Only while the countdown is seen.** A countdown that ends in the cloud, whatever brought it there, runs only while the
+  person can see it (`SummaryPlacements.countdownsAreSeen`). On the Mac (`CountdownVisibility`): its login session is the
+  active one (`NSWorkspace` session notifications), the screen is unlocked (`com.apple.screenIsLocked`/`Unlocked`) and
+  awake (`screensDidSleep`/`Wake`), the Mac isn't going to sleep (`willSleep`/`didWake`), Daybook isn't hidden, and the
+  library window (whose list and page show a running summary's countdown) or Floating Notes is on the screen, not
+  minimized and not covered (`NSWindow.occlusionState`); the menu bar item isn't counted. On the iPhone
+  (`PhoneSummaryPlacement.isOnScreen`): the scene is active and iOS says the app is (`UIApplication.applicationState`, read
+  each time, so a background launch starts unseen). When that stops being true, the countdown doesn't end in the cloud:
+  the summary runs where it would have without the cloud (this device, or a Mac; after a failure here, the job fails), and
+  it never goes back to the cloud on its own. A countdown that would begin, or come to end in the cloud, while unseen does
+  the same. Always is unchanged: the person chose to send without asking.
+- **A conversation the local model reads in more than one pass** (`LongConversations.cloudDoesBetter`): one longer than
+  the model it would run on (this device's, or on an iPhone the Mac it would go to) reads whole, by the catalog's
+  whole-read limit or its window (docs/model-runtime.md, "Usable window"; 5,400 tokens for every built-in model, about 17
+  minutes of talk), when the cloud's model ranks above that model by the summary Upgrade margin (10 on the shared
+  quality scale, `UpgradeRole.margin`: Claude Sonnet 5.5's 94 against Gemma 4 E4B's 53 is, against Gemma 4 26B A4B's 90
+  isn't). The length is estimated before anything runs, at 3.5 characters a token (the local tokenizers read about 3.6
+  on the three-hour fixture). Under Offer First its countdown ends in the cloud, "Summarizing with Claude Sonnet 5.5 in
+  12 s", with Start Now and Don't Use the Cloud, which runs it where it would have run (this device, or the Mac); it's
+  never sent without a whole countdown: one that comes to end in the cloud partway (a Mac's model changed) starts its
+  time again, and an iPhone that leaves the screen mid-countdown, or whose summary falls due out of sight (where a
+  countdown can't run), runs it where it would have run instead. Use the Cloud or an Upgrade to the cloud's model
+  during it sends it at once, as the person's choice. Under Always it goes at once, as anything does. A summary someone
+  asked for (Summarize Again, a template, Try Again, or another device's request syncing in) starts at once where it can,
+  so never in the cloud on its own; asked for during a countdown that ends in the cloud, it leaves that countdown as it
+  is, and only Start Now on it, where it's shown as it is, starts it early. A Mac's countdown seen on an iPhone names
+  the model (`LinkProcessingProgress.cloudModel` during `summaryCountdown`) and sends Don't Use the Cloud back as
+  `processing.choice` `useLocal`; a Mac before this one ignores it. An iPhone lists `cloudCountdown` when it shows such a
+  countdown as one (`LinkCapabilities.cloudCountdownFeature`); one before this version, which would show it as the
+  Mac's own, gets it with no countdown and no model ("Summarizing", nothing to choose), and the Mac ignores its Start Now
+  and Use the Cloud for it, so the Mac's own countdown, while seen, is where it's chosen.
+- **A summary that failed on the device** tries the cloud before the job fails, under the same rules: at once under
+  Always, after a countdown to the cloud under Offer First (declined, the job fails with what went wrong on the
+  device), never for a conversation kept off the cloud, one the person asked to summarize on this Mac, one whose cloud
+  countdown they declined (Don't Use the Cloud) or that ran here because nobody could see it, or one the cloud already
+  couldn't read. On the Mac, as it's sent, another device holding the summary or one it wrote since the summary step
+  began stands this Mac down (the step's first start is kept, so a summary written meanwhile is never replaced). On the
+  iPhone the processor asks the placement first (`PhoneProcessor.Services.summaryFailed`), and the request stays the
+  iPhone's while the cloud is tried.
+- **A conversation longer than the cloud model can read** (`CloudError.inputTooLong`, checked before sending) is
+  summarized on the device instead (or, from an iPhone without a summarizer, by a Mac), with the cloud's sentence among
+  the summary's warnings.
+
+The summary records why it went (`cloudReason` in its parameters, `MeetingSummary.cloudReason`): `chosen`, `always`,
+`longConversation`, or `localFailed`.
 
 ## Where the code lives
 
@@ -42,9 +114,11 @@ and a bare `User-Agent: Daybook`. It's fetched only once a key has been added.
   ("5-5", "6.1"), and a suffix, optionally followed by "-pro" and a snapshot date ("-20251001", "-2026-09-29"). Anything
   else (Claude Fable, `gpt-5.5`, `o3`, embeddings, `:batch` listings) isn't offered.
 - **Measured models**, each with its tier, its **rank** within the tier (lower is better: measured quality, then
-  price), a **summary quality** (below), whether Anthropic's refusal fallback applies, and how many tokens it writes:
-  output tokens (reasoning included) for 15, 30, 60, 120, and 186 minutes at medium effort, and low and high against
-  medium on an hour (docs/validation.md, 2026-10-31).
+  price), a **summary quality** (below), whether Anthropic's refusal fallback applies, the efforts it takes (from the
+  provider's model page), and how many tokens it writes: output tokens (reasoning included) for 15, 30, 60, 120, and
+  186 minutes at medium effort, and low and high against medium on an hour (docs/validation.md, 2026-10-31). Extra
+  High and Max aren't measured: each is a further step of high's ratio (Claude Sonnet 5.5's high is 1.72× medium, so
+  Extra High is estimated at 2.96× and Max at 5.09×) until `--cloud-check` measures them.
 - **Per provider**: transcript tokens per minute of conversation (Anthropic 311, OpenAI 214: Claude's tokenizer counts
   about 45% more), characters per token for estimating a prompt (2.8 and 4.0), characters of reply per output token
   (for progress), and a default output rate for a model with no measurements.
@@ -114,9 +188,21 @@ long-prompt rates, `context_length`, `top_provider.max_completion_tokens`, `reas
 - a "-pro" variant, as its own model, only when the provider lists it and it's at least the family's measured version;
 - a dated snapshot only when its alias isn't listed.
 
-An older version of a family (`claude-sonnet-4-6`) isn't offered. Each offer's efforts are those the provider or
-OpenRouter says the model takes, of Low, Medium, and High (all three when neither says); its output limit is the
-provider's `max_tokens`, else OpenRouter's, else 32,000.
+An older version of a family (`claude-sonnet-4-6`) isn't offered. Each offer's efforts are those the provider says the
+model takes (Anthropic's `capabilities.effort`: `low`, `medium`, `high`, `xhigh`, `max`, each `supported` or not), else
+OpenRouter's `reasoning.supported_efforts`, else the catalog's (the model's or its family's newest), else Low, Medium, and
+High; its output limit is the provider's `max_tokens`, else OpenRouter's, else 32,000.
+
+**Effort.** Five levels, lowest first: Low, Medium, High, Extra High (`xhigh`), and Max. Every catalog model takes all
+five: Anthropic's effort page lists `xhigh` and `max` for Claude Opus 5.5, Sonnet 5.5, and Haiku 5.5, and OpenAI's model
+pages list `low` through `max` for GPT-6 Astra, GPT-6.1 Sol, GPT-6.1 Terra, and GPT-6 Luna (Terra and Luna also take
+`none`, which Daybook doesn't use; checked 2026-11-16: platform.claude.com/docs/en/build-with-claude/effort,
+platform.claude.com/docs/en/api/models/list, developers.openai.com/api/docs/guides/reasoning and its model pages).
+Summaries ask for Extra High unless the person chooses another level in Settings (`CloudSummaryPreferences.effort`,
+`effortIsChosen`); a model that doesn't take the level asked for gets the highest it takes below it, else the lowest
+above (`CloudOffer.effort`), so the default is Extra High where offered and the highest level below it elsewhere.
+Preferences an earlier version saved have no `effortIsChosen`: their Medium, the old default, can't be told from a
+Medium the person chose, so it moves to Extra High, and a Low or High they chose stays.
 
 **Recommendation and resolution** (`[CloudOffer].resolve`): the chosen model while a key reaches it; else the tier's
 best-ranked offer; else the nearest tier's (Balanced, then Economy, then Best). A chosen model that's gone isn't
@@ -157,7 +243,7 @@ key does.
 | --- | --- | --- |
 | Endpoint | `POST /v1/messages`, `anthropic-version: 2023-06-01`, `x-api-key` | `POST /v1/responses`, `Authorization: Bearer` |
 | Prompt | `system`: `MeetingSynthesis.instructions`; one user message | `instructions`; `input` |
-| Reasoning | `thinking: {type: "adaptive"}`, `output_config.effort` | `reasoning.effort` |
+| Reasoning | `thinking: {type: "adaptive"}`, `output_config.effort` (`low` … `max`) | `reasoning.effort` (`low` … `max`) |
 | Structure | `output_config.format: {type: "json_schema", schema}` | `text.format: {type: "json_schema", name, schema, strict: true}` |
 | Limit | `max_tokens` | `max_output_tokens` |
 | Other | `stream: true`; `fallbacks: "default"` with `anthropic-beta: server-side-fallback-2026-07-01` for Opus 5.5 and Sonnet 5.5 | `stream: true`, `store: false` |
@@ -180,6 +266,7 @@ as server-sent events: Anthropic's `message_start` (model, input tokens), `conte
 | 403 or 404 for the model | "This key can’t use Claude Sonnet 5.5." | No |
 | `stop_reason: "refusal"`, an OpenAI refusal | "Claude Sonnet 5.5 declined to summarize this conversation." (the category in Details) | No |
 | The reply's limit, twice | "The summary was longer than Claude Sonnet 5.5 can write." | Once, with the model's whole limit |
+| The prompt is longer than the model's window (checked before sending) | "This conversation is longer than Claude Sonnet 5.5 can read." | No; nothing is sent |
 | Another 400 | "Anthropic couldn’t take this request." | No |
 
 Three tries in all. A 400 naming the fallback beta (an account it isn't open to) sends the request once more without
@@ -190,10 +277,11 @@ wrote it.
 
 `CloudSummarizer.summary` (and `summarize`, the protocol's) builds the same source a local summary does
 (`MeetingEvidence.summarySource`) and the local pipeline's final prompt and schema in one pass over the whole
-conversation (every catalog model's window holds far more than a day of talk), through `CloudSynthesis`:
+conversation, checked against the model's window first (a prompt longer than it is never sent; every catalog model's
+1M-token window holds far more than a day of talk), through `CloudSynthesis`:
 
 - **Prompt:** `MeetingSynthesis.finalPrompt` with the template's kind and instructions (bounded to about 700 tokens, as
-  locally), the vocabulary, the transcript with notes and bookmarks in place, and two cloud additions:
+  locally), the vocabulary, the conversation's title and date, the transcript with notes and bookmarks in place, and two cloud additions:
   `quotesActions` (each action item with an exact quote from the transcript) and `findsWhatNotesAdd` (below). Local
   prompts are unchanged.
 - **Schema:** `CloudSynthesis.schema`, the local `summarySchema`'s properties in the same order as structured outputs
@@ -205,8 +293,12 @@ conversation (every catalog model's window holds far more than a day of talk), t
   restated later in other words kept once (`RestatedCommitments`). A notes-only conversation has none.
 - **Parsing:** `MeetingSynthesis.parse`, so a cloud summary has the same shape, terms check, and fallbacks as a local
   one.
-- **Limit:** twice the expected output plus 8,000 tokens, at least 16,000, at most the model's; a reply cut off there
-  is asked for once more with the model's whole limit.
+- **Limit:** twice the expected output (at the effort sent) plus 8,000 tokens, at least 16,000, at most the model's; a
+  reply cut off there is asked for once more with the model's whole limit.
+- **Window:** before anything is sent, the prompt's tokens, estimated from its characters (2.8 a token for Claude,
+  4.0 for OpenAI's models), with room for the smallest reply limit (16,000 tokens, which providers count against the
+  window), are checked against the model's window (`max_input_tokens`, else OpenRouter's `context_length`); a longer one
+  fails with `CloudError.inputTooLong` and isn't sent.
 - **Progress:** the reply's characters against what the model is expected to write.
 
 **Notes (the fix for Claude).** Claude Sonnet 5.5 and Haiku 5.5 folded what only a note said into the summary as if it
@@ -223,8 +315,8 @@ Working it out in the reply, rather than only being told to, is the same idea as
 `priceIsEstimated`, `sentBy` (the device that sent it: `CloudSummarizer(directory:deviceName:)`; the Mac gives
 `ProcessingRequest.Device.currentName`, the iPhone its library name), `templateID`, and `templateInstructions`
 (`CloudProvenance.Key`). The placement adds where it ran on the same summary (docs/multipoint.md, "Where summaries
-run"): `summarizedBy`, `summarizedByName`, `place` (`cloud`), and `model.<role>`, with `model.summarization`
-"anthropic/claude-sonnet-5-5". A summary placed in the cloud without the cloud's provenance (a test's or a demo's
+run"): `summarizedBy`, `summarizedByName`, `place` (`cloud`), `cloudReason` (why it went, "When the cloud is chosen"),
+and `model.<role>`, with `model.summarization` "anthropic/claude-sonnet-5-5". A summary placed in the cloud without the cloud's provenance (a test's or a demo's
 stand-in) gets the model it was sent to, so every cloud summary has both. `MeetingSummary.origin.cloudModel` is the
 model's name for any cloud summary, placed or not (`--cloud-check`'s, or one written before the placement). The
 page's colophon reads "Summarized with Claude Sonnet 5.5", with the cloud glyph, on both apps; the Mac inspector's
@@ -247,9 +339,11 @@ Settings › Cloud (a pane of its own on the Mac, between Models and Devices; a 
   (iPhone) with a secure field; it checks the key before keeping it.
 - **Summaries** (once a key is set): Use the cloud (Offer First, Always, Never), and Countdown (15 or 30 seconds) while
   it offers first.
+- **Use the cloud for** (unless Never): a switch for each placement, Work and Personal, then Not Filed; labels only.
 - **Quality** (unless Never): Best, Balanced, and Economy, each with its recommended model and what an hour costs; Model,
-  Recommended or a model of the tier (with its cost when one is chosen); Effort, the efforts the model takes.
-- One footer line: "Sends the transcript, notes, and vocabulary, never audio."
+  Recommended or a model of the tier (with its cost when one is chosen); Effort, the efforts the model takes (a segmented
+  control on the Mac, a menu on the iPhone), showing the level a summary would ask for: Extra High until one is chosen.
+- One footer line: "Sends the transcript, notes, vocabulary, and the title and date, never audio."
 
 Preferences (`CloudSummaryPreferences`) are each device's own, in its UserDefaults (`cloudSummaryPreferences`), read and
 written only through `CloudSetup.preferences`; the Mac's `--library` runs keep their own suite. The countdown's length
@@ -263,7 +357,7 @@ takes `--open-settings cloud-key`.
 A debug build summarizes one fixture with a real key and prints the tokens and cost:
 
     ANTHROPIC_API_KEY=… .build/debug/Daybook --cloud-check anthropic claude-sonnet-5-5 offsite.json [--fixture <id>]
-        [--effort low|medium|high] [--output run.json]
+        [--effort low|medium|high|xhigh|max] [--output run.json]
 
 The key comes from `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` (or `DAYBOOK_CLOUD_KEY`) and is printed only masked. The
 fixture is the summary harness's format (`[{id, title, kind, speakers, lines, notes, bookmarks}]`) or a conversation's

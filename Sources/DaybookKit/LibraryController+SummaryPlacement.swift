@@ -76,7 +76,12 @@ extension MeetingSummary {
         static let place = "place"
         /// Followed by a role's name: "model.transcription", "model.summarization".
         static let modelPrefix = "model."
+        /// Why it went to the cloud (`CloudReason`), when the placement knew.
+        static let cloudReason = "cloudReason"
     }
+
+    /// Why a cloud summary went to the cloud, when its provenance says.
+    public var cloudReason: CloudReason? { processingSettings?.parameters[PlacementKey.cloudReason].flatMap(CloudReason.init(rawValue:)) }
 
     /// Where it ran. A cloud summary names its model from its cloud provenance, whether or not it was placed.
     public var origin: SummaryOrigin {
@@ -101,7 +106,8 @@ extension MeetingSummary {
     /// for each role behind it (`inputs`, plus its own as `summarization`). A cloud summary keeps the provenance the
     /// cloud wrote (`CloudProvenance`: the model, effort, tokens, cost); one that came without it (a stand-in, or a
     /// summary made before) gets the model it was sent to, so every cloud summary names its model the same way.
-    public func placed(_ place: SummaryPlace, by device: ProcessingRequest.Device, inputs: [String: String]) -> MeetingSummary {
+    public func placed(_ place: SummaryPlace, by device: ProcessingRequest.Device, inputs: [String: String],
+                       cloudReason: CloudReason? = nil) -> MeetingSummary {
         var summary = self
         var settings = summary.processingSettings ?? ProcessingSettings(modelID: modelID, createdAt: createdAt)
         settings.parameters[PlacementKey.device] = device.id
@@ -119,6 +125,7 @@ extension MeetingSummary {
                 settings.parameters[CloudProvenance.Key.model] = model.id
             }
             if settings.parameters[CloudProvenance.Key.sentBy] == nil { settings.parameters[CloudProvenance.Key.sentBy] = device.name }
+            if let cloudReason { settings.parameters[PlacementKey.cloudReason] = cloudReason.rawValue }
         case .thisDevice, .mac:
             settings.parameters[PlacementKey.place] = "local"
         }
@@ -157,11 +164,11 @@ extension LibraryController {
     /// as the summary read it, the names speakers were given meanwhile follow into it. True when applied.
     @discardableResult
     public func applyPlacedSummary(_ summary: MeetingSummary, to id: UUID, place: SummaryPlace, started: Date,
-                                   writtenFrom written: Meeting? = nil) -> Bool {
+                                   writtenFrom written: Meeting? = nil, cloudReason: CloudReason? = nil) -> Bool {
         guard let meeting = meeting(id) else { return false }
         let me = thisDevice
         guard !meeting.summaryWrittenElsewhere(after: started, excluding: me.id) else { return false }
-        let placed = summary.placed(place, by: me, inputs: meeting.modelsBehindTranscript)
+        let placed = summary.placed(place, by: me, inputs: meeting.modelsBehindTranscript, cloudReason: cloudReason)
         update(id) { meeting in
             if let written { meeting.setSummary(placed, writtenFrom: written) } else { meeting.setSummary(placed) }
             meeting.status = .ready

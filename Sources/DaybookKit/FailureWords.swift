@@ -85,7 +85,7 @@ extension CloudError: ProcessingFailureClassifying {
         case .rateLimited: return .cloud(.rateLimited)
         case .busy: return .cloud(.busy)
         case .connectionLost: return .cloud(.connectionLost)
-        case .refused, .tooLong, .rejected, .unreadable: return .cloud(.other)
+        case .refused, .tooLong, .inputTooLong, .rejected, .unreadable: return .cloud(.other)
         }
     }
 }

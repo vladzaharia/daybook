@@ -48,8 +48,12 @@ public struct CloudCatalog: Codable, Equatable, Sendable {
         /// Output tokens (reasoning included) for a conversation of so many minutes, at medium effort:
         /// `[[minutes, tokens], …]`, in order.
         public var outputTokens: [[Double]]?
-        /// Output at low and high effort, against medium, measured on an hour.
+        /// Output at each effort against medium on an hour: low and high measured; Extra High and Max extrapolated
+        /// (each a further step of high's ratio), until `--cloud-check` measures them.
         public var effortScale: [String: Double]?
+        /// The efforts the model takes, from the provider's model page: the offer's when neither the provider's list nor
+        /// OpenRouter says.
+        public var efforts: [String]?
     }
 
     public var version: Int
@@ -182,11 +186,22 @@ public struct CloudCatalog: Codable, Equatable, Sendable {
                 let (x0, y0, x1, y1) = (points[lower][0], points[lower][1], points[upper][0], points[upper][1])
                 tokens = x1 == x0 ? y1 : y0 + (y1 - y0) * (minutes - x0) / (x1 - x0)
             }
-            let scale = effort == .medium ? 1 : measured.effortScale?[effort.rawValue] ?? (effort == .high ? 1.6 : 0.9)
+            let scale = effort == .medium ? 1 : measured.effortScale?[effort.rawValue] ?? Self.assumedScale(effort)
             return max(500, Int((tokens * scale).rounded()))
         }
-        let scale = effort == .high ? 1.6 : effort == .low ? 0.9 : 1
-        return max(500, Int((self.provider(provider).outputTokensPerMinute * minutes * scale).rounded()))
+        return max(500, Int((self.provider(provider).outputTokensPerMinute * minutes * Self.assumedScale(effort)).rounded()))
+    }
+
+    /// Output against medium for a model with no scale of its own: low 0.9 and high 1.6, near the measured models', and each
+    /// level above high a further step of high's ratio.
+    static func assumedScale(_ effort: CloudEffort) -> Double {
+        switch effort {
+        case .low: return 0.9
+        case .medium: return 1
+        case .high: return 1.6
+        case .xhigh: return 1.6 * 1.6
+        case .max: return 1.6 * 1.6 * 1.6
+        }
     }
 
     /// The prompt's tokens for a conversation of `minutes`: the transcript and our instructions.

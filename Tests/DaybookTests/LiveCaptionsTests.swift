@@ -279,11 +279,71 @@ final class LiveCaptionsTests: XCTestCase {
         rig.you.post([line("Still captioning me.", 1, 2)])
         try await waitUntil("You") { rig.captions.segments.map(\.text) == ["Still captioning me."] }
         XCTAssertEqual(rig.captions.state, .listening)
+        XCTAssertEqual(rig.captions.sourceNotice, "Call: Captions stopped: test", "the strip names the source that stopped")
         XCTAssertTrue(rig.captions.isShowing(for: meeting))
         let result = try await XCTUnwrapAsync(await rig.recorder.stop())
         XCTAssertEqual(result.tracks.count, 2)
         XCTAssertTrue(result.warnings.isEmpty, "\(result.warnings)")
         await rig.captions.finish()
+    }
+
+    func testBehaviorTheStripNamesASourceThatStoppedOnlyWhileAnotherListens() {
+        let both: [LiveCaptionSource: LiveCaptionState] = [.microphone: .listening, .call: .listening]
+        XCTAssertNil(LiveCaptionStatus.problem(both))
+        XCTAssertEqual(LiveCaptionStatus.problem([.microphone: .failed("No input"), .call: .listening]), "You: No input")
+        XCTAssertEqual(LiveCaptionStatus.problem([.microphone: .listening, .call: .unavailable("Not for Welsh.")]), "Call: Not for Welsh.")
+        XCTAssertEqual(LiveCaptionStatus.problem([.microphone: .failed("a"), .call: .failed("b"), .device("x"): .listening],
+                                                 names: ["device:x": "Mac"]), "You: a · Call: b")
+        XCTAssertNil(LiveCaptionStatus.problem([.microphone: .failed("a"), .call: .failed("b")]), "none listening: the state line says it")
+    }
+
+    // MARK: The live transcript
+
+    func testBehaviorTheLiveTranscriptOpenedAndClosedMidRecordingChangesNothingAboutCapture() async throws {
+        let rig = rig(route: .headphones)
+        let meeting = UUID()
+        try await start(rig, meeting: meeting)
+        let tap = try XCTUnwrap(rig.system.taps.first)
+        func emit(_ count: Int, from index: Int) {
+            for step in index..<(index + count) {
+                rig.clock.now = 51 + Double(step) * 0.1
+                tap.emit(CallSignals.tone(channels: 2, level: 0.1), at: rig.clock.now)
+                rig.mic.emit(CallSignals.tone(), at: rig.clock.now)
+            }
+        }
+        // The surfaces keep the newest few; the transcript has every line, You and Call among them.
+        var lines: [LiveCaptionSegment] = []
+        for index in 0..<30 { lines.append(line("You \(index)", Double(index) * 4, Double(index) * 4 + 2)) }
+        rig.you.post(lines)
+        rig.call.post([line("The call says hello", 1, 3)])
+        try await waitUntil("heard") { rig.captions.segments.contains { $0.text == "You 29" } && rig.captions.recent(100).count == 8 }
+
+        emit(5, from: 0)
+        let model = LiveTranscriptModel(interval: .milliseconds(10))
+        let open = Task { await model.run(rig.captions.session.transcriptSource) }
+        try await waitUntil("the transcript fills") { model.lines.count == 31 }
+        XCTAssertEqual(model.lines.map(\.text).first, "You 0")
+        XCTAssertEqual(model.lines.map(\.text).last, "You 29")
+        XCTAssertEqual(model.lines.first { $0.text == "The call says hello" }?.source, .call, "You and Call stay labelled")
+        XCTAssertEqual(try XCTUnwrap(model.lines.first { $0.source == .call }.flatMap(LiveCaptionLabels.lane)), "Call")
+        emit(5, from: 5)
+        rig.you.post(lines + [line("A new line while it's open", 130, 132, tentative: true)])
+        try await waitUntil("a line while open") { model.lines.last?.text == "A new line while it's open" }
+        open.cancel()
+        await open.value
+        emit(5, from: 10)
+
+        XCTAssertEqual(rig.you.fed.count, 15, "the microphone's buffers all reached the captioner, open or closed")
+        XCTAssertEqual(rig.call.fed.count, 15)
+        XCTAssertEqual(rig.recorder.state, .recording)
+        XCTAssertTrue(rig.captions.isShowing(for: meeting))
+        let result = try await XCTUnwrapAsync(await rig.recorder.stop())
+        XCTAssertTrue(result.tracks.allSatisfy { $0.frameCount > 0 }, "the recording is whole")
+        XCTAssertTrue(result.warnings.isEmpty, "\(result.warnings)")
+        await rig.captions.finish()
+        let saved = try XCTUnwrap(rig.captions.store.captions(for: meeting))
+        XCTAssertEqual(saved.segments.count, 32, "what's saved is every line, as without the transcript")
+        XCTAssertEqual(saved.segments.filter(\.isTentative).count, 0)
     }
 
     // MARK: Stored on this Mac, replaced by the transcript

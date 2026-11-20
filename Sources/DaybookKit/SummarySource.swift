@@ -35,6 +35,9 @@ public struct SummarySource: Sendable, Equatable {
         /// A note found to repeat what was said around it: passed on without its words, as a moment the
         /// person marked (`MeetingSynthesis.notesRepeatingWhatWasSaid`).
         public var repeatsWhatWasSaid = false
+        /// For handwriting ("H1", …): the notebook page it is on (1-based); nil for typed notes and bookmarks.
+        public var page: Int?
+        public var isHandwriting: Bool { page != nil }
     }
 
     /// How far around a note or a bookmark its passages carry more weight. A note is usually written
@@ -55,10 +58,68 @@ public struct SummarySource: Sendable, Equatable {
     /// `.highlights`), for inference that takes strings and for small tasks.
     public var notesText: String
     public var highlightText: String?
+    /// The conversation's title when the person or the calendar gave it (`Context.title`), never one Daybook
+    /// made up or a model wrote, cut to `Context.titleLength` characters. Context for the model, not evidence.
+    public var title: String?
+    /// When the conversation began, as `Context.when` writes it ("Wednesday 2026-11-18, 14:05, America/Vancouver"); nil when
+    /// no recording's start is known. Context for the model, not evidence.
+    public var started: String?
 
-    public init(lines: [Line], anchors: [Anchor], transcript: String, notesText: String, highlightText: String?) {
+    public init(lines: [Line], anchors: [Anchor], transcript: String, notesText: String, highlightText: String?,
+                title: String? = nil, started: String? = nil) {
         self.lines = lines; self.anchors = anchors; self.transcript = transcript
         self.notesText = notesText; self.highlightText = highlightText
+        self.title = title; self.started = started
+    }
+
+    /// What the summary model is told about the conversation beside what was said: its title and when it began.
+    /// Nothing else about it (docs/cloud.md, "What is sent").
+    public enum Context {
+        /// The most characters of a title a model is given.
+        public static let titleLength = 120
+
+        /// A title the person or the calendar gave: the conversation's own, with the time Daybook adds to a recording's
+        /// ("Weekly sync at 10:15 AM") taken off, and nil for a placeholder (none, "Untitled Conversation", "Note",
+        /// "Conversation", "Microphone", a device's name alone such as "Alex’s iPhone") or a title that is only a time. The title a summary
+        /// model wrote is the summary's (`MeetingSummary.title`), never the conversation's, and is never sent: a
+        /// re-summary would be anchored on the earlier one's guess.
+        public static func title(_ meeting: Meeting) -> String? {
+            var title = meeting.title.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
+            if let time = title.range(of: #" at \d{1,2}[:.]\d{2}.*$"#, options: .regularExpression) { title.removeSubrange(time.lowerBound...) }
+            let lowered = title.lowercased()
+            guard !title.isEmpty, !placeholders.contains(lowered), lowered.range(of: deviceName, options: .regularExpression) == nil,
+                  title.contains(where: \.isLetter) else { return nil }
+            return title.count > titleLength ? String(title.prefix(titleLength)) + "…" : title
+        }
+
+        /// A title that is a device's name and nothing more: the name Daybook gives a recording made on an iPhone, an iPad, or
+        /// an Apple Watch ("iPhone", "Apple Watch", "Alex’s iPhone"; `Meeting.defaultTitle` with `RecordingWords.baseName`).
+        /// "iPhone launch review" is a title.
+        private static let deviceName = #"^(.+['’]s )?(iphone|ipad|apple watch)$"#
+
+        private static let placeholders = Set((["Untitled meeting", "Untitled Conversation", "Imported recording", "Conversation", "Note", "Recorder"]
+            + AudioSource.allCases.map(\.recordingName)).map { $0.lowercased() })
+
+        /// When the conversation began: the earliest start any of its recordings has by its own clock, which a recording
+        /// made here or by a recorder that dates its files has, and a file imported by hand does not. The conversation's
+        /// date alone is not used: for a file imported by hand it is the day it was imported. Nil when no recording knows
+        /// its start. Written as "Wednesday 2026-11-18, 14:05, America/Vancouver" in `timeZone`, the same whatever the
+        /// person's language or region, so the model can count to "next Tuesday".
+        public static func started(_ meeting: Meeting, in timeZone: TimeZone = .current) -> String? {
+            guard let start = meeting.tracks.filter({ !$0.isRemoved }).compactMap(\.startedAt).min() else { return nil }
+            return when(start, in: timeZone)
+        }
+
+        public static func when(_ date: Date, in timeZone: TimeZone) -> String {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = timeZone
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.calendar = calendar
+            formatter.timeZone = timeZone
+            formatter.dateFormat = "EEEE yyyy-MM-dd, HH:mm"
+            return "\(formatter.string(from: date)), \(timeZone.identifier)"
+        }
     }
 
     /// A source from strings alone (inference that predates notes in place): the transcript as it
@@ -75,17 +136,36 @@ public struct SummarySource: Sendable, Equatable {
     ///
     ///     [11:30] (near N1) Alex: We could keep the budget flat.
     ///     [12:04] NOTE N1, written by the user (not spoken): Budget cap is firm at 40k
-    public var annotatedTranscript: String {
+    public var annotatedTranscript: String { annotatedTranscript(placing: []) }
+
+    /// The same, with pictures (photos and sketches with a time) on lines of their own at their times, as a part of a long
+    /// conversation reads them: "[12:04] PICTURE [S1]; drawn at 12:04 on page 2; shows: …".
+    public func annotatedTranscript(placing pictures: [PhotoEvidence]) -> String {
+        let timed = pictures.filter { $0.time != nil }
+        // A source from strings has its transcript as it came: pictures can't be placed in it.
         guard isStructured else { return transcript }
         var result: [String] = []
-        let placed = anchors.filter { $0.time != nil && $0.context.isEmpty }.sorted { ($0.time!, $0.label) < ($1.time!, $1.label) }
+        if lines.isEmpty, !anchors.isEmpty || !pictures.isEmpty { result.append(Self.noSpeech) }
+        var placed = anchors.filter { $0.time != nil && $0.context.isEmpty }.map { (time: $0.time!, order: $0.label, text: Self.marker($0)) }
+        placed += timed.map { (time: $0.time!, order: $0.label, text: "[\(TimeLabel.format($0.time!))] PICTURE " + PhotoPlacement.line($0)) }
+        placed.sort { ($0.time, $0.order) < ($1.time, $1.order) }
         var next = 0
         for line in lines {
-            while next < placed.count, placed[next].time! < line.time { result.append(Self.marker(placed[next])); next += 1 }
+            while next < placed.count, placed[next].time < line.time { result.append(placed[next].text); next += 1 }
             result.append(Self.format(line))
         }
-        while next < placed.count { result.append(Self.marker(placed[next])); next += 1 }
+        while next < placed.count { result.append(placed[next].text); next += 1 }
         return result.joined(separator: "\n")
+    }
+
+    /// Said first in a source with notes or pages and no speech, so the model never takes the notes for a conversation.
+    public static let noSpeech = "[No speech was recorded in this conversation. The notes below are all there is to summarize.]"
+
+    /// Whether there is anything to summarize: speech, notes or handwriting, or the passages around a bookmark on a recording that
+    /// isn't lined up. A bookmark's own words only name a moment, so a silent recording with a named bookmark has nothing.
+    public var hasContent: Bool {
+        !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || anchors.contains { ($0.kind == .note && !$0.text.isEmpty) || !$0.context.isEmpty }
     }
 
     /// Every note and bookmark, for the model: label, kind, time (null when it has none), and text;
@@ -97,6 +177,7 @@ public struct SummarySource: Sendable, Equatable {
                                         "text": anchor.repeatsWhatWasSaid ? "" : anchor.text]
             if anchor.repeatsWhatWasSaid { entry["repeats_what_was_said"] = true }
             if anchor.kind == .note && anchor.time == nil { entry["placement"] = "written outside the recording" }
+            if let page = anchor.page { entry["page"] = page; entry["source"] = "handwriting" }
             if let recording = anchor.recording { entry["recording"] = recording; entry["context"] = anchor.context }
             return entry
         }
@@ -191,7 +272,9 @@ public struct SummarySource: Sendable, Equatable {
     public static func marker(_ anchor: Anchor) -> String {
         let time = anchor.time.map { "[\(TimeLabel.format($0))] " } ?? ""
         switch anchor.kind {
-        case .note where anchor.repeatsWhatWasSaid: return "\(time)NOTE \(anchor.label), written by the user, repeats what was said around it"
+        case .note where anchor.repeatsWhatWasSaid: return "\(time)NOTE \(anchor.label), \(anchor.page != nil ? "handwritten" : "written") by the user, repeats what was said around it"
+        case .note where anchor.page != nil:
+            return "\(time)NOTE \(anchor.label), handwritten on page \(anchor.page!) by the user (not spoken; read from handwriting, so a word may be misread): \(anchor.text)"
         case .note: return "\(time)NOTE \(anchor.label), written by the user (not spoken): \(anchor.text)"
         case .bookmark: return "\(time)BOOKMARK \(anchor.label), marked by the user" + (anchor.text.isEmpty ? "" : ": \(anchor.text)")
         }
@@ -201,16 +284,26 @@ public struct SummarySource: Sendable, Equatable {
 extension MeetingEvidence {
     /// The summary's source for a conversation: its unified transcript (background audio already left
     /// out), each note paragraph and bookmark placed at its time, and the passages in each one's window
-    /// marked to carry more weight.
-    public static func summarySource(_ meeting: Meeting, windows: SummarySource.Windows = .init()) -> SummarySource {
+    /// marked to carry more weight, with its title and start (`SummarySource.Context`).
+    public static func summarySource(_ meeting: Meeting, windows: SummarySource.Windows = .init(), timeZone: TimeZone = .current) -> SummarySource {
         var anchors: [SummarySource.Anchor] = []
         let paragraphs = meeting.notes.components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         let times = meeting.paragraphTimes()
+        let ink = meeting.inkPlacements()
         for (index, text) in paragraphs.enumerated() {
+            // Ink with no words (a sketch, or not read yet) has the placeholder for a paragraph: not something the person
+            // wrote. It's left out, and the notes after it keep their labels (N1, N3).
+            if text == NoteInk.placeholder, index < ink.count, ink[index] != nil { continue }
             let time = index < times.count ? times[index] : nil
             anchors.append(.init(label: "N\(index + 1)", kind: .note, time: time, text: text,
                                  window: time.map { ($0 - windows.noteBefore)...($0 + windows.noteAfter) }, recording: nil, context: []))
+        }
+        for (index, writing) in meeting.pageWriting().enumerated() {
+            let time = writing.time
+            anchors.append(.init(label: "H\(index + 1)", kind: .note, time: time, text: writing.text,
+                                 window: time.map { ($0 - windows.noteBefore)...($0 + writing.duration + windows.noteAfter) },
+                                 recording: nil, context: [], page: writing.page))
         }
         let contexts = meeting.highlightContexts(before: windows.bookmarkBefore, after: windows.bookmarkAfter)
         for (index, context) in contexts.sorted(by: { ($0.isAligned ? 0 : 1, $0.markerTime) < ($1.isAligned ? 0 : 1, $1.markerTime) }).enumerated() {
@@ -234,6 +327,7 @@ extension MeetingEvidence {
             return .init(time: segment.start, speaker: name, text: segment.text, near: near)
         }
         return SummarySource(lines: lines, anchors: anchors, transcript: transcript(meeting),
-                             notesText: notes(meeting), highlightText: highlights(meeting))
+                             notesText: notes(meeting), highlightText: highlights(meeting),
+                             title: SummarySource.Context.title(meeting), started: SummarySource.Context.started(meeting, in: timeZone))
     }
 }

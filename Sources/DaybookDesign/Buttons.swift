@@ -16,6 +16,35 @@ extension ButtonStyle where Self == DaybookLinkStyle {
     public static var daybookLink: DaybookLinkStyle { .init() }
 }
 
+/// A line of live captions that opens the whole transcript: no chrome while it rests, a quiet wash under the
+/// pointer on the Mac, dimmed while pressed, and the link pointer.
+public struct DaybookCaptionLineStyle: ButtonStyle {
+    public init() {}
+    public func makeBody(configuration: Configuration) -> some View { DaybookCaptionLineLabel(configuration: configuration) }
+}
+
+extension ButtonStyle where Self == DaybookCaptionLineStyle {
+    public static var daybookCaptionLine: DaybookCaptionLineStyle { .init() }
+}
+
+private struct DaybookCaptionLineLabel: View {
+    let configuration: ButtonStyleConfiguration
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var hovering = false
+
+    var body: some View {
+        configuration.label
+            .contentShape(Rectangle())
+            .background {
+                RoundedRectangle(cornerRadius: DaybookRadius.row, style: .continuous)
+                    .fill(DaybookPalette.quietFill.opacity(hovering && isEnabled ? 1 : 0))
+                    .padding(-6)
+            }
+            .opacity(ButtonFace.opacity(enabled: isEnabled, pressed: configuration.isPressed))
+            .pointerAndHover(enabled: isEnabled, hovering: $hovering)
+    }
+}
+
 /// What a button looks like while it can't be used, pressed, or under the pointer.
 enum ButtonFace {
     static let disabledOpacity: Double = 0.45

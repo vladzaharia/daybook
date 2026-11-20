@@ -43,9 +43,17 @@ extension LibraryController {
 /// - **A Mac's own countdown** (over the link) shows here, with Use the Cloud and Start Now sent to it; this
 ///   iPhone stops its own countdown for that conversation.
 /// - **In the background**, where a countdown can't run, each countdown's default happens at once, and a
-///   summary waiting for a Mac is left to one through the library.
-/// - **Personal** (placed there, or its template or kind says so) is never sent to the cloud on its own: under Always
-///   it counts down as Offer First does, or waits for a Mac, with Use the Cloud.
+///   summary waiting for a Mac is left to one through the library. A countdown that ends in the cloud runs only while
+///   Daybook is active on the screen (`isOnScreen`); otherwise it runs where it would have without the cloud.
+/// - **Kept off the cloud**: a conversation whose placement Settings › Cloud keeps off it (Personal, unless the person
+///   turns it on: `CloudPlacements`) is never sent there, whatever asks: no Use the Cloud, no cloud Upgrade, Always
+///   doesn't send it, and one moved there (or a switch turned off) mid-countdown goes on here or to a Mac. This iPhone
+///   applies its own switches: preferences are each device's own.
+/// - **When the cloud would do better** (docs/cloud.md, "When the cloud is chosen"): a conversation longer than the model
+///   it would run on (this iPhone's, else the Mac's) reads in one pass, whose summary the cloud's model ranks clearly above,
+///   counts down to the cloud under Offer First, with Start Now and Don't Use the Cloud. A summary that fails here tries
+///   the cloud before its request fails, under the same rules; declined, the request fails as it would have. The summary
+///   records why it went (`cloudReason`). One longer than the cloud model can read goes here, or to a Mac.
 @MainActor
 @Observable
 final class PhoneSummaryPlacement {
@@ -92,19 +100,47 @@ final class PhoneSummaryPlacement {
     @ObservationIgnored private var running: [UUID: (request: UUID, task: Task<Void, Never>)] = [:]
     /// The template each was asked for with; nil uses the conversation's own.
     @ObservationIgnored private var templates: [UUID: String] = [:]
+    /// Summaries that failed here and are being tried in the cloud, with the request and why it failed: declined, it fails.
+    @ObservationIgnored private var localFailures: [UUID: (request: UUID, reason: String, kind: ProcessingRequest.FailureKind)] = [:]
+    /// Conversations a failure here mustn't send to the cloud: the person declined its cloud countdown (Don't Use the
+    /// Cloud), or the cloud model couldn't read it. Until its summary is done or given up.
+    @ObservationIgnored private var keptHere: Set<UUID> = []
+    /// iOS has Daybook active (`UIApplication.applicationState`), asked each time: a background launch has no scene phase
+    /// to say otherwise, as `PhoneAppModel.isInFront` knows.
+    @ObservationIgnored private let appIsActive: @MainActor () -> Bool
+    /// The scene's phase last said Daybook is active (`cameToForeground`, `leftForeground`, `becameInactive`).
+    @ObservationIgnored private var sceneIsActive = true
+    /// Daybook is active on the screen: its scene and iOS both say so. Only then can a countdown that ends in the cloud run
+    /// (`SummaryPlacements.countdownsAreSeen`); away from it, one runs where it would have without the cloud.
+    var isOnScreen: Bool { sceneIsActive && appIsActive() }
 
     init(library: LibraryController, link: PhoneLink, presence: @escaping () -> [KnownSyncDevice],
-         clock: @escaping () -> Date = Date.init, runsTimer: Bool = true) {
+         clock: @escaping () -> Date = Date.init, runsTimer: Bool = true, appIsActive: @escaping @MainActor () -> Bool) {
         self.library = library
         self.link = link
         self.presence = presence
         self.clock = clock
         self.runsTimer = runsTimer
+        self.appIsActive = appIsActive
         placements = SummaryPlacements(waitsForMacs: true, clock: clock, runsTimer: runsTimer)
+        placements.countdownsAreSeen = sceneIsActive && appIsActive()
         placements.onSettled = { [weak self] id, phase in self?.settled(id, phase) }
-        placements.isPersonal = { [weak library] id in library?.meeting(id)?.effectivePlacement == .personal }
+        placements.conversation = { [weak self] id, options in self?.conversation(id, options: options) ?? .init(cloudAllowed: false) }
         // A Mac's countdown or work on a conversation ends this iPhone's own countdown for it.
         link.onLiveProgress = { [weak self] _ in self?.refresh() }
+        followConversationsWhilePlacing()
+    }
+
+    /// A conversation changing (moved to Personal, say) reaches its countdown at once: every change to the library asks
+    /// each planner's conversation again while anything is being placed.
+    private func followConversationsWhilePlacing() {
+        withObservationTracking { _ = library.revision } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if !self.placements.planners.isEmpty { self.refresh() }
+                self.followConversationsWhilePlacing()
+            }
+        }
     }
 
     /// "this iPhone" in the countdown's words.
@@ -124,6 +160,32 @@ final class PhoneSummaryPlacement {
     /// with Never).
     var cloudOffer: CloudModel? { preferences.policy == .never ? nil : cloud?.resolved?.model }
 
+    /// The cloud model on offer for this conversation: none when its placement is kept off the cloud.
+    func cloudOffer(for meeting: Meeting) -> CloudModel? { preferences.placements.allows(meeting) ? cloudOffer : nil }
+
+    /// The same, by conversation; none for one that's gone.
+    func cloudOffer(for id: UUID) -> CloudModel? { library.meeting(id).flatMap(cloudOffer(for:)) }
+
+    /// Whether Settings › Cloud lets this conversation go to the cloud: its placement's switch. False for one that's gone.
+    func cloudAllowed(_ id: UUID) -> Bool { library.meeting(id).map(preferences.placements.allows) ?? false }
+
+    /// What the planner needs of a conversation: whether it may go to the cloud, and whether the cloud would do clearly
+    /// better than the model it would otherwise run on (this iPhone's, else the first reachable Mac's).
+    func conversation(_ id: UUID, options: SummaryOptions) -> SummaryPlacementPlanner.Conversation {
+        guard let meeting = library.meeting(id) else { return .init(cloudAllowed: false) }
+        let allowed = preferences.placements.allows(meeting)
+        let local = options.thisDeviceCanSummarize ? localSummarizer?.model : options.reachableMacs.first.flatMap { macSummaryModel($0.id) }
+        return .init(cloudAllowed: allowed, cloudDoesBetter: allowed && LongConversations.cloudDoesBetter(meeting, localModel: local, cloud: options.cloud))
+    }
+
+    /// The summary model a Mac says it runs: over the link, else in its presence.
+    private func macSummaryModel(_ id: UUID) -> String? {
+        let role = ModelRole.summarization.rawValue
+        if let connected = link.connectedMacs.first(where: { $0.id == id || $0.syncDeviceID == id.uuidString }),
+           let model = connected.processing?.models?[role] { return model }
+        return presence().first { $0.id == id.uuidString }?.capabilities?.models?[role]
+    }
+
     var options: SummaryOptions {
         SummaryOptions(thisDeviceCanSummarize: runHere != nil && localSummarizer?.canSummarize == true, macs: reachableMacs,
                        cloud: cloud?.resolved?.model)
@@ -133,10 +195,13 @@ final class PhoneSummaryPlacement {
     /// follows, and one a Mac has taken meanwhile, or whose conversation went (to the Trash, or into a Mac's
     /// conversation of the same meeting), stops here.
     func refresh() {
+        // Whether the person can see a countdown, as iOS says now.
+        placements.countdownsAreSeen = isOnScreen
         placements.update(options: options, preferences: preferences)
         for id in placements.undecided where isTakenElsewhere(id) {
             // Another device has it: the request this iPhone held goes back, for whichever device finishes the work.
             giveBackHeld(id)
+            forget(id)
             placements.end(id)
         }
         renewHeld()
@@ -170,6 +235,8 @@ final class PhoneSummaryPlacement {
         if let templateID { templates[id] = templateID }
         refresh()
         placements.begin(id)
+        // Away from the screen (transcribed in the background, a background launch), nothing is left to count down.
+        if !isOnScreen { leftForeground() }
         keepHolding()
     }
 
@@ -241,18 +308,35 @@ final class PhoneSummaryPlacement {
             switch action {
             case .useCloud: link.sendSummaryChoice(.useCloud, for: id, to: mac)
             case .startNow: link.sendSummaryChoice(.startNow, for: id, to: mac)
+            case .useLocal: link.sendSummaryChoice(.useLocal, for: id, to: mac)
             case .waitForMac: break
             }
-        } else if action == .useCloud, let model = cloudOffer, waitingSummaryRequest(id) != nil {
-            run(id, .cloud(model))
+        } else if action == .useCloud, let model = cloudOffer(for: id), waitingSummaryRequest(id) != nil {
+            run(id, .cloud(model), reason: .chosen)
         }
     }
 
     /// Leaving the screen: a countdown can't run in the background, so each one's default happens now, and a
     /// summary waiting for a Mac is left to one through the library.
+    /// A countdown that ends in the cloud doesn't go there: it runs where it would have without the cloud.
     func leftForeground() {
+        sceneIsActive = false
+        placements.countdownsAreSeen = false
         placements.startDefaultsNow()
         for id in placements.undecided { send(id) }
+    }
+
+    /// Still on the screen but not active (Control Center, the app switcher, a call coming in): a countdown here goes on,
+    /// and one that ends in the cloud runs where it would have without the cloud.
+    func becameInactive() {
+        sceneIsActive = false
+        placements.countdownsAreSeen = false
+    }
+
+    /// Back on the screen: countdowns can run again, and a new one may end in the cloud.
+    func cameToForeground() {
+        sceneIsActive = true
+        placements.countdownsAreSeen = isOnScreen
     }
 
     /// A sync pass applied: what Macs did may stop work here (a claim lost in a merge, a Mac on it).
@@ -283,6 +367,9 @@ final class PhoneSummaryPlacement {
 
     private func settled(_ id: UUID, _ phase: SummaryPlacementPlanner.Phase) {
         switch phase {
+        case .waiting where localFailures[id] != nil:
+            // The cloud declined or not on offer after a failure here: the request fails as it would have.
+            failAfterLocalFailure(id)
         case .started(.mac), .waiting:
             send(id)
         case .started(let place):
@@ -292,10 +379,40 @@ final class PhoneSummaryPlacement {
         }
     }
 
+    /// The summary placed on this iPhone failed (the processor asks, `PhoneProcessor.Services.summaryFailed`): the cloud is
+    /// tried before its request fails, as this conversation's rules allow: at once under Always, after a countdown to it
+    /// under Offer First, never without the cloud on offer for it. False when it isn't tried; the request then fails.
+    func localSummaryFailed(_ id: UUID, request: UUID, reason: String, kind: ProcessingRequest.FailureKind) -> Bool {
+        guard running[id] == nil, !keptHere.contains(id), let meeting = library.meeting(id), cloudOffer(for: meeting) != nil else {
+            keptHere.remove(id)
+            return false
+        }
+        localFailures[id] = (request, reason, kind)
+        placements.beginAfterLocalFailure(id)
+        if !isOnScreen { leftForeground() }
+        keepHolding()
+        return true
+    }
+
+    /// Done with what this iPhone held for a conversation's retry: its summary was made, given back, or given up.
+    private func forget(_ id: UUID) {
+        localFailures[id] = nil
+        keptHere.remove(id)
+    }
+
+    /// A summary that failed here and won't go to the cloud: its request fails with what went wrong here.
+    private func failAfterLocalFailure(_ id: UUID) {
+        defer { placements.end(id) }
+        guard let failure = localFailures.removeValue(forKey: id) else { return }
+        templates[id] = nil
+        library.failProcessingRequest(failure.request, in: id, reason: failure.reason, kind: failure.kind, at: clock())
+    }
+
     /// Hands the summary to a Mac: a Summarize request in the library (a Mac that's here hears of it now). The
     /// request this iPhone held through the countdown is the one given back.
     private func send(_ id: UUID) {
         defer { placements.end(id) }
+        forget(id)
         let templateID = templates.removeValue(forKey: id)
         guard library.meeting(id) != nil, !isTakenElsewhere(id) else { return }
         if let request = giveBackHeld(id) ?? library.requestProcessing(id, mode: .summaryOnly, templateID: templateID) {
@@ -305,14 +422,25 @@ final class PhoneSummaryPlacement {
 
     /// Summarizes here or in the cloud, holding a claim on a Summarize request so no Mac does it too. Here, the
     /// processor runs it (`runHere`) under its rules; in the cloud, it runs now.
-    private func run(_ id: UUID, _ place: SummaryPlace) {
+    private func run(_ id: UUID, _ place: SummaryPlace, reason chosen: CloudReason? = nil) {
         if place == .thisDevice, runHere == nil { return send(id) }
+        // The device that sends it applies its own switches, as the conversation is now: one moved to a placement kept
+        // off the cloud (or a switch turned off) since it was placed goes here, or to a Mac.
+        if case .cloud = place, let meeting = library.meeting(id), !preferences.allowsCloud(for: meeting) {
+            return options.thisDeviceCanSummarize ? run(id, .thisDevice) : send(id)
+        }
         let templateID = templates.removeValue(forKey: id)
         guard running[id] == nil, let meeting = library.meeting(id), !isTakenElsewhere(id),
               let claimed = library.claimSummary(id, templateID: templateID, at: clock()) else {
+            forget(id)
             placements.end(id)
             return
         }
+        let reason = placements[id]?.cloudReason ?? chosen
+        // A retry after a failure here carries that failure: if the cloud can't read it either, the request fails with it.
+        let failedHere = localFailures.removeValue(forKey: id)
+        // Declined the cloud and placed here: a failure here mustn't bring the cloud back.
+        if place == .thisDevice, placements[id]?.prefersLocal == true { keptHere.insert(id) }
         placements.end(id)
         link.nudge(claimed)
         guard case .cloud(let model) = place, let cloud = cloudSummarizer else {
@@ -331,7 +459,12 @@ final class PhoneSummaryPlacement {
             do {
                 let output = try await cloud.summaryOutput(meeting, template: template, vocabulary: vocabulary, model: model, effort: effort) { _ in }
                 try Task.checkCancellation()
-                await self?.finished(id, request: claimed.id, output: output, place: place, started: started, writtenFrom: meeting)
+                await self?.finished(id, request: claimed.id, output: output, place: place, started: started, writtenFrom: meeting,
+                                     cloudReason: reason)
+            } catch CloudError.inputTooLong {
+                // Longer than the cloud model can read: nothing was sent; here, or a Mac, instead (after a failure here,
+                // the request fails with that failure).
+                self?.cloudCouldntRead(id, request: claimed.id, failedHere: failedHere)
             } catch is CancellationError {
                 self?.stopped(id, request: claimed.id, failure: nil)
             } catch {
@@ -342,20 +475,43 @@ final class PhoneSummaryPlacement {
     }
 
     private func finished(_ id: UUID, request: UUID, output: SummaryProcessingOutput, place: SummaryPlace, started: Date,
-                          writtenFrom meeting: Meeting) async {
+                          writtenFrom meeting: Meeting, cloudReason: CloudReason?) async {
         running[id] = nil
         runs[id] = nil
-        let applied = library.applyPlacedSummary(output.summary, to: id, place: place, started: started, writtenFrom: meeting)
+        forget(id)
+        let applied = library.applyPlacedSummary(output.summary, to: id, place: place, started: started, writtenFrom: meeting,
+                                                 cloudReason: cloudReason)
         library.completeProcessingRequest(request, in: id, at: clock())
         guard applied else { return }
         library.update(id) { $0.errorMessage = output.warnings.isEmpty ? nil : output.warnings.joined(separator: "\n") }
         try? await library.proposeTerms(output.suggestedTerms, for: id)
     }
 
+    /// The cloud model couldn't read the conversation (nothing was sent): this iPhone summarizes it when it can, else the
+    /// request goes back for a Mac. When it already failed here, the request fails with that failure instead, so the two
+    /// never hand it back and forth.
+    private func cloudCouldntRead(_ id: UUID, request: UUID, failedHere: (request: UUID, reason: String, kind: ProcessingRequest.FailureKind)?) {
+        running[id] = nil
+        runs[id] = nil
+        if let failedHere {
+            forget(id)
+            library.failProcessingRequest(request, in: id, reason: failedHere.reason, kind: failedHere.kind, at: clock())
+            return
+        }
+        // Summarized here next: a failure here mustn't try the cloud again.
+        keptHere.insert(id)
+        if options.thisDeviceCanSummarize, let runHere, let claimed = library.meeting(id)?.processingRequests?.first(where: { $0.id == request }) {
+            runHere(id, claimed)
+        } else if let released = library.releaseProcessingRequest(request, in: id, at: clock()) {
+            link.nudge(released)
+        }
+    }
+
     /// Cancelled (given back: a Mac may take it) or failed (with the error's words and kind, for Try Again).
     private func stopped(_ id: UUID, request: UUID, failure: Error?) {
         running[id] = nil
         runs[id] = nil
+        forget(id)
         if let failure { library.failProcessingRequest(request, in: id, error: failure, at: clock()) }
         else { library.releaseProcessingRequest(request, in: id, at: clock()) }
     }
