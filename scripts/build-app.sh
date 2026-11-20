@@ -200,7 +200,9 @@ common=(-project "$project" -scheme Daybook -configuration "$configuration"
 
 mkdir -p "$work_dir" "$dist_dir"
 if [[ "$configuration" == Debug ]]; then
-    xcodebuild "${common[@]}" -destination 'platform=macOS,arch=arm64' ${provisioning[@]+"${provisioning[@]}"} build "${settings[@]}"
+    # No index store: nothing reads this one (Xcode's editor keeps its own), and writing it costs every compile time.
+    xcodebuild "${common[@]}" -destination 'platform=macOS,arch=arm64' ${provisioning[@]+"${provisioning[@]}"} build "${settings[@]}" \
+        COMPILER_INDEX_STORE_ENABLE=NO
     built="$derived_dir/Build/Products/Debug/Daybook.app"
 else
     archive="$work_dir/Daybook.xcarchive"
@@ -208,8 +210,13 @@ else
         [[ -d "$archive" ]] || { echo "No archive at $archive: run --archive-only first." >&2; exit 1; }
     else
         /bin/rm -rf "${archive:?}"
+        # xcodebuild archive deletes its intermediates (ArchiveIntermediates) before it starts, so every archive
+        # compiles everything again. The compilation cache (DerivedData/CompilationCache.noindex, keyed by each
+        # compile's inputs) survives that, and CI restores it, so an archive replays what didn't change. Capped,
+        # since CI saves it again after every push to main.
+        compilation_cache=(COMPILATION_CACHE_ENABLE_CACHING=YES COMPILATION_CACHE_LIMIT_SIZE=2G)
         xcodebuild "${common[@]}" -destination 'generic/platform=macOS' -archivePath "$archive" \
-            ${provisioning[@]+"${provisioning[@]}"} archive "${settings[@]}"
+            ${provisioning[@]+"${provisioning[@]}"} archive "${settings[@]}" "${compilation_cache[@]}"
     fi
     if (( archive_only )); then
         echo "Archive: $archive"

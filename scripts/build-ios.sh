@@ -186,17 +186,21 @@ fi
 
 if [[ "$MODE" == archive ]]; then
     rm -rf "${ARCHIVE_PATH:?}"
+    # xcodebuild archive deletes its intermediates (ArchiveIntermediates) before it starts, so every archive
+    # compiles everything again. The compilation cache (DerivedData/CompilationCache.noindex, keyed by each
+    # compile's inputs) survives that, and CI restores it, so an archive replays what didn't change. Capped,
+    # since CI saves it again after every push to main.
+    ARCHIVE=(-destination 'generic/platform=iOS' -archivePath "$ARCHIVE_PATH"
+             COMPILATION_CACHE_ENABLE_CACHING=YES COMPILATION_CACHE_LIMIT_SIZE=2G)
     if [[ "$SIGN" == 1 ]]; then
         require_team "archive"
         TEAM_SETTINGS=()
         [[ -n "${DAYBOOK_TEAM_ID:-}" ]] && TEAM_SETTINGS=("DAYBOOK_TEAM_ID=$DAYBOOK_TEAM_ID")
         # Without the API key this uses only profiles that already exist, like --device. With it
         # (release.yml), Xcode may create the development certificate and profiles it needs.
-        xcodebuild "${COMMON[@]}" -destination 'generic/platform=iOS' -archivePath "$ARCHIVE_PATH" \
-            ${AUTH[@]+"${AUTH[@]}"} archive ${TEAM_SETTINGS[@]+"${TEAM_SETTINGS[@]}"}
+        xcodebuild "${COMMON[@]}" "${ARCHIVE[@]}" ${AUTH[@]+"${AUTH[@]}"} archive ${TEAM_SETTINGS[@]+"${TEAM_SETTINGS[@]}"}
     else
-        xcodebuild "${COMMON[@]}" -destination 'generic/platform=iOS' -archivePath "$ARCHIVE_PATH" \
-            archive CODE_SIGNING_ALLOWED=NO
+        xcodebuild "${COMMON[@]}" "${ARCHIVE[@]}" archive CODE_SIGNING_ALLOWED=NO
     fi
     echo "Archived $ARCHIVE_PATH"
     [[ -z "$EXPORT" ]] && exit 0
@@ -241,8 +245,9 @@ fi
 # Every simulator build is the same one, for this Mac's architecture, so each reuses what the last made. The
 # generic destination alone would add x86_64, and alternating it with a simulator's own destination recompiles
 # every target that imports a C module (MLX, Tokenizers) each time. The watch app builds for the watchOS
-# Simulator with the same architecture.
-SIMULATOR_BUILD=(-destination 'generic/platform=iOS Simulator' "ARCHS=$(uname -m)")
+# Simulator with the same architecture. No index store: nothing here reads it (Xcode's editor keeps its own), and
+# writing it costs every compile time and the CI cache about 200 MB.
+SIMULATOR_BUILD=(-destination 'generic/platform=iOS Simulator' "ARCHS=$(uname -m)" COMPILER_INDEX_STORE_ENABLE=NO)
 if [[ "$RUN_TESTS" == 0 && "$BUILD_FOR_TESTING" == 0 ]]; then
     xcodebuild "${COMMON[@]}" "${SIMULATOR_BUILD[@]}" build
     echo "Built $DERIVED/Build/Products/$CONFIGURATION-iphonesimulator/DaybookPhone.app, with Watch/DaybookWatch.app"
@@ -253,5 +258,19 @@ if [[ "$SKIP_BUILD" == 0 ]]; then
 fi
 if [[ "$RUN_TESTS" == 1 ]]; then
     if [[ "$SIMULATOR" =~ ^[0-9A-F-]{36}$ ]]; then DESTINATION="id=$SIMULATOR"; else DESTINATION="platform=iOS Simulator,name=$SIMULATOR"; fi
-    xcodebuild "${COMMON[@]}" -destination "$DESTINATION" test-without-building ${TEST_ARGS[@]+"${TEST_ARGS[@]}"}
+    TESTS=("${COMMON[@]}")
+    if [[ "$SKIP_BUILD" == 1 ]]; then
+        # The test run the last build for testing wrote (the newest, should a restored cache hold an older SDK's), so
+        # xcodebuild neither opens the project nor resolves its packages: about a minute on a CI runner, every run.
+        XCTESTRUN="$(find "$DERIVED/Build/Products" -maxdepth 1 -name 'DaybookPhone_iphonesimulator*.xctestrun' \
+            -exec stat -f '%m %N' {} + 2>/dev/null | sort -rn || true)"
+        XCTESTRUN="${XCTESTRUN%%$'\n'*}"
+        XCTESTRUN="${XCTESTRUN#* }"
+        if [[ -z "$XCTESTRUN" ]]; then
+            echo "--skip-build needs an earlier --build-for-testing (no .xctestrun in $DERIVED/Build/Products)" >&2
+            exit 1
+        fi
+        TESTS=(-xctestrun "$XCTESTRUN" -derivedDataPath "$DERIVED")
+    fi
+    xcodebuild "${TESTS[@]}" -destination "$DESTINATION" test-without-building ${TEST_ARGS[@]+"${TEST_ARGS[@]}"}
 fi
