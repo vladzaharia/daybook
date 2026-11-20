@@ -279,11 +279,22 @@ final class LiveCaptionsTests: XCTestCase {
         rig.you.post([line("Still captioning me.", 1, 2)])
         try await waitUntil("You") { rig.captions.segments.map(\.text) == ["Still captioning me."] }
         XCTAssertEqual(rig.captions.state, .listening)
+        XCTAssertEqual(rig.captions.sourceNotice, "Call: Captions stopped: test", "the strip names the source that stopped")
         XCTAssertTrue(rig.captions.isShowing(for: meeting))
         let result = try await XCTUnwrapAsync(await rig.recorder.stop())
         XCTAssertEqual(result.tracks.count, 2)
         XCTAssertTrue(result.warnings.isEmpty, "\(result.warnings)")
         await rig.captions.finish()
+    }
+
+    func testBehaviorTheStripNamesASourceThatStoppedOnlyWhileAnotherListens() {
+        let both: [LiveCaptionSource: LiveCaptionState] = [.microphone: .listening, .call: .listening]
+        XCTAssertNil(LiveCaptionStatus.problem(both))
+        XCTAssertEqual(LiveCaptionStatus.problem([.microphone: .failed("No input"), .call: .listening]), "You: No input")
+        XCTAssertEqual(LiveCaptionStatus.problem([.microphone: .listening, .call: .unavailable("Not for Welsh.")]), "Call: Not for Welsh.")
+        XCTAssertEqual(LiveCaptionStatus.problem([.microphone: .failed("a"), .call: .failed("b"), .device("x"): .listening],
+                                                 names: ["device:x": "Mac"]), "You: a · Call: b")
+        XCTAssertNil(LiveCaptionStatus.problem([.microphone: .failed("a"), .call: .failed("b")]), "none listening: the state line says it")
     }
 
     // MARK: The live transcript

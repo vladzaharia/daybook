@@ -4533,6 +4533,13 @@ More › Notebook opens a conversation's pages full screen (docs/notebook.md), s
 - **Hardware only, not checked:** holding a finger on handwriting once Apple Pencil is in use (the simulator has no Pencil, so the gesture's enabling after the first Pencil touch is not exercised); whether a recording's pauses really are silence of their length in the audio (the end-of-pause start assumes it); fetching a page over a slow network and from an evicted cache; playing from a passage on a multipoint conversation's placed recording.
 - **Review fixes (2026-11-19).** The commit joins strokes that arrived by sync while the page was open (`testBehaviorCommitKeepsStrokesThatArrivedBySyncWhileOpen`, erased-here and blank-when-opened cases, refusal when the stored strokes aren't here, a clean canvas following its page, a written one kept, a page that couldn't be fetched retried); the draft goes only once the conversation is on disk (`testBehaviorDraftStaysUntilTheConversationIsOnDisk`); recovery merges, keeps a draft it can't commit, drops one of a deleted page and restores a missing page; the player clock is tested with samples taken after the stroke's creation date, as on a device (opening, pause, seek, track change, speed). Not checked on a device: the real begin-callback lag and a kill inside the save window.
 
+## Caption source failure shown (2026-11-19)
+
+While one caption source listens and the other has failed or is unavailable, the strip on the conversation page and in Floating Notes adds "You: <reason>" or "Call: <reason>" after the lines (`LiveCaptionStatus.problem`); the reason is logged once per source.
+
+- **Checked in tests, fakes only:** `LiveCaptionsTests` (a failed call captioner beside a listening You names "Call: Captions stopped: test" while the recording and You's lines go on; both listening shows nothing; both ended shows nothing, the state line says it).
+- **Not checked:** the strip in a screenshot, and which real failure the owner hit (the reason is now visible and logged). The iPhone's strip follows its microphone alone, so it has no masking; the Floating Notes compact strip is one clipped line and shows no notice.
+
 ## Summaries, search and exports use notebook pages (2026-11-19)
 
 A page's writing is a note (H1, H2…), its sketches are picture evidence (S1, S2…), long conversations place both and photos by time, and a conversation with notes or pages and no speech is summarized (docs/notebook.md, "In summaries").

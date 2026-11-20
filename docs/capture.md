@@ -604,7 +604,10 @@ link, Settings' section), and `Capture/CaptureCaptionTap.swift`.
 - **Where they show.** Every live caption on both apps is one renderer, `LiveCaptionStrip`
   (DaybookDesign), in a style per surface: "Live captions · tentative" on top, the newest line in
   Body ink, earlier ones in Secondary, still-revised words in Meta, and "Listening…" before anything
-  is heard. Floating Notes, while recording: a fixed-height strip above Bookmark and Stop (`.panel`)
+  is heard. While one source listens and the other ended (failed or unavailable), a Meta line after
+  the lines names it with the captioner's own reason ("You: …", "Call: …"); the recording and the
+  other source go on. The reason is logged once per source (subsystem `local.daybook`, category
+  `LiveCaptions`). Floating Notes, while recording: a fixed-height strip above Bookmark and Stop (`.panel`)
   with the newest two lines, the newest larger and keeping its latest words; the source (You or
   Call) sits in the time lane, so arriving words never move the notes. Compact, it shows the newest
   line only, without the label (`.panelCompact`). The conversation page, after your notes: the newest
