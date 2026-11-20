@@ -1,5 +1,13 @@
 # Validation record
 
+## Playback levels (2026-11-20)
+
+Each recording of a conversation plays with one constant gain that brings its speech level toward the quietest recording's (docs/architecture.md, "Playback levels"). On `feature/playback-level`.
+
+**Verified.** Unit tests on synthetic audio (`SyntheticAudio.syllables` at known levels), no models, no recording: the gain rule (`PlaybackLevelTests`: one recording and recordings within the 3 dB dead band play as captured, the loud one comes down to the quiet one's level and the quiet one is untouched, a spread wider than the cap lowers the loud one by exactly 12 dB, a recording without a usable level is ignored and plays as captured, the latest run's recorded level); the engine (`PlaybackEngineLevelTests`: a recorded level matched to its siblings without measuring, no conversation plays at unity and isn't measured, an unrecorded file measured once and joining the set while it plays, a measured sibling counting toward the next recording's target, the measurement cancelled when another recording loads, `volume = 0` silent whatever the gain, and the real measure lowering a −20 dBFS synthetic recording by 12 dB against a −35 dBFS sibling); the existing `PlaybackEngineTests` and `AudioPlaybackTests` unchanged. Removing the dead band or the cap's floor on the target fails rule tests (the other mutations tried were equivalent).
+
+**Not verified.** It hasn't been heard on real recordings, on speakers or headphones, or on a device. The 3 dB dead band and 12 dB cap are chosen from the numbers `SpeechLevel` produces on synthetic speech, not from listening. Very quiet recordings are not raised in playback (`AVAudioPlayer` can't, so attenuation only): a conversation comes down to its quietest recording and that one plays as captured. A recorded level doesn't keep the quiet level, so the noise guard applies only to levels measured at playback; it was measured on the 16 kHz mono rendering the models read, and a played one on the file as stored, which can differ slightly. Only the recording playing is recomputed when a measurement arrives. The fade as heard, and the iPhone's Lock Screen and audio session with a gain in play, are unchecked.
+
 ## Ask across conversations, engine (2026-11-18)
 
 The first half of "Ask across conversations": the in-memory index, the question parser, retrieval, and the answering step

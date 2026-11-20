@@ -112,7 +112,7 @@ final class PlaybackController: PlaybackControlling {
             do {
                 let url = try await provider.localAudio(for: track, in: meetingID, progress: report)
                 guard let self, !Task.isCancelled, self.meetingID == meetingID else { return }
-                try self.engine.load(url)
+                try self.engine.load(url, conversation: meeting.playbackLevels(ofTrack: track.id))
                 self.engine.volume = self.muted ? 0 : 1
                 self.phase = .ready
                 self.seek(to: seconds)
