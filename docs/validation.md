@@ -1,5 +1,13 @@
 # Validation record
 
+## Playback levels (2026-11-20)
+
+Each recording plays with one constant gain that matches its speech level to the others' (docs/architecture.md, "Playback levels"). On `feature/playback-level`.
+
+**Verified.** Unit tests on synthetic audio (`SyntheticAudio.syllables` at known levels), no models, no recording: the gain rule (`PlaybackLevelTests`: lowering to −32 dBFS and its 12 dB cap, no raise, the boost cap and the peak ceiling under a policy that allows a boost, unity for no speech, no level, or no speech-like range, the latest run's recorded level); the engine (`PlaybackEngineLevelTests`: a recorded level applied without measuring, an unrecorded file measured once and its gain applied after playback started, the measurement cancelled when another recording loads, a file never measured twice, `volume = 0` silent whatever the gain, and the real measure lowering a −20 dBFS synthetic recording by 12 dB); the existing `PlaybackEngineTests` and `AudioPlaybackTests` unchanged. With the gain neutered, three of the new engine tests fail.
+
+**Not verified.** It hasn't been heard on real recordings, on speakers or headphones, or on a device. The −32 dBFS target and the 12 dB cap are chosen from the numbers `SpeechLevel` produces on synthetic speech, not from listening. Very quiet recordings are not raised (`AVAudioPlayer` can't), so a recording below the target still plays quieter than the rest. A recorded level was measured on the 16 kHz mono rendering the models read and a measured one on the file as stored, which can differ slightly. The fade as heard, and the iPhone's Lock Screen and audio session with a gain in play, are unchecked.
+
 ## Ask across conversations, engine (2026-11-18)
 
 The first half of "Ask across conversations": the in-memory index, the question parser, retrieval, and the answering step

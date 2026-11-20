@@ -1,4 +1,5 @@
 import AVFoundation
+import DaybookCore
 import Foundation
 import Observation
 
@@ -35,6 +36,10 @@ public struct PlaybackError: LocalizedError, Equatable, Sendable {
 /// second while it plays. Each app's player wraps one and adds its own: the Mac its words for a problem, the iPhone
 /// downloads, the audio session, and the Lock Screen.
 ///
+/// Each recording plays with one constant gain that brings its speech to a common level (`PlaybackLevel`), so moving
+/// from one recording to the next doesn't jump in loudness. The level is the one processing recorded, or measured once
+/// off the main actor after the recording loads: it starts at unity and the gain fades in when the measurement arrives.
+///
 /// `isPlaying` changes only when playback starts or stops, so a view that reads only it (a row's waveform, the
 /// Controls menu's Play or Pause) isn't redrawn as the position moves.
 @MainActor
@@ -48,7 +53,10 @@ public final class PlaybackEngine: NSObject, AVAudioPlayerDelegate {
     /// Playback speed, kept when another recording loads.
     public var rate: Float = 1 { didSet { player?.rate = rate } }
     /// 0 plays silently (debug screenshots, tests).
-    public var volume: Float = 1 { didSet { player?.volume = volume } }
+    public var volume: Float = 1 { didSet { player?.volume = volume * levelGain } }
+    /// The factor that matches this recording's speech level to the others' (`PlaybackLevel`), multiplied into the
+    /// player's volume; 1 until the level is known.
+    @ObservationIgnored public private(set) var levelGain: Float = 1
     /// How many times each skip was asked for, so a skip button can answer every press (the keyboard's too).
     public private(set) var backSkips = 0
     public private(set) var forwardSkips = 0
@@ -58,13 +66,24 @@ public final class PlaybackEngine: NSObject, AVAudioPlayerDelegate {
 
     @ObservationIgnored private var player: AVAudioPlayer?
     @ObservationIgnored private var clock: Task<Void, Never>?
+    @ObservationIgnored private var measuring: Task<Void, Never>?
+    /// What was measured this session, by file, so a recording played again isn't measured again.
+    @ObservationIgnored private var measured: [URL: SpeechLevel.Measurement] = [:]
+    @ObservationIgnored private let measure: @Sendable (URL) async throws -> SpeechLevel.Measurement
 
     /// How often the position is read while playing.
     public nonisolated static let tick: Duration = .milliseconds(100)
     /// Within this of the end, Play starts the recording over rather than playing its last moment.
     public nonisolated static let endTolerance: TimeInterval = 0.05
 
-    public override init() { super.init() }
+    /// How long the gain takes to change when the measurement arrives after playback started, seconds.
+    public nonisolated static let levelFade: TimeInterval = 0.3
+
+    /// `measure` reads a recording's level; tests give it another.
+    public init(measure: @escaping @Sendable (URL) async throws -> SpeechLevel.Measurement = { try await SpeechLevel.measure(url: $0) }) {
+        self.measure = measure
+        super.init()
+    }
 
     /// Whether Play at `position` starts over: at the end, or within `endTolerance` of it.
     public nonisolated static func startsOver(at position: TimeInterval, duration: TimeInterval) -> Bool {
@@ -88,8 +107,12 @@ public final class PlaybackEngine: NSObject, AVAudioPlayerDelegate {
 
     public var isLoaded: Bool { player != nil }
 
-    /// Opens `url` for playback, at its start. The same file again keeps its place.
-    public func load(_ url: URL) throws {
+    /// The player's own volume, for tests.
+    var playerVolume: Float? { player?.volume }
+
+    /// Opens `url` for playback, at its start. The same file again keeps its place. `recordedLevel` is the level
+    /// processing recorded for it; without one it's measured in the background, and plays at unity until then.
+    public func load(_ url: URL, recordedLevel: SpeechLevel.Measurement? = nil) throws {
         if self.url == url, player != nil { return }
         unload()
         let loaded = try AVAudioPlayer(contentsOf: url)
@@ -102,6 +125,27 @@ public final class PlaybackEngine: NSObject, AVAudioPlayerDelegate {
         self.url = url
         duration = loaded.duration
         position = 0
+        if let level = recordedLevel ?? measured[url] {
+            applyLevel(level, fade: 0)
+        } else {
+            startMeasuring(url)
+        }
+    }
+
+    /// Plays with the gain `level` calls for, fading to it over `fade` seconds.
+    private func applyLevel(_ level: SpeechLevel.Measurement, fade: TimeInterval) {
+        levelGain = PlaybackLevel.factor(for: level)
+        player?.setVolume(volume * levelGain, fadeDuration: fade)
+    }
+
+    /// Measures `url` off the main actor; another recording loading cancels it.
+    private func startMeasuring(_ url: URL) {
+        measuring = Task { [weak self, measure] in
+            guard let found = try? await measure(url), !Task.isCancelled, let self else { return }
+            self.measured[url] = found
+            guard self.url == url else { return }
+            self.applyLevel(found, fade: Self.levelFade)
+        }
     }
 
     /// Plays from the position, or from the start when it's at the end. False when the system won't play it.
@@ -154,6 +198,9 @@ public final class PlaybackEngine: NSObject, AVAudioPlayerDelegate {
 
     /// Stops and lets the recording go.
     public func unload() {
+        measuring?.cancel()
+        measuring = nil
+        levelGain = 1
         stop()
         player?.delegate = nil
         player = nil

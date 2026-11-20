@@ -1,3 +1,4 @@
+import DaybookCore
 import DaybookKit
 import DaybookUI
 import Foundation
@@ -31,6 +32,9 @@ final class AudioPlaybackController: PlaybackControlling {
     private(set) var trackID: UUID?
     private(set) var meetingID: UUID?
 
+    /// The level processing recorded for a recording (`Meeting.recordedLevel(ofTrack:)`), so it needn't be measured.
+    @ObservationIgnored var recordedLevel: (UUID, UUID) -> SpeechLevel.Measurement? = { _, _ in nil }
+
     init() {
         engine.onEnding = { [weak self] ending in self?.ended(ending) }
     }
@@ -38,7 +42,7 @@ final class AudioPlaybackController: PlaybackControlling {
     /// Starts or seeks playback of one recording of a conversation.
     func play(url: URL, at seconds: TimeInterval = 0, trackID: UUID, meetingID: UUID) {
         self.trackID = trackID; self.meetingID = meetingID
-        play(url: url, at: seconds)
+        play(url: url, at: seconds, level: recordedLevel(meetingID, trackID))
     }
 
     /// Silences the current source; used only by debug launch actions.
@@ -52,9 +56,9 @@ final class AudioPlaybackController: PlaybackControlling {
     func skip(_ seconds: TimeInterval) { engine.skip(seconds) }
 
     /// Starts or seeks playback; loading another URL replaces the current source.
-    func play(url: URL, at seconds: TimeInterval = 0) {
+    func play(url: URL, at seconds: TimeInterval = 0, level: SpeechLevel.Measurement? = nil) {
         do {
-            try engine.load(url)
+            try engine.load(url, recordedLevel: level)
             errorMessage = nil; errorDetails = nil
             engine.seek(to: seconds)
             resume()
