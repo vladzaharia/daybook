@@ -1,3 +1,4 @@
+import DaybookCore
 import DaybookDesign
 import DaybookKit
 import SwiftUI
@@ -16,7 +17,7 @@ struct PeopleSection: View {
             Text("No speakers yet").foregroundStyle(DaybookPalette.Ink.secondary)
         } else {
             ForEach(people) { person in
-                SpeakerRow(person: person) { name in
+                SpeakerRow(person: person, profiles: library.speakerProfiles, me: library.ownerProfileID) { name in
                     // One person found more than once is renamed as one, so they stay one person.
                     library.update(meeting.id, actionName: "Rename Speaker", undoManager: undoManager) { meeting in
                         for id in person.speakerIDs { meeting.renameSpeaker(id: id, name: name) }
@@ -25,6 +26,14 @@ struct PeopleSection: View {
                     SpeakerIdentityLine(library: library, meeting: meeting, speakerIDs: person.speakerIDs)
                 }
                 .contextMenu { meMenu(person) }
+                #if DEBUG
+                .onAppear {
+                    // `--speaker-name-me`: the first person is the person's own profile, for the You mark.
+                    if SpeakerNamePickerDemo.marksFirstAsMe, person.index == 0, library.canMarkSpeakerAsMe(person.speakerIDs, in: meeting.id) {
+                        library.markSpeakerAsMe(person.speakerIDs, in: meeting.id)
+                    }
+                }
+                #endif
             }
         }
     }
@@ -44,6 +53,8 @@ extension PeopleSection {
 /// talking; under the name, `identity`.
 struct SpeakerRow<Identity: View>: View {
     let person: MeetingPerson
+    let profiles: [SpeakerProfile]
+    let me: UUID?
     let save: (String) -> Void
     @ViewBuilder var identity: Identity
     @State private var draft = ""
@@ -61,10 +72,10 @@ struct SpeakerRow<Identity: View>: View {
         VStack(alignment: .leading, spacing: 2) {
             if dynamicTypeSize.isAccessibilitySize {
                 // The largest sizes: the name a line of its own, then the share and the time under it.
-                HStack(spacing: gap) { inkDot; name }
+                HStack(alignment: .firstTextBaseline, spacing: gap) { inkDot; name }
                 HStack(spacing: gap) { share; time }.padding(.leading, dot + gap)
             } else {
-                HStack(spacing: gap) {
+                HStack(alignment: .firstTextBaseline, spacing: gap) {
                     inkDot
                     name
                     Spacer(minLength: 8)
@@ -75,17 +86,30 @@ struct SpeakerRow<Identity: View>: View {
             // Lined up with the name, past the ink dot.
             identity.padding(.leading, dot + gap)
         }
-        .onAppear { draft = person.speaker.name }
+        .onAppear {
+            draft = person.speaker.name
+            #if DEBUG
+            if SpeakerNamePickerDemo.focusesInfo, person.index == 0 {
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(2))
+                    focused = true
+                    if let typed = SpeakerNamePickerDemo.draft { draft = typed }
+                }
+            }
+            #endif
+        }
         .onChange(of: person.speaker.name) { _, value in if !focused { draft = value } }
     }
 
     private var inkDot: some View {
         Circle().fill(ink).frame(width: dot, height: dot).accessibilityHidden(true)
+            .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
     }
 
     private var share: some View {
         Capsule().fill(Color.primary.opacity(0.08)).frame(width: bar, height: touch ? 5 : 4)
             .overlay(alignment: .leading) { Capsule().fill(ink).frame(width: max(touch ? 5 : 4, bar * person.share), height: touch ? 5 : 4) }
+            .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
             .accessibilityLabel("\(Int((person.share * 100).rounded())) percent of the talking")
     }
 
@@ -96,13 +120,21 @@ struct SpeakerRow<Identity: View>: View {
     }
 
     private var name: some View {
+        SpeakerNameField(current: person.speaker.name, draft: $draft, isFocused: focused, profiles: profiles, me: me,
+                         commit: commit) { nameField }
+    }
+
+    private var nameField: some View {
         let field = TextField("Speaker", text: $draft)
             .labelsHidden()
             .foregroundStyle(ink)
             .fontWeight(.semibold)
             .focused($focused)
-            .onSubmit(commit)
-            .onChange(of: focused) { _, active in if !active { commit() } }
+            #if os(macOS)
+            // Escape leaves the field with the name it had.
+            .onExitCommand { draft = person.speaker.name; focused = false }
+            #endif
+            .onChange(of: focused) { _, active in if !active { commit(draft) } }
             .accessibilityLabel("Speaker name")
             .accessibilityHint("Edit to rename this speaker everywhere in the conversation.")
         #if os(iOS)
@@ -118,9 +150,11 @@ struct SpeakerRow<Identity: View>: View {
         #endif
     }
 
-    private func commit() {
-        let value = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        if value.isEmpty { draft = person.speaker.name } else if value != person.speaker.name { save(value) }
+    private func commit(_ name: String) {
+        let value = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        draft = value.isEmpty ? person.speaker.name : value
+        if !value.isEmpty, value != person.speaker.name { save(value) }
+        focused = false
     }
 }
 
