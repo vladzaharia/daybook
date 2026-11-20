@@ -77,3 +77,30 @@ extension AppState {
         if devices != syncDevices { syncDevices = devices }
     }
 }
+
+extension AppState {
+    /// Every way this conversation's summary can be made again now (`SummarizeAgainChoices`): the summary models installed
+    /// here that fit this Mac (the chosen one first), and the cloud model Settings › Cloud resolves to while the cloud is
+    /// on offer for this conversation. This Mac hands summaries to no other Mac.
+    func summarizeAgainChoices(for meeting: Meeting) -> [SummarizeAgainChoice] {
+        let local = modelCatalog.models(for: .summarization).filter {
+            installedModels.contains($0.key) && LiveModelChoices.fitsMemory($0, physicalMemory: physicalMemory)
+        }.map { SummarizeAgainChoices.LocalModel(id: $0.key, name: $0.name) }
+        return SummarizeAgainChoices.rows(for: meeting, local: local, defaultLocal: summaryModel, macs: [],
+                                          cloud: hasCloudSetup && cloudOnOffer ? cloud.resolved?.model : nil, preferences: hasCloudSetup ? cloud.preferences : CloudSummaryPreferences())
+    }
+
+    /// Summarizes again as the person chose: with another installed model for this run only (the chosen one in Settings
+    /// stays), or in the cloud through the path Use the Cloud takes (`summarizeInCloud`, which checks the conversation
+    /// again and does nothing when the cloud no longer takes it).
+    func summarizeAgain(_ id: UUID, as choice: SummarizeAgainChoice) {
+        switch choice.place {
+        case .thisDevice(let model):
+            processor.enqueue(id, mode: .summaryOnly, summaryModelID: model == summaryModel ? nil : model)
+        case .cloud:
+            summarizeInCloud(id)
+        case .mac:
+            break
+        }
+    }
+}

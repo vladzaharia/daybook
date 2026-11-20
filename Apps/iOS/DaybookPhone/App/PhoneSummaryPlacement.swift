@@ -78,6 +78,8 @@ final class PhoneSummaryPlacement {
     /// Runs a summary placed on this iPhone, on the request claimed for it: the processor's work
     /// (`PhoneProcessor.summarizeHere`). Without it, a summary placed here goes to a Mac.
     @ObservationIgnored var runHere: ((UUID, ProcessingRequest) -> Void)?
+    /// A summary model's display name from its catalog key; nil names it by the key.
+    @ObservationIgnored var modelName: ((String) -> String?)?
     /// Summaries in the cloud with the person's own keys: `cloud`'s directory, sent as this iPhone. Tests and demos
     /// set one of their own.
     var cloudSummarizer: (any CloudSummarizing)? {
@@ -297,6 +299,27 @@ final class PhoneSummaryPlacement {
         refresh()
         placements.begin(id, immediately: true)
         if placements[id]?.phase == .waitingForMac { send(id) }
+    }
+
+    /// Every way this conversation's summary can be made again now (`SummarizeAgainChoices`): this iPhone's own summarizer
+    /// when it can run, and the cloud model while it's on offer for this conversation (this iPhone's own switches).
+    /// Another Mac is never named: a Summarize request goes to whichever Mac takes it.
+    func summarizeAgainChoices(for meeting: Meeting) -> [SummarizeAgainChoice] {
+        let local = (runHere != nil ? localSummarizer : nil).flatMap { $0.canSummarize ? $0 : nil }
+            .map { [SummarizeAgainChoices.LocalModel(id: $0.model, name: modelName?($0.model) ?? $0.model)] } ?? []
+        return SummarizeAgainChoices.rows(for: meeting, local: local, defaultLocal: local.first?.id, macs: [], cloud: cloudOffer, preferences: preferences)
+    }
+
+    /// Summarizes again as the person chose: here as Summarize Again does, or in the cloud as accepting a cloud Upgrade does
+    /// (due, then Use the Cloud, which this iPhone's switches check as it goes).
+    func summarizeAgain(_ id: UUID, as choice: SummarizeAgainChoice) async {
+        switch choice.place {
+        case .cloud:
+            await summaryIsDue(id)
+            perform(.useCloud, for: id)
+        default:
+            summarize(id)
+        }
     }
 
     /// The person's choice for a conversation's summary: this iPhone's own countdown, a Mac's countdown shown

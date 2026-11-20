@@ -110,14 +110,17 @@ extension AppState {
     /// A job for `meetingID`, frozen with the routed models, these preferences with the library's language, and their
     /// revisions.
     func makeJob(meetingID: UUID, mode: ProcessingRequest.Mode, templateID: String? = nil, upgrade: ProcessingRequest.Upgrade? = nil,
-                 summarizesHere: Bool = false, summarizesInCloud: Bool = false) -> ProcessingJob {
+                 summarizesHere: Bool = false, summarizesInCloud: Bool = false, summaryModelID: String? = nil) -> ProcessingJob {
         let route = speechRoute
         var preferences = processingPreferences
         preferences.speakerModelID = route.speakerModel
         preferences.transcriptionLanguage = route.transcription.language
-        return ProcessingJob(meetingID: meetingID, mode: mode, transcriptionModelID: route.transcription.model, summaryModelID: summaryModel,
+        // A summary the person asked to make with another installed model: that job only (its revision frozen too).
+        var revisions = frozenModelRevisions
+        if let summaryModelID, let revision = installedRevisions[summaryModelID] { revisions[summaryModelID] = revision }
+        return ProcessingJob(meetingID: meetingID, mode: mode, transcriptionModelID: route.transcription.model, summaryModelID: summaryModelID ?? summaryModel,
                              detectSpeakers: route.findsSpeakers, preferences: preferences, templateID: templateID,
-                             revisions: frozenModelRevisions, voiceEmbeddingModelID: route.voiceEmbedder,
+                             revisions: revisions, voiceEmbeddingModelID: route.voiceEmbedder,
                              languageFallbackModelID: route.transcription.fallback, smallTasksModelID: smallTasksModel, photoModelID: photoModel?.id,
                              upgrade: upgrade, summarizesHere: summarizesHere, summarizesInCloud: summarizesInCloud)
     }
