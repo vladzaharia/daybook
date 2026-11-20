@@ -89,6 +89,37 @@ public enum SyntheticAudio {
     /// Silence of `seconds`, for a mix.
     public static func silence(_ seconds: Double) -> [Float] { [Float](repeating: 0, count: Int(seconds * rate)) }
 
+    /// Speech-like sound at a known level: 300 ms syllables of a 140 Hz voice with three overtones, steady at `level` dBFS
+    /// RMS between 5 ms ramps, 100 ms apart, with `pause` seconds more after every fifth, over uniform noise at `floor`
+    /// dBFS RMS (none when nil). Syllables start on 100 ms boundaries, so a 100 ms window inside one holds 14 whole
+    /// periods and measures `level` exactly, at any rate that's a multiple of 10 Hz. Deterministic by `seed`.
+    public static func syllables(level: Double, seconds: Double, rate: Double = SyntheticAudio.rate, pause: Double = 0.7,
+                                 floor: Double? = nil, seed: UInt64 = 1) -> [Float] {
+        let count = Int((seconds * rate).rounded())
+        let harmonics = [1.0, 0.6, 0.4, 0.25]
+        let scale = pow(10, level / 20) / (harmonics.reduce(0) { $0 + $1 * $1 } / 2).squareRoot()
+        let length = Int((0.3 * rate).rounded()), ramp = Int((0.005 * rate).rounded())
+        var out = [Float](repeating: 0, count: count)
+        var tenths = 0, syllable = 0
+        while tenths * Int(rate) / 10 < count {
+            let first = tenths * Int(rate) / 10
+            for k in 0..<length where first + k < count {
+                let envelope = min(1, Double(min(k, length - 1 - k)) / Double(ramp))
+                var value = 0.0
+                for (index, amplitude) in harmonics.enumerated() { value += amplitude * sin(2 * .pi * 140 * Double(index + 1) * Double(k) / rate) }
+                out[first + k] = Float(value * scale * envelope)
+            }
+            syllable += 1
+            tenths += 4 + (syllable % 5 == 0 ? Int((pause * 10).rounded()) : 0)
+        }
+        if let floor {
+            var random = SeededRandom(seed: seed)
+            let amplitude = pow(10, floor / 20) * 3.0.squareRoot()
+            for index in out.indices { out[index] += Float(random.uniform(-amplitude...amplitude)) }
+        }
+        return out
+    }
+
     /// Scales `mix` down only if it would clip.
     public static func limited(_ mix: [Float]) -> [Float] {
         let peak = mix.map(abs).max() ?? 1

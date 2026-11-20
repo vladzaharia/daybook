@@ -225,13 +225,18 @@ public struct ProcessingSettings: Codable, Equatable, Sendable {
     /// (docs/models.md). Nil for results made before the model system recorded it; those name their
     /// model through `modelID`, which the catalog's migration table still resolves.
     public var model: ModelProvenance?
+    /// The gain the recording was heard with (`SpeechLevel`). Nil for results made before levels were measured, and for
+    /// results that don't come from audio.
+    public var levelAdjustment: LevelAdjustment?
     /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
     public var unknownFields = UnknownFields()
-    public init(modelID: String, parameters: [String: String] = [:], createdAt: Date = Date(), model: ModelProvenance? = nil) {
+    public init(modelID: String, parameters: [String: String] = [:], createdAt: Date = Date(), model: ModelProvenance? = nil,
+                levelAdjustment: LevelAdjustment? = nil) {
         self.modelID = modelID; self.parameters = parameters; self.createdAt = createdAt; self.model = model
+        self.levelAdjustment = levelAdjustment
     }
 
-    private enum CodingKeys: String, CodingKey, CaseIterable { case modelID, parameters, createdAt, model }
+    private enum CodingKeys: String, CodingKey, CaseIterable { case modelID, parameters, createdAt, model, levelAdjustment }
     private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
 
     public init(from decoder: Decoder) throws {
@@ -241,6 +246,7 @@ public struct ProcessingSettings: Codable, Equatable, Sendable {
         createdAt = try values.decode(Date.self, forKey: .createdAt)
         // Provenance a newer Daybook wrote differently is dropped, never a reason to reject the meeting.
         model = (try? values.decodeIfPresent(ModelProvenance.self, forKey: .model)) ?? nil
+        levelAdjustment = (try? values.decodeIfPresent(LevelAdjustment.self, forKey: .levelAdjustment)) ?? nil
         unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
     }
 
@@ -250,6 +256,7 @@ public struct ProcessingSettings: Codable, Equatable, Sendable {
         try values.encode(parameters, forKey: .parameters)
         try values.encode(createdAt, forKey: .createdAt)
         try values.encodeIfPresent(model, forKey: .model)
+        try values.encodeIfPresent(levelAdjustment, forKey: .levelAdjustment)
         try unknownFields.encode(to: encoder)
     }
 }
