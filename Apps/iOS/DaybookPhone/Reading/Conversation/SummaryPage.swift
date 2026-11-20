@@ -77,6 +77,7 @@ struct SummaryPage: View {
                                     revealing: arrival.reveals(summary, in: meeting), passages: passages,
                                     blockID: Self.blockID) { section in
                             ForEach(meeting.photos(in: section)) { PhotoTile(meeting: meeting, photo: $0, large: true).padding(.top, DaybookSpacing.s2) }
+                            SectionSketches(meeting: meeting, section: section, library: library)
                         }
                         // A new summary is a new block, so it reveals itself; the ID is a String, as the page's anchors are.
                         .id("summary:\(summary.createdAt.timeIntervalSinceReferenceDate)")
