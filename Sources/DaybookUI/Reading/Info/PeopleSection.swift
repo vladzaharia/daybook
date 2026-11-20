@@ -17,11 +17,12 @@ struct PeopleSection: View {
         } else {
             ForEach(people) { person in
                 SpeakerRow(person: person) { name in
-                    library.update(meeting.id, actionName: "Rename Speaker", undoManager: undoManager) {
-                        $0.renameSpeaker(id: person.speaker.id, name: name)
+                    // One person found more than once is renamed as one, so they stay one person.
+                    library.update(meeting.id, actionName: "Rename Speaker", undoManager: undoManager) { meeting in
+                        for id in person.speakerIDs { meeting.renameSpeaker(id: id, name: name) }
                     }
                 } identity: {
-                    SpeakerIdentityLine(library: library, meeting: meeting, speakerID: person.speaker.id)
+                    SpeakerIdentityLine(library: library, meeting: meeting, speakerIDs: person.speakerIDs)
                 }
             }
         }
@@ -114,22 +115,37 @@ struct SpeakerRow<Identity: View>: View {
 
 /// Under a speaker: a name Daybook gave by voice reads Recognized, with Not <name> to take it back; a profile the
 /// voice resembles reads Maybe <name>, with Yes and No. Nothing for names the person gave. On the Mac, how alike the
-/// voices are is in the tooltip; under touch, each answer has a 44 pt target.
+/// voices are is in the tooltip; under touch, each answer has a 44 pt target. A person found more than once
+/// (`MeetingPerson.speakerIDs`) reads Recognized while Daybook named any of those speakers, and Not <name> takes back
+/// every label Daybook gave them, which separates those speakers again.
 struct SpeakerIdentityLine: View {
     let library: LibraryController
     let meeting: Meeting
-    let speakerID: String
+    let speakerIDs: [String]
     @Environment(\.daybookDensity) private var density
 
+    /// The first of the speakers with a label or suggestion from Daybook.
+    private var shown: (speakerID: String, identity: SpeakerIdentity)? {
+        for id in speakerIDs {
+            if let identity = meeting.speakerIdentity(id), identity.$source.isKnown,
+               identity.source == .recognized || identity.source == .suggested { return (id, identity) }
+        }
+        return nil
+    }
+
     var body: some View {
-        if let identity = meeting.speakerIdentity(speakerID), identity.$source.isKnown,
-           let profile = identity.profileID.flatMap({ library.metadata.speakerProfile($0) }) {
+        if let shown, let profile = shown.identity.profileID.flatMap({ library.metadata.speakerProfile($0) }) {
+            let identity = shown.identity, speakerID = shown.speakerID
             switch identity.source {
             case .recognized:
                 line(identity) {
                     Label("Recognized", systemImage: "waveform")
                 } answers: {
-                    answer("Not \(profile.name)") { library.rejectSpeakerProfile(speakerID, in: meeting.id) }
+                    answer("Not \(profile.name)") {
+                        for id in speakerIDs where meeting.speakerIdentity(id)?.source == .recognized {
+                            library.rejectSpeakerProfile(id, in: meeting.id)
+                        }
+                    }
                 }
             case .suggested:
                 line(identity) {
