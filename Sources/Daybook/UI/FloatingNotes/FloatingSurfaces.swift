@@ -89,6 +89,7 @@ private struct PanelCaptions: View {
                            isEnabled: LiveTranscriptLink<EmptyView>.opens(state: captions.state, lines: captions.segments.count)) {
             LiveCaptionStrip(lines: segments.map { LiveCaptionLabels.line($0, names: captions.sourceNames) },
                              status: LiveCaptionStatus.line(captions.state, locale: captions.locale),
+                             notice: captions.sourceNotice,
                              style: compact ? .panelCompact : .panel)
         }
             .padding(.leading, FloatingLayout.inset)

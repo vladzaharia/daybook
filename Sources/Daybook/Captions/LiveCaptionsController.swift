@@ -86,6 +86,9 @@ final class LiveCaptionsController {
         return values.contains(.finished) ? .finished : .off
     }
 
+    /// A source that stopped while another listens, "You: <reason>", for the strips beside the lines.
+    var sourceNotice: String? { LiveCaptionStatus.problem(states, names: sourceNames) }
+
     /// Whether a recording surface shows captions for this conversation. When they can't run (no
     /// language, no Speech support) the surfaces stay quiet and Settings says why.
     func isShowing(for meetingID: UUID) -> Bool { showing == meetingID }

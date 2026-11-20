@@ -35,6 +35,7 @@ struct LiveCaptionsSection: View {
                     LiveCaptionStrip(lines: Self.lines(captions.recent(Self.liveLines), names: captions.sourceNames,
                                                        listening: captions.state == .listening),
                                      status: LiveCaptionStatus.line(captions.state, locale: captions.locale),
+                                     notice: captions.sourceNotice,
                                      style: Self.style)
                 }
             }
