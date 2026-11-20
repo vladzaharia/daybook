@@ -8,8 +8,8 @@ import XCTest
 @testable import DaybookIntelligence
 
 /// What the speech models hear of a recording (`LevelledAudio`): a quiet recording raised in a 16 kHz mono copy timed as
-/// the readers time the original, made only with room for it, removed when the run ends however it ends; the stored file
-/// only read; the gain recorded with the run. Synthetic speech-like sound only; the models are faked.
+/// the readers time the original, made only with room for it and under a WAV file's size, with the recording's protection
+/// class, removed when the run ends however it ends; the stored file only read; the gain recorded with the run. Synthetic speech-like sound only; the models are faked.
 final class LevelledAudioTests: XCTestCase {
     /// A 32-bit float CAF: `samples` in the first channel, at half level in a second when `stereo`.
     private func recording(_ samples: [Float], rate: Double, stereo: Bool = false, in folder: URL, name: String = "a.caf") throws -> URL {
@@ -35,9 +35,33 @@ final class LevelledAudioTests: XCTestCase {
         return (channels, file.processingFormat.sampleRate, file.length)
     }
 
+    /// Every file left in this run's processing folder under `base`, at any depth.
     private func copies(in base: URL) -> [URL] {
         let folder = ProcessingScratch.root(in: base).appendingPathComponent(String(getpid()))
+        let found = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.isRegularFileKey])?.allObjects as? [URL] ?? []
+        return found.filter { (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true }
+    }
+
+    /// The folders made for copies in this run's processing folder under `base`.
+    private func copyFolders(in base: URL) -> [URL] {
+        let folder = ProcessingScratch.root(in: base).appendingPathComponent(String(getpid()))
         return (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+    }
+
+    /// An AAC recording at 48 kHz, mono, as the iPhone records.
+    private func aacRecording(_ samples: [Float], in folder: URL) throws -> URL {
+        let url = folder.appendingPathComponent("iphone.m4a")
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+        do {
+            let file = try AVAudioFile(forWriting: url, settings: [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 48_000,
+                                                                   AVNumberOfChannelsKey: 1, AVEncoderBitRateKey: 96_000],
+                                       commonFormat: .pcmFormatFloat32, interleaved: false)
+            let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)))
+            buffer.frameLength = AVAudioFrameCount(samples.count)
+            samples.withUnsafeBufferPointer { buffer.floatChannelData![0].update(from: $0.baseAddress!, count: samples.count) }
+            try file.write(from: buffer)
+        }
+        return url
     }
 
     /// The 16 kHz mono rendering the readers make of `url` (`MonoAudioReader`, as Nemotron 3 reads).
@@ -55,70 +79,84 @@ final class LevelledAudioTests: XCTestCase {
     /// One step of 16-bit PCM, as a reader turns it into a float.
     private let step: Float = 1 / 32_768
 
-    // MARK: The copy
-
-    func testBehaviorQuietSpeechIsRaisedInA16kHzMonoCopyTimedAsTheReadersTimeTheOriginal() throws {
-        let folder = makeTemporaryFolder(), scratch = makeTemporaryFolder()
-        let url = try recording(SyntheticAudio.syllables(level: -50, seconds: 10, rate: 48_000, floor: -85), rate: 48_000, stereo: true, in: folder)
-        let stored = try Data(contentsOf: url)
-
-        let levelled = try LevelledAudio.prepare(url, in: scratch)
-        let adjustment = try XCTUnwrap(levelled.adjustment)
-        let mono = try rendering(url)
+    /// The copy made of `original` against what each reader would have read of the original: the rendering's samples
+    /// times the gain, its length, and its duration within one 16 kHz sample.
+    private func checkTimedAsTheReaders(_ original: URL, _ levelled: LevelledAudio, _ name: String) throws {
+        let adjustment = try XCTUnwrap(levelled.adjustment, name)
+        let mono = try rendering(original)
         var meter = SpeechLevel.Meter(sampleRate: 16_000)
         meter.add(mono)
-        XCTAssertEqual(adjustment, SpeechLevel.adjustment(for: meter.measurement()), "measured on the rendering the models hear")
-        XCTAssertGreaterThan(adjustment.gain, 25, "the downmixed speech, under −50 dBFS, raised toward −23")
-        let copy = try XCTUnwrap(levelled.copy)
+        XCTAssertEqual(adjustment, SpeechLevel.adjustment(for: meter.measurement()), "\(name): measured on the rendering the models hear")
+        XCTAssertGreaterThan(adjustment.gain, 20, "\(name): speech under −50 dBFS raised toward −23")
+        let copy = try XCTUnwrap(levelled.copy, name)
         XCTAssertEqual(levelled.url, copy)
         XCTAssertEqual(copy.pathExtension, "wav")
-        XCTAssertEqual(copies(in: scratch).map { $0.resolvingSymlinksInPath().path }, [copy.resolvingSymlinksInPath().path],
-                       "made where processing keeps its copies")
 
-        // 16 kHz mono 16-bit: a sixth of the 48 kHz stereo float original, a third of a float copy at 16 kHz.
+        // 16 kHz mono 16-bit: a sixth of a 48 kHz stereo float original, a third of a float copy at 16 kHz.
         let file = try AVAudioFile(forReading: copy)
         XCTAssertEqual(file.fileFormat.sampleRate, 16_000)
         XCTAssertEqual(file.fileFormat.channelCount, 1)
         XCTAssertEqual(file.fileFormat.commonFormat, .pcmFormatInt16)
-        let original = try contents(url), raised = try contents(copy)
-        XCTAssertEqual(Double(raised.length), Double(mono.count), "the rendering's length, sample for sample")
-        XCTAssertEqual(Double(raised.length) / 16_000, Double(original.length) / 48_000, accuracy: 1 / 16_000,
-                       "the duration every reader times words and turns against")
-        XCTAssertEqual(try MonoAudioReader.describe(copy).duration, try MonoAudioReader.describe(url).duration, accuracy: 1 / 16_000)
+        let source = try AVAudioFile(forReading: original)
+        let duration = Double(source.length) / source.processingFormat.sampleRate
+        let raised = try contents(copy)
+        XCTAssertEqual(Double(raised.length), Double(mono.count), "\(name): the rendering's length, sample for sample")
+        XCTAssertEqual(Double(raised.length) / 16_000, duration, accuracy: 1 / 16_000, "\(name): the duration readers time words and turns against")
+        XCTAssertEqual(try MonoAudioReader.describe(copy).duration, try MonoAudioReader.describe(original).duration, accuracy: 1 / 16_000)
         XCTAssertLessThanOrEqual(largestDifference(raised.channels[0], mono.map { $0 * adjustment.factor }), step,
-                                 "the gain times the rendering Nemotron 3 (and Parakeet and Apple Speech for several channels) read")
-        XCTAssertLessThan(raised.channels[0].map(abs).max() ?? 1, Float(pow(10, -1.0 / 20)) + step, "the peak at −1 dBFS: nothing clips")
+                                 "\(name): the gain times the rendering Nemotron 3 (and Parakeet and Apple Speech for several channels) read")
+        XCTAssertLessThan(raised.channels[0].map(abs).max() ?? 1, Float(pow(10, -1.0 / 20)) + step, "\(name): the peak at −1 dBFS: nothing clips")
 
         // The readers that convert slab by slab (WhisperKit, Sortformer, voice profiles) render the whole file the same way.
-        let slab = try AudioSlabReader.samples(url: url, from: 0, to: Double(original.length) / 48_000)
-        XCTAssertEqual(slab.count, mono.count)
-        XCTAssertLessThanOrEqual(largestDifference(raised.channels[0], slab.map { $0 * adjustment.factor }), step)
+        let slab = try AudioSlabReader.samples(url: original, from: 0, to: duration)
+        XCTAssertEqual(slab.count, mono.count, name)
+        XCTAssertLessThanOrEqual(largestDifference(raised.channels[0], slab.map { $0 * adjustment.factor }), step, name)
         // FluidAudio (Parakeet over 30 s, Community-1) maps the copy as it is, without converting it again.
-        let source = try AudioSourceFactory().makeDiskBackedSource(from: copy, targetSampleRate: 16_000).source
-        defer { source.cleanup() }
-        XCTAssertEqual(source.sampleCount, raised.channels[0].count)
-        var mapped = [Float](repeating: 0, count: source.sampleCount)
-        try mapped.withUnsafeMutableBufferPointer { try source.copySamples(into: $0.baseAddress!, offset: 0, count: $0.count) }
-        XCTAssertTrue(mapped == raised.channels[0])
-        // FluidAudio's own conversion of the original (its first channel, another filter) is timed the same.
-        let converted = try AudioSourceFactory().makeDiskBackedSource(from: url, targetSampleRate: 16_000).source
+        let mapped = try AudioSourceFactory().makeDiskBackedSource(from: copy, targetSampleRate: 16_000).source
+        defer { mapped.cleanup() }
+        XCTAssertEqual(mapped.sampleCount, raised.channels[0].count)
+        var samples = [Float](repeating: 0, count: mapped.sampleCount)
+        try samples.withUnsafeMutableBufferPointer { try mapped.copySamples(into: $0.baseAddress!, offset: 0, count: $0.count) }
+        XCTAssertTrue(samples == raised.channels[0], name)
+        // FluidAudio's own conversion of the original (another filter; a stereo file's first channel) is timed the same.
+        let converted = try AudioSourceFactory().makeDiskBackedSource(from: original, targetSampleRate: 16_000).source
         defer { converted.cleanup() }
-        XCTAssertEqual(Double(converted.sampleCount), Double(mono.count), accuracy: 1)
-
-        XCTAssertEqual(try Data(contentsOf: url), stored, "the stored recording is only read")
-        levelled.remove()
-        XCTAssertFalse(FileManager.default.fileExists(atPath: copy.path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+        XCTAssertEqual(Double(converted.sampleCount), Double(mono.count), accuracy: 1, name)
     }
 
-    func testBehaviorWithoutRoomForTheCopyTheRecordingIsHeardAsStored() throws {
+    // MARK: The copy
+
+    func testBehaviorQuietSpeechIsRaisedInA16kHzMonoCopyTimedAsTheReadersTimeTheOriginal() throws {
+        let folder = makeTemporaryFolder(), scratch = makeTemporaryFolder()
+        // The Mac's computer audio (48 kHz stereo float) and an iPhone's recording (48 kHz mono AAC).
+        let mac = try recording(SyntheticAudio.syllables(level: -50, seconds: 10, rate: 48_000, floor: -85), rate: 48_000, stereo: true, in: folder)
+        let phone = try aacRecording(SyntheticAudio.syllables(level: -52, seconds: 10, rate: 48_000, floor: -85), in: folder)
+        for (name, url) in [("48 kHz stereo float", mac), ("48 kHz mono AAC", phone)] {
+            let stored = try Data(contentsOf: url)
+            let levelled = try LevelledAudio.prepare(url, in: scratch)
+            try checkTimedAsTheReaders(url, levelled, name)
+            let copy = try XCTUnwrap(levelled.copy)
+            XCTAssertEqual(copies(in: scratch).map { $0.resolvingSymlinksInPath().path }, [copy.resolvingSymlinksInPath().path],
+                           "\(name): made where processing keeps its copies")
+            XCTAssertEqual(try Data(contentsOf: url), stored, "\(name): the stored recording is only read")
+            levelled.remove()
+            XCTAssertFalse(FileManager.default.fileExists(atPath: copy.path))
+            XCTAssertTrue(copyFolders(in: scratch).isEmpty, "\(name): the copy's folder goes with it")
+            XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+        }
+    }
+
+    func testBehaviorWithoutRoomForTheCopyTheRecordingIsHeardAsStoredWithItsLevelRecorded() throws {
         let folder = makeTemporaryFolder(), scratch = makeTemporaryFolder()
         let url = try recording(SyntheticAudio.syllables(level: -50, seconds: 4, floor: -85), rate: 16_000, in: folder)
         var asked: [URL] = []
         let short = try LevelledAudio.prepare(url, in: scratch) { asked.append($0); return LevelledAudio.spareBytes + 100_000 }
         XCTAssertEqual(short.url, url)
         XCTAssertNil(short.copy)
-        XCTAssertNil(short.adjustment, "nothing is recorded when nothing was done")
+        let recorded = try XCTUnwrap(short.adjustment)
+        XCTAssertEqual(recorded.gain, 0, "the models heard it as stored")
+        XCTAssertEqual(try XCTUnwrap(recorded.speechLevel), -50, accuracy: 0.3, "and its level and peak are recorded")
+        XCTAssertNotNil(recorded.peak)
         XCTAssertTrue(copies(in: scratch).isEmpty)
         XCTAssertEqual(asked.map(\.path), [ProcessingScratch.root(in: scratch).path], "the room asked for is where the copy goes")
 
@@ -130,21 +168,62 @@ final class LevelledAudioTests: XCTestCase {
         }
     }
 
-    func testBehaviorTheCopyHasTheProtectionOfProcessingsOtherCopies() throws {
+    func testBehaviorACopyTooLongForAWAVFileIsNotMade() {
+        // 34 hours and more at 16 kHz in 16 bits is past what a WAV file holds (4,294,967,295 bytes) less its header room.
+        XCTAssertEqual(LevelledAudio.declined(frames: 2_147_483_647, free: nil), .tooLong)
+        XCTAssertEqual(LevelledAudio.declined(frames: 2_000_000_000, free: nil), .tooLong)
+        XCTAssertNil(LevelledAudio.declined(frames: 1_999_000_000, free: nil), "just under: made")
+        XCTAssertEqual(LevelledAudio.declined(frames: 2_100_000_000, free: Int64.max), .tooLong, "however much room there is")
+        XCTAssertEqual(LevelledAudio.declined(frames: 16_000 * 3_600, free: 1_000_000_000), .noRoom, "an hour, 115 MB, with less than 1 GB spare")
+        XCTAssertNil(LevelledAudio.declined(frames: 16_000 * 3_600, free: 2_000_000_000))
+    }
+
+    func testBehaviorTheCopyKeepsTheRecordingsProtectionClass() throws {
         let folder = makeTemporaryFolder(), scratch = makeTemporaryFolder()
         let url = try recording(SyntheticAudio.syllables(level: -50, seconds: 2, rate: 48_000, floor: -85), rate: 48_000, stereo: true, in: folder)
-        let levelled = try LevelledAudio.prepare(url, in: scratch)
-        defer { levelled.remove() }
-        // Parakeet's and Apple Speech's mono copy of a recording with several channels.
+        // Where the file system keeps classes (a Mac with FileVault, the simulators, every iPhone; `FileProtectionClasses`).
+        try XCTSkipUnless(FileProtectionClasses.areKept, "This file system doesn't keep protection classes.")
+        for wanted in [FileProtectionType.completeUnlessOpen, .completeUntilFirstUserAuthentication] {
+            try FileManager.default.setAttributes([.protectionKey: wanted], ofItemAtPath: url.path)
+            XCTAssertEqual(LevelledAudio.protection(of: url), wanted)
+            let levelled = try LevelledAudio.prepare(url, in: scratch)
+            let copy = try XCTUnwrap(levelled.copy)
+            XCTAssertEqual(FileProtectionClasses.of(copy), wanted, "a copy of a \(wanted.rawValue) recording")
+            XCTAssertEqual(FileProtectionClasses.of(copy.deletingLastPathComponent()), wanted, "made in a folder of that class")
+            XCTAssertEqual(copy.deletingLastPathComponent().deletingLastPathComponent().resolvingSymlinksInPath().path,
+                           ProcessingScratch.root(in: scratch).appendingPathComponent(String(getpid())).resolvingSymlinksInPath().path)
+            levelled.remove()
+            XCTAssertTrue(copyFolders(in: scratch).isEmpty)
+        }
+        // A class that can't be read leaves the folder as this run's is: what's made in it has the class the run's own
+        // copies have (Parakeet's mono copy).
+        XCTAssertNil(LevelledAudio.protection(of: folder.appendingPathComponent("missing.caf")))
+        let plain = try ProcessingScratch.folder(protection: nil, in: scratch).appendingPathComponent("a.caf")
+        try MonoAudioReader.writeMonoCopy(of: url, to: plain)
         let mono = try ProcessingScratch.file(extension: "caf", in: scratch)
         try MonoAudioReader.writeMonoCopy(of: url, to: mono)
-        let copy = try XCTUnwrap(levelled.copy)
-        XCTAssertEqual(copy.deletingLastPathComponent(), mono.deletingLastPathComponent(), "in the same folder")
-        // Classes are compared where the file system keeps them (`FileProtectionClasses`).
-        if FileProtectionClasses.areKept {
-            XCTAssertNotNil(FileProtectionClasses.of(copy))
-            XCTAssertEqual(FileProtectionClasses.of(copy), FileProtectionClasses.of(mono))
+        XCTAssertNotNil(FileProtectionClasses.of(plain))
+        XCTAssertEqual(FileProtectionClasses.of(plain), FileProtectionClasses.of(mono))
+    }
+
+    func testBehaviorACancelledWriteLeavesNoPartialCopy() async throws {
+        let folder = makeTemporaryFolder(), scratch = makeTemporaryFolder()
+        let url = try recording(SyntheticAudio.syllables(level: -50, seconds: 10, floor: -85), rate: 16_000, in: folder)
+        // Cancelled as the copy is about to be written (the room is asked for last): the WAV file is made, then the
+        // first block read sees the cancellation.
+        let task = Task { () throws -> LevelledAudio in
+            try LevelledAudio.prepare(url, in: scratch) { _ in
+                withUnsafeCurrentTask { $0?.cancel() }
+                return nil
+            }
         }
+        do {
+            let levelled = try await task.value
+            levelled.remove()
+            XCTFail("prepared after being cancelled")
+        } catch is CancellationError {}
+        XCTAssertTrue(copies(in: scratch).isEmpty, "no partial copy")
+        XCTAssertTrue(copyFolders(in: scratch).isEmpty, "nor its folder")
     }
 
     func testBehaviorNormalSpeechSilenceAndUnreadableAudioAreReadAsStored() throws {

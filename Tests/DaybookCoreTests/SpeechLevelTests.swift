@@ -105,8 +105,9 @@ final class SpeechLevelTests: XCTestCase {
 
     // MARK: Choosing the gain
 
+    /// The gain for a measured speech level and peak, the quiet level well below (speech-like dynamics).
     private func gain(speech: Double?, peak: Double?) -> Double {
-        SpeechLevel.adjustment(for: SpeechLevel.Measurement(speech: speech, peak: peak)).gain
+        SpeechLevel.adjustment(for: SpeechLevel.Measurement(speech: speech, peak: peak, quiet: speech.map { $0 - 30 })).gain
     }
 
     func testBehaviorQuietSpeechIsRaisedToTheTargetCappedAndUnderTheCeiling() {
@@ -115,7 +116,7 @@ final class SpeechLevelTests: XCTestCase {
         XCTAssertEqual(gain(speech: -45, peak: -8), 7, accuracy: 1e-9, "the peak stays at −1 dBFS")
         XCTAssertEqual(gain(speech: -40.04, peak: -20), 17, accuracy: 1e-9, "in 0.1 dB steps, rounded down")
         XCTAssertEqual(gain(speech: -45, peak: -1.95), 0, "the peak allows 0.9 dB, under 1 dB: none")
-        let adjustment = SpeechLevel.adjustment(for: SpeechLevel.Measurement(speech: -44.96, peak: -25.04))
+        let adjustment = SpeechLevel.adjustment(for: SpeechLevel.Measurement(speech: -44.96, peak: -25.04, quiet: -80))
         XCTAssertEqual(adjustment, LevelAdjustment(version: 1, speechLevel: -45, peak: -25, gain: 21.9))
         XCTAssertEqual(LevelAdjustment(speechLevel: -43, peak: -30, gain: 20).factor, 10, accuracy: 1e-5)
     }
@@ -128,6 +129,79 @@ final class SpeechLevelTests: XCTestCase {
         XCTAssertEqual(gain(speech: -45, peak: 0), 0, "a peak over the ceiling doesn't lower it either")
         XCTAssertEqual(gain(speech: nil, peak: -20), 0)
         XCTAssertEqual(gain(speech: -35.1, peak: -15), 12.1, accuracy: 1e-9, "just under the line, raised all the way")
+    }
+
+    // MARK: Noise isn't raised
+
+    /// Uniform noise at `level` dBFS RMS. Deterministic by `seed`.
+    private func noise(level: Double, seconds: Double, seed: UInt64) -> [Float] {
+        var random = SeededRandom(seed: seed)
+        let amplitude = pow(10, level / 20) * 3.0.squareRoot()
+        return (0..<Int(seconds * 16_000)).map { _ in Float(random.uniform(-amplitude...amplitude)) }
+    }
+
+    /// The rule without the noise guard, to show what it holds back.
+    private var unguarded: SpeechLevel.Policy {
+        var policy = SpeechLevel.Policy()
+        policy.minimumRange = -.infinity
+        return policy
+    }
+
+    func testBehaviorStationaryNoiseIsNotRaisedWithOrWithoutAClick() throws {
+        var hum = noise(level: -60, seconds: 20, seed: 5)
+        hum[80_000] = Float(pow(10, -35.0 / 20))
+        let clicked = measured(hum)
+        XCTAssertEqual(try XCTUnwrap(clicked.speech), -60, accuracy: 0.5, "the 95th percentile is the noise")
+        XCTAssertEqual(SpeechLevel.adjustment(for: clicked).gain, 0)
+        XCTAssertEqual(SpeechLevel.adjustment(for: clicked, policy: unguarded).gain, 30, "without the guard: +30 dB of noise")
+
+        let line = measured(noise(level: -55, seconds: 20, seed: 6))
+        XCTAssertLessThan(try XCTUnwrap(line.speech) - XCTUnwrap(line.quiet), 2, "stationary noise has no range")
+        XCTAssertEqual(SpeechLevel.adjustment(for: line).gain, 0)
+        XCTAssertEqual(SpeechLevel.adjustment(for: line, policy: unguarded).gain, 30)
+        let adjustment = SpeechLevel.adjustment(for: line)
+        XCTAssertNotNil(adjustment.speechLevel, "the level and peak are still recorded")
+        XCTAssertNotNil(adjustment.peak)
+    }
+
+    func testBehaviorQuietSpeechIsStillRaisedOverALowFloorOrRoomNoise() throws {
+        // Steady syllables over digital silence: the quiet level is −∞.
+        XCTAssertEqual(SpeechLevel.adjustment(for: measured(SyntheticAudio.syllables(level: -50, seconds: 10))).gain, 27, accuracy: 0.3)
+        // Over a floor under −70 dBFS, and over room noise 12 dB below the speech.
+        XCTAssertEqual(SpeechLevel.adjustment(for: measured(SyntheticAudio.syllables(level: -50, seconds: 10, floor: -75))).gain, 27, accuracy: 0.3)
+        XCTAssertEqual(SpeechLevel.adjustment(for: measured(SyntheticAudio.syllables(level: -50, seconds: 10, floor: -62))).gain, 27, accuracy: 0.5)
+        // Speech only 6 dB over the noise isn't: raising it would raise as much noise.
+        XCTAssertEqual(SpeechLevel.adjustment(for: measured(SyntheticAudio.syllables(level: -50, seconds: 10, floor: -56))).gain, 0)
+
+        // Speech from `say`, its level with pauses at −50 dBFS, over a −75 dBFS floor.
+        let folder = makeTemporaryFolder()
+        guard let voice = try SyntheticAudio.speech("Okay, so let's go over the launch plan for next week. Priya will send the checklist on Friday.",
+                                                    voice: "Samantha", in: folder) else { throw XCTSkip("The Samantha voice isn't available to `say` here.") }
+        var quiet = SyntheticAudio.level(voice, -28)
+        let floor = noise(level: -75, seconds: Double(quiet.count) / 16_000, seed: 7)
+        for index in quiet.indices where index < floor.count { quiet[index] += floor[index] }
+        XCTAssertGreaterThan(SpeechLevel.adjustment(for: measured(quiet)).gain, 10)
+    }
+
+    func testBehaviorSparseSpeechAtANormalLevelOverComfortNoiseIsLeftAlone() throws {
+        // A minute of comfort noise at −62 dBFS with 2 s of speech at −20 dBFS RMS in it (15 of 600 windows), one
+        // sample at −8 dBFS: the 95th percentile is the noise.
+        var line = noise(level: -62, seconds: 60, seed: 8)
+        let speech = SyntheticAudio.syllables(level: -20, seconds: 2)
+        for index in speech.indices { line[160_000 + index] += speech[index] }
+        line[164_000] = Float(pow(10, -8.0 / 20))
+        let sparse = measured(line)
+        XCTAssertEqual(try XCTUnwrap(sparse.speech), -62, accuracy: 0.5)
+        XCTAssertEqual(try XCTUnwrap(sparse.peak), -8, accuracy: 0.05)
+        XCTAssertEqual(SpeechLevel.adjustment(for: sparse, policy: unguarded).gain, 7, accuracy: 0.11, "without the guard: a peak-limited +7 dB")
+        XCTAssertEqual(SpeechLevel.adjustment(for: sparse).gain, 0)
+
+        // Speech filling more of it measures at its own level, above −35 dBFS: left alone too.
+        var busy = noise(level: -62, seconds: 60, seed: 9)
+        let talk = SyntheticAudio.syllables(level: -20, seconds: 30)
+        for index in talk.indices { busy[index] += talk[index] }
+        XCTAssertEqual(try XCTUnwrap(measured(busy).speech), -20, accuracy: 0.5)
+        XCTAssertEqual(SpeechLevel.adjustment(for: measured(busy)).gain, 0)
     }
 
     // MARK: Provenance

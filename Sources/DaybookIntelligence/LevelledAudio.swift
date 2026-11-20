@@ -16,32 +16,67 @@ import os
 /// Community-1).
 ///
 /// It's the conversation's audio, so it's made where processing keeps such copies (`ProcessingScratch`: kept out of
-/// backups, the temporary folder's file protection) and removed when the work ends, however it ends (`remove()`). The
+/// backups), in a folder of its own with the recording's file protection class where that can be read and set (an
+/// iPhone's recording is class B), and removed with that folder when the work ends, however it ends (`remove()`). The
 /// stored recording is only read.
 struct LevelledAudio: Sendable {
     /// What the models read.
     let url: URL
     /// What was measured and done; nil when the recording couldn't be measured or copied (the models then read it as is).
     let adjustment: LevelAdjustment?
-    /// The copy made for the models, which `remove()` deletes.
+    /// The copy made for the models, which `remove()` deletes with the folder made for it.
     let copy: URL?
 
     /// Room the copy needs beyond its own size, so raising a level never takes the space a recording, a download, or
     /// sync needs.
     static let spareBytes: Int64 = 1_000_000_000
+    /// The largest copy made, bytes: a WAV file holds at most 4,294,967,295, and this leaves room for its header. At
+    /// 32,000 bytes a second it's about 34 hours of audio; a longer recording is heard as stored.
+    static let maximumCopyBytes: Int64 = 4_000_000_000
     private static let log = Logger(subsystem: "local.daybook", category: "Processing")
 
     /// The recording as it is, unmeasured.
     static func unchanged(_ url: URL) -> LevelledAudio { LevelledAudio(url: url, adjustment: nil, copy: nil) }
 
     func remove() {
-        if let copy { try? FileManager.default.removeItem(at: copy) }
+        if let copy { try? FileManager.default.removeItem(at: copy.deletingLastPathComponent()) }
     }
 
-    /// Measures `url` and, when the rule calls for a gain and the volume has room (`freeSpace`, bytes free where the copy
-    /// goes; nil when unknown), writes the raised copy into `directory`'s processing scratch. A cancellation is passed
-    /// on, any copy begun removed first; any other failure leaves the recording as it is, so levels never stop a
-    /// recording from being processed.
+    /// Why a copy the rule calls for isn't made.
+    enum Declined: String, Equatable {
+        /// Over `maximumCopyBytes`.
+        case tooLong = "too long for a copy"
+        /// Less free than the copy and `spareBytes` (`free`: bytes free where it would go; nil when unknown, which stops nothing).
+        case noRoom = "no room for a copy"
+    }
+
+    /// Whether a copy of `frames` 16-bit samples is declined, and why.
+    static func declined(frames: Int, free: Int64?) -> Declined? {
+        let bytes = Int64(frames) * 2 + 65_536
+        if bytes > maximumCopyBytes { return .tooLong }
+        if let free, free < bytes + spareBytes { return .noRoom }
+        return nil
+    }
+
+    /// The recording's file protection class, when it can be read and is one a folder can be given.
+    static func protection(of url: URL) -> FileProtectionType? {
+        var url = url
+        url.removeAllCachedResourceValues()   // read now, not as an earlier look at this URL found it
+        guard let value = (try? url.resourceValues(forKeys: [.fileProtectionKey]))?.fileProtection else { return nil }
+        switch value {
+        case .complete: return .complete
+        case .completeUnlessOpen: return .completeUnlessOpen
+        case .completeUntilFirstUserAuthentication: return .completeUntilFirstUserAuthentication
+        case URLFileProtection.none: return FileProtectionType.none
+        default: return nil
+        }
+    }
+
+    /// Measures `url` and, when the rule calls for a gain and the copy isn't declined (`declined(frames:free:)`;
+    /// `freeSpace` is asked about the scratch folder), writes the raised copy into `directory`'s processing scratch. A
+    /// declined copy leaves the recording as it is, with its level and peak recorded and a gain of 0, and says why in the
+    /// log. A cancellation is passed on, any copy begun removed first; any other failure leaves the recording as it is,
+    /// unrecorded, so levels never stop a recording from being processed.
     static func prepare(_ url: URL, policy: SpeechLevel.Policy = .standard,
                         in directory: URL = FileManager.default.temporaryDirectory,
                         freeSpace: (URL) -> Int64? = { ModelSpace.available(at: $0).free }) throws -> LevelledAudio {
@@ -57,19 +92,20 @@ struct LevelledAudio: Sendable {
             return unchanged(url)
         }
         guard adjustment.gain > 0 else { return LevelledAudio(url: url, adjustment: adjustment, copy: nil) }
-        let needed = Int64(frames) * 2 + 65_536 + spareBytes
-        if let free = freeSpace(ProcessingScratch.root(in: directory)), free < needed {
-            log.notice("Input level left as recorded: \(free, privacy: .public) bytes free, \(needed, privacy: .public) needed")
-            return unchanged(url)
+        let free = freeSpace(ProcessingScratch.root(in: directory))
+        if let reason = declined(frames: frames, free: free) {
+            log.notice("Input level left as recorded, \(reason.rawValue, privacy: .public): \(frames, privacy: .public) samples, \(free ?? -1, privacy: .public) bytes free")
+            return LevelledAudio(url: url, adjustment: LevelAdjustment(speechLevel: adjustment.speechLevel, peak: adjustment.peak, gain: 0), copy: nil)
         }
-        var copy: URL?
+        var folder: URL?
         do {
-            let destination = try ProcessingScratch.file(extension: "wav", in: directory)
-            copy = destination
+            let made = try ProcessingScratch.folder(protection: protection(of: url), in: directory)
+            folder = made
+            let destination = made.appendingPathComponent(UUID().uuidString).appendingPathExtension("wav")
             try writeCopy(of: url, factor: adjustment.factor, to: destination)
             return LevelledAudio(url: destination, adjustment: adjustment, copy: destination)
         } catch {
-            if let copy { try? FileManager.default.removeItem(at: copy) }
+            if let folder { try? FileManager.default.removeItem(at: folder) }
             if error is CancellationError { throw error }
             return unchanged(url)
         }

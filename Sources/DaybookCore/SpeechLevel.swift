@@ -7,7 +7,9 @@ import Foundation
 ///
 /// The speech level is the 95th percentile of the recording's 100 ms RMS levels, counting only windows above −70 dBFS:
 /// pauses and silence don't pull it down (a whole-file mean would), and a click or a cough doesn't push it up (the peak
-/// would), as long as speech fills more than 5% of what's audible.
+/// would), as long as speech fills more than 5% of what's audible. When it doesn't (a line of noise, or a few words
+/// over a long hum), the 95th percentile is the noise; so a recording is raised only when that level stands at least
+/// 10 dB above the quietest tenth of it, as speech does over the pauses between words and stationary noise doesn't.
 public enum SpeechLevel {
     /// The rule's numbers.
     public struct Policy: Equatable, Sendable {
@@ -32,6 +34,14 @@ public enum SpeechLevel {
         public var silenceFloor = -70.0
         /// Less audible sound than this, seconds, isn't measured.
         public var minimumSoundSeconds = 1.0
+        /// The share of all windows, silent ones included, at or below the recording's quiet level.
+        public var quietPercentile = 0.1
+        /// The speech level must stand at least this far, dB, above the quiet level for the recording to be raised.
+        /// Stationary noise measures within about 1 dB between the two, and noise that ebbs and flows (a fan, traffic,
+        /// comfort noise) a few dB; speech, even quiet speech in a noisy room, 15 dB and more between syllables and the
+        /// gaps between them. 10 dB keeps a margin both ways, and is where speech no longer stands clear of the noise
+        /// it would be raised with.
+        public var minimumRange = 10.0
 
         public init() {}
 
@@ -44,9 +54,12 @@ public enum SpeechLevel {
         public var speech: Double?
         /// The highest sample magnitude in any channel; nil for digital silence.
         public var peak: Double?
+        /// The quiet level: `Policy.quietPercentile` of every window, silent ones included (−∞ for digital silence);
+        /// nil when there was no window, or too little sound to measure. Nil never lets a recording be raised.
+        public var quiet: Double?
 
-        public init(speech: Double?, peak: Double?) {
-            self.speech = speech; self.peak = peak
+        public init(speech: Double?, peak: Double?, quiet: Double? = nil) {
+            self.speech = speech; self.peak = peak; self.quiet = quiet
         }
     }
 
@@ -59,7 +72,7 @@ public enum SpeechLevel {
         let windowLength: Int
         private var sum = 0.0
         private var filled = 0
-        /// Each audible window's RMS level, dBFS.
+        /// Every window's RMS level, dBFS (−∞ for digital silence).
         private var levels: [Double] = []
         private var peak: Float = 0
 
@@ -84,8 +97,7 @@ public enum SpeechLevel {
                 sum += mixed * mixed
                 filled += 1
                 if filled == windowLength {
-                    let level = 10 * log10(sum / Double(windowLength))
-                    if level >= policy.silenceFloor { levels.append(level) }
+                    levels.append(10 * log10(sum / Double(windowLength)))
                     sum = 0
                     filled = 0
                 }
@@ -98,13 +110,17 @@ public enum SpeechLevel {
         /// The level of everything added so far. A last window shorter than the others isn't counted.
         public func measurement() -> Measurement {
             let peakLevel = peak > 0 ? 20 * log10(Double(peak)) : nil
-            guard !levels.isEmpty, Double(levels.count * windowLength) / sampleRate >= policy.minimumSoundSeconds else {
+            let sorted = levels.sorted()
+            // Audible windows are the loudest ones: those from the first at or above the floor.
+            let firstAudible = sorted.firstIndex { $0 >= policy.silenceFloor } ?? sorted.count
+            let audible = sorted.count - firstAudible
+            guard audible > 0, Double(audible * windowLength) / sampleRate >= policy.minimumSoundSeconds else {
                 return Measurement(speech: nil, peak: peakLevel)
             }
-            let sorted = levels.sorted()
-            // Nearest rank: the smallest level with at least `percentile` of the windows at or below it.
-            let rank = Int((policy.percentile * Double(sorted.count)).rounded(.up)) - 1
-            return Measurement(speech: sorted[min(sorted.count - 1, max(0, rank))], peak: peakLevel)
+            // Nearest rank: the smallest level with at least that share of the windows at or below it.
+            func rank(_ share: Double, of count: Int) -> Int { min(count - 1, max(0, Int((share * Double(count)).rounded(.up)) - 1)) }
+            return Measurement(speech: sorted[firstAudible + rank(policy.percentile, of: audible)], peak: peakLevel,
+                               quiet: sorted[rank(policy.quietPercentile, of: sorted.count)])
         }
     }
 
@@ -134,13 +150,15 @@ public enum SpeechLevel {
         return try await detachedWork(priority: Task.currentPriority) { try measure(contentsOf: url, policy: policy) }
     }
 
-    /// The gain for a measured recording: when its speech is below `actBelow`, enough to bring it to `target`, at most
-    /// `maximumGain`, and no more than keeps its peak at `peakCeiling`; never negative. Gains come in 0.1 dB steps,
-    /// rounded down (so the ceiling holds), and one under `minimumGain` is none.
+    /// The gain for a measured recording: when its speech is below `actBelow` and at least `minimumRange` above its
+    /// quiet level, enough to bring it to `target`, at most `maximumGain`, and no more than keeps its peak at
+    /// `peakCeiling`; never negative. Gains come in 0.1 dB steps, rounded down (so the ceiling holds), and one under
+    /// `minimumGain` is none. A recording left alone still has its level and peak recorded, with a gain of 0.
     public static func adjustment(for measurement: Measurement, policy: Policy = .standard) -> LevelAdjustment {
         func tenth(_ value: Double?) -> Double? { value.map { ($0 * 10).rounded() / 10 } }
         var gain = 0.0
-        if let speech = measurement.speech, let peak = measurement.peak, speech < policy.actBelow {
+        if let speech = measurement.speech, let peak = measurement.peak, let quiet = measurement.quiet, speech < policy.actBelow,
+           speech - quiet >= policy.minimumRange {
             let wanted = min(policy.target - speech, policy.maximumGain, policy.peakCeiling - peak)
             let stepped = (wanted * 10).rounded(.down) / 10
             if stepped >= policy.minimumGain { gain = stepped }
