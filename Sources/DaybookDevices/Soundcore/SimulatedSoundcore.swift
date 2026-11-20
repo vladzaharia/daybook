@@ -81,6 +81,17 @@ public final class SimulatedSoundcore {
     public var unansweredListings = 0
     /// The next this-many requests for the recording list are refused (both layouts).
     public var refusedListings = 0
+    /// Firmware variant: a page with no entries carries only this many bytes of the 8-byte trailer (4: the
+    /// recording in progress alone; 0: the count by itself).
+    public var emptyListTrailerBytes = 8
+    /// Firmware variant: the count field is the total across pages, not the page's own.
+    public var listCountIsTotal = false
+    /// Firmware variant: the last page with entries is cut off inside its final entry, with no trailer.
+    public var truncatesFinalPage = false
+    /// A later page (1 is the second) whose reply is bytes that aren't a list.
+    public var garbagePage: Int?
+    /// Entries whose IDs aren't Unix times, as a different protocol's would be.
+    public var listsImplausibleIDs = false
     /// Audio slices per notification.
     public var slicesPerPacket = 3
     /// Time between audio notifications; nil sends as fast as possible.
@@ -478,15 +489,21 @@ public final class SimulatedSoundcore {
         var listed = recordings
         if listsActiveRecording, let active = activeRecording { listed.insert(active, at: 0) }
         let entries = start < listed.count ? Array(listed[start..<min(listed.count, start + pageSize)]) : []
-        var data = Data([UInt8(entries.count & 255), UInt8(entries.count >> 8)])
-        for recording in entries {
-            data.append(littleEndian32(recording.id))
-            if extended { data.append(littleEndian32(recording.reportsEnd ? recording.id + recording.seconds : 0)) }
+        if garbagePage == page { return Data(repeating: 0xAB, count: 30) }
+        let count = listCountIsTotal ? listed.count : entries.count
+        var data = Data([UInt8(count & 255), UInt8(count >> 8)])
+        for (index, recording) in entries.enumerated() {
+            let id = listsImplausibleIDs ? UInt32(index + 1) * 7 : recording.id
+            data.append(littleEndian32(id))
+            if extended { data.append(littleEndian32(listsImplausibleIDs ? 3 : recording.reportsEnd ? recording.id + recording.seconds : 0)) }
             data.append(littleEndian32(recording.size))
         }
         let open = isRecording || keepsActiveWhilePaused
-        data.append(littleEndian32(open ? activeRecording?.id ?? 0 : 0))
-        data.append(Data(repeating: 0, count: 4))
+        var trailer = littleEndian32(open ? activeRecording?.id ?? 0 : 0)
+        trailer.append(Data(repeating: 0, count: 4))
+        if entries.isEmpty { trailer = trailer.prefix(emptyListTrailerBytes) }
+        data.append(trailer)
+        if truncatesFinalPage, !entries.isEmpty, start + pageSize >= listed.count { data = data.prefix(data.count - trailer.count - 5) }
         return data
     }
 
