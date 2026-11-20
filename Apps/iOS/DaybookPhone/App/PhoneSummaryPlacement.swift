@@ -303,11 +303,10 @@ final class PhoneSummaryPlacement {
 
     /// Every way this conversation's summary can be made again now (`SummarizeAgainChoices`): this iPhone's own summarizer
     /// when it can run, and the cloud model while it's on offer for this conversation (this iPhone's own switches).
-    /// Another Mac is never named: a Summarize request goes to whichever Mac takes it.
     func summarizeAgainChoices(for meeting: Meeting) -> [SummarizeAgainChoice] {
         let local = (runHere != nil ? localSummarizer : nil).flatMap { $0.canSummarize ? $0 : nil }
             .map { [SummarizeAgainChoices.LocalModel(id: $0.model, name: modelName?($0.model) ?? $0.model)] } ?? []
-        return SummarizeAgainChoices.rows(for: meeting, local: local, defaultLocal: local.first?.id, macs: [], cloud: cloudOffer, preferences: preferences)
+        return SummarizeAgainChoices.rows(for: meeting, local: local, defaultLocal: local.first?.id, cloud: cloudOffer, preferences: preferences)
     }
 
     /// Summarizes again as the person chose: here as Summarize Again does, or in the cloud as accepting a cloud Upgrade does

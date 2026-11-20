@@ -45,17 +45,6 @@ final class SpeechRoutingTests: XCTestCase {
         XCTAssertEqual(configuration.languageFallbackModel, ModelReference("whisper/large-v3-turbo", revision: "rev-t"))
     }
 
-    func testBehaviorASummaryMadeWithAnotherModelLeavesTheChosenOneAlone() throws {
-        let state = try state()
-        let chosen = state.summaryModel
-        state.installedRevisions = [chosen: "rev-a", "other/summary": "rev-b"]
-        let job = state.makeJob(meetingID: UUID(), mode: .summaryOnly, summaryModelID: "other/summary")
-        XCTAssertEqual(job.summaryModelID, "other/summary")
-        XCTAssertEqual(job.revisions?["other/summary"], "rev-b")
-        XCTAssertEqual(state.summaryModel, chosen, "the person's model in Settings is unchanged")
-        XCTAssertEqual(state.makeJob(meetingID: UUID(), mode: .summaryOnly).summaryModelID, chosen)
-    }
-
     func testAChosenLanguageTheModelDoesntCoverGoesToTheOtherLanguagesModel() throws {
         let state = try state()
         state.transcriptionModel = "parakeet/ultra"

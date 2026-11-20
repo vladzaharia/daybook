@@ -51,12 +51,12 @@ switch is on (above). Within it:
 - **Use the Cloud**, an Upgrade to the cloud's model, and **Always**, as before.
 - **Summarize Again with the cloud's model.** Summarize Again on the page's foot is a menu when there is more than one way
   to redo the summary (`SummarizeAgainChoices`): this device's installed summary models (the chosen one first; the Mac
-  runs another for that summary only, Settings keeps its choice), then the cloud's model, "With Claude Sonnet 5.5". The
+  runs another for that summary only, Settings keeps its choice), then the cloud's model, "With Claude Sonnet 5.5". A model that goes between the menu and the run (uninstalled, or no longer fits) runs the chosen model instead, never a download. The
   cloud row is there only inside the privacy rule (a key, a policy that isn't Never, this device's switch for the
   conversation's placement, a placement or kind this version reads); otherwise it is absent. Choosing it is the person's
   choice, sent as Use the Cloud is (`AppState.summarizeInCloud`, `PhoneSummaryPlacement` due then Use the Cloud), which
   checks the conversation again as it sends. Settings › Cloud holds one chosen model, so there is one cloud row, not one
-  per provider. The iPhone lists its own summarizer and the cloud; it never names a Mac.
+  per provider. The iPhone lists its own summarizer and the cloud. Naming a Mac is a follow-up: it needs a target on the request.
 - **Only while the countdown is seen.** A countdown that ends in the cloud, whatever brought it there, runs only while the
   person can see it (`SummaryPlacements.countdownsAreSeen`). On the Mac (`CountdownVisibility`): its login session is the
   active one (`NSWorkspace` session notifications), the screen is unlocked (`com.apple.screenIsLocked`/`Unlocked`) and

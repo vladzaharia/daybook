@@ -14,6 +14,16 @@ import Foundation
 /// - `cloud`: its summary was made here with Gemma 4 E2B, and Settings › Cloud has an in-memory Anthropic key
 ///   (`CloudSetup.demo`): "Upgrade summary with Claude Sonnet 5.5".
 /// - `waiting`: `mac`, accepted: "Waiting for Vlad's MacBook Pro to upgrade the transcript".
+/// A summarizer that is only there to be offered.
+private struct DemoSummarizer: LocalSummarizing {
+    let model = "gemma-4/e2b-4bit"
+    let canSummarize = true
+    func summarize(_ meeting: Meeting, template: SummaryTemplate?, vocabulary: [String],
+                   progress: @escaping @Sendable (Double) -> Void) async throws -> SummaryProcessingOutput {
+        throw CancellationError()
+    }
+}
+
 @MainActor
 enum PhoneUpgradeDemo {
     static let scenario = LaunchOptions.value(after: "--upgrade-demo", in: CommandLine.arguments)
@@ -51,6 +61,9 @@ enum PhoneUpgradeDemo {
             model.cloudSummaries = CloudSetup.demo(providers: [.anthropic], defaults: .standard)
             model.placement.cloud = model.cloudSummaries
             model.placement.cloudSummarizer = PhonePlacementDemo.StandIn()
+            // This iPhone summarizes itself too, so Summarize Again at the page's foot is a menu: this iPhone's model, and the cloud's.
+            model.placement.localSummarizer = DemoSummarizer()
+            model.placement.runHere = { _, _ in }
         default:
             break
         }

@@ -10,14 +10,14 @@ final class SummarizeAgainChoicesTests: XCTestCase {
 
     private func work(_ placement: LibraryPlacement = .work) -> Meeting { Meeting(title: "Weekly", status: .ready, placement: placement) }
 
-    private func rows(_ meeting: Meeting, local: [SummarizeAgainChoices.LocalModel] = [], macs: [SummarizeAgainChoices.Mac] = [],
+    private func rows(_ meeting: Meeting, local: [SummarizeAgainChoices.LocalModel] = [],
                       cloud: CloudModel?, _ preferences: CloudSummaryPreferences = .init()) -> [SummarizeAgainChoice] {
-        SummarizeAgainChoices.rows(for: meeting, local: local, defaultLocal: "gemma/e4b", macs: macs, cloud: cloud, preferences: preferences)
+        SummarizeAgainChoices.rows(for: meeting, local: local, defaultLocal: "gemma/e4b", cloud: cloud, preferences: preferences)
     }
 
-    func testBehaviorOrdersThisDeviceThenMacsThenCloudWithTheDefaultFirst() {
-        let all = rows(work(), local: [big, small], macs: [.init(id: "m1", name: "Studio Mac", model: "Gemma 4 26B A4B")], cloud: cloud)
-        XCTAssertEqual(all.map(\.title), ["With Gemma 4 E4B", "With Gemma 4 26B A4B", "With Gemma 4 26B A4B on Studio Mac", "With Claude Sonnet 5.5"])
+    func testBehaviorOrdersThisDeviceThenCloudWithTheDefaultFirst() {
+        let all = rows(work(), local: [big, small], cloud: cloud)
+        XCTAssertEqual(all.map(\.title), ["With Gemma 4 E4B", "With Gemma 4 26B A4B", "With Claude Sonnet 5.5"])
         XCTAssertEqual(all.first?.place, .thisDevice(model: "gemma/e4b"))
     }
 
@@ -53,9 +53,5 @@ final class SummarizeAgainChoicesTests: XCTestCase {
     func testBehaviorAModelNotInstalledIsNotOffered() {
         let titles = rows(work(), local: [small], cloud: cloud).map(\.title)
         XCTAssertFalse(titles.contains("With Gemma 4 26B A4B"))
-    }
-
-    func testBehaviorAMacWithoutAKnownModelIsNamedByItsName() {
-        XCTAssertEqual(rows(work(), macs: [.init(id: "m1", name: "Studio Mac")], cloud: nil).map(\.title), ["On Studio Mac"])
     }
 }

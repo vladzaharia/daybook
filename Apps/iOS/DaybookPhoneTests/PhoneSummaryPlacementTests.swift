@@ -792,4 +792,92 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         deinit { task?.cancel() }
         var received: [LinkSummaryChoice] { lock.withLock { choices } }
     }
+
+    // MARK: Summarize Again's menu
+
+    private func cloudRow(_ rig: Rig, _ id: UUID) throws -> SummarizeAgainChoice? {
+        rig.placement.summarizeAgainChoices(for: try XCTUnwrap(rig.library.meeting(id))).first { if case .cloud = $0.place { true } else { false } }
+    }
+
+    func testBehaviorSummarizeAgainOffersTheCloudOnlyInsideThePrivacyRule() async throws {
+        let none = try await rig(local: Local(), macSeen: false)
+        let a = transcribed(none.library)
+        XCTAssertNil(try cloudRow(none, a), "No key")
+        XCTAssertEqual(none.placement.summarizeAgainChoices(for: try XCTUnwrap(none.library.meeting(a))).count, 1, "Its own summarizer alone: no menu")
+
+        let rig = try await rig(cloud: Cloud(models: [sonnet]), local: Local(), macSeen: false)
+        let id = transcribed(rig.library)
+        XCTAssertEqual(rig.placement.summarizeAgainChoices(for: try XCTUnwrap(rig.library.meeting(id))).map(\.title),
+                       ["With gemma-4/e2b-4bit", "With Claude Sonnet 5.5"])
+        var preferences = rig.cloud.preferences
+        preferences.policy = .never
+        rig.cloud.preferences = preferences
+        XCTAssertNil(try cloudRow(rig, id), "Never")
+        preferences.policy = .ask
+        preferences.placements.set(.work, allowed: false)
+        rig.cloud.preferences = preferences
+        rig.library.update(id) { $0.placement = .work }
+        XCTAssertNil(try cloudRow(rig, id), "Work's switch is off")
+        preferences.placements.set(.work, allowed: true)
+        rig.cloud.preferences = preferences
+        rig.library.update(id) { $0.placement = .personal }
+        XCTAssertNil(try cloudRow(rig, id), "Personal is off by default")
+        preferences.placements.set(.personal, allowed: true)
+        rig.cloud.preferences = preferences
+        XCTAssertNotNil(try cloudRow(rig, id))
+        preferences.placements = try JSONDecoder().decode(CloudPlacements.self, from: Data("[1]".utf8))
+        rig.cloud.preferences = preferences
+        XCTAssertNil(try cloudRow(rig, id), "A setting this version can't read never goes")
+    }
+
+    func testBehaviorSummarizeAgainWithTheCloudSendsAsTheCloudUpgradeDoes() async throws {
+        let cloud = Cloud(models: [sonnet])
+        let rig = try await rig(cloud: cloud, macSeen: false)
+        let id = transcribed(rig.library)
+        await rig.placement.summarizeAgain(id, as: try XCTUnwrap(try cloudRow(rig, id)))
+        try await waitUntil("the summary") { rig.library.meeting(id)?.summary != nil }
+        XCTAssertEqual(cloud.asked, [id])
+        XCTAssertEqual(rig.library.meeting(id)?.summary?.origin.cloudModel, "Claude Sonnet 5.5")
+        XCTAssertEqual(rig.library.meeting(id)?.summary?.cloudReason, .chosen)
+    }
+
+    /// Chosen, then the conversation stops qualifying before it sends: nothing is sent, and a Mac is left it.
+    private func stopsQualifying(_ name: String, change: (Rig, UUID) async -> Void) async throws {
+        let cloud = Cloud(models: [sonnet])
+        let rig = try await rig(cloud: cloud, macSeen: true)
+        let id = transcribed(rig.library, name)
+        rig.library.update(id) { $0.placement = .work }
+        let choice = try XCTUnwrap(try cloudRow(rig, id))
+        await rig.placement.summaryIsDue(id)
+        await change(rig, id)
+        rig.placement.perform(.useCloud, for: id)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertTrue(cloud.asked.isEmpty, "\(name): never sent")
+        XCTAssertNil(rig.placement.runs[id], name)
+        XCTAssertEqual(choice.title, "With Claude Sonnet 5.5")
+    }
+
+    func testBehaviorAConversationMovedToPersonalBeforeTheSendIsNotSent() async throws {
+        try await stopsQualifying("Moved") { rig, id in rig.library.update(id) { $0.placement = .personal } }
+    }
+
+    func testBehaviorASwitchTurnedOffBeforeTheSendIsNotSent() async throws {
+        try await stopsQualifying("Switched") { rig, _ in
+            var preferences = rig.cloud.preferences
+            preferences.placements.set(.work, allowed: false)
+            rig.cloud.preferences = preferences
+        }
+    }
+
+    func testBehaviorNeverSetBeforeTheSendIsNotSent() async throws {
+        try await stopsQualifying("Never") { rig, _ in
+            var preferences = rig.cloud.preferences
+            preferences.policy = .never
+            rig.cloud.preferences = preferences
+        }
+    }
+
+    func testBehaviorTheKeyRemovedBeforeTheSendIsNotSent() async throws {
+        try await stopsQualifying("Key") { rig, _ in await rig.cloud.removeKey(for: .anthropic) }
+    }
 }

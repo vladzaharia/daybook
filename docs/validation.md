@@ -4625,7 +4625,21 @@ A reported call's far side (computer audio) was barely picked up while the micro
 
 ## 2026-11-20: Summarize Again menu
 
-Verified: `SummarizeAgainChoicesTests` (order, one option is no menu, each cloud gate, Personal off by default, unreadable
-placement), `SpeechRoutingTests` (a per-run summary model leaves the chosen one alone), SharedNameTests, MotionAuditTests,
-`swift build`. Not verified: the open menu in the apps (no real key, no pictures), a cloud send (never against a provider),
-the iPhone's menu on a device.
+Verified (simulated: fake inference, fake cloud, fake provider server; no network, no models):
+- `SummarizeAgainChoicesTests` (order, one option is no menu, each cloud gate).
+- `SummarizeAgainProcessingTests` on the Mac: the app-level list for no key, Never, a switch off, Personal by default, an
+  unreadable placement, a model not installed, one that no longer fits; the cloud row queues what Use the Cloud queues
+  and sends as the person's choice; a conversation moved to Personal, its switch turned off, Never set, or the key removed
+  between choosing and sending is not sent and is summarized here; the request is byte-identical to a cloud Upgrade's;
+  another installed model runs for that job only and Settings keeps its choice; one that went falls back to the chosen.
+- `PhoneSummaryPlacementTests` (iPhone simulator, `scripts/build-ios.sh --test --test-arg
+  -only-testing:DaybookPhoneTests/PhoneSummaryPlacementTests`): the same list gates, the cloud send, and moved, switched
+  off, Never, and key removed before the send.
+- Mutations: each key test fails with its guard removed (the list's `allowsCloud`; the send-time checks, which are layered
+  (the planner, `summarizeInCloud`, the iPhone's `run`), so the send tests fail only with them removed together; the key
+  removed test passes with the placement checks alone removed, since the key check is another layer).
+- One iPhone picture of the closed menu (Summarize Again with its chevron, with this iPhone's model and the cloud's).
+
+Not verified: the open menu in either app (a simulator can't open it from the command line here); a Mac picture (the
+unbundled debug build drew no library window under `--snapshot`); a send to a real provider; the iPhone menu on a device.
+Naming a Mac, and the app and context menus, are follow-ups.

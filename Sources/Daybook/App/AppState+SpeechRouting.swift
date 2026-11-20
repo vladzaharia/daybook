@@ -115,10 +115,14 @@ extension AppState {
         var preferences = processingPreferences
         preferences.speakerModelID = route.speakerModel
         preferences.transcriptionLanguage = route.transcription.language
-        // A summary the person asked to make with another installed model: that job only (its revision frozen too).
+        // A summary the person asked to make with another installed model: that job only (its revision frozen too). One
+        // that went (uninstalled, or no longer fits) since the menu was drawn runs the chosen model, never a download.
         var revisions = frozenModelRevisions
-        if let summaryModelID, let revision = installedRevisions[summaryModelID] { revisions[summaryModelID] = revision }
-        return ProcessingJob(meetingID: meetingID, mode: mode, transcriptionModelID: route.transcription.model, summaryModelID: summaryModelID ?? summaryModel,
+        let usable = summaryModelID.flatMap { id in
+            installedModels.contains(id) && modelCatalog.model(id).map { LiveModelChoices.fitsMemory($0, physicalMemory: physicalMemory) } == true ? id : nil
+        }
+        if let usable, let revision = installedRevisions[usable] { revisions[usable] = revision }
+        return ProcessingJob(meetingID: meetingID, mode: mode, transcriptionModelID: route.transcription.model, summaryModelID: usable ?? summaryModel,
                              detectSpeakers: route.findsSpeakers, preferences: preferences, templateID: templateID,
                              revisions: revisions, voiceEmbeddingModelID: route.voiceEmbedder,
                              languageFallbackModelID: route.transcription.fallback, smallTasksModelID: smallTasksModel, photoModelID: photoModel?.id,

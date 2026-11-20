@@ -51,6 +51,10 @@ enum UpgradeDemo {
         case .cloud:
             state.cloud = CloudSetup.demo(providers: [.anthropic], defaults: LaunchOptions.defaults)
             state.cloudSummarizer = PlacementDemo.StandIn()
+            // Two summary models here, so Summarize Again at the page's foot is a menu: Gemma 4 E4B and the 12B, and the cloud's.
+            state.summaryModel = "gemma-4/12b-4bit"
+            state.installedModels.formUnion(["gemma-4/12b-4bit", "gemma-4/e4b-4bit"])
+            state.physicalMemory = 64 << 30
         }
     }
 }

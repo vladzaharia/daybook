@@ -81,12 +81,12 @@ extension AppState {
 extension AppState {
     /// Every way this conversation's summary can be made again now (`SummarizeAgainChoices`): the summary models installed
     /// here that fit this Mac (the chosen one first), and the cloud model Settings › Cloud resolves to while the cloud is
-    /// on offer for this conversation. This Mac hands summaries to no other Mac.
+    /// on offer for this conversation.
     func summarizeAgainChoices(for meeting: Meeting) -> [SummarizeAgainChoice] {
         let local = modelCatalog.models(for: .summarization).filter {
             installedModels.contains($0.key) && LiveModelChoices.fitsMemory($0, physicalMemory: physicalMemory)
         }.map { SummarizeAgainChoices.LocalModel(id: $0.key, name: $0.name) }
-        return SummarizeAgainChoices.rows(for: meeting, local: local, defaultLocal: summaryModel, macs: [],
+        return SummarizeAgainChoices.rows(for: meeting, local: local, defaultLocal: summaryModel,
                                           cloud: hasCloudSetup && cloudOnOffer ? cloud.resolved?.model : nil, preferences: hasCloudSetup ? cloud.preferences : CloudSummaryPreferences())
     }
 
@@ -99,8 +99,6 @@ extension AppState {
             processor.enqueue(id, mode: .summaryOnly, summaryModelID: model == summaryModel ? nil : model)
         case .cloud:
             summarizeInCloud(id)
-        case .mac:
-            break
         }
     }
 }
