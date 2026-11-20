@@ -1,8 +1,9 @@
+import AVFoundation
 import Foundation
 
 /// How loud a recording's speech is, and the one gain that brings speech far quieter than a normal level up to it before
-/// the speech models hear it (docs/architecture.md, "Input levels"). Pure: the same samples give the same answer on every
-/// device, block boundaries or not.
+/// the speech models hear it (docs/architecture.md, "Input levels"). The measure is pure: the same samples give the same
+/// answer on every device, block boundaries or not. `Meter` takes samples as they come; `measure(url:)` reads a file.
 ///
 /// The speech level is the 95th percentile of the recording's 100 ms RMS levels, counting only windows above −70 dBFS:
 /// pauses and silence don't pull it down (a whole-file mean would), and a click or a cough doesn't push it up (the peak
@@ -105,6 +106,32 @@ public enum SpeechLevel {
             let rank = Int((policy.percentile * Double(sorted.count)).rounded(.up)) - 1
             return Measurement(speech: sorted[min(sorted.count - 1, max(0, rank))], peak: peakLevel)
         }
+    }
+
+    /// Measures the recording at `url` at its own sample rate, block by block so memory stays bounded, stopping with
+    /// `CancellationError` between blocks once the task is cancelled. For work already off the main actor.
+    public static func measure(contentsOf url: URL, policy: Policy = .standard) throws -> Measurement {
+        let file = try AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false)
+        let format = file.processingFormat
+        guard format.sampleRate > 0, format.channelCount > 0,
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 65_536) else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        var meter = Meter(sampleRate: format.sampleRate, policy: policy)
+        while file.framePosition < file.length {
+            try Task.checkCancellation()
+            try file.read(into: buffer, frameCount: AVAudioFrameCount(min(Int64(buffer.frameCapacity), file.length - file.framePosition)))
+            let frames = Int(buffer.frameLength)
+            guard frames > 0, let data = buffer.floatChannelData else { break }
+            meter.add((0..<Int(format.channelCount)).map { Array(UnsafeBufferPointer(start: data[$0], count: frames)) })
+        }
+        return meter.measurement()
+    }
+
+    /// The same, off the caller's actor at the caller's priority, and cancelled with the caller.
+    public static func measure(url: URL, policy: Policy = .standard) async throws -> Measurement {
+        try Task.checkCancellation()
+        return try await detachedWork(priority: Task.currentPriority) { try measure(contentsOf: url, policy: policy) }
     }
 
     /// The gain for a measured recording: when its speech is below `actBelow`, enough to bring it to `target`, at most

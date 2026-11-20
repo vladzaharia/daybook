@@ -75,6 +75,34 @@ final class SpeechLevelTests: XCTestCase {
         XCTAssertEqual(measured(speech), whole, "measured again, the same")
     }
 
+    // MARK: Reading a file
+
+    func testBehaviorAFileMeasuresAsItsSamplesDoOffTheCallersActor() async throws {
+        let speech = SyntheticAudio.syllables(level: -44, seconds: 6, floor: -80)
+        let url = makeTemporaryFolder().appendingPathComponent("speech.caf")
+        try SyntheticAudio.write(speech, to: url)
+        let expected = measured(speech)
+        XCTAssertEqual(try SpeechLevel.measure(contentsOf: url), expected)
+        let fromMain = try await Task { @MainActor in try await SpeechLevel.measure(url: url) }.value
+        XCTAssertEqual(fromMain, expected, "a view can ask without reading on the main actor")
+    }
+
+    func testBehaviorMeasuringAFileStopsWhenItsTaskIsCancelled() async throws {
+        let url = makeTemporaryFolder().appendingPathComponent("speech.caf")
+        try SyntheticAudio.write(SyntheticAudio.syllables(level: -44, seconds: 6), to: url)
+        for waits in [false, true] {
+            let task = Task.detached { () async throws -> SpeechLevel.Measurement in
+                while !Task.isCancelled { await Task.yield() }
+                return waits ? try await SpeechLevel.measure(url: url) : try SpeechLevel.measure(contentsOf: url)
+            }
+            task.cancel()
+            do {
+                _ = try await task.value
+                XCTFail("measured after being cancelled (\(waits ? "async" : "sync"))")
+            } catch is CancellationError {}
+        }
+    }
+
     // MARK: Choosing the gain
 
     private func gain(speech: Double?, peak: Double?) -> Double {
