@@ -4574,6 +4574,14 @@ Stop is the same 44 pt height as Bookmark and the page controls (it was a 62 pt 
 - **Launch hang found with it.** `PhoneNotices.app`'s `remove` called `removePendingNotificationRequests` on the main actor at launch (`PhoneAppModel.launch()` → `recordingNoLongerPaused()`), a synchronous XPC to `usernotificationsd` that never returned in a simulator clone, so the app showed an empty library and no recording. It now runs off the main thread.
 - **Not checked:** the chips against a real hand writing on the first line (the simulator has no Pencil); a chip expanded over the page's top covers what is written there until it collapses.  The ruling is unchanged (first rule 56 pt down, 28 pt apart), so existing pages' strokes still sit on their rules.
 
+## Timing in `CascadeDuringImportTests` (2026-11-19)
+
+`testACascadeStartedMidImportStartsTheRecorderWithinItsDeadline` failed on CI at its wait for "the import, again from its start" (30 s, which is its 15 s stretched by `DAYBOOK_TEST_TIMEOUT_SCALE=2`), then passed on re-run. Its rig gave the simulated recorder an 800 ms stall and a 3 s request deadline. On a starved runner a transfer that goes 800 ms without audio fails as stalled, and the import isn't tried again, so the test waited for a file that never came (the same cause `docs/release.md`, "CI under load", records for `SoundcoreSharedRecordingTests`).
+
+- **Changed in the test only:** the stall and request deadlines are 5 s and, with the cascade's connect, confirm and inventory deadlines, stretch with the test scale. The Start's own deadline stays 3 s unscaled, so "the Start comes within its deadline, ahead of the import" still means what it did. The wait now says what it last saw (imports, queue, failures).
+- **Not reproduced locally:** ten to ninety busy loops on an 18-core Mac, with the stall cut to 150 ms, never made this test fail, so the stall as the cause is from the code and the documented starved-night failures, not from a local failure. The fixed test passed 20 runs in a row under 60 busy loops.
+- **Left alone:** `testLiveAudioThatLosesAPacketKeepsWhatArrivedWithTheGapAsSilence` (CI: 0.5975 s saved, no gap recorded). It ended the capture once the recorder had *sent* 40 notifications, while audio it had sent was still on its way, so the saved part was short and the packets after the lost one had not arrived to show the gap. Open PR #69 already waits for what the captioner was *fed* instead, and stretches the rig's deadlines.
+
 ## Sketches on the summary (2026-11-19)
 
 A summary section shows the sketches it drew on beside its photos, on the Mac and the iPhone (docs/notebook.md, "In summaries").

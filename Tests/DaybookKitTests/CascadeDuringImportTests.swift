@@ -47,8 +47,12 @@ final class CascadeDuringImportTests: XCTestCase {
         hooks.makeCaptioner = { nil }
         environment.liveCaptions = hooks
         var timing = SoundcoreTiming()
-        timing.request = .seconds(3)
-        timing.stall = .milliseconds(800)
+        // A deadline a starved machine misses is, to the code under test, a real failure: a transfer that stalls fails
+        // and its import isn't tried again, so the test would wait for a file that never comes (docs/release.md,
+        // "CI under load"). No test here runs a stall or a request out on purpose, so both are seconds long, stretched
+        // with the tests' waits (DAYBOOK_TEST_TIMEOUT_SCALE).
+        timing.request = Self.stretched(.seconds(5))
+        timing.stall = Self.stretched(.seconds(5))
         timing.settle = .milliseconds(20)
         timing.recordConfirm = .milliseconds(1_500)
         timing.idleRelease = .seconds(600)
@@ -75,15 +79,19 @@ final class CascadeDuringImportTests: XCTestCase {
         session.activate()
         session.libraryChanged([], ready: true)
         let cascade = RecorderCascade(sessions: { [session] })
-        cascade.timing.connect = .seconds(3)
-        cascade.timing.confirm = .seconds(3)
-        cascade.timing.inventory = .seconds(2)
+        // The Start's deadline stays the test's yardstick (the Start comes within it, not after the import), so it
+        // stretches with the scale rather than growing.
+        cascade.timing.connect = Self.stretched(.seconds(3))
+        cascade.timing.confirm = Self.stretched(.seconds(3))
+        cascade.timing.inventory = Self.stretched(.seconds(2))
         cascade.timing.poll = .milliseconds(20)
         addTeardownBlock { session.shutDown() }
         connection.connect()
         try await waitUntil("connected and listed") { connection.isInventoryCurrent }
         return Rig(session: session, connection: connection, device: device, cascade: cascade, imports: imports)
     }
+
+    private static func stretched(_ deadline: Duration) -> Duration { deadline * TestTiming.scale }
 
     private func starts(_ device: SimulatedSoundcore) -> Int {
         device.received.filter { $0.type == 0x18 && $0.command == 0x82 }.count
@@ -107,7 +115,10 @@ final class CascadeDuringImportTests: XCTestCase {
         XCTAssertTrue(rig.device.isRecording)
         XCTAssertEqual(starts(rig.device), 1)
 
-        try await waitUntil("the import, again from its start", timeout: 15) {
+        try await waitUntil("the import, again from its start", timeout: 15, state: {
+            "imports \(rig.imports.all.map(\.identity.recordingID)); queue \(rig.session.queue.current == nil ? "idle" : "importing"), "
+                + "\(rig.session.queue.waiting.count) waiting; failures \(rig.session.failures.map(\.message))"
+        }) {
             rig.imports.all.contains { !$0.identity.recordingID.hasSuffix("~live") } && rig.session.queue.current == nil
         }
         XCTAssertTrue(rig.session.failures.isEmpty)
