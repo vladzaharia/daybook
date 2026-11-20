@@ -48,6 +48,11 @@ extension LibraryController {
         return { [weak self] in self?.update(id) { $0.restorePage(pageID) } }
     }
 
+    /// Keeps a page out of summaries, or lets them use it again.
+    public func setPageHiddenFromSummary(_ pageID: UUID, hidden: Bool, in id: UUID) {
+        update(id) { $0.setPageHiddenFromSummary(pageID, hidden: hidden) }
+    }
+
     /// Puts a deleted page back.
     public func restorePage(_ pageID: UUID, in id: UUID) {
         update(id) { $0.restorePage(pageID) }

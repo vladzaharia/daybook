@@ -243,4 +243,17 @@ final class NotebookConversationTests: XCTestCase {
         await session.settle(.close)
         XCTAssertEqual(controller.meeting(id)?.page(page.id)?.drawing?.sha256, String(repeating: "ab", count: 32), "the conversation's strokes are untouched")
     }
+
+    func testBehaviorLeavingAPageOutOfSummariesIsKeptInTheLibraryAndUndone() async throws {
+        let model = try makeModel()
+        let (id, page, drafts) = try await conversationWithPage(model)
+        let notebook = NotebookModel.conversation(id, model: model, player: PlaybackController(), provider: LocalAudioProvider(library: model.library), drafts: drafts)
+        let session = NotebookSession()
+        session.bind(notebook)
+        session.setHiddenFromSummary(page, true)
+        XCTAssertEqual(model.library.controller.meeting(id)?.page(page)?.hiddenFromSummary, true)
+        XCTAssertEqual(notebook.pages().first?.hiddenFromSummary, true, "the notebook's page shows it")
+        session.setHiddenFromSummary(page, false)
+        XCTAssertNil(model.library.controller.meeting(id)?.page(page)?.hiddenFromSummary)
+    }
 }

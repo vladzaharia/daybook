@@ -245,8 +245,8 @@ struct RecorderPieces {
                         action: actions.bookmark)
     }
 
-    func stop(_ metrics: RecorderControlMetrics, glyph: Bool = false) -> some View {
-        StopControl(isSaving: state.isSaving, metrics: metrics, glyph: glyph, shortcut: state.keyboardShortcuts, elapsed: { state.clock.now },
+    func stop(_ metrics: RecorderControlMetrics, glyph: Bool = false, flat: Bool = false) -> some View {
+        StopControl(isSaving: state.isSaving, metrics: metrics, glyph: glyph, flat: flat, shortcut: state.keyboardShortcuts, elapsed: { state.clock.now },
                     action: actions.stop)
             .allowsHitTesting(state.stopTakesTouch)
     }

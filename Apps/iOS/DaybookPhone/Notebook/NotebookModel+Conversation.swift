@@ -175,7 +175,8 @@ extension NotebookModel {
                 guard let meeting = library.meeting(id), let target = meeting.playbackTarget(of: passage, on: page) else { return }
                 player.play(target, in: meeting, provider: provider)
             },
-            origin: .thisIPhone(installation: model.library.installationID))
+            origin: .thisIPhone(installation: model.library.installationID),
+            setHiddenFromSummary: { library.setPageHiddenFromSummary($0, hidden: $1, in: id) })
     }
 }
 
