@@ -313,4 +313,166 @@ final class SpeakerProfileLibraryTests: XCTestCase {
             await !coordinator.refresh() && !activeVoiceprints(library).contains { $0.meetingID == three }
         }
     }
+
+    // MARK: The profile that is the person
+
+    func testBehaviorMarkingASpeakerAsMeNamesTheOwnerOfOtherCallsUntilThePersonSaysNot() async throws {
+        let library = try await library("Mac", synced: false)
+        let one = conversation("one", in: library, daysAgo: 20, [("me", mine(70), 200)])
+        library.renameSpeaker("one:me", to: "Vlad", in: one)
+        await settle(library)
+        let vlad = try XCTUnwrap(library.speakerProfiles.first { $0.name == "Vlad" })
+        XCTAssertNil(library.ownerProfileID)
+        XCTAssertFalse(library.markSpeakerAsMe(["nobody"], in: one), "no such speaker")
+
+        // A call fused before the choice was made, with a voice that isn't Vlad's.
+        let call = conversation("call", in: library, daysAgo: 1, [("mic", SyntheticVoice.near(other, similarity: 0.95, seed: 71), 300)])
+        library.update(call) { meeting in
+            let track = meeting.speakers[0].sourceTrackID
+            meeting.speakers.append(Speaker(id: "owner", name: "Me", sourceTrackID: track))
+            meeting.fusionSummary = FusionSummary(sources: [], words: 100, corroboratedWords: 0, disputedWords: 0, ownerSpeakerID: "owner",
+                                                  speakerMappings: [FusionSpeakerMapping(sourceSpeakerID: "call:mic", trackID: track ?? UUID(),
+                                                                                         speakerID: "owner", reason: .owner, share: 0.9)])
+        }
+        await settle(library)
+        XCTAssertEqual(name(library, call, "owner"), "Me")
+
+        XCTAssertTrue(library.markSpeakerAsMe(["one:me"], in: one))
+        XCTAssertEqual(library.ownerProfileID, vlad.id)
+        await settle(library)
+        XCTAssertEqual(name(library, call, "owner"), "Vlad", "picked up on the next pass, without fusing again")
+        XCTAssertEqual(library.meeting(call)?.speakerIdentity("owner")?.profileID, vlad.id)
+
+        // Not Vlad takes it back, and it stays back.
+        library.rejectSpeakerProfile("owner", in: call)
+        await settle(library)
+        XCTAssertEqual(name(library, call, "owner"), "Me")
+
+        // Clearing: no one is me, and the choice stays a choice.
+        library.setOwnerProfile(nil)
+        XCTAssertNil(library.ownerProfileID)
+        XCTAssertNotNil(library.metadata.choice(.ownerProfile))
+        // The profile deleted: no one is me either.
+        library.setOwnerProfile(vlad.id)
+        library.deleteSpeakerProfile(vlad.id)
+        XCTAssertNil(library.ownerProfileID)
+    }
+
+    func testBehaviorTheOwnerProfileSyncsBetweenDevicesTheLaterChangeWinning() async throws {
+        let a = try await library("A"), b = try await library("B")
+        let id = UUID()
+        a.setOwnerProfile(id, at: Date(timeIntervalSince1970: 1_000))
+        await sync(a); await sync(b)
+        XCTAssertEqual(b.metadata.ownerProfileSelection, id)
+        b.setOwnerProfile(nil, at: Date(timeIntervalSince1970: 2_000))
+        await sync(b); await sync(a)
+        XCTAssertNil(a.metadata.ownerProfileSelection)
+        XCTAssertNotNil(a.metadata.choice(.ownerProfile))
+    }
+
+    /// A library with Vlad (named, me not chosen yet) and Bob, and a conversation with one speaker to mark.
+    private func markingLibrary() async throws -> (library: LibraryController, vlad: SpeakerProfile, bob: SpeakerProfile) {
+        let library = try await library("Mac", synced: false)
+        let one = conversation("one", in: library, daysAgo: 30, [("me", mine(80), 200)])
+        let two = conversation("two", in: library, daysAgo: 29, [("bob", SyntheticVoice.near(other, similarity: 0.95, seed: 81), 200)])
+        library.renameSpeaker("one:me", to: "Vlad", in: one)
+        library.renameSpeaker("two:bob", to: "Bob", in: two)
+        await settle(library)
+        return (library, try XCTUnwrap(library.speakerProfiles.first { $0.name == "Vlad" }), try XCTUnwrap(library.speakerProfiles.first { $0.name == "Bob" }))
+    }
+
+    func testBehaviorThisIsMeIsOfferedOnlyWhereItDoesSomething() async throws {
+        let (library, vlad, _) = try await markingLibrary()
+        let one = try XCTUnwrap(library.meetings.first { $0.title == "one" }).id
+        let spare = conversation("spare", in: library, daysAgo: 5, [("x", SyntheticVoice.near(SyntheticVoice.person(5), similarity: 0.95, seed: 82), 200)])
+        XCTAssertTrue(library.canMarkSpeakerAsMe(["one:me"], in: one), "a name the person gave, with a profile")
+        XCTAssertFalse(library.canMarkSpeakerAsMe(["spare:x"], in: spare), "Speaker 1 with no me-profile yet")
+        library.update(spare) { $0.setSpeakerIdentity(SpeakerIdentity(speakerID: "spare:x", profileID: vlad.id, source: .suggested, similarity: 0.7), for: "spare:x") }
+        XCTAssertFalse(library.canMarkSpeakerAsMe(["spare:x"], in: spare), "a suggestion isn't adopted")
+        XCTAssertFalse(library.markSpeakerAsMe(["spare:x"], in: spare))
+        XCTAssertNil(library.ownerProfileID)
+
+        library.setOwnerProfile(vlad.id)
+        XCTAssertFalse(library.canMarkSpeakerAsMe(["one:me"], in: one), "already the person's me")
+        XCTAssertTrue(library.canMarkSpeakerAsMe(["spare:x"], in: spare), "a me-profile exists: anyone can be named as it")
+    }
+
+    func testBehaviorMarkingASuggestedSpeakerConfirmsItAndKeepsTheLibrarysChoice() async throws {
+        let (library, vlad, bob) = try await markingLibrary()
+        library.setOwnerProfile(vlad.id)
+        let id = conversation("spare", in: library, daysAgo: 5, [("x", SyntheticVoice.near(SyntheticVoice.person(5), similarity: 0.95, seed: 82), 200)])
+        library.update(id) { $0.setSpeakerIdentity(SpeakerIdentity(speakerID: "spare:x", profileID: vlad.id, source: .suggested, similarity: 0.7), for: "spare:x") }
+        XCTAssertTrue(library.markSpeakerAsMe(["spare:x"], in: id))
+        XCTAssertEqual(library.meeting(id)?.speakerIdentity("spare:x")?.source, .confirmed)
+        XCTAssertEqual(name(library, id, "spare:x"), "Vlad")
+        XCTAssertEqual(library.ownerProfileID, vlad.id)
+        XCTAssertNotEqual(library.ownerProfileID, bob.id)
+    }
+
+    /// With a me-profile, "Speaker n", "Me", and a wrong Recognized/Maybe profile are all named as the person, by hand;
+    /// the library's choice never changes from inside a conversation, and Bob is off what the speaker rejected.
+    func testBehaviorMarkingAnyoneAsMeWithAMeProfileNamesThemAsItWithoutChangingTheChoice() async throws {
+        let (library, vlad, bob) = try await markingLibrary()
+        library.setOwnerProfile(vlad.id)
+        let id = conversation("call", in: library, daysAgo: 1, [("a", SyntheticVoice.near(SyntheticVoice.person(6), similarity: 0.95, seed: 83), 200),
+                                                                ("b", SyntheticVoice.near(other, similarity: 0.95, seed: 84), 200)])
+        library.update(id) { meeting in
+            meeting.setSpeakerIdentity(SpeakerIdentity(speakerID: "call:a", profileID: bob.id, source: .suggested, similarity: 0.7,
+                                                       rejectedProfileIDs: [vlad.id]), for: "call:a")
+        }
+        // "Speaker 2" recognized as the wrong profile (Bob, by voice).
+        await settle(library)
+        XCTAssertEqual(name(library, id, "call:b"), "Bob")
+        XCTAssertEqual(library.meeting(id)?.speakerIdentity("call:b")?.source, .recognized)
+
+        for speaker in ["call:a", "call:b"] {
+            XCTAssertTrue(library.canMarkSpeakerAsMe([speaker], in: id))
+            XCTAssertTrue(library.markSpeakerAsMe([speaker], in: id))
+            XCTAssertEqual(name(library, id, speaker), "Vlad")
+            XCTAssertFalse(library.meeting(id)?.speakerIdentity(speaker)?.rejectedProfileIDs?.contains(vlad.id) ?? false)
+        }
+        await settle(library)
+        XCTAssertEqual(library.ownerProfileID, vlad.id)
+        XCTAssertEqual(library.meeting(id)?.speakerIdentity("call:b")?.profileID, vlad.id)
+        XCTAssertEqual(library.meeting(id)?.speakerIdentity("call:b")?.source, .named)
+        XCTAssertFalse(library.canMarkSpeakerAsMe(["call:b"], in: id), "now the person's me")
+    }
+
+    func testBehaviorMarkingARecognizedSpeakerAdoptsItsProfileAndConfirmsIt() async throws {
+        let (library, vlad, _) = try await markingLibrary()
+        let id = conversation("call", in: library, daysAgo: 1, [("me", mine(85), 200)])
+        await settle(library)
+        XCTAssertEqual(library.meeting(id)?.speakerIdentity("call:me")?.source, .recognized)
+        XCTAssertTrue(library.markSpeakerAsMe(["call:me"], in: id))
+        XCTAssertEqual(library.ownerProfileID, vlad.id)
+        XCTAssertEqual(library.meeting(id)?.speakerIdentity("call:me")?.source, .confirmed, "keeps its label")
+    }
+
+    func testBehaviorMarkingANamedSpeakerWithoutAProfileMarksTheProfileItsNameStarts() async throws {
+        let library = try await library("Mac", synced: false)
+        let id = conversation("quiet", in: library, daysAgo: 1, [("me", mine(86), 5)])
+        XCTAssertFalse(library.canMarkSpeakerAsMe(["quiet:me"], in: id), "Speaker 1")
+        library.renameSpeaker("quiet:me", to: "Vlad", in: id)
+        XCTAssertTrue(library.canMarkSpeakerAsMe(["quiet:me"], in: id))
+        XCTAssertTrue(library.markSpeakerAsMe(["quiet:me"], in: id))
+        XCTAssertEqual(library.metadata.ownerProfileSelection, SpeakerProfile.id(forName: "Vlad"))
+        XCTAssertNil(library.ownerProfileID, "no profile yet")
+        // A deleted profile's ID is never marked.
+        library.setOwnerProfile(nil)
+        let (other, vlad, _) = try await markingLibrary()
+        other.deleteSpeakerProfile(vlad.id)
+        let one = try XCTUnwrap(other.meetings.first { $0.title == "one" }).id
+        XCTAssertFalse(other.canMarkSpeakerAsMe(["one:me"], in: one))
+        XCTAssertNil(other.ownerProfileID)
+    }
+
+    func testBehaviorTheCoordinatorSeesAChoiceThatArrivesBySync() async throws {
+        let a = try await library("A"), b = try await library("B")
+        let options = SpeakerProfileOptions()
+        let before = SpeakerProfileCoordinator.inputs(b, options: options, skipping: [])
+        a.setOwnerProfile(UUID(), at: Date(timeIntervalSince1970: 1_000))
+        await sync(a); await sync(b)
+        XCTAssertNotNil(b.metadata.ownerProfileSelection)
+        XCTAssertNotEqual(SpeakerProfileCoordinator.inputs(b, options: options, skipping: []), before, "a pass is due")
+    }
 }

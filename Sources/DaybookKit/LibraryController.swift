@@ -582,6 +582,14 @@ public final class LibraryController {
         return true
     }
 
+    /// The speaker profile that is the person themselves (nil: none), following merges; nil too once it was deleted.
+    public var ownerProfileID: UUID? { metadata.ownerProfileID }
+
+    /// Chooses the profile that is the person themselves, or none (nil). The later change wins everywhere.
+    public func setOwnerProfile(_ profileID: UUID?, at now: Date = Date()) {
+        choose(.ownerProfile, profileID?.uuidString, at: now)
+    }
+
     private func choose(_ name: LibraryChoice.Name, _ selection: String?, at now: Date) {
         let stored = metadata.choice(name)
         // The choice the library holds already: nothing new to save or sync.

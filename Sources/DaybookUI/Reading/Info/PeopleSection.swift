@@ -24,7 +24,18 @@ struct PeopleSection: View {
                 } identity: {
                     SpeakerIdentityLine(library: library, meeting: meeting, speakerIDs: person.speakerIDs)
                 }
+                .contextMenu { meMenu(person) }
             }
+        }
+    }
+}
+
+extension PeopleSection {
+    /// This Is Me on a person it does something for (`LibraryController.canMarkSpeakerAsMe`). Taking it back is the
+    /// row's own Not <name>; the library-wide Not Me is on the profile.
+    @ViewBuilder fileprivate func meMenu(_ person: MeetingPerson) -> some View {
+        if library.canMarkSpeakerAsMe(person.speakerIDs, in: meeting.id) {
+            Button(SpeakerProfileWords.thisIsMe) { library.markSpeakerAsMe(person.speakerIDs, in: meeting.id) }
         }
     }
 }

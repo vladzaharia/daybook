@@ -304,7 +304,15 @@ struct SpeakerProfileRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(profile.name).foregroundStyle(DaybookPalette.Ink.title)
+            HStack(spacing: 6) {
+                Text(profile.name).foregroundStyle(DaybookPalette.Ink.title)
+                if library.ownerProfileID == profile.id {
+                    Text(SpeakerProfileWords.you)
+                        .font(.caption2.weight(.semibold)).foregroundStyle(DaybookPalette.Ink.secondary)
+                        .padding(.horizontal, 6).padding(.vertical, 1)
+                        .background(Capsule().fill(Color.primary.opacity(0.08)))
+                }
+            }
             Text(SpeakerProfileWords.voiceprints(library.metadata.voiceprints(of: profile.id).count))
                 .font(density == .touch ? .footnote : .caption).foregroundStyle(DaybookPalette.Ink.secondary)
         }
@@ -327,9 +335,24 @@ struct SpeakerProfileMenu: View {
     @Binding var request: SpeakerProfileRequest?
 
     var body: some View {
+        ThisIsMeButton(library: library, profile: profile)
         MergeMenu(library: library, profile: profile, request: $request)
         Divider()
         Button(SpeakerProfileWords.deleteProfile + "…", role: .destructive) { request = .delete(profile) }
+    }
+}
+
+/// This Is Me on a profile that isn't the person's, Not Me on the one that is.
+struct ThisIsMeButton: View {
+    let library: LibraryController
+    let profile: SpeakerProfile
+
+    var body: some View {
+        if library.ownerProfileID == profile.id {
+            Button(SpeakerProfileWords.notMe) { library.setOwnerProfile(nil) }
+        } else {
+            Button(SpeakerProfileWords.thisIsMe) { library.setOwnerProfile(profile.id) }
+        }
     }
 }
 
@@ -357,11 +380,14 @@ struct SpeakerProfileActions: View {
 
     var body: some View {
         if density == .touch {
+            ThisIsMeButton(library: library, profile: profile)
+                .foregroundStyle(DaybookPalette.Ink.link)
             MergeMenu(library: library, profile: profile, request: $request)
                 .foregroundStyle(DaybookPalette.Ink.link)
             delete
         } else {
             HStack {
+                ThisIsMeButton(library: library, profile: profile)
                 MergeMenu(library: library, profile: profile, request: $request)
                     .menuStyle(.button)
                     .fixedSize()

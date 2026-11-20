@@ -170,6 +170,7 @@ So you can tell, for every word, which recordings said it.
 Speakers are labelled in priority order:
 
 - Call audio keeps its diarized speakers, the remote participants.
+- When the person has said which speaker profile is them (`ownerProfile`, [architecture](architecture.md#speakers-and-profiles)), the owner that would still be "Me" takes that profile's name when profiles are reconciled, not in fusion, so conversations fused earlier follow without being fused again.
 - On the microphone, the dominant local voice is the owner. A local voice is one whose words the call didn't carry, and dominant means at least 70%. The owner is labelled `owner`, named "Me" until renamed, or keeps a microphone speaker the person already named.
 - Other labels on the microphone and recorders are mapped onto established speakers by shared speech (`SpeakerMatcher.matchByCooccurrence`): at least six shared words, at least 70% with one speaker, and two labels from one recording can't claim the same speaker without a 2× margin.
 - Labels the person renamed are never remapped.

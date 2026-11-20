@@ -70,6 +70,89 @@ extension LibraryController {
         }
     }
 
+    /// What "This Is Me" would do for a person (`speakerIDs`) in a conversation.
+    private enum MeMark {
+        /// The profile that is me is already offered for the speaker: the person agrees.
+        case confirm(speakerID: String)
+        /// A me-profile exists: the speakers are named as it, the way the person would by hand.
+        case name(profile: SpeakerProfile)
+        /// No me-profile yet: the speaker's own profile becomes it (confirmed first when Daybook gave it).
+        case adopt(profile: UUID, confirming: String?)
+        /// No me-profile yet, and a name the person gave with no profile made yet: its profile, once it exists, becomes it.
+        case pending(profile: UUID)
+    }
+
+    /// Never changes the library's choice from inside a conversation when one exists; the person can't mark a speaker
+    /// who has nothing to go by (a placeholder, or fusion's "Me", with no me-profile yet).
+    private func meMark(_ speakerIDs: [String], in id: UUID) -> MeMark? {
+        guard let meeting = meeting(id) else { return nil }
+        let merges = metadata.speakerProfileMerges
+        func profile(of speakerID: String) -> (identity: SpeakerIdentity, id: UUID)? {
+            guard let identity = meeting.speakerIdentity(speakerID), identity.$source.isKnown, identity.source != .dismissed,
+                  let stored = identity.profileID, let resolved = merges.resolve(stored) else { return nil }
+            return (identity, resolved)
+        }
+        if let ownerID = ownerProfileID, let me = metadata.speakerProfile(ownerID) {
+            var held = false
+            for speakerID in speakerIDs {
+                guard let (identity, resolved) = profile(of: speakerID), resolved == me.id else { continue }
+                if identity.source == .recognized || identity.source == .suggested { return .confirm(speakerID: speakerID) }
+                held = true
+            }
+            return held ? nil : .name(profile: me)
+        }
+        for speakerID in speakerIDs {
+            guard let (identity, resolved) = profile(of: speakerID), identity.source != .suggested else { continue }
+            return .adopt(profile: resolved, confirming: identity.source == .recognized ? speakerID : nil)
+        }
+        for speakerID in speakerIDs {
+            let name = (meeting.speakerName(speakerID) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !SpeakerProfile.isPlaceholder(name), name != FusionOptions().ownerName,
+                  meeting.revisions.contains(where: { $0.kind == .speaker(speakerID) }) else { continue }
+            let key = SpeakerProfile.normalizedName(name)
+            if let existing = speakerProfiles.first(where: { SpeakerProfile.normalizedName($0.name) == key }) { return .pending(profile: existing.id) }
+            let started = SpeakerProfile.id(forName: name)
+            // A profile of that name that was deleted is not the person's.
+            if metadata.speakerProfiles?.contains(where: { $0.id == started.uuidString }) == true { continue }
+            return .pending(profile: started)
+        }
+        return nil
+    }
+
+    /// Whether "This Is Me" does anything for the person (`speakerIDs`): offered only then.
+    public func canMarkSpeakerAsMe(_ speakerIDs: [String], in id: UUID) -> Bool { meMark(speakerIDs, in: id) != nil }
+
+    /// The person says this speaker is them. With a me-profile, the speaker is the person's (confirmed when Daybook
+    /// offered that profile, else named as it by hand, which also takes it off what the speaker rejected) and the
+    /// library's choice stays. Without one, the profile the speaker has (a name, confirmation, or recognition of
+    /// the person's) becomes it. Returns whether anything was done (`canMarkSpeakerAsMe`).
+    @discardableResult
+    public func markSpeakerAsMe(_ speakerIDs: [String], in id: UUID, at now: Date = Date()) -> Bool {
+        guard let mark = meMark(speakerIDs, in: id) else { return false }
+        switch mark {
+        case .confirm(let speakerID):
+            confirmSpeakerProfile(speakerID, in: id)
+        case .name(let me):
+            update(id) { meeting in
+                for speakerID in speakerIDs {
+                    meeting.renameSpeaker(id: speakerID, name: me.name)
+                    guard let identity = meeting.speakerIdentity(speakerID), identity.$source.isKnown,
+                          identity.rejectedProfileIDs?.contains(me.id) == true else { continue }
+                    let rejected = identity.rejectedProfileIDs?.filter { $0 != me.id }
+                    var changed = identity
+                    changed.rejectedProfileIDs = rejected?.isEmpty == true ? nil : rejected
+                    meeting.setSpeakerIdentity(changed.source == .dismissed && changed.rejectedProfileIDs == nil ? nil : changed, for: speakerID)
+                }
+            }
+        case .adopt(let profile, let confirming):
+            if let confirming { confirmSpeakerProfile(confirming, in: id) }
+            setOwnerProfile(profile, at: now)
+        case .pending(let profile):
+            setOwnerProfile(profile, at: now)
+        }
+        return true
+    }
+
     // MARK: Profiles
 
     /// Renames a profile; speakers Daybook labelled with it follow. A name another profile has is
@@ -116,6 +199,7 @@ extension LibraryController {
     public func deleteSpeakerProfile(_ profileID: UUID, at now: Date = Date()) {
         guard let profile = metadata.speakerProfile(profileID) else { return }
         let members = metadata.speakerProfileMerges.members(of: profile.id)
+        let wasMe = metadata.ownerProfileID == profile.id
         updateMetadata { metadata in
             var profiles = metadata.speakerProfiles ?? []
             let stored = profiles.first { $0.id == profile.id.uuidString }
@@ -124,6 +208,7 @@ extension LibraryController {
             metadata.speakerProfiles = profiles.sorted { $0.id < $1.id }
             Self.retireVoiceprints(in: &metadata, at: now) { members.contains($0.profileID) }
         }
+        if wasMe { setOwnerProfile(nil, at: now) }
     }
 
     /// Takes one voiceprint out of its profile; it isn't learned again.
@@ -255,6 +340,7 @@ public final class SpeakerProfileCoordinator {
         }
         for item in library.metadata.speakerProfiles ?? [] { hasher.combine(item.id); hasher.combine(item.modifiedAt); hasher.combine(item.value?.name) }
         for item in library.metadata.voiceprints ?? [] { hasher.combine(item.id); hasher.combine(item.modifiedAt) }
+        hasher.combine(library.metadata.ownerProfileSelection)
         return hasher.finalize()
     }
 }
