@@ -180,8 +180,12 @@ struct PhoneNotices {
         }
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: notice.id, content: content, trigger: nil))
     }, remove: { id in
-        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [id])
-        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [id])
+        // Off the caller's thread: these wait on the notification daemon, and launch (on the main actor)
+        // must never wait on it.
+        DispatchQueue.global(qos: .utility).async {
+            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [id])
+            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [id])
+        }
     }, askPermission: {
         Task {
             let center = UNUserNotificationCenter.current()
