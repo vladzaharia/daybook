@@ -26,7 +26,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 zip="$(mktemp -d)/xcodegen.zip"
-curl -fsSL --retry 3 -o "$zip" "https://github.com/yonaskolb/XcodeGen/releases/download/$version/xcodegen.zip"
+# GitHub's release downloads answer 504 for a while at times: curl's default retries (1, 2, then 4 s
+# apart) were all used up within one such spell. Six, 10 s apart, cover a minute; the version is
+# pinned and its digest checked, so retrying any error costs nothing but the wait.
+curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors -o "$zip" \
+    "https://github.com/yonaskolb/XcodeGen/releases/download/$version/xcodegen.zip"
 actual="$(shasum -a 256 "$zip" | awk '{print $1}')"
 [[ "$actual" == "$sha256" ]] || fail "xcodegen.zip $version has SHA-256 $actual, expected $sha256"
 
