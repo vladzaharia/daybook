@@ -49,6 +49,10 @@ public final class SoundcoreConnection: DiscoveringConnection, RecordingStateCon
 
         public let at: Date
         public let result: Result
+        public var endedOnUnreadablePage = false
+        /// The list reply that was unreadable, short, or had entries left out, as one line (counts, timestamps and
+        /// sizes only), so a report identifies the packet.
+        public var replyShape: String?
         public var failed: Bool { if case .failed = result { return true } else { return false } }
     }
 
@@ -482,8 +486,9 @@ public final class SoundcoreConnection: DiscoveringConnection, RecordingStateCon
 
     private func listingFailed(_ error: Error) {
         guard case .connected = phase, (error as? SoundcoreError) != .disconnected, !(error is CancellationError) else { return }
-        lastListing = ListingOutcome(at: Date(), result: .failed(error.localizedDescription))
-        Self.log.notice("Recording list failed (\(error.logCode, privacy: .public)): \(error.localizedDescription, privacy: .private)")
+        let shape = session?.unreadableListReply
+        lastListing = ListingOutcome(at: Date(), result: .failed(error.localizedDescription), replyShape: shape)
+        Self.log.notice("Recording list failed (\(error.logCode, privacy: .public)): \(error.localizedDescription, privacy: .private); reply: \(shape ?? "none", privacy: .public)")
         if problem == nil { problem = SoundcoreIssue.listFailed.problem }
         scheduleRelist()
         publish()
@@ -975,6 +980,9 @@ public final class SoundcoreConnection: DiscoveringConnection, RecordingStateCon
             DeviceDetail(label: "Audio key exchange", value: keyExchangeComplete ? "Complete" : "Not yet in this connection")
         ]
         rows.append(DeviceDetail(label: "Recording list", value: listingSummary))
+        if let shape = lastListing?.replyShape {
+            rows.append(DeviceDetail(label: "Last list reply", value: shape + (lastListing?.endedOnUnreadablePage == true ? "; a later page was unreadable" : "")))
+        }
         let named = listedThisConnection ? activeRecordingID : remembered?.activeRecordingID
         if let named {
             let start = startDate(of: named).map { DeviceDateFormat.title($0) } ?? String(named)
@@ -1376,7 +1384,9 @@ public final class SoundcoreConnection: DiscoveringConnection, RecordingStateCon
         defer { if firstListing { catchUpMissedButton() } }
         let now = Date()
         inventoryUpdatedAt = now
-        lastListing = ListingOutcome(at: now, result: .listed(count: listing.count, pages: result.pages, endedOnRefusal: result.endedOnRefusal))
+        lastListing = ListingOutcome(at: now, result: .listed(count: listing.count, pages: result.pages, endedOnRefusal: result.endedOnRefusal),
+                                     endedOnUnreadablePage: result.endedOnUnreadablePage, replyShape: result.replyShape)
+        if let shape = result.replyShape { Self.log.notice("Recording list reply: \(shape, privacy: .public)\(result.endedOnUnreadablePage ? "; a later page was unreadable" : "", privacy: .public)") }
         clearListingFailure()
         Self.log.notice("Recording list: \(result.recordings.count, privacy: .public) in \(result.pages, privacy: .public) pages\(result.endedOnRefusal ? ", the last refused" : "", privacy: .public); in progress: \(result.activeRecordingID.map(String.init) ?? "none", privacy: .public); recording: \(self.info?.isRecording == true, privacy: .public)")
         if var snapshot = remembered {

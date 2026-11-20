@@ -196,21 +196,88 @@ public struct SoundcoreRecording: Identifiable, Equatable, Codable {
         try page(packet).active
     }
 
-    public static func page(_ packet: SoundcorePacket) throws -> (recordings: [Self], active: UInt32?) {
+    /// What one list reply held and what was made of it. `read` never throws: a page it can't use says
+    /// so (`isValid`) and still describes the packet.
+    public struct ListPage: Equatable {
+        public var recordings: [SoundcoreRecording] = []
+        public var active: UInt32?
+        /// False for a packet that isn't a list reply, can't hold a count, or whose entries aren't plausible
+        /// (the "different protocol" case).
+        public var isValid = false
+        public var type: UInt8 = 0
+        public var command: UInt8 = 0
+        public var payloadLength = 0
+        /// The count field, which may be the recorder's total rather than this page's.
+        public var declared = 0
+        /// Whole entries read.
+        public var parsed = 0
+        public var stride = 0
+        /// Entries read but left out for an implausible ID or end time. Entries with an ID of 0 aren't counted.
+        public var droppedImplausible = 0
+        /// Bytes after the entries read: 8 on every page seen so far (the recording in progress, then 4 more).
+        public var trailerBytes = 0
+        /// The first 32 payload bytes, hex. A list reply holds counts, Unix timestamps, and sizes only: no
+        /// audio and no names, so it's safe to log and to copy into a report.
+        public var head = ""
+
+        /// Anything other than a page of the shape documented: worth showing even when it listed.
+        public var isOdd: Bool { !isValid || declared != parsed || droppedImplausible > 0 || trailerBytes != 8 }
+
+        /// One line for Device Details and the log.
+        public var shape: String {
+            let reply = String(format: "%02X %02X", type, command)
+            guard stride > 0 else { return "\(isValid ? "" : "unreadable ")reply \(reply), \(payloadLength) bytes, first bytes \(head)" }
+            return "\(isValid ? "" : "unreadable ")reply \(reply), \(payloadLength) bytes, declared \(declared), read \(parsed) of \(stride) bytes, "
+                + "trailer \(trailerBytes), dropped \(droppedImplausible), first bytes \(head)"
+        }
+    }
+
+    /// Recording IDs are Unix start times: nothing before 2015, nor more than two days ahead.
+    static let earliestPlausibleID: UInt32 = 1_420_070_400
+    static let plausibleDaysAhead: TimeInterval = 172_800
+
+    /// Reads as many whole entries as the payload holds, whatever the count field says: it may be the total
+    /// across pages, and a page may be cut short. The recording in progress is read only when 4 bytes remain
+    /// after the entries. The layout is the reply's own (`1B 0E` 12-byte entries, `1A 0E` 8-byte).
+    public static func read(_ packet: SoundcorePacket, now: Date = Date()) -> ListPage {
         let b = [UInt8](packet.payload)
-        guard packet.command == 0x0e, packet.type == 0x1a || packet.type == 0x1b, b.count >= 10 else {
-            throw SoundcoreError.invalidPacket
-        }
-        let count = Int(b[0]) | Int(b[1]) << 8
+        var page = ListPage()
+        page.type = packet.type
+        page.command = packet.command
+        page.payloadLength = b.count
+        page.head = b.prefix(32).map { String(format: "%02X", $0) }.joined(separator: " ")
+        guard packet.command == 0x0e, packet.type == 0x1a || packet.type == 0x1b, b.count >= 2 else { return page }
         let stride = packet.type == 0x1b ? 12 : 8
-        guard count <= 5_000, b.count >= 2 + count * stride + 8 else { throw SoundcoreError.invalidPacket }
-        let recordings = try (0..<count).map { index in
+        let declared = Int(b[0]) | Int(b[1]) << 8
+        let parsed = min(declared, (b.count - 2) / stride)
+        page.stride = stride
+        page.declared = declared
+        page.parsed = parsed
+        page.trailerBytes = b.count - 2 - parsed * stride
+        func value(_ offset: Int) -> UInt32 { (try? b.le32(at: offset)) ?? 0 }
+        let latest = UInt32(clamping: Int(now.timeIntervalSince1970 + plausibleDaysAhead))
+        func plausible(_ id: UInt32) -> Bool { id >= earliestPlausibleID && id <= latest }
+        let entries = (0..<parsed).map { index -> Self in
             let offset = 2 + index * stride
-            return Self(id: try b.le32(at: offset), size: try b.le32(at: offset + stride - 4),
-                        endTimestamp: stride == 12 ? try b.le32(at: offset + 4) : nil)
+            return Self(id: value(offset), size: value(offset + stride - 4), endTimestamp: stride == 12 ? value(offset + 4) : nil)
+        }.filter { $0.id > 0 }
+        // An end time of 0 is a recording still open; an earlier one than the start isn't a time at all.
+        let kept = entries.filter { entry in plausible(entry.id) && (entry.endTimestamp.map { $0 == 0 || $0 >= entry.id } ?? true) }
+        page.droppedImplausible = entries.count - kept.count
+        guard declared <= 5_000, parsed > 0 || declared == 0, kept.count > 0 || entries.isEmpty else { return page }
+        page.recordings = kept
+        if page.trailerBytes >= 4 {
+            let active = value(2 + parsed * stride)
+            page.active = plausible(active) ? active : nil
         }
-        let active = try b.le32(at: 2 + count * stride)
-        return (recordings.filter { $0.id > 0 }, active > 0 ? active : nil)
+        page.isValid = true
+        return page
+    }
+
+    public static func page(_ packet: SoundcorePacket) throws -> (recordings: [Self], active: UInt32?) {
+        let page = read(packet)
+        guard page.isValid else { throw SoundcoreError.invalidPacket }
+        return (page.recordings, page.active)
     }
 
     public init(id: UInt32, size: UInt32, endTimestamp: UInt32? = nil) {

@@ -160,6 +160,109 @@ final class SoundcoreProtocolTests: XCTestCase {
         XCTAssertEqual(legacy.recordings[0].length, .estimated(1))
     }
 
+    // MARK: Tolerant list pages
+
+    private let listNow = Date(timeIntervalSince1970: 1_790_000_000)
+
+    private func listPacket(_ type: UInt8, count: Int, entries: [(id: UInt32, end: UInt32, size: UInt32)], trailer: Data = Data(repeating: 0, count: 8),
+                            extra: Data = Data()) -> SoundcorePacket {
+        var payload = Data([UInt8(count & 255), UInt8(count >> 8)])
+        for entry in entries {
+            payload.append(littleEndian32(entry.id))
+            if type == 0x1b { payload.append(littleEndian32(entry.end)) }
+            payload.append(littleEndian32(entry.size))
+        }
+        return SoundcorePacket(type: type, command: 0x0e, status: 1, payload: payload + trailer + extra)
+    }
+
+    func testBehaviorAPageSmallerThanTenBytesWithNoEntriesIsAnEmptyList() {
+        for trailer in [8, 4, 0] {
+            let page = SoundcoreRecording.read(listPacket(0x1b, count: 0, entries: [], trailer: Data(repeating: 0, count: trailer)), now: listNow)
+            XCTAssertTrue(page.isValid, "trailer \(trailer)")
+            XCTAssertTrue(page.recordings.isEmpty)
+            XCTAssertEqual(page.trailerBytes, trailer)
+            XCTAssertEqual(page.isOdd, trailer != 8)
+        }
+        XCTAssertFalse(SoundcoreRecording.read(SoundcorePacket(type: 0x1b, command: 0x0e, status: 1, payload: Data([0])), now: listNow).isValid)
+        XCTAssertFalse(SoundcoreRecording.read(SoundcorePacket(type: 0x1b, command: 0x0e, status: 1, payload: Data()), now: listNow).isValid)
+    }
+
+    func testBehaviorOnlyWholeEntriesAreReadWhateverTheCountSays() {
+        let entries = (0..<3).map { (id: 1_780_000_000 + UInt32($0) * 100, end: 1_780_000_050 + UInt32($0) * 100, size: UInt32(8_000)) }
+        // The count is the total across pages: 40 declared, 3 carried.
+        let total = SoundcoreRecording.read(listPacket(0x1b, count: 40, entries: entries, trailer: littleEndian32(1_780_000_900) + Data(count: 4)), now: listNow)
+        XCTAssertTrue(total.isValid)
+        XCTAssertEqual(total.declared, 40)
+        XCTAssertEqual(total.parsed, 3)
+        XCTAssertEqual(total.recordings.count, 3)
+        XCTAssertEqual(total.active, 1_780_000_900)
+        XCTAssertTrue(total.isOdd)
+
+        // Cut inside the last entry: two whole entries, and no active ID from the leftover bytes.
+        let whole = listPacket(0x1b, count: 3, entries: entries, trailer: Data())
+        let cut = SoundcoreRecording.read(SoundcorePacket(type: 0x1b, command: 0x0e, status: 1, payload: whole.payload.prefix(whole.payload.count - 5)), now: listNow)
+        XCTAssertTrue(cut.isValid)
+        XCTAssertEqual(cut.parsed, 2)
+        XCTAssertEqual(cut.trailerBytes, 7)
+        XCTAssertNotNil(cut.active, "four bytes remain, so they're read; implausible ones aren't")
+        XCTAssertNil(SoundcoreRecording.read(SoundcorePacket(type: 0x1b, command: 0x0e, status: 1, payload: whole.payload.prefix(whole.payload.count - 9)), now: listNow).active, "three bytes remain")
+
+        // A short trailer: no active ID. A long one: the rest is ignored.
+        XCTAssertNil(SoundcoreRecording.read(listPacket(0x1b, count: 3, entries: entries, trailer: Data(count: 3)), now: listNow).active)
+        let long = SoundcoreRecording.read(listPacket(0x1b, count: 3, entries: entries, trailer: littleEndian32(1_780_000_900) + Data(count: 4), extra: Data(repeating: 9, count: 20)), now: listNow)
+        XCTAssertEqual(long.active, 1_780_000_900)
+        XCTAssertEqual(long.recordings.count, 3)
+
+        // The same pages read as before in both layouts.
+        let eight = SoundcoreRecording.read(listPacket(0x1a, count: 3, entries: entries), now: listNow)
+        XCTAssertEqual(eight.recordings.map(\.id), entries.map(\.id))
+        XCTAssertEqual(eight.stride, 8)
+        XCTAssertFalse(eight.isOdd)
+        XCTAssertEqual(total.stride, 12)
+    }
+
+    func testBehaviorImplausibleEntriesAreDroppedOrTheWholePageIsDifferentProtocol() {
+        let good = (id: UInt32(1_780_000_000), end: UInt32(1_780_000_050), size: UInt32(8_000))
+        let old = (id: UInt32(1_300_000_000), end: UInt32(1_300_000_050), size: UInt32(8_000))
+        let future = (id: UInt32(1_790_000_000 + 200_000), end: UInt32(0), size: UInt32(8_000))
+        let backwards = (id: UInt32(1_780_000_100), end: UInt32(1_780_000_000), size: UInt32(8_000))
+        let open = (id: UInt32(1_780_000_200), end: UInt32(0), size: UInt32(8_000))
+        let zero = (id: UInt32(0), end: UInt32(0), size: UInt32(0))
+
+        let mixed = SoundcoreRecording.read(listPacket(0x1b, count: 4, entries: [good, old, future, zero]), now: listNow)
+        XCTAssertTrue(mixed.isValid)
+        XCTAssertEqual(mixed.recordings.map(\.id), [good.id])
+        XCTAssertEqual(mixed.droppedImplausible, 2, "zero IDs aren't counted")
+        XCTAssertTrue(mixed.isOdd)
+
+        let allWrong = SoundcoreRecording.read(listPacket(0x1b, count: 3, entries: [old, future, backwards]), now: listNow)
+        XCTAssertFalse(allWrong.isValid)
+        XCTAssertThrowsError(try SoundcoreRecording.page(listPacket(0x1b, count: 2, entries: [old, old]))) {
+            XCTAssertEqual($0 as? SoundcoreError, .invalidPacket)
+        }
+        XCTAssertFalse(SoundcoreRecording.read(listPacket(0x1b, count: 2, entries: [backwards, backwards]), now: listNow).isValid,
+                       "every end time before its start")
+        XCTAssertTrue(SoundcoreRecording.read(listPacket(0x1b, count: 2, entries: [good, backwards]), now: listNow).isValid)
+        XCTAssertEqual(SoundcoreRecording.read(listPacket(0x1b, count: 1, entries: [open]), now: listNow).recordings.count, 1, "an open recording has no end yet")
+        XCTAssertTrue(SoundcoreRecording.read(listPacket(0x1b, count: 1, entries: [zero]), now: listNow).isValid, "only zero IDs: an empty page")
+        // The 8-byte layout has no end time to check.
+        XCTAssertTrue(SoundcoreRecording.read(listPacket(0x1a, count: 1, entries: [backwards]), now: listNow).isValid)
+        XCTAssertFalse(SoundcoreRecording.read(listPacket(0x1a, count: 1, entries: [old]), now: listNow).isValid)
+    }
+
+    func testBehaviorTheListDiagnosticNamesTheShapeAndTheFirstBytes() {
+        let packet = listPacket(0x1b, count: 7, entries: [(id: 1_780_000_000, end: 1_780_000_050, size: 8_000)], trailer: Data([1, 2, 3, 4]))
+        let page = SoundcoreRecording.read(packet, now: listNow)
+        XCTAssertEqual(page.shape, "reply 1B 0E, 18 bytes, declared 7, read 1 of 12 bytes, trailer 4, dropped 0, first bytes 07 00 "
+                       + [hex(1_780_000_000), hex(1_780_000_050), hex(8_000), "01 02 03 04"].joined(separator: " "))
+        let long = SoundcoreRecording.read(listPacket(0x1b, count: 0, entries: [], extra: Data(repeating: 0xEE, count: 60)), now: listNow)
+        XCTAssertEqual(long.head.split(separator: " ").count, 32)
+        let garbage = SoundcoreRecording.read(SoundcorePacket(type: 0x1a, command: 0x0e, status: 1, payload: Data([0xAB])), now: listNow)
+        XCTAssertEqual(garbage.shape, "unreadable reply 1A 0E, 1 bytes, first bytes AB")
+    }
+
+    private func hex(_ value: UInt32) -> String { littleEndian32(value).map { String(format: "%02X", $0) }.joined(separator: " ") }
+
     func testSlicesRoundTripAndBounds() throws {
         let slice = SoundcoreAudioSlice.encode(sequence: 42, audio: Data(repeating: 5, count: 160))
         XCTAssertEqual(slice.count, SoundcoreAudioSlice.size)

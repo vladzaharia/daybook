@@ -242,6 +242,91 @@ final class SoundcoreSimulatorTests: XCTestCase {
         XCTAssertEqual(device.received.filter { $0 == (0x1b, 0x0e) }.count, 3, "refused, then the list and its empty second page")
     }
 
+    /// A recorder with nothing on it may end its list after the count, or after the recording in progress.
+    func testBehaviorAnEmptyListWithAShortTrailerIsAnEmptyList() async throws {
+        for trailer in [4, 0] {
+            let device = recorder(count: 0)
+            device.emptyListTrailerBytes = trailer
+            let rig = rig(device)
+            try await connectThroughSetup(rig)
+            XCTAssertTrue(rig.connection.isInventoryCurrent, "trailer \(trailer)")
+            XCTAssertNil(rig.connection.problem)
+            XCTAssertTrue(rig.connection.recordings.isEmpty)
+            let reply = try XCTUnwrap(rig.connection.technicalDetails.first { $0.label == "Last list reply" }, "the shape of an odd list that worked")
+            XCTAssertTrue(reply.value.contains("declared 0, read 0 of 12 bytes, trailer \(trailer)"), reply.value)
+            XCTAssertTrue(rig.session.diagnostics.contains("Last list reply: "), "in the copied details")
+            rig.connection.shutDown()
+        }
+    }
+
+    /// A count field that is the total across pages still pages to the rest.
+    func testBehaviorACountThatIsTheTotalStillPagesToEveryRecording() async throws {
+        let device = recorder(count: 7)
+        device.pageSize = 3
+        device.listCountIsTotal = true
+        let rig = rig(device)
+        try await connectThroughSetup(rig)
+        XCTAssertEqual(rig.connection.recordings.count, 7)
+        let reply = try XCTUnwrap(rig.connection.technicalDetails.first { $0.label == "Last list reply" })
+        XCTAssertTrue(reply.value.hasPrefix("page 1: reply 1B 0E, "), reply.value)
+        XCTAssertTrue(reply.value.contains("declared 7, read 3"), reply.value)
+        rig.connection.shutDown()
+    }
+
+    /// The last page cut inside its final entry keeps its whole entries.
+    func testBehaviorATruncatedFinalPageKeepsItsWholeEntries() async throws {
+        let device = recorder(count: 8)
+        device.pageSize = 3
+        device.truncatesFinalPage = true
+        let rig = rig(device)
+        try await connectThroughSetup(rig)
+        XCTAssertTrue(rig.connection.isInventoryCurrent)
+        XCTAssertNil(rig.connection.problem)
+        XCTAssertEqual(rig.connection.recordings.count, 7, "three, three, and one whole entry of two")
+        let reply = try XCTUnwrap(rig.connection.technicalDetails.first { $0.label == "Last list reply" })
+        XCTAssertTrue(reply.value.hasPrefix("page 3: "), reply.value)
+        XCTAssertTrue(reply.value.contains("declared 2, read 1"), reply.value)
+        rig.connection.shutDown()
+    }
+
+    /// A later page that is garbage ends the list with what came before it; nothing is thrown away.
+    func testBehaviorAGarbageLaterPageEndsTheListWithWhatWasRead() async throws {
+        let device = recorder(count: 7)
+        device.pageSize = 3
+        device.garbagePage = 1
+        let rig = rig(device)
+        try await connectThroughSetup(rig)
+        XCTAssertTrue(rig.connection.isInventoryCurrent)
+        XCTAssertNil(rig.connection.problem)
+        XCTAssertEqual(rig.connection.recordings.count, 3)
+        XCTAssertEqual(rig.connection.lastListing?.endedOnUnreadablePage, true)
+        let reply = try XCTUnwrap(rig.connection.technicalDetails.first { $0.label == "Last list reply" })
+        XCTAssertTrue(reply.value.hasPrefix("page 2: unreadable reply 1B 0E, 30 bytes"), reply.value)
+        XCTAssertTrue(reply.value.contains("AB AB"), reply.value)
+        XCTAssertTrue(reply.value.hasSuffix("a later page was unreadable"), reply.value)
+        XCTAssertEqual(device.received.filter { $0 == (0x1b, 0x0e) }.count, 2, "it didn't ask past the garbage")
+        rig.connection.shutDown()
+    }
+
+    /// A first page of entries that are not times is the "different protocol" case: it fails, says so,
+    /// carries the packet's shape, and nothing imports from it.
+    func testBehaviorAFirstPageOfImplausibleIDsFailsWithItsShapeAndImportsNothing() async throws {
+        let device = recorder(count: 2)
+        device.listsImplausibleIDs = true
+        let rig = rig(device, automatic: true, since: .distantPast, configure: { $0.relist = [.milliseconds(100)] }, remembered: true)
+        try await waitUntil("the list to fail") { rig.connection.lastListing?.failed == true }
+        XCTAssertEqual(rig.connection.problem?.id, SoundcoreIssue.listFailed.rawValue)
+        XCTAssertEqual(rig.session.listingState, .notListed)
+        let list = try XCTUnwrap(rig.connection.technicalDetails.first { $0.label == "Recording list" })
+        XCTAssertEqual(list.value, "Not listed: " + (SoundcoreError.invalidPacket.errorDescription ?? ""))
+        XCTAssertTrue(list.value.contains("different protocol"))
+        let reply = try XCTUnwrap(rig.connection.technicalDetails.first { $0.label == "Last list reply" })
+        XCTAssertTrue(reply.value.hasPrefix("page 1: unreadable reply 1B 0E, 34 bytes, declared 2, read 2 of 12 bytes, trailer 8, dropped 2, first bytes 02 00 07 00 00 00"), reply.value)
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertTrue(rig.library.imports.isEmpty, "nothing imports from a list that isn't current")
+        rig.connection.shutDown()
+    }
+
     /// Every attempt fails: it stops trying after the schedule, says so, and Refresh still works.
     func testTryingAgainStopsAfterItsScheduleAndRefreshStillLists() async throws {
         let device = recorder(count: 1)

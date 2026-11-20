@@ -89,6 +89,18 @@ connected ──idle──▶ released (idle) ──cooldown──▶ waitingInR
   new", and it's tried again quietly after 15 and 60 s (`SoundcoreTiming.relist`) while the link is
   up. A refusal of both layouts doesn't switch the connection to the 8-byte layout. Status and the
   list are read separately, so a status that doesn't arrive doesn't stop the list.
+  A list page is read tolerantly (`SoundcoreRecording.read`): as many whole entries as the reply
+  holds, whatever its count says (it may be the total across pages, and Daybook still asks for the
+  next page), the recording in progress only when four bytes follow the entries (an empty list may
+  end after the count or after that ID), and the layout from the reply's own type. Entries whose ID
+  isn't a Unix time (before 2015 or over two days ahead) or whose end is before its start are
+  dropped; a page where none are plausible is the unrecognized-packet failure above. Only an
+  unreadable first page fails the list: a later page that is unreadable ends it with what was read
+  (`Listing.endedOnUnreadablePage`). A page that wasn't the documented shape (unreadable, short, a
+  count that isn't the page's, entries dropped) is described in Device Details › Technical Details as
+  "Last list reply" (reply type, length, declared and read counts, trailer, dropped, and the first 32
+  bytes as hex: counts, times and sizes, no audio or names), included in Copy and logged, so a
+  report identifies the packet. The cause of the field failure on 0.11.2 was not seen; see docs/validation.md.
 - **Another app on the same iPhone.** iOS shares one link to the recorder between apps, so while the
   Soundcore app lists or transfers, its replies and audio reach Daybook too, and a reply to its list
   request can satisfy Daybook's. Daybook ignores audio it didn't ask for and counts it, and replies
