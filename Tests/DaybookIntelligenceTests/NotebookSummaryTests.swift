@@ -87,6 +87,20 @@ final class NotebookSummaryTests: XCTestCase {
         XCTAssertFalse(try XCTUnwrap(bare.prompts.first { $0.contains("Write a concise summary") }).contains("Labels starting with S"))
     }
 
+    func testBehaviorTheNotePayloadTheModelReceivesMarksHandwritingAndItsPage() throws {
+        let source = MeetingEvidence.summarySource(meeting())
+        let json = SynthesisJSON.string(NotePayload.all(source))
+        XCTAssertTrue(json.contains(#""label":"H1""#))
+        XCTAssertTrue(json.contains(#""page":1,"placement""#) || json.contains(#""page":1"#))
+        XCTAssertTrue(json.contains(#""source":"handwriting""#))
+        let reference = try JSONSerialization.data(withJSONObject: source.notesPayload, options: [.sortedKeys, .withoutEscapingSlashes])
+        XCTAssertEqual(json, String(decoding: reference, as: UTF8.self), "The same as the source's own payload")
+        let typed = MeetingEvidence.summarySource(Meeting(title: "T", notes: "A note"))
+        XCTAssertFalse(SynthesisJSON.string(NotePayload.all(typed)).contains("handwriting"))
+        let whole = SynthesisJSON.string(SourcePayload(source))
+        XCTAssertTrue(whole.contains(#""source":"handwriting""#))
+    }
+
     // MARK: Parts of a long conversation
 
     func testBehaviorEachPartReadsTheHandwritingSketchesAndPhotosWhoseTimeFallsInIt() async throws {
@@ -183,7 +197,7 @@ final class NotebookSummaryTests: XCTestCase {
         } catch DaybookError.noSpeech {}
         // And the writing alone reaches the prompt, with the no-speech line.
         let model = WordModel()
-        let reply = summary
+        let reply = summary.replacingOccurrences(of: #""actionItems":[]"#, with: #""actionItems":[{"text":"Book the hall"}]"#)
         model.reply = { prompt in prompt.contains("Extract ALL explicit agreed tasks") ? #"{"actions":[]}"# : reply }
         let generated = try await MeetingSynthesis.generate(model: model, modelID: "gemma", source: source, template: .auto, glossary: [],
                                                             photos: photos, progress: { _ in })
@@ -191,7 +205,7 @@ final class NotebookSummaryTests: XCTestCase {
         XCTAssertTrue(final.contains("No speech was recorded in this conversation"))
         XCTAssertTrue(final.contains("venue holds 120 people"))
         XCTAssertEqual(generated.summary.sections.first?.heading, "Layout")
-        XCTAssertTrue(generated.summary.actionItems.isEmpty)
+        XCTAssertEqual(generated.summary.actionItems.map(\.text), [], "The reply's invented task, with nothing said to show it, is dropped")
     }
 
     // MARK: Reading sketches

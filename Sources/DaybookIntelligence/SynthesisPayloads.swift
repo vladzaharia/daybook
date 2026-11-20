@@ -58,9 +58,11 @@ public struct NotePayload: Encodable, Equatable, Sendable {
     var placement: String?
     var recording: String?
     var context: [String]
+    /// For handwriting: the notebook page it is on.
+    var page: Int?
 
     enum CodingKeys: String, CodingKey {
-        case label, kind, time, text, placement, recording, context
+        case label, kind, time, text, placement, recording, context, page, source
         case repeatsWhatWasSaid = "repeats_what_was_said"
     }
 
@@ -73,6 +75,7 @@ public struct NotePayload: Encodable, Equatable, Sendable {
         placement = anchor.kind == .note && anchor.time == nil ? "written outside the recording" : nil
         recording = anchor.recording
         context = anchor.context
+        page = anchor.page
     }
 
     static func all(_ source: SummarySource) -> [NotePayload] { source.anchors.map(NotePayload.init) }
@@ -86,6 +89,10 @@ public struct NotePayload: Encodable, Equatable, Sendable {
         try container.encode(text, forKey: .text)
         if repeatsWhatWasSaid { try container.encode(true, forKey: .repeatsWhatWasSaid) }
         try container.encodeIfPresent(placement, forKey: .placement)
+        if let page {
+            try container.encode(page, forKey: .page)
+            try container.encode("handwriting", forKey: .source)
+        }
         if let recording {
             try container.encode(recording, forKey: .recording)
             try container.encode(context, forKey: .context)

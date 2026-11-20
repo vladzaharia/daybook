@@ -83,7 +83,7 @@ extension AppState {
         }, set: { [weak self] id in
             guard let self, self.library.chooseTemplate(id, for: meetingID),
                   let after = self.meetings.first(where: { $0.id == meetingID }),
-                  !after.unifiedTranscript.isEmpty, self.processor.queue.runningID != meetingID else { return }
+                  after.hasSummarizableContent, self.processor.queue.runningID != meetingID else { return }
             self.cancelQueued(meetingID)
             self.processor.enqueue(meetingID, mode: .summaryOnly)
         })

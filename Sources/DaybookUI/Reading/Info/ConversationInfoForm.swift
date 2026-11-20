@@ -178,7 +178,7 @@ private struct DetailsRows: View {
     /// Choosing a different template summarizes again; the earlier summary stays in Version History. It starts work,
     /// so it isn't undone from Edit › Undo.
     private func chooseTemplate(_ id: String) {
-        guard library.chooseTemplate(id, for: meeting.id), let after = library.meeting(meeting.id), !after.unifiedTranscript.isEmpty else { return }
+        guard library.chooseTemplate(id, for: meeting.id), let after = library.meeting(meeting.id), after.hasSummarizableContent else { return }
         services.perform(.summarize(templateID: id == "auto" ? nil : id), after)
     }
 }

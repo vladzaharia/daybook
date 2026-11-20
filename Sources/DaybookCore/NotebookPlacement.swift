@@ -14,20 +14,27 @@ public struct PageWriting: Equatable, Sendable {
     public var text: String
 }
 
+extension NotebookPage {
+    /// The passages a summary may read: those of a reading made from the page's current drawing by this version's grouping. A
+    /// reading not made yet, or of strokes since replaced, may hold words the person has erased, so it is not summary input.
+    public var summaryPassages: [NotebookPassage] { isReadingCurrent ? passages : [] }
+}
+
 extension Meeting {
-    /// The writing on pages a summary may use: each visible page not taken out of summaries, each passage that is writing with
-    /// words, in time order (timeline time, then page, then place); passages without a time come after the timed ones, in page
+    /// The writing on pages a summary may use: each visible page not taken out of summaries whose reading is current for its
+    /// drawing, each passage that is known to be writing (a kind a newer Daybook wrote is never summary input) with words, in time order (timeline time, then page, then place); passages without a time come after the timed ones, in page
     /// order. Words a typed note already has are left out.
     public func pageWriting() -> [PageWriting] {
         let typed = notes.components(separatedBy: .newlines).map(NotebookPlacement.normalized).filter { !$0.isEmpty }
         var found: [(writing: PageWriting, y: Double, x: Double)] = []
         for (index, page) in visiblePages.enumerated() where page.hiddenFromSummary != true {
-            for passage in page.passages where passage.kind == .writing {
+            for passage in page.summaryPassages where passage.kind == .writing && passage.$kind.isKnown {
                 let flat = (page.words(of: passage) ?? "").split(whereSeparator: \.isNewline)
                     .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: " / ")
                 guard !flat.isEmpty else { continue }
                 let key = NotebookPlacement.normalized(flat)
-                guard !typed.contains(where: { $0 == key || (key.count >= 8 && $0.contains(key)) }) else { continue }
+                // Whole words only: "call ann" is not in "recall anne's budget".
+                guard !typed.contains(where: { $0 == key || (key.count >= 8 && (" " + $0 + " ").contains(" " + key + " ")) }) else { continue }
                 let text = flat.count > NotebookPlacement.writingLength ? String(flat.prefix(NotebookPlacement.writingLength)) + "…" : flat
                 found.append((PageWriting(passageID: passage.id, page: index + 1, time: timelineTime(of: passage, on: page),
                                           duration: passage.duration, text: text), passage.y, passage.x))
@@ -42,7 +49,7 @@ extension Meeting {
     /// kind, the words shown, its time, and what was found in a sketch. Reading the same strokes again gives the same value.
     var notebookSummaryInputs: [String] {
         visiblePages.flatMap { page in
-            [page.id.uuidString + (page.hiddenFromSummary == true ? " hidden" : "")] + page.passages.map { passage in
+            [page.id.uuidString + (page.hiddenFromSummary == true ? " hidden" : "")] + page.summaryPassages.map { passage in
                 let found = page.sketch(for: passage)?.analysis
                 return [passage.id.uuidString, passage.kind.rawValue, page.words(of: passage) ?? "",
                         timelineTime(of: passage, on: page).map { String($0) } ?? "", found?.caption ?? "",
@@ -79,14 +86,14 @@ extension Meeting {
         updatedAt = now
     }
 
-    /// Stores what image reading found for sketch passages, by passage: replaces a reading of the same passage, whatever
-    /// strokes it read. Only passages the pages have; the rest are dropped.
+    /// Stores what image reading found for sketch passages, by passage: replaces a reading of the same passage. A reading of
+    /// strokes the passage no longer has (a late result) is dropped, and so is one for a passage no page has.
     public mutating func applySketchAnalyses(_ analyses: [UUID: SketchAnalysis], now: Date = Date()) {
         guard pages != nil, !analyses.isEmpty else { return }
         var changed = false
         for index in pages!.indices {
             for passage in pages![index].passages {
-                guard let found = analyses[passage.id] else { continue }
+                guard let found = analyses[passage.id], found.strokeDigest == passage.strokeDigest else { continue }
                 var list = (pages![index].sketches ?? []).filter { $0.passageID != passage.id }
                 list.append(found)
                 list.sort { $0.passageID.uuidString < $1.passageID.uuidString }
@@ -99,10 +106,11 @@ extension Meeting {
         if changed { updatedAt = now }
     }
 
-    /// Sketch passages of visible pages with no current reading: what an image reading pass has to do.
+    /// Sketch passages of visible pages (not hidden from summaries, and read from their current drawing) with no reading of their
+    /// strokes: what an image reading pass has to do.
     public var sketchesNeedingReading: [(page: NotebookPage, passage: NotebookPassage)] {
-        visiblePages.flatMap { page in
-            page.passages.filter { $0.kind == .sketch && page.sketch(for: $0) == nil }.map { (page, $0) }
+        visiblePages.filter { $0.hiddenFromSummary != true }.flatMap { page in
+            page.summaryPassages.filter { $0.kind == .sketch && page.sketch(for: $0) == nil }.map { (page, $0) }
         }
     }
 }
@@ -120,7 +128,7 @@ public enum NotebookPlacement {
     public static func candidates(in meeting: Meeting) -> [PhotoEvidence] {
         var found: [(passage: NotebookPassage, page: NotebookPage, number: Int, time: TimeInterval?)] = []
         for (index, page) in meeting.visiblePages.enumerated() where page.hiddenFromSummary != true {
-            for passage in page.passages where passage.kind == .sketch && page.sketch(for: passage)?.analysis.isInformative == true {
+            for passage in page.summaryPassages where passage.kind == .sketch && passage.$kind.isKnown && page.sketch(for: passage)?.analysis.isInformative == true {
                 found.append((passage, page, index + 1, meeting.timelineTime(of: passage, on: page)))
             }
         }

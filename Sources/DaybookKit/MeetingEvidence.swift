@@ -2,6 +2,14 @@ import DaybookCore
 import Foundation
 
 /// User annotations keep their own provenance and are never presented as spoken words.
+extension Meeting {
+    /// Whether a summary can be written (or written again): there was speech, or there are notes or handwriting to summarize
+    /// (`SummarySource.hasContent`). The one rule the engines and every Summarize Again gate on.
+    public var hasSummarizableContent: Bool {
+        !unifiedTranscript.isEmpty || MeetingEvidence.summarySource(self).hasContent
+    }
+}
+
 public enum MeetingEvidence {
     public static func transcript(_ meeting: Meeting) -> String {
         meeting.unifiedTranscript.map { segment in

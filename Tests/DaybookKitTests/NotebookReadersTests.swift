@@ -154,4 +154,102 @@ final class NotebookReadersTests: XCTestCase {
         XCTAssertTrue(text.contains("clockSamples"), "The recording clock")
         XCTAssertFalse(String(decoding: try MeetingExport.json(meeting), as: UTF8.self).contains("pageDrawingFiles"), "No files given, none carried")
     }
+
+    // MARK: Review fixes
+
+    /// `meeting` after a round trip through JSON in which the first passage's kind was written by a newer Daybook.
+    private func withUnknownKind(_ meeting: Meeting) throws -> Meeting {
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(meeting)) as? [String: Any])
+        var pages = try XCTUnwrap(object["pages"] as? [[String: Any]])
+        var reading = try XCTUnwrap(pages[0]["reading"] as? [String: Any])
+        var passages = try XCTUnwrap(reading["passages"] as? [[String: Any]])
+        passages[0]["kind"] = "futureDiagram"
+        reading["passages"] = passages; pages[0]["reading"] = reading; object["pages"] = pages
+        return try JSONDecoder().decode(Meeting.self, from: JSONSerialization.data(withJSONObject: object))
+    }
+
+    func testBehaviorAPassageKindANewerDaybookWroteIsNotSummaryInput() throws {
+        let id = UUID()
+        let known = meeting(pages: [Pages.page(id, [Pages.passage(id, key: "a", words: "secret words of a future kind", time: 20),
+                                                    Pages.passage(id, key: "b", words: "ordinary writing", time: 30)])])
+        let future = try withUnknownKind(known)
+        XCTAssertEqual(future.pages?[0].passages[0].kind, .writing, "It reads as writing here")
+        XCTAssertEqual(future.pageWriting().map(\.text), ["ordinary writing"])
+        XCTAssertFalse(MeetingEvidence.summarySource(future).anchors.contains { $0.text.contains("secret") })
+        XCTAssertFalse(MeetingEvidence.notes(future).contains("secret"))
+        XCTAssertTrue(MeetingEvidence.summarySource(known).anchors.contains { $0.text.contains("secret") })
+    }
+
+    func testBehaviorAReadingThatIsNotCurrentForTheDrawingIsNotSummaryInput() {
+        let id = UUID()
+        var meeting = meeting(pages: [Pages.page(id, [Pages.passage(id, key: "a", words: "words since erased", time: 20)])])
+        XCTAssertEqual(meeting.pageWriting().count, 1)
+        meeting.pages![0].reading!.drawingSHA256 = "of-older-strokes"
+        XCTAssertTrue(meeting.pageWriting().isEmpty, "A reading of other strokes")
+        XCTAssertTrue(MeetingEvidence.summarySource(meeting).anchors.isEmpty)
+        meeting.pages![0].reading = nil
+        XCTAssertTrue(meeting.pageWriting().isEmpty, "A page not read yet")
+        XCTAssertFalse(meeting.summaryInputsChanged(since: meeting))
+        var read = meeting
+        read.pages![0] = Pages.page(id, [Pages.passage(id, key: "a", words: "words since erased", time: 20)])
+        XCTAssertTrue(read.summaryInputsChanged(since: meeting), "A reading arriving changes what a summary reads")
+    }
+
+    func testBehaviorTypedNotesAreMatchedByWholeWordsOnly() {
+        let id = UUID()
+        let page = Pages.page(id, [Pages.passage(id, key: "a", words: "call ann", time: 20)])
+        let source = MeetingEvidence.summarySource(meeting(notes: "recall anne's budget", pages: [page]))
+        XCTAssertEqual(source.anchors.compactMap { $0.page == nil ? nil : $0.text }, ["call ann"], "Not inside other words")
+        let again = Pages.page(id, [Pages.passage(id, key: "a", words: "ask about the venue contract", time: 20)])
+        XCTAssertTrue(MeetingEvidence.summarySource(meeting(notes: "Remember to ask about the venue contract today", pages: [again]))
+            .anchors.allSatisfy { $0.page == nil }, "Whole words inside a note are the same words")
+    }
+
+    func testBehaviorABookmarkNameAloneIsNotContentButNotesAndHandwritingAre() {
+        var silent = Meeting(title: "Silent")
+        silent.highlights = [Highlight(time: 5, text: "Pricing decision")]
+        XCTAssertFalse(MeetingEvidence.summarySource(silent).hasContent)
+        XCTAssertFalse(silent.hasSummarizableContent)
+        silent.notes = "A note"
+        XCTAssertTrue(silent.hasSummarizableContent)
+        let id = UUID()
+        XCTAssertTrue(meeting(pages: [Pages.page(id, [Pages.passage(id, key: "a", words: "idea", time: 1)])], speech: false).hasSummarizableContent)
+        XCTAssertTrue(meeting(pages: [], speech: true).hasSummarizableContent)
+    }
+
+    func testBehaviorASourceFromStringsKeepsItsTranscriptWhenPicturesAreOffered() {
+        let source = SummarySource.legacy(transcript: "[00:05] Alex: Hello there", notes: "n", highlights: nil)
+        let picture = PhotoEvidence(id: UUID(), label: "P1", time: 5, caption: "Whiteboard")
+        XCTAssertEqual(source.annotatedTranscript(placing: [picture]), "[00:05] Alex: Hello there")
+    }
+
+    func testBehaviorFullDataExportFormatsNumbersAsWithoutTheDrawingFiles() throws {
+        let id = UUID()
+        var meeting = meeting(pages: [Pages.page(id, [Pages.passage(id, key: "a", words: "hello", time: 20)])])
+        meeting.highlights = [Highlight(time: 0.1, text: "Tenth")]
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("Export-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("page.pkdrawing")
+        try Data("strokes".utf8).write(to: file)
+        let path = try XCTUnwrap(meeting.pages?[0].drawing).relativePath
+        let without = String(decoding: try MeetingExport.json(meeting), as: UTF8.self)
+        let with = String(decoding: try MeetingExport.json(meeting, pageDrawings: [path: file]), as: UTF8.self)
+        XCTAssertTrue(without.contains("0.1,") || without.contains("0.1\n"), without)
+        XCTAssertFalse(with.contains("0.10000000000000001"))
+        XCTAssertTrue(Set(without.components(separatedBy: "\n")).isSubset(of: Set(with.components(separatedBy: "\n"))), "Only the drawing files are added")
+        XCTAssertTrue(with.contains("pageDrawingFiles"))
+    }
+
+    func testBehaviorSummarizeAgainIsOfferedForAConversationWithOnlyNotesOrPages() {
+        func summarizeAgain(_ meeting: Meeting) -> ConversationAction.Availability? {
+            func all(_ actions: [ConversationAction]) -> [ConversationAction] { actions.flatMap { [$0] + all($0.children) } }
+            let groups = ConversationActions.actions(for: meeting, context: .init(platform: .mac, canTakePhoto: false))
+            return all(groups.flatMap(\.actions)).first { $0.id == .process(.summaryOnly) }?.availability
+        }
+        let id = UUID()
+        let pages = meeting(pages: [Pages.page(id, [Pages.passage(id, key: "a", words: "idea", time: 1)])], speech: false)
+        XCTAssertEqual(summarizeAgain(pages), .available)
+        XCTAssertEqual(summarizeAgain(Meeting(title: "Empty")), .unavailable("No transcript yet"))
+    }
 }

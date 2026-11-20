@@ -97,4 +97,21 @@ final class NotebookPlacementTests: XCTestCase {
         let photo = #"{"id":"\#(id.uuidString)","label":"P1","labels":[]}"#
         XCTAssertFalse(try JSONDecoder().decode(PhotoEvidence.self, from: Data(photo.utf8)).isSketch, "Old evidence is a photo")
     }
+
+    func testBehaviorALateReadingOfOldStrokesIsDroppedAndOnlyCurrentVisiblePagesAreRead() {
+        var (meeting, id) = meeting([("a", 10, true)])
+        let current = meeting.pages![0].passages[0]
+        var late = analysis(current, caption: "Old strokes")
+        late.strokeDigest = PassageGrouping.digest(of: ["old"])
+        meeting.applySketchAnalyses([current.id: late])
+        XCTAssertEqual(meeting.pages![0].sketches?.first?.analysis.caption, "Floor plan of hall B", "The current reading stands")
+        // A sketch with no reading is read only from a page whose reading is current and which summaries may use.
+        meeting.pages![0].sketches = nil
+        XCTAssertEqual(meeting.sketchesNeedingReading.count, 1)
+        var older = meeting
+        older.pages![0].reading!.drawingSHA256 = "other"
+        XCTAssertTrue(older.sketchesNeedingReading.isEmpty, "Not from a reading that isn't current")
+        meeting.setPageHiddenFromSummary(id, hidden: true)
+        XCTAssertTrue(meeting.sketchesNeedingReading.isEmpty, "Not on a page hidden from summaries")
+    }
 }

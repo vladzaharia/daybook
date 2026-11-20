@@ -181,7 +181,7 @@ final class CloudSummarizerTests: XCTestCase {
         XCTAssertFalse(everything.contains("kestrelwords"), "Nor the words in the drawing")
         XCTAssertFalse(everything.contains("[S1]"), "Nor its label")
         XCTAssertFalse(everything.contains("drawn at"))
-        XCTAssertFalse(everything.contains("sketches the user drew"), "The prompt doesn't mention sketches at all")
+        XCTAssertFalse(everything.contains("sketches the user drew"), "No guidance about sketch labels")
         XCTAssertFalse(everything.contains("PICTURE"))
         for image in ["data:image", "image/png", "base64", "\"image\""] { XCTAssertFalse(everything.contains(image), image) }
         // The prompt builder says the same: it is given the source, which has no picture evidence to hold.
@@ -193,6 +193,22 @@ final class CloudSummarizerTests: XCTestCase {
         XCTAssertEqual(built.noteText.contains("zephyr contract"), true)
         // A summary written in the cloud places a sketch by time, from what was read on this device.
         XCTAssertEqual(result.summary.sections.flatMap { $0.sketchIDs ?? [] }, [sketch.id])
+    }
+
+    func testBehaviorWordsOfAPassageKindANewerDaybookWroteNeverReachTheCloud() async throws {
+        let (notebook, _) = notebookMeeting()
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(notebook)) as? [String: Any])
+        var pages = try XCTUnwrap(object["pages"] as? [[String: Any]])
+        var reading = try XCTUnwrap(pages[0]["reading"] as? [String: Any])
+        var passages = try XCTUnwrap(reading["passages"] as? [[String: Any]])
+        passages[0]["kind"] = "futureDiagram"
+        reading["passages"] = passages; pages[0]["reading"] = reading; object["pages"] = pages
+        let future = try JSONDecoder().decode(Meeting.self, from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertTrue(future.pageWriting().isEmpty)
+        let built = CloudSynthesis.prompt(source: MeetingEvidence.summarySource(future), template: .auto, glossary: [], templateInstructions: nil, provider: .anthropic)
+        XCTAssertFalse((built.instructions + built.prompt + built.schema + built.noteText).contains("zephyr contract"))
+        let known = CloudSynthesis.prompt(source: MeetingEvidence.summarySource(notebook), template: .auto, glossary: [], templateInstructions: nil, provider: .anthropic)
+        XCTAssertTrue(known.prompt.contains("zephyr contract"))
     }
 
     func testBehaviorACloudSummaryNeedsNoSpeechWhenThereAreNotesOrPages() async throws {

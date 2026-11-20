@@ -107,7 +107,7 @@ public struct ProcessingOutput: Sendable {
     public var meeting: Meeting
     public var transcripts: [TrackTranscript]
     public var speakers: [Speaker]
-    /// Nil when nothing was said, so there was nothing to summarize.
+    /// Nil when nothing was said or written, so there was nothing to summarize.
     public var summary: MeetingSummary?
     public var suggestedTerms: [String]
     public var notices: [String]
@@ -180,7 +180,7 @@ extension ProcessingEngine {
             working.applyPlacements(fusion.settled)
         }
         try Task.checkCancellation()
-        guard !MeetingEvidence.transcript(working).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard working.hasSummarizableContent else {
             return ProcessingOutput(meeting: working, transcripts: transcripts, speakers: speakers, summary: nil, suggestedTerms: [], notices: notices)
         }
         let summary = try await summarize(working, template: template, vocabulary: vocabulary, progress: progress)

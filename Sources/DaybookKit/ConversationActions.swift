@@ -223,7 +223,7 @@ public enum ConversationActions {
         }
         modes += [
             ConversationAction(id: .process(.summaryOnly), title: ProcessingWords.title(.summaryOnly), symbol: "text.alignleft",
-                               availability: meeting.unifiedTranscript.isEmpty ? .unavailable("No transcript yet") : .available),
+                               availability: meeting.hasSummarizableContent ? .available : .unavailable("No transcript yet")),
             ConversationAction(id: .process(.speakerRefresh), title: ProcessingWords.title(.speakerRefresh), symbol: "person.2",
                                availability: meeting.transcripts.isEmpty ? .unavailable("Not transcribed yet") : .available),
             ConversationAction(id: .process(.fullRetranscription), title: ProcessingWords.title(.fullRetranscription), symbol: "arrow.clockwise"),
@@ -237,7 +237,7 @@ public enum ConversationActions {
                            symbol: personal ? "briefcase" : "house")
     }
 
-    /// Several conversations selected: filing them, merging them into one, summarizing those with a transcript again, and
+    /// Several conversations selected: filing them, merging them into one, summarizing those with something to summarize again, and
     /// the Trash. `each` is what the app knows about each one (recording, processing): Merge… waits while any of them is
     /// busy (`Context.mergeBusy`), recording as another device's sync says (`Meeting.status`), or in a merge that's running
     /// (`merging`, `LibraryController.mergingIDs`).
@@ -248,7 +248,7 @@ public enum ConversationActions {
         if selected.count == 1, let meeting = selected.first { return actions(for: meeting, context: context) }
         let mac = context.platform == .mac
         let personal = selected.allSatisfy { $0.effectivePlacement == .personal }
-        let summarizable = selected.contains { !$0.unifiedTranscript.isEmpty }
+        let summarizable = selected.contains { $0.hasSummarizableContent }
         let mergeBusy = context.busy ?? selected.lazy.compactMap { meeting -> String? in
             if merging.contains(meeting.id) { return "Merging now" }
             return meeting.status == .recording ? "Recording now" : (each?(meeting) ?? context).mergeBusy

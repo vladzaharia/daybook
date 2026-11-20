@@ -142,7 +142,8 @@ public struct SummarySource: Sendable, Equatable {
     /// conversation reads them: "[12:04] PICTURE [S1]; drawn at 12:04 on page 2; shows: …".
     public func annotatedTranscript(placing pictures: [PhotoEvidence]) -> String {
         let timed = pictures.filter { $0.time != nil }
-        guard isStructured || !timed.isEmpty else { return transcript }
+        // A source from strings has its transcript as it came: pictures can't be placed in it.
+        guard isStructured else { return transcript }
         var result: [String] = []
         if lines.isEmpty, !anchors.isEmpty || !pictures.isEmpty { result.append(Self.noSpeech) }
         var placed = anchors.filter { $0.time != nil && $0.context.isEmpty }.map { (time: $0.time!, order: $0.label, text: Self.marker($0)) }
@@ -160,10 +161,11 @@ public struct SummarySource: Sendable, Equatable {
     /// Said first in a source with notes or pages and no speech, so the model never takes the notes for a conversation.
     public static let noSpeech = "[No speech was recorded in this conversation. The notes below are all there is to summarize.]"
 
-    /// Whether there is anything to summarize: speech, or notes, handwriting, or bookmarks.
+    /// Whether there is anything to summarize: speech, notes or handwriting, or the passages around a bookmark on a recording that
+    /// isn't lined up. A bookmark's own words only name a moment, so a silent recording with a named bookmark has nothing.
     public var hasContent: Bool {
         !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || anchors.contains { !$0.text.isEmpty || !$0.context.isEmpty }
+            || anchors.contains { ($0.kind == .note && !$0.text.isEmpty) || !$0.context.isEmpty }
     }
 
     /// Every note and bookmark, for the model: label, kind, time (null when it has none), and text;

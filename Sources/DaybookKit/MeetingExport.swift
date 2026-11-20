@@ -11,6 +11,20 @@ import UniformTypeIdentifiers
 /// Markdown viewer fetches with the summary in its URL. The person's own notes and bookmarks are
 /// written as they typed them.
 public enum MeetingExport {
+    /// The conversation's own keys with, when there are any, the page drawing files beside them.
+    private struct FullData: Encodable {
+        struct DrawingFile: Encodable { var relativePath: String, sha256: String, base64: String }
+        var meeting: Meeting
+        var pageDrawingFiles: [DrawingFile]
+        private enum Keys: String, CodingKey { case pageDrawingFiles }
+        func encode(to encoder: Encoder) throws {
+            try meeting.encode(to: encoder)
+            guard !pageDrawingFiles.isEmpty else { return }
+            var container = encoder.container(keyedBy: Keys.self)
+            try container.encode(pageDrawingFiles, forKey: .pageDrawingFiles)
+        }
+    }
+
     /// `photoLinks` maps photos to the relative links written beside the Markdown (`write(_:to:photoFile:)`);
     /// a photo without one is described by its caption only.
     public static func markdown(_ meeting: Meeting, photoLinks: [UUID: String] = [:]) -> String {
@@ -247,14 +261,12 @@ public enum MeetingExport {
     public static func json(_ meeting: Meeting, pageDrawings: [String: URL] = [:]) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(meeting)
-        let files: [[String: String]] = (meeting.pages ?? []).compactMap { $0.drawing }.compactMap { drawing in
+        let files: [FullData.DrawingFile] = (meeting.pages ?? []).compactMap { $0.drawing }.compactMap { drawing in
             guard let url = pageDrawings[drawing.relativePath], let bytes = try? Data(contentsOf: url) else { return nil }
-            return ["relativePath": drawing.relativePath, "sha256": drawing.sha256, "base64": bytes.base64EncodedString()]
+            return FullData.DrawingFile(relativePath: drawing.relativePath, sha256: drawing.sha256, base64: bytes.base64EncodedString())
         }
-        guard !files.isEmpty, var object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return data }
-        object["pageDrawingFiles"] = files
-        return try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        // The same encoder either way, so numbers are written alike with and without the drawing files.
+        return try encoder.encode(FullData(meeting: meeting, pageDrawingFiles: files))
     }
 }
 

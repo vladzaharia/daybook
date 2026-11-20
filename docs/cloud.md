@@ -14,7 +14,7 @@ title and date. The title goes only when the person or the calendar gave it (nev
 placeholder, or a title a summary wrote earlier), cut to 120 characters; the date is when the conversation began as the
 person's local day, time, and time zone, sent only when a recording's start is known, so the model can resolve "next
 Tuesday" (`SummarySource.Context`). Nothing else: no audio, no photos or their captions, no notebook page pictures or sketches (nor a sketch's description or label), no voiceprints, no speaker
-profiles, no calendar attendees or other calendar detail. Photo captions and sketch descriptions stay on the device, so a cloud
+profiles, no calendar attendees or other calendar detail. Words from a page reading that isn't current, or of a passage kind this version doesn't know, are never sent. Photo captions and sketch descriptions stay on the device, so a cloud
 summary places photos and sketches by time only (`PhotoPlacement.arrange`, `NotebookPlacement.arrange`). OpenAI's request sets `store: false`, so the response
 isn't kept on OpenAI's side. The same is sent whatever brought the summary to the cloud ("When the cloud is chosen").
 
