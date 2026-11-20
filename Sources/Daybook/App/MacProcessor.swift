@@ -196,6 +196,8 @@ final class MacProcessor {
         await app.realign(id)
         if await app.sourcesAfterTranscription(id) { return }
         _ = try await app.readPhotos(id, engine: engine, progress: progress)
+        // Sketches drawn on notebook pages, described here as the iPhone describes them before it summarizes.
+        _ = try await app.readSketches(id, engine: engine, progress: progress)
         await app.labelSpeakers(before: id)
         guard let before = app.meetings.first(where: { $0.id == id }) else { return }
         guard MeetingEvidence.summarySource(before).hasContent else { throw AppError.noSpeech }
