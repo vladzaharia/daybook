@@ -167,65 +167,94 @@ final class PlaybackEngineLevelTests: XCTestCase {
         }
     }
 
-    private let loud = SpeechLevel.Measurement(speech: -20, peak: -5, quiet: -50)   // 12 dB over -32: lowered 12
-    private let quiet = SpeechLevel.Measurement(speech: -50, peak: -30, quiet: -80)
+    private let meetingID = UUID()
+    private func level(_ speech: Double) -> SpeechLevel.Measurement { SpeechLevel.Measurement(speech: speech, peak: speech + 15, quiet: speech - 30) }
+    private func conversation(own: Double?, others: [Double]) -> PlaybackLevel.Conversation {
+        PlaybackLevel.Conversation(id: meetingID, own: own.map(level), others: others.map(level))
+    }
+    private func factor(_ decibels: Double) -> Float { Float(pow(10, decibels / 20)) }
 
-    func testBehaviorARecordedLevelIsUsedWithoutMeasuring() throws {
+    func testBehaviorARecordedLevelIsMatchedToTheConversationWithoutMeasuring() throws {
         let measurer = Measurer()
         let engine = PlaybackEngine { try await measurer($0, nil) }
-        let url = try recording(SyntheticAudio.syllables(level: -20, seconds: 2))
-        try engine.load(url, recordedLevel: loud)
-        XCTAssertEqual(engine.levelGain, Float(pow(10, -12.0 / 20)), accuracy: 1e-6)
+        let url = try recording(SyntheticAudio.syllables(level: -25, seconds: 2))
+        try engine.load(url, conversation: conversation(own: -25, others: [-35]))
+        XCTAssertEqual(engine.levelGain, factor(-10), accuracy: 1e-6)
         XCTAssertEqual(try XCTUnwrap(engine.playerVolume), engine.levelGain, accuracy: 1e-6)
         XCTAssertTrue(measurer.measurements.isEmpty)
     }
 
-    func testBehaviorAnUnrecordedFileIsMeasuredOnceAndTheGainArrivesAfterPlaybackStarted() async throws {
+    func testBehaviorWithoutAConversationItPlaysAtUnityAndIsNotMeasured() throws {
         let measurer = Measurer()
-        let engine = PlaybackEngine { try await measurer($0, self.loud) }
-        let url = try recording(SyntheticAudio.syllables(level: -20, seconds: 2))
-        try engine.load(url)
+        let engine = PlaybackEngine { try await measurer($0, self.level(-20)) }
+        try engine.load(try recording(SyntheticAudio.syllables(level: -20, seconds: 2)))
+        XCTAssertEqual(engine.levelGain, 1)
+        XCTAssertTrue(measurer.measurements.isEmpty)
+    }
+
+    func testBehaviorAnUnrecordedFileIsMeasuredOnceAndJoinsTheSetWhilePlaying() async throws {
+        let measurer = Measurer()
+        let engine = PlaybackEngine { try await measurer($0, self.level(-25)) }
+        let url = try recording(SyntheticAudio.syllables(level: -25, seconds: 2))
+        try engine.load(url, conversation: conversation(own: nil, others: [-35]))
         XCTAssertEqual(engine.levelGain, 1, "plays at unity until the measurement arrives")
         try await waitUntil("the measurement is applied") { engine.levelGain < 1 }
-        XCTAssertEqual(engine.levelGain, Float(pow(10, -12.0 / 20)), accuracy: 1e-6)
+        XCTAssertEqual(engine.levelGain, factor(-10), accuracy: 1e-6)
 
         // The same file again, here and after another recording, comes from the session's memory.
-        try engine.load(url)
-        let other = try recording(SyntheticAudio.syllables(level: -50, seconds: 2))
-        try engine.load(other, recordedLevel: quiet)
-        try engine.load(url)
-        XCTAssertEqual(engine.levelGain, Float(pow(10, -12.0 / 20)), accuracy: 1e-6, "applied at once")
+        try engine.load(url, conversation: conversation(own: nil, others: [-35]))
+        let other = try recording(SyntheticAudio.syllables(level: -35, seconds: 2))
+        try engine.load(other, conversation: conversation(own: -35, others: [-25]))
+        XCTAssertEqual(engine.levelGain, 1, "the quiet one is the target")
+        try engine.load(url, conversation: conversation(own: nil, others: [-35]))
+        XCTAssertEqual(engine.levelGain, factor(-10), accuracy: 1e-6, "applied at once")
         XCTAssertEqual(measurer.measurements, [url])
+    }
+
+    func testBehaviorAMeasuredSiblingCountsTowardTheTargetOfTheNextRecording() async throws {
+        let measurer = Measurer()
+        let engine = PlaybackEngine { url in try await measurer(url, url.lastPathComponent.contains("quiet") ? self.level(-35) : self.level(-25)) }
+        let quietURL = FileManager.default.temporaryDirectory.appendingPathComponent("quiet-\(UUID().uuidString).wav")
+        files.append(quietURL)
+        try SyntheticAudio.write(SyntheticAudio.syllables(level: -35, seconds: 2), to: quietURL)
+        let loudURL = try recording(SyntheticAudio.syllables(level: -25, seconds: 2))
+        try engine.load(quietURL, conversation: conversation(own: nil, others: []))
+        try await waitUntil("the quiet one is measured") { measurer.measurements.count == 1 }
+        try await Task.sleep(for: .milliseconds(200))   // for the answer to be kept
+        try engine.load(loudURL, conversation: conversation(own: nil, others: []))
+        try await waitUntil("the loud one is matched to the quiet one measured before") { engine.levelGain < 1 }
+        XCTAssertEqual(engine.levelGain, factor(-10), accuracy: 1e-6)
     }
 
     func testBehaviorMeasuringStopsWhenAnotherRecordingLoadsAndItsLevelIsNotApplied() async throws {
         let measurer = Measurer()
         let engine = PlaybackEngine { try await measurer($0, nil) }
-        let first = try recording(SyntheticAudio.syllables(level: -20, seconds: 2))
-        let second = try recording(SyntheticAudio.syllables(level: -50, seconds: 2))
-        try engine.load(first)
+        let first = try recording(SyntheticAudio.syllables(level: -25, seconds: 2))
+        let second = try recording(SyntheticAudio.syllables(level: -35, seconds: 2))
+        try engine.load(first, conversation: conversation(own: nil, others: [-35]))
         try await waitUntil("the first is being measured") { measurer.measurements.count == 1 }
-        try engine.load(second, recordedLevel: quiet)
+        try engine.load(second, conversation: conversation(own: -35, others: [-25]))
         try await waitUntil("the first measurement is cancelled") { measurer.cancellations == 1 }
-        XCTAssertEqual(engine.levelGain, 1, "the quiet one isn't lowered")
+        XCTAssertEqual(engine.levelGain, 1)
         engine.unload()
     }
 
-    func testBehaviorTheRealMeasureLowersALoudSyntheticRecording() async throws {
+    func testBehaviorTheRealMeasureLowersALoudSyntheticRecordingToTheQuietOne() async throws {
         let engine = PlaybackEngine()
         let url = try recording(SyntheticAudio.syllables(level: -20, seconds: 3))
-        try engine.load(url)
+        try engine.load(url, conversation: conversation(own: nil, others: [-35]))
         try await waitUntil("the file is measured") { engine.levelGain < 1 }
-        XCTAssertEqual(20 * log10(Double(engine.levelGain)), -12, accuracy: 0.1)
+        XCTAssertEqual(20 * log10(Double(engine.levelGain)), -12, accuracy: 0.1, "15 dB apart: the cap")
         engine.unload()
         XCTAssertEqual(engine.levelGain, 1)
     }
 
     func testBehaviorMutedStaysSilentWhateverTheGain() throws {
         let engine = PlaybackEngine()
-        let url = try recording(SyntheticAudio.syllables(level: -20, seconds: 2))
+        let url = try recording(SyntheticAudio.syllables(level: -25, seconds: 2))
         engine.volume = 0
-        try engine.load(url, recordedLevel: loud)
+        try engine.load(url, conversation: conversation(own: -25, others: [-35]))
+        XCTAssertLessThan(engine.levelGain, 1)
         XCTAssertEqual(engine.playerVolume, 0)
         engine.volume = 1
         XCTAssertEqual(try XCTUnwrap(engine.playerVolume), engine.levelGain, accuracy: 1e-6, "the gain is a factor on the volume")

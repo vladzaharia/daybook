@@ -432,8 +432,8 @@ final class AppState {
         processor.app = self
         processor.queue.activity.onChange = { [weak processor] _ in processor?.processingProgressChanged() }
         searchMemo.onUpdate = { [weak self] in self?.searchResultsArrived &+= 1 }
-        playback.recordedLevel = { [weak self] meetingID, trackID in
-            self?.meetings.first { $0.id == meetingID }?.recordedLevel(ofTrack: trackID)
+        playback.conversationLevels = { [weak self] meetingID, trackID in
+            self?.meetings.first { $0.id == meetingID }?.playbackLevels(ofTrack: trackID)
         }
         sync.onSyncRequested = { [weak self] in await self?.synchronizeLibrary() }
         monitor.onMeetingStarted = { [weak self] candidate in

@@ -4,45 +4,53 @@ import XCTest
 /// The gain a recording plays with so recordings play at one level: lowered to the target, never raised by what a
 /// player can't do, raised (for a player that can) no further than the peak allows, and left alone without speech.
 final class PlaybackLevelTests: XCTestCase {
-    private func speech(_ level: Double, peak: Double? = nil, quiet: Double? = nil) -> SpeechLevel.Measurement {
-        SpeechLevel.Measurement(speech: level, peak: peak ?? level + 15, quiet: quiet ?? level - 30)
+    private func speech(_ level: Double, quiet: Double? = nil) -> SpeechLevel.Measurement {
+        SpeechLevel.Measurement(speech: level, peak: level + 15, quiet: quiet ?? level - 30)
     }
 
-    func testBehaviorALoudRecordingIsLoweredToTheTarget() {
-        XCTAssertEqual(PlaybackLevel.gain(for: speech(-25)), -7, accuracy: 1e-9)
-        XCTAssertEqual(PlaybackLevel.gain(for: speech(-32)), 0, accuracy: 1e-9, "at the target")
+    private func gain(_ level: Double, among levels: [Double]) -> Double {
+        PlaybackLevel.gain(for: speech(level), among: levels.map { speech($0) })
     }
 
-    func testBehaviorLoweringStopsAtTheCap() {
-        XCTAssertEqual(PlaybackLevel.gain(for: speech(-10)), -12, accuracy: 1e-9, "22 dB over, 12 dB taken")
+    func testBehaviorASingleRecordingPlaysAsCaptured() {
+        XCTAssertEqual(gain(-20, among: [-20]), 0)
+        XCTAssertEqual(gain(-20, among: []), 0)
     }
 
-    func testBehaviorAQuietRecordingIsNotRaisedWhenThePlayerCannot() {
-        XCTAssertEqual(PlaybackLevel.gain(for: speech(-50)), 0)
-        XCTAssertEqual(PlaybackLevel.factor(for: speech(-50)), 1)
+    func testBehaviorRecordingsWithinTheDeadBandPlayAsCaptured() {
+        XCTAssertEqual(gain(-25, among: [-25, -27.5]), 0)
+        XCTAssertEqual(gain(-27.5, among: [-25, -27.5]), 0)
+        XCTAssertEqual(gain(-25, among: [-25, -28]), -3, accuracy: 1e-9, "3 dB apart is the edge: matched")
     }
 
-    func testBehaviorABoostIsCappedAndKeepsThePeakUnderTheCeiling() {
-        var policy = PlaybackLevel.Policy()
-        policy.maximumBoost = 20
-        XCTAssertEqual(PlaybackLevel.gain(for: speech(-40, peak: -10), policy: policy), 8, accuracy: 1e-9, "all the way to the target")
-        XCTAssertEqual(PlaybackLevel.gain(for: speech(-60, peak: -30), policy: policy), 20, accuracy: 1e-9, "capped")
-        XCTAssertEqual(PlaybackLevel.gain(for: speech(-40, peak: -5), policy: policy), 4, accuracy: 1e-9, "the peak reaches −1 dBFS first")
-        XCTAssertEqual(PlaybackLevel.gain(for: speech(-40, peak: -0.5), policy: policy), 0, "never lowered for a peak")
-        XCTAssertEqual(PlaybackLevel.gain(for: SpeechLevel.Measurement(speech: -40, peak: nil, quiet: -70), policy: policy), 0, "no peak, no boost")
+    func testBehaviorTheLoudOneComesDownToTheQuietOneAndTheQuietOneIsUntouched() {
+        XCTAssertEqual(gain(-25, among: [-25, -35]), -10, accuracy: 1e-9)
+        XCTAssertEqual(gain(-35, among: [-25, -35]), 0)
+        XCTAssertEqual(gain(-30, among: [-25, -30, -35]), -5, accuracy: 1e-9, "one in between")
     }
 
-    func testBehaviorNoSpeechLikeDynamicsOrNoLevelPlaysAtUnity() {
-        XCTAssertEqual(PlaybackLevel.gain(for: speech(-20, quiet: -22)), 0, "a loud hum: no speech to match")
-        XCTAssertEqual(PlaybackLevel.gain(for: SpeechLevel.Measurement(speech: nil, peak: -3)), 0, "too little sound")
-        XCTAssertEqual(PlaybackLevel.gain(for: SpeechLevel.Measurement(speech: nil, peak: nil)), 0)
-        XCTAssertEqual(PlaybackLevel.gain(for: SpeechLevel.Measurement(speech: -.infinity, peak: nil)), 0)
+    func testBehaviorASpreadWiderThanTheCapLowersTheLoudOneByExactlyTheCap() {
+        XCTAssertEqual(gain(-15, among: [-15, -50]), -12, accuracy: 1e-9)
+        XCTAssertEqual(gain(-50, among: [-15, -50]), 0)
+        XCTAssertEqual(gain(-38, among: [-15, -50]), 0, "already under the target: lowering stops at the cap")
+        XCTAssertEqual(gain(-30, among: [-15, -30, -50]), -0, accuracy: 1e-9, "the target is -27")
+        XCTAssertEqual(gain(-20, among: [-15, -20, -50]), -7, accuracy: 1e-9)
+    }
+
+    func testBehaviorARecordingWithoutAUsableLevelIsIgnoredAndPlaysAsCaptured() {
+        let unmeasured = SpeechLevel.Measurement(speech: nil, peak: nil)
+        let hum = speech(-20, quiet: -22)
+        XCTAssertEqual(PlaybackLevel.gain(for: speech(-25), among: [speech(-25), unmeasured, hum]), 0, "no one to match")
+        XCTAssertEqual(PlaybackLevel.gain(for: speech(-25), among: [speech(-25), speech(-35), unmeasured, hum]), -10, accuracy: 1e-9)
+        XCTAssertEqual(PlaybackLevel.gain(for: unmeasured, among: [speech(-25), speech(-35)]), 0)
+        XCTAssertEqual(PlaybackLevel.gain(for: hum, among: [hum, speech(-35)]), 0, "a loud hum has no speech to bring down")
+        XCTAssertEqual(PlaybackLevel.factor(for: speech(-25), among: [speech(-25), speech(-35)]), Float(pow(10, -10.0 / 20)), accuracy: 1e-6)
     }
 
     func testBehaviorARecordedLevelHasNoQuietLevelAndIsMatchedAsItStands() {
         let recorded = LevelAdjustment(speechLevel: -22, peak: -3, gain: 0)
         XCTAssertNil(recorded.measurement.quiet)
-        XCTAssertEqual(PlaybackLevel.gain(for: recorded.measurement), -10, accuracy: 1e-9)
+        XCTAssertEqual(PlaybackLevel.gain(for: recorded.measurement, among: [recorded.measurement, speech(-32)]), -10, accuracy: 1e-9)
     }
 
     func testBehaviorTheLatestProcessedRunsRecordedLevelIsUsed() {
@@ -58,5 +66,6 @@ final class PlaybackLevelTests: XCTestCase {
         ])
         XCTAssertEqual(meeting.recordedLevel(ofTrack: track)?.speech, -20)
         XCTAssertNil(meeting.recordedLevel(ofTrack: UUID()))
+        XCTAssertEqual(meeting.playbackLevels(ofTrack: track).own?.speech, -20)
     }
 }
