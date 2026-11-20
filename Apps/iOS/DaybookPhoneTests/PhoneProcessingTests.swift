@@ -384,6 +384,45 @@ final class PhoneProcessingTests: XCTestCase {
         XCTAssertNil(request(rig, id)?.activeClaim(at: Date()), "left for a Mac")
     }
 
+    // MARK: Audio this iPhone still needs
+
+    func testBehaviorARecordingAwaitingThisIPhonesWorkNeedsItsAudioUntilTheWorkEnds() async throws {
+        let rig = try await rig(summarizes: false)
+        let meeting = try await record(into: rig.library)
+        XCTAssertEqual(rig.processor.meetingsNeedingAudio(), [meeting.id], "claimed when filed, before it starts")
+        rig.engine.hold(true)
+        rig.processor.pickUp()
+        try await waitUntil("transcribing") { rig.engine.isWaiting }
+        XCTAssertEqual(rig.processor.meetingsNeedingAudio(), [meeting.id], "while it runs")
+        rig.processor.conditions.isRecording = true
+        try await waitUntil("the pause") { outcome(rig, meeting.id) == .paused(.recording) }
+        XCTAssertEqual(rig.processor.meetingsNeedingAudio(), [meeting.id], "and while it waits to go on")
+        rig.engine.hold(false)
+        rig.processor.conditions.isRecording = false
+        try await waitUntil("the job to finish") { rig.processor.lastOutcome?.meetingID == meeting.id && rig.processor.running == nil
+            && rig.processor.lastOutcome?.outcome != .paused(.recording) }
+        XCTAssertEqual(rig.processor.meetingsNeedingAudio(), [], "its work is done: the audio can go back to iCloud")
+    }
+
+    func testBehaviorAJobThatFailedForGoodNoLongerNeedsItsAudio() async throws {
+        let rig = try await rig()
+        rig.engine.fail(with: DaybookError.noSpeech)
+        let meeting = try await record(into: rig.library)
+        XCTAssertEqual(rig.processor.meetingsNeedingAudio(), [meeting.id])
+        rig.processor.pickUp()
+        try await waitUntil("the failure") { outcome(rig, meeting.id) == .failed(DaybookError.noSpeech.localizedDescription, .noSpeech) }
+        XCTAssertEqual(rig.processor.meetingsNeedingAudio(), [])
+    }
+
+    func testBehaviorAnotherDevicesRecordingNeedsNoAudioHere() async throws {
+        let rig = try await rig()
+        let id = rig.library.controller.newMeeting(title: "From the Mac")
+        let track = RecordingTrack(source: .microphone, relativePath: "Originals/mac.m4a", fileName: "mac.m4a", duration: 4, sha256: "mac")
+        rig.library.controller.update(id) { $0.tracks = [track] }
+        rig.library.controller.requestProcessing(id, mode: .newAudio)
+        XCTAssertEqual(rig.processor.meetingsNeedingAudio(), [])
+    }
+
     // MARK: Never in a recording's way, and backing off
 
     func testBehaviorARecordingPausesTheWorkWhichKeepsItsClaimAndResumes() async throws {

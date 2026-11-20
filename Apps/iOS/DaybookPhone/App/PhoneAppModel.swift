@@ -211,7 +211,9 @@ final class PhoneAppModel: RecordingCommandHandling {
             owns: { [weak library] in library?.ownsTrack ?? { _ in false } },
             // Its own recordings are kept here until iCloud has them; one that went back since comes down again.
             audio: { track, id in try await audio.localAudio(for: track, in: id, progress: { _ in }) },
-            release: { [weak models] in await models?.releaseProcessingModels() }),
+            release: { [weak models] in await models?.releaseProcessingModels() },
+            // A job ended: its recording may go back to iCloud now.
+            changed: { [weak audio] in audio?.evictSoon() }),
             // The system's continued-processing task, never in tests.
             continued: ContinuedProcessing(scheduler: environment.continuedProcessing()))
         let sync = self.sync, link = self.link
@@ -239,6 +241,12 @@ final class PhoneAppModel: RecordingCommandHandling {
         wireRecorder()
         wireSync()
         multipoints.wire()
+        // What this iPhone still has to process or send isn't taken back to iCloud, and an upload iCloud confirms is.
+        audio.needsAudio = { [weak self] in
+            guard let self else { return [] }
+            return self.processor.meetingsNeedingAudio().union(self.multipoints.outgoing.keys)
+        }
+        sync.onUploadsConfirmed = { [weak audio] in audio?.evictSoon() }
         sharing.multipoints = multipoints
         // A Mac's note or bookmark changes what the Live Activity shows.
         sharing.changed = { [weak self] in self?.updateActivity() }
@@ -565,6 +573,8 @@ final class PhoneAppModel: RecordingCommandHandling {
             speakerPass = nil
             sync.scheduleBackgroundRefresh()
             sync.finishOnLeavingForeground()
+            // Audio iCloud already has goes back to it while iOS gives the time, never holding the app on screen.
+            audio.evictLeavingForeground()
             // What the saves on leaving made gets the library's class, if it's protected while locked.
             protector.keep()
             remindMeetings()

@@ -28,6 +28,10 @@ public struct SyncResult: Sendable {
     /// A large conversation edited here again within `LibrarySyncEngine.publicationInterval` of its last publication is
     /// held back (counted in `pendingUploads`) until then; a pass at or after this date publishes it. Nil: nothing held.
     public var nextPublication: Date?
+    /// Files in the sync folder that waited to upload when the pass before this one ended and iCloud reports uploaded now.
+    /// An on-demand replica's cue to bring its audio within budget again (nothing it holds is more evictable than a
+    /// recording iCloud has just confirmed).
+    public var confirmedUploads: Int = 0
     public var hasPendingTransfers: Bool { pendingDownloads > 0 || pendingUploads > 0 }
     /// Synchronize again soon: this pass stopped at its work limits.
     public var hasMoreWork: Bool { deferredItems > 0 }
@@ -137,6 +141,8 @@ public actor LibrarySyncEngine {
     /// Objects in the sync folder an eager replica wrote, verified, or installed from, by path, with the plaintext SHA-256
     /// the library holds a verified copy of: once iCloud has one, its local copy is let go (`evictUploadedContainerCopies`).
     var containerCopies: [String: String] = [:]
+    /// Sync-folder files the last pass found waiting to upload (`countPendingCloudUploads`), by path.
+    var uploadsWaiting: Set<String> = []
     /// Objects in the sync folder whose bytes the library installed from a courier delivery, by path, with the plaintext
     /// SHA-256: kept while iCloud holds them only in the cloud, so a copy it brings down later is let go too
     /// (`evictUploadedContainerCopies`).
@@ -676,6 +682,7 @@ public actor LibrarySyncEngine {
         // Objects iCloud has, which the library holds verified, needn't stay on disk twice.
         evictUploadedContainerCopies()
         pass.pendingUploads += uploads.pending
+        pass.confirmedUploads = uploads.confirmed
         try saveAudioIndexIfNeeded()
         // Courier deliveries the sync folder now holds, downloaded and identical, aren't needed any more.
         pruneCourierInbox()
@@ -692,7 +699,7 @@ public actor LibrarySyncEngine {
             deletedMeetingIDs: pass.deletes, metadataVersions: versions, warnings: Array(Set(pass.warnings)).sorted(),
             pendingDownloads: pass.pendingDownloads, pendingUploads: pass.pendingUploads, publishedEvents: pass.published,
             changedMeetingIDs: pass.changed, notLocalAudio: pass.notLocalAudio, deferredItems: pass.budget.deferred, writtenFiles: written,
-            storageFull: uploads.storageFull, nextPublication: heldPublicationDue)
+            storageFull: uploads.storageFull, nextPublication: heldPublicationDue, confirmedUploads: pass.confirmedUploads)
     }
 
     // MARK: Publication
@@ -1867,8 +1874,9 @@ public actor LibrarySyncEngine {
     }
     /// Files in the sync folder iCloud hasn't uploaded yet, and whether it refused any for lack of storage (then they
     /// won't upload until the person frees some). Remembered for the sealer (`storageFullLately`).
-    func countPendingCloudUploads() throws -> (pending: Int, storageFull: Bool) {
+    func countPendingCloudUploads() throws -> (pending: Int, storageFull: Bool, confirmed: Int) {
         var count = 0, full = false
+        var waiting = Set<String>(), present = Set<String>()
         let keys: [URLResourceKey] = [.isUbiquitousItemKey, .ubiquitousItemIsUploadedKey, .ubiquitousItemUploadingErrorKey]
         var urls = [remoteRoot.appendingPathComponent("daybook-sync.json")]
         for name in ["Events", "Blobs", "Metadata"] where sealing == nil || fm.fileExists(atPath: remoteRoot.appendingPathComponent(name).path) {
@@ -1881,11 +1889,17 @@ public actor LibrarySyncEngine {
             try Task.checkCancellation()
             let values = try url.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemIsUploadedKey])
             let refused = cloud.uploadRefusedForQuota(url)
-            if refused || (values.isUbiquitousItem == true && values.ubiquitousItemIsUploaded == false) { count += 1 }
+            present.insert(url.path)
+            let isWaiting = refused || (values.isUbiquitousItem == true && values.ubiquitousItemIsUploaded == false)
+            if isWaiting { count += 1 }
+            if isWaiting || !cloud.isUploaded(url) { waiting.insert(url.path) }
             if refused { full = true }
         }
         storageFullLately = full
-        return (count, full)
+        // What waited before and is listed now without waiting: iCloud confirmed it.
+        let confirmed = uploadsWaiting.intersection(present).subtracting(waiting).count
+        uploadsWaiting = waiting
+        return (count, full, confirmed)
     }
 }
 
@@ -2052,6 +2066,7 @@ struct PassState {
     var warnings: [String]
     var pendingDownloads: Int
     var pendingUploads = 0
+    var confirmedUploads = 0
     var published = 0
     /// Journal files this pass couldn't read yet (downloading, settling, or unreadable), compaction records included.
     var unreadJournalFiles: Int

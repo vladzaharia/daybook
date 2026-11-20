@@ -567,6 +567,32 @@ final class LibrarySyncSealingTests: XCTestCase {
         XCTAssertEqual(evicted.evicted.count, 1)
     }
 
+    /// An encrypted library's sealed copy of a recording made on this phone is other bytes than its original, so the phone
+    /// held the recording twice until iCloud dropped its local copy (which on a phone it never did). Once iCloud has it,
+    /// the phone asks it to, under the same proof, and keeps the original.
+    func testBehaviorAnEncryptedLibrarysSealedCopyOfThePhonesRecordingIsDroppedOnceUploaded() async throws {
+        let phone = try phone(budget: 1)
+        try await pass(phone, "Phone")
+        try await phone.enableSealing()
+        cloud.holdUploads(under: remote)
+        let recorded = try await record(audioBytes(50_000, seed: 9), on: "Phone", into: Meeting(title: "Only here"))
+        let meeting = try await pass(phone, "Phone", [recorded]).meetings.first { $0.id == recorded.id }!
+        let sealed = remote.appendingPathComponent("Sealed/Blobs/\(files("Sealed/Blobs")[0])")
+        XCTAssertEqual(files("Sealed/Blobs").count, 1)
+        let original = local("Phone").appendingPathComponent("Meetings/\(meeting.id.uuidString)/\(meeting.tracks[0].relativePath)")
+        XCTAssertNotEqual(try Data(contentsOf: sealed), try Data(contentsOf: original), "Other bytes, not a clone")
+        try await pass(phone, "Phone", [meeting])
+        XCTAssertFalse(cloud.droppedLocalCopies.contains(sealed.path), "Not while iCloud is still uploading it")
+        cloud.holdUploads(under: nil)
+        try await pass(phone, "Phone", [meeting])
+        XCTAssertEqual(cloud.droppedLocalCopies.filter { $0 == sealed.path }.count, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: original.path), "The original is the phone's until the proof says otherwise")
+        // No second key holder, no recovery key: the original stays however small the budget.
+        let kept = try await phone.evictAudio()
+        XCTAssertTrue(kept.evicted.isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: original.path))
+    }
+
     // MARK: The sealer
 
     func testHistoryFromBeforeIsSealedAndRetiredWithoutRepublishing() async throws {

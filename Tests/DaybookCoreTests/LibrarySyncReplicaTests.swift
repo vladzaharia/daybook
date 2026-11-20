@@ -423,6 +423,93 @@ final class LibrarySyncReplicaTests: XCTestCase {
 
     // MARK: Eviction
 
+    /// A phone with budget 1 that recorded one conversation and published it; its blob is held as not uploaded when `held`.
+    private func phoneThatRecorded(held: Bool) async throws -> (phone: LibrarySyncEngine, meeting: Meeting, track: RecordingTrack) {
+        let phone = try phone(budget: 1)
+        try await pass(phone, "Phone")
+        if held { cloud.holdUploads(under: remote) }
+        let recorded = try await record(audioBytes(50_000, seed: 40), on: "Phone", into: Meeting(title: "On the train"), ext: "m4a")
+        let meeting = try await pass(phone, "Phone", [recorded]).meetings.first { $0.id == recorded.id }!
+        return (phone, meeting, meeting.tracks[0])
+    }
+
+    func testBehaviorAPassSaysWhenICloudConfirmedAnUploadAndOnlyThen() async throws {
+        let (phone, meeting, track) = try await phoneThatRecorded(held: true)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: blob(track).path))
+        let waiting = try await pass(phone, "Phone", [meeting])
+        XCTAssertEqual(waiting.confirmedUploads, 0)
+        cloud.holdUploads(under: nil)
+        let confirmed = try await pass(phone, "Phone", [meeting])
+        XCTAssertGreaterThan(confirmed.confirmedUploads, 0)
+        let after = try await pass(phone, "Phone", [meeting])
+        XCTAssertEqual(after.confirmedUploads, 0, "Said once")
+    }
+
+    func testBehaviorAPhoneLetsICloudDropItsCopyOfARecordingOnceItIsUploadedAndKeepsTheOriginal() async throws {
+        let (phone, meeting, track) = try await phoneThatRecorded(held: true)
+        // Not uploaded: iCloud's copy is the upload itself.
+        try await pass(phone, "Phone", [meeting])
+        XCTAssertFalse(cloud.droppedLocalCopies.contains(blob(track).path))
+        cloud.holdUploads(under: nil)
+        try await pass(phone, "Phone", [meeting])
+        XCTAssertEqual(cloud.droppedLocalCopies.filter { $0 == blob(track).path }.count, 1, "The container copy goes once, not every pass")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: localAudio("Phone", meeting.id, track).path), "The library's own original stays")
+        try await pass(phone, "Phone", [meeting])
+        XCTAssertEqual(cloud.droppedLocalCopies.filter { $0 == blob(track).path }.count, 1)
+    }
+
+    func testBehaviorAnOriginalGoingBackToICloudTakesICloudsLocalCopyWithIt() async throws {
+        // The pass that published it already had iCloud's confirmation: the object is dropped when the original goes, too.
+        let (phone, meeting, track) = try await phoneThatRecorded(held: false)
+        let report = try await phone.evictAudio()
+        XCTAssertEqual(report.evicted.map(\.meetingID), [meeting.id])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: localAudio("Phone", meeting.id, track).path))
+        XCTAssertTrue(cloud.droppedLocalCopies.contains(blob(track).path))
+    }
+
+    private func assertNothingEvicted(_ arrange: (URL) throws -> Void, file: StaticString = #filePath, line: UInt = #line) async throws {
+        let (phone, meeting, track) = try await phoneThatRecorded(held: false)
+        try arrange(blob(track))
+        let dropped = cloud.droppedLocalCopies
+        let report = try await phone.evictAudio()
+        XCTAssertTrue(report.evicted.isEmpty, file: file, line: line)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: localAudio("Phone", meeting.id, track).path), file: file, line: line)
+        XCTAssertEqual(cloud.droppedLocalCopies, dropped, "Nothing more is dropped either", file: file, line: line)
+    }
+
+    func testBehaviorNothingIsEvictedWhileICloudStillUploads() async throws {
+        try await assertNothingEvicted { _ in self.cloud.holdUploads(under: self.remote) }
+    }
+
+    func testBehaviorNothingIsEvictedWhenICloudRefusesTheUploadForStorage() async throws {
+        try await assertNothingEvicted { _ in self.cloud.refuseUploadsForQuota(under: self.remote) }
+    }
+
+    func testBehaviorNothingIsEvictedWhenICloudsStateForTheObjectIsUnknown() async throws {
+        // The object isn't in the folder (signed out of the account that holds it, or iCloud lost it): unknown, not uploaded.
+        try await assertNothingEvicted { try FileManager.default.removeItem(at: $0) }
+    }
+
+    func testBehaviorARecordingChangedSinceItWasVerifiedIsNeverEvicted() async throws {
+        let (phone, meeting, track) = try await phoneThatRecorded(held: false)
+        let url = localAudio("Phone", meeting.id, track)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+        try audioBytes(50_001, seed: 41).write(to: url)
+        let report = try await phone.evictAudio()
+        XCTAssertTrue(report.evicted.isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    func testBehaviorTheOnlyCopyOfARecordingNeverLeavesThePhone() async throws {
+        let phone = try phone(budget: 1)
+        try await pass(phone, "Phone")
+        let unpublished = try await record(audioBytes(50_000, seed: 42), on: "Phone", into: Meeting(title: "Not synced"), ext: "m4a")
+        let report = try await phone.evictAudio()
+        XCTAssertTrue(report.evicted.isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: localAudio("Phone", unpublished.id, unpublished.tracks[0]).path))
+        XCTAssertTrue(cloud.droppedLocalCopies.isEmpty)
+    }
+
     func testEvictionRespectsBudgetLeastRecentlyPlayedFirstAndNeverUnuploadedOriginals() async throws {
         let mac = try mac(), phone = try phone()
         var fromMac: [Meeting] = []

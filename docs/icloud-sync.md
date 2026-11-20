@@ -170,7 +170,7 @@ Each replica chooses an audio policy when it creates its `LibrarySyncEngine` (`S
 
 Progress phases are `waitingForUpload`, `downloading`, `copying`, and `installed`. The download fraction comes from `SyncCloudFiles.downloadFraction`, and the copy reports bytes. Cancelling the calling task stops the fetch at any point and leaves nothing partial. A hash mismatch throws `integrityMismatch` and installs nothing. A different file already at the path is preserved under `SyncConflicts/`. After installing, the engine asks iCloud to drop its own local copy of the object, so the phone doesn't keep the audio twice.
 
-**Cache policy.** `AudioCachePolicy` sets a byte budget (1 GB by default on the phone). `evictAudio(protecting:)` runs after each fetch and whenever the app asks. It deletes local copies, least recently played first (`noteAudioPlayed`), until tracked audio fits the budget. It deletes only what the cloud already holds:
+**Cache policy.** `AudioCachePolicy` sets a byte budget (1 GB by default on the phone). `evictAudio(protecting:)` runs after each fetch and whenever the app asks (on the iPhone: at launch, when the budget changes, after a pass that found iCloud had just confirmed an upload (`SyncResult.confirmedUploads`), when a job this iPhone ran ends, and as the app goes to the background, under the background time iOS gives and cancelled if it runs out; a burst of requests runs once, `SyncAudioProvider.evictSoon`). It deletes local copies, least recently played first (`noteAudioPlayed`), until tracked audio fits the budget. It deletes only what the cloud already holds:
 
 - fetched audio whose object is still in the sync folder;
 - originals recorded or imported on this device, once iCloud reports their object uploaded (`evictsUploadedOriginals`).
@@ -183,6 +183,10 @@ It never deletes:
 - anything not listed in `audio-cache.json`.
 
 Losing that index therefore only makes eviction more cautious. Eager replicas never evict the library's own audio.
+
+**What the iPhone still needs stays.** The phone adds protected tracks to those playing or downloading: every recording of a conversation with an open processing request this iPhone has claimed, would carry out now (`OnDeviceProcessing.next`), or has paused, and of a recording a Mac waits for that hasn't been sent (`PhoneProcessor.meetingsNeedingAudio`, `MultipointCoordinator.outgoing`). Once the request is done or has failed, the audio is evictable like any other, and the end of the job asks for an eviction. Without this a recording could go back to iCloud and be downloaded again to be transcribed.
+
+**One copy on the iPhone.** iCloud keeps its own local copy of an object this device uploaded. In a plaintext library that is a clone of the original, which frees nothing while the original is there; in an encrypted library it is the sealed bytes, other bytes than the original, so the iPhone held every recording it made twice. Like an eager replica (`evictUploadedContainerCopies`), an on-demand one now asks iCloud to drop its local copy of an object once iCloud reports it uploaded and the library holds the verified original, and when `evictAudio` deletes an original it drops the object's copy too, so the space comes back. The library's own original is never touched by this, and what may be evicted is decided as before.
 
 ## Devices and presence
 

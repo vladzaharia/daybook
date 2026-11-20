@@ -1,5 +1,13 @@
 # Validation record
 
+## iPhone gives back audio sooner (2026-11-20)
+
+The iPhone brings its audio back within the budget after iCloud confirms an upload and as the app goes to the background, spares what it still has to process or send, and no longer keeps its own uploads twice (docs/icloud-sync.md, "Cache policy"). On `feature/iphone-evict-after-upload`.
+
+**Verified, on rigs only.** Engine tests with the simulated iCloud (`LibrarySyncReplicaTests`, `LibrarySyncSealingTests`): a pass reports an upload iCloud just confirmed, once; the container copy of an iPhone's recording is dropped only after iCloud confirms it and the original stays; in an encrypted library the sealed copy differs from the original and is dropped the same way, with no second key holder the original stays; an original that goes back to iCloud takes iCloud's copy with it; nothing is evicted or dropped while the upload is held, when iCloud refuses it for storage, when the object isn't there, when the file changed since it was verified, or when it is the only copy. iPhone tests (`AudioEvictionTests`, run with `scripts/build-ios.sh --test --test-arg -only-testing:DaybookPhoneTests/AudioEvictionTests`, and with the rest of the suite in CI): eviction after a confirmed upload and not before, a burst runs once, leaving the foreground evicts under background time and expiry cancels it, audio a conversation needs is spared until it isn't, no iCloud engine evicts nothing, totals follow an eviction.
+
+**Not verified.** Not on a real iPhone or against real iCloud: how soon `ubiquitousItemIsUploaded` turns true, what `evictUbiquitousItem` frees on APFS (a plaintext container copy is expected to be a clone), and how much background time iOS gives are assumed from the documentation. The encrypted duplicate is established from the code and the rig (the sealed object is other bytes), not measured on a device. The processing and hand-off protection reads the library's requests and the recording's outgoing list; it wasn't exercised with a real job or a Mac.
+
 ## Playback levels (2026-11-20)
 
 Each recording of a conversation plays with one constant gain that brings its speech level toward the quietest recording's (docs/architecture.md, "Playback levels"). On `feature/playback-level`.
