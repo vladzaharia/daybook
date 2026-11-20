@@ -95,13 +95,45 @@ final class ConversationActionsTests: XCTestCase {
         let groups = ConversationActions.batch([a.id, b.id], in: [a, b], context: .init(platform: .mac))
         XCTAssertEqual(groups.map(\.id), [.reprocess, .filing, .trash])
         XCTAssertEqual(groups[0].actions.map(\.title), ["Summarize Again"])
-        XCTAssertEqual(groups[1].actions.map(\.title), ["Move to Folder", "Tags…", "Move to Personal"])
+        XCTAssertEqual(groups[1].actions.map(\.title), ["Move to Folder", "Tags…", "Move to Personal", "Merge…"])
         XCTAssertEqual(groups[2].actions.map(\.title), ["Move 2 to Trash…"])
         XCTAssertEqual(ids(ConversationActions.batch([a.id], in: [a, b], context: .init(platform: .mac))),
                        ids(ConversationActions.actions(for: a, context: .init(platform: .mac))), "one selected is the conversation's own menu")
         XCTAssertTrue(ConversationActions.batch([], in: [a], context: .init(platform: .mac)).isEmpty)
         let none = ConversationActions.batch([b.id, Meeting(title: "Notes").id], in: [b], context: .init(platform: .iPhone))
         XCTAssertEqual(none.first?.id, .share, "a single match is its own menu")
+    }
+
+    func testBehaviorMergeIsOfferedForTwoOrMoreAndWaitsWhileAnyIsBusy() throws {
+        let a = meeting(), b = meeting(transcribed: false)
+        for platform in [ConversationAction.Platform.mac, .iPhone] {
+            let one = ConversationActions.batch([a.id], in: [a, b], context: .init(platform: platform))
+            XCTAssertFalse(one.flatMap(\.actions).contains { $0.id == .merge }, "one conversation has nothing to merge with")
+            let two = ConversationActions.batch([a.id, b.id], in: [a, b], context: .init(platform: platform))
+            let merge = try XCTUnwrap(two.flatMap(\.actions).first { $0.id == .merge })
+            XCTAssertEqual(merge.title, "Merge…", "it asks first")
+            XCTAssertTrue(merge.isAvailable)
+            XCTAssertEqual(merge.symbol, "arrow.triangle.merge")
+        }
+        // What the app knows of each: one processing anywhere, waiting to, recording here, or waiting for a recording made
+        // alongside it, and Merge… waits.
+        let awaited = AwaitedRecording(deviceName: "Soundcore Work", deviceKind: "soundcore.work", since: Date())
+        let busy: [(ConversationActions.Context, String)] = [
+            (.init(platform: .mac, status: .processing(.init(stage: .transcribing, fraction: 0.5))), "Processing now"),
+            (.init(platform: .iPhone, status: .requested(.device(ProcessingRequest(meetingID: b.id, mode: .newAudio,
+                                                                                      requestedBy: .init(id: "phone", name: "iPhone"))))), "Waiting to process"),
+            (.init(platform: .mac, isRecording: true), "Recording now"),
+            (.init(platform: .mac, status: .awaitingRecordings([awaited])), "Waiting for a recording"),
+        ]
+        for (context, reason) in busy {
+            let groups = ConversationActions.batch([a.id, b.id], in: [a, b], context: .init(platform: context.platform),
+                                                   each: { $0.id == b.id ? context : .init(platform: context.platform) })
+            XCTAssertEqual(groups.flatMap(\.actions).first { $0.id == .merge }?.availability, .unavailable(reason))
+        }
+        // Paused, or waiting for models: nothing works on it, so it can be merged.
+        let paused = ConversationActions.batch([a.id, b.id], in: [a, b], context: .init(platform: .mac),
+                                               each: { _ in .init(platform: .mac, status: .requested(.paused)) })
+        XCTAssertEqual(paused.flatMap(\.actions).first { $0.id == .merge }?.isAvailable, true)
     }
 
     func testBehaviorARecordingCanBeMovedToItsOwnConversationOrRemoved() throws {

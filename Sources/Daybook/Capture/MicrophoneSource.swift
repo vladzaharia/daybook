@@ -6,7 +6,8 @@ import Foundation
 
 /// The part of `AVAudioEngine` the microphone uses, so its restart rules are tested without a device.
 protocol MicrophoneEngine: AnyObject {
-    /// Called on the main queue when the input device or its format changes (the engine has stopped).
+    /// Called on the main queue when the input device or its format changes and the engine has stopped for it; a
+    /// configuration notice the engine keeps running through is not a change.
     var onConfigurationChange: (() -> Void)? { get set }
     /// Sets `device` (a Core Audio UID; nil leaves the system's default input) on the input before anything starts,
     /// starts delivering it, and returns its format. Throws when it can't start: no device, one that's gone, or one
@@ -81,13 +82,13 @@ final class MicrophoneSource: CaptureAudioSource, @unchecked Sendable {
         let snapshot = devices.snapshot()
         let chosen = snapshot.resolved
         do {
-            _ = try engine.start(device: chosen?.id, deliver: onBuffer, report: onEvent)
+            _ = try engine.start(device: deviceToSet(chosen, in: snapshot), deliver: onBuffer, report: onEvent)
             current = chosen
         } catch {
             // A chosen input that won't start: the Mac's own microphone, rather than no recording.
             engine.stop()
             guard let builtIn = snapshot.builtIn, builtIn.id != chosen?.id,
-                  (try? engine.start(device: builtIn.id, deliver: onBuffer, report: onEvent)) != nil else { throw error }
+                  (try? engine.start(device: deviceToSet(builtIn, in: snapshot), deliver: onBuffer, report: onEvent)) != nil else { throw error }
             current = builtIn
         }
         running = true
@@ -157,7 +158,7 @@ final class MicrophoneSource: CaptureAudioSource, @unchecked Sendable {
             guard running else { return }
             let target = snapshot.resolved
             do {
-                let format = try engine.start(device: target?.id, deliver: deliver, report: report)
+                let format = try engine.start(device: deviceToSet(target, in: snapshot), deliver: deliver, report: report)
                 moved(to: target)
                 report(cause.isRestart ? .restarted(note(cause, format: format)) : .deviceChanged(note(cause, format: format)))
                 await followPending()
@@ -169,7 +170,8 @@ final class MicrophoneSource: CaptureAudioSource, @unchecked Sendable {
         }
         // The input that's there won't start: the Mac's own microphone, before giving up.
         guard running else { return }
-        if let builtIn = snapshot.builtIn, let format = try? engine.start(device: builtIn.id, deliver: deliver, report: report) {
+        if let builtIn = snapshot.builtIn,
+           let format = try? engine.start(device: deviceToSet(builtIn, in: snapshot), deliver: deliver, report: report) {
             moved(to: builtIn)
             report(.deviceChanged("The microphone couldn’t start, so recording moved to the Mac’s built-in microphone (\(Int(format.sampleRate)) Hz, \(format.channelCount) ch)."))
             await followPending()
@@ -178,6 +180,14 @@ final class MicrophoneSource: CaptureAudioSource, @unchecked Sendable {
         engine.stop()
         running = false
         report(.failed(lastError))
+    }
+
+    /// The device to set on the engine: none when the input is the system's default, which the engine records on its
+    /// own. Setting one, even the default's, makes the engine reconfigure once after it starts (macOS 27.0), posting a
+    /// configuration change and now and then stopping for it; so only an input that isn't the default is set.
+    private func deviceToSet(_ device: MicrophoneChoice.Device?, in snapshot: MicrophoneChoice.Snapshot) -> String? {
+        guard let device, device.id != snapshot.systemDefault else { return nil }
+        return device.id
     }
 
     @MainActor private func moved(to device: MicrophoneChoice.Device?) {
@@ -221,7 +231,9 @@ final class AVMicrophoneEngine: MicrophoneEngine, @unchecked Sendable {
             guard let object = CoreAudioInputs.object(for: device) else { throw RecordingError.noMicrophone }
             try input.auAudioUnit.setDeviceID(object)
         }
-        let format = input.outputFormat(forBus: 0)
+        // The device's own format. The node's output format is the previous device's until the engine starts, and
+        // a tap at the wrong rate is never created (macOS 27.0: "Failed to create tap, config change pending").
+        let format = input.inputFormat(forBus: 0)
         guard format.sampleRate > 0 && format.channelCount > 0 else { throw RecordingError.noMicrophone }
         input.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, time in
             guard let copied = PCMTrackWriter.copy(buffer) else {
@@ -239,7 +251,11 @@ final class AVMicrophoneEngine: MicrophoneEngine, @unchecked Sendable {
             throw error
         }
         self.engine = engine
-        observer = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
+        observer = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self, weak engine] _ in
+            // A device or format that really changed stops the engine. After a start on a set device the engine
+            // posts one notice while it keeps running; following that restarted the engine, which set the device
+            // and posted again, ten times in two seconds (v0.8.0's recordings).
+            guard let engine, !engine.isRunning else { return }
             self?.onConfigurationChange?()
         }
         return format

@@ -124,6 +124,7 @@ extension LibraryController {
             meeting.speakers = carried.speakers
             meeting.speakerIdentities = carried.identities.isEmpty ? nil : carried.identities
             meeting.highlights = carried.highlights
+            meeting.transcriptFlagDismissals = carried.dismissals.isEmpty ? nil : carried.dismissals
             // The passages as they read here, so fusing the new conversation finds the corrections made to them.
             meeting.unifiedTranscript = carried.passages
             // Named by the copy: the person filed it here (`wasMovedHere`), so it's never matched back.
@@ -179,11 +180,12 @@ extension LibraryController {
         var highlights: [Highlight] = []
         var passages: [TranscriptSegment] = []
         var revisions: [MeetingRevision] = []
+        var dismissals: [TranscriptFlagDismissal] = []
     }
 
     /// The recording's transcripts (on its new track IDs), the speakers heard in them with who they are, the
     /// conversation's passages drawn from them with the corrections made to those passages, the names the person
-    /// gave those speakers, and the bookmarks on the recording.
+    /// gave those speakers, the bookmarks on the recording, and the person's answers to its unsure words.
     nonisolated static func carried(from source: Meeting, group: Set<UUID>, mapping: [UUID: UUID]) -> Carried {
         var carried = Carried()
         carried.transcripts = source.transcripts.filter { group.contains($0.trackID) }.map { run in
@@ -207,6 +209,12 @@ extension LibraryController {
         carried.highlights = source.highlights.compactMap { mark in
             guard let track = mark.trackID, let copy = mapping[track] else { return nil }
             var moved = mark
+            moved.trackID = copy
+            return moved
+        }
+        carried.dismissals = (source.transcriptFlagDismissals ?? []).compactMap { answer in
+            guard let copy = mapping[answer.trackID] else { return nil }
+            var moved = answer
             moved.trackID = copy
             return moved
         }

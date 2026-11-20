@@ -1,0 +1,720 @@
+import Foundation
+
+// Unsure words (docs/architecture.md, "Unsure words"): places in a conversation's transcript that may have been heard
+// wrong, marked quietly where they read, for the person to answer when they like. Two signals make one kind of flag:
+//
+// - the recording's latest transcript and its previous one, over the same audio, read the words differently (the
+//   earlier reading is offered as the alternative);
+// - the recognizer gave the words a low confidence.
+//
+// Flags are worked out with the unified transcript, after fusion (`Meeting.applyFusion`, off the main actor through
+// `Meeting.preparingFusion`), and nothing waits for them. Each is anchored in its recording's own time, which fusing
+// again, a recording placed again, and renaming or relabelling speakers leave where it was; it's found in the unified
+// transcript by the recording's citations (`SegmentProvenance`), the way corrections find their passages. Text the
+// person typed is never flagged, and a flag the person answered (`TranscriptFlagDismissal`) stays answered while the
+// words it was about read the same.
+
+/// A place in the transcript that may have been heard wrong.
+public struct TranscriptFlag: Codable, Equatable, Identifiable, Sendable {
+    public enum Reason: String, ExtensibleSyncEnum {
+        /// The recording's latest transcript and its previous one read these words differently.
+        case disagreement
+        /// The recognizer was unsure of these words.
+        case lowConfidence
+        public static let syncFallback = Reason.lowConfidence
+    }
+
+    /// Worked out from what it marks (`TranscriptFlags.id`), so two devices deriving the same flag give it the same ID.
+    public var id: UUID
+    /// The recording whose transcript it marks.
+    public var trackID: UUID
+    /// Where the words are, in seconds of the recording.
+    public var start: TimeInterval
+    public var end: TimeInterval
+    /// The words as the latest transcript reads them.
+    public var text: String
+    @Extensible public var reason: Reason
+    /// The lowest confidence (0–1) the recognizer gave these words, when it gave one.
+    public var confidence: Double?
+    /// The previous transcript's reading of the same audio: its words, or "" where it heard none. Nil without one.
+    public var alternative: String?
+    /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
+    public var unknownFields = UnknownFields()
+
+    public init(id: UUID? = nil, trackID: UUID, start: TimeInterval, end: TimeInterval, text: String, reason: Reason,
+                confidence: Double? = nil, alternative: String? = nil) {
+        self.id = id ?? TranscriptFlags.id(trackID: trackID, reason: reason.rawValue, start: start, end: end, text: text)
+        self.trackID = trackID; self.start = start; self.end = end; self.text = text; self.reason = reason
+        self.confidence = confidence; self.alternative = alternative
+    }
+
+    /// The whole of a flag this version can't read (a newer Daybook's shape), written back as it came. Such a flag marks
+    /// nothing here.
+    public private(set) var unread: SyncJSONValue?
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case id, trackID, start, end, text, reason, confidence, alternative
+    }
+    private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
+
+    private init(unread value: SyncJSONValue) {
+        if case .object(let fields) = value, case .string(let text)? = fields["id"], let found = UUID(uuidString: text) { id = found }
+        else { id = SyncEncoding.uuid("unread-transcript-flag:\(SyncEncoding.string(value))") }
+        trackID = UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)); start = 0; end = 0; text = ""
+        _reason = Extensible(wrappedValue: .lowConfidence)
+        unread = value
+    }
+
+    /// Reads one flag; one this version can't read is kept as it came (`unread`), so a list never fails as a whole and a
+    /// newer version's flags survive a round trip.
+    public init(from decoder: Decoder) throws {
+        do {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            var flag = TranscriptFlag(unread: .null)
+            flag.id = try values.decode(UUID.self, forKey: .id)
+            flag.trackID = try values.decode(UUID.self, forKey: .trackID)
+            flag.start = try values.decode(TimeInterval.self, forKey: .start)
+            flag.end = try values.decode(TimeInterval.self, forKey: .end)
+            flag.text = try values.decode(String.self, forKey: .text)
+            flag._reason = try values.decode(Extensible<Reason>.self, forKey: .reason)
+            flag.confidence = try values.decodeIfPresent(Double.self, forKey: .confidence)
+            flag.alternative = try values.decodeIfPresent(String.self, forKey: .alternative)
+            flag.unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
+            flag.unread = nil
+            self = flag
+        } catch {
+            self = TranscriptFlag(unread: try SyncJSONValue(from: decoder))
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        if let unread { try unread.encode(to: encoder); return }
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(trackID, forKey: .trackID)
+        try values.encode(start, forKey: .start)
+        try values.encode(end, forKey: .end)
+        try values.encode(text, forKey: .text)
+        try values.encode(_reason, forKey: .reason)
+        try values.encodeIfPresent(confidence, forKey: .confidence)
+        try values.encodeIfPresent(alternative, forKey: .alternative)
+        try unknownFields.encode(to: encoder)
+    }
+}
+
+/// A flag where it shows: the passage of the unified transcript, and the flagged words' place in its text.
+public struct TranscriptFlagMark: Equatable, Sendable {
+    public var flag: TranscriptFlag
+    public var segmentID: UUID
+    /// The words' range in the passage's text, in UTF-16 offsets.
+    public var range: Range<Int>
+
+    public init(flag: TranscriptFlag, segmentID: UUID, range: Range<Int>) {
+        self.flag = flag; self.segmentID = segmentID; self.range = range
+    }
+
+    /// The flagged words as the passage reads them.
+    public func words(in text: String) -> String? {
+        guard let range = Range(NSRange(location: range.lowerBound, length: range.count), in: text) else { return nil }
+        return String(text[range])
+    }
+
+    /// The alternative reading as it goes in the flagged words' place: its words, without the sentence punctuation, quotes,
+    /// and brackets at its ends (the passage keeps its own), and with the symbols that belong to them ("$20", "20%").
+    /// Nil without one; "" where the earlier transcript heard nothing.
+    public var alternativeWords: String? {
+        flag.alternative.map(Self.edgesTrimmed)
+    }
+}
+
+public enum TranscriptFlags {
+    /// The version of the algorithm that works flags out, stored with them (`Meeting.transcriptFlagsVersion`). Raised when
+    /// it would flag differently, so devices on different versions can tell whose flags are the newer: where two copies
+    /// of a conversation were fused apart, the higher version's flags win, and devices don't undo each other's.
+    public static let version = 1
+
+    /// Seconds two readings of the same words may sit apart and still be the same place.
+    static let timeSlack = 0.5
+    /// Words compared only with words of the other transcript within this many seconds: two runs over the same audio
+    /// place a word within a second of each other, and the band keeps the comparison linear in the recording's length.
+    static let window = 3.0
+    /// The most words a disagreement may cover on either side; longer differences are about coverage (one run missed a
+    /// stretch, or heard background speech), not a word heard wrong.
+    static let longestDisagreement = 12
+    /// The most words the latest transcript may add where the earlier one heard nothing and still be flagged.
+    static let longestAddition = 4
+    /// Above this share of differing words, the two transcripts aren't readings of the same speech (another language,
+    /// another stretch of audio) and aren't compared.
+    static let comparableShare = 0.5
+    /// When the latest run's model ranks above the earlier run's (the model catalogue's transcription quality), its
+    /// words at or above this confidence are taken as read right and a disagreement over them isn't flagged: the earlier
+    /// run was the weaker, and it's the one that erred. From the measured confidences (docs/validation.md, "Unsure words
+    /// in the transcript"): a Parakeet word scored 0.9 or more was right 99.5% of the time (15,531 of 15,616) and an
+    /// Apple Speech word 98.4% (11,697 of 11,882), where all their words were right 95.2% and 89.1% of the time; below
+    /// 0.9, 42% of Parakeet's words and 31% of Apple Speech's were wrong, so there the two readings are worth a question.
+    static let confidentWhenStronger = 0.9
+
+    /// The rank of the model that made a transcript, by what `modelKey(of:)` reads from it, for transcription (the model
+    /// catalogue's `quality`); nil when it isn't ranked. DaybookCore doesn't know the catalogue, so DaybookKit gives it.
+    public typealias Ranking = @Sendable (_ model: String) -> Int?
+
+    /// Words below this confidence are flagged, by recognizer family (`ModelProvenance.family`); a recognizer not listed
+    /// gives none. Each was set from its confidences over words it got right and wrong (docs/validation.md, "Unsure
+    /// words in the transcript"): below 0.5, 76% of Parakeet's flagged words were wrong and 0.3% of its right words
+    /// were flagged on clean speech (Apple Speech: 71%, 0.7%), and above it the false flags multiply. Whisper's word
+    /// probabilities weren't measured, so its runs are flagged only where transcripts disagree.
+    static let confidenceFloors: [String: Double] = ["parakeet": 0.5, "apple-speech": 0.5]
+
+    /// The confidence below which `transcript`'s words are flagged, or nil when its recognizer's confidences aren't used.
+    public static func confidenceFloor(for transcript: TrackTranscript) -> Double? {
+        confidenceFloors[family(of: transcript)]
+    }
+
+    static func family(of transcript: TrackTranscript) -> String {
+        if let family = transcript.processingSettings?.model?.family { return family }
+        let id = transcript.processingSettings?.modelID ?? transcript.modelID
+        return id.split(separator: "/").first.map(String.init) ?? id
+    }
+
+    /// How a transcript's model is named to the catalogue: its variant ("parakeet/ultra"), else the ID it was saved with.
+    static func modelKey(of transcript: TrackTranscript) -> String {
+        transcript.processingSettings?.model?.variantKey ?? transcript.modelID
+    }
+
+    /// Whether `latest`'s model ranks above `earlier`'s, and its confidences are measured (`confidenceFloors`): only then
+    /// is a high confidence taken as the word being right. Never when either isn't ranked.
+    static func isStronger(_ latest: TrackTranscript, than earlier: TrackTranscript, ranking: Ranking?) -> Bool {
+        guard let ranking, confidenceFloor(for: latest) != nil,
+              let a = ranking(modelKey(of: latest)), let b = ranking(modelKey(of: earlier)) else { return false }
+        return a > b
+    }
+
+    /// A run's words as two runs are compared: for English, without fillers, with the writing of numbers, ordinals,
+    /// abbreviations, and "OK" made one (`TranscriptWordStyle`), and a number said as two words ("twenty one") one word.
+    /// Each word's place among the run's own words comes with it, for the flags to find them again.
+    static func comparable(_ words: [Token], english: Bool) -> (tokens: [Token], source: [Range<Int>]) {
+        guard english else { return (words, words.indices.map { $0..<($0 + 1) }) }
+        var tokens: [Token] = [], source: [Range<Int>] = []
+        var index = 0
+        while index < words.count {
+            var word = words[index]
+            var end = index + 1
+            if TranscriptWordStyle.isFiller(word.key) { index += 1; continue }
+            if end < words.count, words[end].segment == word.segment, let number = TranscriptWordStyle.joins(word.key, words[end].key) {
+                let next = words[end]
+                word = Token(key: number, text: word.text + " " + next.text, start: word.start, end: next.end,
+                             confidence: [word.confidence, next.confidence].compactMap { $0 }.min(), segment: word.segment)
+                end += 1
+            } else {
+                word.key = TranscriptWordStyle.key(word.key)
+            }
+            tokens.append(word); source.append(index..<end)
+            index = end
+        }
+        return (tokens, source)
+    }
+
+    /// The flags of a conversation's transcript as it is now, for storing with it (`Meeting.transcriptFlags`): for each
+    /// recording in the unified transcript, where its latest transcript and the previous one that reads differently
+    /// disagree, and the words its latest transcript is unsure of, less those in passages the person corrected, those
+    /// another recording heard the same way, and those not in the transcript. The person's answers aren't read here
+    /// (`marks` reads them), so two devices fusing the same transcripts store the same flags whatever answers have
+    /// reached each. Pure; run it off the main actor.
+    public static func flags(for meeting: Meeting, ranking: Ranking? = nil) -> [TranscriptFlag] {
+        var heard = Set<UUID>()
+        for segment in meeting.unifiedTranscript {
+            heard.insert(segment.trackID)
+            for source in segment.provenance { heard.insert(source.trackID) }
+        }
+        let removed = Set(meeting.tracks.filter(\.isRemoved).map(\.id))
+        let runs = Dictionary(grouping: meeting.transcripts.filter { heard.contains($0.trackID) && !removed.contains($0.trackID) },
+                              by: \.trackID)
+        var found: [TranscriptFlag] = []
+        for (trackID, transcripts) in runs {
+            // The latest run as fusion picks it (the first of the newest), and the others newest first.
+            guard let latest = transcripts.max(by: { $0.createdAt < $1.createdAt }) else { continue }
+            let others = transcripts.enumerated().filter { $0.element.id != latest.id }
+                .sorted { $0.element.createdAt == $1.element.createdAt ? $0.offset > $1.offset : $0.element.createdAt > $1.element.createdAt }
+                .map(\.element)
+            let words = tokens(latest)
+            var covered = Set<Int>()
+            if TranscriptWordStyle.isEnglish(latest.language) {
+                covered = Set(words.indices.filter { TranscriptWordStyle.isFiller(words[$0].key) })
+            }
+            // The run before the latest that reads differently: a speaker-only run repeats its run's words.
+            for other in others {
+                let english = TranscriptWordStyle.isEnglish(latest, other)
+                let now = comparable(words, english: english), before = comparable(tokens(other), english: english)
+                guard now.tokens.map(\.key) != before.tokens.map(\.key) else { continue }
+                // A stronger recognizer's confident words are taken as read right: the earlier run erred.
+                let stronger = isStronger(latest, than: other, ranking: ranking)
+                for flag in disagreements(now.tokens, before.tokens, trackID: trackID) {
+                    if stronger, let confidence = flag.flag.confidence, confidence >= confidentWhenStronger { continue }
+                    found.append(flag.flag)
+                    for index in flag.indices { covered.formUnion(now.source[index]) }
+                }
+                break
+            }
+            if let floor = confidenceFloor(for: latest) {
+                found += unsure(words, below: floor, skipping: covered, trackID: trackID)
+            }
+        }
+        var seen = Set<UUID>()
+        return locate(found, in: meeting).map(\.flag).filter { seen.insert($0.id).inserted }
+            .sorted { $0.start == $1.start ? $0.id.uuidString < $1.id.uuidString : $0.start < $1.start }
+    }
+
+    /// The conversation's stored flags that show now, by passage, each passage's in reading order: those the person
+    /// hasn't answered, outside passages they corrected, that another recording didn't hear the same way, and that the
+    /// passage still reads.
+    public static func marks(in meeting: Meeting) -> [UUID: [TranscriptFlagMark]] {
+        guard let flags = meeting.transcriptFlags, !flags.isEmpty else { return [:] }
+        let readable = flags.filter { $0.unread == nil }
+        let answered = answered(readable, by: meeting.transcriptFlagDismissals ?? [])
+        let open = readable.filter { !answered.contains($0.id) }
+        var bySegment: [UUID: [TranscriptFlagMark]] = [:]
+        for mark in locate(open, in: meeting) {
+            // Two flags over the same words show once.
+            guard !(bySegment[mark.segmentID] ?? []).contains(where: { $0.range.overlaps(mark.range) }) else { continue }
+            bySegment[mark.segmentID, default: []].append(mark)
+        }
+        for key in bySegment.keys { bySegment[key]?.sort { $0.range.lowerBound < $1.range.lowerBound } }
+        return bySegment
+    }
+
+    /// What the marks that show depend on, and nothing else of a conversation: a copy that compares equal to another has
+    /// the same marks, so they needn't be worked out again for a change to anything else.
+    public struct MarkInputs: Equatable, Sendable {
+        var flags: [TranscriptFlag]?
+        var answers: [TranscriptFlagDismissal]?
+        var passages: [TranscriptSegment]
+        var corrections: [MeetingRevision]
+        var tracks: [RecordingTrack]
+        var alignments: [TrackAlignment]
+
+        public init(_ meeting: Meeting) {
+            flags = meeting.transcriptFlags; answers = meeting.transcriptFlagDismissals; passages = meeting.unifiedTranscript
+            corrections = meeting.revisions.filter { if case .segment = $0.kind { return true } else { return false } }
+            tracks = meeting.tracks; alignments = meeting.alignmentReports
+        }
+    }
+
+    /// The ID a flag over `text` of a recording at `start`–`end` gets, the same on every device.
+    static func id(trackID: UUID, reason: String, start: TimeInterval, end: TimeInterval, text: String) -> UUID {
+        SyncEncoding.uuid("transcript-flag:\(trackID.uuidString):\(reason):\(milliseconds(start)):\(milliseconds(end)):\(key(of: text))")
+    }
+
+    /// A time as the ID has it, in whole milliseconds: a time that isn't finite, or is absurdly far off, can't trap.
+    private static func milliseconds(_ seconds: TimeInterval) -> Int {
+        seconds.isFinite ? Int((min(max(seconds, -1e9), 1e9) * 1000).rounded()) : 0
+    }
+
+    // MARK: Words
+
+    /// A word as compared: its letters and digits folded (`key`), as written, when, how sure, and its passage in the run.
+    struct Token: Equatable {
+        var key: String
+        var text: String
+        var start: Double
+        var end: Double
+        var confidence: Double?
+        var segment: Int
+    }
+
+    /// Where `text`'s letters and digits begin and end, without the punctuation or symbols around them ("Friday." reads
+    /// "Friday", "$20" reads "20"). Nil when it has none.
+    static func core<S: StringProtocol>(of text: S) -> Range<S.Index>? {
+        func isWordy(_ character: Character) -> Bool { character.unicodeScalars.contains { CharacterSet.alphanumerics.contains($0) } }
+        guard let first = text.firstIndex(where: isWordy), let last = text.lastIndex(where: isWordy) else { return nil }
+        return first..<text.index(after: last)
+    }
+
+    /// A word's letters and digits, case, accents, and width folded: punctuation and casing never make two readings differ.
+    static func wordKey(_ word: some StringProtocol) -> String {
+        let folded = String(word).folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+        return String(String.UnicodeScalarView(folded.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }))
+    }
+
+    /// Words as compared, joined: what makes two readings of a stretch the same.
+    static func key(of text: String) -> String {
+        text.split(whereSeparator: \.isWhitespace).map(wordKey).filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
+    /// A run's words, in time order: its recognizer's words (`TrackTranscript.words`) with their confidences, else, for a
+    /// run saved without them, its passages' words with times shared out by length. Words of punctuation alone are left
+    /// out.
+    static func tokens(_ run: TrackTranscript) -> [Token] {
+        let segments = run.segments.enumerated().sorted { $0.element.start == $1.element.start ? $0.offset < $1.offset : $0.element.start < $1.element.start }.map(\.element)
+        var result: [Token] = []
+        if let words = run.words, !words.isEmpty {
+            let starts = segments.map(\.start)
+            var last = 0
+            for word in words.enumerated().sorted(by: { $0.element.start == $1.element.start ? $0.offset < $1.offset : $0.element.start < $1.element.start }).map(\.element) {
+                let pieces = word.text.split(whereSeparator: \.isWhitespace)
+                guard !pieces.isEmpty, word.start.isFinite, word.end.isFinite else { continue }
+                // The passage holding the word: the last starting by its middle, never one before the last word's.
+                let middle = (word.start + word.end) / 2
+                let segment = max(last, firstIndex(in: starts) { $0 > middle + 0.001 } - 1)
+                last = segment
+                let share = (word.end - word.start) / Double(pieces.count)
+                for (index, piece) in pieces.enumerated() {
+                    let key = wordKey(piece)
+                    guard !key.isEmpty else { continue }
+                    result.append(Token(key: key, text: String(piece), start: word.start + share * Double(index),
+                                        end: word.start + share * Double(index + 1), confidence: word.confidence, segment: segment))
+                }
+            }
+        } else {
+            for (index, segment) in segments.enumerated() where segment.start.isFinite && segment.end.isFinite {
+                let pieces = segment.text.split(whereSeparator: \.isWhitespace)
+                let length = Double(max(1, pieces.reduce(0) { $0 + $1.count }))
+                var offset = 0.0
+                for piece in pieces {
+                    let start = segment.start + (segment.end - segment.start) * offset / length
+                    offset += Double(piece.count)
+                    let end = segment.start + (segment.end - segment.start) * offset / length
+                    let key = wordKey(piece)
+                    guard !key.isEmpty else { continue }
+                    result.append(Token(key: key, text: String(piece), start: start, end: end, confidence: nil, segment: index))
+                }
+            }
+        }
+        return result
+    }
+
+    /// The first index whose element satisfies `isAfter`, in an array where every such element follows every other.
+    private static func firstIndex(in values: [Double], where isAfter: (Double) -> Bool) -> Int {
+        var low = 0, high = values.count
+        while low < high {
+            let middle = (low + high) / 2
+            if isAfter(values[middle]) { high = middle } else { low = middle + 1 }
+        }
+        return low
+    }
+
+    // MARK: Disagreement
+
+    /// One step of an alignment of two runs' words: indices into the latest run (`a`) and the earlier one (`b`); nil
+    /// on the side that lacks the word.
+    struct Step: Equatable {
+        var a: Int?
+        var b: Int?
+    }
+
+    /// The fewest word edits that turn `b` into `a`, as steps, each word compared only with the other run's words
+    /// heard within `window` seconds of it: a banded edit distance, so different passage boundaries don't matter and the
+    /// work grows with the recording's length rather than its square. Ties keep words side by side. Nil when the runs
+    /// are too far apart in time to compare.
+    static func alignment(_ a: [Token], _ b: [Token], window: Double = TranscriptFlags.window) -> [Step]? {
+        let n = a.count, m = b.count
+        guard n > 0, m > 0 else { return a.indices.map { Step(a: $0, b: nil) } + b.indices.map { Step(a: nil, b: $0) } }
+        /// The time between word i - 1 and word i: where a cut after i words falls.
+        func boundaries(_ words: [Token]) -> [Double] {
+            var times = [words[0].start]
+            for index in 1..<words.count { times.append((words[index - 1].end + words[index].start) / 2) }
+            times.append(words[words.count - 1].end)
+            for index in 1..<times.count { times[index] = max(times[index], times[index - 1]) }
+            return times
+        }
+        let ta = boundaries(a), tb = boundaries(b)
+        // Each row's band: the cuts in b within the window of the row's cut in a, then widened so every row reaches the next.
+        var lo = [Int](repeating: 0, count: n + 1), hi = lo
+        for i in 0...n {
+            let first = firstIndex(in: tb) { $0 >= ta[i] - window }
+            let after = firstIndex(in: tb) { $0 > ta[i] + window }
+            if after > first { lo[i] = min(first, m); hi[i] = min(after - 1, m) }
+            else { lo[i] = max(min(first, m + 1) - 1, 0); hi[i] = min(first, m) }
+        }
+        lo[0] = 0; hi[n] = m
+        for i in stride(from: n - 1, through: 0, by: -1) { lo[i] = min(lo[i], lo[i + 1]) }
+        for i in 1...n { hi[i] = max(hi[i], hi[i - 1]) }
+        for i in 0...n { hi[i] = max(hi[i], lo[i]) }
+        for i in stride(from: n - 1, through: 0, by: -1) { hi[i] = max(hi[i], lo[i + 1] - 1) }
+        guard (0...n).reduce(0, { $0 + hi[$1] - lo[$1] + 1 }) <= 4_000_000 else { return nil }
+
+        let unreachable = Int32.max
+        var cost: [[Int32]] = [], move: [[UInt8]] = []
+        cost.reserveCapacity(n + 1); move.reserveCapacity(n + 1)
+        for i in 0...n {
+            var rowCost = [Int32](repeating: unreachable, count: hi[i] - lo[i] + 1)
+            var rowMove = [UInt8](repeating: 0, count: rowCost.count)
+            for j in lo[i]...hi[i] {
+                let k = j - lo[i]
+                if i == 0 && j == 0 { rowCost[k] = 0; continue }
+                var best = unreachable, how: UInt8 = 0
+                if i > 0, j > 0, (lo[i - 1]...hi[i - 1]).contains(j - 1), cost[i - 1][j - 1 - lo[i - 1]] != unreachable {
+                    best = cost[i - 1][j - 1 - lo[i - 1]] + (a[i - 1].key == b[j - 1].key ? 0 : 1); how = 0
+                }
+                if i > 0, (lo[i - 1]...hi[i - 1]).contains(j), cost[i - 1][j - lo[i - 1]] != unreachable,
+                   cost[i - 1][j - lo[i - 1]] + 1 < best {
+                    best = cost[i - 1][j - lo[i - 1]] + 1; how = 1
+                }
+                if k > 0, rowCost[k - 1] != unreachable, rowCost[k - 1] + 1 < best {
+                    best = rowCost[k - 1] + 1; how = 2
+                }
+                rowCost[k] = best; rowMove[k] = how
+            }
+            cost.append(rowCost); move.append(rowMove)
+        }
+        var steps: [Step] = []
+        var i = n, j = m
+        while i > 0 || j > 0 {
+            switch move[i][j - lo[i]] {
+            case 0: steps.append(Step(a: i - 1, b: j - 1)); i -= 1; j -= 1
+            case 1: steps.append(Step(a: i - 1, b: nil)); i -= 1
+            default: steps.append(Step(a: nil, b: j - 1)); j -= 1
+            }
+        }
+        return steps.reversed()
+    }
+
+    /// Stretches where the alignment's words differ: the latest run's words (`a`) and the earlier run's (`b`), each a
+    /// range of indices. Two stretches with a single shared word between them are one, so a phrase reads whole.
+    static func differences(_ steps: [Step], _ a: [Token], _ b: [Token]) -> [(a: Range<Int>, b: Range<Int>)] {
+        var result: [(a: Range<Int>, b: Range<Int>)] = []
+        var nextA = 0, nextB = 0
+        var open: (a: Int, b: Int)?
+        for step in steps {
+            let same = step.a.flatMap { x in step.b.map { y in a[x].key == b[y].key } } ?? false
+            if same {
+                if let start = open { result.append((start.a..<nextA, start.b..<nextB)); open = nil }
+            } else if open == nil {
+                open = (nextA, nextB)
+            }
+            if step.a != nil { nextA += 1 }
+            if step.b != nil { nextB += 1 }
+        }
+        if let start = open { result.append((start.a..<nextA, start.b..<nextB)) }
+        var merged: [(a: Range<Int>, b: Range<Int>)] = []
+        for difference in result {
+            if let last = merged.last, difference.a.lowerBound - last.a.upperBound <= 1, difference.b.lowerBound - last.b.upperBound <= 1 {
+                merged[merged.count - 1] = (last.a.lowerBound..<difference.a.upperBound, last.b.lowerBound..<difference.b.upperBound)
+            } else {
+                merged.append(difference)
+            }
+        }
+        // Only the spacing differs ("ice cream", "icecream"): the same reading.
+        return merged.filter { difference in
+            difference.a.map { a[$0].key }.joined() != difference.b.map { b[$0].key }.joined()
+        }
+    }
+
+    /// Flags where the latest run (`latest`) and an earlier one (`earlier`) of one recording read differently, each with
+    /// the latest run's word indices it covers. A flag stays within one of the latest run's passages; a word the
+    /// latest run left out is flagged with the word beside it, so there's always something to mark.
+    static func disagreements(_ latest: [Token], _ earlier: [Token], trackID: UUID) -> [(flag: TranscriptFlag, indices: Range<Int>)] {
+        guard !latest.isEmpty, let steps = alignment(latest, earlier) else { return [] }
+        // Only time both runs cover can be a disagreement: a run that heard part of the audio says nothing of the rest.
+        guard let first = [latest.first?.start, earlier.first?.start].compactMap({ $0 }).max(),
+              let last = [latest.last?.end, earlier.last?.end].compactMap({ $0 }).min(), last > first else { return [] }
+        func covers(_ word: Token) -> Bool { word.end > first && word.start < last }
+        let differences = differences(steps, latest, earlier).filter { difference in
+            latest[difference.a].contains(where: covers) || earlier[difference.b].contains(where: covers)
+        }
+        // Each earlier word's place among the latest run's words: the word it was aligned with, else the latest word
+        // before it (the first, before any).
+        var partner = [Int](repeating: 0, count: earlier.count)
+        var lastA: Int?
+        for step in steps {
+            if let x = step.a { lastA = x }
+            if let y = step.b { partner[y] = step.a ?? lastA ?? 0 }
+        }
+        let differing = differences.reduce(0) { $0 + max($1.a.count, $1.b.count) }
+        let shared = max(latest.filter(covers).count, earlier.filter(covers).count)
+        guard Double(differing) <= comparableShare * Double(shared) else { return [] }
+        func text(_ words: some Sequence<Token>) -> String { words.map(\.text).joined(separator: " ") }
+        var flags: [(flag: TranscriptFlag, indices: Range<Int>)] = []
+        for difference in differences {
+            var a = difference.a, b = difference.b
+            if a.isEmpty {
+                // Words only the earlier run heard: marked on the word beside them, the nearer one in time.
+                guard b.count <= longestDisagreement else { continue }
+                let before = a.lowerBound - 1, after = a.upperBound
+                let gapBefore = before >= 0 && b.lowerBound > 0 ? earlier[b.lowerBound].start - latest[before].end : .infinity
+                let gapAfter = after < latest.count && b.upperBound < earlier.count ? latest[after].start - earlier[b.upperBound - 1].end : .infinity
+                if gapBefore.isInfinite && gapAfter.isInfinite { continue }
+                if gapBefore <= gapAfter { a = before..<a.upperBound; b = (b.lowerBound - 1)..<b.upperBound }
+                else { a = a.lowerBound..<(after + 1); b = b.lowerBound..<(b.upperBound + 1) }
+            } else if b.isEmpty {
+                guard a.count <= longestAddition else { continue }
+            } else {
+                guard a.count <= longestDisagreement, b.count <= longestDisagreement else { continue }
+            }
+            // One flag per passage of the latest run; the earlier words go with the part holding the words they were
+            // aligned with, and a part that reads the same as its earlier words (a shared word between two
+            // differences, alone in its passage) isn't one.
+            let parts = Dictionary(grouping: a, by: { latest[$0].segment }).values.map { $0.min()!..<($0.max()! + 1) }
+                .sorted { $0.lowerBound < $1.lowerBound }
+            var alternatives = Array(repeating: [Token](), count: parts.count)
+            for index in b {
+                let place = partner[index]
+                let part = parts.firstIndex { $0.contains(place) }
+                    ?? parts.indices.min { distance(Double(place), parts[$0]) < distance(Double(place), parts[$1]) }!
+                alternatives[part].append(earlier[index])
+            }
+            for (part, alternative) in zip(parts, alternatives) {
+                let words = latest[part]
+                guard words.map(\.key).joined() != alternative.map(\.key).joined() else { continue }
+                let confidences = words.compactMap(\.confidence)
+                let flag = TranscriptFlag(trackID: trackID, start: words.first!.start, end: words.last!.end, text: text(words),
+                                          reason: .disagreement, confidence: confidences.min(), alternative: text(alternative))
+                flags.append((flag, part))
+            }
+        }
+        return flags
+    }
+
+    /// How far word `place` is from the words `part`: zero inside it.
+    private static func distance(_ place: Double, _ part: Range<Int>) -> Double {
+        place < Double(part.lowerBound) ? Double(part.lowerBound) - place : max(0, place - Double(part.upperBound - 1))
+    }
+
+    /// Flags over the words the recognizer gave less than `floor`, neighbours in one passage together, leaving out the
+    /// words already flagged (`skipping`).
+    static func unsure(_ words: [Token], below floor: Double, skipping: Set<Int>, trackID: UUID) -> [TranscriptFlag] {
+        var flags: [TranscriptFlag] = []
+        var run: [Int] = []
+        func close() {
+            guard let first = run.first, let last = run.last else { return }
+            let span = words[first...last]
+            flags.append(TranscriptFlag(trackID: trackID, start: span.first!.start, end: span.last!.end,
+                                        text: span.map(\.text).joined(separator: " "), reason: .lowConfidence,
+                                        confidence: span.compactMap(\.confidence).min()))
+            run = []
+        }
+        for (index, word) in words.enumerated() {
+            guard !skipping.contains(index), let confidence = word.confidence, confidence < floor else { close(); continue }
+            if let last = run.last, last != index - 1 || words[last].segment != word.segment { close() }
+            run.append(index)
+        }
+        close()
+        return flags
+    }
+
+    // MARK: Where flags show
+
+    /// Each flag's place in the unified transcript: the passage citing its recording at its time (the passage's own
+    /// recording and time when it cites none) that reads its words, nearest where the time says. In a passage the person
+    /// corrected, a flag stays on the words they left alone, found in the corrected text, and goes where the correction
+    /// changed its words: what the person wrote is never flagged. A flag is also left out when another recording heard
+    /// every one of its words the same way (`SegmentProvenance.wordIndices`), or when no passage reads it.
+    static func locate(_ flags: [TranscriptFlag], in meeting: Meeting) -> [TranscriptFlagMark] {
+        guard !flags.isEmpty else { return [] }
+        let segments = meeting.unifiedTranscript
+        let corrected = meeting.correctedSegmentIDs
+        // The words a corrected passage read before the person's first correction: what fusion made of it.
+        var originals: [UUID: String] = [:]
+        if !corrected.isEmpty {
+            for revision in meeting.revisions.sorted(by: { $0.date < $1.date }) {
+                if case .segment(let id) = revision.kind, originals[id] == nil { originals[id] = revision.oldValue }
+            }
+        }
+        // Per recording: the passages citing it, with the span they cite in its own time.
+        var spans: [UUID: [(segment: Int, start: Double, end: Double)]] = [:]
+        for (index, segment) in segments.enumerated() {
+            if segment.provenance.isEmpty {
+                guard let clock = meeting.clock(of: segment.trackID), clock.rate > 0 else { continue }
+                spans[segment.trackID, default: []].append((index, (segment.start - clock.offset) / clock.rate, (segment.end - clock.offset) / clock.rate))
+            } else {
+                for source in segment.provenance { spans[source.trackID, default: []].append((index, source.start, source.end)) }
+            }
+        }
+        // Each word's letters and digits: the mark leaves the punctuation around them alone.
+        var words: [Int: [(key: String, range: Range<Int>)]] = [:]
+        func wordsOf(_ index: Int) -> [(key: String, range: Range<Int>)] {
+            if let cached = words[index] { return cached }
+            let text = segments[index].text
+            let found = text.split(whereSeparator: \.isWhitespace).map { piece -> (key: String, range: Range<Int>) in
+                let range = NSRange(core(of: piece) ?? piece.startIndex..<piece.endIndex, in: text)
+                return (wordKey(piece), range.location..<(range.location + range.length))
+            }
+            words[index] = found
+            return found
+        }
+        // The words a passage had when fusion numbered them (those with letters or digits), and where each stands in the
+        // passage now: the same place when nobody corrected it; in a corrected one, nil for a word the person changed.
+        var edits: [Int: (words: [String], now: [Int?])] = [:]
+        func editsOf(_ index: Int) -> (words: [String], now: [Int?]) {
+            if let cached = edits[index] { return cached }
+            let current = wordsOf(index).map(\.key).filter { !$0.isEmpty }
+            var found: (words: [String], now: [Int?]) = (current, current.indices.map { $0 })
+            if corrected.contains(segments[index].id) {
+                // Without what it read before, nothing in it is known to be the recognizer's.
+                found = ([], [])
+                if let text = originals[segments[index].id] {
+                    let before = text.split(whereSeparator: \.isWhitespace).map(wordKey).filter { !$0.isEmpty }
+                    if before.count * current.count <= 250_000 {
+                        var now = [Int?](repeating: nil, count: before.count)
+                        for (place, word) in unchanged(before, current).enumerated() { if let word { now[word] = place } }
+                        found = (before, now)
+                    }
+                }
+            }
+            edits[index] = found
+            return found
+        }
+        var marks: [TranscriptFlagMark] = []
+        for flag in flags {
+            let keys = flag.text.split(whereSeparator: \.isWhitespace).map(wordKey).filter { !$0.isEmpty }
+            guard !keys.isEmpty else { continue }
+            var candidates: [(segment: Int, start: Double, end: Double, overlap: Double)] = []
+            for span in spans[flag.trackID] ?? [] {
+                let overlap: Double = min(span.end, flag.end) - max(span.start, flag.start)
+                if overlap > -timeSlack { candidates.append((span.segment, span.start, span.end, overlap)) }
+            }
+            // Passages beside it count only when none holds its time.
+            if candidates.contains(where: { $0.overlap > 0 }) { candidates.removeAll { $0.overlap <= 0 } }
+            candidates.sort { $0.overlap == $1.overlap ? $0.segment < $1.segment : $0.overlap > $1.overlap }
+            for span in candidates {
+                let all = wordsOf(span.segment)
+                let edit = editsOf(span.segment)
+                guard edit.words.count >= keys.count else { continue }
+                // Where the words were numbered, nearest where the time says: they're marked there if nobody changed them.
+                let starts: [Int] = (0...(edit.words.count - keys.count)).filter { offset in
+                    keys.indices.allSatisfy { edit.words[offset + $0] == keys[$0] }
+                }
+                guard !starts.isEmpty else { continue }
+                let length: Double = span.end - span.start
+                let share: Double = length > 0 ? min(1, max(0, (flag.start - span.start) / length)) : 0
+                let expected: Double = share * Double(edit.words.count)
+                func distance(_ start: Int) -> Double { abs(Double(start) - expected) }
+                let chosen = starts.min { distance($0) < distance($1) }!
+                guard let first = edit.now[chosen],
+                      keys.indices.allSatisfy({ edit.now[chosen + $0] == first + $0 }) else { continue }
+                let segment = segments[span.segment]
+                // Fusion numbered the words as `edit.words` does (punctuation alone goes with the word before).
+                let fused = Set(chosen..<(chosen + keys.count))
+                let corroborated = segment.provenance.contains { source in
+                    guard source.trackID != flag.trackID, let supported = source.wordIndices else { return false }
+                    return Set(supported).isSuperset(of: fused)
+                }
+                if !corroborated {
+                    let slots: [Int] = all.indices.filter { !all[$0].key.isEmpty }
+                    marks.append(TranscriptFlagMark(flag: flag, segmentID: segment.id,
+                                                    range: all[slots[first]].range.lowerBound..<all[slots[first + keys.count - 1]].range.upperBound))
+                }
+                break
+            }
+        }
+        return marks
+    }
+
+    /// For each word of `now`, the number of the word of `before` it's the same as when the two are laid side by side
+    /// (the longest run of words they share, in order); nil for a word that isn't one of them: written since.
+    static func unchanged(_ before: [String], _ now: [String]) -> [Int?] {
+        let n = before.count, m = now.count
+        var length = [[Int]](repeating: [Int](repeating: 0, count: m + 1), count: n + 1)
+        for i in stride(from: n - 1, through: 0, by: -1) {
+            for j in stride(from: m - 1, through: 0, by: -1) {
+                length[i][j] = before[i] == now[j] ? length[i + 1][j + 1] + 1 : max(length[i + 1][j], length[i][j + 1])
+            }
+        }
+        var paired = [Int?](repeating: nil, count: m)
+        var i = 0, j = 0
+        while i < n, j < m {
+            if before[i] == now[j] { paired[j] = i; i += 1; j += 1 }
+            else if length[i + 1][j] >= length[i][j + 1] { i += 1 } else { j += 1 }
+        }
+        return paired
+    }
+}

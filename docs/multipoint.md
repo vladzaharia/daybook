@@ -602,6 +602,10 @@ preferences (the policy, the countdown's length, the effort) are read from each 
   **Use the Cloud** and **Start Now**, and, on a device that isn't a Mac and counts down to itself, **Wait
   for a Mac** (a reachable Mac gets it at once; otherwise it waits for one, passing over this device from
   then on).
+- **Counting down to the cloud**: a conversation longer than the local model reads in one pass, which the cloud's
+  model would summarize clearly better, or one whose summary here just failed (docs/cloud.md, "When the cloud is
+  chosen"). When it runs out it starts in the cloud; **Start Now** and **Don't Use the Cloud** (where it would have
+  run; after a failure, nowhere, so the job fails as it would have).
 - **Waiting for a Mac**: nothing here can summarize it and no Mac is reachable, with the cloud on offer.
   No countdown; Use the Cloud. When a Mac becomes reachable, a fresh countdown starts before it's sent.
 - **Started**: here, sent to a Mac, or in the cloud. Nothing changes it after this.
@@ -610,10 +614,11 @@ preferences (the policy, the countdown's length, the effort) are read from each 
 
 **When it counts down.** Only when there's something to choose. Without a cloud model on offer (no key, or
 Never) a summary starts at once where it can, as before there was a cloud. **Always** sends it to the cloud
-with no countdown, except a **Personal** conversation (filed there, or its template or summary says so:
-`Meeting.effectivePlacement`), which is never sent on its own: it counts down as Offer First does, or waits for a
-Mac, and the cloud is only ever the person's choice for it (Use the Cloud). The planner reads it as `isPersonal`,
-which each app's `SummaryPlacements.isPersonal` answers from its library as the planner begins. A summary someone
+with no countdown. A conversation whose placement Settings › Cloud keeps off the cloud (Personal, unless the person
+turns it on; docs/cloud.md, "Which conversations") has no cloud on offer at all: no countdown, no Use the Cloud, and
+Always doesn't send it. The planner reads it as `Conversation.cloudAllowed`, which each app's
+`SummaryPlacements.conversation` answers from its library and its own switches as the planner begins and at every
+change, the library's included. A summary someone
 asked for starts at once wherever it can: Summarize Again, a template,
 Identify Speakers Again, Transcribe Everything Again, here or as another device's request. Only the summary
 that new audio makes due counts down.
@@ -622,7 +627,8 @@ that new audio makes due counts down.
 countdown keeps its deadline when where it ends up changes (the Mac it counted down to went away and another
 is reachable; this device became able to summarize, or stopped); one with nowhere left to go waits for a Mac;
 one whose cloud went away (the key removed, Never chosen) starts its default now, since the countdown was
-there to offer the cloud; Always chosen sends it to the cloud, except a Personal one, which keeps counting down.
+there to offer the cloud, and so does one whose conversation was moved to a placement kept off the cloud, or whose
+switch was turned off; Always chosen sends it to the cloud.
 Waiting turns into a fresh countdown when somewhere to run it appears.
 
 **On the Mac.** The summary step of every job goes through the planner (`placedSummary`): when the
@@ -642,7 +648,7 @@ starts it at once.
 **Transcript first, on the Mac.** A job doesn't wait for the summary model to start: it transcribes with what
 transcribes, and at the summary step, when the summary model isn't here (`summarizesLocally`; the options
 say so, `thisDeviceCanSummarize`), the summary goes to the cloud at once under Always, unless the
-conversation is Personal. Otherwise the job ends with the transcript rather than holding the queue for a
+conversation's placement is kept off the cloud (Personal, unless the person turns it on). Otherwise the job ends with the transcript rather than holding the queue for a
 wait, and the summary is owed until the model arrives (`AppState+SummaryPlacement.swift`): the page reads
 "Waiting to summarize after the download · 38%" with the bar, and Use the Cloud while the cloud is on offer,
 which sends it there with no countdown (`ProcessingJob.summarizesInCloud`), from the page or a phone. When
@@ -757,7 +763,7 @@ option, and goes everywhere once the work is done or the offer dismissed.
   devices' work; the iPhone redoes only a conversation whose every recording is its own, as it transcribes only those),
   the Macs reachable now that name their models (the placement's reachability; an earlier Daybook names none, so offers
   nothing), and for the summary the cloud model Settings › Cloud resolves to, with a key and unless Never, and never for
-  a Personal conversation. The best rank
+  a conversation whose placement Settings › Cloud keeps off the cloud (`UpgradeCandidates.cloudPlacements`). The best rank
   wins; on a tie this device, then the Macs in order, then the cloud, so the work stays nearest. A transcription model
   must cover each recording's language as it was transcribed.
 - **Clearly better:** the best must rank at least the step's margin above what's there now. Without one, every Gemma 4

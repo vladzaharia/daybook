@@ -257,6 +257,16 @@ public actor MeetingStore {
         let inkIDs = Set((result.ink ?? []).map(\.id))
         let missingInk = (stored.ink ?? []).filter { !inkIDs.contains($0.id) }
         if !missingInk.isEmpty { result.ink = (result.ink ?? []) + missingInk }
+        // And notebook pages: deleting one marks it.
+        let pageIDs = Set((result.pages ?? []).map(\.id))
+        let missingPages = (stored.pages ?? []).filter { !pageIDs.contains($0.id) }
+        // And it can't take back strokes written since it was made.
+        let storedPages = Dictionary((stored.pages ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        if let pages = result.pages {
+            let kept = pages.map { page in storedPages[page.id].map(page.keepingStrokes(of:)) ?? page }
+            if kept != pages { result.pages = kept }
+        }
+        if !missingPages.isEmpty { result.pages = (result.pages ?? []) + missingPages }
         return result
     }
 
@@ -354,6 +364,50 @@ public actor MeetingStore {
         return result
     }
 
+    /// A merge's copy of a folded conversation's recording (`track`, its bytes at `sourceURL`) in conversation `meetingID`'s
+    /// folder, under the ID every device gives it (`ConversationMerge.copyID`), and the track that describes it, which the
+    /// caller adds to the conversation when it folds (`LibraryController.mergeConversations`); `meeting.json` isn't
+    /// written. The file is `Originals/<id>` with the original's extension, the same path on every device. `existing` is
+    /// the conversation's track with that ID, when it has one (another device's fold synced, or a copy an earlier Daybook
+    /// left waiting): that track is the copy, never a second one, and its file is written where it's missing or isn't its
+    /// bytes. A file at a new copy's place that isn't the recording (a copy that stopped partway) is replaced. Bytes that
+    /// aren't the recording's (`sha256`) are refused, and nothing is written.
+    public func mergeCopy(of track: RecordingTrack, from sourceURL: URL, into meetingID: UUID, id: UUID,
+                          existing: RecordingTrack?) async throws -> RecordingTrack {
+        let directory = try meetingDirectory(for: meetingID)
+        let ext = (track.relativePath as NSString).pathExtension.lowercased().filter { $0.isLetter || $0.isNumber }.prefix(12)
+        let relativePath = existing?.relativePath ?? "Originals/\(id.uuidString)" + (ext.isEmpty ? "" : ".\(ext)")
+        let destination = try LocalFiles.relativeURL(relativePath, in: directory)
+        let expected = existing.map(\.sha256) ?? track.sha256
+        func described(_ digest: String) -> RecordingTrack {
+            existing ?? RecordingTrack(id: id, source: track.source, relativePath: relativePath, fileName: track.fileName,
+                                       createdAt: track.createdAt, duration: track.duration, sha256: digest)
+        }
+        // There already: a merge asked for again, or the same copy synced from another device.
+        if !expected.isEmpty, (try? destination.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true,
+           (try? await BlockingFileWork.sha256(destination)) == expected {
+            return described(expected)
+        }
+        let originals = destination.deletingLastPathComponent()
+        try LocalFiles.requireContained(originals, in: directory)
+        try LocalFiles.directory(originals)
+        let staged = originals.appendingPathComponent(".merge-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: staged) }
+        let hash = try await BlockingFileWork.run { isCancelled in
+            try FileManager.default.copyItem(at: sourceURL, to: staged)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: staged.path)
+            return try AudioDigest.sha256(fileURL: staged, isCancelled: isCancelled)
+        }
+        guard expected.isEmpty || hash == expected else { throw LibraryError.invalidAudio(track.fileName) }
+        if fm.fileExists(atPath: destination.path) {
+            _ = try fm.replaceItemAt(destination, withItemAt: staged)
+        } else {
+            try fm.moveItem(at: staged, to: destination)
+        }
+        noteWrite(destination)
+        return described(hash)
+    }
+
     /// The same check, on the actor: only for a recording that appeared during an import's await.
     private func isVerifiedNow(_ track: RecordingTrack, digest: String, in meetingID: UUID) -> Bool {
         guard let url = try? audioURL(for: track, in: meetingID),
@@ -425,6 +479,20 @@ public actor MeetingStore {
             guard photo.relativePath.hasPrefix(MeetingPhoto.folder + "/") else { throw LibraryError.unsafePath(photo.relativePath) }
             _ = try LocalFiles.relativeURL(photo.relativePath, in: directory)
             guard photo.time.map({ $0.isFinite && $0 >= 0 }) ?? true else { throw LibraryError.invalidHighlight }
+        }
+        let pagesFolder = directory.appendingPathComponent(PageDrawing.folder, isDirectory: true)
+        for page in meeting.pages ?? [] {
+            for file in page.files {
+                guard file.relativePath.hasPrefix(PageDrawing.folder + "/") else { throw LibraryError.unsafePath(file.relativePath) }
+                try LocalFiles.requireContained(try LocalFiles.relativeURL(file.relativePath, in: directory), in: pagesFolder)
+            }
+            guard page.width.isFinite, page.width > 0, page.height.isFinite, page.height > 0, page.hasBackgroundSize,
+                  page.background.map({ $0.width.isFinite && $0.width > 0 && $0.height.isFinite && $0.height > 0 }) ?? true else {
+                throw LibraryError.corruptMeeting(expectedID)
+            }
+            for passage in page.passages {
+                guard passage.time.map({ $0.isFinite && $0 >= 0 }) ?? true else { throw LibraryError.invalidHighlight }
+            }
         }
     }
 }
@@ -498,6 +566,13 @@ enum LocalFiles {
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
         try excludeFromBackup(temporary)
         guard rename(temporary.path, url.path) == 0 else { throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path]) }
+    }
+    /// Marks a file as used now: pruning keeps what was written lately (`MeetingStore.prunePageDrawings`), and a file that
+    /// becomes named again (the same bytes stored again, or a revert applied) is as new as that.
+    static func touch(_ url: URL, now: Date = Date(), unlessWithin interval: TimeInterval = 0) {
+        if interval > 0, let modified = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+           now.timeIntervalSince(modified) < interval { return }
+        try? FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: url.path)
     }
     /// Marks a file to stay out of backups. The mark moves with the file when it's renamed into place.
     static func excludeFromBackup(_ url: URL) throws {

@@ -65,6 +65,47 @@ struct CapturePhoto: Codable, Equatable, Sendable {
     var time: TimeInterval
 }
 
+/// A notebook page written while recording: its record as it'll be filed, and its strokes in the staging folder
+/// (`fileName(for:)`). `page.drawing` is the conversation's drawing as it was loaded (nil for a page made during the
+/// recording); the strokes written since are in the staging file, committed at the notebook's settle points (`commit`)
+/// and kept fresh between them by drafts, which are files only: the file can hold newer strokes than the journal says.
+struct CapturePage: Codable, Equatable, Sendable {
+    /// The page record. Its `reading` may be of the committed strokes (`drawingSHA256`), not of a draft's.
+    var page: NotebookPage
+    /// The staging file as last committed. Nil until the first commit.
+    var drawingFile: String?
+    /// SHA-256 of that file's bytes as last committed: what a reading made during the recording is checked against.
+    var drawingSHA256: String?
+    /// What the last commit knew of the strokes, for the drawing filed from the file.
+    var strokeCount: Int?
+    var contentVersion: Int?
+    var committedAt: Date?
+    /// The conversation's copy when the recording loaded it; nil for a page made during the recording.
+    var base: NotebookPage?
+
+    /// "page-<UUID>.pkdrawing" in the staging folder.
+    static func fileName(for page: UUID) -> String { "page-\(page.uuidString).\(PageDrawing.fileExtension)" }
+
+    /// "page-<UUID>.base.json": the copy of the conversation's page the recording loaded, written once when it was loaded, so the
+    /// journal rewritten every few seconds doesn't carry it. Encoded as the conversation is (full-precision dates), so
+    /// the three-way merge at filing sees the copy it was loaded as, unchanged.
+    static func baseFileName(for page: UUID) -> String { "page-\(page.uuidString).base.json" }
+    static func encodeBase(_ page: NotebookPage) throws -> Data { try JSONEncoder().encode(page) }
+
+    /// These pages with each one's `base` read back from its file in `folder` where the journal holds none (a recovered recording,
+    /// or one Stop finished from the journal on disk).
+    static func restoringBases(_ pages: [CapturePage], in folder: URL) -> [CapturePage] {
+        pages.map { entry in
+            guard entry.base == nil,
+                  let data = try? Data(contentsOf: folder.appendingPathComponent(baseFileName(for: entry.page.id))),
+                  let base = try? JSONDecoder().decode(NotebookPage.self, from: data) else { return entry }
+            var restored = entry
+            restored.base = base
+            return restored
+        }
+    }
+}
+
 /// The Macs a recording is made with (docs/multipoint.md), kept in its journal so that one
 /// recovered after Daybook was killed still joins its conversation and its Macs are still stopped.
 struct CaptureMultipoint: Codable, Equatable, Sendable {
@@ -161,6 +202,13 @@ struct PhoneCaptureJournal: Codable, Equatable, Sendable {
     var highlights: [Highlight] = []
     /// Optional, so journals written before photos still load.
     var photos: [CapturePhoto]?
+    /// Notebook pages. Optional, so journals written before pages still load. Nil when none was written or loaded.
+    var pages: [CapturePage]?
+    /// The recorder's clock as the notebook sampled it (`RecordingClockMap`), so a recovered recording can still time
+    /// passages and keep the samples with its track. Nil when no page was written.
+    var pageClock: [RecordingClockSample]?
+    /// When the notebook's open pages changed, against the recording clock (`PageTurn`). Nil when none did.
+    var pageTurns: [PageTurn]?
     /// The Macs it's recorded with; nil when none (and in journals written before multipoint was kept).
     var multipoint: CaptureMultipoint?
     /// Paragraphs and bookmarks a Mac recording this conversation too wrote over the link, as that Mac
@@ -248,6 +296,12 @@ struct PhoneRecording: Sendable, Equatable {
     var photos: [CapturePhoto] = []
     /// Handwriting in the notes.
     var ink: [NoteInk] = []
+    /// Notebook pages written or loaded while recording; the strokes are in `stagingDirectory`.
+    var pages: [CapturePage] = []
+    /// The recorder's clock as the notebook sampled it.
+    var pageClock: [RecordingClockSample] = []
+    /// The notebook's page turns, in the recording's seconds.
+    var pageTurns: [PageTurn] = []
     /// The Macs it was recorded with, as the journal kept them (for a recovered recording).
     var multipoint: CaptureMultipoint?
     /// What a Mac recording along wrote over the link, as that Mac files it (`PhoneCaptureJournal.sharedNotes`).

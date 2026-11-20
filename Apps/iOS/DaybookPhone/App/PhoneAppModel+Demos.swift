@@ -4,7 +4,10 @@ import DaybookCore
 import DaybookDevices
 import DaybookKit
 import DaybookLink
+import DaybookUI
 import Foundation
+import PencilKit
+import UIKit
 
 // The debug launch scripts (`DebugLaunch`): a scripted recording, a paired Mac, the simulated recorder
 // added and importing, its handoff states, and a Mac's presence in a sync folder, for screenshots. Nothing
@@ -19,17 +22,91 @@ extension PhoneAppModel {
         addInk(NoteInk(drawing: SyntheticInk.drawing("world hello").dataRepresentation(), width: 440, height: 96), after: nil)
     }
 
+    /// `--demo-pages`: three pages written during the recording, in several colours with a sketch, read and one corrected: what
+    /// the notebook's screenshots show. Written some seconds in, so the passages have recording times.
+    func runPagesDemo() async {
+        try? await Task.sleep(for: .seconds(12))
+        guard recorder.isActive else { return }
+        let ink = InkColor.self
+        // Strokes are stamped from now on, so the clock sample taken now places each passage.
+        recorder.sampleClock()
+        let begun = Date()
+        func words(_ text: String, _ x: CGFloat, _ y: CGFloat, after: TimeInterval, _ colour: InkColor = .black) -> SyntheticInk.Passage {
+            .init(.words(text), at: CGPoint(x: x, y: y), size: 34, after: after, color: colour.uiColor.cgColor)
+        }
+        let drawings: [PKDrawing] = [
+            SyntheticInk.page(passages: [words("hello world", 66, 70, after: 0), words("world hello", 66, 150, after: 8, ink.blue),
+                                         words("hello", 66, 236, after: 14, ink.red), words("world", 66, 320, after: 20, ink.green),
+                                         words("hello hello", 66, 400, after: 26, ink.orange)], start: begun),
+            SyntheticInk.page(passages: [.init(.sketch, at: CGPoint(x: 80, y: 120), size: 150, after: 4, color: ink.blue.uiColor.cgColor),
+                                         words("hello", 66, 400, after: 12, ink.red)], start: begun),
+            SyntheticInk.page(passages: [words("world hello", 66, 70, after: 0), words("hello", 66, 160, after: 8, ink.green)], start: begun),
+        ]
+        var pages: [NotebookPage] = []
+        for (index, drawing) in drawings.enumerated() {
+            var page = NotebookPage(order: Double(index + 1), origin: .thisIPhone(installation: library.installationID))
+            if index == 1 { page.paper = .plain }
+            recorder.addPage(page)
+            pages.append(page)
+            let data = drawing.dataRepresentation()
+            guard let sha = try? recorder.commitPage(page.id, data: data, strokeCount: drawing.strokes.count,
+                                                     contentVersion: drawing.requiredContentVersion.rawValue) else { continue }
+            let samples = recorder.pageClock
+            let reading = await NotebookReader.read(drawing, sha256: sha, page: page) { moment in (nil, RecordingClockMap.elapsed(at: moment, samples: samples)) }
+            recorder.applyPageReading(page.id, reading)
+            if index == 0, let passage = reading.passages.first { recorder.correctPassage(pageID: page.id, passageID: passage.id, text: "Hello, world: agenda") }
+        }
+    }
+
+    /// `--notebook-conversation --demo-pages`: the same three pages in a saved conversation, read and timed on its timeline.
+    func seedDemoPages(in id: UUID) async {
+        let controller = library.controller
+        guard controller.meeting(id)?.pages == nil else { return }
+        let ink = InkColor.self
+        func words(_ text: String, _ y: CGFloat, after: TimeInterval, _ colour: InkColor = .black) -> SyntheticInk.Passage {
+            .init(.words(text), at: CGPoint(x: 66, y: y), size: 34, after: after, color: colour.uiColor.cgColor)
+        }
+        let begun = Date()
+        let drawings: [PKDrawing] = [
+            SyntheticInk.page(passages: [words("hello world", 110, after: 0), words("world hello", 190, after: 8, ink.blue),
+                                         words("hello", 276, after: 14, ink.red)], start: begun),
+            SyntheticInk.page(passages: [.init(.sketch, at: CGPoint(x: 80, y: 160), size: 150, after: 4, color: ink.blue.uiColor.cgColor),
+                                         words("hello", 420, after: 12, ink.red)], start: begun),
+        ]
+        for (index, drawing) in drawings.enumerated() {
+            var page = NotebookPage(order: Double(index + 1), origin: .thisIPhone(installation: library.installationID))
+            if index == 1 { page.paper = .plain }
+            controller.addPage(page, to: id)
+            let data = drawing.dataRepresentation()
+            guard let stored = try? await controller.commitPageDrawing(data, page: page.id, in: id, strokeCount: drawing.strokes.count,
+                                                                       contentVersion: drawing.requiredContentVersion.rawValue, device: nil) else { continue }
+            // Written during the conversation: timed on its timeline, from 30 s in.
+            let reading = await NotebookReader.read(drawing, sha256: stored.sha256, page: page) { moment in (nil, 30 + moment.timeIntervalSince(begun)) }
+            controller.applyPageReading(reading, to: page.id, in: id)
+        }
+    }
+
     /// What the launch arguments ask for, once the library, sync, and the link are up.
     func runLaunchDemos() {
         if options.deviceAutopilot { runDeviceAutopilot() }
         if options.handoffDemo != nil || options.demoLiveCaptions || options.demoTransfer != nil { runStatusDemo() }
         if PhonePlacementDemo.scenario != nil { Task { await PhonePlacementDemo.apply(to: self) } }
         if PhoneUpgradeDemo.scenario != nil { Task { await PhoneUpgradeDemo.apply(to: self) } }
+        if options.notebookConversation {
+            Task {
+                for _ in 0..<100 where !(library.controller.isLoaded && !library.controller.meetings.isEmpty) { try? await Task.sleep(for: .milliseconds(200)) }
+                try? await Task.sleep(for: .seconds(2))
+                guard let newest = library.controller.meetings.max(by: { $0.updatedAt < $1.updatedAt }) else { return }
+                if options.demoPages { await seedDemoPages(in: newest.id) }
+                pendingNotebook = newest.id
+            }
+        }
         Task {
             if options.startRecording, !recorder.isActive {
                 try? await startRecording()
                 runDemoScript()
                 if options.demoInk { await runInkDemo() }
+                if options.demoPages { await runPagesDemo() }
             }
             if let name = options.demoRecorderOnly, !recorder.isActive {
                 // After the scene has come forward, which would otherwise record along at once.

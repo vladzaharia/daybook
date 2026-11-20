@@ -236,7 +236,7 @@ struct LibraryPage: View {
     let hits = LibrarySearch.hits(
       in: personalLock?.listed(library.meetings) ?? library.meetings, text: session.searchText,
       tokens: session.searchTokens,
-      scope: session.searchScope)
+      scope: session.searchScope, people: library.searchPeople)
     return List {
       // The scopes, on one page and on two, as on the Mac.
       // Its rows line up with the list's, clear of the crease on two pages.
@@ -284,7 +284,7 @@ struct LibraryPage: View {
     ) {
       let candidates = Self.captionCandidates(
         in: personalLock?.listed(library.meetings) ?? library.meetings, tokens: session.searchTokens,
-        scope: session.searchScope)
+        scope: session.searchScope, people: library.searchPeople)
       let found = await LibraryCaptionSearch.hits(
         in: candidates, query: session.searchText,
         excluding: Set(hits.map(\.meetingID)), libraryRoot: library.rootURL)
@@ -296,11 +296,12 @@ struct LibraryPage: View {
   /// The conversations whose saved captions search reads: those the search could list (its scope and tokens). Which
   /// captions still show is the transcript page's own rule (`SavedCaptions.shown`), which the search reads too, so a
   /// caption result always opens at them.
-  static func captionCandidates(in meetings: [Meeting], tokens: [SearchToken], scope: SearchScope)
-    -> [Meeting]
+  static func captionCandidates(
+    in meetings: [Meeting], tokens: [SearchToken], scope: SearchScope, people: SearchPeople = .none
+  ) -> [Meeting]
   {
     let scoped = Set(
-      LibrarySearch.hits(in: meetings, text: "", tokens: tokens, scope: scope).map(\.meetingID))
+      LibrarySearch.hits(in: meetings, text: "", tokens: tokens, scope: scope, people: people).map(\.meetingID))
     return meetings.filter { scoped.contains($0.id) }
   }
 
@@ -521,7 +522,8 @@ private struct SearchWhilePresented: ViewModifier {
             suggestedTokens: .constant(
               LibrarySearchSuggestions.tokens(
                 for: session.searchText, tags: library.allTags,
-                meetings: library.meetings, chosen: session.searchTokens)),
+                meetings: library.meetings, chosen: session.searchTokens,
+                people: library.searchPeople)),
             isPresented: $session.isSearchPresented,
             placement: .navigationBarDrawer(displayMode: .always),
             prompt: LibraryWords.searchPrompt
@@ -655,6 +657,7 @@ struct RowMenu: View {
   @Environment(\.summaryPlacement) private var placement
   @Environment(\.undoManager) private var undoManager
   @Environment(PersonalLock.self) private var personalLock: PersonalLock?
+  @Environment(PhoneAppModel.self) private var model
 
   var body: some View {
     let meetings = library.meetings.filter { ids.contains($0.id) }
@@ -681,7 +684,10 @@ struct RowMenu: View {
       Divider()
     }
     if !meetings.isEmpty {
-      ConversationActionMenuItems(PhoneActions.groups(for: ids, library: library), platform: .iPhone) {
+      ConversationActionMenuItems(
+        PhoneActions.groups(for: ids, library: library, recordingOnMac: PhoneActions.recordingOnMac(model)),
+        platform: .iPhone
+      ) {
         PhoneActions.perform(
           $0, on: ids, library: library, session: session, provider: provider,
           placement: placement, undoManager: undoManager)
@@ -695,13 +701,29 @@ struct RowMenu: View {
 /// does them, and this iPhone's own here.
 @MainActor
 enum PhoneActions {
-  /// The actions for one conversation, or a selection's.
-  static func groups(for ids: [UUID], library: LibraryController) -> [ConversationActionGroup] {
+  /// The actions for one conversation, or a selection's. `recordingOnMac` are the conversations connected Macs are
+  /// recording now, which Merge… waits for.
+  static func groups(for ids: [UUID], library: LibraryController, recordingOnMac: Set<UUID> = []) -> [ConversationActionGroup] {
     let selected = library.meetings.filter { ids.contains($0.id) }
     guard let only = selected.first, selected.count == 1 else {
-      return ConversationActions.batch(ids, in: library.meetings, context: .init(platform: .iPhone))
+      return ConversationActions.batch(
+        ids, in: library.meetings, context: .init(platform: .iPhone),
+        each: { mergeContext($0, recordingOnMac: recordingOnMac) }, merging: library.mergingIDs)
     }
     return groups(for: only)
+  }
+
+  /// What this iPhone knows of a conversation that Merge… asks: a Mac recording it, this iPhone processing it, and its
+  /// processing asked for or under way anywhere (`ConversationActions.Context.mergeBusy`).
+  static func mergeContext(_ meeting: Meeting, recordingOnMac: Set<UUID>) -> ConversationActions.Context {
+    var context = ConversationInfo.context(meeting)
+    context.isRecording = recordingOnMac.contains(meeting.id)
+    return context
+  }
+
+  /// The conversations the Macs this iPhone is connected to are recording now.
+  static func recordingOnMac(_ model: PhoneAppModel) -> Set<UUID> {
+    PhoneRowStatus.recording(model.link.connectedMacs.compactMap(\.recording))
   }
 
   /// One conversation's actions on this iPhone: Take Photo where there's a camera, Reprocess unless it's waiting.
@@ -740,6 +762,7 @@ enum PhoneActions {
         case .versionHistory(let id): session.sheet = .history(id)
         case .moveToFolder(let ids): session.sheet = .move(ids)
         case .moveToTrash(let ids): session.confirmingTrash = ids
+        case .merge(let ids): if ids.count > 1 { session.confirmingMerge = ids }
         }
       },
       copy: { LocalPasteboard.copy($0) },
@@ -758,7 +781,7 @@ enum PhoneActions {
         break  // The Mac's.
       case .play, .adjustTiming, .showOriginalTranscript, .moveToNewConversation, .removeRecording:
         break  // A recording's, in Info.
-      case .copySummary, .process, .versionHistory, .moveToFolder, .tags, .moveTo, .moveToTrash:
+      case .copySummary, .process, .versionHistory, .moveToFolder, .tags, .moveTo, .merge, .moveToTrash:
         break  // The library's (`ConversationActionPerformer`).
       }
     }
@@ -817,10 +840,10 @@ private struct SelectionBar: View {
   @Environment(\.audioProvider) private var provider
   @Environment(\.summaryPlacement) private var placement
   @Environment(\.undoManager) private var undoManager
+  @Environment(PhoneAppModel.self) private var model
 
   var body: some View {
-    let groups = ConversationActions.batch(
-      ids, in: library.meetings, context: .init(platform: .iPhone))
+    let groups = PhoneActions.groups(for: ids, library: library, recordingOnMac: PhoneActions.recordingOnMac(model))
     let actions = ConversationActionMenuItems.shown(groups, on: .iPhone).flatMap(\.actions)
     HStack(spacing: 0) {
       if actions.isEmpty {

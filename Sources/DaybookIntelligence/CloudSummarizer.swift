@@ -6,7 +6,7 @@ import Synchronization
 /// Summarizes a conversation with a cloud model (docs/cloud.md, "The summary"): `CloudSynthesis`'s single pass,
 /// streamed, with the reply's limit raised once when it runs into it, and the provider and model, tokens, estimated
 /// cost, and sending device recorded in the summary's provenance. Only the transcript text, the notes and bookmarks,
-/// the template, and the vocabulary are sent: never audio, photos, or voiceprints.
+/// the template, the vocabulary, and the conversation's title and date are sent: never audio, photos, page pictures, sketches, or voiceprints.
 public struct CloudSummarizer: CloudSummarizing {
     public let directory: CloudDirectory
     /// The device sending the conversation, for provenance: "Vlad's MacBook Pro".
@@ -37,7 +37,7 @@ public struct CloudSummarizer: CloudSummarizing {
     public func summary(_ meeting: Meeting, template: SummaryTemplate?, vocabulary: [String], model: CloudModel,
                         effort wanted: CloudEffort, progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> Result {
         let source = MeetingEvidence.summarySource(meeting)
-        guard !source.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw DaybookError.noSpeech }
+        guard source.hasContent else { throw DaybookError.noSpeech }
         guard let key = try directory.keys.key(for: model.provider) else { throw CloudError.noKey(model.provider) }
         progress(0.02)
         let catalog = directory.catalog
@@ -48,6 +48,14 @@ public struct CloudSummarizer: CloudSummarizing {
         let kind = template?.kind ?? meeting.kind
         let built = CloudSynthesis.prompt(source: source, template: kind, glossary: vocabulary, templateInstructions: template?.instructions,
                                           provider: model.provider, catalog: catalog)
+        // Checked against the model's window before anything is sent, with room for the smallest reply limit (providers
+        // count it against the window): the provider's tokenizer isn't here, so the prompt's length is estimated from its
+        // characters (`CloudCatalog.estimatedTokens`, which errs long for Claude).
+        let context = offer.model.contextTokens ?? model.contextTokens
+        let inputTokens = catalog.estimatedTokens(built.instructions + built.prompt + built.schema, provider: model.provider)
+        if let context, inputTokens + Self.minimumReplyLimit > context {
+            throw CloudError.inputTooLong(model: model.name, details: "About \(inputTokens.formatted()) tokens and a reply in a window of \(context.formatted())")
+        }
 
         // How much it should write, for the limit and for progress while it streams.
         let minutes = Self.minutes(meeting)
@@ -60,7 +68,7 @@ public struct CloudSummarizer: CloudSummarizing {
         }
         var request = CloudRequest(provider: model.provider, model: model.id, modelName: model.name, instructions: built.instructions,
                                    prompt: built.prompt, schema: offer.structuredOutputs ? built.schema : nil,
-                                   maxOutputTokens: min(ceiling, max(16_000, expected * 2 + 8_000)), effort: effort,
+                                   maxOutputTokens: min(ceiling, max(Self.minimumReplyLimit, expected * 2 + 8_000)), effort: effort,
                                    refusalFallback: offer.refusalFallback)
         var reply = try await directory.client.respond(request, key: key, received: received)
         if reply.stop == .lengthCap {
@@ -89,7 +97,8 @@ public struct CloudSummarizer: CloudSummarizing {
                                          priceIsEstimated: writer?.model.priceIsEstimated ?? false, sentBy: deviceName)
 
         let notes = CloudSynthesis.notes(reply.text, prompt: built, template: kind, modelID: provenance.modelID)
-        var summary = PhotoPlacement.arrange(notes.summary, in: meeting)
+        // Photos and sketches never left the device: both are placed by time here, from what was read on the device.
+        var summary = NotebookPlacement.arrange(PhotoPlacement.arrange(notes.summary, in: meeting), in: meeting)
         var parameters = provenance.parameters
         parameters["templateID"] = template?.id ?? "auto"
         parameters["templateInstructions"] = template?.instructions ?? "Automatic selection"
@@ -98,6 +107,9 @@ public struct CloudSummarizer: CloudSummarizing {
         progress(1)
         return Result(summary: summary, suggestedTerms: notes.suggestedTerms, warnings: notes.warnings, provenance: provenance)
     }
+
+    /// The least a reply may be allowed to write: a request's limit is never below it.
+    static let minimumReplyLimit = 16_000
 
     /// What summarizing `meeting` with `model` should cost, in USD, before it's sent: the prompt's own length in the
     /// provider's tokens, and what the model is expected to write for a conversation this long; nil without a price.

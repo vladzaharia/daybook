@@ -122,4 +122,42 @@ final class ShippedCaptureJournalTests: XCTestCase {
         XCTAssertLessThan(audio.rms(3.2..<4.8), 0.003, "the interruption is silence")
         XCTAssertEqual(audio.frequency(5.3..<(audio.duration - 0.2)), 660, accuracy: 3)
     }
+
+    // MARK: Notebook pages
+
+    func testBehaviorJournalWithoutPagesLoads() throws {
+        let folder = try v022Folder()
+        let journal = try PhoneCaptureJournal.load(from: folder)
+        XCTAssertNil(journal.pages, "written before pages")
+        XCTAssertNil(journal.pageClock)
+        // Written back without either key: a journal that never held a page is the bytes it was.
+        let rewritten = try XCTUnwrap(JSONSerialization.jsonObject(with: JournalCoding.encoder().encode(journal)) as? [String: Any])
+        XCTAssertNil(rewritten["pages"])
+        XCTAssertNil(rewritten["pageClock"])
+    }
+
+    func testBehaviorJournalWithPagesRoundTrips() throws {
+        let folder = try v022Folder()
+        var journal = try PhoneCaptureJournal.load(from: folder)
+        let at = Date(timeIntervalSince1970: 1_792_850_100)
+        let id = UUID()
+        var made = NotebookPage(id: id, order: 2, origin: PhotoOrigin(kind: "daybook.iphone", serial: "INSTALL-1", name: "Alex's iPhone"), now: at)
+        made.corrections = [PassageCorrection(passageID: UUID(), strokeDigest: "abc", text: "Budget review", editedAt: at)]
+        let loadedID = UUID()
+        var loaded = NotebookPage(id: loadedID, order: 1, now: at.addingTimeInterval(-60))
+        loaded.drawing = PageDrawing(relativePath: PageDrawing.relativePath(page: loadedID, sha256: String(repeating: "a", count: 64)),
+                                     sha256: String(repeating: "a", count: 64), byteCount: 900, strokeCount: 4, editedAt: at.addingTimeInterval(-30), contentVersion: 1)
+        journal.pages = [CapturePage(page: made, drawingFile: CapturePage.fileName(for: id), drawingSHA256: String(repeating: "b", count: 64),
+                                     strokeCount: 7, contentVersion: 1, committedAt: at, base: nil),
+                         CapturePage(page: loaded, base: loaded)]
+        journal.pageClock = [RecordingClockSample(at: at, elapsed: 4, running: true), RecordingClockSample(at: at.addingTimeInterval(9), elapsed: 13, running: false)]
+        try journal.write(to: folder)
+        let back = try PhoneCaptureJournal.load(from: folder)
+        XCTAssertEqual(back.pages, journal.pages)
+        XCTAssertEqual(back.pageClock, journal.pageClock)
+        XCTAssertEqual(back, journal)
+        XCTAssertEqual(back.pages?[0].page.origin?.name, "Alex's iPhone")
+        XCTAssertEqual(back.pages?[1].base, loaded, "the copy the recording loaded, for a three-way merge")
+        XCTAssertEqual(CapturePage.fileName(for: id), "page-\(id.uuidString).pkdrawing")
+    }
 }

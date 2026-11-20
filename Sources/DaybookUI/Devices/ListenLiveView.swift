@@ -164,18 +164,22 @@ struct ListenLiveCaptions: View {
         }
         let status = lines.isEmpty ? services?.captionStatus(live.captionState) : nil
         if !lines.isEmpty || status != nil {
-            VStack(alignment: .leading, spacing: DaybookSpacing.s2) {
-                HStack(spacing: DaybookSpacing.s3) {
-                    Image(systemName: "captions.bubble").frame(width: Self.glyphColumn)
-                    Text("Live captions · tentative")
+            // The lines open every one the recorder's audio has been captioned with so far.
+            LiveTranscriptLink(source: LiveTranscriptModel.Source(read: { LiveTranscriptModel.Reading(lines: live.captions) }),
+                               isEnabled: !lines.isEmpty) {
+                VStack(alignment: .leading, spacing: DaybookSpacing.s2) {
+                    HStack(spacing: DaybookSpacing.s3) {
+                        Image(systemName: "captions.bubble").frame(width: Self.glyphColumn)
+                        Text("Live captions · tentative")
+                    }
+                    .font(density == .touch ? .caption.weight(.semibold) : .system(size: 11, weight: .semibold))
+                    .textCase(.uppercase)
+                    .tracking(0.5)
+                    .foregroundStyle(DaybookPalette.Ink.meta)
+                    .lineLimit(1)
+                    .accessibilityHidden(true)
+                    LiveCaptionStrip(lines: Array(lines), status: status, style: style)
                 }
-                .font(density == .touch ? .caption.weight(.semibold) : .system(size: 11, weight: .semibold))
-                .textCase(.uppercase)
-                .tracking(0.5)
-                .foregroundStyle(DaybookPalette.Ink.meta)
-                .lineLimit(1)
-                .accessibilityHidden(true)
-                LiveCaptionStrip(lines: Array(lines), status: status, style: style)
             }
             .padding(.top, DaybookSpacing.s5)
         }

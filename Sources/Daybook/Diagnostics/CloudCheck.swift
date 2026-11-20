@@ -4,7 +4,7 @@ import DaybookIntelligence
 import DaybookKit
 import Foundation
 
-/// Debug only: `Daybook --cloud-check <anthropic|openai> <model> <fixture.json> [--fixture <id>] [--effort low|medium|high]
+/// Debug only: `Daybook --cloud-check <anthropic|openai> <model> <fixture.json> [--fixture <id>] [--effort low|medium|high|xhigh|max]
 /// [--output <run.json>]` summarizes one synthetic conversation with a cloud model, exactly as Settings › Cloud's choice
 /// would (`CloudSummarizer`), and prints the summary, the tokens in and out, the estimated cost, and the time
 /// (docs/cloud.md, "Checking a model"). The key comes from `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` (or
@@ -35,7 +35,7 @@ enum CloudCheck {
         }
         guard let index = arguments.firstIndex(of: "--cloud-check"), index + 3 < arguments.count,
               let provider = CloudProvider(rawValue: arguments[index + 1].lowercased()) else {
-            print("Usage: Daybook --cloud-check <anthropic|openai> <model> <fixture.json> [--fixture <id>] [--effort low|medium|high] [--output <run.json>]")
+            print("Usage: Daybook --cloud-check <anthropic|openai> <model> <fixture.json> [--fixture <id>] [--effort low|medium|high|xhigh|max] [--output <run.json>]")
             return 2
         }
         let modelID = arguments[index + 2]
@@ -46,7 +46,7 @@ enum CloudCheck {
             print("Set \(variable) (or DAYBOOK_CLOUD_KEY) to the key to use.")
             return 2
         }
-        let effort = value("--effort").flatMap(CloudEffort.init(rawValue:)) ?? .medium
+        let effort = value("--effort").flatMap(CloudEffort.init(rawValue:)) ?? CloudEffort.summaryDefault
         let meeting: Meeting, fixtureID: String?
         do { (meeting, fixtureID) = try self.meeting(at: fixtureURL, id: value("--fixture")) }
         catch {

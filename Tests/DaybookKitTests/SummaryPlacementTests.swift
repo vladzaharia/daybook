@@ -37,14 +37,15 @@ final class SummaryPlacementTests: XCTestCase {
     }
 
     /// A Mac without its summary model (transcript first, uxf-03): Always sends its summary to the cloud with nothing
-    /// here; a Personal one, or Offer First, would wait for a Mac with Use the Cloud, which the Mac never lets hold its
-    /// queue (it ends the job and waits for its model); Use the Cloud and asking for it still start in the cloud.
+    /// here; Offer First would wait for a Mac with Use the Cloud, which the Mac never lets hold its queue (it ends the
+    /// job and waits for its model); Use the Cloud and asking for it still start in the cloud. A conversation kept off the
+    /// cloud waits as if there were none.
     func testBehaviorAMacThatCantSummarizeItselfSendsAlwaysToTheCloudAndOtherwiseWaits() {
         let always = SummaryPlacementPlanner(options: options(local: false), preferences: preferences(.always), at: start)
         XCTAssertEqual(always.phase, .started(.cloud(sonnet)), "No summary model needed")
-        let personal = SummaryPlacementPlanner(options: options(local: false), preferences: preferences(.always), at: start, personal: true)
-        XCTAssertEqual(personal.phase, .waitingForMac)
-        XCTAssertEqual(personal.actions, [.useCloud])
+        let personal = SummaryPlacementPlanner(options: options(local: false), preferences: preferences(.always), at: start, conversation: kept)
+        XCTAssertEqual(personal.phase, .waiting)
+        XCTAssertEqual(personal.actions, [])
         var offered = SummaryPlacementPlanner(options: options(local: false), preferences: preferences(), at: start)
         XCTAssertEqual(offered.phase, .waitingForMac)
         XCTAssertFalse(offered.waitsForMacs, "A Mac never offers Wait for a Mac")
@@ -109,46 +110,96 @@ final class SummaryPlacementTests: XCTestCase {
         XCTAssertEqual(withoutKey.phase, .started(.thisDevice))
     }
 
-    func testBehaviorAlwaysCountsDownForAPersonalConversationAsOfferFirstDoes() {
-        // Personal (placed there, or its template or kind says so) is never sent to the cloud on its own.
+    /// Personal, unless the person turns it on in Settings › Cloud (`CloudPlacements`).
+    private let kept = SummaryPlacementPlanner.Conversation(cloudAllowed: false)
+
+    func testBehaviorAConversationNotFiledYetFollowsItsOwnSwitchAndAnUnknownOneNeverGoes() throws {
+        var switches = CloudPlacements()
+        let unfiled = Meeting(title: "Just recorded")
+        XCTAssertNil(unfiled.effectivePlacement)
+        XCTAssertTrue(switches.allows(unfiled), "Not filed: on until the person turns it off, as Always sent it before")
+        switches.set(.work, allowed: false)
+        XCTAssertTrue(switches.allows(unfiled), "Not Work's switch")
+        switches.setNotFiled(allowed: false)
+        XCTAssertFalse(switches.allows(unfiled))
+        XCTAssertTrue(CloudPlacements().allows(Meeting(title: "Filed", placement: .work)))
+        // A kind or placement a newer Daybook wrote: never sent, whatever the switches say.
+        let everything = CloudPlacements(allowed: ["work": true, "personal": true, CloudPlacements.notFiledKey: true])
+        func newer<Value>(_ raw: String, as type: Value.Type) throws -> Value where Value: Decodable {
+            try JSONDecoder().decode(type, from: Data("\"\(raw)\"".utf8))
+        }
+        var newerKind = Meeting(title: "Meditation")
+        newerKind.$kind = try newer("meditation", as: Extensible<MeetingKind>.self)
+        XCTAssertFalse(newerKind.$kind.isKnown)
+        XCTAssertFalse(everything.allows(newerKind))
+        var newerPlacement = Meeting(title: "Family")
+        newerPlacement.$placement = try newer("family", as: ExtensibleOptional<LibraryPlacement>.self)
+        XCTAssertFalse(everything.allows(newerPlacement))
+        // Its summary's kind decides while the conversation's is Automatic: unknown, it never goes.
+        var summarized = Meeting(title: "Summarized")
+        var summary = MeetingSummary(title: "Call", overview: "Talked.")
+        summary.$kind = try newer("meditation", as: Extensible<MeetingKind>.self)
+        summarized.summary = summary
+        XCTAssertFalse(everything.allows(summarized))
+        summarized.placement = .work
+        XCTAssertTrue(everything.allows(summarized), "Filed by the person: the summary's kind doesn't decide")
+    }
+
+    func testBehaviorSwitchesStoredInAShapeThisVersionCantReadLetNothingGo() throws {
+        func decode(_ json: String) throws -> CloudSummaryPreferences { try JSONDecoder().decode(CloudSummaryPreferences.self, from: Data(json.utf8)) }
+        let work = Meeting(title: "Work", placement: .work), unfiled = Meeting(title: "Not filed")
+        for stored in [#""on""#, #"{"version":2,"work":{"allowed":true}}"#, #"[true]"#, "null"] {
+            let preferences = try decode(#"{"policy":"always","placements":\#(stored)}"#)
+            XCTAssertEqual(preferences.policy, .always, stored)
+            XCTAssertFalse(preferences.allowsCloud(for: work), stored)
+            XCTAssertFalse(preferences.allowsCloud(for: unfiled), stored)
+            XCTAssertFalse(preferences.placements.allows(.work), "Settings shows every switch off: \(stored)")
+        }
+        // Written back as it was, so the version that wrote it reads it again.
+        let newer = try decode(#"{"policy":"ask","placements":{"version":2,"work":{"allowed":true}}}"#)
+        let written = try JSONSerialization.jsonObject(with: JSONEncoder().encode(newer)) as? [String: Any]
+        XCTAssertEqual(written?["placements"] as? NSDictionary, ["version": 2, "work": ["allowed": true]] as NSDictionary)
+        // A switch set here replaces it: that one on, the rest off.
+        var chosen = newer
+        chosen.placements.set(.work, allowed: true)
+        XCTAssertNil(chosen.placements.unreadable)
+        XCTAssertTrue(chosen.allowsCloud(for: work))
+        XCTAssertFalse(chosen.allowsCloud(for: unfiled))
+        XCTAssertFalse(chosen.placements.allows(.personal))
+        // Absent, the defaults; a newer switch in the shape this version reads is kept.
+        XCTAssertTrue(try decode(#"{"policy":"always"}"#).allowsCloud(for: unfiled))
+        let extra = try decode(#"{"placements":{"work":false,"family":true}}"#)
+        XCTAssertFalse(extra.placements.allows(.work))
+        XCTAssertEqual(try decode(String(decoding: JSONEncoder().encode(extra), as: UTF8.self)).placements, extra.placements)
+    }
+
+    func testBehaviorAConversationKeptOffTheCloudHasNoCloudOnOfferEvenUnderAlways() {
         let here = SummaryPlacementPlanner(options: options(local: true, macs: [studio]), preferences: preferences(.always), at: start,
-                                           personal: true)
-        XCTAssertEqual(here.phase, .countingDown(to: .thisDevice, until: at(15)), "This device, as Offer First")
-        XCTAssertEqual(here.actions, [.useCloud, .startNow], "The cloud is a tap away")
-        XCTAssertEqual(here.line(at: at(3), thisDevice: "this Mac"), SummaryPlacementWords.countdown(on: "this Mac", seconds: 12))
+                                           conversation: kept)
+        XCTAssertNil(here.cloud)
+        XCTAssertEqual(here.phase, .started(.thisDevice), "Nothing to choose between: no countdown, no cloud")
+        XCTAssertEqual(here.actions, [])
         let mac = SummaryPlacementPlanner(options: options(macs: [studio]), preferences: preferences(.always), at: start,
-                                          waitsForMacs: true, personal: true)
-        XCTAssertEqual(mac.phase, .countingDown(to: .mac(id: studio.id, name: studio.name), until: at(15)))
+                                          waitsForMacs: true, conversation: kept)
+        XCTAssertEqual(mac.phase, .started(.mac(id: studio.id, name: studio.name)))
         let nowhere = SummaryPlacementPlanner(options: options(), preferences: preferences(.always), at: start, waitsForMacs: true,
-                                              personal: true)
-        XCTAssertEqual(nowhere.phase, .waitingForMac, "With nowhere else to run it, it waits for a Mac")
-        XCTAssertEqual(nowhere.actions, [.useCloud])
+                                              conversation: kept)
+        XCTAssertEqual(nowhere.phase, .waiting, "With nowhere else to run it, it waits for a Mac, with no Use the Cloud")
+        XCTAssertEqual(nowhere.actions, [])
+        let offered = SummaryPlacementPlanner(options: options(local: true), preferences: preferences(), at: start, conversation: kept)
+        XCTAssertEqual(offered.phase, .started(.thisDevice), "Offer First has nothing to offer either")
         // Everything else under Always still goes straight to the cloud.
-        let work = SummaryPlacementPlanner(options: options(local: true), preferences: preferences(.always), at: start, personal: false)
+        let work = SummaryPlacementPlanner(options: options(local: true), preferences: preferences(.always), at: start)
         XCTAssertEqual(work.phase, .started(.cloud(sonnet)))
     }
 
-    func testBehaviorAPersonalConversationStillGoesToTheCloudWhenThePersonChoosesIt() {
-        var counting = SummaryPlacementPlanner(options: options(local: true), preferences: preferences(.always), at: start, personal: true)
-        XCTAssertTrue(counting.perform(.useCloud, at: at(4)))
-        XCTAssertEqual(counting.phase, .started(.cloud(sonnet)))
-        var waiting = SummaryPlacementPlanner(options: options(), preferences: preferences(.always), at: start, waitsForMacs: true,
-                                              personal: true)
-        XCTAssertTrue(waiting.perform(.useCloud, at: at(60)))
-        XCTAssertEqual(waiting.started, .cloud(sonnet))
-        var running = SummaryPlacementPlanner(options: options(local: true), preferences: preferences(.always), at: start, personal: true)
-        running.advance(to: at(15))
-        XCTAssertEqual(running.phase, .started(.thisDevice), "Left alone, the countdown's default starts")
-    }
-
-    func testBehaviorAPersonalConversationAskedForStartsWhereItCanEvenUnderAlways() {
-        let here = SummaryPlacementPlanner(options: options(local: true), preferences: preferences(.always), at: start, immediately: true,
-                                           personal: true)
-        XCTAssertEqual(here.phase, .started(.thisDevice), "Summarize Again on a Personal conversation stays on the device")
-        let nowhere = SummaryPlacementPlanner(options: options(), preferences: preferences(.always), at: start, immediately: true,
-                                              waitsForMacs: true, personal: true)
-        XCTAssertEqual(nowhere.phase, .waitingForMac)
-        XCTAssertEqual(nowhere.actions, [.useCloud])
+    func testBehaviorUseTheCloudIsNeverTakenForAConversationKeptOffIt() {
+        var waiting = SummaryPlacementPlanner(options: options(), preferences: preferences(), at: start, waitsForMacs: true, conversation: kept)
+        XCTAssertFalse(waiting.perform(.useCloud, at: at(60)))
+        XCTAssertEqual(waiting.phase, .waiting)
+        let asked = SummaryPlacementPlanner(options: options(local: true), preferences: preferences(.always), at: start, immediately: true,
+                                            conversation: kept)
+        XCTAssertEqual(asked.phase, .started(.thisDevice), "Summarize Again stays on the device")
     }
 
     func testBehaviorAskedForItStartsAtOnceWhereItCan() {
@@ -303,15 +354,23 @@ final class SummaryPlacementTests: XCTestCase {
         XCTAssertEqual(planner.phase, .started(.cloud(sonnet)))
     }
 
-    func testBehaviorAlwaysChosenMidCountdownLeavesAPersonalConversationCountingDown() {
-        var planner = SummaryPlacementPlanner(options: options(local: true), preferences: preferences(), at: start, personal: true)
-        planner.update(preferences: preferences(.always), at: at(2))
-        XCTAssertEqual(planner.phase, .countingDown(to: .thisDevice, until: at(15)))
-        var waiting = SummaryPlacementPlanner(options: options(), preferences: preferences(.always), at: start, waitsForMacs: true,
-                                              personal: true)
-        waiting.update(options: options(macs: [studio]), at: at(30))
-        XCTAssertEqual(waiting.phase, .countingDown(to: .mac(id: studio.id, name: studio.name), until: at(45)),
-                       "A Mac arriving starts a countdown to it, not the cloud")
+    func testBehaviorAConversationMovedOffTheCloudMidCountdownLosesItAtOnce() {
+        // Moved to Personal (or its switch turned off) while it counts down with Use the Cloud: nothing left to choose.
+        var planner = SummaryPlacementPlanner(options: options(local: true), preferences: preferences(), at: start)
+        XCTAssertEqual(planner.actions, [.useCloud, .startNow])
+        planner.update(conversation: kept, at: at(2))
+        XCTAssertEqual(planner.phase, .started(.thisDevice))
+        XCTAssertNil(planner.cloud)
+        var waiting = SummaryPlacementPlanner(options: options(), preferences: preferences(.always), at: start, waitsForMacs: true)
+        XCTAssertEqual(waiting.phase, .started(.cloud(sonnet)), "Always, allowed")
+        var held = SummaryPlacementPlanner(options: options(), preferences: preferences(), at: start, waitsForMacs: true)
+        XCTAssertEqual(held.phase, .waitingForMac)
+        held.update(conversation: kept, at: at(30))
+        XCTAssertEqual(held.phase, .waiting, "No Use the Cloud left: it waits for a Mac as before")
+        held.update(options: options(macs: [studio]), at: at(40))
+        XCTAssertEqual(held.phase, .started(.mac(id: studio.id, name: studio.name)), "A Mac arriving takes it, never the cloud")
+        waiting.update(conversation: kept, at: at(50))
+        XCTAssertEqual(waiting.phase, .started(.cloud(sonnet)), "Started is final: the app's last check keeps it from being sent")
     }
 
     func testBehaviorStartedIsFinalWhateverChanges() {
@@ -338,7 +397,7 @@ final class SummaryPlacementTests: XCTestCase {
         let started = SummaryPlacementPlanner(options: options(local: true, cloud: false), preferences: preferences(), at: start)
         XCTAssertNil(started.line(at: at(0), thisDevice: "this Mac"), "The processing status says the rest")
         XCTAssertEqual(SummaryPlacementPlanner.Action.allCases.map(\.title),
-                       [Words.title(.useCloud), Words.title(.startNow), Words.title(.waitForMac)])
+                       [Words.title(.useCloud), Words.title(.startNow), Words.title(.waitForMac), Words.title(.useLocal)])
     }
 
     // MARK: Every conversation on a device
@@ -385,27 +444,33 @@ final class SummaryPlacementTests: XCTestCase {
     }
 
     @MainActor
-    func testBehaviorPlacementsAskWhetherEachConversationIsPersonal() {
+    func testBehaviorPlacementsAskEachConversationWhetherItMayGoToTheCloud() {
         let now = start
-        let placements = SummaryPlacements(options: options(local: true), preferences: preferences(.always), waitsForMacs: false,
+        let placements = SummaryPlacements(options: options(local: true), preferences: preferences(), waitsForMacs: false,
                                            clock: { now }, runsTimer: false)
+        var keptOff: Set<UUID> = []
+        placements.conversation = { id, _ in .init(cloudAllowed: !keptOff.contains(id)) }
         let therapy = UUID(), standup = UUID()
-        placements.isPersonal = { $0 == therapy }
-        XCTAssertNil(placements.begin(therapy), "Personal: it counts down")
-        XCTAssertEqual(placements[therapy]?.isPersonal, true)
-        XCTAssertEqual(placements[therapy]?.actions, [.useCloud, .startNow])
-        XCTAssertEqual(placements.begin(standup), .cloud(sonnet), "Everything else goes straight to the cloud under Always")
-        // The preferences changing reach the Personal countdown without sending it anywhere.
-        placements.update(preferences: preferences(.always, seconds: 30))
-        XCTAssertEqual(placements[therapy]?.phase, .countingDown(to: .thisDevice, until: at(15)))
-        // The person's choice still sends it.
-        XCTAssertTrue(placements.perform(.useCloud, for: therapy))
-        XCTAssertEqual(placements[therapy]?.started, .cloud(sonnet))
-        // So does an upgrade to the cloud the person accepted; Summarize on This Mac stays here.
+        keptOff = [therapy]
+        XCTAssertEqual(placements.begin(therapy), .thisDevice, "Kept off the cloud: nothing to offer, it starts here")
+        XCTAssertNil(placements.begin(standup))
+        XCTAssertEqual(placements[standup]?.actions, [.useCloud, .startNow])
+        // Moved to Personal mid-countdown: the next change asks again, and the cloud goes.
+        keptOff.insert(standup)
+        placements.update()
+        XCTAssertEqual(placements[standup]?.started, .thisDevice)
+        XCTAssertFalse(placements.perform(.useCloud, for: standup))
+        // An upgrade to the cloud the person accepted on a conversation kept off it is placed as a due one: here.
         let accepted = UUID(), here = UUID()
-        placements.isPersonal = { _ in true }
-        XCTAssertEqual(placements.beginInCloud(accepted), .cloud(sonnet))
+        keptOff.insert(accepted)
+        XCTAssertEqual(placements.beginInCloud(accepted), .thisDevice)
         XCTAssertEqual(placements.beginHere(here), .thisDevice)
+        // Under Always, a conversation allowed goes straight to the cloud; one kept off doesn't.
+        placements.update(preferences: preferences(.always))
+        let allowed = UUID(), personal = UUID()
+        keptOff.insert(personal)
+        XCTAssertEqual(placements.begin(allowed), .cloud(sonnet))
+        XCTAssertEqual(placements.begin(personal), .thisDevice)
     }
 
     @MainActor

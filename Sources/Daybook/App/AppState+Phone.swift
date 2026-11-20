@@ -211,7 +211,7 @@ extension AppState {
         case .processingProgress:
             break
         case .summaryChoice(let choice):
-            phoneChoseSummaryPlacement(choice)
+            phoneChoseSummaryPlacement(choice, answersCloudCountdowns: phoneLink.peers[phone]?.capabilities.answersCloudCountdowns == true)
         case .recordPermission(let permission):
             phoneSaidRecordPermission(permission, from: phone)
         case .recordingArrival:
@@ -518,7 +518,7 @@ extension AppState {
         let link = phoneLink, previous = phoneProgressSend
         phoneProgressSend = Task {
             await previous?.value
-            await link.broadcast(.processingProgress(message))
+            await link.broadcast(message)
         }
     }
 

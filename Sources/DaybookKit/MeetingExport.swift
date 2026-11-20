@@ -11,6 +11,20 @@ import UniformTypeIdentifiers
 /// Markdown viewer fetches with the summary in its URL. The person's own notes and bookmarks are
 /// written as they typed them.
 public enum MeetingExport {
+    /// The conversation's own keys with, when there are any, the page drawing files beside them.
+    private struct FullData: Encodable {
+        struct DrawingFile: Encodable { var relativePath: String, sha256: String, base64: String }
+        var meeting: Meeting
+        var pageDrawingFiles: [DrawingFile]
+        private enum Keys: String, CodingKey { case pageDrawingFiles }
+        func encode(to encoder: Encoder) throws {
+            try meeting.encode(to: encoder)
+            guard !pageDrawingFiles.isEmpty else { return }
+            var container = encoder.container(keyedBy: Keys.self)
+            try container.encode(pageDrawingFiles, forKey: .pageDrawingFiles)
+        }
+    }
+
     /// `photoLinks` maps photos to the relative links written beside the Markdown (`write(_:to:photoFile:)`);
     /// a photo without one is described by its caption only.
     public static func markdown(_ meeting: Meeting, photoLinks: [UUID: String] = [:]) -> String {
@@ -36,6 +50,25 @@ public enum MeetingExport {
             }
         }
         if !meeting.notes.isEmpty { lines += ["", "## My notes", "", meeting.notes] }
+        // Each page's words in reading order, as the person's own (like notes), and a sketch by what it shows (model text, escaped).
+        let pages = meeting.visiblePages.filter { !$0.passages.isEmpty }
+        if !pages.isEmpty {
+            lines += ["", "## Notebook"]
+            for (index, page) in meeting.visiblePages.enumerated() where !page.passages.isEmpty {
+                lines += ["", "### Page \(index + 1)", ""]
+                for passage in page.passages {
+                    let when = meeting.timelineTime(of: passage, on: page).map { "[\(TimeLabel.format($0))] " } ?? ""
+                    if passage.kind == .sketch {
+                        let found = page.sketch(for: passage)?.analysis
+                        let text = found?.recognizedText.map { "“" + $0.split(whereSeparator: \.isNewline).joined(separator: " / ") + "”" }
+                        let described = [found?.caption, text].compactMap { $0 }.filter { !$0.isEmpty }.map(safe).joined(separator: " · ")
+                        lines += ["\(when)**Sketch:** \(described.isEmpty ? "no description yet" : described)"]
+                    } else if let words = page.words(of: passage), !words.isEmpty {
+                        lines += ["\(when)\(words.replacingOccurrences(of: "\n", with: " / "))"]
+                    }
+                }
+            }
+        }
         lines += ["", "## Transcript", ""]
         lines += MeetingTimelineItem.items(in: meeting).map { item in
             switch item {
@@ -222,10 +255,18 @@ public enum MeetingExport {
     }
 
     /// The conversation's full data, as the Mac's Export › Full Data (JSON)… saves it: every field, keys sorted.
-    public static func json(_ meeting: Meeting) throws -> Data {
+    /// `pageDrawings` maps a page drawing's `relativePath` to its file on this device; each one found is carried in
+    /// `pageDrawingFiles` (path, `sha256`, and the file's bytes as base64), so the strokes survive outside Daybook beside
+    /// their reading and the recordings' clock samples (both part of the conversation's own data).
+    public static func json(_ meeting: Meeting, pageDrawings: [String: URL] = [:]) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        return try encoder.encode(meeting)
+        let files: [FullData.DrawingFile] = (meeting.pages ?? []).compactMap { $0.drawing }.compactMap { drawing in
+            guard let url = pageDrawings[drawing.relativePath], let bytes = try? Data(contentsOf: url) else { return nil }
+            return FullData.DrawingFile(relativePath: drawing.relativePath, sha256: drawing.sha256, base64: bytes.base64EncodedString())
+        }
+        // The same encoder either way, so numbers are written alike with and without the drawing files.
+        return try encoder.encode(FullData(meeting: meeting, pageDrawingFiles: files))
     }
 }
 
@@ -279,9 +320,10 @@ public enum ExportFiles {
     }
 
     /// The full data, as `MeetingExport.json`.
-    public static func json(_ meeting: Meeting, in directory: URL = FileManager.default.temporaryDirectory) throws -> URL {
+    public static func json(_ meeting: Meeting, pageDrawings: [String: URL] = [:],
+                            in directory: URL = FileManager.default.temporaryDirectory) throws -> URL {
         let url = try newFolder(in: directory).appendingPathComponent(MeetingExport.fileName(for: meeting) + ".json")
-        try MeetingExport.json(meeting).write(to: url, options: .atomic)
+        try MeetingExport.json(meeting, pageDrawings: pageDrawings).write(to: url, options: .atomic)
         return url
     }
 

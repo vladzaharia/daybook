@@ -9,10 +9,15 @@ import Foundation
 ///   reachable. Use the Cloud, Start Now, and, on a device that isn't a Mac, Wait for a Mac.
 /// - With nowhere to run it but the cloud, it waits for a Mac, with Use the Cloud, and counts down once a
 ///   Mac is reachable.
-/// - Always skips the countdown for the cloud, except for a Personal conversation (`isPersonal`), which counts down
-///   as Offer First does: the cloud is only ever a choice the person makes for it. Without a cloud model on offer
-///   there's nothing to choose, so it starts at once where it can, or waits as before.
-/// - Asked for by the person or another device, it starts at once (`immediately`).
+/// - Always skips the countdown for the cloud. Without a cloud model on offer there's nothing to choose, so it starts
+///   at once where it can, or waits as before.
+/// - A conversation longer than the local model reads in one pass, which the cloud's model would summarize clearly
+///   better (`Conversation.cloudDoesBetter`), counts down to the cloud instead, under Offer First, with Start Now and
+///   Don't Use the Cloud. So does one whose summary here just failed (`Conversation.localFailed`); declining then leaves
+///   it nowhere to run.
+/// - A conversation whose placement Settings › Cloud keeps off the cloud (`Conversation.cloudAllowed`: Personal, unless
+///   the person turns it on) has no cloud on offer at all: no Use the Cloud, and Always doesn't send it.
+/// - Asked for by the person or another device, it starts at once (`immediately`), never in the cloud on its own.
 ///
 /// Pure: every change takes the time, so tests drive it with a clock of their own.
 public struct SummaryPlacementPlanner: Equatable, Sendable {
@@ -27,9 +32,10 @@ public struct SummaryPlacementPlanner: Equatable, Sendable {
         case waiting
     }
 
-    /// What the person can do while it counts down or waits.
+    /// What the person can do while it counts down or waits. Don't Use the Cloud is for a countdown that ends in the
+    /// cloud: it runs where it would have without the cloud's advantage.
     public enum Action: String, CaseIterable, Equatable, Sendable {
-        case useCloud, startNow, waitForMac
+        case useCloud, startNow, waitForMac, useLocal
 
         /// The button's title (`SummaryPlacementWords`).
         public var title: String { SummaryPlacementWords.title(self) }
@@ -44,28 +50,48 @@ public struct SummaryPlacementPlanner: Equatable, Sendable {
     public let waitsForMacs: Bool
     /// The person chose Wait for a Mac: this device's own summarizer is passed over from then on.
     public private(set) var prefersMac = false
-    /// The conversation is Personal (placed there, or its template or kind says so: `Meeting.effectivePlacement`). It's
-    /// never sent to the cloud on its own: under Always it counts down as Offer First does, with Use the Cloud.
-    public let isPersonal: Bool
+
+    /// What the planner knows of the conversation itself.
+    public struct Conversation: Equatable, Sendable {
+        /// Its placement lets it go to the cloud (`CloudPlacements`: Personal is off unless the person turns it on).
+        /// Without it the cloud isn't on offer for it at all.
+        public var cloudAllowed: Bool
+        /// It's longer than the local model it would run on reads in one pass, and the cloud's model ranks clearly above
+        /// that model (`LongConversations.cloudDoesBetter`): a countdown ends in the cloud.
+        public var cloudDoesBetter: Bool
+        /// Its summary on this device just failed: the cloud is the one place left to try.
+        public var localFailed: Bool
+
+        public init(cloudAllowed: Bool = true, cloudDoesBetter: Bool = false, localFailed: Bool = false) {
+            self.cloudAllowed = cloudAllowed; self.cloudDoesBetter = cloudDoesBetter; self.localFailed = localFailed
+        }
+    }
+
+    public private(set) var conversation: Conversation
+    /// The person chose Don't Use the Cloud: a countdown no longer ends there.
+    public private(set) var prefersLocal = false
+    /// Why it started in the cloud, once it has, for the summary's provenance.
+    public private(set) var cloudReason: CloudReason?
 
     public init(options: SummaryOptions, preferences: CloudSummaryPreferences, at now: Date,
-                immediately: Bool = false, waitsForMacs: Bool = false, personal: Bool = false) {
+                immediately: Bool = false, waitsForMacs: Bool = false, conversation: Conversation = Conversation()) {
         self.options = options
         self.preferences = preferences
         self.immediately = immediately
         self.waitsForMacs = waitsForMacs
-        isPersonal = personal
+        self.conversation = conversation
         phase = .waiting
         phase = plan(at: now)
     }
 
     // MARK: Reading
 
-    /// The cloud model on offer: one the preferences resolve to, unless the policy is Never.
-    public var cloud: CloudModel? { preferences.policy == .never ? nil : options.cloud }
+    /// The cloud model on offer: one the preferences resolve to, unless the policy is Never or the conversation's
+    /// placement is kept off the cloud.
+    public var cloud: CloudModel? { preferences.policy == .never || !conversation.cloudAllowed ? nil : options.cloud }
 
-    /// The cloud model Always sends it to with no countdown: none for a Personal conversation.
-    private var alwaysCloud: CloudModel? { preferences.policy == .always && !isPersonal ? cloud : nil }
+    /// The cloud model Always sends it to with no countdown.
+    private var alwaysCloud: CloudModel? { preferences.policy == .always ? cloud : nil }
 
     /// How long a countdown lasts: the setting (15 or 30 s), never less than a second.
     public var countdown: TimeInterval { TimeInterval(max(1, preferences.countdownSeconds)) }
@@ -74,6 +100,12 @@ public struct SummaryPlacementPlanner: Equatable, Sendable {
     public var started: SummaryPlace? {
         if case .started(let place) = phase { return place }
         return nil
+    }
+
+    /// It's counting down to the cloud.
+    public var endsInCloud: Bool {
+        if case .countingDown(.cloud, _) = phase { return true }
+        return false
     }
 
     /// When the countdown runs out.
@@ -90,6 +122,8 @@ public struct SummaryPlacementPlanner: Equatable, Sendable {
     /// What the person can do now, in the order they're shown.
     public var actions: [Action] {
         switch phase {
+        case .countingDown(.cloud, _):
+            return [.startNow, .useLocal]
         case .countingDown(let place, _):
             var actions: [Action] = cloud == nil ? [] : [.useCloud]
             actions.append(.startNow)
@@ -104,17 +138,25 @@ public struct SummaryPlacementPlanner: Equatable, Sendable {
 
     // MARK: Changes
 
-    /// The person's choice. False when it doesn't apply now (nothing changes).
+    /// The person's choice. False when it doesn't apply now (nothing changes). Use the Cloud during a countdown that ends
+    /// there (an Upgrade to the cloud's model accepted for a long conversation) starts it now, as the person's choice.
     @discardableResult
     public mutating func perform(_ action: Action, at now: Date) -> Bool {
+        if action == .useCloud, case .countingDown(.cloud, _) = phase, let cloud {
+            start(.cloud(cloud), reason: .chosen)
+            return true
+        }
         guard actions.contains(action) else { return false }
         switch action {
         case .useCloud:
             guard let cloud else { return false }
-            phase = .started(.cloud(cloud))
+            start(.cloud(cloud), reason: .chosen)
         case .startNow:
             guard case .countingDown(let place, _) = phase else { return false }
-            phase = .started(place)
+            start(place, reason: reasonForCountdown)
+        case .useLocal:
+            prefersLocal = true
+            phase = conversation.localFailed ? .waiting : defaultPlace.map { .started($0) } ?? .waiting
         case .waitForMac:
             prefersMac = true
             // The person chose a Mac: one that's reachable gets it now; otherwise it waits for one.
@@ -126,31 +168,50 @@ public struct SummaryPlacementPlanner: Equatable, Sendable {
 
     /// The countdown ran out: the default starts.
     public mutating func advance(to now: Date) {
-        if case .countingDown(let place, let until) = phase, now >= until { phase = .started(place) }
+        if case .countingDown(let place, let until) = phase, now >= until { start(place, reason: reasonForCountdown) }
     }
 
+    /// Starts at `place`, recording why when it's the cloud.
+    private mutating func start(_ place: SummaryPlace, reason: CloudReason) {
+        phase = .started(place)
+        if case .cloud = place { cloudReason = reason }
+    }
+
+    /// Why a countdown that ends in the cloud went there.
+    private var reasonForCountdown: CloudReason { conversation.localFailed ? .localFailed : .longConversation }
+
     /// What this device can offer changed: a Mac came or went, a key was added or removed, this device
-    /// stopped (or started) being able to summarize, or the person changed the preferences. A countdown
-    /// keeps its deadline when its target changes; one whose reason to wait went (no cloud on offer) starts
-    /// now. Waiting turns into a fresh countdown when somewhere to run it appears. Started is final.
-    public mutating func update(options: SummaryOptions? = nil, preferences: CloudSummaryPreferences? = nil, at now: Date) {
+    /// stopped (or started) being able to summarize, the person changed the preferences, or the conversation changed
+    /// (its placement switched off the cloud). A countdown keeps its deadline when its target changes; one whose reason
+    /// to wait went (no cloud on offer) starts now. Waiting turns into a fresh countdown when somewhere to run it
+    /// appears. Started is final.
+    public mutating func update(options: SummaryOptions? = nil, preferences: CloudSummaryPreferences? = nil, conversation: Conversation? = nil,
+                                at now: Date) {
         if let options { self.options = options }
         if let preferences { self.preferences = preferences }
+        if let conversation { self.conversation = conversation }
         switch phase {
         case .started:
             return
         case .countingDown(let place, let until):
             if let cloud = alwaysCloud {
-                phase = .started(.cloud(cloud))
+                start(.cloud(cloud), reason: alwaysReason)
                 return
             }
-            let target = defaultPlace
+            let target = countdownTarget
             if cloud == nil {
-                // Nothing to choose between any more: the default starts now, or it waits.
-                phase = target.map { .started($0) } ?? .waiting
+                // Nothing to choose between any more: the default starts now, or it waits. A countdown that ended in the
+                // cloud (the conversation moved to Personal, a switch turned off, the key removed) starts here instead.
+                phase = self.conversation.localFailed ? .waiting : defaultPlace.map { .started($0) } ?? .waiting
             } else if let target {
-                // A countdown keeps its time; only where it ends up may change.
-                if target != place { phase = .countingDown(to: target, until: until) }
+                // A countdown keeps its time; only where it ends up may change. One that now ends in the cloud starts its
+                // time again, so the cloud always gets a whole countdown.
+                if target != place {
+                    var cloudBound = false
+                    if case .cloud = target { cloudBound = true }
+                    if case .cloud = place { cloudBound = false }
+                    phase = .countingDown(to: target, until: cloudBound ? now.addingTimeInterval(countdown) : until)
+                }
             } else {
                 phase = .waitingForMac
             }
@@ -168,12 +229,30 @@ public struct SummaryPlacementPlanner: Equatable, Sendable {
         return options.reachableMacs.first.map { .mac(id: $0.id, name: $0.name) }
     }
 
-    private func plan(at now: Date) -> Phase {
-        if let cloud = alwaysCloud { return .started(.cloud(cloud)) }
+    /// Where a countdown ends when nobody chooses: the cloud when it would do clearly better, or when the summary here
+    /// failed (unless the person declined it); else the default. Nil with nowhere to end.
+    private var countdownTarget: SummaryPlace? {
+        if let cloud, !prefersLocal, conversation.cloudDoesBetter || conversation.localFailed { return .cloud(cloud) }
+        return conversation.localFailed ? nil : defaultPlace
+    }
+
+    /// Why Always sends it: its summary here failed, or the policy.
+    private var alwaysReason: CloudReason { conversation.localFailed ? .localFailed : .always }
+
+    private mutating func plan(at now: Date) -> Phase {
+        if let cloud = alwaysCloud {
+            cloudReason = alwaysReason
+            return .started(.cloud(cloud))
+        }
+        if conversation.localFailed {
+            // Only the cloud is left, and under Offer First it's never used without the countdown.
+            guard let cloud, !prefersLocal else { return .waiting }
+            return .countingDown(to: .cloud(cloud), until: now.addingTimeInterval(countdown))
+        }
         guard let target = defaultPlace else { return cloud == nil ? .waiting : .waitingForMac }
         // Asked for, or nothing to offer instead: it starts where it can, now.
         if immediately || cloud == nil { return .started(target) }
-        return .countingDown(to: target, until: now.addingTimeInterval(countdown))
+        return .countingDown(to: countdownTarget ?? target, until: now.addingTimeInterval(countdown))
     }
 }
 

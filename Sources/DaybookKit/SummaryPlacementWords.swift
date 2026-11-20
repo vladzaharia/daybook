@@ -5,8 +5,7 @@ import Foundation
 /// it starts, the wait for a Mac, a summary under way where it was placed, and the person's choices. The page and its
 /// list row, the list's subtitle, the inspector, Floating Notes and the menu bar on a Mac, the iPhone's status sheet,
 /// and a Mac's countdown seen over the link all say them from here, with one rounding rule for the seconds and one way
-/// to move them as a line ticks. Personal under Always counts down as Offer First does (`SummaryPlacementPlanner`), so
-/// it reads as any countdown, with Use the Cloud.
+/// to move them as a line ticks.
 public enum SummaryPlacementWords {
     // MARK: The countdown
 
@@ -40,6 +39,11 @@ public enum SummaryPlacementWords {
     /// The same, counting down to `deadline`.
     public static func countdown(on device: String, until deadline: Date, at now: Date) -> String {
         countdown(on: device, seconds: secondsLeft(until: deadline, at: now))
+    }
+
+    /// "Summarizing with Claude Opus 5.5 in 12 s": a countdown that ends in the cloud (a Mac's, seen over the link).
+    public static func countdown(inCloud model: String, until deadline: Date, at now: Date) -> String {
+        "\(inCloud(model)) in \(seconds(secondsLeft(until: deadline, at: now)))"
     }
 
     /// The same toward a planner's place; `thisDevice` is how this device calls itself ("this Mac", "this iPhone").
@@ -101,6 +105,7 @@ public enum SummaryPlacementWords {
         case .useCloud: return "Use the Cloud"
         case .startNow: return "Start Now"
         case .waitForMac: return "Wait for a Mac"
+        case .useLocal: return "Don’t Use the Cloud"
         }
     }
 }

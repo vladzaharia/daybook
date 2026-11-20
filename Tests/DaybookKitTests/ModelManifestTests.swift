@@ -97,6 +97,29 @@ final class ModelManifestTests: XCTestCase {
         }
     }
 
+    func testLanguageModelWindowsCacheSizesAndReadLimitsMatchTheirPinnedConfigs() throws {
+        // `max_position_embeddings` and the KV cache per token from each pinned revision's config.json (checked
+        // 2026-11-16, docs/model-runtime.md): full-attention layers with their own cache × KV heads × head size × 2 × 2 bytes.
+        let expected: [String: (context: Int, kv: Int)] = [
+            "gemma-4/e2b-4bit": (131_072, 6_144), "gemma-4/e4b-4bit": (131_072, 16_384), "gemma-4/12b-4bit": (262_144, 16_384),
+            "gemma-4/26b-a4b-qat-4bit": (262_144, 20_480), "gemma-4/31b-8bit": (262_144, 81_920),
+            "qwen3.5/4b-4bit": (262_144, 32_768), "qwen3.5/9b-4bit": (262_144, 32_768), "qwen3.6/35b-a3b-4bit": (262_144, 20_480),
+            "qwen2.5/1.5b-4bit": (32_768, 28_672), "qwen2.5/3b-4bit": (32_768, 36_864), "qwen2.5/7b-4bit": (32_768, 57_344),
+        ]
+        let catalog = ModelCatalog.builtIn
+        for (key, values) in expected {
+            let model = try XCTUnwrap(catalog.model(key), key)
+            XCTAssertEqual(model.capabilities.contextLength, values.context, key)
+            XCTAssertEqual(model.capabilities.kvCacheBytesPerToken, values.kv, key)
+            // The sizes each was measured at (docs/validation.md, 2026-10-31), kept as its own limits.
+            let limits = model.summaryReadLimits
+            let small = key.hasPrefix("qwen2.5/")
+            XCTAssertEqual(limits, SummaryReadLimits(wholeRead: 5_400, part: small ? 8_000 : 12_000, evidence: small ? 12_000 : 24_000,
+                                                     commitmentPart: 5_400), key)
+        }
+        XCTAssertEqual(Set(catalog.models.filter { $0.engine == .mlxLanguage && $0.capabilities.contextLength != nil }.map(\.key)), Set(expected.keys))
+    }
+
     func testBuiltInCapabilitiesReplaceModelIDChecks() {
         let catalog = ModelCatalog.builtIn
         XCTAssertEqual(catalog.model("community-1/offline")?.capabilities.voiceEmbeddings?.space, "fluid-community1-embedding-df2625ac79a7ac6b")

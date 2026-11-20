@@ -3,7 +3,7 @@ import Foundation
 
 /// One conversation that matches a library search, and where it matched.
 public struct SearchHit: Identifiable, Equatable, Sendable {
-    public enum Field: Equatable, Sendable { case title, summary, notes, transcript }
+    public enum Field: Equatable, Sendable { case title, summary, notes, pages, transcript }
     public let meetingID: UUID
     public var id: UUID { meetingID }
     public let field: Field
@@ -17,7 +17,8 @@ public struct SearchHit: Identifiable, Equatable, Sendable {
 }
 
 public enum LibrarySearch {
-    public static func hits(in meetings: [Meeting], text: String, tokens: [SearchToken], scope: SearchScope) -> [SearchHit] {
+    public static func hits(in meetings: [Meeting], text: String, tokens: [SearchToken], scope: SearchScope,
+                              people: SearchPeople = .none) -> [SearchHit] {
         let query = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let scoped = meetings.filter { meeting in
             switch scope {
@@ -31,7 +32,7 @@ public enum LibrarySearch {
             tokens.allSatisfy { token in
                 switch token {
                 case .tag(let tag): return (meeting.tags ?? []).contains { $0.caseInsensitiveCompare(tag) == .orderedSame }
-                case .speaker(let name): return meeting.speakers.contains { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+                case .speaker(let name): return people.spoke(name, in: meeting)
                 }
             }
         }
@@ -72,6 +73,14 @@ public enum LibrarySearch {
             let (snippet, match) = excerpt(meeting.notes, around: range)
             return (SearchHit(meetingID: meeting.id, field: .notes, snippet: snippet, match: match, segmentID: nil, speaker: nil, time: nil, matchCount: 1), 2)
         }
+        // The words on notebook pages (a correction in place of what was read; deleted pages left out), with the notes' rank.
+        for page in meeting.visiblePages {
+            for passage in page.passages {
+                guard let words = page.words(of: passage), let range = words.range(of: query, options: options) else { continue }
+                let (snippet, match) = excerpt(words, around: range)
+                return (SearchHit(meetingID: meeting.id, field: .pages, snippet: snippet, match: match, segmentID: nil, speaker: nil, time: nil, matchCount: 1), 2)
+            }
+        }
         let matches = meeting.unifiedTranscript.filter { $0.text.range(of: query, options: options) != nil }
         if let first = matches.first, let range = first.text.range(of: query, options: options) {
             let (snippet, match) = excerpt(first.text, around: range)
@@ -110,8 +119,9 @@ public final class LibrarySearchMemo {
         public var scope: SearchScope
         /// Changes whenever the library's conversations do.
         public var revision: Int
-        public init(text: String, tokens: [SearchToken], scope: SearchScope, revision: Int) {
-            self.text = text; self.tokens = tokens; self.scope = scope; self.revision = revision
+        public var people: SearchPeople
+        public init(text: String, tokens: [SearchToken], scope: SearchScope, revision: Int, people: SearchPeople = .none) {
+            self.text = text; self.tokens = tokens; self.scope = scope; self.revision = revision; self.people = people
         }
     }
 
@@ -126,7 +136,7 @@ public final class LibrarySearchMemo {
     private var pending: Task<Void, Never>?
     /// The search run off the main actor (tests replace it).
     var search: @Sendable ([Meeting], Key) -> [SearchHit] = { meetings, key in
-        LibrarySearch.hits(in: meetings, text: key.text, tokens: key.tokens, scope: key.scope)
+        LibrarySearch.hits(in: meetings, text: key.text, tokens: key.tokens, scope: key.scope, people: key.people)
     }
 
     public init() {}
@@ -138,7 +148,7 @@ public final class LibrarySearchMemo {
         searches += 1
         let passages = meetings.reduce(0) { $0 + $1.unifiedTranscript.count }
         guard passages >= backgroundThreshold else {
-            hits = LibrarySearch.hits(in: meetings, text: key.text, tokens: key.tokens, scope: key.scope)
+            hits = LibrarySearch.hits(in: meetings, text: key.text, tokens: key.tokens, scope: key.scope, people: key.people)
             return hits
         }
         let search = search

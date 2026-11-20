@@ -197,8 +197,16 @@ follows too (docs/iphone.md, "Scope"):
   whenever it's there. While it's away, another of its kind stands in (another headset for chosen
   AirPods, another wired microphone for a USB one), else Automatic decides. The choice is kept in
   the app's preferences (`microphoneChoice`).
-- `MicrophoneSource` sets the device on the engine's input unit (`auAudioUnit.setDeviceID`) before
-  the engine starts, so an idle default input is never opened. While it records it follows the
+- `MicrophoneSource` records the system's default input as the engine's own input, with no device
+  set on it; an input that isn't the default (the built-in microphone beside idle AirPods, a
+  chosen one) is set on the engine's input unit (`auAudioUnit.setDeviceID`) before the engine
+  starts, so an idle default input is never opened. Setting a device, even the default's, makes
+  the engine reconfigure once after it starts (macOS 27.0): it posts a configuration change, now
+  and then stopping for it. The tap takes the input node's input format, the device's own (the
+  output format is the previous device's until the engine starts, and a tap at the wrong rate is
+  never created), and the source follows only a change the engine stopped for, as it does for a
+  device or format that really changed. (Found where v0.8.0's recordings ended after two seconds:
+  no audio, and ten restarts in a row; `MicrophoneHardwareTests`.) While it records it follows the
   inputs (`CoreAudioMicrophoneDevices`): an input coming or going, the default input changing, the
   input in use no longer alive (`kAudioDevicePropertyDeviceIsAlive`), or a new choice resolves the
   choice again, and a different answer restarts the engine on it through the restart rules below
@@ -596,7 +604,10 @@ link, Settings' section), and `Capture/CaptureCaptionTap.swift`.
 - **Where they show.** Every live caption on both apps is one renderer, `LiveCaptionStrip`
   (DaybookDesign), in a style per surface: "Live captions · tentative" on top, the newest line in
   Body ink, earlier ones in Secondary, still-revised words in Meta, and "Listening…" before anything
-  is heard. Floating Notes, while recording: a fixed-height strip above Bookmark and Stop (`.panel`)
+  is heard. While one source listens and the other ended (failed or unavailable), a Meta line after
+  the lines names it with the captioner's own reason ("You: …", "Call: …"); the recording and the
+  other source go on. The reason is logged once per source (subsystem `local.daybook`, category
+  `LiveCaptions`). Floating Notes, while recording: a fixed-height strip above Bookmark and Stop (`.panel`)
   with the newest two lines, the newest larger and keeping its latest words; the source (You or
   Call) sits in the time lane, so arriving words never move the notes. Compact, it shows the newest
   line only, without the label (`.panelCompact`). The conversation page, after your notes: the newest
@@ -698,6 +709,13 @@ leave it. Only a meeting's title is kept, as its conversation's title, as a type
   never recorded on its own, and Record Automatically doesn't change that. Unanswered is Not Now.
 - **Once it's over** (its end time, while the recording it started still goes on), the prompt asks
   "Weekly product sync ended · Stop recording?" once, and keeps recording without an answer.
+- **Last time.** A recording named after a calendar meeting looks for the same meeting's last conversation
+  (`LastTime.find`, DaybookKit). The library keeps no calendar identity with a conversation, so the meeting is the same
+  when its title is: the " at 10:15 AM" Daybook adds is left off both, and case and accents don't matter. A title that
+  only starts the same way ("Weekly product sync review") is another meeting. The newest earlier conversation that is
+  in the library (not the Trash), isn't still recording, and isn't in the other of Work and Personal than the
+  recording shows, as Floating Notes' "Last time". If that one is Personal and the lock or a Focus hides it, nothing
+  shows, rather than an older conversation. It lists the next steps that aren't done yet.
 
 `AppState.checkCalendar(at:)` is the whole of it, called every 30 seconds while Use Calendar is on,
 in the app only (`MacEnvironment.watchesCalendar`). Tests stand in their own calendar

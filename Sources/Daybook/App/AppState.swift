@@ -193,6 +193,8 @@ final class AppState {
     @ObservationIgnored var askedMeetings: Set<String> = []
     /// The recording started from a meeting's prompt, and the meeting: asked about stopping once it's over.
     @ObservationIgnored var calendarMeeting: (recording: UUID, event: MeetingEvent)?
+    /// The earlier conversation of the meeting being recorded, found as the recording started (`LastTime`).
+    var lastTimeMeetingID: UUID?
     @ObservationIgnored var calendarWatch: Task<Void, Never>?
 
     /// Looks at this Mac for calls, only in the app (`MacEnvironment.watchesCalls`): a test's AppState must never read the
@@ -262,6 +264,8 @@ final class AppState {
     /// Whether `cloud` has been made: until then nothing is being placed with it.
     var hasCloudSetup: Bool { cloudSetup != nil }
     let runtime: LocalIntelligenceRuntime
+    /// Asking across conversations: the question and its answer while the page is open (AskController.swift).
+    @ObservationIgnored lazy var ask = makeAskController()
     /// Keeps speaker profiles and conversations in step (AppState+SpeakerProfiles.swift).
     @ObservationIgnored lazy var speakerProfileCoordinator = makeSpeakerProfileCoordinator()
     /// Gives voices to speakers found without them, when this Mac is idle (AppState+SpeakerProfiles.swift).
@@ -613,8 +617,10 @@ final class AppState {
         switch event {
         case .locked:
             window.lockReturned { personalLock.firstShown(in: visibleMeetings)?.id }
+            ask.personalHidden()
         case .focusChanged:
             if !personalLock.focus.showsPersonal, window.place == .section(.personal) { window.place = .section(.all) }
+            if !personalLock.focus.showsPersonal { ask.personalHidden() }
         }
     }
 
@@ -622,7 +628,8 @@ final class AppState {
     /// a large library is searched off the main actor (`LibrarySearchMemo`).
     var searchHits: [SearchHit] {
         _ = searchResultsArrived
-        let hits = searchMemo.hits(for: .init(text: window.searchText, tokens: window.searchTokens, scope: window.searchScope, revision: libraryRevision),
+        let hits = searchMemo.hits(for: .init(text: window.searchText, tokens: window.searchTokens, scope: window.searchScope, revision: libraryRevision,
+                                         people: library.searchPeople),
                                    in: meetings)
         // A Focus that leaves Personal out leaves it out of search too.
         guard !personalLock.focus.showsPersonal else { return hits }
@@ -1061,8 +1068,9 @@ final class AppState {
             do {
                 try await detachedWork(priority: .userInitiated) {
                     if json {
-                        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-                        try encoder.encode(meeting).write(to: url, options: .atomic)
+                        let drawings = Dictionary((meeting.pages ?? []).compactMap(\.drawing).map { ($0.relativePath, directory.appendingPathComponent($0.relativePath)) },
+                                                  uniquingKeysWith: { first, _ in first })
+                        try MeetingExport.json(meeting, pageDrawings: drawings).write(to: url, options: .atomic)
                     } else {
                         try MeetingExport.write(meeting, markdownURL: url) { directory.appendingPathComponent($0.relativePath) }
                     }
@@ -1323,6 +1331,7 @@ extension AppState {
         if keepsRecording { afterStop.began(id, at: result.endedAt) } else { afterStop.end() }
         recordingID = nil; recordingStartedAt = nil; recordingWasAutomatic = false
         calendarMeeting = nil
+        lastTimeMeetingID = nil
         CallPromptWindow.shared.recordingEnded()
         sync.publishActivity(recording: nil)
         phones.recordingEnded(id)

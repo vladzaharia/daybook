@@ -42,6 +42,18 @@ extension AudioProviding {
     }
 }
 
+extension AudioProviding {
+    /// A notebook page's drawing or background, described as a drawing (its path and digest are what finds it): the same
+    /// verified, content-addressed fetch and cache as audio originals, as `LibrarySyncEngine.fetchPageDrawing` does.
+    @MainActor
+    func localPageDrawing(for drawing: PageDrawing, in meetingID: UUID) async throws -> URL {
+        let original = RecordingTrack(id: UUID(), source: .imported, relativePath: drawing.relativePath,
+                                      fileName: (drawing.relativePath as NSString).lastPathComponent, sha256: drawing.sha256)
+        do { return try await localAudio(for: original, in: meetingID, progress: { _ in }) }
+        catch is AudioProvidingError { throw PhotoProvidingError.unavailable }
+    }
+}
+
 enum PhotoProvidingError: LocalizedError, PlainSentenceError {
     case unavailable
     var errorDescription: String? { "The photo isn’t on this iPhone yet. Try again when you’re online." }

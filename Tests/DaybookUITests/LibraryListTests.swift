@@ -103,13 +103,17 @@ final class LibraryListTests: XCTestCase {
         XCTAssertEqual(ConversationActionMenuItems.action(.copySummary, in: mac)?.isAvailable, false)
     }
 
-    func testBehaviorASelectionOffersSummarizeFilingTagsAndTheTrashInOneOrderWithShortWordsForTheBar() {
+    func testBehaviorASelectionOffersSummarizeFilingTagsMergeAndTheTrashInOneOrderWithShortWordsForTheBar() {
         var transcribed = Meeting(title: "A")
         transcribed.unifiedTranscript = [TranscriptSegment(trackID: UUID(), start: 0, end: 1, text: "Hello")]
         let other = Meeting(title: "B")
         let groups = ConversationActions.batch([transcribed.id, other.id], in: [transcribed, other], context: .init(platform: .iPhone))
         let actions = ConversationActionMenuItems.shown(groups, on: .iPhone).flatMap(\.actions)
-        XCTAssertEqual(actions.map(ConversationActionMenuItems.shortTitle), ["Summarize", "Move", "Tags", "Personal", "Trash"])
+        XCTAssertEqual(actions.map(ConversationActionMenuItems.shortTitle), ["Summarize", "Move", "Tags", "Personal", "Merge", "Trash"])
+        // One busy: the bar leaves Merge out, as an iPhone's menus leave out what doesn't apply now.
+        let busy = ConversationActions.batch([transcribed.id, other.id], in: [transcribed, other], context: .init(platform: .iPhone),
+                                             each: { .init(platform: .iPhone, isRecording: $0.id == other.id) })
+        XCTAssertFalse(ConversationActionMenuItems.shown(busy, on: .iPhone).flatMap(\.actions).contains { $0.id == .merge })
     }
 
     func testBehaviorAConversationTravelsAsItsIDInsideDaybookAndAsMarkdownOrWordsOutside() throws {

@@ -219,24 +219,28 @@ public struct InferenceProcessingEngine: ProcessingEngine {
                           progress: @escaping ProcessingProgressHandler) async throws -> SummaryProcessingOutput {
         let source = MeetingEvidence.summarySource(meeting)
         let transcript = source.transcript
-        guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw DaybookError.noSpeech }
+        // Nothing said and nothing written is nothing to summarize; notes or pages alone are summarized as what there is.
+        guard source.hasContent else { throw DaybookError.noSpeech }
         let report = Self.reporting(.summarizing, to: progress)
         let notes = source.notesText
         let requestedKind = template?.kind ?? meeting.kind
         let small = try await smallTasks(transcript: transcript, notes: notes, kind: requestedKind, vocabulary: vocabulary, progress: report)
         // The small-tasks model's kind guides the summary's sections, as a chosen kind would.
         let summaryKind = requestedKind == .auto ? (small?.kind ?? .auto) : requestedKind
-        let photos = PhotoPlacement.candidates(in: meeting)
+        // Sketches from notebook pages are picture evidence here, on the device; a cloud summary is never given them.
+        let photos = PhotoPlacement.candidates(in: meeting) + NotebookPlacement.candidates(in: meeting)
         // Notes and bookmarks in place: the passages around them carry more weight (`SummarySource`).
         let generated = try await inference.summarize(
             source, template: summaryKind, glossary: vocabulary, model: configuration.summaryModel,
             templateInstructions: template?.instructions, photos: photos, progress: report)
         // The model's photo placements, kept only where valid, plus the time fallback (PhotoPlacement).
-        var summary = PhotoPlacement.arrange(generated.summary, in: meeting)
+        var summary = NotebookPlacement.arrange(PhotoPlacement.arrange(generated.summary, in: meeting), in: meeting)
         var parameters = ["configuration": configuration.fingerprint, "templateID": template?.id ?? "auto",
                           "templateInstructions": template?.instructions ?? "Automatic selection"]
         var suggestedTerms = generated.suggestedTerms
-        if !photos.isEmpty { parameters["photos"] = String(photos.count) }
+        let sketches = photos.filter(\.isSketch).count
+        if photos.count > sketches { parameters["photos"] = String(photos.count - sketches) }
+        if sketches > 0 { parameters["sketches"] = String(sketches) }
         if let small, let model = configuration.smallTasksModel {
             if let title = small.title { summary.title = title }
             if requestedKind == .auto, let kind = small.kind { summary.kind = kind }
@@ -330,6 +334,54 @@ public struct InferenceProcessingEngine: ProcessingEngine {
                                                      settings: settings, createdAt: now)
         }
         return PhotoProcessingOutput(analyses: analyses, notices: notices, failures: failures)
+    }
+
+    /// Reads sketch passages the way photos are read: Apple Vision's text and labels, then, when a caption model other than Vision
+    /// is chosen, its caption for the informative ones (which, if it can't run, leaves Vision's). Each result is a `SketchAnalysis`
+    /// of the strokes given, so it stands until they change. A sketch that can't be read has no result and is tried again later.
+    public func describeSketches(_ sketches: [SketchProcessingInput],
+                                 progress: @escaping ProcessingProgressHandler) async throws -> [UUID: SketchAnalysis] {
+        guard !sketches.isEmpty else { return [:] }
+        let report = Self.reporting(nil, to: progress)
+        let read: [ImageDescription]
+        do { read = try await inference.describeImages(sketches.map { ImageDescriptionRequest(url: $0.url) }, model: PhotoReading.visionModel, progress: report) }
+        catch is CancellationError { throw CancellationError() }
+        catch LocalIntelligenceError.busy { throw LocalIntelligenceError.busy }
+        catch { return [:] }
+        guard read.count == sketches.count else { return [:] }
+        var captions = read.map(\.caption)
+        var captionModels = Array(repeating: PhotoReading.visionModel.id, count: read.count)
+        var provenance = read.map(\.provenance)
+        if let model = configuration.photoModel, model.id != PhotoReading.visionModel.id {
+            let informative = sketches.indices.filter { read[$0].failure == nil && PhotoReading.isInformative(read[$0], caption: read[$0].caption) }
+            if !informative.isEmpty {
+                do {
+                    let described = try await inference.describeImages(informative.map { ImageDescriptionRequest(url: sketches[$0].url, recognizedText: read[$0].recognizedText) },
+                                                                       model: model, progress: report)
+                    for (position, index) in informative.enumerated() where position < described.count {
+                        if let caption = described[position].caption, !caption.isEmpty {
+                            captions[index] = caption; captionModels[index] = model.id; provenance[index] = described[position].provenance
+                        }
+                    }
+                } catch is CancellationError { throw CancellationError() }
+                catch LocalIntelligenceError.busy { throw LocalIntelligenceError.busy }
+                catch {}
+            }
+        }
+        var result: [UUID: SketchAnalysis] = [:]
+        let now = Date()
+        for (index, input) in sketches.enumerated() where read[index].failure == nil {
+            let found = read[index]
+            var parameters = ["textModel": PhotoReading.visionModel.id]
+            if let vision = found.provenance { parameters["textEngine"] = "\(vision.engine) \(vision.engineVersion)" }
+            let analysis = PhotoAnalysis(caption: captions[index], recognizedText: found.recognizedText,
+                                         labels: found.labels.isEmpty ? nil : found.labels,
+                                         isInformative: PhotoReading.isInformative(found, caption: captions[index]),
+                                         settings: ProcessingSettings(modelID: captionModels[index], parameters: parameters, createdAt: now, model: provenance[index]),
+                                         createdAt: now)
+            result[input.passageID] = SketchAnalysis(passageID: input.passageID, strokeDigest: input.strokeDigest, analysis: analysis)
+        }
+        return result
     }
 
     /// A photo is read when it has no analysis, or its caption came from another model than the one

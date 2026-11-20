@@ -34,6 +34,7 @@ final class ModelAdditionTests: XCTestCase {
         XCTAssertEqual(added.origin.label, "Added by you")
         XCTAssertEqual(added.engineOptions["architecture"], "qwen2")
         XCTAssertEqual(added.capabilities.contextLength, 4096)
+        XCTAssertEqual(added.capabilities.kvCacheBytesPerToken, 16, "One layer, one KV head of 4, keys and values in 16 bits")
         XCTAssertEqual(added.license?.allowsCommercialUse, true)
         XCTAssertEqual(added.latestRevision?.id, "c0ffee")
         XCTAssertEqual(added.latestRevision?.artifacts.first?.files.map(\.path),
@@ -59,6 +60,19 @@ final class ModelAdditionTests: XCTestCase {
         try await runtime.removeAddedModel(added.key)
         let after = await runtime.catalog
         XCTAssertNil(after.model(added.key))
+    }
+
+    func testAnAddedModelsCacheSizeComesFromItsConfig() {
+        // Gemma 4 E2B's text settings: 7 full-attention layers of 35, one global KV head of 512. Layers that share
+        // another's cache count too, so it errs high (the catalog's 6,144 counts only the 3 with their own).
+        let gemma: [String: Any] = ["num_hidden_layers": 35, "num_key_value_heads": 1, "head_dim": 256, "global_head_dim": 512,
+                                    "layer_types": Array(repeating: ["sliding_attention", "sliding_attention", "sliding_attention", "sliding_attention",
+                                                                     "full_attention"], count: 7).flatMap { $0 }]
+        XCTAssertEqual(MLXLanguageEngine.kvCacheBytesPerToken(gemma), 7 * 512 * 4)
+        // Qwen 2.5 7B: 28 layers, 4 KV heads, a head size from the hidden size.
+        XCTAssertEqual(MLXLanguageEngine.kvCacheBytesPerToken(["num_hidden_layers": 28, "num_key_value_heads": 4, "hidden_size": 3_584,
+                                                               "num_attention_heads": 28]), 57_344)
+        XCTAssertNil(MLXLanguageEngine.kvCacheBytesPerToken(["num_hidden_layers": 28]))
     }
 
     func testAnMLXModelThisVersionCantRunIsRefusedWithReasons() async throws {

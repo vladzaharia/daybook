@@ -9,7 +9,7 @@ import XCTest
 
 /// What the page's status says on this Mac, from what this Mac knows (`ConversationStatusPresentation.mac`, its
 /// `Inputs.mac`), over the demo library both apps fill (`ReadingDemo`): its own downloads and queue, where a summary
-/// runs (a Personal conversation under Always, ux-mac-10), a recording another device still has to send, and work that
+/// runs (a Personal conversation kept off the cloud under Always), a recording another device still has to send, and work that
 /// couldn't finish. The queue is held still, as `LibraryDemo` holds it; no models, keys, or network.
 @MainActor
 final class PageStatusTests: XCTestCase {
@@ -78,10 +78,10 @@ final class PageStatusTests: XCTestCase {
         XCTAssertEqual(try page(research, state)?.kind, .box(.accent), "not transcribed yet")
     }
 
-    /// ux-mac-10: Personal is never sent to the cloud on its own. Under Always a Work summary goes to the cloud at once;
-    /// a Personal one counts down as Offer First does, with Use the Cloud as a tap, and without its summary model here
-    /// it waits for one rather than for the cloud.
-    func testBehaviorAPersonalConversationUnderAlwaysCountsDownOrWaits() async throws {
+    /// A Personal conversation, kept off the cloud by Settings › Cloud's switch (off until the person turns it on), is never
+    /// offered it. Under Always a Work summary goes to the cloud at once; a Personal one starts here with no countdown, and
+    /// without its summary model here it waits for one with no Use the Cloud.
+    func testBehaviorAPersonalConversationKeptOffTheCloudStartsHereOrWaits() async throws {
         let state = try await demo()
         cloud(state, policy: .always)
         let personal = try id(ReadingDemo.Title.transcriptOnly, in: state)
@@ -93,12 +93,11 @@ final class PageStatusTests: XCTestCase {
             state.update(id) { $0.status = .summarizing }
             state.placements.begin(id)
         }
+        XCTAssertEqual(state.placements[personal]?.started, .thisDevice, "No countdown: nothing to offer")
+        XCTAssertNil(state.placements[personal]?.deadline)
         state.processor.queue.runningID = personal
         state.processor.queue.activity.set(IntelligenceProgress(0, "Summarizing", stage: .summarizing))
-        let started = try XCTUnwrap(state.placements[personal]?.deadline).addingTimeInterval(-30)
-        let countdown = try page(personal, state, now: started)
-        XCTAssertEqual(countdown?.title, "Summarizing on this Mac in 30 s")
-        XCTAssertEqual(countdown?.actions, [.placement(.useCloud), .placement(.startNow)])
+        XCTAssertFalse(try page(personal, state)?.actions.contains(.placement(.useCloud)) ?? false)
         state.processor.queue.runningID = work
         let sent = try page(work, state)
         XCTAssertEqual(sent?.title, "Summarizing with Claude Sonnet 5.5")
@@ -109,11 +108,11 @@ final class PageStatusTests: XCTestCase {
         }
         state.processor.queue.runningID = nil
 
-        // Without its summary model, a Personal transcript waits for one, with Use the Cloud; a Work one would go.
+        // Without its summary model, a Personal transcript waits for one, with no Use the Cloud; a Work one would go.
         state.installedModels.remove(state.summaryModel)
         let waits = try page(personal, state)
         XCTAssertEqual(waits?.title, "Download models to summarize this conversation")
-        XCTAssertEqual(waits?.actions.first, .placement(.useCloud))
+        XCTAssertFalse(waits?.actions.contains(.placement(.useCloud)) ?? true)
         state.update(personal) { $0.placement = .work }
         let goes = try page(personal, state)
         XCTAssertEqual(goes?.title, "Not summarized yet")

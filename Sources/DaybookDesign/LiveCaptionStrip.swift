@@ -114,6 +114,7 @@ public struct CaptionStripStyle: Equatable, Sendable {
 public struct LiveCaptionStrip: View {
     private let lines: [CaptionLine]
     private let status: String?
+    private let notice: String?
     private let style: CaptionStripStyle
     private let label: String
     @Environment(\.daybookDensity) private var density
@@ -128,9 +129,12 @@ public struct LiveCaptionStrip: View {
         return style.followsReadingScale ? readingScale : 1
     }
 
-    public init(lines: [CaptionLine], status: String?, style: CaptionStripStyle, label: String = "Live captions · tentative") {
+    /// `notice`: a source that stopped while others caption, shown after the lines or the status.
+    public init(lines: [CaptionLine], status: String?, notice: String? = nil, style: CaptionStripStyle,
+                label: String = "Live captions · tentative") {
         self.lines = Array(lines.suffix(style.lines))
         self.status = status
+        self.notice = notice
         self.style = style
         self.label = label
     }
@@ -179,6 +183,15 @@ public struct LiveCaptionStrip: View {
                     }
                 }
                 .daybookMotion(DaybookMotion.fade, value: lines.map(\.id))
+            }
+            if let notice {
+                row(source: nil) {
+                    Text(notice)
+                        .font(.system(size: style.olderSize * scale))
+                        .foregroundStyle(DaybookPalette.Ink.meta)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

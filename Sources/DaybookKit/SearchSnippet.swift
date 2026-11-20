@@ -20,13 +20,14 @@ extension SearchHit {
         return title.range(of: String(snippet[match]), options: [.caseInsensitive, .diacriticInsensitive])
     }
 
-    /// Where it was found, under the result, the same on both apps: "Title", "Summary", "Your notes", "Transcript ·
+    /// Where it was found, under the result, the same on both apps: "Title", "Summary", "Your notes", "Notebook", "Transcript ·
     /// Maya · 0:12", "Transcript · 3 matches", and "Conversation" for one found by its tags or people alone.
     public var location: String {
         switch field {
         case .title: return match == nil ? "Conversation" : "Title"
         case .summary: return "Summary"
         case .notes: return "Your notes"
+        case .pages: return "Notebook"
         case .transcript:
             if matchCount > 1 { return "Transcript · \(matchCount) matches" }
             return (["Transcript", speaker, time.map(TimeLabel.short)].compactMap { $0 }).joined(separator: " · ")
@@ -39,6 +40,7 @@ extension SearchHit {
         case .title: return "textformat"
         case .summary: return "text.alignleft"
         case .notes: return "note.text"
+        case .pages: return "book"
         case .transcript: return "quote.bubble"
         }
     }

@@ -19,10 +19,15 @@ struct MacEnvironment: Sendable {
     /// Recordings and Listen Live may load a live captioner: the live models, or the Speech framework
     /// (`MacCaptioners.recordingFactory`, `recorderFactory`).
     var makesCaptioners: Bool
+    /// A summary's countdown that ends in the cloud runs only while it's on the screen in front of the person
+    /// (`CountdownVisibility`); without this, the app's countdowns are taken as seen.
+    var watchesScreen: Bool
 
     /// The app's: everything real.
-    static let live = MacEnvironment(watchesCalls: true, watchesPersonalLock: true, watchesCalendar: true, makesCaptioners: true)
+    static let live = MacEnvironment(watchesCalls: true, watchesPersonalLock: true, watchesCalendar: true, makesCaptioners: true,
+                                     watchesScreen: true)
 
-    /// Nothing real: no look at calls, the system's lock, or the calendar, and no captioner.
-    static let inert = MacEnvironment(watchesCalls: false, watchesPersonalLock: false, watchesCalendar: false, makesCaptioners: false)
+    /// Nothing real: no look at calls, the system's lock, the screen, or the calendar, and no captioner.
+    static let inert = MacEnvironment(watchesCalls: false, watchesPersonalLock: false, watchesCalendar: false, makesCaptioners: false,
+                                      watchesScreen: false)
 }

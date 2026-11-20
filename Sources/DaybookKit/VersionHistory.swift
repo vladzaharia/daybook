@@ -21,6 +21,13 @@ public enum RevisionRestore {
             // A deleted photo can be put back; adding one isn't undone from here (delete it instead).
             guard revision.newValue == "removed", let photo = meeting.photo(id) else { return false }
             return photo.isRemoved
+        case .page(let id):
+            // As a photo: a deleted page can be put back; adding one is undone by deleting it.
+            guard revision.newValue == "removed", let page = meeting.page(id) else { return false }
+            return page.isRemoved
+        case .passage(let id):
+            guard let passage = passage(id, in: meeting) else { return false }
+            return passage.page.words(of: passage.passage) ?? "" != revision.oldValue
         case .bookmark: return meeting.canRestoreBookmark(revision)
         case .photoCaption, .correctionTransfer, .source, .sync, .unknown: return false
         }
@@ -39,9 +46,20 @@ public enum RevisionRestore {
         case .summary:
             if let summary = decodedSummary(revision.oldValue) { meeting.setSummary(summary) }
         case .photo(let id): meeting.restorePhoto(id)
+        case .page(let id): meeting.restorePage(id)
+        case .passage(let id):
+            if let found = passage(id, in: meeting) { meeting.correctPassage(pageID: found.page.id, passageID: id, text: revision.oldValue) }
         case .bookmark: meeting.restoreBookmark(revision)
         case .photoCaption, .correctionTransfer, .source, .sync, .unknown: break
         }
+    }
+
+    /// The passage with this ID, and the page it's on.
+    private static func passage(_ id: UUID, in meeting: Meeting) -> (page: NotebookPage, passage: NotebookPassage)? {
+        for page in meeting.pages ?? [] {
+            if let passage = page.passages.first(where: { $0.id == id }) { return (page, passage) }
+        }
+        return nil
     }
 
     private static func decodedSummary(_ value: String) -> MeetingSummary? {
@@ -67,6 +85,13 @@ public enum RevisionText {
             default: return "Photo put back"
             }
         case .photoCaption: return "Photo caption edited"
+        case .page:
+            switch revision.newValue {
+            case "added": return "Page added"
+            case "removed": return "Page deleted"
+            default: return "Page put back"
+            }
+        case .passage: return "Handwriting corrected"
         case .bookmark: return revision.newValue == MeetingRevision.bookmarkRemoved ? "Bookmark deleted" : "Bookmark put back"
         case .unknown: return "Edited"
         }
@@ -82,7 +107,7 @@ public enum RevisionText {
     /// removed, moved, or put back, keep only a mark of what happened, which the title already says.
     public static func showsComparison(_ revision: MeetingRevision) -> Bool {
         switch revision.kind {
-        case .photo, .source: return false
+        case .photo, .page, .source: return false
         default: return true
         }
     }
@@ -94,6 +119,10 @@ public enum RevisionText {
                 return "Passage at \(TimeLabel.short(segment.start))" + (meeting.speakerName(segment.speakerID).map { " · \($0)" } ?? "")
             }
         case .speaker: return "\(revision.oldValue) → \(revision.newValue)"
+        case .passage(let id):
+            if let found = meeting.pages?.first(where: { $0.passages.contains { $0.id == id } }), let number = meeting.pageNumber(of: found.id) {
+                return "Handwriting on page \(number)"
+            }
         case .bookmark:
             if let bookmark = revision.bookmark {
                 let time = "Bookmark at \(TimeLabel.short(meeting.alignedTime(for: bookmark) ?? bookmark.time))"
@@ -115,6 +144,8 @@ public enum RevisionText {
         case .source: return "waveform"
         case .photo: return "photo"
         case .photoCaption: return "text.below.photo"
+        case .page: return "doc"
+        case .passage: return "pencil"
         case .bookmark: return "bookmark"
         case .sync, .unknown: return "arrow.triangle.branch"
         }

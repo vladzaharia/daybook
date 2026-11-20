@@ -23,6 +23,12 @@ import SwiftUI
 ///     --interface-orientation portrait|landscape|preview-portrait   turn the interface in table mode, and the library
 ///                                (the simulator can't turn the device); for the library, a list (landscape,portrait)
 ///                                turns it each way in turn, three seconds apart
+///     --notebook                 open the notebook in the recorder (use with --start-recording --synthetic-audio)
+///     --notebook-page <n>        with --notebook: open at page n (1 is the first)
+///     --notebook-conversation    open the newest conversation's notebook (with --library-demo; --demo-pages seeds its pages)
+///     --notebook-collapsed       with --notebook: the pill and the tools start collapsed
+///     --notebook-panel notes|words   with --notebook: the notes card, or the words of the open page, showing
+///     --demo-pages               with --start-recording: three synthetic pages in the recording, writing in several colours and a sketch
 ///     --write-notes              table mode opens with Write Notes on (notes on the standing half, the keyboard below)
 ///     --recorder-sheet mini|collapsed|expanded|full   open the recorder's sheet expanded to this level (without it: at rest)
 ///     --caption-probe [file]     log what live captions can do here (and, if ready, caption the file); never downloads
@@ -104,6 +110,12 @@ struct DebugLaunch {
     var demoCaptions = false
     var writeNotes = false
     var recorderSheet: RecorderSheetSize?
+    var notebook = false
+    var demoPages = false
+    var notebookPage: Int?
+    var notebookPanel: String?
+    var notebookCollapsed = false
+    var notebookConversation = false
     var demoInk = false
     var demoInkWriting = false
     var interfaceOrientation: String?
@@ -232,6 +244,12 @@ struct DebugLaunch {
         demoCaptions = has("--demo-captions")
         writeNotes = has("--write-notes")
         recorderSheet = value("--recorder-sheet").flatMap(RecorderSheetSize.init(rawValue:))
+        notebook = has("--notebook")
+        demoPages = has("--demo-pages")
+        notebookPage = value("--notebook-page").flatMap(Int.init)
+        notebookPanel = value("--notebook-panel")
+        notebookCollapsed = has("--notebook-collapsed")
+        notebookConversation = has("--notebook-conversation")
         demoInk = has("--demo-ink")
         demoInkWriting = has("--demo-ink-writing")
         interfaceOrientation = value("--interface-orientation")

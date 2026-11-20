@@ -103,10 +103,13 @@ struct ConversationMoreMenu: View {
             PhoneActions.perform(id, on: [meeting.id], library: library, session: session, provider: provider,
                                  placement: placement, undoManager: undoManager)
         } custom: { action in
-            // Write by Hand under Take Photo, on a conversation being read; never on the open Duo's preview of one.
-            guard action.id == .addPhotos, session.reading else { return nil }
+            // Notebook, and Write by Hand (on a conversation being read, never on the open Duo's preview of one), under Take Photo.
+            guard action.id == .addPhotos else { return nil }
             return AnyView(Group {
-                Button { session.writeByHand(meeting.id) } label: { Label(InkWords.writeByHand, systemImage: InkWords.writeByHandSymbol) }
+                Button { session.notebookFor = meeting.id } label: { Label("Notebook", systemImage: "book.pages") }
+                if session.reading {
+                    Button { session.writeByHand(meeting.id) } label: { Label(InkWords.writeByHand, systemImage: InkWords.writeByHandSymbol) }
+                }
                 Button {
                     PhoneActions.perform(action.id, on: [meeting.id], library: library, session: session, provider: provider,
                                          placement: placement, undoManager: undoManager)
@@ -122,7 +125,7 @@ enum ConversationShare {
     static func share(_ id: ConversationAction.ID, meeting: Meeting, session: ReadingSession, provider: any AudioProviding) {
         switch id {
         case .shareMarkdown: markdown(meeting, session: session, provider: provider)
-        case .shareJSON: json(meeting, session: session)
+        case .shareJSON: json(meeting, session: session, provider: provider)
         case .shareAudio: audio(meeting, session: session, provider: provider)
         default: break
         }
@@ -140,10 +143,16 @@ enum ConversationShare {
         }
     }
 
-    private static func json(_ meeting: Meeting, session: ReadingSession) {
+    private static func json(_ meeting: Meeting, session: ReadingSession, provider: any AudioProviding) {
         Task {
             do {
-                let url = try await Task.detached { try ExportFiles.json(meeting) }.value
+                // The page drawings this iPhone has or can fetch travel in the file with the rest of the conversation's data.
+                var drawings: [String: URL] = [:]
+                for drawing in (meeting.pages ?? []).compactMap(\.drawing) {
+                    if let url = try? await provider.localPageDrawing(for: drawing, in: meeting.id) { drawings[drawing.relativePath] = url }
+                }
+                let files = drawings
+                let url = try await Task.detached { try ExportFiles.json(meeting, pageDrawings: files) }.value
                 session.sheet = .share([url])
             } catch { session.alert = ReadingAlert(title: "Couldn’t Share", error: error, fallback: "The conversation couldn’t be prepared. Try again.") }
         }

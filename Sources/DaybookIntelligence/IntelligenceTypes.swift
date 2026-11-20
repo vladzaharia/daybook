@@ -151,6 +151,9 @@ public enum LocalIntelligenceError: LocalizedError {
     case unsupportedRole(model: String, role: String)
     /// The catalog lists the model, but this build can't run it.
     case unavailable(model: String, reason: String)
+    /// A summary pass needs more than the model's usable window (its context, or what this device's memory holds for
+    /// it): an error rather than a prompt or reply cut to fit.
+    case promptTooLong(needed: Int, window: Int)
 
     public var errorDescription: String? {
         switch self {
@@ -163,6 +166,9 @@ public enum LocalIntelligenceError: LocalizedError {
         case .invalidSpeakerOutput: return "The local speaker model returned invalid predictions. Try another speaker model."
         case .unsupportedRole(let model, let role): return "\(ModelCatalog.builtIn.name(for: model)) can’t be used for \(role). Choose another model."
         case .unavailable(let model, let reason): return "\(ModelCatalog.builtIn.name(for: model)): \(reason)."
+        case .promptTooLong(let needed, let window):
+            return "The summary model can’t read this conversation on this device: a pass needs \(needed.formatted()) tokens and the model has "
+                + "room for \(window.formatted()). Choose another summary model."
         }
     }
 }
@@ -174,7 +180,7 @@ extension LocalIntelligenceError: ProcessingFailureClassifying {
     public var failureKind: ProcessingRequest.FailureKind {
         switch self {
         case .modelNotInstalled: return .modelsMissing
-        case .busy, .invalidAudio, .emptyResponse, .invalidSpeakerOutput, .invalidTokenizer, .unavailable, .unsupportedRole:
+        case .busy, .invalidAudio, .emptyResponse, .invalidSpeakerOutput, .invalidTokenizer, .unavailable, .unsupportedRole, .promptTooLong:
             return .plainReason
         case .unknownModel: return .other
         }

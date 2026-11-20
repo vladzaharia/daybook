@@ -196,7 +196,7 @@ public struct TranscriptPage<Header: View, Placeholder: View>: View {
                            emphasized: flashed == row.id || current == row.id,
                            bookmarks: layout.marks.bookmarksBySegment[segment.id] ?? [],
                            label: layout.marks.labelSegments[segment.id], corrected: corrected.contains(segment.id),
-                           highlight: highlight, actions: actions, focus: $focusedRow)
+                           unsure: layout.unsure[segment.id] ?? [], highlight: highlight, actions: actions, focus: $focusedRow)
                     .modifier(RenamePopover(row: row.id, request: $renaming, meeting: meeting, save: rename))
                     .popover(isPresented: Binding(get: { heardIn == segment.id }, set: { if !$0 { heardIn = nil } }),
                              arrowEdge: .bottom) {
@@ -225,7 +225,11 @@ public struct TranscriptPage<Header: View, Placeholder: View>: View {
             bookmark: { TranscriptEdits.bookmark($0, in: meeting.id, library: host.library) },
             showHeardIn: { heardIn = $0.id },
             showNotes: host.showNotes,
-            move: moveFocus)
+            move: moveFocus,
+            keepUnsure: { TranscriptEdits.keep($0.flag.id, in: meeting.id, library: host.library, undoManager: undoManager) },
+            useEarlierReading: {
+                TranscriptEdits.useAlternative($0.flag.id, in: meeting.id, library: host.library, undoManager: undoManager)
+            })
     }
 
     // MARK: Editing
@@ -480,7 +484,7 @@ struct TranscriptPageLayout {
         }
         turnStarts = starts
         passageIDs = passages
-        rotors = TranscriptRotorEntries(rows: rows, marks: layout.marks, meeting: meeting)
+        rotors = TranscriptRotorEntries(rows: rows, marks: layout.marks, meeting: meeting, unsure: layout.unsure)
     }
 
     static func cached(for meeting: Meeting) -> TranscriptPageLayout {
@@ -494,7 +498,8 @@ struct TranscriptPageLayout {
     private static var cache: [UUID: (meeting: Meeting, page: TranscriptPageLayout)] = [:]
 }
 
-/// VoiceOver rotors for a long transcript: the bookmarked passages, your notes, and each speaker's turns.
+/// VoiceOver rotors for a long transcript: the bookmarked passages, your notes, the passages with unsure words, and each
+/// speaker's turns.
 private struct TranscriptRotors: ViewModifier {
     let rotors: TranscriptRotorEntries
     let namespace: Namespace.ID
@@ -506,6 +511,9 @@ private struct TranscriptRotors: ViewModifier {
             }
             .accessibilityRotor("Your Notes") {
                 ForEach(rotors.notes, id: \.id) { entry in AccessibilityRotorEntry(Text(entry.label), id: entry.id, in: namespace) }
+            }
+            .accessibilityRotor("Unsure Words") {
+                ForEach(rotors.unsure, id: \.id) { entry in AccessibilityRotorEntry(Text(entry.label), id: entry.id, in: namespace) }
             })
         for speaker in rotors.speakers {
             view = AnyView(view.accessibilityRotor(speaker.name) {
@@ -530,11 +538,17 @@ public struct TranscriptRotorEntries: Equatable, Sendable {
 
     public var bookmarks: [Entry] = []
     public var notes: [Entry] = []
+    /// Passages with unsure words, each read as its time and the words.
+    public var unsure: [Entry] = []
     public var speakers: [Speaker] = []
 
-    public init(rows: [TranscriptRow], marks: BookmarkMarks, meeting: Meeting) {
+    public init(rows: [TranscriptRow], marks: BookmarkMarks, meeting: Meeting, unsure flags: [UUID: [TranscriptFlagMark]] = [:]) {
         var byName: [String: Int] = [:]
         for row in rows {
+            if case .passage(let segment) = row, let marked = flags[segment.id], !marked.isEmpty {
+                let words = marked.map { "“\($0.words(in: segment.text) ?? $0.flag.text)”" }.joined(separator: ", ")
+                unsure.append(Entry(id: row.id, label: "\(TimeLabel.short(segment.start)), \(words)"))
+            }
             switch row {
             case .passage(let segment) where marks.holders.contains(segment.id):
                 let label = marks.labelSegments[segment.id] ?? String(segment.text.prefix(80))

@@ -147,7 +147,7 @@ final class PhoneProcessingTests: XCTestCase {
         clock.now = Date()
         let link = PhoneLink(identity: PhoneLink.identity(installation: UUID().uuidString, name: "Test iPhone", libraryID: nil),
                              keyStore: MemoryLinkKeyStore(), configuration: .loopback())
-        let placement = PhoneSummaryPlacement(library: library.controller, link: link, presence: { [] }, clock: { clock.now }, runsTimer: false)
+        let placement = PhoneSummaryPlacement(library: library.controller, link: link, presence: { [] }, clock: { clock.now }, runsTimer: false, appIsActive: { true })
         placement.cloud = CloudSetup.demo(providers: cloud == nil ? [] : [.anthropic], defaults: makeTestDefaults("PhoneProcessingTests"))
         if let cloud { placement.cloudSummarizer = cloud }
         placement.runHere = { [weak processor] id, request in processor?.summarizeHere(id, request: request) }

@@ -42,6 +42,27 @@ public struct NotesInkModel {
     }
 }
 
+/// The pen's colours in the notebook. Stored as they are: a page is light paper whatever the appearance, so the colour
+/// written is the colour shown. The notes editor stays black, which PencilKit draws in the appearance's ink.
+public enum InkColor: String, CaseIterable, Identifiable, Sendable {
+    case black, blue, red, green, orange
+    public var id: String { rawValue }
+
+    public var title: String { rawValue.capitalized }
+
+    public var uiColor: UIColor {
+        switch self {
+        case .black: return UIColor(red: 0.07, green: 0.07, blue: 0.08, alpha: 1)
+        case .blue: return UIColor(red: 0.05, green: 0.33, blue: 0.85, alpha: 1)
+        case .red: return UIColor(red: 0.84, green: 0.14, blue: 0.16, alpha: 1)
+        case .green: return UIColor(red: 0.08, green: 0.52, blue: 0.27, alpha: 1)
+        case .orange: return UIColor(red: 0.93, green: 0.48, blue: 0.04, alpha: 1)
+        }
+    }
+
+    public var color: Color { Color(uiColor: uiColor) }
+}
+
 /// How the editor is being written with, shared by its canvases and its tools.
 @MainActor
 @Observable
@@ -68,11 +89,14 @@ public final class InkSession {
             }
         }
 
-        var pencilTool: PKTool {
+        var pencilTool: PKTool { pencilTool(color: nil) }
+
+        /// - Parameter color: The pen's colour in the notebook; nil is the notes' black, drawn in the appearance's ink.
+        func pencilTool(color: InkColor?) -> PKTool {
             switch self {
             // Stored as black and drawn in the appearance's ink: PencilKit turns it light in Dark Mode.
-            case .pen: return PKInkingTool(.pen, color: .black, width: 2.4)
-            case .marker: return PKInkingTool(.marker, color: .systemYellow, width: 22)
+            case .pen: return PKInkingTool(.pen, color: color?.uiColor ?? .black, width: 2.4)
+            case .marker: return PKInkingTool(.marker, color: color == nil ? .systemYellow : UIColor(red: 1, green: 0.87, blue: 0.2, alpha: 1), width: 22)
             case .eraser: return PKEraserTool(.vector)
             case .lasso: return PKLassoTool()
             }
@@ -84,6 +108,8 @@ public final class InkSession {
     /// Apple Pencil wrote since the words last had the focus, so the tools stay in reach.
     public var pencilActive = false { didSet { if pencilActive != oldValue { changed() } } }
     public var tool: Tool = .pen { didSet { if tool != oldValue { changed() } } }
+    /// The pen's colour; the notebook's only (the notes editor writes in black).
+    public var color: InkColor = .black { didSet { if color != oldValue { changed() } } }
     public private(set) var canUndo = false
     public private(set) var canRedo = false
 
@@ -150,23 +176,49 @@ public enum InkRecognizer {
         return await vision(drawing)
     }
 
+    /// The words Vision reads from a picture of the ink, with where each line sits in the drawing's own points: what the
+    /// notebook checks a passage's strokes against to tell writing from a sketch. Nil when nothing could read it.
+    static func textWithBoxes(in drawing: PKDrawing) async -> (words: String, boxes: [CGRect])? {
+        guard let image = await image(of: drawing) else { return nil }
+        let bounds = drawing.bounds.insetBy(dx: -16, dy: -16)
+        return await Self.recognize(image) { request -> (words: String, boxes: [CGRect]) in
+            let lines = (request.results ?? []).sorted { $0.boundingBox.midY > $1.boundingBox.midY }
+            let words = lines.compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
+            let boxes = lines.map { line -> CGRect in
+                let box = line.boundingBox
+                return CGRect(x: bounds.minX + box.minX * bounds.width, y: bounds.minY + (1 - box.maxY) * bounds.height,
+                              width: box.width * bounds.width, height: box.height * bounds.height)
+            }
+            return (words, boxes)
+        }
+    }
+
     private static func vision(_ drawing: PKDrawing) async -> String? {
         guard let image = await image(of: drawing) else { return nil }
-        return await Task.detached(priority: .utility) {
-            let request = VNRecognizeTextRequest()
-            request.recognitionLevel = .accurate
-            request.usesLanguageCorrection = true
-            request.automaticallyDetectsLanguage = true
-            do {
-                try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
-            } catch {
-                return nil
-            }
-            return (request.results ?? [])
+        return await Self.recognize(image) { request in
+            (request.results ?? [])
                 .sorted { $0.boundingBox.midY > $1.boundingBox.midY }
                 .compactMap { $0.topCandidates(1).first?.string }
                 .joined(separator: "\n")
-        }.value
+        }
+    }
+
+    /// Vision reads one picture at a time on a queue of its own. `perform` blocks its thread until the picture is read, which on a
+    /// slow or virtual machine can be very long: on Swift concurrency's pool (`Task.detached`) a few such readings take every thread
+    /// and nothing else async in the app (Stop's filing, saves) can run until they end.
+    private static let visionQueue = DispatchQueue(label: "local.daybook.vision", qos: .utility)
+
+    private static func recognize<Result: Sendable>(_ image: CGImage, _ read: @escaping @Sendable (VNRecognizeTextRequest) -> Result) async -> Result? {
+        await withCheckedContinuation { (done: CheckedContinuation<Result?, Never>) in
+            visionQueue.async {
+                let request = VNRecognizeTextRequest()
+                request.recognitionLevel = .accurate
+                request.usesLanguageCorrection = true
+                request.automaticallyDetectsLanguage = true
+                do { try VNImageRequestHandler(cgImage: image, options: [:]).perform([request]) } catch { done.resume(returning: nil); return }
+                done.resume(returning: read(request))
+            }
+        }
     }
 
     /// Dark ink on opaque white, whatever the phone's appearance: `PKDrawing.image` draws for the current traits, so in
@@ -476,10 +528,13 @@ final class InkKeyboardBar: UIToolbar {
 /// Keyboard. The app docks it under the notes (never over them) while `InkSession.showsTools`.
 public struct InkTools: View {
     @Bindable private var session: InkSession
+    private let showsColors: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    public init(session: InkSession) {
+    /// - Parameter showsColors: The notebook's colour row (the pen's colours) in place of Keyboard.
+    public init(session: InkSession, showsColors: Bool = false) {
         self.session = session
+        self.showsColors = showsColors
     }
 
     public var body: some View {
@@ -491,11 +546,31 @@ public struct InkTools: View {
             button("Undo", symbol: "arrow.uturn.backward", enabled: session.canUndo) { session.undo() }
             button("Redo", symbol: "arrow.uturn.forward", enabled: session.canRedo) { session.redo() }
             divider
-            button("Keyboard", symbol: "keyboard") { session.returnToKeyboard() }
+            if showsColors {
+                ForEach(InkColor.allCases) { colour in swatch(colour) }
+            } else {
+                button("Keyboard", symbol: "keyboard") { session.returnToKeyboard() }
+            }
         }
         .padding(.horizontal, DaybookSpacing.s1)
         .glassEffect(.regular, in: Capsule())
         .fixedSize()
+    }
+
+    private func swatch(_ colour: InkColor) -> some View {
+        let selected = session.color == colour && session.tool != .eraser && session.tool != .lasso
+        return Button {
+            session.color = colour
+            if session.tool != .pen && session.tool != .marker { session.tool = .pen }
+        } label: {
+            Circle().fill(colour.color).frame(width: 22, height: 22)
+                .overlay(Circle().strokeBorder(DaybookPalette.Ink.title.opacity(selected ? 0.9 : 0), lineWidth: 2).padding(-4))
+                .frame(width: 34, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(colour.title)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private var divider: some View {

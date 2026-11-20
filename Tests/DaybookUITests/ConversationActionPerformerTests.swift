@@ -180,6 +180,17 @@ final class ConversationActionPerformerTests: XCTestCase {
         XCTAssertEqual(host.shown.count, 4, "none in the library: nothing to ask")
     }
 
+    func testBehaviorMergeAsksFirstAndChangesNothingItself() async throws {
+        let library = try await makeLibrary()
+        let a = conversation("Weekly product sync", in: library), b = conversation("Roadmap review", in: library)
+        let host = Host()
+        let before = library.meetings
+        performer(library, undoManager: undoManager(), host: host).perform(.merge, on: [a, b, UUID()]) { _ in XCTFail("the library's") }
+        let both = library.meetings.map(\.id).filter { [a, b].contains($0) }
+        XCTAssertEqual(host.shown, [.merge(both)], "the question, with the conversations in the library")
+        XCTAssertEqual(library.meetings, before, "nothing is merged until the person says so")
+    }
+
     func testBehaviorSummarizeAgainPassesOverThoseWithNothingToSummarize() async throws {
         let library = try await makeLibrary()
         let a = conversation("Weekly product sync", in: library)

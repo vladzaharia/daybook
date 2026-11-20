@@ -1,5 +1,278 @@
 # Validation record
 
+## Ask across conversations, engine (2026-11-18)
+
+The first half of "Ask across conversations": the in-memory index, the question parser, retrieval, and the answering step
+with its quote check, with no interface yet (docs/architecture.md, "Ask across conversations"). On `feature/ask-engine`.
+
+**The evaluation library.** `Tests/DaybookKitTests/AskEvaluation`: 20 invented conversations (people Sam, Priya, Alex,
+Dana, and Tomas; customers and vendors such as Orchard & Vane, Kestrel Logistics, and Fennimore Cloud) from September
+to November 2026, 7 of them with a summary, 2 of them Personal decoys, with decisions made and reversed, the same
+person's commitments across months, one person taking another's, a "pricing page" design review beside the pricing
+decision, facts said only in other words than the question's, and facts only in a note or a bookmark; and 60 questions
+with expected key facts and expected passages (decision 10, commitment 10, latest wins 6, counts and lists 6, one
+conversation 6, paraphrase 8, note or bookmark 3, Personal decoys 2, unanswerable 9). A third (20, every third in file
+order) is held out. Nothing in it comes from a real library.
+
+**Retrieval recall** (`AskRetrievalEvaluationTests`, deterministic, no model, in CI). Over the 49 answerable questions
+that aren't Personal decoys. "At 1" and "at 3": an expected passage, note, or bookmark is among the first one or three
+ranked pieces; "given to the model": it is in the passages, notes, and bookmarks the model would read (the 4,000-token
+budget).
+
+| Questions | Count | At 1 | At 3 | Given to the model |
+| --- | --- | --- | --- | --- |
+| Tuning | 33 | 20 (60.6%) | 26 (78.8%) | 28 (84.8%) |
+| Held out | 16 | 12 (75.0%) | 14 (87.5%) | 15 (93.8%) |
+
+**Only the questions are held out, not the conversations.** The 16 held-out questions share the library with the 33
+tuning ones: every one of the 11 conversations that hold held-out evidence also holds tuning evidence, so tuning on the library
+could still help them. The held-out score says the ranking wasn't fitted to those questions' wording, not that it works
+on conversations it has never seen. The CI bars sit one question under what retrieval finds on each split (28 of 33 and
+15 of 16 given to the model; at 3, 26 and 14; at 1, 20 and 12), and retrieval is deterministic, so a regression of two
+questions fails.
+
+Tuning changed three things, each chosen from the tuning set's misses and what retrieval should do, not from the held-out
+questions: a question about commitments reads passages in the words of a promise by the person it names (and the
+summaries' commitments) more favourably; a question asked about one conversation reads it whatever it shares; and the
+floor is lower in a small library, where no word can weigh as much. A review then found the promise bonus lifted pieces
+that shared no word with the question over the floor, so no commitment question could end at retrieval, and counted "I
+can't make Thursday" as a promise. It now excludes can't, cannot, won't, will not, and 'll not, and applies only to
+pieces that share a word with the question. That cost three tuning questions (all "what did Sam commit to in
+<month>"-style questions that share no word with how a promise is said): given to the model 31 to 28 of 33, at 3 29
+to 26, at 1 23 to 20; held out unchanged at 12, 14, and 15 of 16. It was left that way rather than weighted back.
+Before tuning at all, the tuning set found the evidence for 24 of 33, and the held-out set's 13 of 16 had been printed
+once by the test's first run. Honestly: that aggregate was seen before tuning, and no held-out question was looked at.
+Still missed: "when did we talk about someone being burned out?" (the passage says "wiped out"; no shared word: the
+paraphrase gap the design expected), "what did I mark in the launch retro?" (the bookmark's words share nothing with
+the question and titles aren't indexed), and the three commitment questions above. The synthetic score is an upper
+bound: the same hands wrote the library and the ranking.
+
+**What the quote check guarantees.** Each kept sentence cites a passage, note, or bookmark that contains the quoted
+words, whole and word for word (case, apostrophes, spacing, and timestamps ignored; no word is matched inside another;
+no ellipsis joins pieces and no sentences are split). It does not prove the sentence says what the quote says: a model
+can quote real words and draw a wrong conclusion from them. Summary lines are never the evidence. The commitments
+check, which shares the matcher, got the whole-word rule too.
+
+**Before any model runs.** Retrieval alone ended 4 of the 9 unanswerable questions (the August one, whose dates hold no
+conversation, and three with no word in the library); the other 5 reach the model, which has to say "not found" (not
+measured). With the Personal lock locked, none of the 60 questions read or ranked either Personal conversation.
+
+**Not measured.** Answer quality (correct, wrong, not found, and how many sentences the quote check drops), the bars
+for abstention and correctness, and latency: `Daybook --ask-eval` needs an installed summary model, and this Mac has
+none for this session to use (`~/Library/Application Support/Daybook Development` doesn't exist, and no model was
+downloaded). The flag was run against an empty models folder and stops saying so. The model-free tests cover the
+prompt byte for byte, the quote check (case, apostrophes, timestamps, ellipsis, unknown labels, quotes that are
+elsewhere, a broken-off reply, the free-form fallback, notes and bookmarks), the three "not found" cases, waiting
+behind a running job, and cancelling.
+
+## Long summaries: the usable window, the cloud when it does better, effort, and placements (2026-11-16)
+
+The owner: smaller models can't handle large transcripts; use each local model's whole usable context, fall back to a
+cloud model when one is available and does better, and set thinking very high. Then: the person chooses which
+placements may go to the cloud, and Extra High is the default effort. On `feature/long-summaries` (docs/model-runtime.md,
+"Usable window" and "Summarization"; docs/cloud.md, "Which conversations", "When the cloud is chosen", "What's offered").
+
+**Context windows, checked.** Each language model's `config.json` at its pinned revision was fetched from Hugging Face
+(the config alone; its size and git object ID matched the catalog's for all eleven), and `max_position_embeddings`
+matches the catalog's `contextLength` for every one: Gemma 4 E2B and E4B 131,072; Gemma 4 12B, 26B A4B, and 31B, Qwen
+3.5 4B and 9B, and Qwen 3.6 35B A3B 262,144; Qwen 2.5 1.5B, 3B, and 7B 32,768 (7B's config also says `sliding_window`
+131,072, with `use_sliding_window` false and no `rope_scaling`, so 32,768 stands). Nothing needed correcting; an install now runs with the catalog's current
+capabilities while the catalog lists its revision, so a later correction reaches it. The KV cache per token, from the
+same configs (full-attention layers with their own cache × KV heads × head size × keys and values × 2 bytes): 6 KB
+(E2B), 16 KB (E4B, 12B), 20 KB (26B A4B, Qwen 3.6), 80 KB (31B), 32 KB (Qwen 3.5), 28/36/56 KB (Qwen 2.5 1.5B/3B/7B);
+the doc's earlier figures for Gemma 4 and Qwen 2.5 7B agree.
+
+**The usable window.** The smaller of the model's window and what Metal's recommended working set holds beside the
+weights, with a margin of a tenth (at least 512 MiB). This Mac (M5 Pro, 64 GB, macOS 27.0) reports 55,662,788,608 bytes,
+0.81 of its memory; the table in docs/model-runtime.md applies that ratio to 8, 16, and 32 GB, which wasn't measured on
+those Macs. Every built-in model gets its whole window on the Macs its suggested memory names, except Gemma 4 31B 8-bit
+(199,382 of 262,144 on 64 GB) and Gemma 4 E4B on 8 GB (68,070).
+
+**What a pass reads did not grow for the built-in models.** The docs record why the sizes are what they are: on Gemma 4
+26B A4B, reading the weekly whole with commitments in one pass lost a topic and kept 31 of 38 commitments (36 in parts of
+5,400 tokens), and the three-hour meeting's commitments in two parts of 24,000 tokens kept 60 of 66 (all 66 in parts of
+5,400; 2026-10-31 below). No model was measured reading more. So those sizes are now each model's own limits in the
+catalog (`wholeReadTokens` 5,400, `partTokens` 12,000 or Qwen 2.5's 8,000, `evidenceTokens` 24,000 or 12,000,
+`commitmentPartTokens` 5,400) rather than constants, the window and memory cap them, and a model without limits (one the
+person adds) reads what its window holds. Lifting a built-in model's limits needs a run like the one below on that model.
+What changed for them: a prompt that can't fit the usable window is an error ("The summary model can’t read this
+conversation on this device…") rather than a reply squeezed to 256 tokens, a window or memory too small to read 1,024
+tokens is the same error before anything runs, and notes left out of the final pass are a warning. Long conversations
+those models read in parts now go to the cloud when it does clearly better (below).
+
+**Local thinking: not measured, not shipped.** It needs real inference on installed summary models. This Mac has none
+this session could use: `~/Library/Application Support/Daybook Development` doesn't exist, the signed app's container
+(`~/Library/Containers/local.daybook`) refuses this session ("Operation not permitted": macOS keeps another app's data
+from it), and no Daybook store receipt exists anywhere else in the home folder. Weights weren't downloaded (the disk is at
+93%, and the brief ruled it out). The Hugging Face cache's `gemma-3-12b-it-4bit` isn't a catalog model, and Gemma 3 has
+no thinking mode. So every model keeps `"thinking": "off"`, and no reasoning pass was added. To measure: install a
+summary model in the development library, run the summary harness on the three-hour fixture with thinking on for a
+reasoning pass before each constrained pass (Gemma 4's `enable_thinking`, Qwen 3's), and compare topics, commitments, time,
+and peak memory with these runs.
+
+**Cloud effort.** Anthropic's effort page and Models API reference (platform.claude.com/docs/en/build-with-claude/effort,
+.../api/models/list) list `low`, `medium`, `high`, `xhigh`, and `max`, all five on Claude Opus 5.5, Sonnet 5.5, and Haiku
+5.5, reported per model as `capabilities.effort.<level>.supported` (`xhigh` may be null); OpenAI's reasoning guide and
+model pages (developers.openai.com/api/docs/guides/reasoning, .../models/gpt-6-astra, gpt-6.1-sol, gpt-6.1-terra,
+gpt-6-luna) list `low` through `max` for all four (Terra and Luna also `none`), default `medium`. OpenAI's API reference
+at platform.openai.com answered 403 and wasn't read. Summaries ask for Extra High unless the person chose a level; the
+request bodies are otherwise unchanged (`thinking: {type: "adaptive"}` with `output_config.effort`; `reasoning.effort`).
+No request was sent to either provider: Extra High's and Max's output allowances are extrapolated, not measured, and a
+`--cloud-check` run at each level should replace them.
+
+**Automated.** New or changed: `SummaryRepairTests` (budgets from the window, memory, and the catalog's limits; a
+conversation that fits read whole in one pass, commitments too; parts under a memory-limited window; every pass within
+the window; a prompt that can't fit an error, before or at a pass; what memory holds), `SummaryNotesTests` (notes left
+out of the final pass warned), `RuntimeResidencyTests` (an install's capabilities refreshed while the catalog lists its
+revision, not after), `ModelManifestTests` (each model's window, cache size, and limits), `ModelAdditionTests` (an added
+model's cache size from its config), `CloudClientTests` (Extra High and Max read from Anthropic's list, a null or
+unsupported level left out), `CloudCatalogTests` (every catalog model offers all five; the default Extra High, else the
+highest level below; estimates), `CloudDirectoryTests` (older preferences: Medium moves to Extra High, Low and High stay,
+placements default to Personal off and Work on; switches round-trip; Never overrides), `CloudSummarizerTests` (Extra High
+sent to both providers by default, Max when chosen; a prompt longer than the window never sent), `SummaryPlacementTests`,
+`SummaryPlacementWordsTests`, `UpgradeTests`, and `LongConversationTests` (placements kept off the cloud under every
+policy and mid-countdown; long conversations counting down to the cloud only inside the rule; Don't Use the Cloud; a
+local failure trying the cloud under the same rules; leaving the screen never sending; the link's countdown to the cloud;
+the reason recorded), `SummaryPlacementProcessingTests` on the Mac and `PhoneSummaryPlacementTests` and
+`PhonePageStatusTests` on the iPhone (the same flows end to end, including a queued Use the Cloud for a conversation moved
+to Personal, Use the Cloud refused for a kept-off conversation's waiting request, a long conversation for the Mac's
+model, and a request failing only after the cloud was declined). `swift test`: 2,714 tests across the eleven bundles, 5
+skipped (hardware and timing checks, as before), 0 failures; this time the file-protection suites that fail on this Mac
+passed too (Captions 35, Core 519, Design 43, Devices 187, Intelligence 226, Kit 723, Link 108, Live 44, Mac app 611, UI
+169, WatchLink 49). The iPhone bundle (`scripts/build-ios.sh --test` on an iPhone Duo simulator, iOS 27.1, CI's two
+encoder timing tests left out as CI runs them apart): 511 tests, 0 failures.
+
+**Review.** An independent review of the branch found, and this change fixes: on the iPhone a conversation too long for
+the cloud whose summary also failed here could pass between the two forever (it now fails with the failure here); a
+countdown that falls due out of sight could still end in the cloud (none begins off the screen now); a countdown
+retargeted to the cloud kept its old deadline; a failure after Don't Use the Cloud brought the cloud back; an Upgrade to
+the cloud on a long conversation turned into a countdown; a stale retry could swallow a later Summarize; the final
+pass's evidence didn't leave room for its own words, so a small window failed only after every part; a small window
+refused even a conversation that fit it whole; Summarize Again during a cloud countdown sent it; the cloud's size check
+didn't leave room for a reply; a pause during the retry's countdown read as a failure; and preferences written with
+Extra High would reset in an earlier version (it now reads High, or Medium when unchosen, and keeps Never).
+
+**Still to check:** real long conversations through the new cloud path on a Mac and an iPhone with real keys; the
+working-set ratio on 8–32 GB Macs and an iPhone's memory headroom in practice; Extra High and Max output and cost per
+provider (`--cloud-check`); local thinking, as above; screenshots of Settings › Cloud's new switches and the iPhone's
+Effort menu.
+
+## Merging conversations (2026-11-16)
+
+Merge… on both apps (docs/architecture.md, "Merging conversations"), built on `feature/merge-conversations`. Nothing
+has run on a device or with real recordings: what's verified is the package's tests, the Mac app end to end with the fake
+inference engine, and the iPhone app's unit tests in the Simulator.
+
+- **Runs.** The package: 2,700 tests, 5 skipped, 1 failure, the guard against a type both apps declare (each app's merge
+  question is named for its platform since; `SharedNameTests` 4 of 4 after). The iPhone bundle: 507 tests, none failed.
+  The file-protection suites that fail on this Mac on `main` passed in both runs.
+- **Tests.** `ConversationMergeTests` (placement after, alongside, and alongside a later one; every run with its words;
+  corrections through fusion; the owner and a named person as one speaker, a taken ID, Daybook's numbers; one voice
+  profile under two names; notes, ink, tags, Version History, folding twice; the sync warning),
+  `MergeConversationsTests` (files and photos copied, the others in the Trash with their recordings marked moved; the
+  busy guard; a merge asked for again after a copy was left, and after the fold; the iPhone's request),
+  `MergeProcessingTests` (on the Mac: an hour apart, every recording transcribed again, the sound aligner never asked,
+  names and a correction kept, one summary; recorded alongside, lined up by the stubbed sound from the clocks' prior),
+  and the action lists on both apps (`ConversationActionsTests`, `LibraryListTests`, `ConversationActionPerformerTests`,
+  `LibraryListPhoneTests`).
+- **Needs real recordings.** A merge of two Macs' recordings of one meeting through the real `AudioAligner`; names across
+  a merge of recordings from different kinds of microphone (the earlier speaker's voice is the one kept); on the iPhone,
+  a merge whose audio and photos download first, with the request taken up by a Mac.
+
+## Unsure words in the transcript (2026-11-16)
+
+Words the transcript may have wrong, marked where they read (docs/architecture.md, "Unsure words"), built on
+`feature/unsure-words`.
+
+- **Does the recognizer give per-word confidence?** Yes, and it's stored: every engine's words reach
+  `TrackTranscript.words` with a confidence (`InferenceProcessingEngine.transcribe`). Parakeet's is the lowest of its
+  sub-word tokens' probabilities (`ParakeetWords.words`), Apple Speech's the system's `transcriptionConfidence` for the
+  run, Whisper's WhisperKit's word probability. Passages (`TranscriptSegment.confidence`) don't carry a word's: with
+  speakers found, a passage takes its first word's.
+- **Where the floor came from.** Measured, not tuned in tests: 24 meeting sentences read by six `say` voices
+  (Samantha, Daniel, Karen, Moira, Rishi, Tessa), each clean, through a telephone band, and with white noise at 20, 10,
+  5, and 0 dB and pink noise at 10, 5, and 0 dB (324 files, 112 minutes), transcribed by Parakeet through FluidAudio
+  0.18.0 with the v3 base model already on this Mac (`AsrModels.loadLocal`, nothing downloaded) and by Apple Speech
+  (`SpeechTranscriber`, en-US, installed), with the app's own word rules copied; each word scored right or wrong against
+  the script. Parakeet: 17,372 words, 4.8% wrong, AUROC 0.975 (0.988 clean). Apple Speech: 17,479 words, 10.9% wrong,
+  AUROC 0.914 (0.919 clean). Flagging words below 0.5:
+
+  | | Words flagged | Of them wrong | Wrong words caught | Right words flagged |
+  |---|---|---|---|---|
+  | Parakeet, clean | 1.3% | 76% | 45% | 0.32% |
+  | Parakeet, every condition | 2.7% | 79% | 45% | 0.59% |
+  | Apple Speech, clean | 2.1% | 71% | 32% | 0.65% |
+  | Apple Speech, every condition | 8.0% | 63% | 46% | 3.3% |
+
+  For Parakeet, words between 0.4 and 0.5 were more often wrong than right (6 to 5 clean, 123 to 59 in all) and words
+  between 0.5 and 0.6 more often right (6 to 8, 121 to 145); 0.6 would double the false flags for 14 points more of the
+  errors. For Apple Speech, 0.4 and 0.5 were equally precise on clean speech (71%), 0.5 catching more, and at 0.6 the
+  false flags tripled, nearly all on words with punctuation or a capital: its confidence covers those too, and the
+  marks compare words without them. So both floors are 0.5. Parakeet is sometimes confidently wrong (about one wrong
+  word in ten scored 0.9 or more, "Thomas" for Tomasz), which no floor catches.
+- **Where 0.9 came from** (`TranscriptFlags.confidentWhenStronger`: after an upgrade to a stronger model, a disagreement
+  is flagged only where the latest words' confidence is below it). From the same measurements: words scored 0.9 or more
+  were right 99.5% of the time for Parakeet (15,531 right, 85 wrong) and 98.4% for Apple Speech (11,697, 185), against 95.2%
+  and 89.1% for all their words, so a disagreement over such a word is almost always the earlier, weaker run's error;
+  words below 0.9 were wrong 42% (Parakeet) and 31% (Apple Speech) of the time, enough to be worth a question. The bound
+  also keeps nine in ten of a recognizer's wrong words in doubt (90% and 90% of them score below 0.9), where 0.8 would
+  let one in five through as confident (81% and 80% below it) and 0.95 would doubt 2 and 8 points more of all their
+  words to catch 4 and 5 points more of the wrong ones. It isn't applied to Whisper, whose probabilities weren't
+  measured, and a recognizer that gives no confidence is flagged as before; two runs of one model are compared as before.
+- **Tests.** `TranscriptFlagsTests` (50): disagreement across different passage boundaries (a word read differently,
+  words added, words left out, runs saved without words, a speaker-only run, a shared word alone in its passage between
+  two differences not flagged), punctuation, case, and spacing not flagged, different speech not compared, an earlier run
+  that covered only part of the audio still flagging where it differs, engines' styles ("OK", numbers and ordinals,
+  "Dr.", fillers) not disagreements for English and left alone for Portuguese, German, and no language, a stronger
+  latest run flagged only where unconfident (and as before for one model, an unmeasured recognizer, or no confidence),
+  low-confidence words with their neighbours, a recognizer without a floor flagging nothing, one flag where both signals
+  mark a word, a correction clearing only the flags on the words it changed (two flags in one passage, Use on one, words
+  added before them, words the person typed never marked), Keep, Use (a correction in Version History that carries over,
+  changing only the flagged words) and its text well formed (a word taken out between commas, dashes, brackets, quotes,
+  full stops, at the start, at the end, a neighbour word the earlier reading shares), answers merging as a union (two
+  devices, no ancestor, both answering one flag, Undo with another device's answer synced in between, an older copy with
+  fewer answers, an answer given again after it was taken back or taken back after it was given again, the same result in
+  any order and grouping), coverage word by word (regrouping, a speaker refresh, one word unsure now, a timing shift of a
+  second and not of four, a repeat of a word 0.45 s later still showing, another earlier reading a new question), flags
+  and answers in a shape this version can't read kept and written back, devices on different algorithm versions not
+  fighting over the flags, any time making a flag ID, flags worked out off the main actor and applied as prepared, and
+  old files without the fields, newer fields and an unknown reason round-tripping, and an hour of words aligned in its
+  band. `UnsureWordsScreensTests` (4): the dotted underline (its pattern and ink) on the words alone, the menu's,
+  VoiceOver's, and the rotor's words, Keep and Use undone and done again, and Undo taking back only its own answer whatever
+  arrived between. `TranscriptReadingTests` checks the marks are worked out again only when their inputs change.
+  `UnsureWordsProcessingTests` (1): the Mac's queue with the fake engine transcribes a recording, transcribes it again
+  reading "Friday" for "Thursday" and an unsure name, flags both with the earlier readings, writes the summary as before,
+  and keeps the answers through a third transcription. `RecordingRemovalTests` checks a moved recording takes its answers
+  along. The whole package after the second review's fixes: 2,739 tests, 5 skipped (the opt-in hardware and budget tests), 0
+  failures (the file-protection suites that have failed on this Mac before passed too), and the iPhone app builds for the
+  simulator (`scripts/build-ios.sh`).
+- **Reviews.** An independent read of the diff found two ways a mark could land on the wrong words (a shared word alone
+  in its passage flagged as its own alternative; agreement counted with punctuation-only words, which fusion attaches to
+  the word before), stored flags that depended on answers not yet synced (so two devices fusing the same transcripts could
+  conflict), a removal that tidied the whole passage, a neighbouring passage's word marked by coincidence, an answer given
+  again lost to an Undo in a merge, and non-finite word times; all fixed, with tests. A second read found a correction
+  clearing every other flag in its passage, Undo restoring the whole answers field (so another device's answer could be
+  lost in the next merge, as could an older Daybook's whole list), coverage by the exact text of the whole flag (too weak
+  for a regrouped phrase or a re-read word, too broad for a repeated word), Use and Remove writing malformed text,
+  disagreements that were only how two engines write or a weaker earlier run's error, a partial earlier run suppressing
+  every disagreement, stored flags and answers a newer Daybook wrote being dropped, flag IDs trapping on absurd times, the
+  marks being worked out again at every change to a conversation, and two tests that asserted too little; all fixed, with
+  tests.
+- **Looked at.** A passage with two marks rendered offscreen (`ImageRenderer`) in light and dark: a fine dotted line
+  under "Friday" (not its comma) and "Siobhan", in the meta ink, the words otherwise as before. The apps weren't launched
+  and no screenshots were taken.
+- **Needs real models or hardware.**
+  - Parakeet Ultra, the model Daybook transcribes with, was not measured: its fine-tune may be calibrated differently
+    from the v3 base model. Run the same set through Ultra (and real meetings, where errors are more varied than ten
+    hard names said by six voices) before trusting 0.5 for it.
+  - Whisper's word probabilities weren't measured, so Whisper runs have no floor and are flagged only where two
+    transcripts disagree.
+  - The menu (a right-click on the Mac, touch and hold on the iPhone), VoiceOver's actions and Unsure Words rotor, and
+    the mark under Increase Contrast and Dynamic Type, on a Mac and an iPhone.
+  - How many marks a real hour gets, in particular after an upgrade from a weaker recognizer to a stronger one (the
+    normalisation and the confidence bound are meant to cut the hundreds an hour; the count is unmeasured), and whether
+    that reads as quiet.
+
 ## Apple Watch recording (2026-11-11)
 
 Daybook for Apple Watch, a recorder the iPhone manages (docs/watch.md; docs/devices.md, "Apple Watch"), built on
@@ -38,6 +311,27 @@ protocol and rules on the Mac, the iPhone side against a simulated watch, and th
 
 ## After v0.8.0
 
+- **The Mac's microphone records again (2026-11-12).** On v0.9.0 the owner's Mac was "only recording for one
+  second": since v0.8.0 every Mac recording ended after about two seconds. The design pass's microphone choice set
+  the chosen input on the engine's input unit before starting, and on macOS 27.0 AVAudioEngine then reconfigures
+  once after it starts: the tap, created at the node's stale output format (44.1 kHz for a 48 kHz device), was never
+  created ("Failed to create tap, config change pending"), so no audio arrived, and the engine posted a configuration
+  change while it kept running, which `MicrophoneSource` followed with a restart, which set the device and posted
+  again, ten times in two seconds, until the restart rate limit ended the recording ("The microphone kept
+  changing"). Found in the Mac's own log (`log show --predicate 'process == "Daybook"'`) and reproduced outside the
+  app with a standalone engine: the device set, 0 buffers in 3 s and one change; not set, 2.9 s and none. Now the
+  tap takes the input node's input format; the engine forwards a configuration change only once it has stopped for
+  it (what a device or format that really changed does); and the system's default input is recorded as the engine's
+  own input with no device set, so the common case never reconfigures, while an input that isn't the default (the
+  built-in microphone beside idle AirPods, a chosen one) is still set and the source rides out the one
+  reconfiguration. docs/capture.md "Choosing the microphone" says so. Checked: `MicrophoneRestartTests` (the default
+  input is never set, another is; the restart, fallback, and choice tests updated); `MicrophoneHardwareTests`
+  (owner-run with `DAYBOOK_HARDWARE_TESTS=1`; opens the microphone, keeps no audio): two seconds through the engine
+  on the default input with no change posted, 2.5 s through the source with the built-in microphone set explicitly,
+  five seconds through `RecordingController` with no warning, note, or stop, three runs each, all passing, where the
+  unfixed engine delivered 0.0 s and one change; the capture suites; the whole Mac package, 2,605 tests across ten
+  bundles, 0 failures. One Mac (built-in microphone, macOS 27.0); a chosen USB or Bluetooth input and AirPods
+  connecting mid-recording still need the owner's hardware check.
 - **The standing status sheet is back on the iPhone (the owner's call, 2026-11-11).** On the v0.8.0 TestFlight build
   the library's foot "is no longer a sheet, it's once again a weird tight background. It doesn't slide up or down, it
   just stays minimized. The search button popped off it when switching between landscape and portrait." W2-K's bottom
@@ -4174,3 +4468,82 @@ Replaces the modal "draw, recognize, review, add" sheet. Typing and ink share on
 - Inspected the cover and inner displays: typed and handwritten paragraphs alternating with their times in the lane, ink inverted in Dark Mode, a block written wider than the column scaled whole, the writing tools, and the recorder sheet at rest in each posture.
 
 **Still to check on a real iPhone Duo with Apple Pencil:** the simulator has no Pencil, so every stroke above was synthetic or a finger's. Check that Pencil writes past the last paragraph with no mode on, that a finger on that empty page still places the caret, Scribble over typed words beside a canvas, double-tap and squeeze for the eraser, a block's long-press menu, undo across strokes and typing, and the recognizer's accuracy on real handwriting. On the Mac, handwriting appears as its recognized words, not as ink.
+
+## The conversation's title and date in the summary prompt (2026-11-18)
+
+The summary model is told the conversation's title (only one the person or the calendar gave) and when it began, so it can resolve "next Tuesday" and has a hint of the subject (docs/cloud.md, "What is sent"). The cloud summary is sent them too.
+
+- `SummaryNotesTests`, `SynthesisPayloadTests`, `CloudSummarizerTests`: both appear in the short path, the long path, and the cloud prompt; placeholders and a title a summary wrote are not sent; a conversation with no recording whose start is known sends no date; the date reads the same in any locale; a source without them encodes as before.
+- **Not measured:** no model was run. Whether models resolve relative dates better with the date, and whether a title anchors a summary on its subject, is unknown. Check on the weekly and the three-hour offsite fixtures with the local models and one cloud model: a "next Tuesday" is written with the right date, an unclear one stays relative, and nothing is said to have been decided because the title implies it.
+
+## Notebook pages, stored format (2026-11-18)
+
+Pages (`Meeting.pages`) are stored and merged in DaybookCore; nothing shows them yet.
+
+- `NotebookPageTests`, `PassageGroupingTests`, `RecordingClockMapTests`, `NotebookMergeTests` (package): a conversation without pages encoding byte for byte as before, unknown keys and values kept on every record, corrections standing only while their strokes do, readings made by a newer grouping standing here, and merges that are commutative and stable when merged again, with later strokes winning, the other set aside, and a stale snapshot unable to drop a page or take its strokes back.
+- **Limits across versions:** a Mac running a version from before pages keeps `pages` as an unknown key, and it can move a conversation whose only content is pages to the Trash, because it can't see them as content. An older version that publishes a merge of two devices' changes keeps one `pages` array (and `pageTurns`) whole; the sync engine puts back every page the snapshot lacks and replaces an array that is one parent's and not the merge of the parents by the merge (`repairingNotebook`), so its merge loses nothing in the notebook.
+- `PhotoOrigin`, `ProcessingSettings`, and `PhotoAnalysis` (nested in pages) now keep keys a newer Daybook adds, as the page records do; their encoding for existing data is unchanged.
+
+### Page files, sync, and filing the recording clock (storage and sync)
+
+- `MeetingStorePageTests`: a drawing stored at the path its digest gives (owner-only), the same bytes reusing the file and a torn file replaced, pruning that keeps what a page, a drawing set aside, a background, the sync history, or the last day names, validation refusing a path outside `Originals/Pages` and a size that isn't the background's aspect, and page paths accepted only when derived from the page and the whole digest.
+- `LibrarySyncPageTests` (temporary libraries, one shared sync folder): a drawing, a drawing set aside, and a background travelling as blobs byte for byte; an eager Mac waiting for a drawing; an on-demand iPhone applying a page's words before its strokes and fetching them when shown, and publishing a correction with the strokes not on the phone; the fetch refusing bytes that aren't the digest and installing nothing; an event that lists no page assets (the frozen version 1 engine's edit) applying with its drawings hydrated from the pages; the iPhone holding a publication that only changes page drawings and releasing it when due, when the person leaves, and not holding one that doesn't; and the frozen version 1 engine editing a conversation with pages, then an event built the way an older Daybook merges two newer devices' pages (it keeps one array whole) read by a newer Mac with every page and its strokes (the test fails with `restoringPages` taken out). `LibrarySyncSealingTests` checks the drawings, a drawing set aside, and the background survive the retirement of the plaintext, and reach a device that joins after.
+- `MergeConversationsTests`: Merge… copies a folded conversation's page files into the survivor's folder at the same paths, carries its pages after the survivor's, and leaves a page whose files aren't there; a drawing that can't be fetched stops the merge before anything changes.
+- `NotebookDetailsTests` and the notebook tests above: the recording clock samples on the track (written once at filing, a copy with samples beating one without, never a conflict with another change to the track, carried by Merge… with the track); a bounded log of erased strokes (union by stroke, the oldest dropped); a page background (the A5 width and the background's aspect, merged three way, files named by the page); and a bounded log of page turns. Each is optional and encodes as before when absent, and keeps unknown keys.
+- **Sizes** (`SyncEncoding.data`): 200 erased strokes on a page 29 KB, 200 page turns 43 KB, a filed clock at its 400 cap 21 KB, a continuous hour about 1 KB; every log at its cap together add 93 KB to a snapshot, under the 128 KB the test allows (`NotebookDetailsTests`).
+- **Timing in a pause:** a stroke made during a pause is timed at the moment the pause began, which is inside the silent span of the audio, so playing from it will need to skip to the end of the silence.
+- A clock at the live cap (4,000 samples) measured 273 KB of JSON, which is why the filed clock is thinned to at most 400.
+- **Not measured:** whether a full-size notebook's blobs strain iCloud on a real account; and the iPhone's behaviour with strokes not yet downloaded on a slow network (the words show with "Downloading…" in the next change, which has the interface).
+
+### Notebook pages while the iPhone records (journal, recorder, filing)
+
+Nothing draws on a page yet; the recorder keeps and files what the notebook will give it.
+
+- `ShippedCaptureJournalTests`: a v0.2.2 capture journal loads with no pages and no clock and is written back without either key; a journal with a page made during the recording and one loaded from the conversation (with the copy it was loaded as) round-trips.
+- `PhoneRecorderTests`: a commit writes the page's strokes to the staging file (owner-only) and the journal, returning the digest a reading is checked against, with a reading of older strokes dropped, a correction and a deletion kept, and the clock sampled; drafts are debounced into one write of the last strokes to the file only, never the journal, a commit supersedes a draft not yet written, and Stop writes what was pending; pages loaded from a conversation come with their base and, until strokes are written, the conversation's own drawing.
+- `CaptureRecoveryTests`: a recording recovered after a crash files its pages (committed strokes, a draft the journal never heard of, and not a page nothing was written on), with passages on the phone's track and the clock samples kept with the track; a page the recording loaded and edited merges with what was changed elsewhere meanwhile; passages and erasures are placed on the track when the recording has audio, and on the timeline (moved by where the iPhone started on a Mac's, none without a first sample) when it was filed as notes.
+- **What the journal rewrites** (every five seconds while recording): the clock as it's filed (`RecordingClockMap.filed`: ends, changes of state, an anchor every five minutes; at most 400 samples, so a 12-minute writing session of 120 samples is under a dozen) and each page without the copy it was loaded as, which is a file of its own (`page-<id>.base.json`), written once when the page is loaded and read back at filing and recovery (`PhoneRecorderTests`, `CaptureRecoveryTests`). Pauses and resumes are sampled as they happen.
+- **A page whose drawing isn't on the iPhone** is `notLoaded`, not blank: drafts and commits to it are refused (`PageWriteError.drawingNotLoaded`) until the drawing has been read, so filing never replaces strokes nobody saw as a plain edit.
+- **Filing keeps an earlier passage's place**: a passage the conversation already had (same ID and start) keeps its track and seconds even when it gained strokes and words in this recording.
+- **Not measured:** the staging page files' behaviour on a locked device is covered only as the existing staging files are (`StagingProtectionTests`, the class-B protection type); a kill of the real app with strokes in a draft, the 2 s draft against a real Pencil's stroke rate, and a recording with many pages (the journal is rewritten every five seconds with every page's record, readings included) wait for the notebook's interface.
+
+## Notebook mode while recording (2026-11-19)
+
+The interface the stored pages were waiting for (docs/notebook.md): the open Duo's recorder gains Notebook, which opens two facing pages split at the crease with the recorder as a pill, or one page on the cover.
+
+- **Seen in the iPhone Duo simulator (iOS 27.1)**, light and dark, with `--start-recording --synthetic-audio --notebook --demo-pages` (`SyntheticInk` strokes; the simulator has no Apple Pencil): the recorder with Notebook beside where the camera goes; the display as the notebook, two pages at 0.875 against the crease (16 pt clear, 8 pt from the edges, centred, the status area at the far right untouched), the tools floating top-left of the left page and the pill, on one row without its meter, top-right of the right page; both collapsed to chips with the tops of both pages clear (`--notebook-collapsed`); the pill with a real pause (Resume beside Stop, the clock held); a blank right page; the words list with each passage's recording time and a corrected one; the notes card over the right page; and the cover after folding shut with the notebook open (one page at 0.87, the pill top, the tools at the foot, expanded and collapsed). Pages stay light paper in Dark Mode, and the glass over them is drawn light too (dark glass over paper read grey and washed). Earlier passes found a reserved band that floated the pages as cards, a pill that covered the page's top edge and ran off the cover's right edge, and glass that went grey over paper in Dark Mode.
+- **Tests.** Package: `NotebookLayoutTests` (the open Duo at 0.875 with the numbers measured, the cover at 0.871, a wide display, too narrow, shared scale, no strip where the page fills the height, the pill dropping its meter and then wrapping its page controls, controls stepping aside for a pen), `NotebookReaderTests` (stroke summaries, keys through `dataRepresentation`, two timed clusters become two passages), `NotebookModeEditingTests` (erasure log, page turn log). iPhone: `NotebookSessionTests` (a turn settles the pages it leaves, idle settle, unchanged bytes commit nothing, a reading of replaced strokes dropped and the new ones read, canvases kept across layout changes, erasures captured across two commits, a page whose strokes aren't here never commits, a page made with its first strokes, the writing point following touches) and `NotebookRecordingTests` (Stop settles pages before filing, turns and erasures journaled and filed, the Notebook button only where two pages fit, folding keeps the notebook open as one page).
+- **Hardware only, not checked:** Apple Pencil latency and palm rejection on the Duo (the first Pencil touch switches fingers off); finger writing before that; whether a live stroke is stamped with the wall clock at touch-down (passage times depend on it, and on the begin callback's sample); a stroke in progress across a fold; `PKStrokeRecognizer`'s accuracy and line breaks on handwriting, and that it works with the network off; CPU and battery with live captions beside reading; the crease clearance on the real panel.
+- **Not seen:** a saved conversation's notebook, tapping a passage to play, strokes written while playback runs, and fetching a page from iCloud (a later change).
+## Ask across conversations: the Mac interface (2026-11-18)
+
+The search field's Return and ⌘Return, the answer page, its waiting and cancelling, the queue rule, and what the Personal lock and a Focus do to an answer (docs/interface.md, "The answer page").
+
+- **Checked in tests, no model:** `AskQuestionTests` (when words read as a question); `AskControllerTests` drives the page's states with a scripted answerer: streaming and finishing, nothing found, a failed answer and asking again, no summary model, a repeated question shown rather than asked again, waiting behind the running job with its name, a new question cancelling the one running, closing and cancelling while waiting, and every hold on the queue released. Privacy: a locked Personal conversation never reaches the model and All includes Personal only when unlocked; locking, and a Focus that hides Personal, clear an answer that cites Personal (a conversation moved to Personal after the answer included), cancel one being written and drop Personal from the index, and keep an answer that cites none; both through the app's own `PersonalLock`. Queue: no job starts while a question is open and it runs after; a job that becomes ready while a question is answered waits and is never marked failed; a failed or cancelled question never leaves the queue stuck.
+- **Checked in pictures:** the answered, partial, not found, waiting, and failed pages, each in light and dark, from a debug build on this Mac with `--ask-demo` over the demo library (a scripted answerer). Not checked: other window widths, Reduce Motion, VoiceOver, and the keyboard by hand.
+- **Not measured: any real model.** No real summary model has answered a question through this interface. How good its answers are, how often it declines, how many sentences the quote check drops, and how long a question takes on any Mac are unknown, and so is whether a person finds the page clear. The owner decided to ship without that measurement.
+- **Known limits:** photo reading, giving voices, and listening to earlier recordings are not held by a question; if one has the model when a question starts, the question waits for it behind the engine's own retry. Back (⌘[) to the answer is not built: the first row of the results returns to it.
+
+## A saved conversation's notebook (2026-11-19)
+
+More › Notebook opens a conversation's pages full screen (docs/notebook.md), strokes written while it plays are timed by the player, a passage plays from when it was written, and a page whose strokes aren't on the iPhone is fetched or refused.
+
+- **Seen in the iPhone Duo simulator**, light and dark, with `--library-demo --notebook-conversation --demo-pages --notebook-page 1` (the newest conversation, three synthetic pages written, read, and timed on its timeline): two pages at the crease with Done and the page controls in the pill, the words list with each passage's time as a play button, and the cover as one page.
+- **Tests.** Package: `NotebookPlaybackTests` (a passage written while running starts at its time; one timed inside a pause starts at the end of the silence, 40 s for a pause from 10 s to 40 s; a pause that never ended has no end; a passage on no recording starts on the timeline). iPhone: `NotebookConversationTests` (the player's position times strokes while playing and nothing does while paused or long after a sample; pages commit to the library's files, open from them, and the draft goes with the commit; a page whose strokes aren't here is refused and the conversation's strokes are untouched) and `NotebookSessionTests` (a long press plays the passage under it and nothing on bare paper).
+- **Hardware only, not checked:** holding a finger on handwriting once Apple Pencil is in use (the simulator has no Pencil, so the gesture's enabling after the first Pencil touch is not exercised); whether a recording's pauses really are silence of their length in the audio (the end-of-pause start assumes it); fetching a page over a slow network and from an evicted cache; playing from a passage on a multipoint conversation's placed recording.
+- **Review fixes (2026-11-19).** The commit joins strokes that arrived by sync while the page was open (`testBehaviorCommitKeepsStrokesThatArrivedBySyncWhileOpen`, erased-here and blank-when-opened cases, refusal when the stored strokes aren't here, a clean canvas following its page, a written one kept, a page that couldn't be fetched retried); the draft goes only once the conversation is on disk (`testBehaviorDraftStaysUntilTheConversationIsOnDisk`); recovery merges, keeps a draft it can't commit, drops one of a deleted page and restores a missing page; the player clock is tested with samples taken after the stroke's creation date, as on a device (opening, pause, seek, track change, speed). Not checked on a device: the real begin-callback lag and a kill inside the save window.
+
+## Caption source failure shown (2026-11-19)
+
+While one caption source listens and the other has failed or is unavailable, the strip on the conversation page and in Floating Notes adds "You: <reason>" or "Call: <reason>" after the lines (`LiveCaptionStatus.problem`); the reason is logged once per source.
+
+- **Checked in tests, fakes only:** `LiveCaptionsTests` (a failed call captioner beside a listening You names "Call: Captions stopped: test" while the recording and You's lines go on; both listening shows nothing; both ended shows nothing, the state line says it).
+- **Not checked:** the strip in a screenshot, and which real failure the owner hit (the reason is now visible and logged). The iPhone's strip follows its microphone alone, so it has no masking; the Floating Notes compact strip is one clipped line and shows no notice.
+
+## Summaries, search and exports use notebook pages (2026-11-19)
+
+A page's writing is a note (H1, H2…), its sketches are picture evidence (S1, S2…), long conversations place both and photos by time, and a conversation with notes or pages and no speech is summarized (docs/notebook.md, "In summaries").
+
+- **Checked in tests, no model:** `NotebookReadersTests` (H labels in time order with the untimed last, corrected words used, deleted and hidden pages and empty passages left out, no duplicate of a typed note, the no-speech source, summary inputs changing on a correction and not on a re-read, search by a page word and its correction, Markdown's Notebook part, the full-data export's drawing files and clock samples); `NotebookPlacementTests` (S labels and order, informative current readings only, a sketch read once and again only when its strokes' digest changes, hiding a page, placement, `sketchIDs` round trip and older data); `NotebookSummaryTests` (the final prompt's handwriting and sketch lines, each part of a long conversation getting the handwriting, sketches and photos whose time falls in it, untimed ones only in the final write-up, a no-speech conversation through the engine, `describeSketches`, handwriting too long for the final pass trimmed and warned like notes); `CloudSummarizerTests` (the cloud request has the handwriting words and no sketch description, text, words, label or image data; a cloud summary places sketches by time; notes alone are summarized). The existing summary, payload, completeness and repair suites pass unchanged.
+- **Not measured: no real model has summarized a notebook.** Whether the H and S wording changes what Gemma or Qwen write, how well a model ties handwriting to what was said then, how often it places a sketch well, and how Vision describes real sketches are unknown. Nothing here used real handwriting, PencilKit's reader, or a real image reading.
+- **Review fixes (2026-11-19).** Only a current reading and a known passage kind are summary input (`NotebookPage.summaryPassages`; tests decode a page with a future kind and assert its words are absent from `pageWriting()` and from the cloud request); typed-note de-duplication matches whole words; a bookmark's name alone is not content; `Meeting.hasSummarizableContent` gates every Summarize Again and template change; a late sketch reading of old strokes is dropped; the model's note payload carries the handwriting marker; full-data export encodes through one encoder. The iPhone reads pages before summarizing: compiled and run in the iOS plan only through existing tests, with no test of that step.\n- **Known limits:** no UI places a sketch (`sketchIDs`) or takes a page out of summaries yet; the Mac does not read sketches itself; a page reading arriving after a summary does not mark it out of date (no stored mark exists).\n- **Not built or not checked:** the Mac does not read sketches (its reading pass comes with the Mac's pages); an iPhone reads them before it summarizes, which no test exercises (`SketchReading` renders with PencilKit and runs on a simulator or device only). A title that is only a custom device or recorder name is still sent: those names live in the apps' preferences and aren't reachable from `SummarySource.Context.title` without widening the engine's and the cloud summarizer's APIs. Version History records a correction as before; page drawings set aside by a merge and "Use This Version" are not built.

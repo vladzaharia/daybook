@@ -121,6 +121,13 @@ final class PhoneAppModel: RecordingCommandHandling {
     @ObservationIgnored private var speakerPass: (id: UUID, task: Task<Void, Never>)?
     /// Recorders recording along: their live audio's captions join this iPhone's.
     @ObservationIgnored let recorderCaptions = LiveCaptureCaptions()
+    /// A conversation whose notebook a debug launch asks to open (`--notebook-conversation`); the root takes it.
+    var pendingNotebook: UUID?
+    /// Settles the open notebook's pages (commits their strokes): Stop waits for it, from wherever it came, so what was just
+    /// written is in the recording. Set while the notebook is open.
+    @ObservationIgnored var settleNotebook: (() async -> Void)?
+    /// Drawings of the conversation's pages fetched to this iPhone, by SHA-256, for a recording that loaded them (`NotebookModel.recording`).
+    @ObservationIgnored var fetchedPageDrawings: [String: URL] = [:]
     /// Heat, power, and battery changes the processor backs off for.
     @ObservationIgnored private var processingObservers: [NSObjectProtocol] = []
     /// The iPhone locking and unlocking, which the Live Activity's caption follows.
@@ -210,7 +217,8 @@ final class PhoneAppModel: RecordingCommandHandling {
         let sync = self.sync, link = self.link
         // A network that comes back or changes sends what the courier holds now, rather than at its next retry.
         environment.network.onChange { [weak sync] in Task { @MainActor in sync?.networkChanged() } }
-        placement = PhoneSummaryPlacement(library: library.controller, link: link, presence: { sync.devices })
+        placement = PhoneSummaryPlacement(library: library.controller, link: link, presence: { sync.devices },
+                                          appIsActive: { UIApplication.shared.applicationState == .active })
         upgrades = PhoneUpgrades(library: library.controller, placement: placement, link: link, presence: { sync.devices })
         captions = LiveCaptionsController(store: LiveCaptionStore(libraryRoot: library.rootURL),
                                           makeCaptioner: Self.captioner(settings: settings, options: options, models: models,
@@ -548,6 +556,7 @@ final class PhoneAppModel: RecordingCommandHandling {
                 // A key added on another device meanwhile arrives through iCloud Keychain.
                 await placement.reloadCloud()
             }
+            placement.cameToForeground()
         case .background:
             // A countdown can't run in the background: each one's default happens now.
             placement.leftForeground()
@@ -560,6 +569,9 @@ final class PhoneAppModel: RecordingCommandHandling {
             protector.keep()
             remindMeetings()
             Task { await link.setActivity(recorder.isActive || multipoints.recorderOnly != nil ? .backgroundRecording : .background) }
+        case .inactive:
+            // A countdown that ends in the cloud runs only while Daybook is active on the screen.
+            placement.becameInactive()
         default:
             break
         }
@@ -643,6 +655,9 @@ final class PhoneAppModel: RecordingCommandHandling {
             else { Task { await placement.summaryIsDue(id, templateID: templateID) } }
         }
         placement.runHere = { [weak processor] id, request in processor?.summarizeHere(id, request: request) }
+        processor.services.summaryFailed = { [weak placement] id, request, reason, kind in
+            placement?.localSummaryFailed(id, request: request, reason: reason, kind: kind) ?? false
+        }
         placement.localSummarizer = processingSummarizer
         // An upgrade of this iPhone's own recordings is its processor's work; what it can do is what its models can.
         upgrades.capabilities = { [weak self] in self?.processingCapabilities ?? .none }
@@ -721,6 +736,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         do {
             try await recorder.start(in: directory, id: id, recordingID: recordingID, title: title)
             recorder.setMultipoint(multipoints.session?.journaled)
+            loadNotebookPages(of: id)
         } catch {
             multipoints.session = nil
             recorder.audioTap = nil
@@ -775,6 +791,8 @@ final class PhoneAppModel: RecordingCommandHandling {
             return
         }
         guard recorder.isActive else { throw RecordingCommandError.notRecording }
+        // The notebook's open pages are committed first (at most two seconds), so what was just written is in the recording.
+        await settleNotebook?()
         // A stop from a Mac (it asked, or this iPhone follows it) doesn't go back to that Mac.
         let cascadesUp = !multipoints.stopIsFromMac
         multipoints.stopIsFromMac = false

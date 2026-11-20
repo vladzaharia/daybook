@@ -193,6 +193,19 @@ final class FakeInference: MeetingInference, @unchecked Sendable {
         let segments = lines.map { RecognizedSegment(start: $0.0, end: $0.0 + 4, text: " " + $0.1, confidence: 0.9, words: []) }
         lock.withLock { scripts[digest] = segments }
     }
+    /// The recording is heard as these words, timed and with confidences, as a recognizer that keeps its words reports
+    /// them: one passage per line, each word 0.4 s after the one before, 0.97 sure unless `confidence` says otherwise.
+    func script(_ url: URL, words lines: [(start: Double, text: String, confidence: [String: Double])]) throws {
+        let digest = try AudioDigest.sha256(fileURL: url)
+        let segments = lines.map { line -> RecognizedSegment in
+            let words = line.text.split(separator: " ").enumerated().map { index, word in
+                RecognizedWord(text: " " + word, start: line.start + Double(index) * 0.4, end: line.start + Double(index) * 0.4 + 0.35,
+                               confidence: line.confidence[String(word)] ?? 0.97)
+            }
+            return RecognizedSegment(start: line.start, end: words.last?.end ?? line.start, text: " " + line.text, confidence: 0.9, words: words)
+        }
+        lock.withLock { scripts[digest] = segments }
+    }
     /// Transcribing the recording throws `error`, as an engine or a fetch would.
     func fail(_ url: URL, with error: Error) throws {
         let digest = try AudioDigest.sha256(fileURL: url)
@@ -241,8 +254,13 @@ final class FakeInference: MeetingInference, @unchecked Sendable {
         return SpeakerAnalysis(turns: turns, embeddings: ["A": voice], embeddingModelID: Self.voiceSpace)
     }
 
+    private var summaryFailure: Error?
+    /// Every summary throws `error` (nil: they work again), as a model that runs out of room would.
+    func failSummaries(with error: Error?) { lock.withLock { summaryFailure = error } }
+
     func summarize(transcript: String, notes: String, template: MeetingKind, glossary: [String], model: ModelReference,
                    templateInstructions: String?, highlightEvidence: String?, progress: @escaping IntelligenceProgressHandler) async throws -> GeneratedMeetingNotes {
+        if let failure = lock.withLock({ summaryFailure }) { throw failure }
         let count = lock.withLock { () -> Int in _summarized.append(transcript); return _summarized.count }
         return GeneratedMeetingNotes(summary: MeetingSummary(kind: .general, title: "Call", overview: "Summary \(count)"),
                                      suggestedTerms: [], rawResponse: "", warnings: [])

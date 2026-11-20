@@ -76,6 +76,17 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
     public var backgroundAudio: BackgroundAudioAnalysis?
     /// Set once the recording is taken out of its conversation (RecordingRemoval.swift); nil while it's in it.
     public var removal: RecordingRemoval?
+    /// The conversation this recording came from when it was merged into this one (`ConversationMerge`); nil for one
+    /// recorded, imported, or moved here.
+    public var mergedFrom: UUID?
+    /// The stretch of the wall clock a merged copy was recorded in, when that isn't the conversation's own
+    /// (`ConversationMerge.stretches`): the ID of the conversation a merge placed after the rest, for its recordings and
+    /// those recorded alongside them. Nil for the conversation's own and what was recorded alongside it. Set by the merge
+    /// (`ConversationMerge.fold`), never inferred from a recording's timing, so Adjust Timing doesn't move it.
+    public var stretch: UUID?
+    /// The recorder's clock as a notebook sampled it while this recording ran (`RecordingClockMap`), written once when the
+    /// recording is filed: it maps the wall clock to seconds into this recording across pauses. Nil when nothing was written.
+    public var clockSamples: [RecordingClockSample]?
     /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
     public var unknownFields = UnknownFields()
     public init(id: UUID = UUID(), source: AudioSource = .imported, relativePath: String,
@@ -101,7 +112,8 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case id, source, relativePath, fileName, createdAt, duration, offset, sha256, deviceKind, deviceSerial,
-            deviceRecordingID, derivedFrom, processing, startedAt, alignment, capture, backgroundAudio, removal
+            deviceRecordingID, derivedFrom, processing, startedAt, alignment, capture, backgroundAudio, removal, mergedFrom, stretch,
+            clockSamples
     }
     private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
 
@@ -126,6 +138,9 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
         // A newer analysis this version can't read is measured again, never a reason to reject the meeting.
         backgroundAudio = (try? values.decodeIfPresent(BackgroundAudioAnalysis.self, forKey: .backgroundAudio)) ?? nil
         removal = try values.decodeIfPresent(RecordingRemoval.self, forKey: .removal)
+        mergedFrom = try values.decodeIfPresent(UUID.self, forKey: .mergedFrom)
+        stretch = try values.decodeIfPresent(UUID.self, forKey: .stretch)
+        clockSamples = try values.decodeIfPresent([RecordingClockSample].self, forKey: .clockSamples)
         unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
     }
 
@@ -149,6 +164,9 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
         try values.encodeIfPresent(capture, forKey: .capture)
         try values.encodeIfPresent(backgroundAudio, forKey: .backgroundAudio)
         try values.encodeIfPresent(removal, forKey: .removal)
+        try values.encodeIfPresent(mergedFrom, forKey: .mergedFrom)
+        try values.encodeIfPresent(stretch, forKey: .stretch)
+        try values.encodeIfPresent(clockSamples, forKey: .clockSamples)
         try unknownFields.encode(to: encoder)
     }
 }
@@ -207,11 +225,14 @@ public struct ProcessingSettings: Codable, Equatable, Sendable {
     /// (docs/models.md). Nil for results made before the model system recorded it; those name their
     /// model through `modelID`, which the catalog's migration table still resolves.
     public var model: ModelProvenance?
+    /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
+    public var unknownFields = UnknownFields()
     public init(modelID: String, parameters: [String: String] = [:], createdAt: Date = Date(), model: ModelProvenance? = nil) {
         self.modelID = modelID; self.parameters = parameters; self.createdAt = createdAt; self.model = model
     }
 
-    private enum CodingKeys: String, CodingKey { case modelID, parameters, createdAt, model }
+    private enum CodingKeys: String, CodingKey, CaseIterable { case modelID, parameters, createdAt, model }
+    private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
 
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -220,6 +241,16 @@ public struct ProcessingSettings: Codable, Equatable, Sendable {
         createdAt = try values.decode(Date.self, forKey: .createdAt)
         // Provenance a newer Daybook wrote differently is dropped, never a reason to reject the meeting.
         model = (try? values.decodeIfPresent(ModelProvenance.self, forKey: .model)) ?? nil
+        unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(modelID, forKey: .modelID)
+        try values.encode(parameters, forKey: .parameters)
+        try values.encode(createdAt, forKey: .createdAt)
+        try values.encodeIfPresent(model, forKey: .model)
+        try unknownFields.encode(to: encoder)
     }
 }
 
@@ -314,15 +345,19 @@ public struct SummarySection: Codable, Equatable, Identifiable, Sendable {
     /// Photos this section shows (`MeetingPhoto.id`), in order. Nil for none, and in summaries
     /// written before photos.
     public var photoIDs: [UUID]?
+    /// Sketch passages from notebook pages this section drew on (`NotebookPassage.id`), in order. Nil for none, and in
+    /// summaries written before notebook pages.
+    public var sketchIDs: [UUID]?
     /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
     public var unknownFields = UnknownFields()
-    public init(id: UUID = UUID(), heading: String, body: String, photoIDs: [UUID]? = nil) {
+    public init(id: UUID = UUID(), heading: String, body: String, photoIDs: [UUID]? = nil, sketchIDs: [UUID]? = nil) {
         self.id = id; self.heading = heading; self.body = body
         self.photoIDs = photoIDs?.isEmpty == true ? nil : photoIDs
+        self.sketchIDs = sketchIDs?.isEmpty == true ? nil : sketchIDs
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case id, heading, body, photoIDs
+        case id, heading, body, photoIDs, sketchIDs
     }
     private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
 
@@ -332,6 +367,7 @@ public struct SummarySection: Codable, Equatable, Identifiable, Sendable {
         heading = try values.decode(String.self, forKey: .heading)
         body = try values.decode(String.self, forKey: .body)
         photoIDs = try values.decodeIfPresent([UUID].self, forKey: .photoIDs)
+        sketchIDs = try values.decodeIfPresent([UUID].self, forKey: .sketchIDs)
         unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
     }
 
@@ -341,6 +377,7 @@ public struct SummarySection: Codable, Equatable, Identifiable, Sendable {
         try values.encode(heading, forKey: .heading)
         try values.encode(body, forKey: .body)
         try values.encodeIfPresent(photoIDs, forKey: .photoIDs)
+        try values.encodeIfPresent(sketchIDs, forKey: .sketchIDs)
         try unknownFields.encode(to: encoder)
     }
 }
@@ -479,6 +516,10 @@ public enum RevisionField: Hashable, Sendable {
     case photo(UUID)
     /// A photo's caption.
     case photoCaption(UUID)
+    /// A notebook page added, deleted, or put back (`NotebookPage`).
+    case page(UUID)
+    /// The person's own words for a handwritten passage (`PassageCorrection`), by the passage's ID.
+    case passage(UUID)
     /// A bookmark deleted or put back (`Meeting.removeBookmark`); the entry keeps the whole bookmark.
     case bookmark(UUID)
     /// A correction carried over from an earlier transcript, applied or dismissed, by its issue's ID.
@@ -506,6 +547,8 @@ public enum RevisionField: Hashable, Sendable {
         case "segment": self = UUID(uuidString: target).map(Self.segment) ?? .unknown(rawValue)
         case "photo": self = UUID(uuidString: target).map(Self.photo) ?? .unknown(rawValue)
         case "photo-caption": self = UUID(uuidString: target).map(Self.photoCaption) ?? .unknown(rawValue)
+        case "page": self = UUID(uuidString: target).map(Self.page) ?? .unknown(rawValue)
+        case "passage": self = UUID(uuidString: target).map(Self.passage) ?? .unknown(rawValue)
         case "bookmark": self = UUID(uuidString: target).map(Self.bookmark) ?? .unknown(rawValue)
         case "correction-transfer": self = UUID(uuidString: target).map(Self.correctionTransfer) ?? .unknown(rawValue)
         case "source": self = .source(target)
@@ -522,6 +565,8 @@ public enum RevisionField: Hashable, Sendable {
         case .segment(let id): return "segment:\(id.uuidString)"
         case .photo(let id): return "photo:\(id.uuidString)"
         case .photoCaption(let id): return "photo-caption:\(id.uuidString)"
+        case .page(let id): return "page:\(id.uuidString)"
+        case .passage(let id): return "passage:\(id.uuidString)"
         case .bookmark(let id): return "bookmark:\(id.uuidString)"
         case .correctionTransfer(let id): return "correction-transfer:\(id.uuidString)"
         case .source(let target): return "source:\(target)"
@@ -533,7 +578,7 @@ public enum RevisionField: Hashable, Sendable {
     /// The person's own words or names: a correction, a rename, or notes.
     public var isPersonsEdit: Bool {
         switch self {
-        case .notes, .segment, .speaker: return true
+        case .notes, .segment, .speaker, .passage: return true
         default: return false
         }
     }
@@ -595,6 +640,10 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
     public var photos: [MeetingPhoto]?
     /// Handwriting in the notes (`NoteInk.swift`), one block per ink paragraph. Nil until the first stroke.
     public var ink: [NoteInk]?
+    /// Notebook pages (`NotebookPages.swift`), deleted ones included. Nil until the first page.
+    public var pages: [NotebookPage]?
+    /// When the notebook's open pages changed, against the recording clock (`PageTurn`). Nil until the first.
+    public var pageTurns: [PageTurn]?
     /// Passages left out of `unifiedTranscript` as background audio (a TV, radio, or music;
     /// `BackgroundAudio`), on the timeline as fusion placed them. Derived with the unified transcript;
     /// nil when there are none. The transcript runs still hold every word.
@@ -606,6 +655,15 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
     public var speakerIdentities: [SpeakerIdentity]?
     /// "Upgrade" offers the person dismissed (`UpgradeDismissal`). Nil until the first; merged as a union.
     public var upgradeDismissals: [UpgradeDismissal]?
+    /// Words the transcript may have wrong (`TranscriptFlags`), derived with the unified transcript and merged with it.
+    /// Nil when there are none, and for conversations fused before flags.
+    public var transcriptFlags: [TranscriptFlag]?
+    /// The version of the unsure-words algorithm that worked out `transcriptFlags` (`TranscriptFlags.version`), as
+    /// `FusionSummary.version` stamps the fusion. Nil for flags worked out before it, and until the first fusion.
+    public var transcriptFlagsVersion: Int?
+    /// The person's answers to flags (`TranscriptFlagDismissal`), never removed: taking one back marks it withdrawn.
+    /// Nil until the first; merged as a union, answer by answer.
+    public var transcriptFlagDismissals: [TranscriptFlagDismissal]?
     /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
     public var unknownFields = UnknownFields()
     public init(id: UUID = UUID(), title: String = "Untitled meeting", date: Date = Date(),
@@ -665,16 +723,24 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         if old != new { revisions.append(MeetingRevision(kind: .summary, oldValue: old, newValue: new)) }
         summary = value; updatedAt = Date()
     }
-    @discardableResult public mutating func applyFusion(_ result: FusionResult) -> [CorrectionTransferIssue] {
-        applyFusion(result, transferred: CorrectionTransfer.apply(to: result.segments, in: self))
+    /// `ranking` is the model catalogue's transcription quality (`TranscriptFlags.Ranking`), which the unsure words
+    /// compare the recording's runs by.
+    @discardableResult public mutating func applyFusion(_ result: FusionResult, ranking: TranscriptFlags.Ranking? = nil) -> [CorrectionTransferIssue] {
+        applyFusion(result, transferred: CorrectionTransfer.apply(to: result.segments, in: self), ranking: ranking)
     }
-    @discardableResult mutating func applyFusion(_ result: FusionResult, transferred: CorrectionTransfer.Result) -> [CorrectionTransferIssue] {
+    /// `flags` are the transcript's flags worked out beforehand for the same conversation (`preparingFusion`); nil
+    /// works them out here.
+    @discardableResult mutating func applyFusion(_ result: FusionResult, transferred: CorrectionTransfer.Result,
+                                                 flags: [TranscriptFlag]? = nil, ranking: TranscriptFlags.Ranking? = nil) -> [CorrectionTransferIssue] {
         unifiedTranscript = transferred.segments
         correctionTransferIssues = transferred.issues.isEmpty ? nil : transferred.issues
         alignmentReports = result.alignments; updatedAt = Date()
         fusionSummary = result.summary
         backgroundPassages = result.backgroundSegments.isEmpty ? nil : result.backgroundSegments
         speakers += result.addedSpeakers.filter { added in !speakers.contains { $0.id == added.id } }
+        let flags = flags ?? TranscriptFlags.flags(for: self, ranking: ranking)
+        transcriptFlags = flags.isEmpty ? nil : flags
+        transcriptFlagsVersion = TranscriptFlags.version
         return transferred.issues
     }
     /// Explicit review either applies the saved correction to a chosen passage or dismisses transfer.
@@ -725,8 +791,8 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         case schemaVersion, id, title, date, updatedAt, kind, notes, timedNotes, folderID, tags, templateID,
             placement, tracks, transcripts, unifiedTranscript, alignmentReports, summary, revisions, highlights,
             speakers, status, errorMessage, correctionTransferIssues, speakerMatches, companions, sourceSuggestions,
-            audioAlignments, fusionSummary, processingRequests, photos, ink, backgroundPassages, includesBackgroundAudio,
-            speakerIdentities, upgradeDismissals
+            audioAlignments, fusionSummary, processingRequests, photos, ink, pages, pageTurns, backgroundPassages, includesBackgroundAudio,
+            speakerIdentities, upgradeDismissals, transcriptFlags, transcriptFlagsVersion, transcriptFlagDismissals
     }
     private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
 
@@ -763,11 +829,18 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         processingRequests = try values.decodeIfPresent([ProcessingRequest].self, forKey: .processingRequests)
         photos = try values.decodeIfPresent([MeetingPhoto].self, forKey: .photos)
         ink = try values.decodeIfPresent([NoteInk].self, forKey: .ink)
+        pages = try values.decodeIfPresent([NotebookPage].self, forKey: .pages)
+        pageTurns = try values.decodeIfPresent([PageTurn].self, forKey: .pageTurns)
         backgroundPassages = try values.decodeIfPresent([TranscriptSegment].self, forKey: .backgroundPassages)
         includesBackgroundAudio = try values.decodeIfPresent(Bool.self, forKey: .includesBackgroundAudio)
         speakerIdentities = try values.decodeIfPresent([SpeakerIdentity].self, forKey: .speakerIdentities)
         // A dismissal a newer Daybook wrote differently is dropped: at worst an offer shows again.
         upgradeDismissals = (try? values.decodeIfPresent([UpgradeDismissal].self, forKey: .upgradeDismissals)) ?? nil
+        // Flags and answers are read one at a time: one a newer Daybook wrote in a shape this version can't read is kept
+        // as it came, and written back (`TranscriptFlag.unread`).
+        transcriptFlags = (try? values.decodeIfPresent([TranscriptFlag].self, forKey: .transcriptFlags)) ?? nil
+        transcriptFlagsVersion = (try? values.decodeIfPresent(Int.self, forKey: .transcriptFlagsVersion)) ?? nil
+        transcriptFlagDismissals = (try? values.decodeIfPresent([TranscriptFlagDismissal].self, forKey: .transcriptFlagDismissals)) ?? nil
         unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
     }
 
@@ -804,10 +877,15 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         try values.encodeIfPresent(processingRequests, forKey: .processingRequests)
         try values.encodeIfPresent(photos, forKey: .photos)
         try values.encodeIfPresent(ink, forKey: .ink)
+        try values.encodeIfPresent(pages, forKey: .pages)
+        try values.encodeIfPresent(pageTurns, forKey: .pageTurns)
         try values.encodeIfPresent(backgroundPassages, forKey: .backgroundPassages)
         try values.encodeIfPresent(includesBackgroundAudio, forKey: .includesBackgroundAudio)
         try values.encodeIfPresent(speakerIdentities, forKey: .speakerIdentities)
         try values.encodeIfPresent(upgradeDismissals, forKey: .upgradeDismissals)
+        try values.encodeIfPresent(transcriptFlags, forKey: .transcriptFlags)
+        try values.encodeIfPresent(transcriptFlagsVersion, forKey: .transcriptFlagsVersion)
+        try values.encodeIfPresent(transcriptFlagDismissals, forKey: .transcriptFlagDismissals)
         try unknownFields.encode(to: encoder)
     }
 }

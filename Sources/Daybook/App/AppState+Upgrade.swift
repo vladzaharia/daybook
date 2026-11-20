@@ -21,7 +21,7 @@ extension AppState {
     /// What this Mac can reach for an upgrade now.
     var upgradeCandidates: UpgradeCandidates {
         UpgradeCandidates(thisDevice: processingCapabilities, macs: ProcessingMac.reachable(connected: [], presence: syncDevices),
-                          cloud: upgradeCloud)
+                          cloud: upgradeCloud, cloudPlacements: hasCloudSetup ? cloud.preferences.placements : CloudPlacements())
     }
 
     /// The cloud model on offer for an upgrade: Settings › Cloud's, unless Never. Nil until Settings › Cloud is first

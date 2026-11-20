@@ -152,6 +152,77 @@ final class CloudSummarizerTests: XCTestCase {
         XCTAssertEqual(body["fallbacks"] as? String, "default")
     }
 
+    /// A launch conversation with handwriting on a page, and a sketch with words in it and a description read on the device.
+    private func notebookMeeting() -> (meeting: Meeting, sketch: NotebookPassage) {
+        var meeting = self.meeting()
+        let id = UUID()
+        let writing = NotebookTestPages.passage(id, key: "w", words: "ask legal about the zephyr contract", time: 78)
+        let sketch = NotebookTestPages.passage(id, key: "s", words: "kestrelwords in the drawing", kind: .sketch, time: 100, y: 200)
+        var page = NotebookTestPages.page(id, [writing, sketch])
+        page.sketches = [NotebookTestPages.analysis(of: sketch, caption: "Quokka floor plan", text: "Hall Q stage entrance layout")]
+        meeting.pages = [page]
+        return (meeting, sketch)
+    }
+
+    func testBehaviorTheCloudGetsHandwritingWordsAsNotesAndNoSketchDescriptionLabelOrImage() async throws {
+        let (notebook, sketch) = notebookMeeting()
+        let server = FakeCloudServer()
+        let summarizer = await summarizer(server, keys: [.anthropic: anthropicKey]) { _ in
+            // A reply that tries to place a sketch by label: it has nothing to place.
+            .anthropicReply(self.pieces(self.reply.replacingOccurrences(of: #""heading":"Budget","body""#, with: #""heading":"Budget","photos":["S1"],"body""#)))
+        }
+        let result = try await summarizer.summary(notebook, template: nil, vocabulary: [], model: try model("claude-sonnet-5-5", in: summarizer), effort: .medium)
+        let sent = try XCTUnwrap(server.requests.last(where: { $0.path == "/v1/messages" }))
+        let everything = sent.text
+        XCTAssertTrue(everything.contains("ask legal about the zephyr contract"), "Handwriting words go as notes")
+        XCTAssertTrue(everything.contains("NOTE H1, handwritten on page 1"))
+        XCTAssertFalse(everything.contains("Quokka floor plan"), "No sketch description")
+        XCTAssertFalse(everything.contains("Hall Q"), "Nor the text read from it")
+        XCTAssertFalse(everything.contains("kestrelwords"), "Nor the words in the drawing")
+        XCTAssertFalse(everything.contains("[S1]"), "Nor its label")
+        XCTAssertFalse(everything.contains("drawn at"))
+        XCTAssertFalse(everything.contains("sketches the user drew"), "No guidance about sketch labels")
+        XCTAssertFalse(everything.contains("PICTURE"))
+        for image in ["data:image", "image/png", "base64", "\"image\""] { XCTAssertFalse(everything.contains(image), image) }
+        // The prompt builder says the same: it is given the source, which has no picture evidence to hold.
+        let built = CloudSynthesis.prompt(source: MeetingEvidence.summarySource(notebook), template: .auto, glossary: [], templateInstructions: nil, provider: .anthropic)
+        let whole = built.instructions + built.prompt + built.schema
+        XCTAssertTrue(whole.contains("zephyr contract"))
+        XCTAssertFalse(whole.contains("Quokka") || whole.contains("Hall Q") || whole.contains("kestrelwords") || whole.contains("[S1]"))
+        XCTAssertFalse(built.schema.contains("S1") || built.schema.contains("\"photos\""))
+        XCTAssertEqual(built.noteText.contains("zephyr contract"), true)
+        // A summary written in the cloud places a sketch by time, from what was read on this device.
+        XCTAssertEqual(result.summary.sections.flatMap { $0.sketchIDs ?? [] }, [sketch.id])
+    }
+
+    func testBehaviorWordsOfAPassageKindANewerDaybookWroteNeverReachTheCloud() async throws {
+        let (notebook, _) = notebookMeeting()
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(notebook)) as? [String: Any])
+        var pages = try XCTUnwrap(object["pages"] as? [[String: Any]])
+        var reading = try XCTUnwrap(pages[0]["reading"] as? [String: Any])
+        var passages = try XCTUnwrap(reading["passages"] as? [[String: Any]])
+        passages[0]["kind"] = "futureDiagram"
+        reading["passages"] = passages; pages[0]["reading"] = reading; object["pages"] = pages
+        let future = try JSONDecoder().decode(Meeting.self, from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertTrue(future.pageWriting().isEmpty)
+        let built = CloudSynthesis.prompt(source: MeetingEvidence.summarySource(future), template: .auto, glossary: [], templateInstructions: nil, provider: .anthropic)
+        XCTAssertFalse((built.instructions + built.prompt + built.schema + built.noteText).contains("zephyr contract"))
+        let known = CloudSynthesis.prompt(source: MeetingEvidence.summarySource(notebook), template: .auto, glossary: [], templateInstructions: nil, provider: .anthropic)
+        XCTAssertTrue(known.prompt.contains("zephyr contract"))
+    }
+
+    func testBehaviorACloudSummaryNeedsNoSpeechWhenThereAreNotesOrPages() async throws {
+        var (notebook, _) = notebookMeeting()
+        notebook.unifiedTranscript = []
+        notebook.notes = ""; notebook.timedNotes = nil; notebook.highlights = []
+        let server = FakeCloudServer()
+        let summarizer = await summarizer(server, keys: [.anthropic: anthropicKey]) { _ in .anthropicReply(self.pieces(self.reply)) }
+        let result = try await summarizer.summary(notebook, template: nil, vocabulary: [], model: try model("claude-sonnet-5-5", in: summarizer), effort: .medium)
+        XCTAssertFalse(result.summary.sections.isEmpty)
+        XCTAssertTrue(result.summary.actionItems.isEmpty, "Nothing was said, so nothing can be shown to be agreed")
+        XCTAssertTrue(try XCTUnwrap(server.requests.last(where: { $0.path == "/v1/messages" })).text.contains("No speech was recorded in this conversation"))
+    }
+
     func testBehaviorOpenAISummariesRecordTheirOwnModelAndCost() async throws {
         let server = FakeCloudServer()
         let summarizer = await summarizer(server, keys: [.openai: openAIKey]) { _ in
@@ -169,6 +240,57 @@ final class CloudSummarizerTests: XCTestCase {
         XCTAssertTrue((body["input"] as? String)?.contains("Blockers first.") == true, "The template's instructions")
         XCTAssertTrue((body["input"] as? String)?.contains("Use the user's selected kind: scrum.") == true)
         XCTAssertEqual(result.summary.actionItems.map(\.owner), ["Alex"])
+    }
+
+    func testBehaviorSummariesAskBothProvidersForExtraHighByDefaultAndMaxWhenChosen() async throws {
+        let server = FakeCloudServer()
+        let summarizer = await summarizer(server, keys: [.anthropic: anthropicKey, .openai: openAIKey]) { request in
+            request.path == "/v1/messages" ? .anthropicReply(self.pieces(self.reply)) : .openAIReply(self.pieces(self.reply))
+        }
+        let preferred = CloudSummaryPreferences().effort
+        let claude = try await summarizer.summary(meeting(), template: nil, vocabulary: [], model: try model("claude-sonnet-5-5", in: summarizer),
+                                                  effort: preferred)
+        XCTAssertEqual(claude.provenance.effort, .xhigh)
+        XCTAssertEqual(claude.summary.processingSettings?.parameters["effort"], "xhigh")
+        let anthropic = try XCTUnwrap(server.requests.last { $0.path == "/v1/messages" }?.json)
+        XCTAssertEqual((anthropic["output_config"] as? [String: Any])?["effort"] as? String, "xhigh")
+        XCTAssertEqual((anthropic["thinking"] as? [String: Any])?["type"] as? String, "adaptive")
+        let gpt = try await summarizer.summary(meeting(), template: nil, vocabulary: [], model: try model("gpt-6.1-sol", in: summarizer), effort: preferred)
+        XCTAssertEqual(gpt.provenance.effort, .xhigh)
+        let openAI = try XCTUnwrap(server.requests.last { $0.path == "/v1/responses" }?.json)
+        XCTAssertEqual((openAI["reasoning"] as? [String: Any])?["effort"] as? String, "xhigh")
+        // Max, chosen in Settings, is sent as itself.
+        _ = try await summarizer.summary(meeting(), template: nil, vocabulary: [], model: try model("claude-sonnet-5-5", in: summarizer), effort: .max)
+        XCTAssertEqual((server.requests.last { $0.path == "/v1/messages" }?.json?["output_config"] as? [String: Any])?["effort"] as? String, "max")
+        _ = try await summarizer.summary(meeting(), template: nil, vocabulary: [], model: try model("gpt-6.1-sol", in: summarizer), effort: .max)
+        XCTAssertEqual((server.requests.last { $0.path == "/v1/responses" }?.json?["reasoning"] as? [String: Any])?["effort"] as? String, "max")
+    }
+
+    func testBehaviorAConversationLongerThanTheModelsWindowIsNeverSent() async throws {
+        let server = FakeCloudServer()
+        server.handle { request in
+            switch request.path {
+            case "/v1/models" where request.header("x-api-key") != nil:
+                return .json(["data": [["id": "claude-sonnet-5-5", "max_input_tokens": 1_500, "max_tokens": 128_000]]])
+            case "/v1/models": return .failure(.cannotFindHost)
+            default: return .anthropicReply(["{}"])
+            }
+        }
+        var client = CloudClient(session: server.session, endpoints: CloudEndpoints(base: server.base))
+        client.wait = { _ in }
+        let directory = CloudDirectory(keys: MemoryCloudKeyStore([.anthropic: anthropicKey]), client: client, defaults: makeTestDefaults())
+        _ = await directory.offers()
+        let summarizer = CloudSummarizer(directory: directory)
+        let sonnet = try await model("claude-sonnet-5-5", in: summarizer)
+        XCTAssertEqual(sonnet.contextTokens, 1_500)
+        do {
+            _ = try await summarizer.summary(meeting(), template: nil, vocabulary: [], model: sonnet, effort: .xhigh)
+            XCTFail("The prompt is longer than the window")
+        } catch let error as CloudError {
+            XCTAssertEqual(error.message, "This conversation is longer than Claude Sonnet 5.5 can read.")
+            guard case .inputTooLong = error else { return XCTFail("\(error)") }
+        }
+        XCTAssertFalse(server.requests.contains { $0.path == "/v1/messages" }, "Nothing was sent")
     }
 
     func testBehaviorASummaryCutOffAtItsLimitIsAskedForAgainWithAllTheModelCanWrite() async throws {
@@ -211,6 +333,26 @@ final class CloudSummarizerTests: XCTestCase {
         XCTAssertGreaterThan(try XCTUnwrap(high), estimate)
     }
 
+    func testBehaviorTheCloudPromptCarriesTheConversationsTitleAndDateAndNothingMoreAboutIt() {
+        var meeting = meeting()
+        meeting.title = "Weekly sync at 10:15 AM"
+        meeting.date = Date(timeIntervalSince1970: 0)
+        meeting.tracks = [RecordingTrack(source: .microphone, relativePath: "m.caf", fileName: "m.caf", startedAt: Date(timeIntervalSince1970: 1_795_035_900))]
+        let zone = TimeZone(identifier: "America/Phoenix")!
+        let built = CloudSynthesis.prompt(source: MeetingEvidence.summarySource(meeting, timeZone: zone), template: .auto, glossary: [],
+                                          templateInstructions: nil, provider: .anthropic)
+        XCTAssertTrue(built.prompt.contains(#""conversation_title":"Weekly sync""#))
+        XCTAssertTrue(built.prompt.contains(#""conversation_started":"Wednesday 2026-11-18, 14:05, America/Phoenix""#))
+        XCTAssertFalse(built.prompt.contains("1970"), "The conversation's own date is not what it began")
+        XCTAssertTrue(built.instructions.contains("title and date, when given, are context"))
+
+        meeting.title = "Untitled Conversation"
+        meeting.tracks[0].startedAt = nil
+        let bare = CloudSynthesis.prompt(source: MeetingEvidence.summarySource(meeting, timeZone: zone), template: .auto, glossary: [],
+                                         templateInstructions: nil, provider: .anthropic)
+        XCTAssertFalse(bare.prompt.contains("conversation_title") || bare.prompt.contains("conversation_started"), "A placeholder and no known start send neither")
+    }
+
     func testBehaviorWithoutAKeyOrATranscriptThereIsNoSummary() async throws {
         let server = FakeCloudServer()
         let summarizer = await summarizer(server, keys: [:]) { _ in .anthropicReply(["{}"]) }
@@ -222,8 +364,12 @@ final class CloudSummarizerTests: XCTestCase {
         } catch let error as CloudError {
             XCTAssertEqual(error, .noKey(.anthropic))
         }
+        // Nothing said and nothing written; notes alone are summarized (`testBehaviorACloudSummaryNeedsNoSpeechWhenThereAreNotesOrPages`).
         var notesOnly = meeting()
         notesOnly.unifiedTranscript = []
+        notesOnly.notes = ""
+        notesOnly.timedNotes = nil
+        notesOnly.highlights = []
         do {
             _ = try await summarizer.summarize(notesOnly, template: nil, vocabulary: [], model: sonnet, effort: .medium) { _ in }
             XCTFail("Nothing was said")
@@ -249,6 +395,17 @@ final class CloudSummarizerTests: XCTestCase {
     }
 
     // MARK: Prompt and schema
+
+    func testBehaviorTheCloudPromptWarnsWhenTermsOfTheVocabularyAreLeftOut() {
+        let source = MeetingEvidence.summarySource(meeting())
+        let terms = (1...81).map { "Term\($0)x" }
+        let over = CloudSynthesis.prompt(source: source, template: .auto, glossary: terms, templateInstructions: nil, provider: .anthropic)
+        XCTAssertTrue(over.warnings.contains("Only the first 80 vocabulary terms were used."))
+        XCTAssertTrue(over.prompt.contains("Term80x"))
+        XCTAssertFalse(over.prompt.contains("Term81x"))
+        let within = CloudSynthesis.prompt(source: source, template: .auto, glossary: Array(terms.prefix(80)), templateInstructions: nil, provider: .anthropic)
+        XCTAssertTrue(within.warnings.isEmpty)
+    }
 
     func testBehaviorTheCloudPromptIsTheLocalOneWithQuotedCommitmentsAndTheNotesWorkedOutFirst() throws {
         let source = MeetingEvidence.summarySource(meeting())

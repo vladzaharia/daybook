@@ -255,13 +255,15 @@ final class CloudDirectoryTests: XCTestCase {
         setup.choose(.economy)
         XCTAssertNil(setup.preferences.model)
         XCTAssertEqual(setup.resolved?.id, "claude-haiku-5-5")
-        setup.preferences.effort = .high
+        XCTAssertEqual(setup.effort, .xhigh, "Extra High until the person chooses")
+        setup.effort = .high
         setup.preferences.policy = .always
         setup.preferences.countdownSeconds = 30
 
         let stored = CloudSummaryPreferences.load(from: defaults)
         XCTAssertEqual(stored.tier, .economy)
         XCTAssertEqual(stored.effort, .high)
+        XCTAssertTrue(stored.effortIsChosen)
         XCTAssertEqual(stored.policy, .always)
         XCTAssertEqual(stored.countdownSeconds, 30)
 
@@ -293,14 +295,69 @@ final class CloudDirectoryTests: XCTestCase {
         XCTAssertTrue(details.hasSuffix("(-25244)"), details)
     }
 
+    func testBehaviorPreferencesFromAnEarlierVersionKeepWhatThePersonSetAndTakeTheNewDefaultEffort() throws {
+        func decode(_ json: String) throws -> CloudSummaryPreferences { try JSONDecoder().decode(CloudSummaryPreferences.self, from: Data(json.utf8)) }
+        // An earlier version wrote every field, effort Medium unless the person changed it.
+        let untouched = try decode(#"{"policy":"always","countdownSeconds":30,"tier":"best","model":"claude-opus-5-5","effort":"medium"}"#)
+        XCTAssertEqual(untouched.policy, .always)
+        XCTAssertEqual(untouched.countdownSeconds, 30)
+        XCTAssertEqual(untouched.tier, .best)
+        XCTAssertEqual(untouched.model, "claude-opus-5-5")
+        XCTAssertEqual(untouched.effort, .xhigh, "Medium was the old default: it moves to the new one")
+        XCTAssertFalse(untouched.effortIsChosen)
+        // No switches stored: Personal off and Work on, what Daybook did before there were switches.
+        XCTAssertEqual(untouched.placements, CloudPlacements())
+        XCTAssertFalse(untouched.placements.allows(.personal))
+        XCTAssertTrue(untouched.placements.allows(.work))
+        var switched = untouched
+        switched.placements.set(.personal, allowed: true)
+        switched.placements.set(.work, allowed: false)
+        let read = try JSONDecoder().decode(CloudSummaryPreferences.self, from: JSONEncoder().encode(switched))
+        XCTAssertTrue(read.placements.allows(.personal))
+        XCTAssertFalse(read.placements.allows(.work))
+        // Never keeps everything off the cloud, whatever the switches say.
+        var never = read
+        never.policy = .never
+        XCTAssertFalse(never.allowsCloud(for: Meeting(title: "Anything", placement: .personal)))
+        XCTAssertTrue(read.allowsCloud(for: Meeting(title: "Anything", placement: .personal)))
+        let lowered = try decode(#"{"policy":"ask","countdownSeconds":15,"tier":"balanced","effort":"low"}"#)
+        XCTAssertEqual(lowered.effort, .low, "Low was the person's choice")
+        XCTAssertTrue(lowered.effortIsChosen)
+        XCTAssertEqual(try decode(#"{"policy":"ask","countdownSeconds":15,"tier":"balanced","effort":"high"}"#).effort, .high)
+        XCTAssertEqual(try decode(#"{}"#), CloudSummaryPreferences(), "Nothing stored: the defaults")
+        // From this version on, a choice is marked, Medium included, and survives; an unchosen effort follows the default.
+        var chosen = CloudSummaryPreferences()
+        chosen.choose(.medium)
+        XCTAssertEqual(try JSONDecoder().decode(CloudSummaryPreferences.self, from: JSONEncoder().encode(chosen)).effort, .medium)
+        XCTAssertEqual(try decode(#"{"policy":"ask","countdownSeconds":15,"tier":"balanced","effort":"high","effortIsChosen":false}"#).effort, .xhigh)
+        // An earlier version reading these preferences finds only levels it knows, so it never resets them (Never stays Never).
+        struct Earlier: Decodable {
+            enum Policy: String, Decodable { case ask, always, never }
+            enum Effort: String, Decodable { case low, medium, high }
+            var policy: Policy; var countdownSeconds: Int; var effort: Effort
+        }
+        var neverSent = CloudSummaryPreferences()
+        neverSent.policy = .never
+        XCTAssertEqual(try JSONDecoder().decode(Earlier.self, from: JSONEncoder().encode(neverSent)).effort, .medium, "The old default")
+        neverSent.choose(.max)
+        let earlier = try JSONDecoder().decode(Earlier.self, from: JSONEncoder().encode(neverSent))
+        XCTAssertEqual(earlier.policy, .never)
+        XCTAssertEqual(earlier.effort, .high, "Max, capped at what it knows")
+        XCTAssertEqual(try JSONDecoder().decode(CloudSummaryPreferences.self, from: JSONEncoder().encode(neverSent)).effort, .max,
+                       "This version keeps Max")
+    }
+
     @MainActor
     func testBehaviorCostPerHourUsesThePreferredEffort() async throws {
         let setup = CloudSetup.demo(providers: [.anthropic], defaults: makeTestDefaults())
         let sonnet = try XCTUnwrap(setup.offers.offer("claude-sonnet-5-5"))
+        let xhigh = try XCTUnwrap(setup.costPerHour(sonnet))
+        setup.effort = .medium
         let medium = try XCTUnwrap(setup.costPerHour(sonnet))
-        setup.preferences.effort = .high
+        setup.effort = .high
         let high = try XCTUnwrap(setup.costPerHour(sonnet))
         XCTAssertGreaterThan(high, medium)
+        XCTAssertGreaterThan(xhigh, high, "The default, Extra High, is estimated above High")
         XCTAssertEqual(medium, 0.09, accuracy: 0.02)
     }
 }
