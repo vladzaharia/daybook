@@ -32,6 +32,8 @@ public final class NotebookSession {
     public internal(set) var writingPoint: CGPoint?
     /// The floating controls begin collapsed (a debug launch's picture of that state).
     @ObservationIgnored public var startsCollapsed = false
+    /// Debug captures: the floating controls start expanded even where they would be chips over the paper.
+    @ObservationIgnored public var startsExpanded = false
     /// Bumped when what the pages show changed, for views that draw from the model.
     public private(set) var revision = 0
 
@@ -491,6 +493,12 @@ public final class NotebookSession {
         let undo = model?.remove(id)
         reconcile()
         return undo.map { undo in { [weak self] in undo(); self?.reconcile() } }
+    }
+
+    /// Keeps a page out of summaries, or lets them use it again.
+    public func setHiddenFromSummary(_ id: UUID, _ hidden: Bool) {
+        model?.setHiddenFromSummary(id, hidden)
+        reconcile()
     }
 
     static func sha256(_ data: Data) -> String {

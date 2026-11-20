@@ -51,15 +51,7 @@ public struct RecorderPill: View {
         RecorderPieces(state: state, levels: levels, actions: actions, slots: RecorderSlots(notes: AnyView(EmptyView())), clockFocus: nil)
     }
 
-    /// How much larger than the default the text draws, for the fit.
-    private var textScale: CGFloat {
-        switch min(typeSize, .xxxLarge) {
-        case .xSmall, .small, .medium, .large: return 1
-        case .xLarge: return 1.1
-        case .xxLarge: return 1.2
-        default: return 1.3
-        }
-    }
+    private var textScale: CGFloat { NotebookPillFit.textScale(typeSize) }
 
     public var body: some View {
         Group {
@@ -92,7 +84,7 @@ public struct RecorderPill: View {
                 }
             }
             .padding(.horizontal, DaybookSpacing.s2)
-            .frame(minHeight: 40)
+            .frame(minHeight: NotebookLayout.chipHeight)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -128,12 +120,13 @@ public struct RecorderPill: View {
                     Circle().fill(DaybookPalette.Ink.record).frame(width: 12, height: 12)
                         .frame(width: 44, height: 44).contentShape(Circle())
                 }
-                .daybookControl(.standard, shape: .circle)
+                .buttonStyle(.plain)
+                .glassEffect(.regular, in: Circle())
                 .accessibilityLabel("Resume Recording")
             } else {
-                parts.bookmark(.glyph).fixedSize()
+                parts.bookmark(.pill).fixedSize()
             }
-            parts.stop(.glyph, glyph: true).fixedSize()
+            parts.stop(.glyph, glyph: true, flat: true).fixedSize()
         }
         .padding(.leading, DaybookSpacing.s2)
     }

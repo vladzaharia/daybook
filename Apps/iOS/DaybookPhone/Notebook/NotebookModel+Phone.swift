@@ -36,7 +36,8 @@ extension NotebookModel {
             },
             sampleClock: { recorder.sampleClock() },
             anchor: { moment in (nil, RecordingClockMap.elapsed(at: moment, samples: recorder.pageClock)) },
-            origin: .thisIPhone(installation: model.library.installationID))
+            origin: .thisIPhone(installation: model.library.installationID),
+            setHiddenFromSummary: { recorder.setPageHiddenFromSummary($0, hidden: $1) })
     }
 
     /// The pages that aren't deleted, in the order a conversation shows them.

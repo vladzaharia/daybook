@@ -53,6 +53,7 @@ struct RecorderScreen: View {
         .onAppear {
             if let launch = model.options.recorderSheet { sheetExpansion = launch }
             notebook.startsCollapsed = model.options.notebookCollapsed
+            notebook.startsExpanded = model.options.notebookExpanded
             if model.options.notebook { notebookOpen = true }
             levels.adopt(model.levels, for: .microphone)
             runLevels()
