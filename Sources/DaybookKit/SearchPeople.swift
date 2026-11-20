@@ -27,10 +27,10 @@ public struct SearchPeople: Equatable, Sendable {
         names = metadata.activeSpeakerProfiles.map(\.name).filter { !SpeakerProfile.isPlaceholder($0) }
     }
 
-    /// Whether `name` spoke in `meeting`.
+    /// Whether `name` spoke in `meeting`: one of the speakers in its transcript (`Meeting.transcriptSpeakers`).
     public func spoke(_ name: String, in meeting: Meeting) -> Bool {
         let wanted = profilesByName[SpeakerProfile.normalizedName(name)] ?? []
-        return meeting.speakers.contains { speaker in
+        return meeting.transcriptSpeakers.contains { speaker in
             if !wanted.isEmpty, let identity = meeting.speakerIdentity(speaker.id), identity.source != .suggested,
                let profile = identity.profileID, let target = active[profile], wanted.contains(target) { return true }
             return speaker.name.caseInsensitiveCompare(name) == .orderedSame

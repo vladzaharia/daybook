@@ -57,7 +57,7 @@ final class VisionImageReader: DescribingImages, @unchecked Sendable {
             progress(.init(Double(index) / Double(max(1, requests.count)), "Reading photo \(index + 1) of \(requests.count)"))
             let read: (description: ImageDescription, print: VNFeaturePrintObservation?)
             do {
-                read = try await Task.detached(priority: .userInitiated) { try Self.read(request.url, compareOnly: request.compareOnly) }.value
+                read = try await Self.onVisionQueue { try Self.read(request.url, compareOnly: request.compareOnly) }
             } catch {
                 // One unreadable photo is reported on its own; the rest of the batch is still read.
                 results.append(ImageDescription(failure: error.localizedDescription))
@@ -79,6 +79,17 @@ final class VisionImageReader: DescribingImages, @unchecked Sendable {
             results.append(description)
         }
         return results
+    }
+
+    /// Vision's `perform` blocks its thread until the image is read, which on a slow or virtual machine can be very long. It runs on
+    /// a queue of its own, one image at a time, not on Swift concurrency's pool, where a few such readings take every thread and
+    /// nothing else async can run (as `InkRecognizer` does for the notebook's).
+    private static let visionQueue = DispatchQueue(label: "local.daybook.vision.images", qos: .userInitiated)
+
+    private static func onVisionQueue<Output>(_ work: @escaping @Sendable () throws -> Output) async throws -> Output {
+        try await withCheckedThrowingContinuation { (done: CheckedContinuation<Output, Error>) in
+            visionQueue.async { done.resume(with: Result { try work() }) }
+        }
     }
 
     /// Reads one image off the actor. `compareOnly` makes the feature print only.
