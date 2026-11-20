@@ -54,13 +54,14 @@ extension Meeting {
     // MARK: Names given while a summary is written
 
     /// Whether what a summary reads has changed since `written`, the conversation as the summary read it: its
-    /// recordings, what was said, the notes, bookmarks, and photos, the kind or template, or who spoke. A speaker's new
+    /// recordings, what was said, the notes, bookmarks, photos, and what was read from notebook pages (not the strokes themselves: reading the same strokes again changes nothing), the kind or template, or who spoke. A speaker's new
     /// name isn't such a change: it follows into the summary (`setSummary(_:writtenFrom:)`), as it does when nothing
     /// is being written, instead of the summary being written again.
     public func summaryInputsChanged(since written: Meeting) -> Bool {
         notes != written.notes || kind != written.kind || templateID != written.templateID || tracks != written.tracks
             || unifiedTranscript != written.unifiedTranscript || speakers.map(\.id) != written.speakers.map(\.id)
             || highlights != written.highlights || timedNotes != written.timedNotes || photos != written.photos
+            || notebookSummaryInputs != written.notebookSummaryInputs
     }
 
     /// Sets a summary written from `written`. The names speakers were given meanwhile follow into it first, where

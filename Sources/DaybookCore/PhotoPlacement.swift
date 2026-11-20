@@ -11,9 +11,29 @@ public struct PhotoEvidence: Codable, Equatable, Sendable {
     /// The text in the picture, shortened.
     public var text: String?
     public var labels: [String]
+    /// A sketch from a notebook page (`NotebookPlacement`), not a photo: `id` is its passage's, `label` "S1". Never sent to a cloud model.
+    public var isSketch: Bool
+    /// The page a sketch is on (1-based).
+    public var page: Int?
 
-    public init(id: UUID, label: String, time: TimeInterval? = nil, caption: String? = nil, text: String? = nil, labels: [String] = []) {
+    public init(id: UUID, label: String, time: TimeInterval? = nil, caption: String? = nil, text: String? = nil, labels: [String] = [],
+                isSketch: Bool = false, page: Int? = nil) {
         self.id = id; self.label = label; self.time = time; self.caption = caption; self.text = text; self.labels = labels
+        self.isSketch = isSketch; self.page = page
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, label, time, caption, text, labels, isSketch, page }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        label = try values.decode(String.self, forKey: .label)
+        time = try values.decodeIfPresent(TimeInterval.self, forKey: .time)
+        caption = try values.decodeIfPresent(String.self, forKey: .caption)
+        text = try values.decodeIfPresent(String.self, forKey: .text)
+        labels = try values.decode([String].self, forKey: .labels)
+        isSketch = try values.decodeIfPresent(Bool.self, forKey: .isSketch) ?? false
+        page = try values.decodeIfPresent(Int.self, forKey: .page)
     }
 }
 
@@ -41,14 +61,23 @@ public enum PhotoPlacement {
 
     /// The summarizer's source data for photos, one line each, with timeline times in the transcript's form.
     public static func evidence(_ photos: [PhotoEvidence]) -> String {
-        photos.map { photo in
-            var parts = ["[\(photo.label)]"]
+        photos.map(line).joined(separator: "\n")
+    }
+
+    /// One picture as a line of source data: "[P1]; taken at 12:04; shows: …", or for a sketch
+    /// "[S1]; drawn at 12:04 on page 2; shows: …; text in the drawing: …".
+    public static func line(_ photo: PhotoEvidence) -> String {
+        var parts = ["[\(photo.label)]"]
+        if photo.isSketch {
+            let page = photo.page.map { " on page \($0)" } ?? ""
+            parts.append(photo.time.map { "drawn at \(clock($0))\(page)" } ?? "drawn outside the recording\(page)")
+        } else {
             parts.append(photo.time.map { "taken at \(clock($0))" } ?? "taken outside the recording")
-            if let caption = photo.caption { parts.append("shows: \(caption)") }
-            else if !photo.labels.isEmpty { parts.append("shows: \(photo.labels.joined(separator: ", "))") }
-            if let text = photo.text { parts.append("text in the photo: \(text)") }
-            return parts.joined(separator: "; ")
-        }.joined(separator: "\n")
+        }
+        if let caption = photo.caption { parts.append("shows: \(caption)") }
+        else if !photo.labels.isEmpty { parts.append("shows: \(photo.labels.joined(separator: ", "))") }
+        if let text = photo.text { parts.append("text in the \(photo.isSketch ? "drawing" : "photo"): \(text)") }
+        return parts.joined(separator: "; ")
     }
 
     /// The summary with only valid photo placements: each photo a candidate, once, at most
@@ -137,13 +166,13 @@ public enum PhotoPlacement {
             .filter { $0.count >= 4 && !stopwords.contains($0) })
     }
 
-    private static func excerpt(_ text: String) -> String {
+    static func excerpt(_ text: String) -> String {
         let flat = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: " / ")
         return flat.count > textExcerptLength ? String(flat.prefix(textExcerptLength)) + "…" : flat
     }
 
     /// "00:12:34" / "12:34", as the summarizer's transcript writes times.
-    private static func clock(_ seconds: TimeInterval) -> String {
+    static func clock(_ seconds: TimeInterval) -> String {
         let value = Int(max(0, seconds.isFinite ? seconds : 0))
         return value >= 3600 ? String(format: "%d:%02d:%02d", value / 3600, (value % 3600) / 60, value % 60)
             : String(format: "%02d:%02d", value / 60, value % 60)

@@ -67,7 +67,7 @@ public struct ConversationActionPerformer {
             confirm(.copied)
         case .process(let mode):
             // A selection's Summarize Again passes over those with no transcript to summarize.
-            for meeting in meetings where mode != .summaryOnly || !meeting.unifiedTranscript.isEmpty { process(meeting.id, mode) }
+            for meeting in meetings where mode != .summaryOnly || meeting.hasSummarizableContent { process(meeting.id, mode) }
         case .versionHistory: show(.versionHistory(first.id))
         case .moveToFolder: show(.moveToFolder(chosen))
         case .tags: show(.tags(chosen))

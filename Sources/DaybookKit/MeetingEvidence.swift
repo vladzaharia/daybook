@@ -2,6 +2,14 @@ import DaybookCore
 import Foundation
 
 /// User annotations keep their own provenance and are never presented as spoken words.
+extension Meeting {
+    /// Whether a summary can be written (or written again): there was speech, or there are notes or handwriting to summarize
+    /// (`SummarySource.hasContent`). The one rule the engines and every Summarize Again gate on.
+    public var hasSummarizableContent: Bool {
+        !unifiedTranscript.isEmpty || MeetingEvidence.summarySource(self).hasContent
+    }
+}
+
 public enum MeetingEvidence {
     public static func transcript(_ meeting: Meeting) -> String {
         meeting.unifiedTranscript.map { segment in
@@ -15,8 +23,13 @@ public enum MeetingEvidence {
             let position = note.time.map { "written at meeting time \(TimeLabel.format($0))" } ?? "written outside recording; time unknown"
             return "[USER NOTE — \(position)] \(note.text)"
         }.joined(separator: "\n")
+        let writing = meeting.pageWriting().map { passage in
+            let position = passage.time.map { "written at meeting time \(TimeLabel.format($0))" } ?? "written outside recording; time unknown"
+            return "[USER HANDWRITING — page \(passage.page), \(position)] \(passage.text)"
+        }.joined(separator: "\n")
         return "User's original notes (intent and context, not a spoken quotation):\n\(meeting.notes)"
             + (anchors.isEmpty ? "" : "\n\nTiming of those same notes (not additional evidence):\n\(anchors)")
+            + (writing.isEmpty ? "" : "\n\nHandwritten pages (the user's own notes, read from handwriting; words may be misread):\n\(writing)")
     }
 
     public static func highlights(_ meeting: Meeting) -> String? {

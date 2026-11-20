@@ -345,15 +345,19 @@ public struct SummarySection: Codable, Equatable, Identifiable, Sendable {
     /// Photos this section shows (`MeetingPhoto.id`), in order. Nil for none, and in summaries
     /// written before photos.
     public var photoIDs: [UUID]?
+    /// Sketch passages from notebook pages this section drew on (`NotebookPassage.id`), in order. Nil for none, and in
+    /// summaries written before notebook pages.
+    public var sketchIDs: [UUID]?
     /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
     public var unknownFields = UnknownFields()
-    public init(id: UUID = UUID(), heading: String, body: String, photoIDs: [UUID]? = nil) {
+    public init(id: UUID = UUID(), heading: String, body: String, photoIDs: [UUID]? = nil, sketchIDs: [UUID]? = nil) {
         self.id = id; self.heading = heading; self.body = body
         self.photoIDs = photoIDs?.isEmpty == true ? nil : photoIDs
+        self.sketchIDs = sketchIDs?.isEmpty == true ? nil : sketchIDs
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case id, heading, body, photoIDs
+        case id, heading, body, photoIDs, sketchIDs
     }
     private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
 
@@ -363,6 +367,7 @@ public struct SummarySection: Codable, Equatable, Identifiable, Sendable {
         heading = try values.decode(String.self, forKey: .heading)
         body = try values.decode(String.self, forKey: .body)
         photoIDs = try values.decodeIfPresent([UUID].self, forKey: .photoIDs)
+        sketchIDs = try values.decodeIfPresent([UUID].self, forKey: .sketchIDs)
         unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
     }
 
@@ -372,6 +377,7 @@ public struct SummarySection: Codable, Equatable, Identifiable, Sendable {
         try values.encode(heading, forKey: .heading)
         try values.encode(body, forKey: .body)
         try values.encodeIfPresent(photoIDs, forKey: .photoIDs)
+        try values.encodeIfPresent(sketchIDs, forKey: .sketchIDs)
         try unknownFields.encode(to: encoder)
     }
 }

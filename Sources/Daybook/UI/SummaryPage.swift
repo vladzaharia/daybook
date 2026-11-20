@@ -134,7 +134,7 @@ private struct PageColophon: View {
 
     /// Only while it can be asked for: work on the conversation already shows in its status.
     private var summarizeAgain: (() -> Void)? {
-        guard !meeting.unifiedTranscript.isEmpty, !state.processingStatus(for: meeting).isPending,
+        guard meeting.hasSummarizableContent, !state.processingStatus(for: meeting).isPending,
               state.recordingID != meeting.id else { return nil }
         return { [state, id = meeting.id] in state.processor.enqueue(id, mode: .summaryOnly) }
     }

@@ -198,8 +198,7 @@ final class MacProcessor {
         _ = try await app.readPhotos(id, engine: engine, progress: progress)
         await app.labelSpeakers(before: id)
         guard let before = app.meetings.first(where: { $0.id == id }) else { return }
-        let transcript = MeetingEvidence.transcript(before)
-        guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AppError.noSpeech }
+        guard MeetingEvidence.summarySource(before).hasContent else { throw AppError.noSpeech }
         // Transcript first: without the summary model here, and with the cloud not taking the summary at once, the job ends
         // with the transcript, and the summary waits for the model or the person's Use the Cloud
         // (AppState+SummaryPlacement.swift).
