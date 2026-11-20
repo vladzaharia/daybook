@@ -150,6 +150,7 @@ final class FusionProbeTests: XCTestCase {
         XCTAssertEqual(SourceFusion.fuse(meeting).fusion.summary?.version, FusionSummary.currentVersion)
         XCTAssertEqual(SourceFusion.fuse(meeting, version: 1).fusion.summary?.version, 1)
         XCTAssertEqual(SourceFusion.fuse(meeting, version: 99).fusion.summary?.version, FusionSummary.currentVersion)
-        XCTAssertEqual(FusionSummary.currentVersion, 2)
+        XCTAssertEqual(FusionSummary.currentVersion, 3)
+        XCTAssertEqual(SourceFusion.fuse(meeting, version: 2).fusion.summary?.version, 2)
     }
 }
