@@ -170,7 +170,11 @@ extension LibraryController {
         guard !meeting.summaryWrittenElsewhere(after: started, excluding: me.id) else { return false }
         let placed = summary.placed(place, by: me, inputs: meeting.modelsBehindTranscript, cloudReason: cloudReason)
         update(id) { meeting in
-            if let written { meeting.setSummary(placed, writtenFrom: written) } else { meeting.setSummary(placed) }
+            if let written { meeting.setSummary(placed, writtenFrom: written) } else {
+                var stamped = placed
+                stamped.notebookDigest = meeting.notebookDigest
+                meeting.setSummary(stamped)
+            }
             meeting.status = .ready
         }
         return true

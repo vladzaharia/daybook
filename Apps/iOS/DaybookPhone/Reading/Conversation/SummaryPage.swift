@@ -313,7 +313,7 @@ private struct PageColophon: View {
     var body: some View {
         let deviceClass = summary.origin.deviceID.flatMap { id in model?.sync.devices.first { $0.id == id }?.deviceClass }
         Colophon(SummaryColophon(summary, thisDeviceID: library.thisDevice.id, words: .iPhone(id: library.thisDevice.id),
-                                 deviceClass: deviceClass),
+                                 deviceClass: deviceClass, notebookChanged: meeting.summaryNotebookChanged),
                  arrived: summary.createdAt, template: TemplateWords.title(for: meeting, resolved: library.resolvedTemplate(for: meeting)),
                  summarizeAgain: summarizeAgain) {
             TemplatePicker(library: library, meeting: meeting)

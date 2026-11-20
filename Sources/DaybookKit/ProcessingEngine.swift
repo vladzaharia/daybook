@@ -184,7 +184,9 @@ extension ProcessingEngine {
             return ProcessingOutput(meeting: working, transcripts: transcripts, speakers: speakers, summary: nil, suggestedTerms: [], notices: notices)
         }
         let summary = try await summarize(working, template: template, vocabulary: vocabulary, progress: progress)
-        working.setSummary(summary.summary)
+        var written = summary.summary
+        written.notebookDigest = working.notebookDigest
+        working.setSummary(written)
         return ProcessingOutput(meeting: working, transcripts: transcripts, speakers: speakers, summary: working.summary,
                                 suggestedTerms: summary.suggestedTerms, notices: notices + summary.warnings)
     }

@@ -68,6 +68,9 @@ extension Meeting {
     /// they replace one Daybook gave (`summaryFollowsRename`), so Version History has the one summary.
     public mutating func setSummary(_ value: MeetingSummary, writtenFrom written: Meeting) {
         var followed = self
+        var value = value
+        // What the notebook gave it is what `written` had, not what has arrived since.
+        value.notebookDigest = written.notebookDigest
         followed.summary = value
         for speaker in speakers {
             guard let before = written.speakers.first(where: { $0.id == speaker.id }), before.name != speaker.name,

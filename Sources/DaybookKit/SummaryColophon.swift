@@ -17,13 +17,15 @@ public struct SummaryColophon: Equatable, Sendable {
 
     /// `summary`'s colophon as `words` would say it on the device whose sync ID is `thisDeviceID`. `deviceClass` is
     /// what the device that ran it says it is (its presence record), when this device knows; otherwise its name
-    /// says. `catalog` names the local model (the Mac's includes the models people added).
+    /// says. `notebookChanged`: the notebook now gives other input than the summary was written from (`Meeting.summaryNotebookChanged`). `catalog` names the local model (the Mac's includes the models people added).
     public init(_ summary: MeetingSummary, thisDeviceID: String, words: DeviceWords, catalog: ModelCatalog = .builtIn,
-                deviceClass: SyncDeviceClass? = nil) {
+                deviceClass: SyncDeviceClass? = nil, notebookChanged: Bool = false) {
         let origin = summary.origin
         var parts = [origin.colophon(thisDeviceID: thisDeviceID, thisDevice: words.here, unknown: words.unknown)]
         if origin.cloudModel == nil, let model = Self.modelName(summary, catalog: catalog) { parts.append(model) }
         parts.append(Self.date(summary.createdAt))
+        // Pages were read or changed after it was written; Summarize Again takes them in.
+        if notebookChanged { parts.append("Notebook changed") }
         line = parts.joined(separator: " · ")
         symbol = Self.symbol(origin, thisDeviceID: thisDeviceID, words: words, deviceClass: deviceClass)
     }
