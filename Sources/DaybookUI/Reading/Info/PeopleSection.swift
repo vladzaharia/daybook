@@ -31,18 +31,10 @@ struct PeopleSection: View {
 }
 
 extension PeopleSection {
-    /// This Is Me on a person the library doesn't know as the person themselves, Not Me on the one it does.
+    /// This Is Me on a person it does something for (`LibraryController.canMarkSpeakerAsMe`). Taking it back is the
+    /// row's own Not <name>; the library-wide Not Me is on the profile.
     @ViewBuilder fileprivate func meMenu(_ person: MeetingPerson) -> some View {
-        let merges = library.metadata.speakerProfileMerges
-        let isMe = library.ownerProfileID.map { me in
-            person.speakerIDs.contains { id in
-                meeting.speakerIdentity(id).flatMap { $0.$source.isKnown && $0.source != .dismissed ? $0.profileID : nil }
-                    .flatMap { merges.resolve($0) } == me
-            }
-        } ?? false
-        if isMe {
-            Button(SpeakerProfileWords.notMe) { library.setOwnerProfile(nil) }
-        } else {
+        if library.canMarkSpeakerAsMe(person.speakerIDs, in: meeting.id) {
             Button(SpeakerProfileWords.thisIsMe) { library.markSpeakerAsMe(person.speakerIDs, in: meeting.id) }
         }
     }

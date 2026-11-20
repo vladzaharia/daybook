@@ -115,4 +115,27 @@ final class SpeakerProfileUndoTests: XCTestCase {
         library.removeVoiceprint("no-such-voiceprint", undoManager: fresh)
         XCTAssertFalse(fresh.canUndo)
     }
+
+    func testBehaviorDeletingTheProfileThatIsMeClearsTheChoiceAndUndoRestoresIt() async throws {
+        let library = try await library()
+        let one = conversation("one", in: library, daysAgo: 20, seed: 11)
+        library.renameSpeaker("one:me", to: "Vlad", in: one)
+        await settle(library)
+        let vlad = try XCTUnwrap(library.speakerProfiles.first)
+        let other = UUID()
+        library.setOwnerProfile(vlad.id)
+        let undo = undoManager()
+        grouped(undo) { library.deleteSpeakerProfile(vlad.id, undoManager: undo, at: Date()) }
+        XCTAssertNil(library.ownerProfileID)
+        XCTAssertNil(library.metadata.ownerProfileSelection, "cleared, not left pointing at a deleted profile")
+        undo.undo()
+        XCTAssertEqual(library.ownerProfileID, vlad.id)
+
+        // Another profile's deletion leaves the choice alone.
+        library.setOwnerProfile(other)
+        let two = conversation("two", in: library, daysAgo: 2, seed: 12)
+        library.renameSpeaker("two:me", to: "Vlad", in: two)
+        library.deleteSpeakerProfile(vlad.id)
+        XCTAssertEqual(library.metadata.ownerProfileSelection, other)
+    }
 }

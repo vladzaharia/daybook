@@ -908,10 +908,12 @@ final class SpeakerProfileTests: XCTestCase {
         var meetings = [fused("named", daysAgo: 2, seed: 1), fused("rejected", daysAgo: 1, seed: 2)]
         meetings[0].speakers[0].embedding = SyntheticVoice.near(other, similarity: 0.95, seed: 9)
         meetings[1].speakers[0].embedding = SyntheticVoice.near(guest, similarity: 0.95, seed: 10)
-        meetings[0].renameSpeaker(id: "owner", name: "Sam")
+        // The person named the owner, in a way that leaves the name fusion's default: only the person-chosen guard keeps it.
+        meetings[0].setSpeakerIdentity(SpeakerIdentity(speakerID: "owner", profileID: nil, source: .named), for: "owner")
         meetings[1].setSpeakerIdentity(SpeakerIdentity(speakerID: "owner", profileID: nil, source: .dismissed, rejectedProfileIDs: [vlad.id]), for: "owner")
         settle(&meetings, &metadata)
-        XCTAssertEqual(name(meetings[0], "owner"), "Sam")
+        XCTAssertEqual(name(meetings[0], "owner"), "Me")
+        XCTAssertEqual(meetings[0].speakerIdentity("owner")?.source, .named, "the person's own, untouched")
         XCTAssertEqual(name(meetings[1], "owner"), "Me")
         XCTAssertEqual(meetings[1].speakerIdentity("owner")?.source, .dismissed)
     }
@@ -953,5 +955,73 @@ final class SpeakerProfileTests: XCTestCase {
         var all = fresh
         settle(&all, &metadata)
         XCTAssertEqual(all[0].speakerIdentity("fresh:far")?.profileID, vlad.id)
+    }
+
+    /// A label the owner already holds for the profile (here by voice) is left as it is, similarity and all: the pass writes nothing.
+    func testBehaviorAnOwnerAlreadyRecognizedAsTheChosenProfileKeepsItsLabelAndTheNextPassWritesNothing() throws {
+        var metadata = LibraryMetadata()
+        var meetings = [meeting("earlier", daysAgo: 20, [voice("me", mine(1), 200)]), fused("call", daysAgo: 1, seed: 2)]
+        meetings[0].renameSpeaker(id: "earlier:me", name: "Vlad")
+        settle(&meetings, &metadata)
+        let vlad = try profile("Vlad", metadata)
+        XCTAssertEqual(meetings[1].speakerIdentity("owner")?.profileID, vlad.id, "by voice")
+        let similarity = try XCTUnwrap(meetings[1].speakerIdentity("owner")?.similarity)
+        choosing(vlad.id, in: &metadata)
+        let result = reconcile(&meetings, &metadata, at: now.addingTimeInterval(10))
+        XCTAssertTrue(result.isEmpty, "nothing to write")
+        XCTAssertEqual(meetings[1].speakerIdentity("owner")?.similarity, similarity)
+    }
+
+    /// Where voices aren't matched, the choice adds no label either.
+    func testBehaviorTheChosenProfileLabelsNoOwnerWhileVoiceMatchingIsOff() throws {
+        var metadata = LibraryMetadata()
+        let vlad = addProfile("Vlad", to: &metadata)
+        choosing(vlad.id, in: &metadata)
+        var meetings = [fused("call", daysAgo: 1, seed: 1)]
+        meetings[0].speakers[0].embedding = SyntheticVoice.near(other, similarity: 0.95, seed: 9)
+        var off = SpeakerProfileOptions()
+        off.recognizes = false
+        settle(&meetings, &metadata, options: off)
+        XCTAssertEqual(name(meetings[0], "owner"), "Me")
+        XCTAssertNil(meetings[0].speakerIdentity("owner"))
+        settle(&meetings, &metadata)
+        XCTAssertEqual(name(meetings[0], "owner"), "Vlad", "on again, it labels")
+    }
+
+    /// Another speaker with a voice of its own already is the profile: the owner isn't it too.
+    func testBehaviorTheOwnerIsNotLabelledWhenAnotherSpeakerWithItsOwnVoiceHoldsTheChosenProfile() throws {
+        var metadata = LibraryMetadata()
+        var meetings = [meeting("earlier", daysAgo: 20, [voice("me", mine(1), 200)]), fused("call", daysAgo: 1, seed: 2)]
+        meetings[0].renameSpeaker(id: "earlier:me", name: "Vlad")
+        let track = meetings[1].tracks[0].id
+        meetings[1].speakers[0].embedding = SyntheticVoice.near(other, similarity: 0.95, seed: 9)
+        meetings[1].speakers.append(Speaker(id: "call:vlad", name: "Speaker 2", sourceTrackID: track, embedding: mine(3), embeddingModelID: Self.space))
+        meetings[1].transcripts[0].segments.append(TranscriptSegment(trackID: track, start: 400, end: 520, text: "Words", speakerID: "call:vlad"))
+        settle(&meetings, &metadata)
+        let vlad = try profile("Vlad", metadata)
+        XCTAssertEqual(meetings[1].speakerIdentity("call:vlad")?.profileID, vlad.id)
+        choosing(vlad.id, in: &metadata)
+        settle(&meetings, &metadata)
+        XCTAssertEqual(name(meetings[1], "owner"), "Me")
+        XCTAssertNil(meetings[1].speakerIdentity("owner"))
+    }
+
+    /// A microphone owner and a computer-audio speaker with the person's voice, in one conversation: the owner is the
+    /// person, the far side never is.
+    func testBehaviorAMicrophoneOwnerAndACallSpeakerTogetherOnlyTheOwnerTakesTheChosenProfile() throws {
+        var metadata = LibraryMetadata()
+        let vlad = addProfile("Vlad", to: &metadata)
+        choosing(vlad.id, in: &metadata)
+        var call = meeting("call", daysAgo: 1, [voice("far", mine(7))], source: .systemAudio)
+        var mic = fused("mic", daysAgo: 1, seed: 8)
+        mic.speakers[0].embedding = SyntheticVoice.near(guest, similarity: 0.95, seed: 8)
+        call.tracks += mic.tracks; call.transcripts += mic.transcripts; call.speakers += mic.speakers
+        call.fusionSummary = mic.fusionSummary
+        var meetings = [call]
+        settle(&meetings, &metadata)
+        XCTAssertEqual(name(meetings[0], "owner"), "Vlad")
+        XCTAssertEqual(meetings[0].speakerIdentity("owner")?.profileID, vlad.id)
+        XCTAssertEqual(name(meetings[0], "call:far"), "Speaker 1")
+        XCTAssertNil(meetings[0].speakerIdentity("call:far"))
     }
 }

@@ -25,17 +25,19 @@ extension LibraryController {
 
     /// Runs `change`, then registers an undo that writes back every profile and voiceprint record it replaced.
     func undoableSpeakerSettings(actionName: String, undoManager: UndoManager?, at now: Date, _ change: () -> Void) {
-        let profiles = metadata.speakerProfiles ?? [], prints = metadata.voiceprints ?? []
+        let profiles = metadata.speakerProfiles ?? [], prints = metadata.voiceprints ?? [], choices = metadata.choices ?? []
         change()
         let changedProfiles = Self.replaced(profiles, now: metadata.speakerProfiles ?? [])
         let changedPrints = Self.replaced(prints, now: metadata.voiceprints ?? [])
-        guard let undoManager, !changedProfiles.isEmpty || !changedPrints.isEmpty else { return }
+        let changedChoices = Self.replaced(choices, now: metadata.choices ?? [])
+        guard let undoManager, !changedProfiles.isEmpty || !changedPrints.isEmpty || !changedChoices.isEmpty else { return }
         undoManager.registerUndo(withTarget: self) { controller in
             let stamp = max(Date(), now)
             controller.undoableSpeakerSettings(actionName: actionName, undoManager: undoManager, at: stamp) {
                 controller.updateMetadata { metadata in
                     metadata.speakerProfiles = Self.restoring(changedProfiles, in: metadata.speakerProfiles ?? [], at: stamp)
                     metadata.voiceprints = Self.restoring(changedPrints, in: metadata.voiceprints ?? [], at: stamp)
+                    if !changedChoices.isEmpty { metadata.choices = Self.restoring(changedChoices, in: metadata.choices ?? [], at: stamp) }
                 }
             }
         }

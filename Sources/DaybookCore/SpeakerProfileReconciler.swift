@@ -192,18 +192,29 @@ public enum SpeakerProfileReconciler {
             }
         }
 
-        // The microphone's owner is the person themselves, once they said which profile that is.
-        if let me {
+        // The microphone's owner is the person themselves, once they said which profile that is. Only where voices are
+        // matched at all, and never over an identity that is already right (kept as it is, similarity and all).
+        if options.recognizes, let me {
             for meeting in ordered {
                 let voice = voices[meeting.id]!
                 guard let ownerID = voice.ownerSpeakerID, var entry = current[meeting.id]?[ownerID] else { continue }
                 let old = entry.identity
-                let labelled = old?.source == .recognized && old?.profileID == me.id && old?.appliedName == entry.name
+                let holdsMe = old?.$source.isKnown == true && old?.source == .recognized && old?.profileID == me.id
+                if holdsMe, entry.name == me.name, old?.appliedName == me.name { continue }
+                let labelled = holdsMe && old?.appliedName == entry.name
                 guard labelled || voice.isOwnerDefault(ownerID, name: entry.name) else { continue }
                 if let old, !old.$source.isKnown || old.source.isPersonChosen { continue }
                 if (old?.rejectedProfileIDs ?? []).contains(me.id) { continue }
-                entry.identity = SpeakerIdentity(speakerID: ownerID, profileID: me.id, source: .recognized, appliedName: me.name,
-                                                 previousName: labelled ? old?.previousName : entry.name,
+                // Another speaker the person (or a voice) already gave the profile, with a voice of its own: not the owner too.
+                let ownerSources = voice.sources(of: ownerID, voice.prints(of: ownerID))
+                let heldElsewhere = (current[meeting.id] ?? [:]).contains { other, value in
+                    guard other != ownerID, let identity = value.identity, identity.$source.isKnown, identity.profileID == me.id,
+                          identity.source == .recognized || identity.source.isPersonChosen else { return false }
+                    return voice.sources(of: other, voice.prints(of: other)).isDisjoint(with: ownerSources)
+                }
+                if heldElsewhere { continue }
+                entry.identity = SpeakerIdentity(speakerID: ownerID, profileID: me.id, source: .recognized, similarity: labelled ? old?.similarity : nil,
+                                                 appliedName: me.name, previousName: labelled ? old?.previousName : entry.name,
                                                  basis: voice.latestRename(of: ownerID)?.id ?? old?.basis, rejectedProfileIDs: old?.rejectedProfileIDs)
                 entry.name = me.name
                 current[meeting.id]?[ownerID] = entry
