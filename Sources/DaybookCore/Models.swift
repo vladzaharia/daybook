@@ -426,6 +426,10 @@ public struct MeetingSummary: Codable, Equatable, Sendable {
     public var modelID: String
     public var createdAt: Date
     public var processingSettings: ProcessingSettings?
+    /// A digest of what the notebook pages gave this summary when it was written (`Meeting.notebookDigest`), so a reading that
+    /// arrives later shows it out of date (`Meeting.summaryNotebookChanged`). Nil on a summary written before this was kept, or by
+    /// a path that doesn't know it: never out of date for it.
+    public var notebookDigest: String?
     /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
     public var unknownFields = UnknownFields()
     public init(kind: MeetingKind = .general, title: String = "", overview: String,
@@ -437,7 +441,7 @@ public struct MeetingSummary: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case kind, title, overview, sections, actionItems, modelID, createdAt, processingSettings
+        case kind, title, overview, sections, actionItems, modelID, createdAt, processingSettings, notebookDigest
     }
     private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
 
@@ -451,6 +455,7 @@ public struct MeetingSummary: Codable, Equatable, Sendable {
         modelID = try values.decode(String.self, forKey: .modelID)
         createdAt = try values.decode(Date.self, forKey: .createdAt)
         processingSettings = try values.decodeIfPresent(ProcessingSettings.self, forKey: .processingSettings)
+        notebookDigest = try values.decodeIfPresent(String.self, forKey: .notebookDigest)
         unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
     }
 
@@ -464,6 +469,7 @@ public struct MeetingSummary: Codable, Equatable, Sendable {
         try values.encode(modelID, forKey: .modelID)
         try values.encode(createdAt, forKey: .createdAt)
         try values.encodeIfPresent(processingSettings, forKey: .processingSettings)
+        try values.encodeIfPresent(notebookDigest, forKey: .notebookDigest)
         try unknownFields.encode(to: encoder)
     }
 }

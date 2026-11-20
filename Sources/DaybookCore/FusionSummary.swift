@@ -87,8 +87,10 @@ public struct FusionSpeakerMapping: Codable, Equatable, Sendable {
 public struct FusionSummary: Codable, Equatable, Sendable {
     /// The fusion that made a unified transcript (docs/alignment.md, "Fusion versions"). 1: words aligned in
     /// 240-item regions. 2: one time-banded alignment with a guard against doubled runs, confidences compared within
-    /// each recognizer, names kept only where they stood, and phrase fits held to a clock's drift.
-    public static let currentVersion = 2
+    /// each recognizer, names kept only where they stood, and phrase fits held to a clock's drift. 3: beside call audio,
+    /// the microphone's echo of the call no longer makes its owner a call speaker, and speech the call carried never
+    /// takes a local label.
+    public static let currentVersion = 3
     /// The versions this build can still fuse with: upkeep re-fuses a conversation with the version it has, so its
     /// wording changes only when it's fused for a new reason.
     public static let supportedVersions = 1...currentVersion

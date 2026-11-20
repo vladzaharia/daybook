@@ -138,11 +138,13 @@ extension LibraryController {
         updateMetadata { Self.retireVoiceprints(in: &$0, at: now) { members.contains($0.profileID) && !$0.origin.isPersonChosen } }
     }
 
-    /// Conversations and speakers a profile is given to (through profiles merged into it too), newest first.
+    /// Conversations and speakers a profile is given to (through profiles merged into it too), newest first: the
+    /// speakers in each conversation's transcript (`Meeting.transcriptSpeakers`), not a recording's label that says
+    /// nothing there.
     public func speakers(of profileID: UUID) -> [(meeting: Meeting, speaker: Speaker, identity: SpeakerIdentity)] {
         let merges = metadata.speakerProfileMerges
         return meetings.sorted { $0.date > $1.date }.flatMap { meeting in
-            meeting.speakers.compactMap { speaker in
+            meeting.transcriptSpeakers.compactMap { speaker in
                 guard let identity = meeting.speakerIdentity(speaker.id), identity.$source.isKnown, let stored = identity.profileID,
                       (merges.resolve(stored) ?? stored) == profileID,
                       identity.source != .suggested, identity.source != .dismissed else { return nil }

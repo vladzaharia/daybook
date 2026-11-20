@@ -58,6 +58,18 @@ extension Meeting {
         }
     }
 
+    /// A short digest of `notebookSummaryInputs`: what a summary stores of the notebook it was written from.
+    public var notebookDigest: String {
+        String(AudioDigest.sha256(data: Data(notebookSummaryInputs.joined(separator: "\n").utf8)).prefix(16))
+    }
+
+    /// Whether the notebook now gives a summary something other than it was written from (a page's reading arrived, a
+    /// correction, a page hidden). False for a summary that kept no digest, so older summaries are not all out of date.
+    public var summaryNotebookChanged: Bool {
+        guard let written = summary?.notebookDigest else { return false }
+        return written != notebookDigest
+    }
+
     /// The sketches a summary section drew on that still exist: not on a deleted or hidden page, and still among the passages
     /// read, in the section's order.
     public func sketches(in section: SummarySection) -> [(page: NotebookPage, passage: NotebookPassage)] {

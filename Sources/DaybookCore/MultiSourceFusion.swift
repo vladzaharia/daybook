@@ -856,6 +856,11 @@ final class MultiSourceFusion {
     /// (remote participants); later sources' labels are mapped onto speakers already established
     /// where both heard the same words; on the microphone, the dominant voice absent from the call
     /// becomes the owner. A column takes the label of its earliest labelled source.
+    ///
+    /// From version 3 the microphone is taken for what it is beside call audio: the person at the Mac, plus the call
+    /// heard again as echo. A microphone label maps onto a call speaker only when most of its words are that echo
+    /// (`minimumEchoShare`); one cluster holding the owner's own speech and some echo stays the owner's. And speech the
+    /// call carried keeps a call speaker or none: it never takes a label from another recording that isn't mapped to one.
     private func speakerLabels() -> (labels: [String?], mappings: [FusionSpeakerMapping], owner: String?, ownerTrack: UUID?) {
         var labels = [String?](repeating: nil, count: columns.count)
         var mappings: [FusionSpeakerMapping] = []
@@ -865,6 +870,7 @@ final class MultiSourceFusion {
         for s in sources.indices where sources[s].role == .call { callMask |= UInt64(1) << UInt64(s) }
         let callLabels = Set(sources.indices.filter { sources[$0].role == .call }
             .flatMap { s in sources[s].segments.compactMap(\.speakerID) })
+        let callPrior = inputs.options.version >= 3 && callMask != 0
         for s in sources.indices {
             let own = columns.indices.compactMap { index in columns[index].entries.first { $0.source == s }.map { (index, $0) } }
             var map: [String: String] = [:]
@@ -873,12 +879,20 @@ final class MultiSourceFusion {
             if sources[s].role != .call {
                 var observations: [SpeakerCooccurrence] = []
                 var tallies: [String: [String: Double]] = [:]
+                var spoken: [String: Double] = [:]
                 for (index, entry) in own {
+                    spoken[key(rawLabel(entry)), default: 0] += 1
                     guard let target = labels[index] else { continue }
                     tallies[key(rawLabel(entry)), default: [:]][target, default: 0] += 1
                 }
                 for (label, targets) in tallies {
                     if label != none, inputs.namedSpeakerIDs.contains(label) || established.contains(label) { continue }
+                    if callPrior, sources[s].role == .microphone {
+                        // Words this label shares with the call are the call's echo. Unless most of what it said is,
+                        // it's the person at the microphone, who took in some of the echo.
+                        let echo = targets.filter { callLabels.contains($0.key) }.values.reduce(0, +)
+                        if echo > 0, echo < Self.minimumEchoShare * (spoken[label] ?? 0) { continue }
+                    }
                     observations += targets.map { SpeakerCooccurrence(sourceSpeakerID: label, targetSpeakerID: $0.key, weight: $0.value) }
                 }
                 for match in SpeakerMatcher.matchByCooccurrence(observations) {
@@ -910,7 +924,12 @@ final class MultiSourceFusion {
             }
             for (index, entry) in own where labels[index] == nil {
                 let raw = rawLabel(entry)
-                labels[index] = map[key(raw)] ?? raw
+                let label = map[key(raw)] ?? raw
+                // The call carried this word (its speaker detection found no turn there): it's the far side's, so it
+                // never takes the microphone's or a room recorder's own label, only one mapped to a call speaker.
+                if callPrior, sources[s].role != .call, columns[index].entries.contains(where: { sources[$0.source].role == .call }),
+                   !(label.map(callLabels.contains) ?? false) { continue }
+                labels[index] = label
             }
             for segment in sources[s].segments { if let label = segment.speakerID { established.insert(map[label] ?? label) } }
             for target in map.values { established.insert(target) }
@@ -1067,6 +1086,11 @@ final class MultiSourceFusion {
     }
 
     private var statistics: [UUID: (words: Int, used: Int, corroborated: Int, merged: Int, overruled: Int)] = [:]
+
+    /// Version 3: the share of a microphone label's words that must repeat the call before it can be mapped onto a call
+    /// speaker. An echo cluster repeats the call almost word for word; the owner's own cluster, which took in some of
+    /// the echo, repeats it for a small part of what it said.
+    static let minimumEchoShare = 0.5
 
     private struct Run { var label: String?; var range: Range<Int>; var count: Int { range.count } }
     private func runsOf(_ labels: [String?]) -> [Run] {

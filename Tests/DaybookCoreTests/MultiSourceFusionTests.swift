@@ -348,6 +348,58 @@ final class MultiSourceFusionTests: XCTestCase {
         XCTAssertEqual(result.segments.first { $0.text == o1 }?.speakerID, "mic:S1")
     }
 
+    // MARK: The microphone's echo of the call
+
+    /// Echo cancellation leaves part of the call audible in the microphone, and the microphone's speaker detection files
+    /// that echo under the owner's own voice: one cluster, "mic:S1", for the owner's three replies and the echo of two
+    /// remote questions. The words it shares with the call are the echo, not the owner.
+    var echoInOwnerCluster: TrackTranscript {
+        transcript(mic, [[Line(start: 5, text: o1, speaker: "mic:S1", confidence: 0.9)],
+                         [Line(start: 10, text: "Could you walk us through the revenue forecast", speaker: "mic:S1", confidence: 0.7)],
+                         [Line(start: 16, text: o2, speaker: "mic:S1", confidence: 0.9)],
+                         [Line(start: 29, text: o3, speaker: "mic:S1", confidence: 0.9)],
+                         [Line(start: 35, text: "Great please send the summary to the whole team", speaker: "mic:S1", confidence: 0.8)]],
+                   created: 3)
+    }
+
+    func testMicrophoneClusterHoldingTheCallsEchoStaysTheOwner() throws {
+        // The call's low-confidence "summery" outvotes the echo's "summary", so passages are found by their first words.
+        func speaker(_ result: FusionResult, _ text: String) -> String? {
+            result.segments.first { $0.text.hasPrefix(text.split(separator: " ").prefix(4).joined(separator: " ")) }?.speakerID
+        }
+        let result = TranscriptFusion.fuse([systemTranscript, echoInOwnerCluster], tracks: Array(tracks.prefix(3)))
+        XCTAssertEqual(result.summary?.version, 3)
+        XCTAssertEqual(result.summary?.ownerSpeakerID, "owner")
+        XCTAssertEqual([o1, o2, o3].map { speaker(result, $0) }, ["owner", "owner", "owner"])
+        XCTAssertEqual([r1, r2, r3, r4].map { speaker(result, $0) }, ["sys:S1", "sys:S2", "sys:S1", "sys:S2"])
+        XCTAssertFalse(result.summary!.speakerMappings.contains { $0.sourceSpeakerID == "mic:S1" && $0.speakerID.hasPrefix("sys:") },
+                       "\(result.summary!.speakerMappings)")
+        // The echo is still one passage with the call's words: nothing the call said is dropped or doubled.
+        XCTAssertEqual(result.segments.count, 7, "\(result.segments.map(\.text))")
+
+        // What version 2 did: the echo mapped the owner's whole cluster onto the remote speaker, so the owner's replies
+        // were credited to the far side, and no owner was found.
+        let before = TranscriptFusion.fuse([systemTranscript, echoInOwnerCluster], tracks: Array(tracks.prefix(3)),
+                                           inputs: FusionInputs(options: FusionOptions(version: 2)))
+        XCTAssertNil(before.summary?.ownerSpeakerID)
+        XCTAssertEqual([o1, o2, o3].map { speaker(before, $0) }, ["sys:S2", "sys:S2", "sys:S2"])
+    }
+
+    /// The call's speaker detection found no turn under a remote question. The call carries only the far side, so the
+    /// question never takes the owner's label from the microphone's echo of it.
+    func testSpeechTheCallCarriedNeverTakesTheOwnersLabel() throws {
+        var call = systemTranscript
+        call.segments[1].speakerID = nil
+        let result = TranscriptFusion.fuse([call, echoInOwnerCluster], tracks: Array(tracks.prefix(3)))
+        let question = try XCTUnwrap(result.segments.first { $0.text == r2 })
+        XCTAssertNotEqual(question.speakerID, "owner")
+        XCTAssertNil(question.speakerID)
+        XCTAssertEqual(result.segments.first { $0.text == o2 }?.speakerID, "owner")
+        // A pure echo cluster still maps onto the remote voice it repeats.
+        let echoCluster = TranscriptFusion.fuse([systemTranscript, micTranscript], tracks: Array(tracks.prefix(3)))
+        XCTAssertTrue(echoCluster.summary!.speakerMappings.contains { $0.sourceSpeakerID == "mic:S2" && $0.speakerID == "sys:S2" })
+    }
+
     func testFusionIsDeterministicAndRoundTripsThroughJSON() throws {
         let transcripts = [systemTranscript, rawMicTranscript, micTranscript, roomTranscript]
         let inputs = FusionInputs(audioAlignments: [roomRecord])
