@@ -45,6 +45,9 @@ public struct TranscriptPage<Header: View, Placeholder: View>: View {
     @State private var editing: UUID?
     @State private var draft = ""
     @State private var renaming: RenameRequest?
+    #if DEBUG
+    @State private var demoRenameOpened = false
+    #endif
     @State private var heardIn: UUID?
     @FocusState private var focusedRow: String?
     @Namespace private var rotorSpace
@@ -190,6 +193,16 @@ public struct TranscriptPage<Header: View, Placeholder: View>: View {
                 .padding(.bottom, 2)
                 .modifier(RenamePopover(row: row.id, request: $renaming, meeting: meeting, profiles: host.library.speakerProfiles,
                                            me: host.library.ownerProfileID, save: rename))
+                #if DEBUG
+                .onAppear {
+                    guard SpeakerNamePickerDemo.opensRename, !demoRenameOpened, let speakerID else { return }
+                    demoRenameOpened = true
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(2))
+                        renaming = RenameRequest(speakerID: speakerID, anchor: row.id)
+                    }
+                }
+                #endif
         case .passage(let segment):
             if editing == segment.id {
                 InlinePassageEditor(text: $draft) { saveCorrection(segment.id) } cancel: { editing = nil; focusedRow = segment.id.uuidString }

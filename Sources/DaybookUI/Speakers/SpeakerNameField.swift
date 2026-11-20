@@ -72,3 +72,19 @@ struct SpeakerNameField<Field: View>: View {
         return .handled
     }
 }
+
+#if DEBUG
+/// Debug only, for screenshots: `--focus-speaker-name` focuses the first person's name in Info › People,
+/// `--rename-speaker` opens the transcript's Rename Speaker at its first turn, and `--speaker-name-draft <text>`
+/// types a name into either.
+enum SpeakerNamePickerDemo {
+    static var focusesInfo: Bool { CommandLine.arguments.contains("--focus-speaker-name") }
+    static var marksFirstAsMe: Bool { CommandLine.arguments.contains("--speaker-name-me") }
+    static var opensRename: Bool { CommandLine.arguments.contains("--rename-speaker") }
+    static var draft: String? {
+        let arguments = CommandLine.arguments
+        guard let index = arguments.firstIndex(of: "--speaker-name-draft"), arguments.indices.contains(index + 1) else { return nil }
+        return arguments[index + 1]
+    }
+}
+#endif

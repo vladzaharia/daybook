@@ -26,6 +26,14 @@ struct PeopleSection: View {
                     SpeakerIdentityLine(library: library, meeting: meeting, speakerIDs: person.speakerIDs)
                 }
                 .contextMenu { meMenu(person) }
+                #if DEBUG
+                .onAppear {
+                    // `--speaker-name-me`: the first person is the person's own profile, for the You mark.
+                    if SpeakerNamePickerDemo.marksFirstAsMe, person.index == 0, library.canMarkSpeakerAsMe(person.speakerIDs, in: meeting.id) {
+                        library.markSpeakerAsMe(person.speakerIDs, in: meeting.id)
+                    }
+                }
+                #endif
             }
         }
     }
@@ -64,10 +72,10 @@ struct SpeakerRow<Identity: View>: View {
         VStack(alignment: .leading, spacing: 2) {
             if dynamicTypeSize.isAccessibilitySize {
                 // The largest sizes: the name a line of its own, then the share and the time under it.
-                HStack(spacing: gap) { inkDot; name }
+                HStack(alignment: .firstTextBaseline, spacing: gap) { inkDot; name }
                 HStack(spacing: gap) { share; time }.padding(.leading, dot + gap)
             } else {
-                HStack(spacing: gap) {
+                HStack(alignment: .firstTextBaseline, spacing: gap) {
                     inkDot
                     name
                     Spacer(minLength: 8)
@@ -78,17 +86,30 @@ struct SpeakerRow<Identity: View>: View {
             // Lined up with the name, past the ink dot.
             identity.padding(.leading, dot + gap)
         }
-        .onAppear { draft = person.speaker.name }
+        .onAppear {
+            draft = person.speaker.name
+            #if DEBUG
+            if SpeakerNamePickerDemo.focusesInfo, person.index == 0 {
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(2))
+                    focused = true
+                    if let typed = SpeakerNamePickerDemo.draft { draft = typed }
+                }
+            }
+            #endif
+        }
         .onChange(of: person.speaker.name) { _, value in if !focused { draft = value } }
     }
 
     private var inkDot: some View {
         Circle().fill(ink).frame(width: dot, height: dot).accessibilityHidden(true)
+            .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
     }
 
     private var share: some View {
         Capsule().fill(Color.primary.opacity(0.08)).frame(width: bar, height: touch ? 5 : 4)
             .overlay(alignment: .leading) { Capsule().fill(ink).frame(width: max(touch ? 5 : 4, bar * person.share), height: touch ? 5 : 4) }
+            .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
             .accessibilityLabel("\(Int((person.share * 100).rounded())) percent of the talking")
     }
 
@@ -109,6 +130,10 @@ struct SpeakerRow<Identity: View>: View {
             .foregroundStyle(ink)
             .fontWeight(.semibold)
             .focused($focused)
+            #if os(macOS)
+            // Escape leaves the field with the name it had.
+            .onExitCommand { draft = person.speaker.name; focused = false }
+            #endif
             .onChange(of: focused) { _, active in if !active { commit(draft) } }
             .accessibilityLabel("Speaker name")
             .accessibilityHint("Edit to rename this speaker everywhere in the conversation.")

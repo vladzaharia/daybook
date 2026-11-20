@@ -306,7 +306,16 @@ struct RenameSpeakerForm: View {
         #if os(iOS)
         .presentationDetents([.medium, .large])
         #endif
-        .onAppear { draft = name; focused = true }
+        .onAppear {
+            draft = name; focused = true
+            #if DEBUG
+            if let typed = SpeakerNamePickerDemo.draft { draft = typed }
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(1))
+                focused = true
+            }
+            #endif
+        }
     }
 
     private func commit(_ chosen: String) {
