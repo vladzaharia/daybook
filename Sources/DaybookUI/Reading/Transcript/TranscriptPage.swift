@@ -1,4 +1,5 @@
 import DaybookCaptions
+import DaybookCore
 import DaybookDesign
 import DaybookKit
 import SwiftUI
@@ -187,7 +188,8 @@ public struct TranscriptPage<Header: View, Placeholder: View>: View {
             TurnHeaderRow(meeting: meeting, rowID: row.id, speakerID: speakerID, first: first, actions: actions)
                 .padding(.top, DaybookSpacing.s5)
                 .padding(.bottom, 2)
-                .modifier(RenamePopover(row: row.id, request: $renaming, meeting: meeting, save: rename))
+                .modifier(RenamePopover(row: row.id, request: $renaming, meeting: meeting, profiles: host.library.speakerProfiles,
+                                           me: host.library.ownerProfileID, save: rename))
         case .passage(let segment):
             if editing == segment.id {
                 InlinePassageEditor(text: $draft) { saveCorrection(segment.id) } cancel: { editing = nil; focusedRow = segment.id.uuidString }
@@ -197,7 +199,8 @@ public struct TranscriptPage<Header: View, Placeholder: View>: View {
                            bookmarks: layout.marks.bookmarksBySegment[segment.id] ?? [],
                            label: layout.marks.labelSegments[segment.id], corrected: corrected.contains(segment.id),
                            unsure: layout.unsure[segment.id] ?? [], highlight: highlight, actions: actions, focus: $focusedRow)
-                    .modifier(RenamePopover(row: row.id, request: $renaming, meeting: meeting, save: rename))
+                    .modifier(RenamePopover(row: row.id, request: $renaming, meeting: meeting, profiles: host.library.speakerProfiles,
+                                           me: host.library.ownerProfileID, save: rename))
                     .popover(isPresented: Binding(get: { heardIn == segment.id }, set: { if !$0 { heardIn = nil } }),
                              arrowEdge: .bottom) {
                         HeardInRecordings(meeting: meeting, segment: segment, recordingName: { host.recordingName($0, meeting) },
@@ -409,12 +412,14 @@ private struct RenamePopover: ViewModifier {
     let row: String
     @Binding var request: RenameRequest?
     let meeting: Meeting
+    let profiles: [SpeakerProfile]
+    let me: UUID?
     let save: (String, String) -> Void
 
     func body(content: Content) -> some View {
         content.popover(isPresented: Binding(get: { request?.anchor == row }, set: { if !$0 { request = nil } }), arrowEdge: .bottom) {
             if let request {
-                RenameSpeakerForm(name: meeting.speakerName(request.speakerID) ?? "") { save(request.speakerID, $0) }
+                RenameSpeakerForm(name: meeting.speakerName(request.speakerID) ?? "", profiles: profiles, me: me) { save(request.speakerID, $0) }
             }
         }
     }

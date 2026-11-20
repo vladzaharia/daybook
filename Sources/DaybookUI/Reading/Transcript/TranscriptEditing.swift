@@ -1,3 +1,4 @@
+import DaybookCore
 import DaybookDesign
 import DaybookKit
 import SwiftUI
@@ -271,6 +272,8 @@ public struct HeardInRecordings: View {
 /// Rename Speaker: the name, changed for every passage of theirs in this conversation.
 struct RenameSpeakerForm: View {
     let name: String
+    let profiles: [SpeakerProfile]
+    let me: UUID?
     let save: (String) -> Void
     private let dismiss = SheetDismiss()
     @Environment(\.daybookDensity) private var density
@@ -282,15 +285,16 @@ struct RenameSpeakerForm: View {
     var body: some View {
         VStack(alignment: .leading, spacing: DaybookSpacing.s3) {
             Text("Rename Speaker").font(.headline).foregroundStyle(DaybookPalette.Ink.title)
-            TextField("Name", text: $draft)
-                .textFieldStyle(.roundedBorder)
-                .touchKeyboard(capitalization: .words)
-                .focused($focused)
-                .onSubmit(commit)
+            SpeakerNameField(current: name, draft: $draft, isFocused: focused, profiles: profiles, me: me, commit: commit) {
+                TextField("Name", text: $draft)
+                    .textFieldStyle(.roundedBorder)
+                    .touchKeyboard(capitalization: .words)
+                    .focused($focused)
+            }
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Rename", action: commit)
+                Button("Rename") { commit(draft) }
                     .keyboardShortcut(.defaultAction)
                     .disabled(trimmed.isEmpty)
             }
@@ -300,14 +304,15 @@ struct RenameSpeakerForm: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .presentationCompactAdaptation(.sheet)
         #if os(iOS)
-        .presentationDetents([.height(220)])
+        .presentationDetents([.medium, .large])
         #endif
         .onAppear { draft = name; focused = true }
     }
 
-    private func commit() {
-        guard !trimmed.isEmpty else { return }
-        if trimmed != name { save(trimmed) }
+    private func commit(_ chosen: String) {
+        let value = chosen.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return }
+        if value != name { save(value) }
         dismiss()
     }
 }

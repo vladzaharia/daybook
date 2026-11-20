@@ -1,3 +1,4 @@
+import DaybookCore
 import DaybookDesign
 import DaybookKit
 import SwiftUI
@@ -16,7 +17,7 @@ struct PeopleSection: View {
             Text("No speakers yet").foregroundStyle(DaybookPalette.Ink.secondary)
         } else {
             ForEach(people) { person in
-                SpeakerRow(person: person) { name in
+                SpeakerRow(person: person, profiles: library.speakerProfiles, me: library.ownerProfileID) { name in
                     // One person found more than once is renamed as one, so they stay one person.
                     library.update(meeting.id, actionName: "Rename Speaker", undoManager: undoManager) { meeting in
                         for id in person.speakerIDs { meeting.renameSpeaker(id: id, name: name) }
@@ -44,6 +45,8 @@ extension PeopleSection {
 /// talking; under the name, `identity`.
 struct SpeakerRow<Identity: View>: View {
     let person: MeetingPerson
+    let profiles: [SpeakerProfile]
+    let me: UUID?
     let save: (String) -> Void
     @ViewBuilder var identity: Identity
     @State private var draft = ""
@@ -96,13 +99,17 @@ struct SpeakerRow<Identity: View>: View {
     }
 
     private var name: some View {
+        SpeakerNameField(current: person.speaker.name, draft: $draft, isFocused: focused, profiles: profiles, me: me,
+                         commit: commit) { nameField }
+    }
+
+    private var nameField: some View {
         let field = TextField("Speaker", text: $draft)
             .labelsHidden()
             .foregroundStyle(ink)
             .fontWeight(.semibold)
             .focused($focused)
-            .onSubmit(commit)
-            .onChange(of: focused) { _, active in if !active { commit() } }
+            .onChange(of: focused) { _, active in if !active { commit(draft) } }
             .accessibilityLabel("Speaker name")
             .accessibilityHint("Edit to rename this speaker everywhere in the conversation.")
         #if os(iOS)
@@ -118,9 +125,11 @@ struct SpeakerRow<Identity: View>: View {
         #endif
     }
 
-    private func commit() {
-        let value = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        if value.isEmpty { draft = person.speaker.name } else if value != person.speaker.name { save(value) }
+    private func commit(_ name: String) {
+        let value = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        draft = value.isEmpty ? person.speaker.name : value
+        if !value.isEmpty, value != person.speaker.name { save(value) }
+        focused = false
     }
 }
 
