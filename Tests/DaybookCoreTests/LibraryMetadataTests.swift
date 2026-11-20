@@ -221,4 +221,51 @@ final class LibraryMetadataTests: XCTestCase {
         let again = try JSONDecoder().decode(LibraryMetadata.self, from: JSONEncoder().encode(metadata))
         XCTAssertEqual(again, metadata, "written back as it came")
     }
+
+    // MARK: The profile that is the person
+
+    private func owner(_ profile: UUID?, at date: Date) -> LibraryMetadata {
+        var metadata = LibraryMetadata()
+        metadata.choices = [.init(id: LibraryChoice.Name.ownerProfile.rawValue, value: LibraryChoice(selection: profile?.uuidString), modifiedAt: date)]
+        return metadata
+    }
+
+    func testBehaviorTheOwnerProfileMergesTheLaterChangeWinningAndRoundTrips() throws {
+        let first = UUID(), second = UUID()
+        let a = owner(first, at: earlier), b = owner(second, at: later), none = owner(nil, at: later)
+        XCTAssertEqual(a.merging(b), b.merging(a))
+        XCTAssertEqual(a.merging(b).ownerProfileSelection, second)
+        XCTAssertNil(a.merging(none).ownerProfileSelection, "cleared later")
+        XCTAssertNotNil(a.merging(none).choice(.ownerProfile))
+        XCTAssertEqual(try JSONDecoder().decode(LibraryMetadata.self, from: JSONEncoder().encode(b)), b)
+        // Independent of the transcription language.
+        XCTAssertEqual(a.merging(language("de", at: later)).ownerProfileSelection, first)
+        XCTAssertEqual(a.merging(language("de", at: later)).transcriptionLanguage, "de")
+    }
+
+    /// An older Daybook doesn't know the name, and keeps and merges the record as it would any choice.
+    func testBehaviorAChoiceNameThisVersionDoesNotKnowIsKeptAndMerged() throws {
+        var future = LibraryMetadata()
+        future.choices = [.init(id: "someFutureChoice", value: LibraryChoice(selection: "x"), modifiedAt: later)]
+        let combined = owner(UUID(), at: earlier).merging(future)
+        XCTAssertEqual(combined.choices?.count, 2)
+        XCTAssertEqual(combined.choices?.first { $0.id == "someFutureChoice" }?.value?.selection, "x")
+        XCTAssertNil(combined.transcriptionLanguage)
+        let decoded = try JSONDecoder().decode(LibraryMetadata.self, from: JSONEncoder().encode(combined))
+        XCTAssertEqual(decoded.choices?.count, 2)
+    }
+
+    func testBehaviorTheOwnerProfileResolvesThroughMergesAndIsNilOnceDeleted() throws {
+        let mine = SpeakerProfile(id: UUID(), name: "Vlad"), same = SpeakerProfile(id: UUID(), name: "Vlad Z")
+        var metadata = owner(mine.id, at: earlier)
+        metadata.speakerProfiles = [mine, same].map { .init(id: $0.id.uuidString, value: $0, modifiedAt: earlier) }
+        XCTAssertEqual(metadata.ownerProfileID, mine.id)
+        XCTAssertTrue(metadata.mergeSpeakerProfile(mine.id, into: same.id, at: later))
+        XCTAssertEqual(metadata.ownerProfileID, same.id, "the merged profile resolves to its target")
+        XCTAssertEqual(metadata.ownerProfileSelection, mine.id)
+        let stored = try XCTUnwrap(metadata.speakerProfiles?.first { $0.id == same.id.uuidString })
+        metadata.speakerProfiles = (metadata.speakerProfiles ?? []).filter { $0.id != same.id.uuidString } + [.edit(same.id.uuidString, value: nil, replacing: stored, at: later)]
+        XCTAssertNil(metadata.ownerProfileID, "a deleted profile is no one")
+        XCTAssertNil(owner(UUID(), at: earlier).ownerProfileID, "a profile that isn't known here either")
+    }
 }

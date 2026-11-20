@@ -264,13 +264,16 @@ public struct RecorderHandoffRecord: Codable, Equatable, Sendable {
 }
 
 /// A choice the whole library shares rather than each device (docs/icloud-sync.md, "Library settings"): one record per
-/// choice in `LibraryMetadata.choices`, keyed by its name and merged like a folder, the later change winning. Today the
-/// transcription language, which describes the person's conversations, so every device transcribes in it.
+/// choice in `LibraryMetadata.choices`, keyed by its name and merged like a folder, the later change winning. The
+/// transcription language, which describes the person's conversations, so every device transcribes in it, and which
+/// speaker profile is the person themselves.
 public struct LibraryChoice: Codable, Equatable, Sendable {
     /// The library's choices. Raw values are stored in the library and must not change.
     public enum Name: String, CaseIterable, Sendable {
         /// The language its conversations are transcribed in: a language code ("de"), or nil for Automatic.
         case transcriptionLanguage
+        /// The speaker profile that is the person themselves: a profile's ID (a UUID string), or nil for none.
+        case ownerProfile
     }
 
     /// What was chosen; nil for the default (Automatic, for the transcription language).
@@ -312,7 +315,7 @@ public struct LibraryMetadata: Codable, Equatable, Sendable {
     /// Optional, like `recorders`, so earlier files decode and earlier versions keep them as they came.
     public var speakerProfiles: [LibraryValue<SpeakerProfile>]?
     public var voiceprints: [LibraryValue<Voiceprint>]?
-    /// Choices the whole library shares, one record each by `LibraryChoice.Name`: the transcription language. Optional,
+    /// Choices the whole library shares, one record each by `LibraryChoice.Name`: the transcription language and the owner profile. Optional,
     /// like `recorders`, so earlier files decode, and earlier versions keep them and merge them item by item.
     public var choices: [LibraryValue<LibraryChoice>]?
     /// Settings a newer Daybook keeps under keys this version doesn't know, written back as they came
@@ -393,6 +396,13 @@ public struct LibraryMetadata: Codable, Equatable, Sendable {
     /// The language the library's conversations are transcribed in, as stored; nil for Automatic, including while no
     /// device has chosen one and when one was written in a shape this version can't read.
     public var transcriptionLanguage: String? { choice(.transcriptionLanguage)?.value?.selection }
+
+    /// The profile chosen as the person themselves, as stored: not followed through merges, and not checked against deletion.
+    public var ownerProfileSelection: UUID? { choice(.ownerProfile)?.value?.selection.flatMap(UUID.init(uuidString:)) }
+
+    /// The profile that is the person themselves: the one chosen, or the profile it was merged into; nil when none was
+    /// chosen or the profile was deleted.
+    public var ownerProfileID: UUID? { ownerProfileSelection.flatMap { speakerProfileMerges.resolve($0) } }
 
     /// Handoffs under way or answered (cleared ones left out).
     public var recorderHandoffs: [RecorderHandoffRecord] { (handoffs ?? []).compactMap(\.value) }

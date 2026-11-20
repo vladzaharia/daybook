@@ -36,6 +36,11 @@ public enum SpeakerProfileWords {
         identity.source == .recognized ? "Recognized" : "Named"
     }
 
+    /// Marking the profile that is the person themselves, and its mark in the list.
+    public static let thisIsMe = "This Is Me"
+    public static let notMe = "Not Me"
+    public static let you = "You"
+
     /// A conversation a voiceprint came from that isn't in the library any more.
     public static let deletedConversation = "Deleted conversation"
 

@@ -695,7 +695,8 @@ A choice that describes the person's conversations rather than a device is the l
 
 - **Automatic** is a choice with nothing selected (`"value": {}`), so a library where someone chose Automatic differs from one where nobody has chosen (no record). Only the second takes a Mac's language from before the setting ([release](release.md#migrations)).
 - **What it changes.** Each device routes its jobs in it ([models](models.md#routing)) and a job keeps the one it was queued with, so a change on one device changes what every device's next job transcribes in once it syncs, never a job already waiting. The speaker model, its effort, the matching thresholds, and the model for other languages stay each Mac's own preferences: they're bound to the models and hardware of the device that runs them. The iPhone runs the speaker defaults.
-- **Older versions** keep `choices` under a key they don't know and merge it item by item, so they drop nothing; they transcribe in their own preference as before. A choice in a shape this version can't read is Automatic here and travels on unchanged.
+- **The owner profile** (`ownerProfile`, `"selection": "<profile UUID>"`, nothing selected for none) is the speaker profile that is the person themselves, set with This Is Me on a profile or a speaker and cleared with Not Me. It resolves through profile merges to the profile it was merged into, and to no one once the profile is deleted (the choice itself stays). Voiceprints and profiles stay as they were; the choice only says which profile is "me" ([architecture](architecture.md#speakers-and-profiles)).
+- **Older versions** keep `choices` under a key they don't know and merge it item by item, so they drop nothing (an `ownerProfile` record included: a choice name they don't know is kept as its record, and travels back); they transcribe in their own preference as before. A choice in a shape this version can't read is Automatic here and travels on unchanged.
 
 ## Newer versions
 

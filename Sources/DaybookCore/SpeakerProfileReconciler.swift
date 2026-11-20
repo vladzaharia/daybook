@@ -17,13 +17,15 @@ public struct SpeakerProfileOptions: Equatable, Sendable {
 public struct SpeakerProfileState: Equatable, Sendable {
     public var profiles: [LibraryValue<SpeakerProfile>]
     public var voiceprints: [LibraryValue<Voiceprint>]
+    /// The profile the person chose as themselves (`LibraryMetadata.ownerProfileSelection`, merges not yet followed).
+    public var ownerProfileID: UUID?
 
-    public init(profiles: [LibraryValue<SpeakerProfile>] = [], voiceprints: [LibraryValue<Voiceprint>] = []) {
-        self.profiles = profiles; self.voiceprints = voiceprints
+    public init(profiles: [LibraryValue<SpeakerProfile>] = [], voiceprints: [LibraryValue<Voiceprint>] = [], ownerProfileID: UUID? = nil) {
+        self.profiles = profiles; self.voiceprints = voiceprints; self.ownerProfileID = ownerProfileID
     }
 
     public init(_ metadata: LibraryMetadata) {
-        self.init(profiles: metadata.speakerProfiles ?? [], voiceprints: metadata.voiceprints ?? [])
+        self.init(profiles: metadata.speakerProfiles ?? [], voiceprints: metadata.voiceprints ?? [], ownerProfileID: metadata.ownerProfileSelection)
     }
 }
 
@@ -60,6 +62,9 @@ public struct SpeakerProfileReconciliation: Equatable, Sendable {
 ///    match is labelled (its name becomes the profile's), a looser one only suggested. A name the
 ///    person gave, or one Daybook didn't give, is never replaced. Two voices from one recording are
 ///    never both labelled the same person.
+///    The profile the person chose as themselves (`ownerProfileID`) is never given to a speaker from the call
+///    side of a recording that has both a microphone and computer audio, and takes the microphone's owner
+///    while that is still fusion's default "Me" (labelled like a recognized speaker, so "Not <name>" takes it back).
 /// 3. **Confident labels teach profiles.** A recognized speaker with plenty of clean speech, close
 ///    both to the profile and to the person's own voiceprints, adds a learned voiceprint.
 ///
@@ -153,6 +158,7 @@ public enum SpeakerProfileReconciler {
         // 2. Labels and suggestions from the profiles as they stand.
         let book = SpeakerProfileBook(profiles: work.activeProfiles, voiceprints: work.activeVoiceprints, learning: options.learning)
         var lessons: [Lesson] = []
+        let me = state.ownerProfileID.flatMap { work.merges.resolve($0) }.flatMap { work.activeProfilesByID[$0] }
         if options.recognizes {
             for meeting in ordered {
                 let voice = voices[meeting.id]!
@@ -171,7 +177,8 @@ public enum SpeakerProfileReconciler {
                         decisions[speaker.id] = Decision(ranked: [], best: nil, print: nil, outcome: .unknown)
                         continue
                     }
-                    decisions[speaker.id] = decide(speaker.id, entry: entry, voice: voice, book: book, matching: options.matching, meetingID: meeting.id)
+                    decisions[speaker.id] = decide(speaker.id, entry: entry, voice: voice, book: book, matching: options.matching, meetingID: meeting.id,
+                                                   barring: voice.isCallSide(speaker.id) ? me?.id : nil)
                 }
                 resolveConflicts(&decisions, meeting: meeting, voice: voice, current: current[meeting.id] ?? [:], margin: options.matching.margin)
                 for (speakerID, decision) in decisions.sorted(by: { $0.key < $1.key }) {
@@ -182,6 +189,24 @@ public enum SpeakerProfileReconciler {
                         lessons.append(lesson)
                     }
                 }
+            }
+        }
+
+        // The microphone's owner is the person themselves, once they said which profile that is.
+        if let me {
+            for meeting in ordered {
+                let voice = voices[meeting.id]!
+                guard let ownerID = voice.ownerSpeakerID, var entry = current[meeting.id]?[ownerID] else { continue }
+                let old = entry.identity
+                let labelled = old?.source == .recognized && old?.profileID == me.id && old?.appliedName == entry.name
+                guard labelled || voice.isOwnerDefault(ownerID, name: entry.name) else { continue }
+                if let old, !old.$source.isKnown || old.source.isPersonChosen { continue }
+                if (old?.rejectedProfileIDs ?? []).contains(me.id) { continue }
+                entry.identity = SpeakerIdentity(speakerID: ownerID, profileID: me.id, source: .recognized, appliedName: me.name,
+                                                 previousName: labelled ? old?.previousName : entry.name,
+                                                 basis: voice.latestRename(of: ownerID)?.id ?? old?.basis, rejectedProfileIDs: old?.rejectedProfileIDs)
+                entry.name = me.name
+                current[meeting.id]?[ownerID] = entry
             }
         }
 
@@ -233,9 +258,10 @@ public enum SpeakerProfileReconciler {
     }
 
     private static func decide(_ speakerID: String, entry: (name: String, identity: SpeakerIdentity?), voice: MeetingVoices,
-                               book: SpeakerProfileBook, matching: SpeakerProfileMatching, meetingID: UUID) -> Decision {
+                               book: SpeakerProfileBook, matching: SpeakerProfileMatching, meetingID: UUID, barring: UUID?) -> Decision {
         let prints = voice.prints(of: speakerID)
-        let excluded = Set(entry.identity?.rejectedProfileIDs ?? [])
+        var excluded = Set(entry.identity?.rejectedProfileIDs ?? [])
+        if let barring { excluded.insert(barring) }
         // A voice is never compared with what was learned from itself.
         let own = voice.sources(of: speakerID, prints)
         var best: [UUID: (SpeakerProfileCandidate, MeetingVoices.Print)] = [:]
@@ -528,7 +554,9 @@ struct MeetingVoices {
     private var own: [String: Print] = [:]
     private var aliases: [String: Set<String>] = [:]
     private var renames: [String: MeetingRevision] = [:]
-    private var ownerSpeakerID: String?
+    private(set) var ownerSpeakerID: String?
+    /// Speakers of the call's recording (computer audio), in a conversation that also has a microphone recording.
+    private var callSide: Set<String> = []
 
     init(_ meeting: Meeting) {
         let stats = Self.speech(meeting)
@@ -559,7 +587,13 @@ struct MeetingVoices {
             renames[id] = revision
         }
         ownerSpeakerID = meeting.fusionSummary?.ownerSpeakerID
+        if tracks.values.contains(where: { $0.source == .microphone }) {
+            callSide = Set(meeting.speakers.filter { $0.sourceTrackID.flatMap { tracks[$0] }?.source == .systemAudio }.map(\.id))
+        }
     }
+
+    /// Whether the speaker is heard on the call's recording of a conversation that also has a microphone's: the far side, never the owner.
+    func isCallSide(_ speakerID: String) -> Bool { callSide.contains(speakerID) }
 
     /// The speaker's own embedding and those of the speakers it stands for, one per embedding.
     func prints(of speakerID: String) -> [Print] {

@@ -24,7 +24,26 @@ struct PeopleSection: View {
                 } identity: {
                     SpeakerIdentityLine(library: library, meeting: meeting, speakerIDs: person.speakerIDs)
                 }
+                .contextMenu { meMenu(person) }
             }
+        }
+    }
+}
+
+extension PeopleSection {
+    /// This Is Me on a person the library doesn't know as the person themselves, Not Me on the one it does.
+    @ViewBuilder fileprivate func meMenu(_ person: MeetingPerson) -> some View {
+        let merges = library.metadata.speakerProfileMerges
+        let isMe = library.ownerProfileID.map { me in
+            person.speakerIDs.contains { id in
+                meeting.speakerIdentity(id).flatMap { $0.$source.isKnown && $0.source != .dismissed ? $0.profileID : nil }
+                    .flatMap { merges.resolve($0) } == me
+            }
+        } ?? false
+        if isMe {
+            Button(SpeakerProfileWords.notMe) { library.setOwnerProfile(nil) }
+        } else {
+            Button(SpeakerProfileWords.thisIsMe) { library.markSpeakerAsMe(person.speakerIDs, in: meeting.id) }
         }
     }
 }

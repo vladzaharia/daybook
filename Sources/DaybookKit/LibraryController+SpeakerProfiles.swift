@@ -70,6 +70,29 @@ extension LibraryController {
         }
     }
 
+    /// The person says this speaker is them: the profile the speaker has (a label, suggestion, or name of the person's)
+    /// becomes the library's "me". A speaker the person named whose profile isn't made yet (it needs their voice) is
+    /// marked by the profile its name starts, which counts once the profile exists. Returns whether anything was marked.
+    @discardableResult
+    public func markSpeakerAsMe(_ speakerIDs: [String], in id: UUID, at now: Date = Date()) -> Bool {
+        guard let meeting = meeting(id) else { return false }
+        let merges = metadata.speakerProfileMerges
+        for speakerID in speakerIDs {
+            guard let identity = meeting.speakerIdentity(speakerID), identity.$source.isKnown, identity.source != .dismissed,
+                  let stored = identity.profileID, let profile = merges.resolve(stored) else { continue }
+            setOwnerProfile(profile, at: now)
+            return true
+        }
+        for speakerID in speakerIDs {
+            let name = (meeting.speakerName(speakerID) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !SpeakerProfile.isPlaceholder(name), name != FusionOptions().ownerName else { continue }
+            let key = SpeakerProfile.normalizedName(name)
+            setOwnerProfile(speakerProfiles.first { SpeakerProfile.normalizedName($0.name) == key }?.id ?? SpeakerProfile.id(forName: name), at: now)
+            return true
+        }
+        return false
+    }
+
     // MARK: Profiles
 
     /// Renames a profile; speakers Daybook labelled with it follow. A name another profile has is
@@ -255,6 +278,7 @@ public final class SpeakerProfileCoordinator {
         }
         for item in library.metadata.speakerProfiles ?? [] { hasher.combine(item.id); hasher.combine(item.modifiedAt); hasher.combine(item.value?.name) }
         for item in library.metadata.voiceprints ?? [] { hasher.combine(item.id); hasher.combine(item.modifiedAt) }
+        hasher.combine(library.metadata.ownerProfileSelection)
         return hasher.finalize()
     }
 }
