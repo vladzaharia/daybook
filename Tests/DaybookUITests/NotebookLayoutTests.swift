@@ -1,3 +1,4 @@
+import DaybookCore
 import XCTest
 
 @testable import DaybookUI
@@ -76,5 +77,57 @@ final class NotebookLayoutTests: XCTestCase {
         XCTAssertTrue(PenProximity.isNear(CGPoint(x: 150, y: 185), frame), "within 40 pt")
         XCTAssertFalse(PenProximity.isNear(CGPoint(x: 150, y: 200), frame), "further")
         XCTAssertFalse(PenProximity.isNear(nil, frame), "a lifted pen is near nothing, and the control comes back")
+    }
+
+    // MARK: Where the controls go
+
+    private func controls(_ size: CGSize, crease: CGFloat?, text: CGFloat = 1) -> (NotebookLayout.Controls, [CGRect], NotebookPillFit) {
+        let layout = NotebookLayout.resolve(size: size, crease: crease, page: page)
+        let width = layout.frames(in: size, crease: crease, page: page).last?.width ?? 0
+        let fit = NotebookPillFit.resolve(available: width - 2 * NotebookLayout.margin, textScale: text)
+        let placement = layout.controls(in: size, page: page, pill: fit)
+        return (placement, layout.frames(in: size, crease: crease, page: page, bottomAligned: placement.bottomAligned), fit)
+    }
+
+    func testBehaviorOpenDuoPutsTheControlsInABandAbovePagesOnTheirStrips() throws {
+        let size = CGSize(width: 867, height: 635)
+        let (placement, frames, fit) = controls(size, crease: 475.5)
+        guard case .band(let height) = placement else { return XCTFail("the free band holds the pill: \(placement)") }
+        XCTAssertEqual(fit, .oneRow(meter: false))
+        XCTAssertEqual(height, 80.4, accuracy: 0.5, "635 - 34 strip - 520.6 page")
+        XCTAssertEqual(frames[0].minY, height, accuracy: 0.01, "the pages start under the band")
+        XCTAssertEqual(frames[0].maxY, size.height - NotebookLayout.stripHeight, accuracy: 0.01, "and sit on their strips")
+        XCTAssertEqual(frames[0].width, 367.5, accuracy: 0.5, "no smaller than centred")
+        XCTAssertGreaterThanOrEqual(height, NotebookLayout.controlInset * 2 + NotebookLayout.pillRowHeight)
+        XCTAssertLessThanOrEqual(frames[1].maxX, size.width - NotebookLayout.margin + 0.01, "the status area at the far right is untouched")
+    }
+
+    func testBehaviorLargerTextTakesTheDuoPillToTwoRowsAndToChipsInTheBand() {
+        let size = CGSize(width: 867, height: 635)
+        for text in [1.1, 1.2, 1.3] as [CGFloat] {
+            let (placement, frames, fit) = controls(size, crease: 475.5, text: text)
+            XCTAssertEqual(fit, .twoRows, "text \(text)")
+            guard case .chips(let height) = placement else { return XCTFail("104 pt is more than the 80 pt band, 52 is not: \(placement)") }
+            XCTAssertEqual(frames[0].minY, height, accuracy: 0.01, "the chips are above the pages, none of the paper under them")
+            XCTAssertGreaterThanOrEqual(frames[0].minY, NotebookLayout.controlInset + NotebookLayout.chipHeight)
+            XCTAssertEqual(frames[0].width, 367.5, accuracy: 0.5, "no smaller than centred")
+        }
+    }
+
+    func testBehaviorCoverControlsAreChipsAboveThePage() {
+        let size = CGSize(width: 382, height: 644)
+        let (placement, frames, _) = controls(size, crease: nil)
+        guard case .chips(let height) = placement else { return XCTFail("92 pt of band holds a row of chips, not the tools above the pill (108): \(placement)") }
+        XCTAssertEqual(height, 91.7, accuracy: 0.5)
+        XCTAssertGreaterThanOrEqual(frames[0].minY, NotebookLayout.controlInset + NotebookLayout.chipHeight, "no chip over the paper while collapsed")
+        XCTAssertEqual(frames[0].maxY, size.height - NotebookLayout.stripHeight, accuracy: 0.01)
+        XCTAssertEqual(NotebookPage.ruleSpacing, 28, "the ruling is untouched: pages already written keep their lines")
+    }
+
+    func testBehaviorWithNoRoomAboveTheChipsFloatOverThePage() {
+        // A short display: the page fills its height, nothing above it.
+        let (placement, frames, _) = controls(CGSize(width: 1000, height: 420), crease: nil)
+        XCTAssertEqual(placement, .overPage)
+        XCTAssertEqual(frames[0].midY, 210, accuracy: 0.01)
     }
 }

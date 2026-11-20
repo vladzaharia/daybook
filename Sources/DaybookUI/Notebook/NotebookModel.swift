@@ -30,6 +30,8 @@ public struct NotebookModel {
     public var applyReading: (UUID, PageReading) -> Void
     public var correct: (_ page: UUID, _ passage: UUID, _ text: String) -> Void
     public var remove: (UUID) -> (() -> Void)?
+    /// Keeps a page out of summaries, or lets them use it again.
+    public var setHiddenFromSummary: (_ page: UUID, _ hidden: Bool) -> Void
     public var recordErasures: (UUID, [ErasedStroke]) -> Void
     public var logTurn: (PageTurn) -> Void
     /// Notes the recorder's clock against the wall clock as a stroke begins; nil when no recording runs.
@@ -50,10 +52,12 @@ public struct NotebookModel {
                 remove: @escaping (UUID) -> (() -> Void)?, recordErasures: @escaping (UUID, [ErasedStroke]) -> Void,
                 logTurn: @escaping (PageTurn) -> Void, sampleClock: (() -> Void)? = nil,
                 anchor: @escaping (Date) -> (trackID: UUID?, time: TimeInterval?), isEditable: Bool = true,
-                play: ((NotebookPassage, NotebookPage) -> Void)? = nil, origin: PhotoOrigin? = nil) {
+                play: ((NotebookPassage, NotebookPage) -> Void)? = nil, origin: PhotoOrigin? = nil,
+                setHiddenFromSummary: @escaping (UUID, Bool) -> Void = { _, _ in }) {
         self.pages = pages; self.content = content; self.fetch = fetch; self.add = add; self.saveDraft = saveDraft
         self.commit = commit; self.applyReading = applyReading; self.correct = correct; self.remove = remove
         self.recordErasures = recordErasures; self.logTurn = logTurn; self.sampleClock = sampleClock; self.anchor = anchor
         self.isEditable = isEditable; self.play = play; self.origin = origin
+        self.setHiddenFromSummary = setHiddenFromSummary
     }
 }

@@ -62,6 +62,26 @@ final class NotebookRecordingTests: XCTestCase {
         XCTAssertNotNil(meeting.pageTurns?.first?.trackID, "placed on the recording's track")
     }
 
+    func testBehaviorPageLeftOutOfSummariesIsFiledWithTheConversation() async throws {
+        let (model, rig) = try makeModel()
+        try await model.library.reload()
+        try await model.startRecording()
+        rig.pump(2)
+        let page = NotebookPage(order: 1, now: rig.clock.now())
+        model.recorder.addPage(page)
+        let notebook = NotebookModel.recording(model)
+        let session = NotebookSession()
+        session.bind(notebook)
+        session.setHiddenFromSummary(page.id, true)
+        XCTAssertEqual(notebook.pages().first?.hiddenFromSummary, true)
+        _ = try model.recorder.commitPage(page.id, data: Data("ink".utf8), strokeCount: 1, contentVersion: 1)
+        let id = try XCTUnwrap(model.recorder.captureID)
+        rig.pump(2)
+        try await model.stopRecording()
+        XCTAssertEqual(model.library.controller.meeting(id)?.page(page.id)?.hiddenFromSummary, true)
+        session.setHiddenFromSummary(page.id, false)
+    }
+
     func testBehaviorNotebookButtonOnlyWhenSpreadFits() {
         let page = CGSize(width: NotebookPage.a5.width, height: NotebookPage.a5.height)
         XCTAssertTrue(NotebookLayout.resolve(size: CGSize(width: 867, height: 635), crease: 475.5, page: page).isSpread, "the open Duo")

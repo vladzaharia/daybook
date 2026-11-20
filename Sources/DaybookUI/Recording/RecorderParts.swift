@@ -345,6 +345,8 @@ public struct BookmarkControl: View {
         case round
         /// Beside the clock while writing in table mode: the glyph and the count.
         case glyph
+        /// The glyph and count at exactly the pill's row height (44 pt), for the notebook's pill, where the controls are one even row.
+        case pill
     }
 
     private let count: Int
@@ -416,7 +418,7 @@ public struct BookmarkControl: View {
             .foregroundStyle(DaybookPalette.bookmark)
             .frame(width: Self.roundTarget, height: Self.roundTarget)
             .contentShape(Circle())
-        case .glyph:
+        case .glyph, .pill:
             HStack(spacing: 6) {
                 Image(systemName: "bookmark.fill").daybookBounce(value: landed)
                 if count > 0 {
@@ -454,6 +456,12 @@ private struct BookmarkSurface: ViewModifier {
         case .wide: content.daybookControl(.standard, shape: .roundedRectangle(radius: 28))
         case .round: content.daybookControl(.standard, shape: .circle)
         case .glyph: content.daybookControl(.standard, shape: .capsule)
+        case .pill:
+            #if os(iOS)
+            content.buttonStyle(.plain).glassEffect(.regular, in: Capsule())
+            #else
+            content.daybookControl(.standard, shape: .capsule)
+            #endif
         }
     }
 }
@@ -466,6 +474,7 @@ public struct StopControl: View {
     private let radius: CGFloat
     private let size: CGFloat?
     private let glyph: Bool
+    private let flat: Bool
     private let shortcut: Bool
     private let elapsed: (() -> TimeInterval)?
     private let action: () -> Void
@@ -473,15 +482,17 @@ public struct StopControl: View {
 
     /// - Parameters:
     ///   - glyph: The symbol alone, a square target `metrics.height` wide (the iPhone's smallest sheet).
+    ///   - flat: With `glyph`, drawn at exactly `metrics.height` (a red capsule, no system padding), so it matches the controls beside it.
     ///   - shortcut: ⇧⌘R, with its tooltip (the Mac's panel).
     ///   - elapsed: The recording's length now, which VoiceOver reads with Stop.
-    public init(isSaving: Bool, metrics: RecorderControlMetrics, glyph: Bool = false, shortcut: Bool = false,
+    public init(isSaving: Bool, metrics: RecorderControlMetrics, glyph: Bool = false, flat: Bool = false, shortcut: Bool = false,
                 elapsed: (() -> TimeInterval)? = nil, action: @escaping () -> Void) {
         self.isSaving = isSaving
         height = metrics.height
         radius = metrics.radius
         size = metrics.size
         self.glyph = glyph
+        self.flat = flat
         self.shortcut = shortcut
         self.elapsed = elapsed
         self.action = action
@@ -494,7 +505,7 @@ public struct StopControl: View {
         } label: {
             label.contentShape(Rectangle())
         }
-        .daybookControl(.stop, shape: glyph ? .capsule : .roundedRectangle(radius: radius))
+        .modifier(StopSurface(flat: glyph && flat, radius: radius, glyph: glyph))
         .disabled(isSaving)
         .modifier(RecorderShortcut(enabled: shortcut, key: "r", modifiers: [.command, .shift], help: "Stop Recording (⇧⌘R)"))
         .modifier(RecorderPressFeedback(trigger: pressed, heavy: false))
@@ -514,10 +525,23 @@ public struct StopControl: View {
                     Image(systemName: "stop.fill").font(.headline).foregroundStyle(.white)
                 }
             }
-            .frame(width: height, height: height)
+            .frame(width: flat ? height * 1.3 : height, height: height)
         } else {
             StopControlLabel(isSaving: isSaving, size: size)
                 .frame(maxWidth: .infinity, minHeight: height)
+        }
+    }
+}
+
+private struct StopSurface: ViewModifier {
+    let flat: Bool
+    let radius: CGFloat
+    let glyph: Bool
+    func body(content: Content) -> some View {
+        if flat {
+            content.buttonStyle(.plain).background(Capsule().fill(DaybookPalette.Ink.recordFill))
+        } else {
+            content.daybookControl(.stop, shape: glyph ? .capsule : .roundedRectangle(radius: radius))
         }
     }
 }
