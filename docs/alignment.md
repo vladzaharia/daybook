@@ -197,12 +197,13 @@ Embedding matches made at transcription time still apply first.
 
 ### Fusion versions
 
-`FusionSummary.currentVersion` is 2. A conversation's wording changes only when it's fused again for a reason: new audio, Adjust Timing, removing or putting back a recording, keeping or leaving out background audio, or processing again. Upkeep the person didn't ask for keeps the version the conversation was last fused with (`LibraryController.realign(_:keepingVersion:)`): background audio heard in an earlier recording, and stranded words joined to their speaker. A conversation fused before versions were recorded counts as 1.
+`FusionSummary.currentVersion` is 3. A conversation's wording changes only when it's fused again for a reason: new audio, Adjust Timing, removing or putting back a recording, keeping or leaving out background audio, or processing again. Upkeep the person didn't ask for keeps the version the conversation was last fused with (`LibraryController.realign(_:keepingVersion:)`): background audio heard in an earlier recording, and stranded words joined to their speaker. A conversation fused before versions were recorded counts as 1.
 
 | Version | Fusion |
 |---|---|
 | 1 | Words aligned in 240-item regions; raw confidences; a named speaker anywhere in a merged passage's provenance labels it; phrase fits measure any rate from 0.97 to 1.03, and stored ones are used at their rate. |
 | 2 | One banded alignment and the four-word guard; confidences compared by rank across recognizers; names kept only where they stood; phrase fits held to 1000 ppm and measured only over a long span; a second Mac's recording made a source to place. |
+| 3 | Beside call audio, a microphone label maps onto a call speaker by shared speech only when at least half its words repeat the call (its echo), so the owner's own cluster that took in some echo stays the owner; and a word the call carried takes a call speaker or none, never a microphone's or recorder's own label. |
 
 The clock rules (one clock per recording, a derived copy at its own rate, capture rates within 1000 ppm) apply at every version: they place recordings, and both apps must read a placement alike.
 
@@ -212,7 +213,7 @@ The clock rules (one clock per recording, a derived copy at its own rate, captur
 - Reverberant recorders align a few milliseconds late, about 8 ms in the synthetic room. This is negligible for transcripts, but don't use it for sample-accurate mixing.
 - The rate is a single linear fit. Clock jumps, dropped audio, or a recorder pausing mid-file would need piecewise alignment. They currently show up as low confidence or a high residual.
 - With headphones, the room recorder may share no sound with computer audio. It is then aligned against the microphone, which needs the owner or someone in the room to talk.
-- Owner inference needs call audio and assumes the person recording dominates the microphone's local speech. In an in-person meeting, or with several people at the Mac, labels stay as diarized.
+- Owner inference needs call audio and assumes the person recording dominates the microphone's local speech. From version 3 the microphone's words shared with the call are taken for echo: a microphone cluster mostly made of the call's echo still maps onto the call's speaker, one mostly local speech doesn't. In an in-person meeting, or with several people at the Mac, labels stay as diarized.
 - Word voting can't recover words that no source recognized. When one recording alone hears a short insertion during another's passage, that insertion can be voted out.
 - When a second Mac's recording is made a source to place (one origin), the notes and bookmarks that Mac took stay timed by its own start; only its recordings move.
 - A waiting recording with no words of its own (silent computer audio) stays waiting until the sound places it or it follows a sibling on its clock.
