@@ -651,6 +651,11 @@ final class PhoneRecorder {
         editPage(pageID) { $0.removePage(pageID, at: environment.clock.now()) }
     }
 
+    /// Keeps a page out of the conversation's summaries, or lets them use it again.
+    func setPageHiddenFromSummary(_ pageID: UUID, hidden: Bool) {
+        editPage(pageID) { $0.setPageHiddenFromSummary(pageID, hidden: hidden, now: environment.clock.now()) }
+    }
+
     func restorePage(_ pageID: UUID) {
         editPage(pageID) { $0.restorePage(pageID, at: environment.clock.now()) }
     }

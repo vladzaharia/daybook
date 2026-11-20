@@ -18,8 +18,9 @@ public struct NotebookSpread<Tools: View, Pill: View, Caption: View, Card: View>
     private let card: (_ pageFrame: CGRect, _ isSpread: Bool) -> Card
     private let words: (UUID) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// How far down the right page the card starts, clear of the pill.
-    private static var cardTop: CGFloat { 72 }
+    @Environment(\.dynamicTypeSize) private var typeSize
+    /// How far down the right page the card starts, clear of the chips floating over its top.
+    private static var cardTop: CGFloat { NotebookLayout.controlInset * 2 + NotebookLayout.chipHeight }
 
     /// - Parameters:
     ///   - crease: Where the display folds, in the safe area; nil for one display.
@@ -40,7 +41,12 @@ public struct NotebookSpread<Tools: View, Pill: View, Caption: View, Card: View>
             let size = proxy.size
             let page = CGSize(width: NotebookPage.a5.width, height: NotebookPage.a5.height)
             let layout = NotebookLayout.resolve(size: size, crease: crease, page: page)
-            let frames = layout.frames(in: size, crease: crease, page: page)
+            let inset = NotebookLayout.margin
+            let centred = layout.frames(in: size, crease: crease, page: page)
+            let fit = NotebookPillFit.resolve(available: (centred.last?.width ?? 0) - 2 * inset, textScale: NotebookPillFit.textScale(typeSize))
+            let controls = layout.controls(in: size, page: page, pill: fit)
+            let frames = controls.bottomAligned ? layout.frames(in: size, crease: crease, page: page, bottomAligned: true) : centred
+            let chips = controls.startsAsChips
             let open = Array(session.visible.prefix(frames.count))
             ZStack(alignment: .topLeading) {
                 ForEach(Array(open.enumerated()), id: \.element.id) { index, page in
@@ -54,22 +60,24 @@ public struct NotebookSpread<Tools: View, Pill: View, Caption: View, Card: View>
                     }
                 }
                 if let last = frames.last, let first = frames.first {
-                    let inset = NotebookLayout.margin
-                    // The card is under the pill and the tools, over the rest of the right page: Stop is never covered.
-                    card(CGRect(x: last.minX, y: last.minY + Self.cardTop, width: last.width, height: last.height - Self.cardTop), layout.isSpread)
-                    // The tools: top-left of the left page, the foot of a single page.
-                    NotebookFloating(session: session, edge: .leading) { collapsed, set in
+                    // The card starts under the chips when they float over the paper, at the top otherwise.
+                    let cardTop = controls == .overPage ? Self.cardTop : 0
+                    card(CGRect(x: last.minX, y: last.minY + cardTop, width: last.width, height: last.height - cardTop), layout.isSpread)
+                    // In the band (or over the top margin when there is none) the tools are at the left page's top corner and the pill at
+                    // the right page's; on a single page the pill expands under the tools.
+                    let anchored = controls == .overPage
+                    let top = anchored ? first.minY + NotebookLayout.controlInset : NotebookLayout.controlInset
+                    let stack = !layout.isSpread ? NotebookLayout.chipHeight + NotebookLayout.controlInset : 0
+                    NotebookFloating(session: session, edge: .leading, chips: chips) { collapsed, set in
                         tools(collapsed, set, first.width - 2 * inset)
                     }
-                    .frame(width: first.width - 2 * inset, height: first.height - 2 * inset,
-                           alignment: layout.isSpread ? .topLeading : .bottomLeading)
-                    .offset(x: first.minX + inset, y: first.minY + inset)
-                    // The pill: top-right of the right page.
-                    NotebookFloating(session: session, edge: .trailing) { collapsed, set in
+                    .frame(width: first.width - 2 * inset, height: NotebookLayout.chipHeight, alignment: .topLeading)
+                    .offset(x: first.minX + inset, y: top)
+                    NotebookFloating(session: session, edge: .trailing, chips: chips, expandedShift: stack) { collapsed, set in
                         pill(collapsed, set, last.width - 2 * inset)
                     }
-                    .frame(width: last.width - 2 * inset, height: last.height - 2 * inset, alignment: .topTrailing)
-                    .offset(x: last.minX + inset, y: last.minY + inset)
+                    .frame(width: last.width - 2 * inset, height: NotebookLayout.pillHeight(fit), alignment: .topTrailing)
+                    .offset(x: last.minX + inset, y: anchored ? last.minY + NotebookLayout.controlInset : NotebookLayout.controlInset + (chips ? 0 : stack))
                     if !layout.hasStrip(under: last, in: size) {
                         NotebookFloatingCaption(session: session, pageFrame: last, origin: proxy.frame(in: .global).origin) { caption }
                     }
@@ -100,35 +108,43 @@ struct NotebookFloating<Content: View>: View {
     let session: NotebookSession
     /// The edge it collapses toward.
     let edge: HorizontalEdge
+    /// It starts as a chip, expands on a tap, and goes back to the chip when a pen comes near or writing starts, staying there;
+    /// otherwise (it is expanded in the band) it steps aside only while a pen is near.
+    let chips: Bool
+    /// How far down it moves while expanded, clear of the control above it.
+    var expandedShift: CGFloat = 0
     let content: (_ collapsed: Bool, _ setCollapsed: @escaping (Bool) -> Void) -> Content
     @State private var chosen: Bool
+    @State private var expanded = false
     @State private var steppedAside = false
     @State private var frame: CGRect = .zero
     @State private var returning: Task<Void, Never>?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    init(session: NotebookSession, edge: HorizontalEdge,
+    init(session: NotebookSession, edge: HorizontalEdge, chips: Bool, expandedShift: CGFloat = 0,
          @ViewBuilder content: @escaping (_ collapsed: Bool, _ setCollapsed: @escaping (Bool) -> Void) -> Content) {
-        self.session = session; self.edge = edge; self.content = content
+        self.session = session; self.edge = edge; self.chips = chips; self.expandedShift = expandedShift; self.content = content
         _chosen = State(initialValue: session.startsCollapsed)
+        _expanded = State(initialValue: session.startsExpanded)
     }
 
-    private var collapsed: Bool { chosen || steppedAside }
+    private var collapsed: Bool { chips ? !expanded : chosen || steppedAside }
 
     var body: some View {
         // Glass over paper, and the paper is always light: so it is too, in Dark Mode.
-        content(collapsed) { chosen = $0 }
+        content(collapsed) { chosen = $0; expanded = !$0 }
             .environment(\.colorScheme, .light)
+            .offset(y: chips && !collapsed ? expandedShift : 0)
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame = $0 }
             .transition(reduceMotion ? .opacity : .move(edge: edge == .leading ? .leading : .trailing).combined(with: .opacity))
             .id(collapsed)
             .simultaneousGesture(DragGesture(minimumDistance: 24).onEnded { value in
                 let toward = edge == .leading ? -value.translation.width : value.translation.width
-                if toward > 40, abs(value.translation.height) < toward { chosen = true }
+                if toward > 40, abs(value.translation.height) < toward { chosen = true; expanded = false }
             })
             .onChange(of: session.writingPoint) { _, point in
                 if let point {
-                    if PenProximity.isNear(point, frame) { returning?.cancel(); steppedAside = true }
+                    if chips { expanded = false } else if PenProximity.isNear(point, frame) { returning?.cancel(); steppedAside = true }
                 } else if steppedAside {
                     returning = Task {
                         try? await Task.sleep(for: PenProximity.returnDelay)
@@ -138,7 +154,7 @@ struct NotebookFloating<Content: View>: View {
                 }
             }
             .animation(DaybookMotion.resolved(DaybookMotion.fade, reduceMotion: reduceMotion), value: collapsed)
-            .accessibilityAction(named: "Collapse") { chosen = true }
+            .accessibilityAction(named: "Collapse") { chosen = true; expanded = false }
     }
 }
 
@@ -169,19 +185,24 @@ private struct PageNumberMenu: View {
 
     var body: some View {
         let number = session.number(of: page.id) ?? 1
+        let left = page.hiddenFromSummary == true
         Menu {
             Button("Words") { words(page.id) }
             if session.model?.isEditable == true {
+                Button(left ? "Include in Summaries" : "Leave Out of Summaries", systemImage: left ? "text.badge.plus" : "text.badge.minus") {
+                    session.setHiddenFromSummary(page.id, !left)
+                }
                 Button("Delete Page", role: .destructive) { _ = session.remove(page.id) }
             }
         } label: {
-            Text("\(number)")
-                .font(.footnote.monospacedDigit())
-                .foregroundStyle(DaybookPalette.Ink.secondary)
+            HStack(spacing: 4) {
+                Text("\(number)").font(.footnote.monospacedDigit()).foregroundStyle(DaybookPalette.Ink.secondary)
+                if left { Image(systemName: "text.badge.minus").font(.caption2).foregroundStyle(DaybookPalette.Ink.meta) }
+            }
                 .frame(minWidth: 44, minHeight: NotebookLayout.stripHeight)
                 .contentShape(Rectangle())
         }
-        .accessibilityLabel("Page \(number) menu")
+        .accessibilityLabel(left ? "Page \(number) menu, left out of summaries" : "Page \(number) menu")
     }
 }
 
