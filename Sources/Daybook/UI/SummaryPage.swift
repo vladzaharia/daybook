@@ -126,7 +126,8 @@ private struct PageColophon: View {
         let origin = summary.origin
         let deviceClass = origin.deviceID.flatMap { id in state.syncDevices.first { $0.id == id }?.deviceClass }
         Colophon(SummaryColophon(summary, thisDeviceID: state.library.thisDevice.id, words: state.statusWords,
-                                 catalog: state.modelCatalog, deviceClass: deviceClass),
+                                 catalog: state.modelCatalog, deviceClass: deviceClass,
+                                 notebookChanged: meeting.summaryNotebookChanged),
                  arrived: summary.createdAt, template: TemplateWords.title(for: meeting, resolved: state.resolvedTemplate(for: meeting)),
                  summarizeAgain: summarizeAgain) {
             TemplateMenuItems(state: state, meetingID: meeting.id)
