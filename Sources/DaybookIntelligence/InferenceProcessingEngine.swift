@@ -82,6 +82,13 @@ public struct InferenceProcessingEngine: ProcessingEngine {
         var transcriptProvenance: ModelProvenance?
         var notices: [String] = []
         var routing: [String: String] = [:]
+        let reusesWords = input.mode == .speakerRefresh && input.previousTranscript != nil
+        // The models hear speech far quieter than normal raised to a normal level, from a copy that goes when this run
+        // ends however it ends; the stored recording is only read (`LevelledAudio`). Nothing is copied when no model
+        // will hear it.
+        let audio = reusesWords && !configuration.detectSpeakers ? LevelledAudio.unchanged(input.audioURL)
+            : try await detachedWork(priority: Task.currentPriority) { try LevelledAudio.prepare(input.audioURL) }
+        defer { audio.remove() }
         if input.mode == .speakerRefresh, let previous = input.previousTranscript {
             // Speakers again from the saved transcript: its words, or its passages for older runs.
             transcriptModel = previous.modelID
@@ -101,7 +108,7 @@ public struct InferenceProcessingEngine: ProcessingEngine {
             let routed = try await TranscriptionRouter(inference: inference, model: configuration.transcriptionModel,
                                                        language: configuration.transcriptionLanguage,
                                                        fallback: configuration.languageFallbackModel)
-                .run(url: input.audioURL, glossary: input.vocabulary, progress: transcribing)
+                .run(url: audio.url, glossary: input.vocabulary, progress: transcribing)
             result = routed.result
             transcriptModel = routed.model.id
             transcriptProvenance = result.provenance
@@ -111,7 +118,7 @@ public struct InferenceProcessingEngine: ProcessingEngine {
         var analysis: SpeakerAnalysis?
         if configuration.detectSpeakers {
             do {
-                analysis = try await inference.diarize(url: input.audioURL, model: configuration.speakerModel,
+                analysis = try await inference.diarize(url: audio.url, model: configuration.speakerModel,
                                                        options: configuration.speakerOptions, progress: identifying)
             } catch is CancellationError { throw CancellationError() }
             catch {
@@ -120,7 +127,8 @@ public struct InferenceProcessingEngine: ProcessingEngine {
             }
         }
         // Listening for music and TV sits between finding speakers and their voice profiles, and decides whose
-        // voice gets one: part of identifying speakers when they're found, of transcribing when they aren't.
+        // voice gets one: part of identifying speakers when they're found, of transcribing when they aren't. It hears
+        // the recording as stored: its levels describe the recording and are kept on the track.
         let background = try await backgroundAudio(input, progress: configuration.detectSpeakers ? identifying : transcribing)
         let runID = UUID()
         let segments = TranscriptBuilder.segments(result: result, speakers: analysis, track: input.track, runID: runID)
@@ -130,7 +138,7 @@ public struct InferenceProcessingEngine: ProcessingEngine {
         if configuration.detectSpeakers, let found = analysis, found.embeddingModelID == nil, let embedder = configuration.voiceEmbeddingModel {
             // Routing by capability: a diarizer without voice profiles gets them from the embedding model.
             do {
-                let embedded = try await inference.embedVoices(url: input.audioURL, analysis: Self.withoutBackground(found, verdict: verdict,
+                let embedded = try await inference.embedVoices(url: audio.url, analysis: Self.withoutBackground(found, verdict: verdict,
                                                                segments: segments, runID: runID), model: embedder, progress: identifying)
                 analysis = SpeakerAnalysis(turns: found.turns, embeddings: embedded.embeddings, embeddingModelID: embedded.embeddingModelID,
                                            warnings: embedded.warnings, provenance: embedded.provenance ?? found.provenance,
@@ -140,9 +148,11 @@ public struct InferenceProcessingEngine: ProcessingEngine {
             catch { notices.append("Speakers were found, but voice profiles couldn’t be made for \(input.track.fileName): \(error.localizedDescription)") }
         }
         if let warnings = analysis?.warnings, !warnings.isEmpty { notices.append(warnings.joined(separator: "\n")) }
+        // The words' level is their own run's when they're reused; the speakers' is always this run's.
         let settings = ProcessingSettings(modelID: transcriptModel,
                                           parameters: configuration.parameters(mode: input.mode).merging(routing) { $1 },
-                                          model: transcriptProvenance)
+                                          model: transcriptProvenance,
+                                          levelAdjustment: reusesWords ? input.previousTranscript?.processingSettings?.levelAdjustment : audio.adjustment)
         let speakers = Set(segments.compactMap(\.speakerID)).sorted().map { label in
             let cluster = String(label.dropFirst(runID.uuidString.count + 1))
             // A broadcast voice (a TV's presenter) gets no voice profile: it's no one in the conversation.
@@ -150,7 +160,7 @@ public struct InferenceProcessingEngine: ProcessingEngine {
             return Speaker(id: label, name: "", sourceTrackID: input.track.id, embedding: embedding,
                            embeddingModelID: analysis?.embeddingModelID,
                            analysisSettings: ProcessingSettings(modelID: configuration.speakerModel.id, parameters: settings.parameters,
-                                                                model: analysis?.provenance))
+                                                                model: analysis?.provenance, levelAdjustment: audio.adjustment))
         }
         let words = result.segments.flatMap(\.words).map { TranscriptWord(text: $0.text, start: $0.start, end: $0.end, confidence: $0.confidence) }
         let transcript = TrackTranscript(id: runID, trackID: input.track.id, segments: segments, language: result.language,
@@ -164,7 +174,9 @@ public struct InferenceProcessingEngine: ProcessingEngine {
     /// the voice step of Identify Speakers Again, over the saved run's passages instead of a new
     /// diarization, so the transcript, the speakers, and their names stay as they are. As when voices
     /// are first made, turns inside background audio are left out and a broadcast voice gets none;
-    /// `protectedSpeakers` (named by the person) are never judged. Nil without a voice-profile model.
+    /// `protectedSpeakers` (named by the person) are never judged. Nil without a voice-profile model. It reads the
+    /// recording as stored, without `LevelledAudio`: the voice model's features subtract each band's mean
+    /// (`WeSpeakerEmbedder`), so one constant gain doesn't change them.
     public func voices(_ input: TrackProcessingInput, run: TrackTranscript, protectedSpeakers: Set<String> = [],
                        progress: @escaping ProcessingProgressHandler) async throws -> SpeakerAnalysis? {
         guard let embedder = configuration.voiceEmbeddingModel else { return nil }

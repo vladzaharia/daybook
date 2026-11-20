@@ -18,6 +18,13 @@ final class ProcessingScratchTests: XCTestCase {
         XCTAssertNotEqual(try ProcessingScratch.file(extension: "caf", in: base), file, "each copy is a file of its own")
     }
 
+    func testBehaviorTheCopiesFolderIsKeptOutOfBackups() throws {
+        let base = makeTemporaryFolder("DaybookTests")
+        _ = try ProcessingScratch.file(extension: "wav", in: base)
+        let root = ProcessingScratch.root(in: base)
+        XCTAssertEqual(try root.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
+    }
+
     func testLaunchClearsWhatEndedRunsLeftAndKeepsRunningOnes() throws {
         let base = makeTemporaryFolder("DaybookTests")
         let root = ProcessingScratch.root(in: base)
