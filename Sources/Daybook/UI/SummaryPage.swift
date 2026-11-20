@@ -40,6 +40,7 @@ struct SummaryPage: View {
                             blockID: { $0 == .notesHeading ? SummaryBlockID.notes : nil }) { section in
                     let pictures = meeting.photos(in: section)
                     if !pictures.isEmpty { SectionPhotos(state: state, meeting: meeting, photos: pictures) }
+                    SectionSketches(meeting: meeting, section: section, library: state.library)
                 }
                 .id(summary.createdAt)
                 // Summarize Again: the old summary steps back while the new one is written (not while it counts down).

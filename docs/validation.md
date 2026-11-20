@@ -4581,3 +4581,11 @@ Stop is the same 44 pt height as Bookmark and the page controls (it was a 62 pt 
 - **Changed in the test only:** the stall and request deadlines are 5 s and, with the cascade's connect, confirm and inventory deadlines, stretch with the test scale. The Start's own deadline stays 3 s unscaled, so "the Start comes within its deadline, ahead of the import" still means what it did. The wait now says what it last saw (imports, queue, failures).
 - **Not reproduced locally:** ten to ninety busy loops on an 18-core Mac, with the stall cut to 150 ms, never made this test fail, so the stall as the cause is from the code and the documented starved-night failures, not from a local failure. The fixed test passed 20 runs in a row under 60 busy loops.
 - **Left alone:** `testLiveAudioThatLosesAPacketKeepsWhatArrivedWithTheGapAsSilence` (CI: 0.5975 s saved, no gap recorded). It ended the capture once the recorder had *sent* 40 notifications, while audio it had sent was still on its way, so the saved part was short and the packets after the lost one had not arrived to show the gap. Open PR #69 already waits for what the captioner was *fed* instead, and stretches the rig's deadlines.
+
+## Sketches on the summary (2026-11-19)
+
+A summary section shows the sketches it drew on beside its photos, on the Mac and the iPhone (docs/notebook.md, "In summaries").
+
+- **Checked in tests, synthetic ink:** `SectionSketchesTests` (a section's sketches in its order with unknown ones dropped, none for a section without; a hidden or deleted page's sketches not shown; a page with no drawing file gives the placeholder state; the label is the reading's description while its digest stands, else "Sketch"; the thumbnail of a synthetic drawing is not blank, on light paper, within its pixel size; the cache keys on passage, stroke digest and size, and a missing file gives nothing, not an error).
+- **Not checked:** the tile with a real Pencil drawing, a drawing still downloading on an iPhone (the placeholder stays until the page is opened and fetched; nothing here fetches it), and VoiceOver reading the tile aloud.
+
