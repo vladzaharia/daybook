@@ -155,6 +155,8 @@ enum MenuBarStatus {
         var choices: [SummaryPlacementPlanner.Action] = []
         /// Its summary runs in the cloud, with this model.
         var cloudModel: String?
+        /// The countdown ends in the cloud, with this model.
+        var countdownCloudModel: String?
     }
 
     struct Inputs: Equatable {
@@ -221,7 +223,9 @@ enum MenuBarStatus {
         let waiting = work.waiting > 0 ? " · \(work.waiting) waiting" : ""
         if let until = work.countdown {
             let seconds = SummaryPlacementWords.secondsLeft(until: until, at: now)
-            return Line(id: "work", title: SummaryPlacementWords.countdown(of: name, seconds: seconds), opens: .conversation(work.id),
+            let title = work.countdownCloudModel.map { SummaryPlacementWords.countdown(of: name, inCloud: $0, seconds: seconds) }
+                ?? SummaryPlacementWords.countdown(of: name, seconds: seconds)
+            return Line(id: "work", title: title, opens: .conversation(work.id),
                         choices: work.choices.map { Choice(title: $0.title, action: .placement($0, work.id)) })
         }
         if let model = work.cloudModel {
@@ -259,8 +263,9 @@ enum MenuBarStatus {
             var work = Work(id: id, title: meeting.effectivePlacement == .personal ? nil : meeting.title, stage: state.runningStage,
                             fraction: state.processor.queue.activity.value.fraction, waiting: state.processor.queue.jobs.count)
             switch state.placements[id]?.phase {
-            case .countingDown(_, let until)?:
+            case .countingDown(let place, let until)?:
                 work.countdown = until
+                if case .cloud(let model) = place { work.countdownCloudModel = model.name }
                 work.choices = state.placements[id]?.actions ?? []
             case .started(.cloud(let model))?:
                 work.cloudModel = model.name

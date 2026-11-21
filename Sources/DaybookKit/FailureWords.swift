@@ -58,6 +58,12 @@ public struct FailureWords: Equatable, Sendable {
         "Couldn’t finish \(hadTranscripts ? "summarizing" : "transcribing")"
     }
 
+    /// A row's failure, for the step that failed: "Couldn’t transcribe" or "Couldn’t summarize" (the page says more).
+    public static func rowLine(_ failure: ProcessingStatus.Failure) -> String {
+        if case .cloud = failure.kind { return "Couldn’t summarize" }
+        return failure.hadTranscripts ? "Couldn’t summarize" : "Couldn’t transcribe"
+    }
+
     /// A cloud failure with no words of its own (an older record): what kind of trouble it was.
     static func cloudSentence(_ cloud: ProcessingRequest.FailureKind.CloudFailure) -> String {
         switch cloud {

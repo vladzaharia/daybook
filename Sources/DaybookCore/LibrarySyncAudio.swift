@@ -226,6 +226,19 @@ extension LibrarySyncEngine {
         // In an encrypted library, an original recorded here is evicted only once another device holds the key or a
         // recovery key was saved: otherwise iCloud's sealed copy could be the only one, unreadable if this device is lost.
         let originalsMayGo = sealing == nil || sealedOriginalsMayEvict()
+        // An original a Mac has since replaced with a compressed copy (`TrackEncoding`) goes whatever the budget, once the
+        // copy is the recording by the usual proof: here and verified, or in iCloud and uploaded. One recorded here waits
+        // for the same key guard as any.
+        for entry in audioIndex().entries.values.sorted(by: Self.evictionOrder) where !(entry.trackID.map { protected.contains($0) } ?? false) {
+            if Task.isCancelled { break }
+            if entry.origin == .recordedHere, !originalsMayGo { continue }
+            guard let url = supersededURL(entry) else { continue }
+            try fm.removeItem(at: url)
+            verifiedAssets.removeValue(forKey: url.path)
+            updateAudioIndex { $0.entries.removeValue(forKey: entry.key) }
+            inUse -= entry.stamp.size; freed += entry.stamp.size
+            evicted.append(entry.publicValue)
+        }
         let candidates = audioIndex().entries.values
             .filter { entry in !(entry.trackID.map { protected.contains($0) } ?? false) }
             .sorted(by: Self.evictionOrder)
@@ -284,6 +297,32 @@ extension LibrarySyncEngine {
         }
         if entry.origin == .recordedHere, !cloud.isUploaded(blob) { return nil }
         return url
+    }
+
+    /// The cached file of an original whose track now names a compressed copy (its `encoding` names this entry's path and
+    /// bytes), when the copy is available: its file here with the copy's SHA-256, or its object in iCloud, uploaded, and
+    /// verified when it's downloaded. Only the exact bytes the cache verified.
+    private func supersededURL(_ entry: AudioCacheEntry) -> URL? {
+        let directory = localRoot.appendingPathComponent("Meetings/\(entry.meetingID.uuidString)", isDirectory: true)
+        guard let data = try? Data(contentsOf: directory.appendingPathComponent("meeting.json")),
+              let meeting = try? JSONDecoder().decode(Meeting.self, from: data),
+              !meeting.tracks.contains(where: { $0.relativePath == entry.relativePath }),
+              let track = meeting.tracks.first(where: {
+                  $0.encoding?.previousRelativePath == entry.relativePath && $0.encoding?.previousSHA256 == entry.sha256
+              }), SyncFiles.isHash(track.sha256),
+              let url = try? LocalFiles.relativeURL(entry.relativePath, in: directory),
+              (try? SyncFiles.noSymlinks(url, below: localRoot)) != nil,
+              (try? assetStamp(url, digest: entry.sha256)) == entry.stamp else { return nil }
+        if let copy = try? LocalFiles.relativeURL(track.relativePath, in: directory), (try? verified(copy, digest: track.sha256)) == true {
+            return url
+        }
+        let object = remoteObject(track.sha256)
+        switch SyncFiles.itemState(object.url) {
+        case .absent: return nil
+        case .inCloud: break
+        case .local: guard (try? verifiedRemote(object, digest: track.sha256)) == true else { return nil }
+        }
+        return cloud.isUploaded(object.url) ? url : nil
     }
 
     private func verifiedRemote(_ object: RemoteObject, digest: String) throws -> Bool {
