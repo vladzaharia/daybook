@@ -290,6 +290,10 @@ final class DeviceOwnershipTests: XCTestCase {
         let copy = RecorderStatusWords.problem(SoundcoreIssue.listFailed.problem, on: .iPhone)
         XCTAssertEqual(copy.title, "Soundcore didn’t list its recordings")
         XCTAssertFalse(copy.message.contains("phone"), "on the iPhone, the Soundcore app is on this phone")
+        let listFailed = SoundcoreIssue.listFailed.problem
+        XCTAssertEqual(RecorderStatusWords.problemActions(listFailed, on: .iPhone), [.refreshStatus, .technicalDetails], "a list that didn’t come leads to the details")
+        XCTAssertEqual(RecorderStatusWords.actionTitle(.technicalDetails, on: .iPhone), "Details")
+        XCTAssertFalse(RecorderStatusWords.problemActions(SoundcoreIssue.notFound.problem, on: .iPhone).contains(.technicalDetails))
     }
 }
 

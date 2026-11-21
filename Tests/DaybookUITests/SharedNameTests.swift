@@ -26,7 +26,7 @@ final class SharedNameTests: XCTestCase {
         "LaunchOptions", "LiveCaptionsController", "LocalPasteboard", "LocalPasteboardWriting", "PhoneLink",
         // Drawn by each app, around shared parts; to lift, or to name for their platform.
         "AddDeviceSheet", "ConversationMoreMenu", "DevicePage", "DevicePageContent", "PageColophon", "PageHeader",
-        "PersonalLockSection", "RowMenu", "SummaryPage"
+        "RowMenu", "SummaryPage"
     ]
 
     private func swiftFiles(_ path: String) -> [URL] {

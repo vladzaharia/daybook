@@ -1,3 +1,4 @@
+import DaybookKit
 import Foundation
 
 /// What Welcome says, once for both apps: the same words on the Mac and the iPhone wherever they mean the same thing.
@@ -75,6 +76,9 @@ public enum WelcomeWords {
     public static let importAudio = "Import Audio…"
     public static let recorderQuestion = "Use a wearable or handheld recorder?"
     public static let addDevice = "Add Recorder…"
+    public static let addRecorder = "Add Recorder…"
+    /// The iPhone's Ready page while the models wait for Wi‑Fi: the way past it, with what it downloads.
+    public static func downloadOverCellular(bytes: Int64) -> String { "Download over Cellular · \(ByteSize.format(bytes))" }
     /// The Mac's Ready page: Daybook as a login item, so calls are noticed after a restart; the one row on it that says why.
     public static let openAtLogin = "Open at login"
     public static let openAtLoginReason = "So Daybook can notice calls."
