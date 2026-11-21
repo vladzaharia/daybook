@@ -501,7 +501,7 @@ private struct PhoneWelcomeReady: View {
                     .buttonStyle(.daybookLink)
                     .padding(.top, DaybookSpacing.s3)
             }
-            HStack(spacing: DaybookSpacing.s1) {
+            VStack(spacing: DaybookSpacing.s1) {
                 Text(WelcomeWords.recorderQuestion).foregroundStyle(DaybookPalette.Ink.secondary)
                 Button(WelcomeWords.addRecorder, action: addRecorder).buttonStyle(.daybookLink)
             }
