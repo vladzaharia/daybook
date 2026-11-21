@@ -4860,6 +4860,7 @@ Added `WatchWords` (the status line, microphone words, notice text, the held clo
 
 Checked: `swift test --filter WatchWordsTests`; the watch app compiles for the simulator (`scripts/build-ios.sh`). Not checked: a real watch (haptics, notices being delivered with the wrist down, the notification prompt), a real interruption or full storage, the Settings path wording on watchOS. Bookmark and the after-Stop moment (REC-03, REC-04) are not part of this.
 
+
 ## 2026-11-20: Visual fixes on Mac Settings, setup and device pages (UX pass)
 
 Verified: the ad hoc debug build (`scripts/build-app.sh --debug --ad-hoc`, scratch libraries, the demo flags the screenshots used) was captured with `screencapture -l` beside each original: the recorder page's action tiles on the figures' columns, the problem box spanning the measure, Recent imports' titles in row type, Enter Recovery Key's field and the recovery key row, Settings' one switch size, the Library groups and footers, Recording's info button and status dot, Cloud's Quality groups, Models › Transcription's Download beside its size, Welcome's dividers, Settings › Devices' empty row, and the sheets' widths. `testActionTilesFallToTheFiguresColumnsAtTheSameWidths` holds the tiles' column count to the figures' widths.
