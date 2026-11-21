@@ -54,4 +54,22 @@ final class SummarizeAgainChoicesTests: XCTestCase {
         let titles = rows(work(), local: [small], cloud: cloud).map(\.title)
         XCTAssertFalse(titles.contains("With Gemma 4 26B A4B"))
     }
+
+    func testBehaviorOnlyTheCloudRowCarriesAGlyph() {
+        let all = rows(work(), local: [small, big], cloud: cloud)
+        XCTAssertEqual(all.map(\.symbol), [nil, nil, "cloud"])
+    }
+
+    func testBehaviorTheRowOfTheModelThatWroteTheSummaryIsTheOneChecked() {
+        let all = rows(work(), local: [small, big], cloud: cloud)
+        let local = MeetingSummary(overview: "x", modelID: "gemma/26b")
+        XCTAssertEqual(all.map { $0.wrote(local) }, [false, true, false])
+        XCTAssertEqual(all.map { $0.wrote(nil) }, [false, false, false])
+        let provenance = CloudProvenance(provider: .anthropic, model: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", effort: .medium,
+                                         inputTokens: 1, outputTokens: 1, estimatedCost: nil)
+        let sent = MeetingSummary(overview: "x", modelID: provenance.modelID, processingSettings: ProcessingSettings(
+            modelID: provenance.modelID, parameters: provenance.parameters, model: provenance.modelProvenance))
+        XCTAssertEqual(all.last?.wrote(sent), true)
+        XCTAssertEqual(all.dropLast().map { $0.wrote(sent) }, [false, false], "a cloud summary names no local model")
+    }
 }

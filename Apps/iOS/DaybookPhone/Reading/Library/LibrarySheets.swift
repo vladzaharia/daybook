@@ -75,12 +75,20 @@ struct TrashedPage: View {
     let library: LibraryController
     let id: UUID?
     @Environment(ReadingSession.self) private var session
+    @Environment(PersonalLock.self) private var personalLock: PersonalLock?
     @State private var meeting: Meeting?
 
     var body: some View {
         ZStack {
             if let meeting {
-                TrashedConversationPage(meeting: meeting) { TrashList.restore(meeting.id, library: library, session: session) }
+                TrashedConversationPage(
+                    meeting: meeting,
+                    mergedInto: LibraryWords.mergedInto(meeting, in: library.meetings, hidden: { personalLock?.hides($0) == true }).map { survivor in
+                        (ConversationRowView.title(survivor), {
+                            session.place = .library(.section(.all))
+                            session.open(survivor.id)
+                        })
+                    }) { TrashList.restore(meeting.id, library: library, session: session) }
             } else {
                 DaybookPalette.paper.ignoresSafeArea()
             }

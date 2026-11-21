@@ -66,7 +66,7 @@ struct ConversationInfo: View {
             download: { track, meeting in
                 _ = try await provider.localAudio(for: track, in: meeting.id, progress: { _ in })
             },
-            actionContext: { meeting in Self.context(meeting) },
+            actionContext: { meeting in Self.context(meeting, placement: placement) },
             now: { meeting, date in
                 var inputs = ConversationStatusPresentation.Inputs(words: words, local: .iPhone())
                 if let placement {
@@ -78,11 +78,12 @@ struct ConversationInfo: View {
             perform: { action, meeting in perform(action, in: meeting) })
     }
 
-    static func context(_ meeting: Meeting) -> ConversationActions.Context {
+    static func context(_ meeting: Meeting, placement: PhoneSummaryPlacement? = nil) -> ConversationActions.Context {
         let status = ProcessingStatus.phone(meeting)
         var here = false
         if case .processing(let progress) = status, progress.device == nil { here = true }
-        return ConversationActions.Context(platform: .iPhone, isProcessingHere: here, status: status)
+        return ConversationActions.Context(platform: .iPhone, isProcessingHere: here, status: status,
+                                           summarizeChoices: placement?.summarizeAgainChoices(for: meeting) ?? [])
     }
 
     static func reading(_ availability: AudioAvailability) -> ReadingAudio {
@@ -123,6 +124,8 @@ struct ConversationInfo: View {
             library.putBackRecording(track.id, in: id, undoManager: undoManager, changed: processAgain)
         case .process(let mode):
             PhoneActions.process(id, mode, library: library, placement: placement)
+        case .summarizeAgain(let choice):
+            if let placement { Task { await placement.summarizeAgain(id, as: choice) } }
         case .summarize(let template):
             library.summarize(id, templateID: template, placement: placement)
         case .versionHistory:
