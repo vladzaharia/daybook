@@ -189,21 +189,23 @@ public actor MeetingStore {
     /// The first of `candidates` (the library's conversations, as the caller has them) holding a
     /// recording with this digest, checked against the file itself: a stale digest in the metadata
     /// must not hide a missing or changed original. Only recordings that claim the digest are read. A recording
-    /// moved out of a conversation is in the one it moved to (`isMovedOut`).
+    /// moved out of a conversation is in the one it moved to (`isMovedOut`). A compressed recording claims its
+    /// original's digest too (`holdsBytes`), checked by its copy's.
     public func verifiedMeeting(withDigest digest: String, among candidates: [Meeting]) async -> Meeting? {
-        for meeting in candidates where meeting.tracks.contains(where: { $0.sha256 == digest && !$0.isMovedOut }) {
-            for track in meeting.tracks where track.sha256 == digest && !track.isMovedOut {
+        for meeting in candidates where meeting.tracks.contains(where: { $0.holdsBytes(digest) && !$0.isMovedOut }) {
+            for track in meeting.tracks where track.holdsBytes(digest) && !track.isMovedOut {
                 if await isVerified(track, digest: digest, in: meeting.id) { return meeting }
             }
         }
         return nil
     }
 
-    /// The original exists and its bytes still have `digest`. The hashing happens off the actor.
+    /// The original exists and its bytes still have `digest`; for a compressed recording that was `digest`, its copy
+    /// exists and still has the copy's. The hashing happens off the actor.
     private func isVerified(_ track: RecordingTrack, digest: String, in meetingID: UUID) async -> Bool {
-        guard track.sha256 == digest, let url = try? audioURL(for: track, in: meetingID),
+        guard track.holdsBytes(digest), let url = try? audioURL(for: track, in: meetingID),
               let values = try? url.resourceValues(forKeys: [.isRegularFileKey]), values.isRegularFile == true else { return false }
-        return (try? await BlockingFileWork.sha256(url)) == digest
+        return (try? await BlockingFileWork.sha256(url)) == track.sha256
     }
 
     @discardableResult public func moveToTrash(_ id: UUID) throws -> URL {
@@ -308,7 +310,7 @@ public actor MeetingStore {
         let hasMetadata = { self.fm.fileExists(atPath: primary.path) || self.fm.fileExists(atPath: backup.path) }
         // Recordings that already claim these bytes are checked against their files, off the actor too.
         let storedTracks = hasMetadata() ? try load(meeting.id).tracks : []
-        let claimed = (meeting.tracks + storedTracks).filter { $0.sha256 == hash }
+        let claimed = (meeting.tracks + storedTracks).filter { $0.holdsBytes(hash) }
         var verified = Set<UUID>(), checked = Set<UUID>()
         for track in claimed where checked.insert(track.id).inserted {
             if await isVerified(track, digest: hash, in: meeting.id) { verified.insert(track.id) }
@@ -324,7 +326,7 @@ public actor MeetingStore {
         }
         let track: RecordingTrack
         // A recording that claimed these bytes while the copy was hashed is checked here (rarely).
-        if let duplicate = result.tracks.first(where: { $0.sha256 == hash && (verified.contains($0.id) || (!checked.contains($0.id) && isVerifiedNow($0, digest: hash, in: meeting.id))) }) {
+        if let duplicate = result.tracks.first(where: { $0.holdsBytes(hash) && (verified.contains($0.id) || (!checked.contains($0.id) && isVerifiedNow($0, digest: hash, in: meeting.id))) }) {
             track = duplicate
             // The same bytes arriving from a recorder teach the library where they came from. The recorder's
             // own file matching a live portion of it byte for byte confirms that portion is the whole
@@ -410,9 +412,9 @@ public actor MeetingStore {
 
     /// The same check, on the actor: only for a recording that appeared during an import's await.
     private func isVerifiedNow(_ track: RecordingTrack, digest: String, in meetingID: UUID) -> Bool {
-        guard let url = try? audioURL(for: track, in: meetingID),
+        guard track.holdsBytes(digest), let url = try? audioURL(for: track, in: meetingID),
               let values = try? url.resourceValues(forKeys: [.isRegularFileKey]), values.isRegularFile == true else { return false }
-        return (try? AudioDigest.sha256(fileURL: url)) == digest
+        return (try? AudioDigest.sha256(fileURL: url)) == track.sha256
     }
 
     // MARK: Durability

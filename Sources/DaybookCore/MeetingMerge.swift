@@ -105,6 +105,9 @@ public enum MeetingMerge {
                 var track = track
                 track.removal = nil
                 track.clockSamples = nil
+                // Its file merges on its own too (`RecordingCompression.merged`): a recording compressed on one device
+                // and edited on another keeps both.
+                RecordingCompression.File(RecordingTrack(relativePath: "", fileName: "")).apply(to: &track)
                 return track
             }
         }
@@ -130,9 +133,15 @@ public enum MeetingMerge {
                 result.tracks[index].removal = choose("track-removal:\(id)", a.removal, b.removal, .some(old?.removal))
                 // Written once, at filing: a copy with samples beats one without, and never a conflict.
                 result.tracks[index].clockSamples = RecordingClockSample.merged(a.clockSamples, b.clockSamples)
+                let file = RecordingCompression.merged(.init(a), .init(b), ancestor: old.map(RecordingCompression.File.init)) { smaller, larger in
+                    record("track-file:\(id)", SyncEncoding.string(smaller), SyncEncoding.string(larger))
+                    conflicted.insert("a recording")
+                }
+                file.apply(to: &result.tracks[index])
             } else {
                 result.tracks[index].removal = (a ?? b ?? old)?.removal
                 result.tracks[index].clockSamples = (a ?? b ?? old)?.clockSamples
+                if let only = a ?? b ?? old { RecordingCompression.File(only).apply(to: &result.tracks[index]) }
             }
         }
         result.transcripts = items("transcript-run", local.transcripts, remote.transcripts, base?.transcripts ?? [])

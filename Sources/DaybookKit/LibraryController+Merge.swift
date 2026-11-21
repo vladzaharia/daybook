@@ -92,13 +92,15 @@ extension LibraryController {
             guard let store else { throw DaybookError.libraryUnavailable }
             for file in recordings {
                 guard let survivor = meeting(survivorID) else { throw DaybookError.libraryUnavailable }
-                let digest = file.track.sha256.isEmpty ? try await AudioDigest.sha256(contentsOf: file.url) : file.track.sha256
-                if let back = survivor.tracks.first(where: { $0.sha256 == digest && $0.removal?.movedTo == file.meetingID && !$0.isWaitingMergeCopy }) {
+                // A compressed recording is still known by its original's bytes (`knownDigests`), on either side.
+                let digests = file.track.sha256.isEmpty ? [try await AudioDigest.sha256(contentsOf: file.url)] : file.track.knownDigests
+                func holds(_ track: RecordingTrack) -> Bool { digests.contains(where: track.holdsBytes) }
+                if let back = survivor.tracks.first(where: { holds($0) && $0.removal?.movedTo == file.meetingID && !$0.isWaitingMergeCopy }) {
                     copies[file.meetingID, default: [:]][file.track.id] = back.id
                     restored[file.meetingID, default: []].insert(back.id)
                     continue
                 }
-                if let same = survivor.presentTracks.first(where: { $0.sha256 == digest })?.id ?? byBytes[digest] {
+                if let same = survivor.presentTracks.first(where: holds)?.id ?? digests.lazy.compactMap({ byBytes[$0] }).first {
                     copies[file.meetingID, default: [:]][file.track.id] = same
                     continue
                 }
@@ -107,7 +109,7 @@ extension LibraryController {
                                                      existing: survivor.tracks.first { $0.id == id })
                 copies[file.meetingID, default: [:]][file.track.id] = id
                 fresh[file.meetingID, default: []].insert(id)
-                byBytes[digest] = id
+                for digest in digests { byBytes[digest] = id }
             }
             for file in pictures {
                 stored[file.meetingID, default: [:]][file.photo.id] = try await storedPhoto(file.photo, from: file.url, in: survivorID)

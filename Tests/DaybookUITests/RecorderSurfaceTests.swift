@@ -209,7 +209,11 @@ final class RecorderSurfaceTests: XCTestCase {
         XCTAssertEqual(countdown.at(Date(timeIntervalSince1970: 1_004)).shortLabel, SummaryPlacementWords.seconds(8))
 
         XCTAssertEqual(RecordingStatusWords.processingChip(ConversationRowStatus(kind: .waitingForModels, text: "Waiting for models"))?.tone,
-                       .attention)
+                       .calm, "a model wait is calm, as Floating Notes' chip says it")
+        XCTAssertEqual(RecordingStatusWords.processingChip(ConversationRowStatus(kind: .failed, text: "Couldn’t download Gemma"))?.tone, .attention)
+        let reading = RecordingStatusWords.processingChip(ConversationRowStatus(kind: .processing, text: "Summarizing", stage: .summarizing))
+        XCTAssertEqual(reading?.symbol, "text.alignleft", "the step's glyph")
+        XCTAssertEqual(reading?.shortLabel, "Summarizing")
         XCTAssertEqual(RecordingStatusWords.processingChip(ConversationRowStatus(kind: .paused, text: "Paused"))?.shortLabel, "Paused")
         XCTAssertNil(RecordingStatusWords.processingChip(nil), "done: the row shows its preview, the chips say nothing")
         XCTAssertNil(RecordingStatusWords.processingChip(ConversationRowStatus(kind: .justFinished, text: nil)))

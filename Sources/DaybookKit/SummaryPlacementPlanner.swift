@@ -275,11 +275,15 @@ extension SummaryPlacementPlanner {
         }
     }
 
-    /// The same, short enough for a list row or a chip: "Summarizing in 12 s".
+    /// The same, short enough for a list row or a chip: "Summarizing in 12 s", or "Summarizing with Claude Sonnet 5.5 in 12 s"
+    /// when the countdown ends in the cloud.
     public func shortLine(at now: Date) -> String? {
         switch phase {
-        case .countingDown(_, let until):
-            return SummaryPlacementWords.countdown(until: until, at: now)
+        case .countingDown(let place, let until):
+            // A countdown that ends in the cloud says so wherever it is read: nothing goes without the person seeing where.
+            var model: String?
+            if case .cloud(let cloud) = place { model = cloud.name }
+            return SummaryPlacementWords.countdown(inCloud: model, seconds: SummaryPlacementWords.secondsLeft(until: until, at: now))
         case .waitingForMac:
             return SummaryPlacementWords.waitingForMac
         case .started(.cloud(let model)):

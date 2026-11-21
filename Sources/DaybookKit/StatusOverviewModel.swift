@@ -414,11 +414,12 @@ public enum StatusOverviewModel {
     /// own words behind Details, and Try Again with what it asked for, as the page offers.
     public static func failureEntry(_ failure: ProcessingStatus.Failure, meeting: Meeting, words: DeviceWords) -> StatusQueueEntry {
         let here = failure.device?.id == words.thisDeviceID
+        let brief = FailureWords.rowLine(failure)
         return StatusQueueEntry(id: meeting.id, title: meeting.title,
-                                line: here ? "Couldn’t finish" : failure.device.map { "\($0.name) couldn’t finish" } ?? "Couldn’t finish",
+                                line: here ? brief : failure.device.map { "\($0.name) c" + brief.dropFirst() } ?? brief,
                                 requestedHere: false, progress: nil, isRunning: false, failed: true, detail: FailureWords(failure, words: words).message,
                                 details: failure.reason.isEmpty ? nil : failure.reason, mac: here ? nil : failure.device?.name,
-                                brief: "Couldn’t finish", retry: meeting.tracks.isEmpty ? nil : failure.request?.mode ?? .newAudio)
+                                brief: brief, retry: meeting.tracks.isEmpty ? nil : failure.request?.mode ?? .newAudio)
     }
 
     /// Conversations a Mac is working on or will, as an iPhone knows (`words`: its own, with its sync ID): live progress
