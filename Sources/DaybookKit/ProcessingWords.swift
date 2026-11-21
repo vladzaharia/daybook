@@ -159,6 +159,8 @@ public enum ProcessingWords {
         case recording
         /// Daybook isn't on the screen, and the system didn't let the work go on.
         case background
+        /// The iPhone is locked, and its files can't be opened until it's unlocked.
+        case locked
         case heat
         case lowPowerMode
         case lowBattery
@@ -171,6 +173,7 @@ public enum ProcessingWords {
         switch reason {
         case .recording: return "Continues after the recording"
         case .background: return "Continues when Daybook is open"
+        case .locked: return "Continues when \(device) is unlocked"
         case .heat: return "Continues when \(device) cools down"
         case .lowPowerMode: return "Continues when Low Power Mode is off"
         case .lowBattery: return "Continues when \(device) is charging"

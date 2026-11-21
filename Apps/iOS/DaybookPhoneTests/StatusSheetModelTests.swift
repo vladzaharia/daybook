@@ -195,10 +195,10 @@ final class StatusSheetModelTests: XCTestCase {
 
   func testThisIPhonesDownloadedAudio() {
     // Downloads and recordings made here together, in Settings' words.
-    XCTAssertEqual(StatusSheetModel.audioOnThisIPhone(bytes: 0), "No audio on this iPhone")
+    XCTAssertNil(StatusSheetModel.audioOnThisIPhone(bytes: 0), "audio that went back to iCloud isn't a loss to report")
     XCTAssertEqual(
       StatusSheetModel.audioOnThisIPhone(bytes: 1_200_000_000),
-      "\(ByteCountFormatter.string(fromByteCount: 1_200_000_000, countStyle: .file)) of audio")
+      "Audio · \(ByteCountFormatter.string(fromByteCount: 1_200_000_000, countStyle: .file))")
   }
 
   // MARK: Where a line leads

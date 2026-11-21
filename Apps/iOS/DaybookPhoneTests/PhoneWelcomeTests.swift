@@ -161,5 +161,7 @@ final class PhoneWelcomeTests: XCTestCase {
         XCTAssertEqual(PhoneWelcome.state(.denied), .openSettings)
         XCTAssertEqual(WelcomeWords.allow(.iPhone), "Allow")
         XCTAssertEqual(WelcomeWords.openSettings(.iPhone), "Open Settings")
+        XCTAssertEqual(WelcomeWords.addRecorder, "Add Recorder…")
+        XCTAssertEqual(WelcomeWords.downloadOverCellular(bytes: 850_000_000), "Download over Cellular · \(ByteSize.format(850_000_000))")
     }
 }

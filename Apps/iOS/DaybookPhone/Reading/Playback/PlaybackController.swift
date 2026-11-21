@@ -45,6 +45,8 @@ final class PlaybackController: PlaybackControlling {
     @ObservationIgnored private var isRecording: @MainActor () -> Bool = { false }
     @ObservationIgnored private var recordingWatch: ObservationWatch?
     @ObservationIgnored private var loading: Task<Void, Never>?
+    /// The last thing asked to play, for Try Again after the audio couldn't be fetched.
+    @ObservationIgnored private var lastRequest: (target: PlaybackTarget, meeting: Meeting, provider: any AudioProviding)?
     @ObservationIgnored private var commandsInstalled = false
     /// Told after the player plays, pauses, seeks, ends, changes speed, or lets go of a recording: the notebook samples where it is.
     @ObservationIgnored var moved: (@MainActor () -> Void)?
@@ -83,6 +85,12 @@ final class PlaybackController: PlaybackControlling {
 
     // MARK: Playing
 
+    /// Asks again for what the player last tried to play.
+    func tryAgain() {
+        guard let request = lastRequest else { return }
+        play(request.target, in: request.meeting, provider: request.provider)
+    }
+
     /// Starts playing a passage, a time, or a recording of a conversation, fetching the audio
     /// through `provider` first when it isn't on this iPhone.
     func play(_ target: PlaybackTarget, in meeting: Meeting, provider: any AudioProviding) {
@@ -91,6 +99,7 @@ final class PlaybackController: PlaybackControlling {
             phase = .unavailable("This conversation has no recording to play.")
             return
         }
+        lastRequest = (target, meeting, provider)
         let (title, subtitle) = Self.nowPlaying(meeting)
         self.title = title
         self.subtitle = subtitle
@@ -120,7 +129,7 @@ final class PlaybackController: PlaybackControlling {
             } catch is CancellationError {
             } catch {
                 guard let self, !Task.isCancelled, self.meetingID == meetingID else { return }
-                // The provider's own reasons are plain ("It downloads when you’re online"); others get a sentence.
+                // The provider's own reasons are plain ("Not on this iPhone"); others get a sentence.
                 self.phase = .unavailable(ProblemWords(fallback: "The audio couldn’t be loaded. Try again.", error: error).message)
             }
         }

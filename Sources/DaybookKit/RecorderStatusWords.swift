@@ -580,11 +580,14 @@ extension RecorderStatusWords {
     }
 
     /// A problem's actions this device can take: the iPhone has no folder to set up (Import Audio does that job) and
-    /// shows a recorder's technical facts on its Details screen.
+    /// shows a recorder's technical facts on its Details screen, which it offers where refreshing isn't the whole
+    /// answer: a recording list that didn't come.
     public static func problemActions(_ problem: DeviceProblem, on place: Place, excluding hidden: Set<DeviceProblemAction> = []) -> [DeviceProblemAction] {
         problem.actions.filter { action in
             guard !hidden.contains(action) else { return false }
-            return place == .mac || ![.setUpFolder, .chooseFolder, .technicalDetails].contains(action)
+            if place == .mac { return true }
+            if action == .technicalDetails { return problem.id == SoundcoreIssue.listFailed.rawValue }
+            return ![.setUpFolder, .chooseFolder].contains(action)
         }
     }
 
@@ -592,6 +595,7 @@ extension RecorderStatusWords {
     public static func actionTitle(_ action: DeviceProblemAction, on place: Place) -> String {
         switch (action, place) {
         case (.openBluetoothSettings, .iPhone), (.openPrivacySettings, .iPhone): return "Open Settings"
+        case (.technicalDetails, .iPhone): return "Details"
         default: return action.title
         }
     }

@@ -106,9 +106,6 @@ struct SettingsScreen: View {
                 SettingsLink(route: .recording) {
                     SettingsRow(title: "Recording", detail: recordingSummary, systemImage: "waveform")
                 }
-                SettingsLink(route: .storage) {
-                    SettingsRow(title: "Storage", detail: storageSummary, systemImage: "internaldrive")
-                }
                 SettingsLink(route: .models) {
                     SettingsRow(title: "Models", detail: modelsSummary, systemImage: "cpu")
                 }
@@ -117,6 +114,9 @@ struct SettingsScreen: View {
                 }
             }
             Section {
+                SettingsLink(route: .storage) {
+                    SettingsRow(title: "Storage", detail: storageSummary, systemImage: "internaldrive")
+                }
                 SettingsLink(route: .templates) {
                     SettingsRow(title: TemplateWords.title, detail: templatesSummary, systemImage: "doc.text")
                 }
@@ -127,10 +127,12 @@ struct SettingsScreen: View {
                     SettingsRow(title: "Speaker Profiles", detail: SpeakerProfilesScreen.summary(model.library.controller.speakerProfiles.count),
                                 systemImage: "person.wave.2")
                 }
+                PersonalLockRow()
             } header: {
                 Text("Library")
+            } footer: {
+                PersonalLockFooter()
             }
-            PersonalLockSection()
             Section {
                 SettingsLink(route: .about) {
                     SettingsRow(title: "About Daybook", detail: nil, systemImage: "info.circle")
@@ -148,7 +150,7 @@ struct SettingsScreen: View {
         model.settings.requestsTranscription ? "Transcribes automatically" : "Transcribes when you ask"
     }
 
-    private var storageSummary: String { StatusSheetModel.audioOnThisIPhone(bytes: model.audio.usage.bytes) }
+    private var storageSummary: String? { StatusSheetModel.audioOnThisIPhone(bytes: model.audio.usage.bytes) }
 
     private var modelsSummary: String {
         Self.modelsDetail(model.models, processesHere: model.settings.processesOnThisIPhone,
@@ -226,22 +228,27 @@ struct SettingsScreen: View {
     }
 }
 
-/// Require Face ID for Personal (or the passcode, on an iPhone without Face ID), and its one line (`PersonalLock`).
+/// Require Face ID for Personal (or the passcode, on an iPhone without Face ID), a row of Library, and its one line (`PersonalLock`).
 /// Off by default; turning it off asks first, as unlocking does.
-private struct PersonalLockSection: View {
+private struct PersonalLockRow: View {
     @Environment(PersonalLock.self) private var personalLock: PersonalLock?
 
     var body: some View {
         if let personalLock {
-            Section {
-                Toggle(isOn: Binding(get: { personalLock.isRequired }, set: { on in Task { await personalLock.setRequired(on) } })) {
-                    SettingsRow(title: SettingsWords.titleCased(PersonalLockWords.requirement(personalLock.method)), detail: nil,
-                                systemImage: PersonalLockWords.symbol)
-                }
-            } footer: {
-                SettingsFooter(PersonalLockWords.footer)
+            Toggle(isOn: Binding(get: { personalLock.isRequired }, set: { on in Task { await personalLock.setRequired(on) } })) {
+                SettingsRow(title: SettingsWords.titleCased(PersonalLockWords.requirement(personalLock.method)), detail: nil,
+                            systemImage: PersonalLockWords.symbol)
             }
         }
+    }
+}
+
+/// The lock's one line, under the Library section it now sits in.
+private struct PersonalLockFooter: View {
+    @Environment(PersonalLock.self) private var personalLock: PersonalLock?
+
+    var body: some View {
+        if personalLock != nil { SettingsFooter(PersonalLockWords.footer) }
     }
 }
 
