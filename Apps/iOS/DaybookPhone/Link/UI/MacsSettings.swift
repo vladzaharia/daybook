@@ -64,7 +64,7 @@ struct MacRow: View {
 }
 
 extension PhoneLink.Mac {
-    /// The line under its name in a list (Settings › Macs, the status sheet): recording, else the link's state.
+    /// The line under its name in a list (Settings › Devices, the status sheet): recording, else the link's state.
     func rowLine(recordingBySync: Bool) -> String {
         if let recording, isRecording {
             return recording.phase == .paused ? "Paused recording" : "Recording now"

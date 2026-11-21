@@ -21,11 +21,14 @@ final class PhoneProcessingTests: XCTestCase {
         private var _transcribed: [UUID] = []
         private var _running = 0, _mostAtOnce = 0
         private var _holding = false, _waiting = false
+        private var _holdFrom: Int?
         private var _failure: Error?
         var transcribed: [UUID] { lock.withLock { _transcribed } }
         var mostAtOnce: Int { lock.withLock { _mostAtOnce } }
         var isWaiting: Bool { lock.withLock { _waiting } }
         func hold(_ on: Bool) { lock.withLock { _holding = on } }
+        /// Holds each recording after the first `count` have been transcribed.
+        func hold(after count: Int?) { lock.withLock { _holdFrom = count } }
         /// Transcribing throws `error`, as an engine that stops does.
         func fail(with error: Error?) { lock.withLock { _failure = error } }
 
@@ -33,7 +36,7 @@ final class PhoneProcessingTests: XCTestCase {
             lock.withLock { _running += 1; _mostAtOnce = max(_mostAtOnce, _running) }
             defer { lock.withLock { _running -= 1; _waiting = false } }
             progress(ProcessingProgress(fraction: 0.5, message: "Transcribing"))
-            while lock.withLock({ _holding }) {
+            while lock.withLock({ _holding || _holdFrom.map { _transcribed.count >= $0 } ?? false }) {
                 lock.withLock { _waiting = true }
                 try await Task.sleep(for: .milliseconds(10))
             }
@@ -740,6 +743,71 @@ final class PhoneProcessingTests: XCTestCase {
         XCTAssertFalse(rig.processor.canCancelStarted(try meetingFor(rig, own.id)))
         rig.processor.cancelStarted(own.id)
         XCTAssertEqual(try meetingFor(rig, own.id).openProcessingRequests.count, 1)
+    }
+
+    func testBehaviorCancelDuringAPauseAlreadyUnderWayLeavesNothingPaused() async throws {
+        let rig = try await rig()
+        let meeting = try await record(into: rig.library)
+        rig.engine.hold(true)
+        rig.processor.pickUp()
+        try await waitUntil("transcribing") { rig.engine.isWaiting }
+        // The pause is under way (the job hasn't ended yet) when Cancel is tapped.
+        rig.processor.conditions.isRecording = true
+        XCTAssertNotNil(rig.processor.running)
+        XCTAssertTrue(rig.processor.canCancelStarted(try meetingFor(rig, meeting.id)))
+        rig.processor.cancelStarted(meeting.id)
+        try await waitUntil("the job to end") { rig.processor.lastOutcome?.meetingID == meeting.id }
+        rig.engine.hold(false)
+        XCTAssertNil(rig.processor.running)
+        XCTAssertFalse(rig.processor.paused.contains(meeting.id), "given up, never shown as paused")
+        let after = try meetingFor(rig, meeting.id)
+        XCTAssertTrue(after.openProcessingRequests.isEmpty)
+        XCTAssertNil(rig.processor.queue(for: after), "no queue entry left behind")
+        XCTAssertFalse(rig.processor.canCancelStarted(after))
+    }
+
+    func testBehaviorCancelAfterSomeRecordingsWereTranscribedKeepsThemAndOffersTranscribeAgain() async throws {
+        let rig = try await rig()
+        let meeting = try await record(into: rig.library)
+        rig.library.controller.update(meeting.id) {
+            var second = $0.tracks[0]
+            second.id = UUID()
+            $0.tracks.append(second)
+        }
+        rig.engine.hold(after: 1)
+        rig.processor.pickUp()
+        try await waitUntil("the second recording") { rig.engine.isWaiting }
+        XCTAssertEqual(rig.engine.transcribed.count, 1)
+        rig.processor.cancelStarted(meeting.id)
+        try await waitUntil("the stop") { outcome(rig, meeting.id) == .lost }
+        rig.engine.hold(after: nil)
+        let after = try meetingFor(rig, meeting.id)
+        XCTAssertEqual(after.transcripts.count, 1, "the first recording's words stay")
+        XCTAssertTrue(after.openProcessingRequests.isEmpty)
+        let status = ProcessingStatus.phone(after)
+        XCTAssertNotEqual(status, .done, "not shown as finished")
+        XCTAssertNotEqual(after.status, .ready)
+        var inputs = ConversationStatusPresentation.Inputs(words: .iPhone(id: rig.library.controller.thisDevice.id),
+                                                           local: .iPhone(processesHere: true, summarizes: true))
+        inputs.ownsUntranscribed = true
+        let line = ConversationStatusPresentation.page(status, meeting: after, inputs: inputs)
+        XCTAssertEqual(line?.actions, [.transcribe(newAudio: true)], "start again is offered: \(String(describing: line))")
+    }
+
+    func testBehaviorCancelIsNotOfferedWhileAMacHoldsOneOfTheOpenRequests() async throws {
+        let rig = try await rig()
+        let meeting = try await record(into: rig.library)
+        XCTAssertTrue(rig.processor.canCancelStarted(try meetingFor(rig, meeting.id)))
+        // A second request of this iPhone's own, a Mac carrying it out: Cancel couldn't take it back.
+        let again = try XCTUnwrap(rig.library.controller.requestProcessing(meeting.id, mode: .fullRetranscription))
+        let mac = ProcessingRequest.Device(id: "studio-mac", name: "Studio Mac")
+        var held = again
+        held.claim = ProcessingRequest.Claim(device: mac, claimedAt: Date(), heartbeat: Date(), expiresAt: Date().addingTimeInterval(600))
+        rig.library.controller.update(meeting.id) { $0.upsertProcessingRequest(held) }
+        XCTAssertEqual(try meetingFor(rig, meeting.id).openProcessingRequests.count, 2)
+        XCTAssertFalse(rig.processor.canCancelStarted(try meetingFor(rig, meeting.id)))
+        rig.processor.cancelStarted(meeting.id)
+        XCTAssertEqual(try meetingFor(rig, meeting.id).openProcessingRequests.count, 2, "Cancel does nothing")
     }
 
     func testBehaviorASummaryPlacedHereIsStoppedByThePlacementNotCancelled() async throws {

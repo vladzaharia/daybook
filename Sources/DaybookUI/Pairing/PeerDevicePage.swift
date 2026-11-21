@@ -5,7 +5,7 @@ import Foundation
 import SwiftUI
 
 // A paired Daybook's page, the same on both apps (docs/link.md, "A paired device's page"): "Alex’s iPhone" on
-// the Mac, beside the recordings it made, and "Studio Mac" on the iPhone, pushed from Settings › Macs and inside
+// the Mac, beside the recordings it made, and "Studio Mac" on the iPhone, pushed from Settings › Devices and inside
 // the status sheet. The header (its tile, name, and status in `PeerStatusWords`' words), what's wrong with the
 // pairing and its fix, what it's recording with Stop on it, the recorders it manages, whether it can start
 // recording here, its facts, and Unpair.
