@@ -89,11 +89,23 @@ public enum AudioCompressor {
              level(TimeInterval), notSilent, lag(Int)
         /// A file delivered fewer frames than it declares (cut short, or damaged): read errors included.
         case shortRead(declared: Int64, delivered: Int64)
+        /// A Linear PCM WAV or CAF has this many bytes past its declared audio that aren't chunks (`unaccountedBytes`).
+        case trailingData(Int64)
+
+        /// A verdict on these bytes (the copy's checks, or the recording's container) that another try wouldn't change:
+        /// remembered by rule. Anything else (reading, encoding, a layout the plan doesn't take) may pass another time.
+        public var isVerdict: Bool {
+            switch self {
+            case .wrongFormat, .frameCount, .quiet, .dropout, .envelope, .level, .notSilent, .lag, .trailingData: return true
+            case .unreadable, .notLossless, .unsupportedLayout, .encodingFailed, .shortRead: return false
+            }
+        }
 
         public var errorDescription: String? {
             switch self {
             case .unreadable: return "The recording couldn’t be read."
             case .shortRead(let declared, let delivered): return "A file ended after \(delivered) of the \(declared) frames it declares."
+            case .trailingData(let bytes): return "The recording has \(bytes) bytes past the audio its header declares."
             case .notLossless: return "The recording is already compressed."
             case .unsupportedLayout(let layout): return "The recording’s layout isn’t compressed (\(layout))."
             case .encodingFailed(let reason): return "Encoding failed: \(reason)"
@@ -110,6 +122,64 @@ public enum AudioCompressor {
     }
 
     // MARK: Reading the source
+
+    /// The most bytes past a Linear PCM file's declared audio that may be something other than chunks (a stray pad or a
+    /// cut-off trailing chunk) before it's refused: a page.
+    public static let unaccountedTail: Int64 = 4_096
+
+    /// Bytes past the declared end of a Linear PCM WAV or CAF's audio (`data` chunk) that aren't well-formed chunks running
+    /// to the end of the file: what a header never updated after a crash leaves, audio every reader skips, so it would be
+    /// lost with the original. Measured on this Mac: AVAudioFile writes a CAF as `desc`, `free` (4,016 bytes), `data`, and
+    /// a WAV as `JUNK`, `fmt `, `FLLR`, `data`, each with its data running exactly to the end of the file, and a file
+    /// with bytes added past its declared data reads as its declared length, the rest unread. Chunks another app wrote
+    /// after the data (`LIST`, `id3 `, and the like) run to the end and count as nothing; a CAF `data` chunk of unknown
+    /// size (-1, still being written) runs to the end too. 0 for anything else (another format or container, no `data`
+    /// chunk, a file cut short: other checks decide those).
+    public static func unaccountedBytes(_ url: URL) throws -> Int64 {
+        guard let file = try? AVAudioFile(forReading: url), file.fileFormat.streamDescription.pointee.mFormatID == kAudioFormatLinearPCM else { return 0 }
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let size = Int64(try handle.seekToEnd())
+        func read(_ offset: Int64, _ count: Int) throws -> Data? {
+            guard offset >= 0, offset + Int64(count) <= size else { return nil }
+            try handle.seek(toOffset: UInt64(offset))
+            let data = try handle.read(upToCount: count) ?? Data()
+            return data.count == count ? Data(data) : nil
+        }
+        guard let magic = try read(0, 12) else { return 0 }
+        let isCAF = magic.prefix(4) == Data("caff".utf8)
+        guard isCAF || (magic.prefix(4) == Data("RIFF".utf8) && magic.suffix(4) == Data("WAVE".utf8)) else { return 0 }
+        /// A chunk's four-character type and where the next begins (nil: it runs to the end of the file, or its size is
+        /// past it).
+        func chunk(at offset: Int64) throws -> (type: Data, next: Int64?)? {
+            guard let header = try read(offset, isCAF ? 12 : 8) else { return nil }
+            let type = Data(header.prefix(4))
+            let length: Int64
+            if isCAF {
+                length = header.dropFirst(4).reduce(Int64(0)) { $0 << 8 | Int64($1) }
+                if length == -1 { return (type, nil) }
+            } else {
+                length = Int64(header.dropFirst(4).reversed().reduce(UInt32(0)) { $0 << 8 | UInt32($1) })
+            }
+            guard length >= 0, length <= size else { return (type, nil) }
+            return (type, offset + (isCAF ? 12 : 8) + length + (isCAF ? 0 : length & 1))
+        }
+        var offset: Int64 = isCAF ? 8 : 12
+        var dataEnd: Int64?
+        while dataEnd == nil, let found = try chunk(at: offset) {
+            guard let next = found.next, next > offset else { return 0 }
+            if found.type == Data("data".utf8) { dataEnd = next } else { offset = next }
+        }
+        guard let end = dataEnd, end < size else { return 0 }
+        // What follows the data: chunks with printable types tiling exactly to the end (a pad byte short at most) are
+        // metadata; anything else is unaccounted.
+        var after = end
+        while after < size, let found = try chunk(at: after), found.type.allSatisfy({ (0x20...0x7e).contains($0) }),
+              let next = found.next, next > after, next <= size + 1 {
+            after = next
+        }
+        return after >= size ? 0 : size - end
+    }
 
     /// How a file is stored: lossless (PCM, Apple Lossless, FLAC), lossy, or something the encoder doesn't take.
     public static func storage(of url: URL) -> RecordingCompressionEligibility.Storage {
@@ -259,7 +329,7 @@ public enum AudioCompressor {
                 // A resampler's last frames short of the count (its filter's tail, a few thousand at most) are silence, so the
                 // copy is exactly as long. Nothing else is ever padded: a copy short otherwise is refused.
                 if written < expected && (!plan.resamples || expected - written > Self.resamplerTail) {
-                    throw Refusal.frameCount(source: expected, copy: written)
+                    throw Refusal.encodingFailed("wrote \(written) of \(expected) frames")
                 }
                 while written < expected {
                     let frames = AVAudioFrameCount(min(Int64(capacity), expected - written))
@@ -300,6 +370,8 @@ public enum AudioCompressor {
         do {
             return try await BlockingFileWork.run { isCancelled in
                 guard try AudioDigest.sha256(fileURL: source, isCancelled: isCancelled) == expectedSHA256 else { throw SourceChanged() }
+                let unaccounted = try Self.unaccountedBytes(source)
+                guard unaccounted <= Self.unaccountedTail else { throw Refusal.trailingData(unaccounted) }
                 let plan = try Self.plan(for: source, isCancelled: isCancelled)
                 try Self.encode(source, to: temporary, plan: plan, isCancelled: isCancelled)
                 let verification = try Self.verify(source: source, copy: temporary, plan: plan, isCancelled: isCancelled)

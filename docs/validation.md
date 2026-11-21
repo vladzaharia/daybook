@@ -93,8 +93,22 @@ far-field or phone audio, Whisper ran on a subset, and the 60 s bound wasn't mea
   (`LibrarySyncSealingTests`).
 - the transcript bar (`TranscriptAgreementTests`, and the library with injected transcribers): words normalized, edit
   distance, the 5%/8%/12% bars and short spans; spans from the track's or its derived copy's transcript; agreeing copy
-  used with the check recorded; disagreeing copy refused and not encoded again under the same rule; no model or no
-  speech skipped and recorded; stopping during the check leaves nothing and isn't a refusal.
+  used with the check recorded; disagreeing copy refused and not encoded again under the same rule; no speech skipped
+  and recorded; stopping during the check leaves nothing and isn't a refusal.
+
+**Final review fixes (same day).** Each with a test that fails without it:
+- an original the model hears saying nothing where its transcript has speech is never a pass: not swapped, not refused,
+  waiting instead; speech with no model this pass waits (nothing encoded or remembered) and compresses on a pass with
+  one; the planner leaves such tracks out without the model.
+- a voiceprint this version can't read makes the pass Never (nothing compressed, no original let go) while the row
+  still shows the choice.
+- only verdicts are remembered: a CAF cut short (a read error) and a model that throws wait 6 hours, then 12, are
+  tried again after the wait, and are forgotten once one works; at most 30 days.
+- stopped, or Never chosen, while the last question under the lock was answered: the original stays.
+- audio past a stale header in a CAF or WAV (300 kB after the declared data, which AVAudioFile skips) refused as a
+  verdict; 2.6 MB of `LIST` and `id3 ` chunks after a WAV's data, 1.5 MB of `info` after a CAF's, and 100 stray bytes
+  pass.
+- a copy rewritten in place after it was hashed, under its exact old modification time, keeps the original.
 - 13 mutations of this round's guards, each failing the test that covers it: the transcript bar skipped; the copy's
   stamp not checked under the lock; the stamp without its status-change time, or the earlier stamp (inode, size, and
   the modification date as a Double), either of which deleted an original rewritten under its exact old modification

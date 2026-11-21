@@ -71,11 +71,10 @@ public enum TranscriptAgreement {
                 worst = max(worst ?? share, share)
             }
         }
-        guard total > 0 else {
-            // Nothing said in the original's sample: the copy must say nothing too.
-            let spoken = spans.contains { !words($0.copy).isEmpty }
-            return Result(disagreement: nil, worstSpan: nil, words: 0, passes: !spoken)
-        }
+        // The sample is chosen where the transcript has speech, so an original that says nothing in it means the model
+        // didn't hear what processing did: nothing to compare, and never a pass (`words` 0 tells the caller it couldn't
+        // check, which isn't a refusal either).
+        guard total > 0 else { return Result(disagreement: nil, worstSpan: nil, words: 0, passes: false) }
         let overall = Double(errors) / Double(total)
         let passes = overall <= bar.overall && (bar.perSpan.map { limit in (worst ?? 0) <= limit } ?? true)
         return Result(disagreement: overall, worstSpan: worst, words: total, passes: passes)
@@ -108,6 +107,11 @@ public enum TranscriptSample {
             }
         }
         return merged
+    }
+
+    /// The track has speech the quality bar must hear before a copy may replace it (`spans` isn't empty).
+    public static func hasSpeech(_ track: RecordingTrack, in meeting: Meeting) -> Bool {
+        !spans(speech(of: track, in: meeting), duration: track.duration).isEmpty
     }
 
     /// The spans to listen to: all the speech when there's 10 minutes or less (cut into 60 s spans), otherwise ten
@@ -151,7 +155,7 @@ public enum TranscriptSample {
 public struct TranscriptCheck: Codable, Equatable, Sendable {
     /// The check ran (false: skipped, with the reason).
     public var ran: Bool
-    /// Why it didn't: "no speech" or "no model".
+    /// Why it didn't: "no speech" (the track's transcript has none). A track with speech is never replaced unheard.
     public var skipped: String?
     /// The transcription model it used (`ModelReference.id`).
     public var model: String?

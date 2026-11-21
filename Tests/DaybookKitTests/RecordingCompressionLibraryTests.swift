@@ -180,9 +180,10 @@ final class RecordingCompressionLibraryTests: XCTestCase {
             XCTAssertFalse(files.contains { $0.hasPrefix(RecordingCompression.temporaryPrefix) }, "\(step): no temporary copy")
             XCTAssertEqual(files, [(track.relativePath as NSString).lastPathComponent], "\(step): only the file the track names")
             XCTAssertEqual(track.isCompressed, step == .saved || step == .removingOriginal, "\(step)")
-            // And it finishes on a later pass.
+            // And it finishes on a later pass (after the wait a failure brings: the crash here is a thrown error, which a
+            // real crash never gets to record).
             if !track.isCompressed {
-                let value4 = await launched.compressRecordings([before.id], in: id, device: nil)
+                let value4 = await launched.compressRecordings([before.id], in: id, device: nil, now: Date().addingTimeInterval(7 * 3_600))
                 XCTAssertEqual(value4, [before.id], "\(step): compressed again")
             }
         }
@@ -478,6 +479,30 @@ final class RecordingCompressionLibraryTests: XCTestCase {
         XCTAssertEqual(after.st_ino, hashed.st_ino, "the same file")
     }
 
+    func testBehaviorACopyRewrittenUnderItsOldDateKeepsTheOriginal() async throws {
+        let library = try await self.library("Mac", syncs: false)
+        let (id, before) = try await conversation(in: library, from: try recording())
+        await library.compressRecordings([before.id], in: id, device: nil)
+        let copy = url(library, try XCTUnwrap(library.meeting(id)?.tracks.first).relativePath, in: id)
+        // The copy, as many bytes as before, rewritten in place after it was hashed, its modification time put back to the
+        // nanosecond: the original stays.
+        var hashed = stat()
+        library.compressionFault = { step in
+            guard step == .checked, lstat(copy.path, &hashed) == 0, let handle = try? FileHandle(forWritingTo: copy) else { return }
+            try? handle.seek(toOffset: 2_048); try? handle.write(contentsOf: Data(repeating: 0x55, count: 64)); try? handle.close()
+            var times = [timespec(tv_sec: 0, tv_nsec: Int(UTIME_OMIT)), hashed.st_mtimespec]
+            _ = utimensat(AT_FDCWD, copy.path, &times, 0)
+        }
+        let removed = await library.finishCompressions()
+        XCTAssertEqual(removed, 0)
+        XCTAssertEqual(try digest(url(library, before.relativePath, in: id)), before.sha256)
+        var after = stat()
+        XCTAssertEqual(lstat(copy.path, &after), 0)
+        XCTAssertEqual([after.st_size, Int64(after.st_mtimespec.tv_sec), Int64(after.st_mtimespec.tv_nsec), Int64(bitPattern: after.st_ino)],
+                       [hashed.st_size, Int64(hashed.st_mtimespec.tv_sec), Int64(hashed.st_mtimespec.tv_nsec), Int64(bitPattern: hashed.st_ino)],
+                       "the same file, size, and modification time")
+    }
+
     func testBehaviorACopyGoneBeforeTheLockKeepsTheOriginal() async throws {
         let library = try await self.library("Mac", syncs: false)
         let (id, before) = try await conversation(in: library, from: try recording())
@@ -572,13 +597,16 @@ final class RecordingCompressionLibraryTests: XCTestCase {
         var value: Int { lock.withLock { calls } }
     }
 
-    private func listener(_ heard: Heard, copySays: String? = nil, wait: Duration? = nil) -> RecordingCompressionListener {
+    private func listener(_ heard: Heard, copySays: String? = nil, originalSays: String? = nil, fails: Bool = false,
+                          wait: Duration? = nil) -> RecordingCompressionListener {
         RecordingCompressionListener(model: "parakeet/test", isDeterministic: true) { url, spans in
             heard.count()
             if let wait { try await Task.sleep(for: wait) }
+            // A span past the end of the file (`SpanTranscription.cut`), a model that won't load: an error, not a verdict.
+            if fails { throw CocoaError(.fileReadCorruptFile) }
             let original = (0..<40).map { "word\($0)" }.joined(separator: " ")
             let isCopy = url.lastPathComponent.hasPrefix(RecordingCompression.temporaryPrefix)
-            return spans.map { _ in isCopy ? (copySays ?? original) : original }
+            return spans.map { _ in isCopy ? (copySays ?? original) : (originalSays ?? original) }
         }
     }
 
@@ -611,16 +639,130 @@ final class RecordingCompressionLibraryTests: XCTestCase {
         XCTAssertEqual(heard.value, 2, "not encoded or heard again under the same rule")
     }
 
-    func testBehaviorTheBarIsSkippedAndSaidSoWithoutAModelOrSpeech() async throws {
+    func testBehaviorSpeechWaitsForTheModelAndOnlyNoSpeechIsSkipped() async throws {
         let library = try await self.library("Mac", syncs: false)
         let (spoken, spokenTrack) = try await spokenConversation(in: library)
-        _ = await library.compressRecordings([spokenTrack.id], in: spoken, device: nil, listener: nil)
-        XCTAssertEqual(library.meeting(spoken)?.tracks.first?.encoding?.transcriptCheck, TranscriptCheck(ran: false, skipped: "no model"))
+        // Speech and no model this pass: left as it was for a pass that has one, nothing encoded, nothing remembered.
+        let waited = await library.compressRecordings([spokenTrack.id], in: spoken, device: nil, listener: nil)
+        XCTAssertEqual(waited, [])
+        XCTAssertNil(library.meeting(spoken)?.tracks.first?.encoding)
+        XCTAssertEqual(originals(library, spoken), [(spokenTrack.relativePath as NSString).lastPathComponent], "nothing encoded")
+        XCTAssertTrue(library.compressionHeldBack(now: Date()).isEmpty)
+        // With the model, the same recording is heard and compressed.
+        let heardSpoken = Heard()
+        let compressed = await library.compressRecordings([spokenTrack.id], in: spoken, device: nil, listener: listener(heardSpoken))
+        XCTAssertEqual(compressed, [spokenTrack.id])
+        XCTAssertEqual(heardSpoken.value, 2)
+        // No speech in its transcript: skipped, and said so, with or without a model.
         let (silent, silentTrack) = try await conversation(in: library, from: try recording(seed: 2))
-        let heard = Heard()
-        _ = await library.compressRecordings([silentTrack.id], in: silent, device: nil, listener: listener(heard))
+        _ = await library.compressRecordings([silentTrack.id], in: silent, device: nil, listener: nil)
         XCTAssertEqual(library.meeting(silent)?.tracks.first?.encoding?.transcriptCheck, TranscriptCheck(ran: false, skipped: "no speech"))
-        XCTAssertEqual(heard.value, 0)
+    }
+
+    func testBehaviorAnOriginalHeardSayingNothingIsntAPassOrARefusal() async throws {
+        let library = try await self.library("Mac", syncs: false)
+        let (id, track) = try await spokenConversation(in: library)
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        // The model hears no words in the original where its transcript has speech, whatever the copy says.
+        for (index, copySays) in ["", "hello there"].enumerated() {
+            let heard = Heard()
+            let now = start.addingTimeInterval(Double(index) * 40 * 86_400)
+            let compressed = await library.compressRecordings([track.id], in: id, device: nil, now: now,
+                                                              listener: listener(heard, copySays: copySays, originalSays: ""))
+            XCTAssertEqual(compressed, [], "copy says \"\(copySays)\"")
+            XCTAssertEqual(heard.value, 2)
+            XCTAssertNil(library.meeting(id)?.tracks.first?.encoding)
+            XCTAssertEqual(originals(library, id), [(track.relativePath as NSString).lastPathComponent])
+            XCTAssertFalse(library.compressionWasRefused(track), "couldn't check isn't a refusal")
+            XCTAssertTrue(library.compressionHeldBack(now: now.addingTimeInterval(60)).contains(track.sha256), "it waits instead")
+        }
+    }
+
+    func testBehaviorAFailureWaitsLongerEachTimeAndIsntARefusal() async throws {
+        let library = try await self.library("Mac", syncs: false)
+        let (id, track) = try await spokenConversation(in: library)
+        let heard = Heard(), start = Date(timeIntervalSince1970: 1_800_000_000)
+        var compressed = await library.compressRecordings([track.id], in: id, device: nil, now: start, listener: listener(heard, fails: true))
+        XCTAssertEqual(compressed, [])
+        XCTAssertFalse(library.compressionWasRefused(track))
+        XCTAssertEqual(library.compressionAttempts()[track.sha256]?.failures, 1)
+        // Within the wait, it isn't encoded or heard again, so it takes no pass's place.
+        compressed = await library.compressRecordings([track.id], in: id, device: nil, now: start.addingTimeInterval(3_600), listener: listener(heard))
+        XCTAssertEqual(compressed, [])
+        XCTAssertEqual(heard.value, 1)
+        // After it, tried again; failing again, it waits twice as long.
+        compressed = await library.compressRecordings([track.id], in: id, device: nil, now: start.addingTimeInterval(7 * 3_600),
+                                                      listener: listener(heard, fails: true))
+        XCTAssertEqual(heard.value, 2)
+        XCTAssertEqual(library.compressionAttempts()[track.sha256]?.failures, 2)
+        XCTAssertTrue(library.compressionHeldBack(now: start.addingTimeInterval(7 * 3_600 + 11 * 3_600)).contains(track.sha256))
+        XCTAssertFalse(library.compressionHeldBack(now: start.addingTimeInterval(7 * 3_600 + 13 * 3_600)).contains(track.sha256))
+        XCTAssertEqual(LibraryController.failureWait(30), 30 * 86_400, "at most 30 days")
+        // Then it works, and nothing is remembered of it.
+        compressed = await library.compressRecordings([track.id], in: id, device: nil, now: start.addingTimeInterval(21 * 3_600), listener: listener(heard))
+        XCTAssertEqual(compressed, [track.id])
+        XCTAssertNil(library.compressionAttempts()[track.sha256])
+    }
+
+    func testBehaviorAReadErrorIsntRememberedAsARefusal() async throws {
+        let library = try await self.library("Mac", syncs: false)
+        // A CAF cut short: its header declares every frame, and reading fails partway (`Refusal.shortRead`).
+        let whole = try recording(seconds: 8)
+        var bytes = try Data(contentsOf: whole)
+        bytes.removeLast(bytes.count / 3)
+        let cut = root.appendingPathComponent("cut.caf")
+        try bytes.write(to: cut)
+        let (id, track) = try await conversation(in: library, from: cut)
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let compressed = await library.compressRecordings([track.id], in: id, device: nil, now: now)
+        XCTAssertEqual(compressed, [])
+        XCTAssertFalse(library.compressionWasRefused(track), "a read error may not happen another time")
+        XCTAssertEqual(library.compressionAttempts()[track.sha256]?.failures, 1)
+        XCTAssertEqual(originals(library, id), [(track.relativePath as NSString).lastPathComponent], "nothing left behind")
+    }
+
+    func testBehaviorStoppedOrNeverWhileAskedLastKeepsTheOriginal() async throws {
+        let library = try await self.library("Mac", syncs: false)
+        let (stopped, stoppedTrack) = try await conversation(in: library, from: try recording())
+        // Stopped while the last answer was being given.
+        let work = Task {
+            await library.compressRecordings([stoppedTrack.id], in: stopped, device: nil) { _ in
+                withUnsafeCurrentTask { $0?.cancel() }
+                return true
+            }
+        }
+        let stoppedResult = await work.value
+        XCTAssertEqual(stoppedResult, [])
+        XCTAssertNil(library.meeting(stopped)?.tracks.first?.encoding)
+        XCTAssertEqual(originals(library, stopped), [(stoppedTrack.relativePath as NSString).lastPathComponent])
+        // Never chosen while it was being given.
+        let (never, neverTrack) = try await conversation(in: library, from: try recording(seed: 4))
+        let neverResult = await library.compressRecordings([neverTrack.id], in: never, device: nil) { _ in
+            library.setRecordingCompression(.never)
+            return true
+        }
+        XCTAssertEqual(neverResult, [])
+        XCTAssertNil(library.meeting(never)?.tracks.first?.encoding)
+        XCTAssertEqual(originals(library, never), [(neverTrack.relativePath as NSString).lastPathComponent])
+    }
+
+    func testBehaviorAVoiceprintThisVersionCantReadMakesThePassNever() async throws {
+        let library = try await self.library("Mac", syncs: false)
+        let (done, doneTrack) = try await conversation(in: library, from: try recording())
+        await library.compressRecordings([doneTrack.id], in: done, device: nil)
+        let (id, track) = try await conversation(in: library, from: try recording(seed: 3))
+        // A voiceprint in a shape a newer Daybook wrote.
+        let unreadable = try JSONDecoder().decode(LibraryValue<Voiceprint>.self,
+                                                  from: Data(#"{"id":"vp-new","value":{"newerShape":true},"modifiedAt":0}"#.utf8))
+        XCTAssertNotNil(unreadable.unreadableValue)
+        library.updateMetadata { $0.voiceprints = ($0.voiceprints ?? []) + [unreadable] }
+        XCTAssertEqual(library.recordingCompression, .after30Days, "the row still shows the choice")
+        XCTAssertEqual(library.compressionPassAge, .never)
+        let compressed = await library.compressRecordings([track.id], in: id, device: nil)
+        XCTAssertEqual(compressed, [])
+        let removed = await library.finishCompressions()
+        XCTAssertEqual(removed, 0, "originals stay, as under Never")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url(library, doneTrack.relativePath, in: done).path))
     }
 
     func testBehaviorStoppingDuringTheCheckLeavesNothing() async throws {
@@ -635,6 +777,7 @@ final class RecordingCompressionLibraryTests: XCTestCase {
         XCTAssertNil(library.meeting(id)?.tracks.first?.encoding)
         XCTAssertEqual(originals(library, id), [(track.relativePath as NSString).lastPathComponent], "no copy, no temporary")
         XCTAssertFalse(library.compressionWasRefused(track), "a stop isn't a refusal")
+        XCTAssertTrue(library.compressionHeldBack(now: Date()).isEmpty, "nor a failure")
     }
 
     // MARK: Sync

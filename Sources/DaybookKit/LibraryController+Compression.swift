@@ -89,37 +89,66 @@ extension LibraryController {
         return url
     }
 
-    // MARK: Refusals remembered
+    // MARK: Refusals and failures remembered
 
-    /// Recordings whose copy was refused (the checks, or the transcript bar), by the original's SHA-256, with the rule
-    /// they were refused under: not encoded again until the rule changes. Kept beside the library, never synced.
-    private var refusalsURL: URL { rootURL.appendingPathComponent("compression-refusals.json") }
+    /// What this Mac remembers of a recording it didn't compress, by the original's SHA-256.
+    public struct CompressionAttempts: Codable, Equatable, Sendable {
+        /// The rule a verdict refused it under (`AudioCompressor.Refusal.isVerdict`, or the transcript bar): it isn't
+        /// encoded again until the rule changes.
+        public var refusedUnderRule: Int?
+        /// Failures that may not happen another time (reading, encoding, the model, a check that couldn't be made), in a
+        /// row, and the last one's date: it waits `failureWait` before it's tried again.
+        public var failures: Int?
+        public var lastFailure: Date?
+    }
 
-    public func compressionRefusals() -> [String: Int] {
-        (try? JSONDecoder().decode([String: Int].self, from: Data(contentsOf: refusalsURL))) ?? [:]
+    /// Kept beside the library, never synced: what one Mac's files and model did says nothing of another's.
+    private var attemptsURL: URL { rootURL.appendingPathComponent("compression-refusals.json") }
+
+    public func compressionAttempts() -> [String: CompressionAttempts] {
+        guard let data = try? Data(contentsOf: attemptsURL) else { return [:] }
+        if let attempts = try? JSONDecoder().decode([String: CompressionAttempts].self, from: data) { return attempts }
+        // The first shape of the file: refusals alone, by rule.
+        let refusals = (try? JSONDecoder().decode([String: Int].self, from: data)) ?? [:]
+        return refusals.mapValues { CompressionAttempts(refusedUnderRule: $0) }
+    }
+
+    /// How long a recording waits after `failures` failures in a row: 6 hours, doubling, at most 30 days.
+    public static func failureWait(_ failures: Int) -> TimeInterval {
+        min(6 * 3_600 * pow(2, Double(max(0, failures - 1))), 30 * 86_400)
     }
 
     /// The recording was refused under the current rule.
     public func compressionWasRefused(_ track: RecordingTrack) -> Bool {
-        compressionRefusals()[track.sha256] == RecordingCompressionTable.rule
+        compressionAttempts()[track.sha256]?.refusedUnderRule == RecordingCompressionTable.rule
     }
 
-    private func rememberRefusal(_ track: RecordingTrack) {
-        var refusals = compressionRefusals()
-        refusals[track.sha256] = RecordingCompressionTable.rule
-        if let data = try? JSONEncoder().encode(refusals) { try? DurableFiles.write(data, to: refusalsURL) }
+    /// Recordings (by SHA-256) not to compress now: refused under the current rule, or waiting after a failure.
+    public func compressionHeldBack(now: Date) -> Set<String> {
+        Set(compressionAttempts().filter { _, attempts in
+            if attempts.refusedUnderRule == RecordingCompressionTable.rule { return true }
+            guard let failures = attempts.failures, failures > 0, let last = attempts.lastFailure else { return false }
+            return now < last.addingTimeInterval(Self.failureWait(failures))
+        }.keys)
+    }
+
+    private func rememberAttempt(_ track: RecordingTrack, _ change: (inout CompressionAttempts?) -> Void) {
+        var attempts = compressionAttempts()
+        change(&attempts[track.sha256])
+        if let data = try? JSONEncoder().encode(attempts) { try? DurableFiles.write(data, to: attemptsURL) }
     }
 
     // MARK: Compressing
 
     /// Replaces these recordings of a conversation with verified copies; the caller found it eligible. Each is made and
-    /// checked first (off the main actor, without the lock), heard by the speech model against the original when a
-    /// `listener` is given and the track has speech (`TranscriptAgreement`), then, under the library lock, put at its
-    /// own path and named by its track, with the original's identity in `encoding`, and saved durably. The originals stay
-    /// until `finishCompressions` lets them go. `stillAllowed` is asked again under the lock (the setting, what's going on
-    /// with the conversation now): a no throws the copy away. A copy the checks or the bar refuse is remembered with the
-    /// rule (`compressionWasRefused`) and not made again until the rule changes. Returns the tracks compressed; one that
-    /// couldn't be is left exactly as it was, with one line in the log.
+    /// checked first (off the main actor, without the lock), heard by the speech model against the original when the
+    /// track has speech (`TranscriptAgreement`; with speech and no `listener`, the track waits for a pass that has one),
+    /// then, under the library lock, put at its own path and named by its track, with the original's identity in
+    /// `encoding`, and saved durably. The originals stay until `finishCompressions` lets them go. `stillAllowed` is asked
+    /// again under the lock (the setting, what's going on with the conversation now): a no throws the copy away. A copy a
+    /// verdict refuses (`Refusal.isVerdict`, or the transcript bar) is remembered with the rule and not made again until
+    /// the rule changes; any other failure makes the recording wait (`failureWait`, from `now`). Returns the tracks
+    /// compressed; one that couldn't be is left exactly as it was, with one line in the log.
     @discardableResult
     public func compressRecordings(_ trackIDs: [UUID], in meetingID: UUID, device: String?, now: Date = Date(),
                                    listener: RecordingCompressionListener? = nil,
@@ -127,10 +156,13 @@ extension LibraryController {
         compressionsInFlight += 1
         defer { compressionsInFlight -= 1 }
         var compressed: [UUID] = []
+        let heldBack = compressionHeldBack(now: now)
         for trackID in trackIDs {
-            if Task.isCancelled || recordingCompression == .never { break }
+            if Task.isCancelled || compressionPassAge == .never { break }
             guard let conversation = meeting(meetingID), let track = conversation.tracks.first(where: { $0.id == trackID }), track.encoding == nil,
-                  !compressionWasRefused(track),
+                  !heldBack.contains(track.sha256),
+                  // Speech is heard by the model before its copy may replace it: with none here this pass, it waits.
+                  listener != nil || !TranscriptSample.hasSpeech(track, in: conversation),
                   let source = try? await audioURL(for: track, in: meetingID),
                   let folder = try? await copyURL(RecordingCompression.relativePath(trackID: trackID, sha256: track.sha256), in: meetingID)
                     .deletingLastPathComponent() else { continue }
@@ -144,10 +176,19 @@ extension LibraryController {
                 if try await replace(trackID, in: meetingID, with: copy, check: check, expecting: track, device: device, now: now,
                                      stillAllowed: stillAllowed) {
                     compressed.append(trackID)
+                    rememberAttempt(track) { $0 = nil }
                 }
             } catch {
                 if let prepared { try? FileManager.default.removeItem(at: prepared.url) }
-                if error is AudioCompressor.Refusal || error is TranscriptDisagreement { rememberRefusal(track) }
+                if error is CancellationError || Task.isCancelled {
+                    // Stopped: not a failure of the recording's.
+                } else if (error as? AudioCompressor.Refusal)?.isVerdict == true || error is TranscriptDisagreement {
+                    rememberAttempt(track) { $0 = CompressionAttempts(refusedUnderRule: RecordingCompressionTable.rule) }
+                } else {
+                    rememberAttempt(track) { attempts in
+                        attempts = CompressionAttempts(refusedUnderRule: attempts?.refusedUnderRule, failures: (attempts?.failures ?? 0) + 1, lastFailure: now)
+                    }
+                }
                 if !(error is CancellationError) {
                     Self.log.error("Kept \(trackID.uuidString, privacy: .public) as it was: \(error.localizedDescription, privacy: .public)")
                 }
@@ -156,7 +197,7 @@ extension LibraryController {
         return compressed
     }
 
-    /// The copy didn't say what the original says, as the speech model hears them.
+    /// The copy didn't say what the original says, as the speech model hears them: a verdict.
     struct TranscriptDisagreement: LocalizedError {
         var result: TranscriptAgreement.Result
         var errorDescription: String? {
@@ -164,30 +205,40 @@ extension LibraryController {
         }
     }
 
+    /// The bar couldn't be applied this time (the model heard no words in the original where its transcript has speech,
+    /// or answered for the wrong spans, or wasn't here): no verdict, so the recording waits and is tried again.
+    struct TranscriptUnchecked: LocalizedError {
+        var reason: String
+        var errorDescription: String? { "The copy couldn't be checked by ear: \(reason)." }
+    }
+
     /// The transcript quality bar: the same sample of the original and of the copy, through `listener`, compared word by
-    /// word. Skipped (and said so) when the track has no speech in its transcript, or no model is here to hear it.
+    /// word. Skipped, and said so, only when the track has no speech in its transcript.
     private func listen(to track: RecordingTrack, in meeting: Meeting, source: URL, copy: URL,
                         listener: RecordingCompressionListener?) async throws -> TranscriptCheck {
         let spans = TranscriptSample.spans(TranscriptSample.speech(of: track, in: meeting), duration: track.duration)
         guard !spans.isEmpty else { return TranscriptCheck(ran: false, skipped: "no speech") }
-        guard let listener else { return TranscriptCheck(ran: false, skipped: "no model") }
+        guard let listener else { throw TranscriptUnchecked(reason: "no model") }
         let original = try await listener.transcribe(source, spans)
         try Task.checkCancellation()
         let copied = try await listener.transcribe(copy, spans)
         try Task.checkCancellation()
-        guard original.count == spans.count, copied.count == spans.count else { throw TranscriptDisagreement(result: .init(disagreement: nil, worstSpan: nil, words: 0, passes: false)) }
+        guard original.count == spans.count, copied.count == spans.count else { throw TranscriptUnchecked(reason: "the model answered for other spans") }
         let result = TranscriptAgreement.judge(Array(zip(original, copied)).map { (original: $0.0, copy: $0.1) },
                                                bar: listener.isDeterministic ? .deterministic : .nondeterministic)
+        guard result.words > 0 else { throw TranscriptUnchecked(reason: "no words heard in the original's speech") }
         guard result.passes else { throw TranscriptDisagreement(result: result) }
         return TranscriptCheck(ran: true, model: listener.model, sampleSeconds: spans.reduce(0) { $0 + $1.upperBound - $1.lowerBound },
                                disagreement: result.disagreement)
     }
 
     /// Whether a compression may go on now, asked under the lock: not cancelled, the library's choice still allows it,
-    /// nothing waits for the lock (an import, a move, a sync), the conversation isn't being merged, and the caller agrees.
+    /// nothing waits for the lock (an import, a move, a sync), the conversation isn't being merged, and the caller agrees;
+    /// and, since the caller's answer can take a while, not cancelled and not Never after it either.
     private func mayReplace(in meeting: Meeting, stillAllowed: (Meeting) async -> Bool) async -> Bool {
-        guard !Task.isCancelled, recordingCompression != .never, lockWaiterCount == 0, !mergingIDs.contains(meeting.id) else { return false }
-        return await stillAllowed(meeting)
+        guard !Task.isCancelled, compressionPassAge != .never, lockWaiterCount == 0, !mergingIDs.contains(meeting.id) else { return false }
+        guard await stillAllowed(meeting) else { return false }
+        return !Task.isCancelled && compressionPassAge != .never
     }
 
     /// Puts a prepared copy in place of its recording, under the lock. False when the recording changed meanwhile, or the
@@ -215,6 +266,9 @@ extension LibraryController {
         }
         try DurableFiles.synchronize([destination.deletingLastPathComponent()])
         try compressionFault?(.renamed)
+        // Asked once more with nothing awaited from here to the track naming the copy: stopped, or Never, since the copy
+        // was put in place keeps the track naming the original (the copy no track names is swept later).
+        guard !Task.isCancelled, compressionPassAge != .never else { return false }
         let encoding = TrackEncoding(method: prepared.plan.method, rule: prepared.plan.rule, sourceFormat: prepared.sourceFormat,
                                      previousSHA256: current.sha256, previousRelativePath: current.relativePath,
                                      previousFileName: current.fileName, previousSize: prepared.sourceSize, size: prepared.size,
@@ -304,7 +358,7 @@ extension LibraryController {
         let state = compressionSync
         guard state != .unknown else { return 0 }
         // Under Never, originals stay (a compressed track keeps naming its copy); a later choice that allows it finishes them.
-        var originalsMayGo = removingOriginals && recordingCompression != .never
+        var originalsMayGo = removingOriginals && compressionPassAge != .never
         if originalsMayGo, state == .connected, await !settingsAreCurrent() { originalsMayGo = false }
         var found: [Removal] = []
         for meeting in meetings where mayTouch(meeting.id) {
@@ -351,7 +405,7 @@ extension LibraryController {
             }
             // Then, with nothing awaited between these and the deletion: the choice, the track and the file it names, no
             // other track naming the file going, and both files (the one going, the one staying) the ones hashed.
-            guard compressionSync == state, !removal.isOriginal || recordingCompression != .never,
+            guard compressionSync == state, !removal.isOriginal || compressionPassAge != .never,
                   let conversation = meeting(removal.meetingID), let track = conversation.tracks.first(where: { $0.id == removal.trackID }),
                   RecordingCompression.File(track) == removal.file,
                   !conversation.tracks.contains(where: { $0.relativePath == removal.relativePath }),

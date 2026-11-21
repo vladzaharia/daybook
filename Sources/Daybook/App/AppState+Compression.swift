@@ -71,8 +71,9 @@ extension AppState {
         preferences.set(["boot": ContinuousClockMark.boot, "seconds": ContinuousClockMark.seconds()], forKey: "\(Preference.compressionLastPassClock).\(id)")
     }
 
-    /// What the pass knows now (`RecordingCompressionPlanner.Inputs`), for the library `id` (read once per pass).
-    func compressionInputs(now: Date, library id: String, clockSteady: Bool) async -> RecordingCompressionPlanner.Inputs? {
+    /// What the pass knows now (`RecordingCompressionPlanner.Inputs`), for the library `id` (read once per pass); `canListen`:
+    /// the pass has the transcript bar's model.
+    func compressionInputs(now: Date, library id: String, clockSteady: Bool, canListen: Bool) async -> RecordingCompressionPlanner.Inputs? {
         let syncState = library.compressionSync
         guard syncState != .unknown else { return nil }
         let start = compressionStartDate(library: id)
@@ -86,7 +87,8 @@ extension AppState {
         // In a synced library, applied for the library this pass is for (`id`): a library switched mid-pass isn't.
         let settingsApplied = syncState == .local ? id == "local" : await library.settingsAreCurrent(library: UUID(uuidString: id) ?? UUID())
         let lineage = await library.trashedMeetings()
-        return .init(now: now, age: library.recordingCompression, startsAt: start, settingsApplied: settingsApplied,
+        // Never too while a voiceprint can't be read (`compressionPassAge`).
+        return .init(now: now, age: library.compressionPassAge, startsAt: start, settingsApplied: settingsApplied,
                      everyDeviceCompresses: syncState == .local ? true : await engine?.everyRecentDeviceCompresses(now: now) ?? false,
                      clockLooksAhead: syncState == .local ? false : await engine?.compressionClockLooksAhead(now: now) ?? true,
                      thisDevice: sync.deviceID, macs: macs,
@@ -94,12 +96,11 @@ extension AppState {
                      done: Set(library.meetings.filter { processingStatus(for: $0) == .done }.map(\.id)),
                      upgradeOffered: Set(library.meetings.filter { upgradeOffer(for: $0) != nil }.map(\.id)),
                      voiceprints: (library.metadata.voiceprints ?? []).compactMap(\.value),
-                     lineage: lineage, refused: Set(library.compressionRefusals().filter { $0.value == RecordingCompressionTable.rule }.keys),
-                     clockSteady: clockSteady)
+                     lineage: lineage, refused: library.compressionHeldBack(now: now), clockSteady: clockSteady, canListen: canListen)
     }
 
-    /// The transcript quality bar's ears: the transcription model processing uses, when it's installed here; nil (the
-    /// check is skipped, and recorded so) when it isn't. Nothing is downloaded for it.
+    /// The transcript quality bar's ears: the transcription model processing uses, when it's installed here; nil when it
+    /// isn't (recordings with speech then wait for a pass that has it). Nothing is downloaded for it.
     func compressionListener() async -> RecordingCompressionListener? {
         let key = transcriptionModel
         guard !key.isEmpty, await runtime.installedModels().contains(key) else { return nil }
@@ -123,17 +124,19 @@ extension AppState {
         let steady = steadyHere && RecordingCompressionClock.trusts(now: now, lastPass: nil, newestOtherDevice: newestOther)
         // A jump seen in this boot keeps the last pass as it was, so it stays seen until the Mac restarts.
         if steadyHere || last.elapsed == nil { rememberCompressionPass(id, at: now) }
-        guard steady, let first = await compressionInputs(now: now, library: id, clockSteady: steady) else { return }
+        // Recordings with speech are compressed only with the model to hear them; this pass's, read once.
+        let listener = await compressionListener()
+        guard steady, let first = await compressionInputs(now: now, library: id, clockSteady: steady, canListen: listener != nil) else { return }
         // Letting go of originals waits with the rest: Never, or before this Mac's start, keeps every original here.
         guard first.age != .never, first.settingsApplied, let start = first.startsAt, now >= start else { return }
         await library.finishCompressions { [weak self] id in self?.isInUse(id) == false }
-        let listener = await compressionListener()
         var passed = 0
         for candidate in RecordingCompressionPlanner.candidates(library.meetings, first) {
             guard passed < Self.compressionsPerPass, !Task.isCancelled, mayCompressRecordings,
-                  library.recordingCompression != .never, let meeting = library.meeting(candidate.meetingID) else { return }
+                  library.compressionPassAge != .never, let meeting = library.meeting(candidate.meetingID) else { return }
             let files = await library.compressionFacts(for: meeting)
-            guard mayCompressRecordings, let inputs = await compressionInputs(now: now, library: id, clockSteady: steady), inputs.age != .never,
+            guard mayCompressRecordings, let inputs = await compressionInputs(now: now, library: id, clockSteady: steady, canListen: listener != nil),
+                  inputs.age != .never,
                   let current = library.meeting(meeting.id) else { return }
             let mine = RecordingCompressionPlanner.tracks(current, among: library.meetings, inputs, files: files)
             guard !mine.isEmpty else { continue }
@@ -143,7 +146,8 @@ extension AppState {
             let work = Task { [library, weak self] in
                 await library.compressRecordings(mine, in: current.id, device: device, now: now, listener: listener) { meeting in
                     // Everything gathered again, under the lock: the choice, voice profiles, devices, settings, the clock.
-                    guard let self, let fresh = await self.compressionInputs(now: Date(), library: id, clockSteady: steady) else { return false }
+                    guard let self, let fresh = await self.compressionInputs(now: Date(), library: id, clockSteady: steady,
+                                                                             canListen: listener != nil) else { return false }
                     return RecordingCompressionPlanner.stillAllowed(meeting, among: library.meetings, fresh)
                 }
             }
@@ -151,7 +155,7 @@ extension AppState {
                 while !Task.isCancelled {
                     try? await Task.sleep(for: .seconds(1))
                     if self?.mayCompressRecordings != true || self?.isInUse(current.id) != false
-                        || self?.library.recordingCompression == .never { work.cancel(); return }
+                        || self?.library.compressionPassAge == .never { work.cancel(); return }
                 }
             }
             _ = await work.value

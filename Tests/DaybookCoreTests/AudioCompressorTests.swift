@@ -193,6 +193,54 @@ final class AudioCompressorTests: XCTestCase {
         XCTAssertThrowsError(try AudioCompressor.verify(source: whole, copy: shortCopy, plan: plan))
     }
 
+    func testBehaviorAudioPastAStaleHeaderIsRefusedAndMetadataChunksAreNot() async throws {
+        func appending(_ name: String, to source: URL, _ bytes: Data) throws -> URL {
+            let url = folder.appendingPathComponent(name)
+            try (Data(contentsOf: source) + bytes).write(to: url)
+            return url
+        }
+        func chunk(_ type: String, _ body: Data, caf: Bool) -> Data {
+            var header = Data(type.utf8)
+            if caf { header += withUnsafeBytes(of: Int64(body.count).bigEndian) { Data($0) } } else {
+                header += withUnsafeBytes(of: UInt32(body.count).littleEndian) { Data($0) }
+            }
+            return header + body + (caf || body.count % 2 == 0 ? Data() : Data([0]))
+        }
+        let caf = try write("written.caf", rate: 48_000, channels: [samples(rate: 48_000, seconds: 3)])
+        let wavSettings: [String: Any] = [AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 16_000, AVNumberOfChannelsKey: 1,
+                                          AVLinearPCMBitDepthKey: 16, AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false]
+        let wav = try write("written.wav", rate: 16_000, channels: [samples(rate: 16_000, seconds: 3)], settings: wavSettings)
+        XCTAssertEqual(try AudioCompressor.unaccountedBytes(caf), 0, "as AVAudioFile writes it")
+        XCTAssertEqual(try AudioCompressor.unaccountedBytes(wav), 0)
+        // A header never updated after a crash: audio past what it declares, which every reader skips.
+        let audio = Data((0..<300_000).map { UInt8(truncatingIfNeeded: $0 &* 7) })
+        for source in [caf, wav] {
+            let stale = try appending("stale-" + source.lastPathComponent, to: source, audio)
+            XCTAssertEqual(try AVAudioFile(forReading: stale).length, try AVAudioFile(forReading: source).length, "the reader skips it")
+            XCTAssertEqual(try AudioCompressor.unaccountedBytes(stale), Int64(audio.count))
+            do {
+                _ = try await AudioCompressor.prepareCopy(of: stale, expectedSHA256: try AudioDigest.sha256(fileURL: stale), in: folder)
+                XCTFail("a stale header passed")
+            } catch let refusal as AudioCompressor.Refusal {
+                XCTAssertEqual(refusal, .trailingData(Int64(audio.count)))
+                XCTAssertTrue(refusal.isVerdict, "the bytes won't change")
+            }
+        }
+        // Chunks another app wrote after the data, however large, and a few stray bytes, are not audio.
+        let metadata = try appending("tagged.wav", to: wav, chunk("LIST", Data(repeating: 1, count: 2_000_001), caf: false)
+                                     + chunk("id3 ", Data(repeating: 2, count: 600_000), caf: false))
+        XCTAssertEqual(try AudioCompressor.unaccountedBytes(metadata), 0)
+        let cafInfo = try appending("tagged.caf", to: caf, chunk("info", Data(repeating: 3, count: 1_500_000), caf: true))
+        XCTAssertEqual(try AudioCompressor.unaccountedBytes(cafInfo), 0)
+        let stray = try appending("stray.caf", to: caf, Data(repeating: 9, count: 100))
+        XCTAssertEqual(try AudioCompressor.unaccountedBytes(stray), 100)
+        _ = try await AudioCompressor.prepareCopy(of: stray, expectedSHA256: try AudioDigest.sha256(fileURL: stray), in: folder)
+        _ = try await AudioCompressor.prepareCopy(of: metadata, expectedSHA256: try AudioDigest.sha256(fileURL: metadata), in: folder)
+        // What another try could change isn't a verdict.
+        XCTAssertFalse(AudioCompressor.Refusal.shortRead(declared: 10, delivered: 5).isVerdict)
+        XCTAssertFalse(AudioCompressor.Refusal.encodingFailed("disk full").isVerdict)
+    }
+
     func testBehaviorEachPlannedRowKeepsItsRateAndALowerBitRateIsCaught() throws {
         for (rate, shape) in [(48_000.0, RecordingCompressionTable.Shape.wideMono), (44_100, .wideMono), (16_000, .narrowMono)] {
             let source = try write("row-\(Int(rate)).caf", rate: rate, channels: [samples(rate: rate, seconds: 4)])

@@ -617,6 +617,12 @@ public final class LibraryController {
     /// acts on it; 30 days while nobody chose, Never for a value this version can't read.
     public var recordingCompression: RecordingCompressionAge { newerSettingsSkipped ? .never : metadata.recordingCompression }
 
+    /// The choice as a compression pass acts on it: Never also while any voiceprint is in a shape this version can't read
+    /// (a newer Daybook's), since which conversation it was learned from can't be known. The row shows the choice itself.
+    public var compressionPassAge: RecordingCompressionAge {
+        (metadata.voiceprints ?? []).contains { $0.unreadableValue != nil } ? .never : recordingCompression
+    }
+
     /// The settings this device holds are the library's as sync last delivered them whole, through the folder and engine
     /// connected now (`settingsAppliedFromSync`), and, given `library`, that library's.
     public func settingsAreCurrent(library: UUID? = nil) async -> Bool {

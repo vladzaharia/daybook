@@ -33,9 +33,14 @@ final class TranscriptAgreementTests: XCTestCase {
         // A short span isn't held to the per-span bound.
         let short = sentence(10, changing: 2)
         XCTAssertTrue(TranscriptAgreement.judge(spans + [(original: short.0, copy: short.1)], bar: .deterministic).passes)
-        // Nothing said in the original: the copy must say nothing too.
-        XCTAssertTrue(TranscriptAgreement.judge([(original: "", copy: "")], bar: .deterministic).passes)
-        XCTAssertFalse(TranscriptAgreement.judge([(original: "", copy: "hello")], bar: .deterministic).passes)
+        // Nothing heard in the original where its transcript has speech: nothing to compare, never a pass, whatever the
+        // copy says (words 0 is how the caller tells "couldn't check" from a refusal).
+        for copy in ["", "hello"] {
+            let result = TranscriptAgreement.judge([(original: "", copy: copy), (original: " ,. ", copy: copy)], bar: .deterministic)
+            XCTAssertFalse(result.passes, copy)
+            XCTAssertEqual(result.words, 0)
+            XCTAssertNil(result.disagreement)
+        }
     }
 
     func testBehaviorSpansFollowTheSpeech() {

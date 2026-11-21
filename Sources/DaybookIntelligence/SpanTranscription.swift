@@ -29,7 +29,8 @@ public enum SpanTranscription {
         return texts
     }
 
-    /// Writes `span` of `url` to `destination` in the file's own processing format.
+    /// Writes `span` of `url` to `destination` in the file's own processing format. A span that starts at or past the
+    /// file's end throws: the recording can't be checked this time, which makes it wait (`LibraryController.failureWait`).
     static func cut(_ url: URL, _ span: ClosedRange<TimeInterval>, to destination: URL) throws {
         let file = try AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false)
         let rate = file.processingFormat.sampleRate

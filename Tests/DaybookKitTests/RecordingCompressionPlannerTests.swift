@@ -136,6 +136,19 @@ final class RecordingCompressionPlannerTests: XCTestCase {
         XCTAssertEqual(ids([a], inputs([a]) { $0.clockSteady = false }), [])
     }
 
+    func testBehaviorWithoutTheModelOnlyRecordingsWithoutSpeechAreCompressed() {
+        let spoken = conversation("spoken", digest: "a")
+        // Its transcript has nothing long enough to listen to (a tenth of a second).
+        var silent = conversation("silent", digest: "b")
+        silent.transcripts[0].segments[0].end = 0.1
+        XCTAssertFalse(TranscriptSample.hasSpeech(silent.tracks[0], in: silent))
+        XCTAssertTrue(TranscriptSample.hasSpeech(spoken.tracks[0], in: spoken))
+        let both = [spoken, silent]
+        XCTAssertEqual(ids(both, inputs(both)), [spoken.id, silent.id])
+        XCTAssertEqual(ids(both, inputs(both) { $0.canListen = false }), [silent.id], "speech waits for a pass with the model")
+        XCTAssertFalse(RecordingCompressionPlanner.stillAllowed(spoken, among: both, inputs(both) { $0.canListen = false }))
+    }
+
     func testBehaviorARefusedRecordingIsntReadAgain() {
         let a = conversation("a", digest: "a")
         XCTAssertEqual(ids([a], inputs([a]) { $0.refused = [a.tracks[0].sha256] }), [])

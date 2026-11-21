@@ -26,19 +26,23 @@ public enum RecordingCompressionPlanner {
         /// Conversations no longer in the library (the Trash) whose audio may live on in one that is: a voiceprint's
         /// conversation moved out of, or merged away.
         public var lineage: [Meeting]
-        /// Recordings refused under the current rule, by SHA-256 (`LibraryController.compressionWasRefused`).
+        /// Recordings held back, by SHA-256: refused under the current rule, or waiting after a failure
+        /// (`LibraryController.compressionHeldBack`).
         public var refused: Set<String>
         /// This Mac's own clock check passed (`RecordingCompressionClock.trusts`).
         public var clockSteady: Bool
+        /// This pass has the transcript bar's model: without it, a track with speech in its transcript waits.
+        public var canListen: Bool
 
         public init(now: Date, age: RecordingCompressionAge, startsAt: Date?, settingsApplied: Bool, everyDeviceCompresses: Bool,
                     clockLooksAhead: Bool, thisDevice: String, macs: [RecordingCompressionRunner.Mac]?, inUse: Set<UUID> = [],
                     trashed: Set<UUID> = [], done: Set<UUID>, upgradeOffered: Set<UUID> = [], voiceprints: [Voiceprint] = [],
-                    lineage: [Meeting] = [], refused: Set<String> = [], clockSteady: Bool = true) {
+                    lineage: [Meeting] = [], refused: Set<String> = [], clockSteady: Bool = true, canListen: Bool = true) {
             self.now = now; self.age = age; self.startsAt = startsAt; self.settingsApplied = settingsApplied
             self.everyDeviceCompresses = everyDeviceCompresses; self.clockLooksAhead = clockLooksAhead; self.thisDevice = thisDevice
             self.macs = macs; self.inUse = inUse; self.trashed = trashed; self.done = done; self.upgradeOffered = upgradeOffered
             self.voiceprints = voiceprints; self.lineage = lineage; self.refused = refused; self.clockSteady = clockSteady
+            self.canListen = canListen
         }
     }
 
@@ -91,10 +95,13 @@ public enum RecordingCompressionPlanner {
               tracks: tracks ?? Dictionary(uniqueKeysWithValues: meeting.tracks.map { ($0.id, assumedTrack) }))
     }
 
-    /// The tracks of a decision this device compresses (`RecordingCompressionRunner`).
+    /// The tracks of a decision this device compresses (`RecordingCompressionRunner`), less those held back (refused, or
+    /// waiting after a failure) and, without the transcript bar's model this pass, those with speech.
     public static func mine(_ ids: [UUID], in meeting: Meeting, _ inputs: Inputs) -> [UUID] {
         ids.filter { id in
-            meeting.tracks.first { $0.id == id && !inputs.refused.contains($0.sha256) }.map {
+            meeting.tracks.first {
+                $0.id == id && !inputs.refused.contains($0.sha256) && (inputs.canListen || !TranscriptSample.hasSpeech($0, in: meeting))
+            }.map {
                 RecordingCompressionRunner.runner(for: $0, thisDevice: inputs.thisDevice, macs: inputs.macs, now: inputs.now) == inputs.thisDevice
             } ?? false
         }
