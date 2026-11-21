@@ -74,9 +74,9 @@ public enum WelcomeWords {
     public static let record = "Record"
     public static let importAudio = "Import Audio…"
     public static let recorderQuestion = "Use a wearable or handheld recorder?"
-    public static let addDevice = "Add Device…"
+    public static let addDevice = "Add Recorder…"
     /// The Mac's Ready page: Daybook as a login item, so calls are noticed after a restart; the one row on it that says why.
-    public static let openAtLogin = "Open Daybook at login"
+    public static let openAtLogin = "Open at login"
     public static let openAtLoginReason = "So Daybook can notice calls."
 
     /// The Ready page's line: what happens to a recording made now. `canTranscribe`: it's transcribed now, by the models

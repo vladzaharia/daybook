@@ -56,7 +56,7 @@ public struct ICloudSyncSheetContent: View {
         case .enterRecoveryKey:
             EnterRecoveryKeyForm(controller: controller) { present(nil) }
         case .devices:
-            SettingsFormSheet(title: "Devices", cancel: nil, confirm: .init("Done") { present(nil) }) {
+            SettingsFormSheet(title: "Synced Devices", cancel: nil, confirm: .init("Done") { present(nil) }) {
                 LibraryDevicesSection(devices: devices)
             }
             .task { await refreshDevices() }
@@ -270,7 +270,7 @@ public struct LibraryDevicesRowLabel: View {
                 }
             }
         } label: {
-            Text("Devices").foregroundStyle(DaybookPalette.Ink.title)
+            Text("Synced Devices").foregroundStyle(DaybookPalette.Ink.title)
         }
         .contentShape(Rectangle())
     }

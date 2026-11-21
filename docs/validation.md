@@ -4671,3 +4671,17 @@ its own. Naming a Mac, and the app and context menus, are follow-ups.
 `testACascadeStartedMidImportStartsTheRecorderWithinItsDeadline` failed on main's CI with "imports []; queue importing, 0 waiting; failures []" for the whole wait. Cause (product): a transfer queued for the link is handed it, finds another app's audio within `otherAppQuiet`, and gives the link back to wait; a request made in that gap (the cascade's Listen Live of the shared recording, right after the Start confirms) also waits out the quiet, and whichever woke first took the link. Listen Live holds it until the recording ends, so the import started again only after the shared recording. The audio taken for another app's was a straggler of the transfer the Start had stopped, arriving after the rig's 20 ms settle (the real one is a second). `exclusiveWhenQuiet` now numbers its callers and a later one (a Start or Pause aside) waits for an earlier one still out of the queue.
 
 Checked (simulated recorder, no Bluetooth): the cascade test's scenario 250 times in 8 processes before the fix with a random wait before the Start and a random amount of audio received: 9 failures, in the same state as CI; 720 times after: none. `SoundcoreLinkOrderTests` (sixteen sessions at once, because which of two that wake together goes first is up to the timers): 0 of 8 runs pass without the fix, 10 of 10 with it. Not checked: a real recorder and another app's transfer on an iPhone. `SoundcoreRecordCommandTests.testAStartGoesAheadOfAnImportWhichStartsAgainAfterIt` flaked once; the same ordering may be behind it, not confirmed.
+
+## 2026-11-20: Mac settings, library, devices (UX pass)
+
+Verified (unit tests, temporary libraries, synthetic audio; no models, no recording, no network):
+- Settings search keywords (`SettingsSearchTests`), the empty places of Work and Personal, the search prompt, the Trash
+  question's wording (`LibraryPlaceWordsTests`, `LibraryWordsTests`), the import notice's wording and an import that goes
+  on past a file that isn't audio, with an alert only when nothing imported (`ImportSidecarTests`), the menu bar's
+  "Saved · 18 min" (`MenuBarStatusTests`), and the Mac intents' spoken lines (`SystemEntryPointsTests`).
+- The Mac settings page order was read against the code; "Open at login" now comes from one constant (`WelcomeWords`).
+
+Not verified: Settings panes and the menu bar were not captured (see the PR), Device Details' Copy on a real recorder
+(the report is the iPhone's text under a Mac first line), the open Floating Notes chip menu's Manage Storage… (it opens
+Settings › Library, where Storage is a row; the Storage sheet itself belongs to another branch), and the partial-import
+notice has no Details… (a notice has none; the alert keeps it when nothing imported).

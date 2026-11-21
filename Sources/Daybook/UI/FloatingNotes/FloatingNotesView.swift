@@ -401,7 +401,10 @@ struct ChipMenuItems: View {
             }
         case .sync:
             Button("Open Sync Settings…") { openSettingsPane(.library) }
-        case .call, .storage:
+        case .storage:
+            // Storage is a row on Library's page, with the library's folder.
+            Button("Manage Storage…") { openSettingsPane(.library) }
+        case .call:
             EmptyView()
         }
     }

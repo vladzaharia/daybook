@@ -24,11 +24,7 @@ struct DevicesSettingsPane: View {
                 Section {
                     HStack(spacing: DaybookSpacing.s3) {
                         DaybookTile(symbol: "recordingtape", size: .row)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("No devices yet")
-                            Text("Soundcore Work, Daybook on iPhone, or any recorder that saves audio files.")
-                                .font(DaybookFont.status.font(.window)).foregroundStyle(.secondary)
-                        }
+                        Text("No devices")
                         Spacer()
                         // The iPhone's pairing screen sends people here for this button.
                         AddDeviceButton(state: state, kind: DaybookPhoneIntegration.id, title: PairingWords.pairWithIPhone)
@@ -60,7 +56,7 @@ struct DevicesSettingsPane: View {
 private struct AddDeviceButton: View {
     let state: AppState
     var kind: String?
-    var title = "Add Device…"
+    var title = WelcomeWords.addDevice
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {

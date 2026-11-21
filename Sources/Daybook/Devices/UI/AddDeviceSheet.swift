@@ -145,7 +145,7 @@ private struct KindChooser: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            AddRecorderHeader(symbol: "recordingtape", title: "Add Device")
+            AddRecorderHeader(symbol: "recordingtape", title: "Add Recorder")
             VStack(spacing: DaybookSpacing.s2) {
                 ForEach(DeviceCatalog.kindsAddedByHand) { kind in
                     KindCard(kind: kind, isSetUp: !kind.allowsMultiple && state.devices.session(kind: kind.id) != nil) { choose(kind) }
