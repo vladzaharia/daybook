@@ -43,4 +43,8 @@ final class WatchWordsTests: XCTestCase {
         XCTAssertEqual(WatchWords.clock(3725), "1:02:05")
         XCTAssertEqual(WatchWords.clock(-3), "0:00")
     }
+
+    func testAStopWithNoReasonHasNoBody() {
+        XCTAssertEqual(WatchWords.stoppedBody(""), "")
+    }
 }

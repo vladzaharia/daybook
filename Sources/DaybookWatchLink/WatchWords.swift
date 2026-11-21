@@ -50,7 +50,7 @@ public enum WatchWords {
 
     /// The body of "Recording stopped": the reason, as a sentence.
     public static func stoppedBody(_ reason: String) -> String {
-        reason.hasSuffix(".") ? reason : reason + "."
+        reason.isEmpty || reason.hasSuffix(".") ? reason : reason + "."
     }
 
     /// The elapsed time, `m:ss` (`h:mm:ss` from an hour).
