@@ -4679,3 +4679,12 @@ From the visual review (VMM-01 to VMM-27, less the three held for the owner: she
 Checked: `ConversationStatusChoicesTests` (a silent recording is information, other failures stay problems) and `LibraryListTests` (the Trash row's time label); Mac pictures of each changed screen from an ad hoc build (`--library` under `/private/tmp/daybook/` only), beside the originals; `swift build`; the iPhone simulator build.
 
 Not checked: VMM-24's merging of consecutive changes (skipped: each change is restored by itself); the photo comparison in Version History on a library with a real photo; the Trash's hover Restore; Increase Contrast and Dark pictures; a scroll into view for a row far down a very long list; the iPhone's pictures (its layouts are unchanged by design, apart from "No speech" now drawn as information).
+||||||| 029dd881
+
+## 2026-11-20: iPhone UX pass (audio not on this iPhone, Settings grouping, Welcome)
+
+Changed: audio that went back to iCloud reads "Not on this iPhone" in Info (with Download · size, or Download when the size isn't known, fetched through `AudioProviding.localAudio`, and Try Again after a failure) and in the player (with Try Again, which asks `PlaybackController` for the last request again); "It downloads when you’re online." is gone. A lock-paused job says "Continues when iPhone is unlocked". The status sheet and Storage row show "Audio · 120 MB" only when some is here. Restore on the iPhone posts "Restored “…”." with Show (`ConfirmationBeat` gained an optional Show). "Soundcore didn’t list its recordings" offers Details beside Refresh Status. Settings › Library holds Storage, Summary Templates, Vocabulary, Speaker Profiles, and Require Face ID for Personal. An encrypted library's backup toggle has a footer. Welcome's Ready page offers Download over Cellular while the models wait for Wi‑Fi, and Add Recorder….
+
+Checked: unit tests for each wording rule (`ConversationInfoTests`, `ProcessingWordsTests`, `StatusSheetModelTests`, `SettingsWordsTests`, `PhoneWelcomeTests`, `DeviceOwnershipTests`, `ReadingTests`, `PlainWordsTests`), `swift build`, and the iPhone simulator build.
+
+Not checked: a real download from iCloud on a device (Download and Try Again run against the simulated provider's paths only in tests); the Details action appears from the first failed listing, not after a second one, since the connection keeps no count of failures for the box; the Welcome cellular link against a real Wi‑Fi wait.

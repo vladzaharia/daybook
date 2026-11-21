@@ -44,6 +44,7 @@ public struct PlayerBar<Player: PlaybackControlling>: View {
     private let player: Player
     private let meeting: Meeting
     private let isRecording: Bool
+    private let retry: (@MainActor () -> Void)?
     private let addBookmark: @MainActor (_ trackID: UUID, _ seconds: TimeInterval) -> Void
     @State private var bookmarks = 0
     @Environment(\.daybookDensity) private var density
@@ -55,14 +56,16 @@ public struct PlayerBar<Player: PlaybackControlling>: View {
 
     /// - Parameters:
     ///   - isRecording: This device is recording, so Play is off (the microphone would record it).
+    ///   - retry: Asks again after the audio couldn't be fetched; nil where that doesn't happen (the Mac).
     ///   - addBookmark: Adds a bookmark in the recording playing, at a time in it.
     public init(
-        player: Player, meeting: Meeting, isRecording: Bool = false,
+        player: Player, meeting: Meeting, isRecording: Bool = false, retry: (@MainActor () -> Void)? = nil,
         addBookmark: @escaping @MainActor (_ trackID: UUID, _ seconds: TimeInterval) -> Void
     ) {
         self.player = player
         self.meeting = meeting
         self.isRecording = isRecording
+        self.retry = retry
         self.addBookmark = addBookmark
     }
 
@@ -350,7 +353,7 @@ public struct PlayerBar<Player: PlaybackControlling>: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 6) {
                 Text(
-                    fraction.map { "Downloading the audio · \(Int(($0 * 100).rounded(.down)))%" }
+                    fraction.map { "Downloading audio · \(Int(($0 * 100).rounded(.down)))%" }
                         ?? "Getting the audio…"
                 )
                 .font(touch ? .subheadline : .system(size: 12))
@@ -375,6 +378,11 @@ public struct PlayerBar<Player: PlaybackControlling>: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .help(player.problemDetails ?? words)
             Spacer(minLength: 0)
+            if let retry {
+                Button("Try Again", action: retry)
+                    .font(touch ? .subheadline : .system(size: 12))
+                    .buttonStyle(.daybookLink)
+            }
             closeButton
         }
     }

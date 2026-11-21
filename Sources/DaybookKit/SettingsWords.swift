@@ -176,6 +176,8 @@ public enum SettingsWords {
     /// (docs/iphone.md, "File protection").
     public static let protectWhileLocked = "Protect while iPhone is locked"
     /// Its one footer line: what it costs, and nothing of how.
+    /// Under Include in iPhone Backups, while the library is encrypted: a backup Apple can read undoes it.
+    public static let encryptedBackupFooter = "Backups aren’t end-to-end encrypted unless Advanced Data Protection is on."
     public static let protectWhileLockedFooter = "Syncs and transcribes while unlocked."
 
     // MARK: Casing
