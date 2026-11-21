@@ -206,4 +206,42 @@ final class ProcessingRequestTests: XCTestCase {
         let restored = try JSONDecoder().decode(Meeting.self, from: JSONEncoder().encode(asked))
         XCTAssertEqual(restored.processingRequests, [claimed])
     }
+
+    /// A request as a Daybook from before `SpeakerAsk` reads and writes one: no `speakers`, and the mode kept as written.
+    private struct EarlierRequest: Codable {
+        var id: UUID
+        var meetingID: UUID
+        @Extensible var mode: ProcessingRequest.Mode
+        var templateID: String?
+        var requestedBy: ProcessingRequest.Device
+        var createdAt: Date
+        var claim: ProcessingRequest.Claim?
+        var outcome: ProcessingRequest.Outcome?
+        var upgrade: ProcessingRequest.Upgrade?
+        var isUnderstood: Bool { $mode.isKnown }
+    }
+
+    /// Identify Speakers with a number of people (or asked where speakers are off) is a mode an earlier Daybook doesn't
+    /// know: it never claims it to identify speakers its own way, and what it writes back keeps the number.
+    func testBehaviorAnEarlierDaybookLeavesARequestWithANumberOfPeopleAndKeepsTheNumber() throws {
+        for ask in [ProcessingRequest.SpeakerAsk(count: 3), ProcessingRequest.SpeakerAsk()] {
+            let asked = ProcessingRequest(meetingID: UUID(), mode: .speakerRefresh, requestedBy: phone, createdAt: start, speakers: ask)
+            let earlier = try JSONDecoder().decode(EarlierRequest.self, from: JSONEncoder().encode(asked))
+            XCTAssertFalse(earlier.isUnderstood, "not the plain Identify Speakers Again it knows")
+
+            // Its copy, written back after an edit elsewhere in the conversation, merges with this one's.
+            let written = try JSONDecoder().decode(ProcessingRequest.self, from: JSONEncoder().encode(earlier))
+            XCTAssertEqual(written, asked)
+            XCTAssertTrue(written.isUnderstood)
+            XCTAssertEqual(written.mode, .speakerRefresh)
+            for merged in [ProcessingRequest.merged([written], [asked]), ProcessingRequest.merged([asked], [written])] {
+                XCTAssertEqual(merged?.first?.speakers, ask)
+            }
+        }
+        // A plain Identify Speakers Again is stored as before.
+        let plain = ProcessingRequest(meetingID: UUID(), mode: .speakerRefresh, requestedBy: phone, createdAt: start)
+        XCTAssertTrue(try JSONDecoder().decode(EarlierRequest.self, from: JSONEncoder().encode(plain)).isUnderstood)
+        XCTAssertNil(ProcessingRequest(meetingID: UUID(), mode: .summaryOnly, requestedBy: phone, speakers: .init(count: 3)).speakers,
+                     "an ask is Identify Speakers Again's alone")
+    }
 }

@@ -21,31 +21,26 @@ public enum TranscriptEdits {
         }
     }
 
-    /// Renames a speaker everywhere in the conversation. Nothing changes for an empty or unchanged name.
+    /// Renames a speaker everywhere in the conversation. Nothing changes for an empty or unchanged name. The person's own
+    /// profile (its row, `picked`, or its name typed) marks the speaker as them, as This Is Me does.
     @discardableResult
-    public static func rename(_ speakerID: String, to name: String, in meetingID: UUID, library: LibraryController,
+    public static func rename(_ speakerID: String, to name: String, picked: UUID? = nil, in meetingID: UUID, library: LibraryController,
                               undoManager: UndoManager?) -> Bool {
-        // The person's own name marks the speaker as them, as This Is Me does.
-        library.renameSpeakers([speakerID], to: name, in: meetingID, undoManager: undoManager)
+        library.renameSpeakers([speakerID], to: name, picked: picked, in: meetingID, undoManager: undoManager)
     }
 
-    /// Gives passages to another speaker of the conversation (`Meeting.giveSpeaker`); Undo gives them back.
+    /// Gives passages to another speaker of the conversation (`LibraryController.giveSpeaker`); Undo gives each back.
     @discardableResult
     public static func changeSpeaker(of passageIDs: [UUID], to speakerID: String, in meetingID: UUID, library: LibraryController,
                                      undoManager: UndoManager?) -> Bool {
-        library.update(meetingID, actionName: "Change Speaker", undoManager: undoManager) {
-            $0.giveSpeaker(speakerID, toPassages: passageIDs)
-        }
+        library.giveSpeaker(speakerID, toPassages: passageIDs, in: meetingID, undoManager: undoManager)
     }
 
-    /// Gives passages to a new speaker called `name`, or the one that has that name already.
+    /// Gives passages to a new speaker called `name`, or the one that has that name already (`giveNewSpeaker`).
     @discardableResult
-    public static func changeSpeaker(of passageIDs: [UUID], toNew name: String, in meetingID: UUID, library: LibraryController,
-                                     undoManager: UndoManager?) -> Bool {
-        library.update(meetingID, actionName: "Change Speaker", undoManager: undoManager) { meeting in
-            guard let speakerID = meeting.speaker(named: name) else { return }
-            meeting.giveSpeaker(speakerID, toPassages: passageIDs)
-        }
+    public static func changeSpeaker(of passageIDs: [UUID], toNew name: String, picked: UUID? = nil, in meetingID: UUID,
+                                     library: LibraryController, undoManager: UndoManager?) -> Bool {
+        library.giveNewSpeaker(named: name, picked: picked, toPassages: passageIDs, in: meetingID, undoManager: undoManager)
     }
 
     /// Keeps words marked unsure as they are: the mark goes, on every device. The transcript doesn't change. Undo takes
@@ -335,7 +330,8 @@ struct RenameSpeakerForm: View {
     let name: String
     let profiles: [SpeakerProfile]
     let me: UUID?
-    let save: (String) -> Void
+    /// The name, and the profile when it's a row of the name list that was picked.
+    let save: (String, UUID?) -> Void
     private let dismiss = SheetDismiss()
     @Environment(\.daybookDensity) private var density
     @State private var draft = ""
@@ -366,7 +362,7 @@ struct RenameSpeakerForm: View {
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("Cancel", role: .cancel) { dismiss() } }
                     ToolbarItem(placement: .confirmationAction) {
-                        Button(action) { commit(draft) }.fontWeight(.semibold).disabled(trimmed.isEmpty)
+                        Button(action) { commit(draft, nil) }.fontWeight(.semibold).disabled(trimmed.isEmpty)
                     }
                 }
             }
@@ -382,7 +378,7 @@ struct RenameSpeakerForm: View {
                 HStack {
                     Spacer()
                     Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                    Button(action) { commit(draft) }
+                    Button(action) { commit(draft, nil) }
                         .keyboardShortcut(.defaultAction)
                         .disabled(trimmed.isEmpty)
                 }
@@ -411,10 +407,10 @@ struct RenameSpeakerForm: View {
         }
     }
 
-    private func commit(_ chosen: String) {
+    private func commit(_ chosen: String, _ picked: UUID?) {
         let value = chosen.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
-        if value != name { save(value) }
+        if value != name { save(value, picked) }
         dismiss()
     }
 }

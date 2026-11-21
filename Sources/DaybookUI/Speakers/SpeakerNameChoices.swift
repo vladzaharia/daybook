@@ -9,6 +9,12 @@ struct SpeakerNameChoice: Equatable, Identifiable {
     /// The profile is the person's own.
     var isMe = false
 
+    /// The row's profile; nil for Add “<name>”.
+    var profileID: UUID? {
+        if case .profile(let id) = kind { return id }
+        return nil
+    }
+
     var id: String {
         switch kind {
         case .profile(let id): return id.uuidString

@@ -12,10 +12,10 @@ public enum RevisionRestore {
             guard let segment = meeting.unifiedTranscript.first(where: { $0.id == id }) else { return false }
             return segment.text != revision.oldValue
         case .segmentSpeaker(let id):
-            // Back to the speaker it had, while it's still with the one it was given and the earlier one is here.
-            guard let segment = meeting.unifiedTranscript.first(where: { $0.id == id }), segment.speakerID == revision.newValue,
-                  meeting.speakers.contains(where: { $0.id == revision.oldValue }) else { return false }
-            return true
+            // Back to the speaker it had (none, for a passage that began without one), while it's still with the one it was
+            // given and the earlier one is here.
+            guard let segment = meeting.unifiedTranscript.first(where: { $0.id == id }), (segment.speakerID ?? "") == revision.newValue else { return false }
+            return revision.oldValue.isEmpty || meeting.speakers.contains { $0.id == revision.oldValue }
         case .speaker(let id):
             guard let speaker = meeting.speakers.first(where: { $0.id == id }) else { return false }
             return speaker.name != revision.oldValue && !revision.oldValue.trimmingCharacters(in: .whitespaces).isEmpty

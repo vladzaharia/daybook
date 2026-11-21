@@ -779,7 +779,9 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         guard let issue = correctionTransferIssues?.first(where: { $0.id == id }) else { return false }
         if let targetSegmentID {
             guard unifiedTranscript.contains(where: { $0.id == targetSegmentID }) else { return false }
-            correctSegment(id: targetSegmentID, text: issue.originalSegment.text)
+            // The words the person corrected, and the speaker they gave it; a passage only given a speaker keeps its new words.
+            if correctsWords(issue) { correctSegment(id: targetSegmentID, text: issue.originalSegment.text) }
+            if let speakerID = issue.speakerID { giveSpeaker(speakerID, toPassages: [targetSegmentID]) }
         }
         revisions.append(MeetingRevision(kind: .correctionTransfer(id), oldValue: issue.originalSegment.text,
             newValue: targetSegmentID.map { "applied:\($0.uuidString)" } ?? "dismissed"))

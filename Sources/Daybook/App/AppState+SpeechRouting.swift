@@ -61,10 +61,16 @@ extension AppState {
         })
     }
 
-    /// The speaker model takes a number of speakers (Settings › Models › Speakers offers one), so Identify Speakers Again can ask
-    /// how many people spoke.
+    /// The speaker model a job runs takes a number of speakers (Settings › Models › Speakers offers one), so Identify
+    /// Speakers Again can ask how many people spoke.
     var speakerCountsOffered: Bool {
-        ModelRouting.supportsExpectedSpeakerCount(processingPreferences.speakerModelID, catalog: modelCatalog)
+        ModelRouting.supportsExpectedSpeakerCount(routedSpeech.speakerModel, catalog: modelCatalog)
+    }
+
+    /// Whether `job` runs as it was asked: a number of people it was given goes to a speaker model that takes one. A job
+    /// that can't is never run as if it had (`pickUpRequests`, `mayRun`, `MacProcessor.enqueue`).
+    func takesSpeakerAsk(_ job: ProcessingJob) -> Bool {
+        job.speakers?.count == nil || ModelRouting.supportsExpectedSpeakerCount(job.preferences.speakerModelID, catalog: modelCatalog)
     }
 
     var speechRoute: SpeechRoute {
@@ -133,16 +139,23 @@ extension AppState {
                  speakers: ProcessingRequest.SpeakerAsk? = nil) -> ProcessingJob {
         let route = speechRoute
         var preferences = processingPreferences
-        preferences.speakerModelID = route.speakerModel
+        var (speakerModel, embedder, detects) = (route.speakerModel, route.voiceEmbedder, route.findsSpeakers)
         // Identify Speakers for this conversation alone (`SpeakerAsk`): the number of people the person said, whatever
-        // Settings says, and speakers found even where Tell speakers apart is off. Settings stays as it is.
-        var detects = route.findsSpeakers
+        // Settings says, and speakers found even where Tell speakers apart is off, so the speaker models are what it waits
+        // for. The routed model, routed again for that number as `speechRoute` routes Settings' (with its voice-profile
+        // model); one that can't take the number isn't run (`takesSpeakerAsk`). Settings stays as it is.
         if let speakers {
+            let catalog = modelCatalog, engines = runtime.engines
             preferences.speakerOptions.expectedSpeakerCount = speakers.count
-            preferences.speakerModelID = ModelRouting.diarizer(selected: processingPreferences.speakerModelID, expectedSpeakers: speakers.count,
-                                                               catalog: modelCatalog, engines: runtime.engines, installed: installedModels)
-            detects = ([preferences.speakerModelID] + [route.voiceEmbedder].compactMap { $0 }).allSatisfy(installedModels.contains)
+            speakerModel = ModelRouting.diarizer(selected: route.speakerModel, expectedSpeakers: speakers.count, catalog: catalog,
+                                                 engines: engines, installed: installedModels)
+            if speakerModel != route.speakerModel {
+                embedder = ModelRouting.voiceEmbedder(diarizer: speakerModel, selections: ModelRouting.withDefaultVoiceEmbedder(modelSelections, catalog: catalog, engines: engines),
+                                                      catalog: catalog, engines: engines)
+            }
+            detects = true
         }
+        preferences.speakerModelID = speakerModel
         preferences.transcriptionLanguage = route.transcription.language
         // A summary the person asked to make with another installed model: that job only (its revision frozen too). One
         // that went (uninstalled, or no longer fits) since the menu was drawn runs the chosen model, never a download.
@@ -151,8 +164,8 @@ extension AppState {
         if let usable, let revision = installedRevisions[usable] { revisions[usable] = revision }
         return ProcessingJob(meetingID: meetingID, mode: mode, transcriptionModelID: route.transcription.model, summaryModelID: usable ?? summaryModel,
                              detectSpeakers: detects, preferences: preferences, templateID: templateID,
-                             revisions: revisions, voiceEmbeddingModelID: route.voiceEmbedder,
+                             revisions: revisions, voiceEmbeddingModelID: embedder,
                              languageFallbackModelID: route.transcription.fallback, smallTasksModelID: smallTasksModel, photoModelID: photoModel?.id,
-                             upgrade: upgrade, summarizesHere: summarizesHere, summarizesInCloud: summarizesInCloud)
+                             upgrade: upgrade, speakers: speakers, summarizesHere: summarizesHere, summarizesInCloud: summarizesInCloud)
     }
 }

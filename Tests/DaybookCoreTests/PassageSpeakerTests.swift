@@ -115,4 +115,110 @@ final class PassageSpeakerTests: XCTestCase {
         XCTAssertEqual(RevisionField(rawValue: "segment-speaker:\(id.uuidString)"), .segmentSpeaker(id))
         XCTAssertEqual(RevisionField(rawValue: "segment-speaker:nope"), .unknown("segment-speaker:nope"))
     }
+
+    /// Two devices each move a passage before they sync: the merged copy keeps one device's transcript, and both moves.
+    func testBehaviorMovesMadeOnTwoDevicesAtOnceBothShowOnceTheyMerge() {
+        let base = conversation()
+        var phone = base, mac = base
+        phone.giveSpeaker("S2", toPassages: [base.unifiedTranscript[0].id], at: Date(timeIntervalSince1970: 10))
+        mac.giveSpeaker("S1", toPassages: [base.unifiedTranscript[2].id], at: Date(timeIntervalSince1970: 11))
+        for (local, remote) in [(phone, mac), (mac, phone)] {
+            let merged = MeetingMerge.merge(base: base, local: local, remote: remote).meeting
+            XCTAssertEqual(merged.unifiedTranscript.map(\.speakerID), ["S2", "S1", "S1"])
+            XCTAssertEqual(merged.passageSpeakers.count, 2)
+        }
+    }
+
+    /// Entries of one instant read in the order of their IDs, never in the order a device happens to hold them, so every
+    /// device agrees which is the latest.
+    func testBehaviorEntriesOfOneInstantReadTheSameOnEveryDevice() throws {
+        var meeting = conversation()
+        let id = meeting.unifiedTranscript[1].id
+        let instant = Date(timeIntervalSince1970: 20)
+        let a = MeetingRevision(id: try XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-00000000000A")), date: instant,
+                                kind: .segmentSpeaker(id), oldValue: "S1", newValue: "S2")
+        let b = MeetingRevision(id: try XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-00000000000B")), date: instant,
+                                kind: .segmentSpeaker(id), oldValue: "S1", newValue: "S3")
+        meeting.revisions = [a, b]
+        XCTAssertEqual(meeting.passageSpeakers[id], "S3")
+        meeting.revisions = [b, a]
+        XCTAssertEqual(meeting.passageSpeakers[id], "S3")
+    }
+
+    /// The new transcript's passage that is the moved one keeps its ID, so processing again after that, Version History,
+    /// and a later move all find it, even once the run it was first heard in is gone.
+    func testBehaviorAMoveSurvivesASecondProcessingAgain() {
+        var meeting = conversation()
+        let moved = meeting.unifiedTranscript[1]
+        meeting.giveSpeaker("S2", toPassages: [moved.id])
+        func rerun(_ at: TimeInterval) {
+            let run = meeting.unifiedTranscript.map {
+                TranscriptSegment(trackID: track, start: $0.start + 0.05, end: $0.end + 0.05, text: $0.text, speakerID: "S1")
+            }
+            meeting.transcripts.append(TrackTranscript(trackID: track, segments: run, createdAt: Date(timeIntervalSince1970: at)))
+            meeting.applyFusion(TranscriptFusion.fuse(meeting.transcripts))
+        }
+        rerun(2)
+        XCTAssertEqual(meeting.unifiedTranscript[1].id, moved.id, "the moved passage keeps its identity")
+        meeting.transcripts.removeFirst()
+        rerun(3)
+        XCTAssertEqual(meeting.unifiedTranscript.map(\.speakerID), ["S1", "S2", "S1"])
+        XCTAssertEqual(meeting.unifiedTranscript[1].id, moved.id)
+        XCTAssertNil(meeting.correctionTransferIssues)
+    }
+
+    /// A move the new transcript has no one passage for (two moved passages heard as one, a passage split in two) isn't
+    /// guessed onto one: it's up for review, as a correction is, and Review gives the passage chosen that speaker.
+    func testBehaviorAMoveTheNewTranscriptCantPlaceIsUpForReviewNotGuessed() throws {
+        var meeting = conversation()
+        let (first, second, third) = (meeting.unifiedTranscript[0], meeting.unifiedTranscript[1], meeting.unifiedTranscript[2])
+        let priya = try XCTUnwrap(meeting.speaker(named: "Priya"))
+        meeting.giveSpeaker("S2", toPassages: [first.id])
+        meeting.giveSpeaker(priya, toPassages: [second.id])
+        meeting.giveSpeaker("S1", toPassages: [third.id])
+        let rerun = [
+            TranscriptSegment(trackID: track, start: 0, end: 9, text: "Shall we start with the budget Yes the numbers are in", speakerID: "S1"),
+            TranscriptSegment(trackID: track, start: 10, end: 12, text: "Good then", speakerID: "S2"),
+            TranscriptSegment(trackID: track, start: 12, end: 14, text: "the offsite", speakerID: "S2"),
+        ]
+        meeting.transcripts.append(TrackTranscript(trackID: track, segments: rerun, createdAt: Date(timeIntervalSince1970: 2)))
+        meeting.applyFusion(TranscriptFusion.fuse(meeting.transcripts))
+        XCTAssertEqual(meeting.unifiedTranscript.map(\.speakerID), ["S1", "S2", "S2"], "the new transcript's reading, nothing guessed")
+        let issues = try XCTUnwrap(meeting.correctionTransferIssues)
+        XCTAssertEqual(Set(issues.map(\.id)), [first.id, second.id, third.id])
+        XCTAssertEqual(Set(issues.compactMap(\.speakerID)), ["S2", priya, "S1"])
+        XCTAssertFalse(issues.contains { meeting.correctsWords($0) }, "none of them is a correction of the words")
+
+        // Review: the passage picked gets the speaker, and keeps the new transcript's words.
+        let target = meeting.unifiedTranscript[0]
+        XCTAssertTrue(meeting.resolveCorrectionTransfer(id: second.id, targetSegmentID: target.id))
+        XCTAssertEqual(meeting.unifiedTranscript[0].speakerID, priya)
+        XCTAssertEqual(meeting.unifiedTranscript[0].text, target.text)
+        // Processed again, the reviewed one isn't asked about again, and the passage it went to keeps it.
+        meeting.applyFusion(TranscriptFusion.fuse(meeting.transcripts))
+        XCTAssertEqual(Set((meeting.correctionTransferIssues ?? []).map(\.id)), [first.id, third.id])
+        XCTAssertEqual(meeting.unifiedTranscript[0].speakerID, priya)
+    }
+
+    /// Each run of speaker detection names its speakers after itself ("<run>:S1"), so a run that finds speakers again
+    /// never reuses an ID for someone else: a moved passage keeps the speaker the person chose, not the new run's S2.
+    func testBehaviorFindingSpeakersAgainNeverHandsAMovedPassageToTheNewRunsNamesake() {
+        let segments = [
+            TranscriptSegment(trackID: track, start: 0, end: 4, text: "Shall we start with the budget", speakerID: "run1:S1"),
+            TranscriptSegment(trackID: track, start: 5, end: 9, text: "Yes the numbers are in", speakerID: "run1:S1"),
+            TranscriptSegment(trackID: track, start: 10, end: 14, text: "Good then the offsite", speakerID: "run1:S2"),
+        ]
+        var meeting = Meeting(transcripts: [TrackTranscript(trackID: track, segments: segments, createdAt: Date(timeIntervalSince1970: 1))],
+                              speakers: [Speaker(id: "run1:S1", name: "Speaker 1"), Speaker(id: "run1:S2", name: "Speaker 2")])
+        meeting.applyFusion(TranscriptFusion.fuse(meeting.transcripts))
+        meeting.giveSpeaker("run1:S2", toPassages: [meeting.unifiedTranscript[1].id])
+        // The second run hears the people in another order: its S2 is the one the first run called S1.
+        let again = zip(meeting.unifiedTranscript, ["run2:S2", "run2:S2", "run2:S1"]).map { passage, label in
+            TranscriptSegment(trackID: track, start: passage.start, end: passage.end, text: passage.text, speakerID: label)
+        }
+        meeting.speakers += [Speaker(id: "run2:S1", name: "Speaker 3"), Speaker(id: "run2:S2", name: "Speaker 4")]
+        meeting.transcripts.append(TrackTranscript(trackID: track, segments: again, createdAt: Date(timeIntervalSince1970: 2)))
+        meeting.applyFusion(TranscriptFusion.fuse(meeting.transcripts))
+        XCTAssertEqual(meeting.unifiedTranscript.map(\.speakerID), ["run2:S2", "run1:S2", "run2:S1"])
+    }
 }

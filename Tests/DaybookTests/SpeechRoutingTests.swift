@@ -68,8 +68,37 @@ final class SpeechRoutingTests: XCTestCase {
         XCTAssertFalse(state.detectSpeakers)
         XCTAssertEqual(state.processingPreferences.speakerOptions.expectedSpeakerCount, 5, "Settings stays as it was")
 
+        // Without the speaker model the ask waits for it, never runs without speakers and calls that done.
         state.installedModels = [state.transcriptionModel, state.summaryModel]
-        XCTAssertFalse(state.makeJob(meetingID: UUID(), mode: .speakerRefresh, speakers: .init()).detectSpeakers, "no speaker model here: none to run")
+        let waiting = state.makeJob(meetingID: UUID(), mode: .speakerRefresh, speakers: .init())
+        XCTAssertTrue(waiting.detectSpeakers)
+        XCTAssertFalse(waiting.transcribingModelIDs(hasUntranscribedAudio: false).isSubset(of: state.installedModels))
+    }
+
+    /// A number of people goes to the speaker model a job runs, routed again for that number, and only to one that takes a
+    /// number: where none does, the job isn't run as if it had.
+    func testBehaviorASpeakerAskStartsFromTheRoutedModelAndIsntRunWhereNoModelTakesTheNumber() throws {
+        let state = try state()
+        // Sortformer chosen, which can't be told a number; ten people expected route to Community-1, which can.
+        state.processingPreferences.speakerModelID = "sortformer-2.1/compact"
+        state.processingPreferences.speakerOptions.expectedSpeakerCount = 10
+        state.installedModels = [state.transcriptionModel, state.summaryModel, "sortformer-2.1/compact", "community-1/offline"]
+        XCTAssertEqual(state.speechRoute.speakerModel, "community-1/offline")
+        XCTAssertTrue(state.speakerCountsOffered, "the model a job runs takes a number")
+        let three = state.makeJob(meetingID: UUID(), mode: .speakerRefresh, speakers: .init(count: 3))
+        XCTAssertEqual(three.preferences.speakerModelID, "community-1/offline", "the routed model, not Settings' own")
+        XCTAssertEqual(three.speakers, .init(count: 3))
+        XCTAssertTrue(state.takesSpeakerAsk(three))
+
+        // Without Community-1, nothing here can take three people.
+        state.processingPreferences.speakerOptions.expectedSpeakerCount = nil
+        state.installedModels = [state.transcriptionModel, state.summaryModel, "sortformer-2.1/compact"]
+        XCTAssertFalse(state.speakerCountsOffered)
+        let unheard = state.makeJob(meetingID: UUID(), mode: .speakerRefresh, speakers: .init(count: 3))
+        XCTAssertEqual(unheard.preferences.speakerModelID, "sortformer-2.1/compact")
+        XCTAssertFalse(state.takesSpeakerAsk(unheard))
+        XCTAssertTrue(state.takesSpeakerAsk(state.makeJob(meetingID: UUID(), mode: .speakerRefresh, speakers: .init())), "Automatic asks no number")
+        XCTAssertTrue(state.takesSpeakerAsk(state.makeJob(meetingID: UUID(), mode: .speakerRefresh)))
     }
 
     func testAChosenLanguageTheModelDoesntCoverGoesToTheOtherLanguagesModel() throws {

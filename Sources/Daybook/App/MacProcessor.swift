@@ -43,11 +43,16 @@ final class MacProcessor {
                  summarizesInCloud: Bool = false, summaryModelID: String? = nil,
                  speakers: ProcessingRequest.SpeakerAsk? = nil) {
         guard let app, id != app.recordingID, !queue.isQueued(id), let meeting = app.meetings.first(where: { $0.id == id }) else { return }
-        // A conversation of an iPhone's own, queued only to check where its recording belongs, isn't owed: its mark
-        // lives only while Daybook runs, and the next sync pass finds it again (`phoneTranscriptsToCheck`).
-        if !app.checkingPhoneTranscripts.contains(id) { queue.owe(id, mode: mode, upgrade: upgrade) }
         let job = app.makeJob(meetingID: id, mode: mode, upgrade: upgrade, summarizesHere: summarizesHere, summarizesInCloud: summarizesInCloud,
                               summaryModelID: summaryModelID, speakers: speakers)
+        // A number of people the speaker model can't take: not run at all, rather than run without it.
+        guard app.takesSpeakerAsk(job) else {
+            app.notice = ProcessingWords.speakerCountUnavailable
+            return
+        }
+        // A conversation of an iPhone's own, queued only to check where its recording belongs, isn't owed: its mark
+        // lives only while Daybook runs, and the next sync pass finds it again (`phoneTranscriptsToCheck`).
+        if !app.checkingPhoneTranscripts.contains(id) { queue.owe(id, mode: mode, upgrade: upgrade, speakers: speakers) }
         let hasNew = meeting.hasUntranscribedTranscribableAudio
         let missing = job.transcribingModelIDs(hasUntranscribedAudio: hasNew).subtracting(app.installedModels)
         let waitsForSummaryModel = missing.isEmpty && job.mode == .summaryOnly && app.summaryWaitsForModel(job, in: meeting)

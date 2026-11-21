@@ -94,6 +94,20 @@ public struct ProcessingRequest: Codable, Equatable, Identifiable, Sendable {
     public struct SpeakerAsk: Codable, Hashable, Sendable {
         public var count: Int?
         public init(count: Int? = nil) { self.count = count.flatMap { (1...32).contains($0) ? $0 : nil } }
+
+        /// The mode a request with this ask is stored as: "speakerRefresh:auto", "speakerRefresh:3". An earlier Daybook
+        /// doesn't know it, so it leaves the request to a device that does (`isUnderstood`) and writes it back unchanged,
+        /// the count with it (`Extensible`), rather than identifying speakers its own way and calling that done.
+        var storedMode: String { Mode.speakerRefresh.rawValue + ":" + (count.map(String.init) ?? "auto") }
+
+        init?(storedMode raw: String) {
+            let prefix = Mode.speakerRefresh.rawValue + ":"
+            guard raw.hasPrefix(prefix) else { return nil }
+            let value = raw.dropFirst(prefix.count)
+            if value == "auto" { self.init(); return }
+            guard let count = Int(value), (1...32).contains(count) else { return nil }
+            self.init(count: count)
+        }
     }
 
     /// How a request ended. Final: a finished request is never claimed again.
@@ -214,15 +228,57 @@ public struct ProcessingRequest: Codable, Equatable, Identifiable, Sendable {
     /// Set when the request redoes a step with a better model ("Upgrade"); nil for every other request.
     public var upgrade: Upgrade?
     /// Set when the request is Identify Speakers asked for this conversation alone (`SpeakerAsk`); nil for every other.
+    /// Stored in the mode (`SpeakerAsk.storedMode`), never beside it.
     public var speakers: SpeakerAsk?
 
-    /// A new, open request.
+    /// A new, open request. An ask (`speakers`) belongs to Identify Speakers Again only.
     public init(id: UUID = UUID(), meetingID: UUID, mode: Mode, templateID: String? = nil, requestedBy: Device,
                 createdAt: Date = Date(), claim: Claim? = nil, outcome: Outcome? = nil, upgrade: Upgrade? = nil,
                 speakers: SpeakerAsk? = nil) {
         self.id = id; self.meetingID = meetingID; self.mode = mode; self.templateID = templateID
         self.requestedBy = requestedBy; self.createdAt = createdAt; self.claim = claim; self.outcome = outcome
-        self.upgrade = upgrade; self.speakers = speakers
+        self.upgrade = upgrade; self.speakers = mode == .speakerRefresh ? speakers : nil
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, meetingID, mode, templateID, requestedBy, createdAt, claim, outcome, upgrade
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        meetingID = try values.decode(UUID.self, forKey: .meetingID)
+        let stored = try values.decode(Extensible<Mode>.self, forKey: .mode)
+        if !stored.isKnown, let ask = SpeakerAsk(storedMode: stored.rawValue) {
+            _mode = Extensible(wrappedValue: .speakerRefresh)
+            speakers = ask
+        } else {
+            _mode = stored
+            speakers = nil
+        }
+        templateID = try values.decodeIfPresent(String.self, forKey: .templateID)
+        requestedBy = try values.decode(Device.self, forKey: .requestedBy)
+        createdAt = try values.decode(Date.self, forKey: .createdAt)
+        claim = try values.decodeIfPresent(Claim.self, forKey: .claim)
+        outcome = try values.decodeIfPresent(Outcome.self, forKey: .outcome)
+        upgrade = try values.decodeIfPresent(Upgrade.self, forKey: .upgrade)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(meetingID, forKey: .meetingID)
+        if let speakers, $mode.isKnown, mode == .speakerRefresh {
+            try values.encode(speakers.storedMode, forKey: .mode)
+        } else {
+            try values.encode($mode, forKey: .mode)
+        }
+        try values.encodeIfPresent(templateID, forKey: .templateID)
+        try values.encode(requestedBy, forKey: .requestedBy)
+        try values.encode(createdAt, forKey: .createdAt)
+        try values.encodeIfPresent(claim, forKey: .claim)
+        try values.encodeIfPresent(outcome, forKey: .outcome)
+        try values.encodeIfPresent(upgrade, forKey: .upgrade)
     }
 
     // MARK: State

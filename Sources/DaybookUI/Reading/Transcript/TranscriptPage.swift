@@ -271,11 +271,11 @@ public struct TranscriptPage<Header: View, Placeholder: View>: View {
         focusedRow = id.uuidString
     }
 
-    private func rename(_ request: RenameRequest, _ name: String) {
+    private func rename(_ request: RenameRequest, _ name: String, _ picked: UUID?) {
         if let passages = request.passages {
-            TranscriptEdits.changeSpeaker(of: passages, toNew: name, in: meeting.id, library: host.library, undoManager: undoManager)
+            TranscriptEdits.changeSpeaker(of: passages, toNew: name, picked: picked, in: meeting.id, library: host.library, undoManager: undoManager)
         } else {
-            TranscriptEdits.rename(request.speakerID, to: name, in: meeting.id, library: host.library, undoManager: undoManager)
+            TranscriptEdits.rename(request.speakerID, to: name, picked: picked, in: meeting.id, library: host.library, undoManager: undoManager)
         }
     }
 
@@ -439,15 +439,15 @@ private struct RenamePopover: ViewModifier {
     let meeting: Meeting
     let profiles: [SpeakerProfile]
     let me: UUID?
-    let save: (RenameRequest, String) -> Void
+    let save: (RenameRequest, String, UUID?) -> Void
 
     func body(content: Content) -> some View {
         content.popover(isPresented: Binding(get: { request?.anchor == row }, set: { if !$0 { request = nil } }), arrowEdge: .bottom) {
             if let request {
                 if request.passages != nil {
-                    RenameSpeakerForm(title: "New Speaker", action: "Add", name: "", profiles: profiles, me: me) { save(request, $0) }
+                    RenameSpeakerForm(title: "New Speaker", action: "Add", name: "", profiles: profiles, me: me) { save(request, $0, $1) }
                 } else {
-                    RenameSpeakerForm(name: meeting.speakerName(request.speakerID) ?? "", profiles: profiles, me: me) { save(request, $0) }
+                    RenameSpeakerForm(name: meeting.speakerName(request.speakerID) ?? "", profiles: profiles, me: me) { save(request, $0, $1) }
                 }
             }
         }

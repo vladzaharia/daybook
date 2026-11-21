@@ -56,6 +56,18 @@ final class OnDeviceProcessingTests: XCTestCase {
         XCTAssertEqual(OnDeviceProcessing.work(for: automatic, in: meeting, device: device(all, owning: [mine.id]), at: now), .identifySpeakers([mine.id]))
     }
 
+    /// A run and a summary made since don't answer a number of people: only the job that ran with it does.
+    func testBehaviorANumberOfPeopleIsNeverAnsweredByWhateverRanSince() {
+        let mine = track("phone")
+        var meeting = Meeting(title: "Walk and talk", tracks: [mine], status: .ready)
+        meeting.transcripts = [transcript(mine, at: now.addingTimeInterval(60))]
+        meeting.summary = MeetingSummary(overview: "Agenda first.", createdAt: now.addingTimeInterval(120))
+        let plain = ProcessingRequest(meetingID: meeting.id, mode: .speakerRefresh, requestedBy: phone, createdAt: now)
+        let counted = ProcessingRequest(meetingID: meeting.id, mode: .speakerRefresh, requestedBy: phone, createdAt: now, speakers: .init(count: 3))
+        XCTAssertTrue(plain.isSatisfied(by: meeting))
+        XCTAssertFalse(counted.isSatisfied(by: meeting))
+    }
+
     @MainActor
     func testBehaviorTheNumberOfPeopleIsFixedWithTheRequestAndAnotherNumberIsAnotherRequest() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookSpeakerAsk-\(UUID().uuidString)", isDirectory: true)
