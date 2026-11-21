@@ -86,7 +86,7 @@ final class LiveCaptionsController {
         return values.contains(.finished) ? .finished : .off
     }
 
-    /// A source that stopped while another listens, "You: <reason>", for the strips beside the lines.
+    /// A source that stopped while another listens, "Me: <reason>", for the strips beside the lines.
     var sourceNotice: String? { LiveCaptionStatus.problem(states, names: sourceNames) }
 
     /// Whether a recording surface shows captions for this conversation. When they can't run (no
@@ -106,7 +106,7 @@ final class LiveCaptionsController {
     /// The newest lines, oldest first.
     func recent(_ count: Int) -> [LiveCaptionSegment] { session.recent(count) }
 
-    /// What a line from `source` is labelled with: "You", "Call", or the device that heard it.
+    /// What a line from `source` is labelled with: "Me", "Call", or the device that heard it.
     func label(for source: LiveCaptionSource?) -> String { LiveCaptionLabels.label(for: source, names: sourceNames) }
 
     /// Reads every conversation's saved captions again (`saved`), off the main actor: at launch and after

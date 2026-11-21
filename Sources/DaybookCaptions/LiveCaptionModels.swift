@@ -59,7 +59,7 @@ public struct LiveCaptionSource: RawRepresentable, Codable, Hashable, Sendable {
     public let rawValue: String
     public init(rawValue: String) { self.rawValue = rawValue }
 
-    /// This device's microphone: "You".
+    /// This device's microphone: "Me".
     public static let microphone = LiveCaptionSource(rawValue: "microphone")
     /// The call, or everything the device plays: "Call".
     public static let call = LiveCaptionSource(rawValue: "call")

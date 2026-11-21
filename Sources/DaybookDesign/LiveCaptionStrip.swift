@@ -6,7 +6,7 @@ public struct CaptionLine: Identifiable, Equatable, Sendable {
     public var text: String
     /// Words still being revised: lighter ink.
     public var isTentative: Bool
-    /// Who it's from ("You", "Call"), when a strip shows more than one source.
+    /// Who it's from ("Me", "Call"), when a strip shows more than one source.
     public var source: String?
     /// Who said it, when live speakers named the voice ("Priya"); shown before the words, never cut off.
     public var speaker: String?

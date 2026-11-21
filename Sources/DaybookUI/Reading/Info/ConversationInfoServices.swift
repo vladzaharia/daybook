@@ -24,6 +24,8 @@ public struct ConversationInfoServices {
     public var offers: @MainActor (ConversationAction.ID) -> Bool
     /// What's happening to the conversation now, with what can be done about it; nil when nothing is.
     public var now: @MainActor (Meeting, Date) -> InfoNow?
+    /// Whether this device finds speakers in what it processes (Tell speakers apart); the iPhone always does.
+    public var findsSpeakers: @MainActor () -> Bool
     /// Does what Info can't do alone.
     public var perform: @MainActor (ConversationInfoAction, Meeting) -> Void
 
@@ -35,10 +37,11 @@ public struct ConversationInfoServices {
                 actionContext: @escaping @MainActor (Meeting) -> ConversationActions.Context,
                 offers: @escaping @MainActor (ConversationAction.ID) -> Bool = { _ in true },
                 now: @escaping @MainActor (Meeting, Date) -> InfoNow?,
+                findsSpeakers: @escaping @MainActor () -> Bool = { true },
                 perform: @escaping @MainActor (ConversationInfoAction, Meeting) -> Void) {
         self.catalog = catalog; self.words = words; self.recordingName = recordingName; self.recordingLine = recordingLine
         self.availability = availability; self.download = download; self.actionContext = actionContext; self.offers = offers; self.now = now
-        self.perform = perform
+        self.findsSpeakers = findsSpeakers; self.perform = perform
     }
 }
 

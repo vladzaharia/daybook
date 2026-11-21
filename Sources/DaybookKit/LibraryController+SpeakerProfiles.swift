@@ -9,6 +9,12 @@ extension LibraryController {
     /// Profiles, by name.
     public var speakerProfiles: [SpeakerProfile] { metadata.activeSpeakerProfiles }
 
+    /// The name of the profile that is the person's own, for Settings' row and the menus that say who it is now.
+    public var ownerProfileName: String? { ownerProfileID.flatMap { metadata.speakerProfile($0)?.name } }
+
+    /// Settings' Speaker profiles row: "3 profiles · Me: Vlad".
+    public var speakerProfilesSummary: String { SpeakerProfileWords.profiles(speakerProfiles.count, me: ownerProfileName) }
+
     /// Brings profiles and conversations into step over the whole library (`SpeakerProfileReconciler`):
     /// names the person gave teach profiles, profiles label and suggest speakers in every conversation,
     /// and confident labels teach profiles. Worked out off the main actor from a snapshot; a speaker,
@@ -126,9 +132,33 @@ extension LibraryController {
     /// offered that profile, else named as it by hand, which also takes it off what the speaker rejected) and the
     /// library's choice stays. Without one, the profile the speaker has (a name, confirmation, or recognition of
     /// the person's) becomes it. Returns whether anything was done (`canMarkSpeakerAsMe`).
+    /// Undo ("Undo This Is Me") takes back what it changed: the speakers' names and labels, and the library's choice
+    /// when it was this that set it.
     @discardableResult
-    public func markSpeakerAsMe(_ speakerIDs: [String], in id: UUID, at now: Date = Date()) -> Bool {
-        guard let mark = meMark(speakerIDs, in: id) else { return false }
+    public func markSpeakerAsMe(_ speakerIDs: [String], in id: UUID, undoManager: UndoManager? = nil, at now: Date = Date()) -> Bool {
+        guard let mark = meMark(speakerIDs, in: id), let before = meeting(id) else { return false }
+        let ownerBefore = metadata.ownerProfileSelection
+        apply(mark, to: speakerIDs, in: id, at: now)
+        if let undoManager { registerThisIsMeUndo(id, before: before, ownerBefore: ownerBefore, undoManager: undoManager) }
+        return true
+    }
+
+    /// Takes the conversation back to `before` and the library's choice to `ownerBefore`, with its redo.
+    private func registerThisIsMeUndo(_ id: UUID, before: Meeting, ownerBefore: UUID?, undoManager: UndoManager) {
+        guard let after = meeting(id) else { return }
+        let ownerAfter = metadata.ownerProfileSelection
+        let restore = Self.undoing(from: before, to: after)
+        guard restore != nil || ownerBefore != ownerAfter else { return }
+        undoManager.registerUndo(withTarget: self) { library in
+            let marked = library.meeting(id)
+            if let restore { library.update(id) { restore(&$0) } }
+            if ownerBefore != ownerAfter { library.setOwnerProfile(ownerBefore) }
+            if let marked { library.registerThisIsMeUndo(id, before: marked, ownerBefore: ownerAfter, undoManager: undoManager) }
+        }
+        undoManager.setActionName(SpeakerProfileWords.thisIsMe)
+    }
+
+    private func apply(_ mark: MeMark, to speakerIDs: [String], in id: UUID, at now: Date) {
         switch mark {
         case .confirm(let speakerID):
             confirmSpeakerProfile(speakerID, in: id)
@@ -150,7 +180,6 @@ extension LibraryController {
         case .pending(let profile):
             setOwnerProfile(profile, at: now)
         }
-        return true
     }
 
     // MARK: Profiles
