@@ -27,6 +27,37 @@ public struct ReviewCorrectionsSheet: View {
     private var issues: [CorrectionTransferIssue] { meeting?.correctionTransferIssues ?? [] }
 
     public var body: some View {
+        #if os(macOS)
+        if issues.isEmpty { doneBody } else { stackBody }
+        #else
+        stackBody
+        #endif
+    }
+
+    #if os(macOS)
+    /// Nothing left to review: drawn without a navigation stack, whose empty view left a blank band above the title.
+    private var doneBody: some View {
+        VStack(spacing: 0) {
+            Text("Review Earlier Corrections")
+                .font(DaybookFont.sheetTitle.font(density))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, DaybookSpacing.s5)
+                .padding(.top, DaybookSpacing.s5)
+            ContentUnavailableView("All Corrections Reviewed", systemImage: "checkmark.circle")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Divider()
+            HStack {
+                Spacer()
+                Button("Done") { close() }.keyboardShortcut(.defaultAction)
+            }
+            .padding(DaybookSpacing.s4)
+        }
+        .frame(width: 440, height: 280)
+        .onAppear { place = .showing(place.index, of: issues, in: meeting) }
+    }
+    #endif
+
+    private var stackBody: some View {
         NavigationStack {
             Group {
                 if let meeting, !issues.isEmpty {
@@ -266,7 +297,8 @@ public struct AdjustTimingSheet: View {
                         .labelsHidden()
                         if !automatic {
                             LabeledContent("Starts at") {
-                                TextField("0:00", text: $draft)
+                                TextField("Starts at", text: $draft, prompt: Text("0:00"))
+                                    .labelsHidden()
                                     .multilineTextAlignment(.trailing)
                                     #if os(iOS)
                                     .keyboardType(.numbersAndPunctuation)
@@ -317,7 +349,7 @@ public struct AdjustTimingSheet: View {
             draft = track?.offset.map(TimeLabel.short) ?? ""
         }
         #if os(macOS)
-        .frame(width: 440, height: 340)
+        .frame(width: 440, height: 280)
         #endif
     }
 }

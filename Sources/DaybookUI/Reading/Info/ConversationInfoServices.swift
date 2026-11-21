@@ -54,6 +54,8 @@ public enum ConversationInfoAction: Equatable {
     case putBack(RecordingTrack)
     /// Reprocess ▸ one of its modes.
     case process(ProcessingRequest.Mode)
+    /// Reprocess ▸ Summarize Again ▸ one way to summarize (`SummarizeAgainChoices`).
+    case summarizeAgain(SummarizeAgainChoice)
     /// The template changed: summarize again with it (nil: Automatic).
     case summarize(templateID: String?)
     case versionHistory

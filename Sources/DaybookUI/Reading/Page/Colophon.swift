@@ -13,6 +13,7 @@ public struct Colophon<TemplateMenu: View>: View {
     private let summarizeAgain: (() -> Void)?
     private let choices: [SummarizeAgainChoice]
     private let choose: (SummarizeAgainChoice) -> Void
+    private let summary: MeetingSummary?
     private let templateMenu: TemplateMenu
     @Environment(\.daybookDensity) private var density
 
@@ -23,9 +24,10 @@ public struct Colophon<TemplateMenu: View>: View {
     ///   - choices: Every way to summarize again now (`SummarizeAgainChoices`). With more than one, Summarize Again is a
     ///     menu of them; with one or none it stays the plain link.
     ///   - choose: Summarizes again as a choice says.
+    ///   - summary: The page's summary: the choice that wrote it is checked in the menu.
     ///   - templateMenu: The template menu's items.
     public init(_ colophon: SummaryColophon, arrived: Date, template: String, summarizeAgain: (() -> Void)?,
-                choices: [SummarizeAgainChoice] = [], choose: @escaping (SummarizeAgainChoice) -> Void = { _ in },
+                choices: [SummarizeAgainChoice] = [], choose: @escaping (SummarizeAgainChoice) -> Void = { _ in }, summary: MeetingSummary? = nil,
                 @ViewBuilder templateMenu: () -> TemplateMenu) {
         self.colophon = colophon
         self.arrived = arrived
@@ -33,7 +35,18 @@ public struct Colophon<TemplateMenu: View>: View {
         self.summarizeAgain = summarizeAgain
         self.choices = choices
         self.choose = choose
+        self.summary = summary
         self.templateMenu = templateMenu()
+    }
+
+    /// A way to summarize again: checked when it wrote this summary, the cloud's marked with its glyph.
+    @ViewBuilder private func choiceItem(_ choice: SummarizeAgainChoice) -> some View {
+        let label = Group { if let symbol = choice.symbol { Label(choice.title, systemImage: symbol) } else { Text(choice.title) } }
+        if choice.wrote(summary) {
+            Toggle(isOn: Binding(get: { true }, set: { _ in choose(choice) })) { label }
+        } else {
+            Button { choose(choice) } label: { label }
+        }
     }
 
     public var body: some View {
@@ -44,9 +57,12 @@ public struct Colophon<TemplateMenu: View>: View {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Image(systemName: colophon.symbol)
                         .daybookBounce(value: arrived)
+                        .frame(width: density == .touch ? nil : 18, alignment: .trailing)
                         .accessibilityHidden(true)
                     Text(colophon.line).fixedSize(horizontal: false, vertical: true)
                 }
+                // In a window the glyph hangs in the margin, so the words start where "Template:" does.
+                .padding(.leading, density == .touch ? 0 : -23)
                 // The template and Summarize Again, beside each other when they fit.
                 FlowLayout(spacing: density == .touch ? DaybookSpacing.s3 : 4, lineSpacing: DaybookSpacing.s1) {
                     HStack(spacing: 4) {
@@ -75,7 +91,7 @@ public struct Colophon<TemplateMenu: View>: View {
                                 Menu {
                                     ForEach(Array(choices.enumerated()), id: \.element.id) { index, choice in
                                         if index > 0, !choice.sharesGroup(with: choices[index - 1]) { Divider() }
-                                        Button(choice.title) { choose(choice) }
+                                        choiceItem(choice)
                                     }
                                 } label: {
                                     QuietLink {

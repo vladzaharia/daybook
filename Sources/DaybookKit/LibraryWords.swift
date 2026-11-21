@@ -29,13 +29,34 @@ extension LibraryWords {
             if section == .all && libraryIsEmpty && platform != .mac {
                 return EmptyPlace(title: "No Conversations Yet", symbol: "waveform", showsMark: true)
             }
-            return EmptyPlace(title: "No Conversations", symbol: section.systemImage)
+            // Work and Personal say how to fill them, as a folder does.
+            let move = section == .work ? "Move to Work" : "Move to Personal"
+            let how: String? = switch section {
+            case .all: nil
+            case .work, .personal: platform == .mac ? "Drag conversations here, or choose \(move)." : "Choose \(move) on a conversation."
+            }
+            return EmptyPlace(title: "No Conversations", symbol: section.systemImage, description: how)
         case .folder:
             let how = platform == .mac ? "Drag conversations here, or choose Move to Folder." : "Choose Move to Folder… on a conversation."
             return EmptyPlace(title: "No Conversations", symbol: "folder", description: how)
         case .trash:
             return EmptyPlace(title: "No Conversations", symbol: "trash")
         }
+    }
+
+    /// What an import says when some of its files didn't read: how many came in, and each that didn't ("Couldn’t import
+    /// “Memo.m4a”."), or only the count when there are several.
+    public static func importSummary(imported: Int, failed: [String]) -> [String] {
+        var lines: [String] = []
+        if imported > 0 { lines.append(imported == 1 ? "Imported 1 recording." : "Imported \(imported) recordings.") }
+        if failed.count == 1 { lines.append("Couldn’t import “\(failed[0])”.") }
+        else if failed.count > 1 { lines.append("Couldn’t import \(failed.count) files.") }
+        return lines
+    }
+
+    /// The question's line under Move to Trash: the Trash keeps what goes into it until it's restored.
+    public static func trashMessage(count: Int) -> String {
+        count > 1 ? "You can restore them from the Trash." : "You can restore it from the Trash."
     }
 
     /// The Trash's name, in the sidebar, the places menu, and over its list.
@@ -45,7 +66,7 @@ extension LibraryWords {
     public static let untitled = "Untitled Conversation"
 
     /// The library search field's prompt on both apps.
-    public static let searchPrompt = "Titles, notes, transcripts"
+    public static let searchPrompt = "Search"
 
     /// What an empty library says on an iPhone while this install's first sync pass is still bringing the library
     /// in (`isGettingConversations`), in place of "No Conversations Yet", with a spinner.
@@ -96,8 +117,36 @@ extension LibraryWords {
         return title.isEmpty ? "Move this conversation to the Trash?" : "Move “\(title)” to the Trash?"
     }
 
-    /// Merge…'s question: "Merge 3 conversations?".
-    public static func mergeTitle(_ count: Int) -> String { "Merge \(count) conversations?" }
+    /// Merge…'s question, naming the conversation that stays (the earliest, whose title wins): "Merge 3 conversations into
+    /// “Weekly sync”?". Without a title to name, or while the Personal lock hides it (`hidden`), "Merge 3 conversations?".
+    public static func mergeTitle(_ ids: [UUID], in meetings: [Meeting], hidden: (Meeting) -> Bool = { _ in false }) -> String {
+        let selected = ConversationMerge.ordered(meetings.filter { ids.contains($0.id) })
+        let count = Set(ids).count
+        guard let survivor = selected.first, !hidden(survivor) else { return "Merge \(count) conversations?" }
+        let title = survivor.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return title.isEmpty ? "Merge \(count) conversations?" : "Merge \(count) conversations into “\(title)”?"
+    }
+    /// Beneath it, what it costs: the summaries are written again only when the merge transcribes the whole again (it has a
+    /// recording, `LibraryController.mergeConversations`).
+    public static func mergeMessage(_ ids: [UUID], in meetings: [Meeting]) -> String {
+        let reprocesses = meetings.contains { ids.contains($0.id) && !$0.presentTracks.isEmpty }
+        return (reprocesses ? "Their summaries are written again from the whole. " : "") + "This can’t be undone."
+    }
+    /// The conversation a merged-away one in the Trash went into: the one in `meetings` that folded it in and that the Personal
+    /// lock doesn't hide (`hidden`). Not one that was restored and trashed again since: that one has a recording of its own, or
+    /// changed after the merge.
+    public static func mergedInto(_ trashed: Meeting, in meetings: [Meeting], hidden: (Meeting) -> Bool = { _ in false }) -> Meeting? {
+        guard trashed.presentTracks.isEmpty else { return nil }
+        let field = ConversationMerge.revisionField(trashed.id).rawValue
+        for survivor in meetings where survivor.id != trashed.id {
+            guard let fold = survivor.revisions.first(where: { $0.field == field }) else { continue }
+            guard trashed.updatedAt <= fold.date.addingTimeInterval(120), !hidden(survivor) else { return nil }
+            return survivor
+        }
+        return nil
+    }
+    /// A merged-away conversation's status in the Trash, with Show: "Merged into “Weekly sync”".
+    public static func mergedInto(_ title: String) -> String { "Merged into “\(title)”" }
     /// Beneath it, what it costs.
-    public static let mergeMessage = "This can’t be undone."
+    public static let mergeMessage = "Their summaries are written again from the whole. This can’t be undone."
 }

@@ -10,15 +10,27 @@ public struct TrashRowView: View {
     private let meeting: Meeting
     private let restore: () -> Void
     private let show: (() -> Void)?
+    private let timeLabel: String?
+    private let restoresOnDemand: Bool
+    private let isSelected: Bool
+    @State private var hovering = false
     @Environment(\.daybookDensity) private var density
     @Environment(PersonalLock.self) private var personalLock: PersonalLock?
 
     /// `show`: a tap on its words shows it read only beside the list, where the list's selection doesn't (the
     /// iPhone's two pages); the Mac's Trash selects the row instead.
-    public init(meeting: Meeting, restore: @escaping () -> Void, show: (() -> Void)? = nil) {
+    ///
+    /// `timeLabel`: when it was, as its day section puts it (`RowDate.format`); nil spells the whole date.
+    /// `restoresOnDemand`: Restore shows while the pointer is over the row or it's selected (the Mac, whose page
+    /// beside the list has Restore too).
+    public init(meeting: Meeting, restore: @escaping () -> Void, show: (() -> Void)? = nil, timeLabel: String? = nil,
+                restoresOnDemand: Bool = false, isSelected: Bool = false) {
         self.meeting = meeting
         self.restore = restore
         self.show = show
+        self.timeLabel = timeLabel
+        self.restoresOnDemand = restoresOnDemand
+        self.isSelected = isSelected
     }
 
     private var onPaper: Bool { density != .window }
@@ -35,8 +47,10 @@ public struct TrashRowView: View {
             Button(TrashWords.restore, action: restore)
                 .buttonStyle(.daybookTinted)
                 .controlSize(.small)
+                .opacity(restoresOnDemand && !hovering && !isSelected ? 0 : 1)
                 .accessibilityLabel("\(TrashWords.restore) \(title)")
         }
+        .onHover { hovering = $0 }
         .padding(.vertical, density == .touch ? 4 : 6)
         .accessibilityAction(named: TrashWords.restore, restore)
     }
@@ -49,7 +63,7 @@ public struct TrashRowView: View {
                 .foregroundStyle(hidden ? onPaper ? AnyShapeStyle(DaybookPalette.Ink.secondary) : AnyShapeStyle(.secondary)
                                  : onPaper ? AnyShapeStyle(DaybookPalette.Ink.title) : AnyShapeStyle(.primary))
                 .lineLimit(1)
-            Text(Self.detail(meeting))
+            Text(Self.detail(meeting, timeLabel: timeLabel))
                 .font(DaybookFont.rowDetail.font(density))
                 .foregroundStyle(onPaper ? AnyShapeStyle(DaybookPalette.Ink.secondary) : AnyShapeStyle(.secondary))
                 .monospacedDigit()
@@ -61,8 +75,8 @@ public struct TrashRowView: View {
     }
 
     /// "Sep 3, 2026 at 10:15 AM · 28 min".
-    static func detail(_ meeting: Meeting) -> String {
-        [meeting.date.formatted(date: .abbreviated, time: .shortened), meeting.duration.map(DurationLabel.format)]
+    static func detail(_ meeting: Meeting, timeLabel: String? = nil) -> String {
+        [timeLabel ?? meeting.date.formatted(date: .abbreviated, time: .shortened), meeting.duration.map(DurationLabel.format)]
             .compactMap { $0 }.joined(separator: " · ")
     }
 }
@@ -73,6 +87,8 @@ public enum TrashWords {
     public static let restoreSymbol = "arrow.uturn.backward"
     /// The page's status for a conversation in the Trash, with Restore.
     public static let inTheTrash = "In the Trash"
+    /// Shows the conversation a merged-away one went into.
+    public static let show = "Show"
 }
 
 /// A conversation in the Trash, read only, with Restore: the Mac's page beside the Trash's list. Its title and byline,
@@ -82,11 +98,15 @@ public enum TrashWords {
 public struct TrashedConversationPage: View {
     private let meeting: Meeting
     private let restore: () -> Void
+    private let mergedInto: (title: String, show: () -> Void)?
     @Environment(\.daybookDensity) private var density
     @Environment(PersonalLock.self) private var personalLock: PersonalLock?
 
-    public init(meeting: Meeting, restore: @escaping () -> Void) {
+    /// `mergedInto`: for a conversation a merge moved to the Trash, the one it went into and a way to show it; the status then
+    /// says so, with Show where Restore sits (Restore stays in the row's menu, and brings back its notes and history only).
+    public init(meeting: Meeting, mergedInto: (title: String, show: () -> Void)? = nil, restore: @escaping () -> Void) {
         self.meeting = meeting
+        self.mergedInto = mergedInto
         self.restore = restore
     }
 
@@ -114,8 +134,14 @@ public struct TrashedConversationPage: View {
                             .fixedSize(horizontal: false, vertical: true)
                             .accessibilityLabel(Self.byline(meeting).joined(separator: ", "))
                     }
-                    TrashStatusLine(restore: restore)
-                        .padding(.top, DaybookSpacing.s5)
+                    Group {
+                        if let mergedInto {
+                            TrashStatusLine(words: LibraryWords.mergedInto(mergedInto.title), action: TrashWords.show, perform: mergedInto.show)
+                        } else {
+                            TrashStatusLine(words: TrashWords.inTheTrash, action: TrashWords.restore, perform: restore)
+                        }
+                    }
+                    .padding(.top, DaybookSpacing.s5)
                 }
                 if let summary = meeting.summary {
                     if !summary.overview.isEmpty {
@@ -203,10 +229,12 @@ public struct TrashedConversationPage: View {
     }
 }
 
-/// "In the Trash" with Restore, drawn as a page's status line is: its glyph in the status column, the words in secondary
-/// ink, and Restore 16 pt after them.
+/// "In the Trash" with Restore (or "Merged into “Weekly sync”" with Show), drawn as a page's status line is: its glyph in the
+/// status column, the words in secondary ink, and the action 16 pt after them.
 private struct TrashStatusLine: View {
-    let restore: () -> Void
+    let words: String
+    let action: String
+    let perform: () -> Void
     @Environment(\.daybookDensity) private var density
 
     var body: some View {
@@ -216,12 +244,14 @@ private struct TrashStatusLine: View {
                 .frame(width: density == .touch ? 20 : 18)
                 .accessibilityHidden(true)
             HStack(alignment: .firstTextBaseline, spacing: DaybookSpacing.s4) {
-                Text(TrashWords.inTheTrash).foregroundStyle(DaybookPalette.Ink.secondary)
-                Button(TrashWords.restore, action: restore)
+                Text(words).foregroundStyle(DaybookPalette.Ink.secondary)
+                Button(action, action: perform)
                     .buttonStyle(.daybookLink)
                     .fontWeight(.medium)
             }
         }
         .daybookFont(.status)
+        // In a window the glyph hangs in the margin, so the words start where the title does.
+        .padding(.leading, density == .touch ? 0 : -24)
     }
 }

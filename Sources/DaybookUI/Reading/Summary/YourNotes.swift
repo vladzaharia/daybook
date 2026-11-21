@@ -11,20 +11,23 @@ public struct YourNotes<Editor: View>: View {
     private let play: (PlaybackTarget) -> Void
     private let passages: PassageLinks
     private let bookmarksID: String?
+    private let findQuery: String
     private let editor: Editor
 
     /// - Parameters:
     ///   - canPlay: Its times play: it has audio, and this device isn't recording it.
     ///   - bookmarksID: The bookmarks' scroll ID, for an app that scrolls to them.
+    ///   - findQuery: The library search's text, marked in the bookmarks' labels.
     ///   - editor: The app's notes editor.
     public init(meeting: Meeting, library: LibraryController, canPlay: Bool, play: @escaping (PlaybackTarget) -> Void,
-                passages: PassageLinks = .none, bookmarksID: String? = nil, @ViewBuilder editor: () -> Editor) {
+                passages: PassageLinks = .none, bookmarksID: String? = nil, findQuery: String = "", @ViewBuilder editor: () -> Editor) {
         self.meeting = meeting
         self.library = library
         self.canPlay = canPlay
         self.play = play
         self.passages = passages
         self.bookmarksID = bookmarksID
+        self.findQuery = findQuery
         self.editor = editor()
     }
 
@@ -54,7 +57,7 @@ public struct YourNotes<Editor: View>: View {
                 VStack(alignment: .leading, spacing: DaybookSpacing.s1) {
                     ForEach(marks, id: \.highlight.id) { mark in
                         BookmarkRow(highlight: mark.highlight, time: mark.time, context: mark.context, meeting: meeting, library: library,
-                                    canPlay: canPlay, play: play, passages: passages)
+                                    canPlay: canPlay, play: play, passages: passages, findQuery: findQuery)
                             .daybookTransition(.opacity.combined(with: .offset(y: -6)))
                     }
                 }
@@ -103,6 +106,7 @@ struct BookmarkRow: View {
     let canPlay: Bool
     let play: (PlaybackTarget) -> Void
     let passages: PassageLinks
+    var findQuery: String = ""
     @State private var expanded = false
     @State private var hovering = false
     @State private var draft = ""
@@ -122,6 +126,7 @@ struct BookmarkRow: View {
                 HStack(alignment: .firstTextBaseline, spacing: DaybookSpacing.s2) {
                     label
                     if hasSpeech { disclosure }
+                    Spacer(minLength: 0)
                 }
             }
             if expanded, let context { quote(context) }
@@ -153,12 +158,23 @@ struct BookmarkRow: View {
             .daybookFont(.body)
             .foregroundStyle(.clear)
             .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityHidden(true)
             .overlay(alignment: .topLeading) {
+                let marked = !editing && !draft.isEmpty && !findQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 TextField(placeholder, text: draftBinding, axis: .vertical)
                     .daybookFont(.body)
                     .foregroundStyle(DaybookPalette.Ink.body)
+                    // While a search marks the words, they're drawn over the field, which a click still reaches.
+                    .opacity(marked ? 0 : 1)
+                    .overlay(alignment: .topLeading) {
+                        if marked {
+                            Text(FindHighlight.mark(AttributedString(draft), query: findQuery))
+                                .daybookFont(.body)
+                                .foregroundStyle(DaybookPalette.Ink.body)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
+                        }
+                    }
                     .textFieldStyle(.plain)
                     .focused($editing)
                     .touchKeyboard(submit: .done)

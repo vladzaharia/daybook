@@ -1,5 +1,7 @@
 import AppIntents
 import AppKit
+import DaybookDesign
+import DaybookDevices
 import Foundation
 
 // The Mac's App Intents: Start Recording, Stop Recording, Add Bookmark, New Note, Show Floating Notes, and Open
@@ -74,27 +76,45 @@ enum DaybookIntentError: Error, Equatable, CustomLocalizedStringResourceConverti
     }
 }
 
+/// What Siri and Shortcuts say back after a recording command, as the iPhone's do ("Recording.", "Bookmarked at 12:03.").
+enum IntentWords {
+    static let recording = "Recording."
+
+    /// "Saved · 12 min.", or "Saved." when the length isn't known.
+    static func saved(duration: TimeInterval?) -> String {
+        guard let duration, duration > 0 else { return "Saved." }
+        return "Saved · \(DurationLabel.format(duration))."
+    }
+
+    /// "Bookmarked at 12:03."
+    static func bookmarked(at time: TimeInterval) -> String { "Bookmarked at \(DaybookTime.short(time))." }
+}
+
 /// What the intents do, on the app's state: one place each, so a test can run them without the system.
 @MainActor
 enum IntentActions {
     /// Starts recording a new conversation; already recording, nothing changes.
-    static func startRecording(_ state: AppState) async throws {
-        guard state.recordingID == nil, !state.isStartingRecording else { return }
+    @discardableResult static func startRecording(_ state: AppState) async throws -> String {
+        guard state.recordingID == nil, !state.isStartingRecording else { return IntentWords.recording }
         await state.startRecording(from: .elsewhere)
         // A start that failed says why in the window's alert; Shortcuts says it too.
         guard state.recordingID != nil else {
             throw DaybookIntentError.failed(state.problem?.message ?? "Recording couldn’t start.")
         }
+        return IntentWords.recording
     }
 
-    static func stopRecording(_ state: AppState) async throws {
-        guard state.recordingID != nil else { throw DaybookIntentError.notRecording }
-        await state.stopRecording()
-    }
-
-    static func addBookmark(_ state: AppState) throws {
+    @discardableResult static func stopRecording(_ state: AppState) async throws -> String {
         guard let id = state.recordingID else { throw DaybookIntentError.notRecording }
+        await state.stopRecording()
+        return IntentWords.saved(duration: state.meetings.first { $0.id == id }?.duration)
+    }
+
+    @discardableResult static func addBookmark(_ state: AppState) throws -> String {
+        guard let id = state.recordingID else { throw DaybookIntentError.notRecording }
+        let time = state.recorder.elapsedTime
         state.addHighlight(id)
+        return IntentWords.bookmarked(at: time)
     }
 
     /// A conversation that's only your notes, open in the library, as File › New Note does.
@@ -122,9 +142,8 @@ struct StartRecordingIntent: AudioRecordingIntent {
     static let description = IntentDescription("Records a conversation, with a call’s audio when there is one.")
 
     @MainActor
-    func perform() async throws -> some IntentResult {
-        try await IntentActions.startRecording(try await IntentState.ready())
-        return .result()
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        .result(dialog: IntentDialog(stringLiteral: try await IntentActions.startRecording(try await IntentState.ready())))
     }
 }
 
@@ -133,9 +152,8 @@ struct StopRecordingIntent: AudioRecordingIntent {
     static let description = IntentDescription("Stops the recording and saves it to your library.")
 
     @MainActor
-    func perform() async throws -> some IntentResult {
-        try await IntentActions.stopRecording(try await IntentState.ready())
-        return .result()
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        .result(dialog: IntentDialog(stringLiteral: try await IntentActions.stopRecording(try await IntentState.ready())))
     }
 }
 
@@ -144,9 +162,8 @@ struct AddBookmarkIntent: AppIntent {
     static let description = IntentDescription("Marks this moment in the recording.")
 
     @MainActor
-    func perform() async throws -> some IntentResult {
-        try IntentActions.addBookmark(try await IntentState.ready())
-        return .result()
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        .result(dialog: IntentDialog(stringLiteral: try IntentActions.addBookmark(try await IntentState.ready())))
     }
 }
 

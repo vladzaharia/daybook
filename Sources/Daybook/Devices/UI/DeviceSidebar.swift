@@ -39,8 +39,8 @@ struct DevicesSidebarSection: View {
                         .foregroundStyle(.secondary)
                         .opacity(hovering ? 1 : 0)
                         .daybookMotion(DaybookMotion.hover, value: hovering)
-                        .help("Add Device…")
-                        .accessibilityLabel("Add Device")
+                        .help("Add Recorder…")
+                        .accessibilityLabel("Add Recorder")
                 }
                 .padding(.leading, 2)
                 .onHover { hovering = $0 }
@@ -135,7 +135,7 @@ struct DeviceFileMenuItems: View {
     }
 
     var body: some View {
-        Button("Add Device…") {
+        Button("Add Recorder…") {
             openWindow(id: WindowID.library)
             state.requestAddDevice()
         }

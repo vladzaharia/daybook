@@ -126,10 +126,7 @@ private struct ReadingLayout: View {
       Button("Move to Trash", role: .destructive) { trash(session.confirmingTrash) }
       Button("Cancel", role: .cancel) {}
     } message: {
-      Text(
-        session.confirmingTrash.count > 1
-          ? "Their audio, notes, and summaries go with them."
-          : "Its audio, notes, and summary go with it.")
+      Text(LibraryWords.trashMessage(count: session.confirmingTrash.count))
     }
     .modifier(PhoneMergeConfirmation(library: library))
     .onChange(of: library.isLoaded, initial: true) { _, loaded in
@@ -356,6 +353,7 @@ private struct PhoneMergeConfirmation: ViewModifier {
   @Environment(PhoneAppModel.self) private var model
   @Environment(\.audioProvider) private var provider
   @Environment(\.summaryPlacement) private var placement
+  @Environment(PersonalLock.self) private var personalLock: PersonalLock?
 
   func body(content: Content) -> some View {
     content
@@ -365,14 +363,15 @@ private struct PhoneMergeConfirmation: ViewModifier {
         }
       }
       .alert(
-        LibraryWords.mergeTitle(session.confirmingMerge.count),
+        LibraryWords.mergeTitle(
+          session.confirmingMerge, in: library.meetings, hidden: { personalLock?.hides($0) == true }),
         isPresented: Binding(
           get: { !session.confirmingMerge.isEmpty }, set: { if !$0 { session.confirmingMerge = [] } })
       ) {
         Button("Merge", role: .destructive) { merge(session.confirmingMerge) }
         Button("Cancel", role: .cancel) {}
       } message: {
-        Text(LibraryWords.mergeMessage)
+        Text(LibraryWords.mergeMessage(session.confirmingMerge, in: library.meetings))
       }
   }
 
