@@ -61,7 +61,7 @@ public struct PrivacyStatement: View {
                 .foregroundStyle(density == .touch ? AnyShapeStyle(DaybookPalette.Ink.body) : AnyShapeStyle(.primary))
                 .fixedSize(horizontal: false, vertical: true)
         } icon: {
-            Image(systemName: "lock.fill").foregroundStyle(DaybookPalette.brandGradient(.mark))
+            Image(systemName: "lock.fill").foregroundStyle(DaybookPalette.Ink.secondary)
         }
     }
 }

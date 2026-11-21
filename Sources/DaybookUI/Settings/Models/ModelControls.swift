@@ -79,10 +79,14 @@ public struct ModelPicker: View {
                     }
                 }
             } label: {
-                // The chevrons follow the name's last word, however it wraps: a no-break space keeps them together.
-                Text("\(Text(name).foregroundStyle(DaybookPalette.Ink.title))\u{00A0}\(Self.chevrons)")
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
+                // The chevrons sit on the row's trailing edge, however the name wraps.
+                HStack(alignment: .firstTextBaseline, spacing: DaybookSpacing.s2) {
+                    Text(name).foregroundStyle(DaybookPalette.Ink.title)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                    Self.chevrons
+                }
             }
             .accessibilityLabel(title)
             .accessibilityValue(name)

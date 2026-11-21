@@ -272,7 +272,7 @@ private struct PhoneWelcomeAllow: View {
     let next: () -> Void
 
     var body: some View {
-        WelcomeStepPage(title: WelcomeWords.allowTitle, message: WelcomeWords.allowMessage(.iPhone)) {
+        WelcomeStepPage(title: WelcomeWords.allowTitle, message: WelcomeWords.allowMessage(.iPhone), symbol: "mic") {
             WelcomeCard {
                 WelcomePermissionRow(WelcomeWords.microphone, symbol: "mic", state: state, device: .iPhone,
                                      allow: allow, openSettings: openSettings)
@@ -293,7 +293,8 @@ private struct PhoneWelcomePair: View {
     let next: () -> Void
 
     var body: some View {
-        WelcomeStepPage(title: WelcomeWords.pairTitle, message: WelcomeWords.pairMessage) {
+        WelcomeStepPage(title: WelcomeWords.pairTitle, message: WelcomeWords.pairMessage,
+                        symbol: paired == nil ? "laptopcomputer.and.iphone" : nil) {
             if let paired {
                 Label {
                     Text(WelcomeWords.paired(with: paired)).foregroundStyle(DaybookPalette.Ink.body)
@@ -301,12 +302,6 @@ private struct PhoneWelcomePair: View {
                     Image(systemName: "checkmark.circle.fill").foregroundStyle(DaybookPalette.Ink.link)
                 }
                 .padding(.top, DaybookSpacing.s6)
-            } else {
-                Image(systemName: "laptopcomputer.and.iphone")
-                    .font(.system(size: 56, weight: .regular))
-                    .foregroundStyle(DaybookPalette.brandGradient(.mark))
-                    .padding(.top, DaybookSpacing.s6)
-                    .accessibilityHidden(true)
             }
         } actions: {
             if paired == nil {
@@ -397,7 +392,8 @@ private struct PhoneWelcomeModels: View {
 
     var body: some View {
         let offer = self.offer
-        WelcomeStepPage(title: WelcomeWords.phoneModelsTitle, message: WelcomeWords.phoneModelsMessage) {
+        WelcomeStepPage(title: WelcomeWords.phoneModelsTitle, message: WelcomeWords.phoneModelsMessage,
+                        symbol: "arrow.down.circle") {
             if let downloading {
                 WelcomeDownloadProgress(WelcomeWords.downloading(nil), fraction: downloading)
                     .padding(.top, DaybookSpacing.s6)
@@ -505,18 +501,20 @@ private struct PhoneWelcomeReady: View {
                     .buttonStyle(.daybookLink)
                     .padding(.top, DaybookSpacing.s3)
             }
-        } actions: {
-            Button(action: record) {
-                RecordControlLabel(title: WelcomeWords.record)
-                    .frame(maxWidth: .infinity, minHeight: 60)
-                    .contentShape(Capsule())
-            }
-            .daybookControl(.standard, shape: .capsule)
-            HStack(spacing: DaybookSpacing.s1) {
+            VStack(spacing: DaybookSpacing.s1) {
                 Text(WelcomeWords.recorderQuestion).foregroundStyle(DaybookPalette.Ink.secondary)
                 Button(WelcomeWords.addRecorder, action: addRecorder).buttonStyle(.daybookLink)
             }
             .font(.subheadline)
+            .padding(.top, DaybookSpacing.s3)
+        } actions: {
+            WelcomePrimaryButton(action: record) {
+                // The red dot of the library's Record, on the primary's own fill.
+                HStack(spacing: DaybookSpacing.s2) {
+                    Circle().fill(DaybookPalette.Ink.record).frame(width: 12, height: 12)
+                    Text(WelcomeWords.record)
+                }
+            }
             WelcomeNotNowButton(action: finish)
         }
     }

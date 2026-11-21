@@ -23,6 +23,7 @@ public struct StatusBlock: View {
     @Environment(\.daybookDensity) private var density
     @Environment(\.colorSchemeContrast) private var contrast
     @ScaledMetric(relativeTo: .subheadline) private var scaledGlyph: CGFloat = 20
+    @ScaledMetric(relativeTo: .subheadline) private var scaledCapHeight: CGFloat = 10.5
     @State private var width: CGFloat = AttentionBoxLayout.stackBelow
 
     public init(_ presentation: ConversationStatusPresentation, perform: @escaping @MainActor (ConversationStatusPresentation.Action) -> Void) {
@@ -52,7 +53,9 @@ public struct StatusBlock: View {
         HStack(alignment: .firstTextBaseline, spacing: gap) {
             Group {
                 if presentation.isWorking {
+                    // A spinner has no baseline, so it sits on the words' cap height as a symbol does.
                     ProgressView().controlSize(.small)
+                        .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + (touch ? scaledCapHeight : 8.4) / 2 }
                 } else if let symbol = presentation.symbol {
                     Image(systemName: symbol).foregroundStyle(DaybookPalette.Ink.secondary)
                 }

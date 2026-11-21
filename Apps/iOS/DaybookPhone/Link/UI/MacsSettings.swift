@@ -238,7 +238,7 @@ struct PairingSheet: View {
                     ScrollViewReader { proxy in
                         ScrollView {
                             pairingView(pages: nil)
-                                .padding(DaybookSpacing.s5)
+                                .padding(DaybookSpacing.s4)
                                 .id(Self.column)
                                 .frame(maxWidth: 520, alignment: .leading)
                                 .frame(maxWidth: .infinity)
@@ -447,7 +447,7 @@ private struct PairingHeading: View {
     let text: String
     var body: some View {
         Text(SettingsWords.titleCased(text))
-            .font(.footnote.weight(.semibold))
+            .font(.footnote)
             .foregroundStyle(DaybookPalette.Ink.secondary)
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityAddTraits(.isHeader)

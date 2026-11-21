@@ -82,6 +82,7 @@ struct ImportPhotosSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(importing) } }
             .interactiveDismissDisabled(importing)
+            .presentationDetents([.medium])
             .fileImporter(isPresented: $choosingFiles, allowedContentTypes: [.heic, .jpeg, .png], allowsMultipleSelection: true) { result in
                 switch result {
                 case .success(let urls):
