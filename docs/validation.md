@@ -109,6 +109,10 @@ far-field or phone audio, Whisper ran on a subset, and the 60 s bound wasn't mea
   verdict; 2.6 MB of `LIST` and `id3 ` chunks after a WAV's data, 1.5 MB of `info` after a CAF's, and 100 stray bytes
   pass.
 - a copy rewritten in place after it was hashed, under its exact old modification time, keeps the original.
+- 11 mutations of these fixes, each failing the test that covers it: a silent original passing, or refused; speech
+  without a model tried, or skipped and recorded; the planner ignoring the model; an unreadable voiceprint ignored; any
+  refusal remembered; no wait after a failure; no check after the last answer under the lock; no container check; no
+  stamp on the copy.
 - 13 mutations of this round's guards, each failing the test that covers it: the transcript bar skipped; the copy's
   stamp not checked under the lock; the stamp without its status-change time, or the earlier stamp (inode, size, and
   the modification date as a Double), either of which deleted an original rewritten under its exact old modification
