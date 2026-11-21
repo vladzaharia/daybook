@@ -55,6 +55,8 @@ final class PhoneSync {
     private(set) var devicesListed = false
     /// Conversations the last pass brought or changed here.
     private(set) var lastReceived: Set<UUID> = []
+    /// A pass found files iCloud had been uploading are uploaded now (`LibrarySyncController.confirmedUploads`).
+    @ObservationIgnored var onUploadsConfirmed: (() -> Void)?
     /// Completed passes in this run (tests and diagnostics).
     private(set) var passes = 0
     /// The courier sending this iPhone's files to the Mac ahead of iCloud Drive, when there is one.
@@ -237,6 +239,7 @@ final class PhoneSync {
             return
         }
         changesInFlight = localChangeCount()
+        let confirmedBefore = controller.confirmedUploads
         isSyncing = true
         let limits: SyncPassLimits = trigger == .backgroundRefresh ? .background : .interactive
         let applied = await library.synchronize(protecting: protectedConversation(), limits: limits)
@@ -247,6 +250,8 @@ final class PhoneSync {
         pendingUploads = controller.pendingUploads
         pendingDownloads = controller.pendingDownloads
         hasMoreWork = controller.hasMoreWork
+        // iCloud just confirmed an upload: that audio can go back to it if the budget needs the room.
+        if controller.confirmedUploads > confirmedBefore { onUploadsConfirmed?() }
         if let applied, applied.acknowledged {
             lastSynced = controller.lastSync ?? Date()
             lastError = nil

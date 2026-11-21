@@ -2,6 +2,7 @@ import DaybookKit
 import Foundation
 import Observation
 import os
+import UIKit
 
 /// Audio for playback on the phone, which is an on-demand replica: conversations arrive without
 /// their audio, and a recording downloads from iCloud the first time it's played
@@ -15,6 +16,11 @@ import os
 /// It also says how much audio is on this iPhone (`usage`, Settings › Storage and the status sheet): measured from
 /// the library's files, so it's right with sync off, when every recording lives only here. It's measured again at
 /// launch, when a recording is filed or imported or a conversation goes, after a download, and after eviction.
+///
+/// Audio goes back to iCloud (within the budget, by the same proof as ever: `LibrarySyncEngine.evictAudio`) at launch,
+/// after a download, when the budget changes, when a sync pass finds iCloud has just confirmed an upload, when a
+/// conversation's processing here ends, and as the app goes to the background (`evictLeavingForeground`). Audio of a
+/// conversation this iPhone still has work on (`needsAudio`) is never taken back until that work is done or given up.
 @MainActor
 @Observable
 final class SyncAudioProvider: AudioProviding {
@@ -36,6 +42,30 @@ final class SyncAudioProvider: AudioProviding {
     @ObservationIgnored var keepWindow: TimeInterval = 30 * 60
     @ObservationIgnored var playingWindow: TimeInterval = 60
     @ObservationIgnored let options: AudioFetchOptions
+    /// Conversations this iPhone still needs the audio of: processing it will run, or a recording a Mac waits for that
+    /// isn't sent yet. Set by the app (`PhoneAppModel`); their recordings are spared like the ones being played.
+    /// The track the player has loaded, whatever its age (`RootView`).
+    @ObservationIgnored var playingTrack: UUID?
+    @ObservationIgnored var needsAudio: @MainActor () -> Set<UUID> = { [] }
+    /// How long a request for eviction waits for others to join it.
+    @ObservationIgnored var evictionDelay: Duration = .milliseconds(1500)
+    /// Asks iOS for time to finish in the background, calling `expired` if it runs out first; returns what ends it.
+    @ObservationIgnored var holdsBackgroundTime: @MainActor (_ expired: @escaping @MainActor () -> Void) -> (@MainActor () -> Void) = { expired in
+        let application = UIApplication.shared
+        var assertion = UIBackgroundTaskIdentifier.invalid
+        let end: @MainActor () -> Void = {
+            if assertion != .invalid { application.endBackgroundTask(assertion); assertion = .invalid }
+        }
+        assertion = application.beginBackgroundTask(withName: "Daybook storage") { MainActor.assumeIsolated { expired(); end() } }
+        return end
+    }
+    /// The eviction waiting for others to join it, or running; one at a time.
+    @ObservationIgnored private var scheduledEviction: Task<Void, Never>?
+    @ObservationIgnored private var evictionRunning = false
+    @ObservationIgnored private var evictAgain = false
+    @ObservationIgnored private var evictionGeneration = 0
+    /// How many times eviction ran (tests).
+    @ObservationIgnored private(set) var evictions = 0
     /// Measures again when the library's recordings change: one filed or imported, a conversation moved to the Trash.
     @ObservationIgnored private var recordingsWatch: ObservationWatch?
     @ObservationIgnored private var measuring: Task<Void, Never>?
@@ -64,6 +94,9 @@ final class SyncAudioProvider: AudioProviding {
         self.library = library
         self.sync = sync
         self.budget = budget
+        // The phone evicts itself (`evictSoon`), so what it still needs is spared after a download too.
+        var options = options
+        options.evictsAfterFetch = false
         self.options = options
         let controller = library.controller
         recordingsWatch = ObservationWatch.distinctValues(of: { Set(controller.meetings.flatMap { $0.tracks.map(\.id) }) }, initial: false,
@@ -106,7 +139,7 @@ final class SyncAudioProvider: AudioProviding {
         }
         await engine.noteAudioPlayed(trackID: track.id, in: meetingID)
         // Playback, sharing and processing don't wait for the library to be measured.
-        if fetched.withLock({ $0 }) { measureSoon() }
+        if fetched.withLock({ $0 }) { measureSoon(); evictSoon() }
         return url
     }
 
@@ -130,19 +163,70 @@ final class SyncAudioProvider: AudioProviding {
         guard let engine else { return measureSoon() }
         await engine.setAudioCachePolicy(AudioCachePolicy(budgetBytes: bytes))
         _ = await evict()
+        measureSoon()
     }
 
     /// Brings local audio within the budget, sparing what's playing or was just asked for, and measures again soon after.
     @discardableResult
     func evict() async -> AudioEvictionReport? {
-        guard let engine else { return nil }
+        // "Uploaded" is judged by this account's container: with another account signed in, or none known, nothing goes.
+        guard let engine, sync.controller?.isOnSameAccount == true else { return nil }
         var report: AudioEvictionReport?
-        do { report = try await engine.evictAudio(protecting: protectedTracks(within: keepWindow)) } catch {
+        do { report = try await engine.evictAudio(protecting: protectedTracks(within: keepWindow)) } catch is CancellationError {
+            // The background time ran out: what wasn't removed stays, and the next eviction picks it up.
+        } catch {
             // Nothing is lost: what wasn't removed stays, and the next eviction tries again.
             Self.log.error("Couldn’t bring audio within the budget: \(error.localizedDescription)")
         }
-        measureSoon()
+        if report?.evicted.isEmpty == false { measureSoon() }
         return report
+    }
+
+    /// Evicts shortly, once for a burst of requests: a sync pass that found an upload confirmed, a job that ended. A
+    /// request while it runs asks for one more run after it.
+    func evictSoon() {
+        guard engine != nil else { return }
+        guard scheduledEviction == nil else {
+            if evictionRunning { evictAgain = true }
+            return
+        }
+        scheduleEviction(after: evictionDelay)
+    }
+
+    /// The app is going to the background: evicts now, under the background time iOS gives (cancelled if it runs out).
+    /// Never waits: the app leaves the foreground as it would have. An eviction already under way carries on.
+    func evictLeavingForeground() {
+        guard engine != nil, !evictionRunning else { return }
+        let end = holdsBackgroundTime { [weak self] in self?.cancelEviction() }
+        scheduleEviction(after: .zero, finishing: end)
+    }
+
+    private func cancelEviction() {
+        scheduledEviction?.cancel()
+    }
+
+    private func scheduleEviction(after delay: Duration, finishing end: (@MainActor () -> Void)? = nil) {
+        scheduledEviction?.cancel()
+        evictionGeneration += 1
+        let mine = evictionGeneration
+        evictAgain = false
+        scheduledEviction = Task { [weak self] in
+            if delay > .zero { try? await Task.sleep(for: delay) }
+            guard let self else { end?(); return }
+            guard !Task.isCancelled, self.evictionGeneration == mine else {
+                end?()
+                if self.evictionGeneration == mine { self.scheduledEviction = nil }
+                return
+            }
+            self.evictionRunning = true
+            self.evictions += 1
+            await self.evict()
+            end?()
+            guard self.evictionGeneration == mine else { return }
+            self.evictionRunning = false
+            self.scheduledEviction = nil
+            if self.evictAgain { self.evictAgain = false; self.evictSoon() }
+        }
     }
 
     /// Clear Downloaded Audio: every download goes back to iCloud (it plays again by downloading).
@@ -197,7 +281,8 @@ final class SyncAudioProvider: AudioProviding {
 
     private func protectedTracks(within window: TimeInterval, now: Date = Date()) -> Set<UUID> {
         recent = recent.filter { now.timeIntervalSince($0.value) < max(keepWindow, playingWindow) }
-        return Set(recent.filter { now.timeIntervalSince($0.value) < window }.keys).union(downloads.keys)
+        let needed = needsAudio().flatMap { library.controller.meeting($0)?.tracks.map(\.id) ?? [] }
+        return Set(recent.filter { now.timeIntervalSince($0.value) < window }.keys).union(downloads.keys).union(needed).union(playingTrack.map { [$0] } ?? [])
     }
 
     /// One figure for a progress bar: downloading fills most of it, copying and checking the rest.

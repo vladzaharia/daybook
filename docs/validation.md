@@ -46,6 +46,17 @@ synthetic sound. Re-processing a compressed conversation (Upgrade, Transcribe Ag
 automated test; neither does the Settings row or Info › Audio's line. No real recording, no iCloud, no two physical Macs,
 and no iPhone were involved. An older Daybook seen more than 30 days ago that returns and edits a compressed recording
 may merge back to the original; that's not tested. Superseded originals stay in a plaintext library's iCloud.
+||||||| eb28b4f1
+
+## iPhone gives back audio sooner (2026-11-20)
+
+The iPhone brings its audio back within the budget after iCloud confirms an upload and as the app goes to the background, spares what it still has to process or send, and no longer keeps its own uploads twice (docs/icloud-sync.md, "Cache policy"). On `feature/iphone-evict-after-upload`.
+
+**Verified, on rigs only.** Engine tests with the simulated iCloud (`LibrarySyncReplicaTests`, `LibrarySyncSealingTests`): a pass reports an upload iCloud just confirmed, once; the container copy of an iPhone's recording is dropped only after iCloud confirms it and the original stays; in an encrypted library the sealed copy differs from the original and is dropped the same way, with no second key holder the original stays; an original that goes back to iCloud takes iCloud's copy with it; nothing is evicted or dropped while the upload is held, when iCloud refuses it for storage, when the object isn't there, when the file changed since it was verified, or when it is the only copy. iPhone tests (`AudioEvictionTests`, run with `scripts/build-ios.sh --test --test-arg -only-testing:DaybookPhoneTests/AudioEvictionTests`, and with the rest of the suite in CI): eviction after a confirmed upload and not before, a burst runs once, leaving the foreground evicts under background time and expiry cancels it, audio a conversation needs is spared until it isn't, no iCloud engine evicts nothing, totals follow an eviction.
+
+**Review fixes.** Also on rigs: a dropped container copy still reads as uploaded (placeholder), the original then goes back and is fetched again as `.fetched`; a fetch can leave eviction to the phone, so a recording being processed survives another's download; an unverified or changed sealed object is never dropped; another account signed in evicts and drops nothing; cancelled eviction stops between files and records what it did; expiry of background time ends the task before anything is deleted; recordings owed to a Mac and the loaded track are spared. `SimulatedICloud` evicts for real only when a test asks (`evictLocalCopiesForReal`): the other tests read objects without requesting a download, as the real engine does not always.
+
+**Not verified.** Whether iOS shows a not-downloaded item as a `.icloud` placeholder or a dataless file on a real iPhone, and so whether `promisedItemResourceValues` answers `ubiquitousItemIsUploaded` for it there, is still unverified (the rig models a placeholder). Saved captions waiting for speakers are in the protected set but have no test of their own. Not on a real iPhone or against real iCloud: how soon `ubiquitousItemIsUploaded` turns true, what `evictUbiquitousItem` frees on APFS (a plaintext container copy is expected to be a clone), and how much background time iOS gives are assumed from the documentation. The encrypted duplicate is established from the code and the rig (the sealed object is other bytes), not measured on a device. The processing and hand-off protection reads the library's requests and the recording's outgoing list; it wasn't exercised with a real job or a Mac.
 
 ## Playback levels (2026-11-20)
 
@@ -4678,3 +4689,27 @@ The owner's Mac on 0.11.2 showed "Soundcore didn't list its recordings" with the
 - **Still fails, saying so:** a first page that isn't a list reply, can't hold a count, declares over 5,000 entries, declares entries but holds none whole, or has no plausible entry among its non-zero ones. The page shows "Soundcore didn't list its recordings"; Technical Details shows the unrecognized-packet wording and "Last list reply" with the packet's shape. A later request that gets no answer still fails the whole list, as before.
 - **Checked in tests (simulator and pure parser, synthetic bytes):** `SoundcoreProtocolTests` (the cases above, both layouts unchanged, the diagnostic line) and `SoundcoreSimulatorTests` (an empty list with a 4-byte and a 0-byte trailer, a total count across pages, a truncated final page, a garbage later page, a first page of implausible IDs that fails and imports nothing).
 - **Not checked:** the real packet, whether the owner's recorder is one of these cases, and the "Last list reply" row on screen on either platform. If the list still fails, Copy from Device Details carries the reply's first 32 bytes.
+
+## 2026-11-20: Summarize Again menu
+
+Verified (simulated: fake inference, fake cloud, fake provider server; no network, no models):
+- `SummarizeAgainChoicesTests` (order, one option is no menu, each cloud gate).
+- `SummarizeAgainProcessingTests` on the Mac: the app-level list for no key, Never, a switch off, Personal by default, an
+  unreadable placement, a placement or kind a newer version wrote, a model not installed, one that no longer fits; the
+  cloud row queues what Use the Cloud queues; a row that no longer qualifies at the click, or names another model than the
+  one resolved, queues and sends nothing; a conversation changed between choosing and sending is not sent and is summarized
+  here; the request is byte-identical to a cloud Upgrade's; a model of this Mac's runs here under Always and Offer First
+  with no request to the cloud and does not go to the cloud when it fails; another installed model runs for that job only; one
+  that went before the run, or while the job waited, runs Settings' model.
+- `PhoneSummaryPlacementTests` (iPhone simulator, `scripts/build-ios.sh --test --test-arg
+  -only-testing:DaybookPhoneTests/PhoneSummaryPlacementTests`): the same list gates, the cloud send, a click that no
+  longer qualifies through `summarizeAgain`, this iPhone's model under Always and Offer First and on failure, no send from
+  the background, and nothing handed to a Mac's countdown.
+- Mutations: each key test fails with its guard removed (the list's `allowsCloud`; `summarizesHere`; `keptHere`; the
+  per-run fallback; the model check at the click; the send-time checks, which are layered, so those tests fail only with
+  the layers removed together).
+- One iPhone picture of the closed menu.
+
+Not verified: the open menu in either app; a Mac picture (the unbundled debug build drew no library window under
+`--snapshot`); a send to a real provider; the iPhone menu on a device; `PhoneUpgrades.accept`'s same guard has no test of
+its own. Naming a Mac, and the app and context menus, are follow-ups.

@@ -85,13 +85,14 @@ final class PhoneSummaryPlacementTests: XCTestCase {
     final class PresenceBox { var devices: [KnownSyncDevice] = [] }
     final class ClockBox { var now = Date(timeIntervalSince1970: 1_800_000_000) }
 
-    private func rig(cloud: Cloud? = nil, local: (any LocalSummarizing)? = nil, macSeen: Bool = true, link: PhoneLink? = nil) async throws -> Rig {
+    private func rig(cloud: Cloud? = nil, local: (any LocalSummarizing)? = nil, macSeen: Bool = true, link: PhoneLink? = nil,
+                     appIsActive: @escaping () -> Bool = { true }) async throws -> Rig {
         let library = LibraryController(rootURL: try temporaryDirectory("placement-\(UUID().uuidString)"), sync: nil)
         try await library.load()
         let link = link ?? PhoneLink(identity: PhoneLink.identity(installation: UUID().uuidString, name: "Test iPhone", libraryID: nil),
                                      keyStore: MemoryLinkKeyStore(), configuration: .loopback())
         let presence = PresenceBox(), clock = ClockBox()
-        let placement = PhoneSummaryPlacement(library: library, link: link, presence: { presence.devices }, clock: { clock.now }, runsTimer: false, appIsActive: { true })
+        let placement = PhoneSummaryPlacement(library: library, link: link, presence: { presence.devices }, clock: { clock.now }, runsTimer: false, appIsActive: appIsActive)
         if macSeen { presence.devices = [studio(at: clock.now)] }
         // Settings › Cloud: an Anthropic key with the catalog's models when there's a cloud, none otherwise.
         placement.cloud = CloudSetup.demo(providers: cloud == nil ? [] : [.anthropic], defaults: makeTestDefaults("PhoneSummaryPlacementTests"))
@@ -791,5 +792,223 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         }
         deinit { task?.cancel() }
         var received: [LinkSummaryChoice] { lock.withLock { choices } }
+    }
+
+    // MARK: Summarize Again's menu
+
+    private func cloudRow(_ rig: Rig, _ id: UUID) throws -> SummarizeAgainChoice? {
+        rig.placement.summarizeAgainChoices(for: try XCTUnwrap(rig.library.meeting(id))).first { if case .cloud = $0.place { true } else { false } }
+    }
+
+    func testBehaviorSummarizeAgainOffersTheCloudOnlyInsideThePrivacyRule() async throws {
+        let none = try await rig(local: Local(), macSeen: false)
+        let a = transcribed(none.library)
+        XCTAssertNil(try cloudRow(none, a), "No key")
+        XCTAssertEqual(none.placement.summarizeAgainChoices(for: try XCTUnwrap(none.library.meeting(a))).count, 1, "Its own summarizer alone: no menu")
+
+        let rig = try await rig(cloud: Cloud(models: [sonnet]), local: Local(), macSeen: false)
+        let id = transcribed(rig.library)
+        XCTAssertEqual(rig.placement.summarizeAgainChoices(for: try XCTUnwrap(rig.library.meeting(id))).map(\.title),
+                       ["With gemma-4/e2b-4bit", "With Claude Sonnet 5.5"])
+        var preferences = rig.cloud.preferences
+        preferences.policy = .never
+        rig.cloud.preferences = preferences
+        XCTAssertNil(try cloudRow(rig, id), "Never")
+        preferences.policy = .ask
+        preferences.placements.set(.work, allowed: false)
+        rig.cloud.preferences = preferences
+        rig.library.update(id) { $0.placement = .work }
+        XCTAssertNil(try cloudRow(rig, id), "Work's switch is off")
+        preferences.placements.set(.work, allowed: true)
+        rig.cloud.preferences = preferences
+        rig.library.update(id) { $0.placement = .personal }
+        XCTAssertNil(try cloudRow(rig, id), "Personal is off by default")
+        preferences.placements.set(.personal, allowed: true)
+        rig.cloud.preferences = preferences
+        XCTAssertNotNil(try cloudRow(rig, id))
+        preferences.placements = try JSONDecoder().decode(CloudPlacements.self, from: Data("[1]".utf8))
+        rig.cloud.preferences = preferences
+        XCTAssertNil(try cloudRow(rig, id), "A setting this version can't read never goes")
+    }
+
+    func testBehaviorSummarizeAgainWithTheCloudSendsAsTheCloudUpgradeDoes() async throws {
+        let cloud = Cloud(models: [sonnet])
+        let rig = try await rig(cloud: cloud, macSeen: false)
+        let id = transcribed(rig.library)
+        await rig.placement.summarizeAgain(id, as: try XCTUnwrap(try cloudRow(rig, id)))
+        try await waitUntil("the summary") { rig.library.meeting(id)?.summary != nil }
+        XCTAssertEqual(cloud.asked, [id])
+        XCTAssertEqual(rig.library.meeting(id)?.summary?.origin.cloudModel, "Claude Sonnet 5.5")
+        XCTAssertEqual(rig.library.meeting(id)?.summary?.cloudReason, .chosen)
+    }
+
+    /// Chosen, then the conversation stops qualifying before it sends: nothing is sent, and a Mac is left it.
+    private func stopsQualifying(_ name: String, change: (Rig, UUID) async -> Void) async throws {
+        let cloud = Cloud(models: [sonnet])
+        let rig = try await rig(cloud: cloud, macSeen: true)
+        let id = transcribed(rig.library, name)
+        rig.library.update(id) { $0.placement = .work }
+        let choice = try XCTUnwrap(try cloudRow(rig, id))
+        await rig.placement.summaryIsDue(id)
+        await change(rig, id)
+        rig.placement.perform(.useCloud, for: id)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertTrue(cloud.asked.isEmpty, "\(name): never sent")
+        XCTAssertNil(rig.placement.runs[id], name)
+        XCTAssertEqual(choice.title, "With Claude Sonnet 5.5")
+    }
+
+    func testBehaviorAConversationMovedToPersonalBeforeTheSendIsNotSent() async throws {
+        try await stopsQualifying("Moved") { rig, id in rig.library.update(id) { $0.placement = .personal } }
+    }
+
+    func testBehaviorASwitchTurnedOffBeforeTheSendIsNotSent() async throws {
+        try await stopsQualifying("Switched") { rig, _ in
+            var preferences = rig.cloud.preferences
+            preferences.placements.set(.work, allowed: false)
+            rig.cloud.preferences = preferences
+        }
+    }
+
+    func testBehaviorNeverSetBeforeTheSendIsNotSent() async throws {
+        try await stopsQualifying("Never") { rig, _ in
+            var preferences = rig.cloud.preferences
+            preferences.policy = .never
+            rig.cloud.preferences = preferences
+        }
+    }
+
+    func testBehaviorTheKeyRemovedBeforeTheSendIsNotSent() async throws {
+        try await stopsQualifying("Key") { rig, _ in await rig.cloud.removeKey(for: .anthropic) }
+    }
+
+    // MARK: Summarize Again: this iPhone's model, and the click
+
+    private func localRow(_ rig: Rig, _ id: UUID) throws -> SummarizeAgainChoice {
+        try XCTUnwrap(rig.placement.summarizeAgainChoices(for: try XCTUnwrap(rig.library.meeting(id))).first { if case .thisDevice = $0.place { true } else { false } })
+    }
+
+    func testBehaviorThisIPhonesModelRunsHereWhateverTheCloudPreferencesSay() async throws {
+        for policy in [CloudSummaryPreferences.Policy.always, .ask] {
+            let cloud = Cloud(models: [sonnet])
+            let rig = try await rig(cloud: cloud, local: Local(), macSeen: false)
+            var preferences = rig.cloud.preferences
+            preferences.policy = policy
+            rig.cloud.preferences = preferences
+            let id = transcribed(rig.library, "Here \(policy)")
+            await rig.placement.summarizeAgain(id, as: try localRow(rig, id))
+            try await waitUntil("the summary from this iPhone") { rig.library.meeting(id)?.summary != nil }
+            XCTAssertEqual(rig.library.meeting(id)?.summary?.overview, "From this iPhone", "\(policy)")
+            XCTAssertTrue(cloud.asked.isEmpty, "\(policy): no request to the cloud")
+        }
+    }
+
+    func testBehaviorThisIPhonesModelThatFailsDoesNotGoToTheCloud() async throws {
+        for policy in [CloudSummaryPreferences.Policy.always, .ask] {
+            let cloud = Cloud(models: [sonnet])
+            let rig = try await rig(cloud: cloud, local: Local(failure: LocalFailure()), macSeen: false)
+            var preferences = rig.cloud.preferences
+            preferences.policy = policy
+            rig.cloud.preferences = preferences
+            let id = transcribed(rig.library, "Fails \(policy)")
+            await rig.placement.summarizeAgain(id, as: try localRow(rig, id))
+            try await waitUntil("the request to fail") { summaryRequests(rig.library, id).first?.outcome != nil }
+            XCTAssertEqual(summaryRequests(rig.library, id).first?.outcome?.result, .failed, "\(policy)")
+            XCTAssertTrue(cloud.asked.isEmpty, "\(policy): not sent after failing here")
+        }
+    }
+
+    func testBehaviorTheCloudRowDoesNothingWhenItNoLongerQualifiesAtTheClick() async throws {
+        let cloud = Cloud(models: [sonnet])
+        let rig = try await rig(cloud: cloud, local: Local(), macSeen: false)
+        let id = transcribed(rig.library)
+        rig.library.update(id) { $0.placement = .work }
+        let row = try XCTUnwrap(try cloudRow(rig, id))
+        func clicked(_ name: String, _ row: SummarizeAgainChoice) async {
+            await rig.placement.summarizeAgain(id, as: row)
+            XCTAssertTrue(cloud.asked.isEmpty, "\(name): nothing sent")
+            XCTAssertNil(rig.placement.planners[id], "\(name): nothing placed")
+            XCTAssertTrue(summaryRequests(rig.library, id).isEmpty, "\(name): nothing asked")
+        }
+        await clicked("another model", SummarizeAgainChoice(place: .cloud(modelID: "gpt-other"), title: "With Other"))
+        rig.library.update(id) { $0.placement = .personal }
+        await clicked("moved to Personal", row)
+        rig.library.update(id) { $0.placement = .work }
+        var preferences = rig.cloud.preferences
+        preferences.placements.set(.work, allowed: false)
+        rig.cloud.preferences = preferences
+        await clicked("switch off", row)
+        preferences.placements.set(.work, allowed: true)
+        preferences.policy = .never
+        rig.cloud.preferences = preferences
+        await clicked("Never", row)
+        preferences.policy = .ask
+        rig.cloud.preferences = preferences
+        await rig.cloud.removeKey(for: .anthropic)
+        await clicked("key removed", row)
+    }
+
+    func testBehaviorAPlacementOrKindANewerVersionWroteGetsNoCloudRowOnThisIPhone() async throws {
+        let rig = try await rig(cloud: Cloud(models: [sonnet]), local: Local(), macSeen: false)
+        var preferences = rig.cloud.preferences
+        preferences.placements = CloudPlacements(allowed: ["work": true, "personal": true, CloudPlacements.notFiledKey: true])
+        rig.cloud.preferences = preferences
+        let id = transcribed(rig.library)
+        rig.library.update(id) { $0.placement = .work }
+        XCTAssertNotNil(try cloudRow(rig, id))
+        let placement = try JSONDecoder().decode(ExtensibleOptional<LibraryPlacement>.self, from: Data("\"family\"".utf8))
+        rig.library.update(id) { $0.$placement = placement }
+        XCTAssertNil(try cloudRow(rig, id))
+        rig.library.update(id) { $0.placement = .work }
+        let kind = try JSONDecoder().decode(Extensible<MeetingKind>.self, from: Data("\"meditation\"".utf8))
+        rig.library.update(id) { $0.$kind = kind }
+        XCTAssertNil(try cloudRow(rig, id))
+    }
+
+    func testBehaviorTheCloudRowSendsNothingFromTheBackground() async throws {
+        let cloud = Cloud(models: [sonnet])
+        let active = ActiveBox()
+        let rig = try await rig(cloud: cloud, macSeen: false, appIsActive: { active.on })
+        let id = transcribed(rig.library)
+        let row = try XCTUnwrap(try cloudRow(rig, id))
+        active.on = false
+        await rig.placement.summarizeAgain(id, as: row)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertTrue(cloud.asked.isEmpty, "Off the screen when it was to send: nothing goes")
+    }
+
+    final class ActiveBox: @unchecked Sendable { var on = true }
+
+    func testBehaviorTheCloudRowIsNotHandedToAMacsCountdown() async throws {
+        let macID = UUID()
+        let service = LinkService(identity: LinkIdentity(deviceID: macID, name: "Studio Mac", deviceClass: .mac, appVersion: "2.0", canProcess: true,
+                                                         features: [LinkCapabilities.summaryPlacementFeature],
+                                                         processing: LinkProcessingCapabilities(transcribes: true, findsSpeakers: true, summarizes: true,
+                                                                                                models: ["summarization": "gemma-4/e4b"])),
+                                  keyStore: MemoryLinkKeyStore(), configuration: .loopback())
+        try await service.start()
+        addTeardownBlock { await service.stop() }
+        let listening = await service.port
+        let port = try XCTUnwrap(listening)
+        let choices = Choices(service.events())
+        let link = PhoneLink(identity: PhoneLink.identity(installation: UUID().uuidString, name: "Test iPhone", libraryID: nil),
+                             keyStore: MemoryLinkKeyStore(), configuration: .loopback())
+        addTeardownBlock { await link.setActivity(.background) }
+        let cloud = Cloud(models: [sonnet])
+        let rig = try await rig(cloud: cloud, macSeen: false, link: link)
+        await link.start()
+        let code = await service.beginPairing()
+        _ = try await link.pair(with: LinkEndpoint(host: "127.0.0.1", port: port), code: code.digits)
+        try await waitUntil("connected") { link.macs.first.map { $0.isConnected && $0.appVersion != nil } == true }
+        rig.placement.refresh()
+        let id = transcribed(rig.library)
+        let row = try XCTUnwrap(try cloudRow(rig, id))
+        try await service.send(.processingProgress(LinkProcessingProgress(meetingID: id, phase: .summaryCountdown, macName: "Studio Mac",
+                                                                          countdown: LinkSummaryCountdown(secondsLeft: 12, cloudOffered: true))))
+        try await waitUntil("the Mac's countdown") { link.liveProgress[id]?.isCountingDown == true }
+        await rig.placement.summarizeAgain(id, as: row)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertFalse(choices.received.contains { $0.meetingID == id && $0.choice == .useCloud }, "The Mac's countdown isn't handed this row's choice")
+        XCTAssertTrue(cloud.asked.isEmpty)
     }
 }

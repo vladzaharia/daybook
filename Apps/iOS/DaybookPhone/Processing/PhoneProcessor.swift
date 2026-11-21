@@ -86,6 +86,8 @@ final class PhoneProcessor {
         var release: @MainActor () async -> Void
         /// After work changed the library, and when a job ends.
         var changed: @MainActor () -> Void = {}
+        /// A job ended (done, failed for good, paused, or lost): the audio it needed may be free to go.
+        var finished: @MainActor () -> Void = {}
         /// A conversation is transcribed and fused here: where its summary runs is the placement's. `askedFor`
         /// when the person asked for the work (Transcribe Everything Again, Identify Speakers Again), so it starts
         /// at once; otherwise it's due, and may count down. The template the request asked for comes with it.
@@ -192,6 +194,23 @@ final class PhoneProcessor {
                                            identifyingSpeakers: running?.stage == .identifyingSpeakers,
                                            queued: waiting ? [id] : [], paused: running?.meetingID == id ? [] : paused,
                                            canProcess: true, stage: running?.stage)
+    }
+
+    /// Conversations whose recordings this iPhone still has work on: running, paused, claimed here, or work it would
+    /// carry out now (`OnDeviceProcessing.next`), until the request is done or given up. Their audio isn't sent back to
+    /// iCloud meanwhile, which would only be downloaded again to be processed (`SyncAudioProvider.needsAudio`).
+    func meetingsNeedingAudio(at now: Date = Date()) -> Set<UUID> {
+        let device = self.device
+        var ids = Set<UUID>()
+        for meeting in library.meetings where !meeting.openProcessingRequests.isEmpty {
+            let id = meeting.id
+            let claimedHere = meeting.openProcessingRequests.contains {
+                $0.isClaimed(by: library.thisDevice, at: now) && ($0.mode != .summaryOnly || summariesHere.contains($0.id))
+            }
+            if running?.meetingID == id || paused.contains(id) || claimedHere
+                || OnDeviceProcessing.next(in: meeting, device: device, at: now) != nil { ids.insert(id) }
+        }
+        return ids
     }
 
     // MARK: Picking up work
@@ -475,6 +494,7 @@ final class PhoneProcessor {
         // The transcription models go before a summary model loads.
         await services.release()
         services.changed()
+        services.finished()
         if let summaryDue { services.summaryDue(id, summaryDue.templateID, summaryDue.askedFor) }
         // Paused for a lock that's over by now: it goes on.
         if case .paused(.locked) = outcome, conditions.protectedDataAvailable, services.protectedDataAvailable() { pickUp(); return }

@@ -205,6 +205,9 @@ public final class LibrarySyncController {
     public internal(set) var warnings: [String] = []
     public internal(set) var pendingDownloads = 0
     public internal(set) var pendingUploads = 0
+    /// Files iCloud has confirmed uploaded, counted over the passes since the controller started: a pass that raises it
+    /// found something just uploaded (an on-demand replica can let go of that audio).
+    public internal(set) var confirmedUploads = 0
     /// Where sync runs now.
     public internal(set) var transport: SyncTransport = .none
     /// iCloud container sync, for Settings.
@@ -423,7 +426,7 @@ public final class LibrarySyncController {
         // In the container, a fresh device waits for iCloud's first listing before it starts a library of its own.
         do { engine = try LibrarySyncEngine(localRoot: localRoot, remoteRoot: url, deviceID: deviceID, replica: replica,
                                             waitsForListing: transport == .iCloudContainer && monitorChanges, installation: installation,
-                                            appInstallation: appInstallation) }
+                                            appInstallation: appInstallation, accountIsCurrent: accountCheck(for: transport)) }
         catch { scopedURL?.stopAccessingSecurityScopedResource(); scopedURL = nil; throw error }
         folder = url; self.transport = transport; status = .preparing; configurationID = UUID()
         toldPresenceProblem = nil
@@ -528,7 +531,7 @@ public final class LibrarySyncController {
             handToCourier(result.writtenFiles, engine: engine)
             schedulePublication(result.nextPublication)
             pendingReceipt = result.checkpointID
-            pendingDownloads = result.pendingDownloads; pendingUploads = result.pendingUploads; warnings = result.warnings
+            pendingDownloads = result.pendingDownloads; pendingUploads = result.pendingUploads; confirmedUploads += result.confirmedUploads; warnings = result.warnings
             hasMoreWork = result.hasMoreWork
             status = .applying
             return result

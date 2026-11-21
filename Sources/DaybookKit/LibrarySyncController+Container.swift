@@ -403,14 +403,14 @@ extension LibrarySyncController {
         }
     }
 
-    static func sameAccount(_ a: Data?, _ b: Data?) -> Bool {
+    nonisolated static func sameAccount(_ a: Data?, _ b: Data?) -> Bool {
         guard let a, let b else { return a == nil && b == nil }
         return sameAccount(a, b)
     }
 
     /// How the account is recorded (`Key.account`): the SHA-256 of its archived identity token. Archives of the same
     /// token are the same bytes, so equal digests are the same account.
-    static func accountDigest(_ archive: Data) -> Data { Data(SHA256.hash(data: archive)) }
+    nonisolated static func accountDigest(_ archive: Data) -> Data { Data(SHA256.hash(data: archive)) }
 
     static func resolve(_ bookmark: Data) -> URL? {
         var stale = false
@@ -434,7 +434,7 @@ extension LibrarySyncController {
     /// archived token is `current`. Bytes are compared, never decoded: preferences another process of the person's can
     /// write never instantiate anything in this one. A record that reads differently is settled by the container
     /// (`prepareContainer`).
-    static func sameAccount(_ recorded: Data, _ current: Data) -> Bool {
+    nonisolated static func sameAccount(_ recorded: Data, _ current: Data) -> Bool {
         recorded == current || recorded == accountDigest(current)
     }
 }
@@ -447,5 +447,16 @@ extension SyncMigrationRecord {
         containerLibraryID = outcome.destinationLibraryID ?? containerLibraryID
         adoptedCheckpoint = adoptedCheckpoint || outcome.adoptedCheckpoint
         skipped = Array(Set(skipped + outcome.progress.skipped)).sorted()
+    }
+}
+
+extension LibrarySyncController {
+    /// The engine's answer to "is the signed-in account this container's?", read where it's asked (the engine's queue), so an
+    /// account change between passes is seen. A folder (tests, development) has no account to check.
+    func accountCheck(for transport: SyncTransport) -> @Sendable () -> Bool {
+        guard transport == .iCloudContainer else { return { true } }
+        nonisolated(unsafe) let defaults = self.defaults
+        let identity = environment.accountIdentity
+        return { Self.sameAccount(defaults.data(forKey: Key.account), identity()) }
     }
 }

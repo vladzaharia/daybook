@@ -49,6 +49,23 @@ Always inside the privacy rule: the person's own key, a policy that isn't Never,
 switch is on (above). Within it:
 
 - **Use the Cloud**, an Upgrade to the cloud's model, and **Always**, as before.
+- **Summarize Again with the cloud's model.** Summarize Again on the page's foot is a menu when there is more than one way
+  to redo the summary (`SummarizeAgainChoices`): this device's installed summary models that fit (the chosen one first),
+  then the cloud's model, "With Claude Sonnet 5.5". Rows that don't hold are absent.
+  - **A model of this device's runs on this device, always.** Not under Always, and not after a failure: the Mac queues it
+    as Summarize on This Mac is (`summarizesHere`), the iPhone keeps it here (`keptHere`, `beginHere`). On the Mac, another
+    model than Settings' is for that job only; Settings keeps its choice. If that model goes while the job waits in the
+    queue (uninstalled, or no longer fits), the job runs Settings' model on the Mac (`jobWithUsableSummaryModel`); if
+    that isn't installed either, the summary waits for the summary model as any does. Never a download, never the cloud.
+    A Mac that quits meanwhile asks for a plain Summarize Again when it starts again.
+  - **The cloud row** is there only inside the privacy rule (a key, a policy that isn't Never, this device's switch for the
+    conversation's placement, a placement or kind this version reads). Choosing it is the person's choice, sent as Use the
+    Cloud is (`AppState.summarizeInCloud`; on the iPhone the summary is due, then Use the Cloud), which checks the
+    conversation as it is at the click and again as it sends. It sends only if the cloud model resolved now is the one the
+    row named; otherwise nothing is queued or sent and the menu, drawn from what's true now, drops the row. The iPhone acts
+    only on the placement that call made and only on the screen, so a Mac's countdown is never handed it. Settings › Cloud
+    holds one chosen model, so there is one cloud row, not one per provider. Naming a Mac is a follow-up: it needs a
+    target on the request.
 - **Only while the countdown is seen.** A countdown that ends in the cloud, whatever brought it there, runs only while the
   person can see it (`SummaryPlacements.countdownsAreSeen`). On the Mac (`CountdownVisibility`): its login session is the
   active one (`NSWorkspace` session notifications), the screen is unlocked (`com.apple.screenIsLocked`/`Unlocked`) and

@@ -11,6 +11,8 @@ public struct Colophon<TemplateMenu: View>: View {
     private let arrived: Date
     private let template: String
     private let summarizeAgain: (() -> Void)?
+    private let choices: [SummarizeAgainChoice]
+    private let choose: (SummarizeAgainChoice) -> Void
     private let templateMenu: TemplateMenu
     @Environment(\.daybookDensity) private var density
 
@@ -18,13 +20,19 @@ public struct Colophon<TemplateMenu: View>: View {
     ///   - arrived: When the summary was made: its glyph bounces when this changes.
     ///   - template: The template's name, or "Automatic (Meeting)".
     ///   - summarizeAgain: Asks for a new summary; nil while one is asked for, running, or the conversation records.
+    ///   - choices: Every way to summarize again now (`SummarizeAgainChoices`). With more than one, Summarize Again is a
+    ///     menu of them; with one or none it stays the plain link.
+    ///   - choose: Summarizes again as a choice says.
     ///   - templateMenu: The template menu's items.
     public init(_ colophon: SummaryColophon, arrived: Date, template: String, summarizeAgain: (() -> Void)?,
+                choices: [SummarizeAgainChoice] = [], choose: @escaping (SummarizeAgainChoice) -> Void = { _ in },
                 @ViewBuilder templateMenu: () -> TemplateMenu) {
         self.colophon = colophon
         self.arrived = arrived
         self.template = template
         self.summarizeAgain = summarizeAgain
+        self.choices = choices
+        self.choose = choose
         self.templateMenu = templateMenu()
     }
 
@@ -63,10 +71,33 @@ public struct Colophon<TemplateMenu: View>: View {
                     if let summarizeAgain {
                         HStack(spacing: 4) {
                             Text("·").accessibilityHidden(true)
-                            Button(action: summarizeAgain) {
-                                QuietLink { Text("Summarize Again").fontWeight(.medium) }.daybookHitTarget()
+                            if choices.count > 1 {
+                                Menu {
+                                    ForEach(Array(choices.enumerated()), id: \.element.id) { index, choice in
+                                        if index > 0, !choice.sharesGroup(with: choices[index - 1]) { Divider() }
+                                        Button(choice.title) { choose(choice) }
+                                    }
+                                } label: {
+                                    QuietLink {
+                                        HStack(spacing: 3) {
+                                            Text("Summarize Again").fontWeight(.medium)
+                                            Image(systemName: "chevron.up.chevron.down").font(.system(size: density == .touch ? 9 : 7, weight: .semibold))
+                                        }
+                                    }
+                                    .daybookHitTarget()
+                                }
+                                .menuStyle(.button)
+                                .buttonStyle(.plain)
+                                #if os(macOS)
+                                .menuIndicator(.hidden)
+                                #endif
+                                .fixedSize()
+                            } else {
+                                Button(action: summarizeAgain) {
+                                    QuietLink { Text("Summarize Again").fontWeight(.medium) }.daybookHitTarget()
+                                }
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                 }

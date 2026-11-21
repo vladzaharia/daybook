@@ -211,7 +211,9 @@ final class PhoneAppModel: RecordingCommandHandling {
             owns: { [weak library] in library?.ownsTrack ?? { _ in false } },
             // Its own recordings are kept here until iCloud has them; one that went back since comes down again.
             audio: { track, id in try await audio.localAudio(for: track, in: id, progress: { _ in }) },
-            release: { [weak models] in await models?.releaseProcessingModels() }),
+            release: { [weak models] in await models?.releaseProcessingModels() },
+            // A job ended: its recording may go back to iCloud now.
+            finished: { [weak audio] in audio?.evictSoon() }),
             // The system's continued-processing task, never in tests.
             continued: ContinuedProcessing(scheduler: environment.continuedProcessing()))
         let sync = self.sync, link = self.link
@@ -239,6 +241,14 @@ final class PhoneAppModel: RecordingCommandHandling {
         wireRecorder()
         wireSync()
         multipoints.wire()
+        // What this iPhone still has to process or send isn't taken back to iCloud, and an upload iCloud confirms is.
+        audio.needsAudio = { [weak self] in
+            guard let self else { return [] }
+            // Also what live captions still wait on this recording's audio for (their speakers, `labelCaptionSpeakers`).
+            return self.processor.meetingsNeedingAudio().union(self.multipoints.outgoing.keys)
+                .union(self.captions.waitingForSpeakers().map(\.meetingID))
+        }
+        sync.onUploadsConfirmed = { [weak audio] in audio?.evictSoon() }
         sharing.multipoints = multipoints
         // A Mac's note or bookmark changes what the Live Activity shows.
         sharing.changed = { [weak self] in self?.updateActivity() }
@@ -565,6 +575,8 @@ final class PhoneAppModel: RecordingCommandHandling {
             speakerPass = nil
             sync.scheduleBackgroundRefresh()
             sync.finishOnLeavingForeground()
+            // Audio iCloud already has goes back to it while iOS gives the time, never holding the app on screen.
+            audio.evictLeavingForeground()
             // What the saves on leaving made gets the library's class, if it's protected while locked.
             protector.keep()
             remindMeetings()
@@ -637,6 +649,7 @@ final class PhoneAppModel: RecordingCommandHandling {
     /// this iPhone can summarize, and the processor picks up what it can do now.
     func processingChanged() {
         placement.localSummarizer = processingSummarizer
+        placement.modelName = { [weak self] _ in self?.models.summaryModel?.name }
         processor.pickUp()
     }
 
@@ -659,6 +672,7 @@ final class PhoneAppModel: RecordingCommandHandling {
             placement?.localSummaryFailed(id, request: request, reason: reason, kind: kind) ?? false
         }
         placement.localSummarizer = processingSummarizer
+        placement.modelName = { [weak self] _ in self?.models.summaryModel?.name }
         // An upgrade of this iPhone's own recordings is its processor's work; what it can do is what its models can.
         upgrades.capabilities = { [weak self] in self?.processingCapabilities ?? .none }
         upgrades.owns = { [weak self] in self?.library.ownsTrack ?? { _ in false } }
