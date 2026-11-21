@@ -87,6 +87,9 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
     /// The recorder's clock as a notebook sampled it while this recording ran (`RecordingClockMap`), written once when the
     /// recording is filed: it maps the wall clock to seconds into this recording across pauses. Nil when nothing was written.
     public var clockSamples: [RecordingClockSample]?
+    /// Set once the recording's file was replaced by a verified lossy copy (`TrackEncoding`, RecordingCompression.swift):
+    /// what the bytes were before, so the recording is still known by them. Nil for a recording kept as it was captured.
+    public var encoding: TrackEncoding?
     /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
     public var unknownFields = UnknownFields()
     public init(id: UUID = UUID(), source: AudioSource = .imported, relativePath: String,
@@ -113,7 +116,7 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case id, source, relativePath, fileName, createdAt, duration, offset, sha256, deviceKind, deviceSerial,
             deviceRecordingID, derivedFrom, processing, startedAt, alignment, capture, backgroundAudio, removal, mergedFrom, stretch,
-            clockSamples
+            clockSamples, encoding
     }
     private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
 
@@ -141,7 +144,15 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
         mergedFrom = try values.decodeIfPresent(UUID.self, forKey: .mergedFrom)
         stretch = try values.decodeIfPresent(UUID.self, forKey: .stretch)
         clockSamples = try values.decodeIfPresent([RecordingClockSample].self, forKey: .clockSamples)
-        unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
+        // An encoding in a shape this version can't read is kept as it came and written back unchanged, never a reason
+        // to reject the meeting; the recording is then left alone here (`RecordingCompressionEligibility`).
+        if let decoded = (try? values.decodeIfPresent(TrackEncoding.self, forKey: .encoding)) ?? nil {
+            encoding = decoded
+            unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
+        } else {
+            encoding = nil
+            unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys.subtracting([CodingKeys.encoding.rawValue]))
+        }
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -167,6 +178,7 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
         try values.encodeIfPresent(mergedFrom, forKey: .mergedFrom)
         try values.encodeIfPresent(stretch, forKey: .stretch)
         try values.encodeIfPresent(clockSamples, forKey: .clockSamples)
+        try values.encodeIfPresent(encoding, forKey: .encoding)
         try unknownFields.encode(to: encoder)
     }
 }

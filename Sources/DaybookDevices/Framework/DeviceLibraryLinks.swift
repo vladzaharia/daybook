@@ -79,8 +79,11 @@ public struct DeviceLibraryLinks: Equatable {
                 imported[device.recordingID] = track.meetingID
                 // Existing libraries used name/size file IDs. Their verified import digest
                 // also recognizes the new content ID on another device without reimporting.
-                if device.recordingID.hasPrefix("file:"), !track.sha256.isEmpty {
-                    imported[ImportFolderWatcher.recordingID(sha256: track.sha256)] = track.meetingID
+                if device.recordingID.hasPrefix("file:") {
+                    // A compressed recording's original digest too: the export folder still holds the original.
+                    for digest in [track.sha256, track.previousSHA256].compactMap({ $0 }) where !digest.isEmpty {
+                        imported[ImportFolderWatcher.recordingID(sha256: digest)] = track.meetingID
+                    }
                 }
             }
             entries.append(Entry(recordingID: device.recordingID, meetingID: track.meetingID, trackID: track.trackID,
@@ -103,6 +106,8 @@ public struct DeviceLibraryIndex: Equatable {
         public let createdAt: Date
         public let fileName: String
         public let sha256: String
+        /// The original's digest, for a recording that was compressed (`TrackEncoding.previousSHA256`).
+        public var previousSHA256: String? = nil
     }
 
     private var byKind: [String: [Track]] = [:]
@@ -113,7 +118,8 @@ public struct DeviceLibraryIndex: Equatable {
             for track in meeting.tracks where !track.isMovedOut {
                 guard let device = track.device else { continue }
                 byKind[device.kind, default: []].append(Track(meetingID: meeting.id, trackID: track.id, device: device,
-                                                              createdAt: track.createdAt, fileName: track.fileName, sha256: track.sha256))
+                                                              createdAt: track.createdAt, fileName: track.fileName, sha256: track.sha256,
+                                                              previousSHA256: track.encoding?.previousSHA256))
             }
         }
     }
