@@ -63,6 +63,9 @@ struct ConversationInfo: View {
                 RecordingWords.line(track, in: meeting, mac: "Your Mac", pending: "Lines up when your Mac processes it")
             },
             availability: { track, meeting in Self.reading(await provider.availability(of: track, in: meeting.id)) },
+            download: { track, meeting in
+                _ = try await provider.localAudio(for: track, in: meeting.id, progress: { _ in })
+            },
             actionContext: { meeting in Self.context(meeting) },
             now: { meeting, date in
                 var inputs = ConversationStatusPresentation.Inputs(words: words, local: .iPhone())
