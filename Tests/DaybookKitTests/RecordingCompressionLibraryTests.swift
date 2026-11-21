@@ -548,6 +548,31 @@ final class RecordingCompressionLibraryTests: XCTestCase {
         XCTAssertEqual(library.meeting(id)?.tracks.first.map(RecordingCompression.File.init), RecordingCompression.File(before))
     }
 
+    /// A copy iCloud has is downloaded, never replaced by its original again: the original's object may have gone from
+    /// iCloud since (LibrarySyncSuperseded.swift). Nor is anything named again while a library that synced isn't connected.
+    func testBehaviorACopyICloudHasIsntPointedBackAtItsOriginal() async throws {
+        let cloud = try cloudFolder()
+        let library = try await self.library("Mac", cloud: cloud)
+        let (id, before) = try await compressedAndUploaded(library)
+        let copy = try XCTUnwrap(library.meeting(id)?.tracks.first)
+        let holds = await library.sync?.engine?.holdsObject(copy.sha256)
+        XCTAssertEqual(holds, true)
+        try FileManager.default.removeItem(at: url(library, copy.relativePath, in: id))
+        await library.reconcileCompressions()
+        XCTAssertEqual(library.meeting(id)?.tracks.first.map(RecordingCompression.File.init), RecordingCompression.File(copy))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url(library, before.relativePath, in: id).path), "the original stays as it was")
+        // Synced before, not connected now (its sync controller here, its folder not): nothing is named again, even what
+        // this device compressed.
+        await library.flush()
+        let offline = try await self.library("Mac")
+        XCTAssertEqual(offline.compressionSync, .unknown)
+        offline.update(id) { $0.tracks[0].encoding?.device = offline.sync?.deviceID }
+        try await offline.flushDurably()
+        await offline.reconcileCompressions()
+        XCTAssertEqual(offline.meeting(id)?.tracks.first?.sha256, copy.sha256)
+        XCTAssertNotNil(offline.meeting(id)?.tracks.first?.encoding)
+    }
+
     func testBehaviorAMissingCopyPointsTheTrackBackAtItsOriginal() async throws {
         let library = try await self.library("Mac", syncs: false)
         let (id, before) = try await conversation(in: library, from: try recording())

@@ -15,6 +15,10 @@ extension LibrarySyncEngine {
         return SyncFiles.itemState(object.url) != .absent && cloud.isUploaded(object.url)
     }
 
+    /// Whether the sync folder has the object with this SHA-256, downloaded or not (sealed under a key held here, or
+    /// plaintext). False for a name that isn't a SHA-256.
+    public func holdsObject(_ sha256: String) -> Bool { SyncFiles.isHash(sha256) && hasRemoteObject(sha256) }
+
     /// Whether this device's clock looks more than a week ahead of the others' (compaction's `clockLooksAhead`): a Mac
     /// whose clock is ahead would take a recent conversation for an old one.
     public func compressionClockLooksAhead(now: Date = Date()) -> Bool { clockLooksAhead(now: now) }

@@ -1,5 +1,49 @@
 # Validation record
 
+## Superseded originals leave iCloud (2026-11-21)
+
+After a Mac replaces a recording with a compressed copy, the original's object (`Blobs/<previousSHA256>`) goes from
+iCloud once nothing can need it (docs/icloud-sync.md, "Superseded objects go from iCloud"). On `storage/icloud-cleanup`,
+built on `storage/voice-clips`.
+
+**The acknowledgement.** Compaction already has one (LibrarySyncCompaction.swift): a conversation's history is pruned
+only once every device seen in the last 30 days has acknowledged a state at or after its root, a device away longer
+holds nothing back, and nothing is pruned while every other device is away. The object goes only once no journal entry
+still here names it, so it waits for exactly that, and nothing new decides who has caught up.
+
+**Verified.** Temporary sync folders standing in for iCloud (`SimulatedICloud`), no network:
+- `SupersededObjectsTests`: the object going a day after the iPhone has the copy and compaction pruned the history naming
+  it, and not a minute before, both devices syncing after with the iPhone's recording the copy; an iPhone that never saw
+  the replacement keeping it while seen in the last 30 days (also at 23 days), and not once it's been away longer while an
+  iPad has caught up; nothing going while every other device is away, before or after it was free; a device without
+  `compress-1` keeping it; the copy not reported uploaded keeping it, and a day after it is, it goes; no commit in iCloud
+  keeping it; a track named back at its original keeping it and forgetting its wait; a second conversation holding the same
+  bytes keeping it; a conversation in this Mac's Trash holding them keeping it, its history pruned; a deleted
+  conversation's recording, which no replacement names, left alone; the object written again during the wait starting it
+  over; a new engine after a quit resuming the wait, an object already gone with its wait remembered clearing without a
+  warning, and what's remembered lost starting the wait over; the iPhone's cached original going only through
+  `evictAudio`'s check, untouched by the object going; compaction proposing because a replaced original would come free,
+  with too little history otherwise.
+- `RecordingCompressionLibraryTests`: a copy iCloud holds isn't named back at its original when the copy's file is
+  missing, and nothing is named back while the library that synced isn't connected (the other tests of naming back still
+  pass: a copy that never reached iCloud is named back).
+- 12 mutations of the safety checks, each failing a test: a journal entry still naming the original, a track
+  in this Mac's Trash naming it, the copy reported uploaded, every recent device knowing compressed recordings, every
+  commit in iCloud, the day's wait, the wait starting over when the object is written again, a wait forgotten once the
+  object isn't free, compaction's guards (every other device away, the clock), a replaced original counting toward
+  compacting, and both conditions on naming a track back at its original.
+- unchanged: `RecordingCompressionLibraryTests` (42), `RecordingCompressionSyncTests` (4), `LibrarySyncCompactionTests` (16),
+  `LibrarySyncReplicaTests` (36), `LibrarySyncDeletionTests` (4), `LibrarySyncSealingTests` (48), `LibrarySyncTests` (26),
+  `VoiceClipLibraryTests` (14).
+
+**Not testable on its own.** The copy must also be here and verified, but an eager Mac's complete pass puts back a copy that
+differs (measured: it keeps the changed one in `SyncConflicts` and installs iCloud's), so no complete pass finds it
+otherwise.
+
+**Needs a real device.** iCloud itself: that a deleted `Blobs/` object frees the space in the account and goes from other
+devices' containers, that `ubiquitousItemIsUploaded` is true for the copy before the deletion, and how long an edit takes
+to reach another Mac (the day's wait is chosen to cover it).
+
 ## Voice clips: compressing recordings a voice profile learned from (2026-11-21)
 
 A voice profile keeps the speech it learned from as lossless clips on each Mac, so the recordings it learned from can be

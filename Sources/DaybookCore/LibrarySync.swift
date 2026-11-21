@@ -304,6 +304,7 @@ public actor LibrarySyncEngine {
         try readJournal(into: &pass)
         try publishLocalChanges(meetings, deletedMeetingIDs: deletedMeetingIDs, libraryMetadata: libraryMetadata, into: &pass)
         try applyJournal(meetings, protecting: protecting, into: &pass)
+        pass.localMeetings = meetings
         return try finishPass(&pass)
     }
 
@@ -687,9 +688,11 @@ public actor LibrarySyncEngine {
         // History no device needs any more goes (on the Mac that compacts, after a pass that read everything).
         if !Task.isCancelled {
             let complete = pass.pendingDownloads == 0 && pass.budget.deferred == 0 && !journalIncomplete && !pass.metadataIncomplete && pass.held.isEmpty
+            let superseded = supersededOriginals(pass.localMeetings, deleted: pass.deletes)
             runCompaction(CompactionInput(events: pass.events, metadata: pass.metadata, metadataHeads: metadataHeads,
                                           entries: (pass.eventEntries + pass.metadataEntries).filter { !sealingRuntime.replacedEntries.contains($0.path) },
-                                          deleted: pass.deletes, complete: complete), now: compactionClock())
+                                          deleted: pass.deletes, complete: complete, superseded: superseded.originals,
+                                          heldDigests: superseded.held), now: compactionClock())
         }
         // A coordinated local write is not necessarily uploaded to iCloud yet; one iCloud refused for lack of storage won't be.
         let uploads = try countPendingCloudUploads()
@@ -2110,6 +2113,8 @@ struct PassState {
     /// Conversations held back for a burst of edits (`publicationInterval`), and when the earliest may go.
     var heldPublications = Set<UUID>()
     var nextPublication: Date?
+    /// The conversations the library supplied (LibrarySyncSuperseded.swift).
+    var localMeetings: [Meeting] = []
     /// The library as the pass returns it, and what changed in it.
     var output: [UUID: Meeting] = [:]
     var changed = Set<UUID>()

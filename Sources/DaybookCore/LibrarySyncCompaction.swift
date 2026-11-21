@@ -61,6 +61,9 @@ public struct CompactionReport: Equatable, Sendable {
     public var deletedBytes: Int64 = 0
     /// Commit records were consolidated into one.
     public var consolidated = false
+    /// Superseded originals' objects deleted from iCloud (LibrarySyncSuperseded.swift), and their bytes.
+    public var deletedSuperseded = 0
+    public var deletedSupersededBytes: Int64 = 0
     /// Why committing failed, when it did, for diagnostics (never shown as it is): what failed is tried again later.
     public var lastError: String?
     public init() {}
@@ -121,6 +124,10 @@ struct CompactionInput {
     var deleted: Set<UUID>
     /// The whole journal was read: nothing pending, deferred, or unreadable.
     var complete: Bool
+    /// Recordings this device's library holds as compressed copies, with the originals they replaced, and every SHA-256 a
+    /// track here holds as its file (LibrarySyncSuperseded.swift).
+    var superseded: [SupersededOriginal] = []
+    var heldDigests: Set<String> = []
 }
 
 extension LibrarySyncEngine {
@@ -306,6 +313,8 @@ extension LibrarySyncEngine {
                 Self.log.error("Compaction couldn’t commit (\(error.logCode, privacy: .public)): \(error.localizedDescription, privacy: .private)")
             }
         }
+        // A superseded original's object, once nothing can need it.
+        if !dormant, !ahead { deleteSupersededObjects(input, others: others, now: now, report: &report) }
         tidyCompactionRecords(policy, now: now, report: &report)
         if compactionRuntime.pendingProposal == nil || proposalIsStale(input, now: now) {
             let stale = compactionRuntime.pendingProposal
@@ -504,7 +513,7 @@ extension LibrarySyncEngine {
             older.formUnion(history)
         }
         older.subtract(compactionRuntime.prunedIDs)
-        let bytes = older.reduce(Int64(0)) { $0 + (sizes[$1] ?? 0) }
+        let bytes = older.reduce(Int64(0)) { $0 + (sizes[$1] ?? 0) } + supersededGain(input, freedBy: older)
         guard !older.isEmpty, older.count >= policy.minimumEntries || bytes >= policy.minimumBytes else { return }
         let proposal = SyncCompactionRecord(deviceID: deviceID, createdAt: now, roots: roots, deletions: deletions.isEmpty ? nil : deletions.sorted())
         if (try? writeCompactionRecord(proposal)) != nil { report.proposed = true }
