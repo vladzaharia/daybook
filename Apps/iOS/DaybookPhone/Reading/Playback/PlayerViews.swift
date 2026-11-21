@@ -11,7 +11,7 @@ struct ConversationPlayer: View {
     @Environment(ReadingSession.self) private var session
 
     var body: some View {
-        PlayerBar(player: session.player, meeting: meeting) { trackID, seconds in
+        PlayerBar(player: session.player, meeting: meeting, retry: { session.player.tryAgain() }) { trackID, seconds in
             library.addBookmark(in: meeting.id, trackID: trackID, at: seconds)
         }
         // Placed as a safe-area bar, the page's scroll edge effect runs under it, but only under something drawn: the
