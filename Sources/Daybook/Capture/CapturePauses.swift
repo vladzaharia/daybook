@@ -28,8 +28,18 @@ struct CapturePause: Codable, Equatable {
 /// nor anything made from it (captions, the transcript, the summary) holds what was said, and both tracks keep their
 /// length on the session's timeline. A buffer is judged by the host time its source stamped on it, so audio captured
 /// before Pause but delivered after it is kept, and audio captured after it never is, wherever it is when Pause comes.
+///
+/// A stamp is when the audio reached the input, a device's latency after it was said (tens of milliseconds on
+/// Bluetooth), so each silence starts `lead` before Pause (for audio not yet written when it comes) and ends `margin`
+/// after Resume: what was said just before Resume arrives stamped after it, and isn't kept. The clock is read under the lock, so a buffer captured
+/// after Pause is never judged before the pause it falls in begins.
 final class CapturePauses: @unchecked Sendable {
     private struct Span { var start: TimeInterval; var end: TimeInterval? }
+
+    /// How long before Pause the silence starts.
+    static let lead: TimeInterval = 0.05
+    /// How long after Resume it ends: more than any input's latency.
+    static let margin: TimeInterval = 0.15
 
     /// The session's zero on the host clock (`CaptureSessionManifest.hostTimeSeconds`).
     let origin: TimeInterval
@@ -42,27 +52,29 @@ final class CapturePauses: @unchecked Sendable {
 
     var isPaused: Bool { lock.withLock { spans.last.map { $0.end == nil } ?? false } }
 
-    /// The pauses so far, in session seconds; one still open has no end.
+    /// The pauses so far, in session seconds, as their silences run; one still open has no end.
     var record: [CapturePause] {
         lock.withLock { spans.map { CapturePause(start: $0.start - origin, end: $0.end.map { $0 - origin }) } }
     }
 
-    /// A pause from `host` on. False while one is open.
+    /// A pause from now (`clock`, read under the lock) on, its silence from `lead` before. False while one is open.
     @discardableResult
-    func begin(at host: TimeInterval) -> Bool {
+    func begin(_ clock: () -> TimeInterval) -> Bool {
         lock.withLock {
             guard spans.last.map({ $0.end != nil }) ?? true else { return false }
-            spans.append(Span(start: host, end: nil))
+            // Never back into the last pause's silence, which may still run after a Resume just now.
+            let start = max(clock() - Self.lead, spans.last?.end ?? -.infinity)
+            spans.append(Span(start: start, end: nil))
             return true
         }
     }
 
-    /// The open pause ends at `host`. False when none is open.
+    /// The open pause ends now (`clock`, read under the lock), its silence `margin` after. False when none is open.
     @discardableResult
-    func end(at host: TimeInterval) -> Bool {
+    func end(_ clock: () -> TimeInterval) -> Bool {
         lock.withLock {
             guard let last = spans.indices.last, spans[last].end == nil else { return false }
-            spans[last].end = max(spans[last].start, host)
+            spans[last].end = max(spans[last].start, clock() + Self.margin)
             return true
         }
     }

@@ -716,6 +716,9 @@ public struct RecorderPause: Equatable, Sendable {
     public init(title: String, message: String, canResume: Bool, kind: AttentionKind = .problem) {
         self.title = title; self.message = message; self.canResume = canResume; self.kind = kind
     }
+
+    /// Whether its box names it: not the person's own pause, which the status above already says (Resume alone).
+    public var showsBox: Bool { kind == .problem || !message.isEmpty }
 }
 
 /// The recording is paused: what happened in one box, and Resume Recording under it once it can.
@@ -732,7 +735,9 @@ public struct RecorderPauseBox: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: DaybookSpacing.s2) {
-            AttentionBox(kind: pause.kind, title: pause.title, symbol: "pause.circle.fill", message: pause.message.isEmpty ? nil : pause.message)
+            if pause.showsBox {
+                AttentionBox(kind: pause.kind, title: pause.title, symbol: "pause.circle.fill", message: pause.message.isEmpty ? nil : pause.message)
+            }
             // Resume only once it can: during a call the message says when it will.
             if pause.canResume {
                 Button(action: resume) {

@@ -226,6 +226,77 @@ final class CascadingRecordingTests: XCTestCase {
 
     // MARK: The recorder
 
+    /// While the person has paused this iPhone's recording nothing joins it: a Mac's start for it is refused, and a Mac
+    /// that says it records it, asked or not, takes Pause away (saying why). After Resume a Mac joins as before.
+    func testBehaviorAPausedRecordingIsJoinedByNoMac() async throws {
+        let mac = try await makeMac()
+        let link = makeLink()
+        let rig = RecorderRig()
+        let model = try makeModel(link: link, rig: rig)
+        try await pair(link, with: mac)
+        // It doesn't take starts from here, so this iPhone records alone.
+        try await mac.service.send(.recordPermission(LinkRecordPermission(allowed: false)))
+        try await waitUntil("its word") { link.macs.first?.takesStartsFromHere == false }
+        try await model.startRecording()
+        rig.pump(1)
+        let id = try XCTUnwrap(model.recorder.captureID)
+        XCTAssertTrue(model.canPauseRecording)
+
+        try await mac.service.send(.recordingState(LinkRecordingState(phase: .recording, conversationID: id, startedAt: Date())), to: link.deviceID)
+        try await waitUntil("the Mac says it records this conversation") { model.multipoints.macRecordsThis }
+        XCTAssertFalse(model.canPauseRecording, "it wouldn't pause with this iPhone")
+        do {
+            try await model.pauseRecording()
+            XCTFail("paused with a Mac recording along")
+        } catch RecordingCommandError.failed(let words) {
+            XCTAssertEqual(words, RecordingDialogs.recordsWithOthers)
+        }
+        try await mac.service.send(.recordingState(LinkRecordingState(phase: .idle)), to: link.deviceID)
+        try await waitUntil("it stopped") { !model.multipoints.macRecordsThis }
+
+        try await model.pauseRecording()
+        let request = LinkRecordRequest(action: .start, conversationID: id, timing: LinkTiming(startedAt: Date()))
+        let refused = try await mac.service.request(request, from: link.deviceID)
+        guard case .refused(let refusal) = refused.outcome else { return XCTFail("\(refused.outcome)") }
+        XCTAssertEqual(refusal.reason, .busy)
+        XCTAssertNil(model.multipoints.session, "nothing joined")
+        XCTAssertTrue(model.recorder.isPausedByPerson)
+
+        try await model.resumeRecording()
+        // A new request: a repeat of the same one is answered with its first answer.
+        let again = LinkRecordRequest(action: .start, conversationID: id, timing: LinkTiming(startedAt: Date()))
+        let accepted = try await mac.service.request(again, from: link.deviceID)
+        guard case .accepted(let ack) = accepted.outcome else { return XCTFail("\(accepted.outcome)") }
+        XCTAssertTrue(ack.wasAlreadyRecording)
+        rig.pump(1)
+        try await model.stopRecording()
+    }
+
+    /// The recorder's button during the person's pause doesn't join the paused recording: the recorder's recording is
+    /// its own, and the pause stays.
+    func testBehaviorTheRecordersButtonDuringAPauseDoesntJoinIt() async throws {
+        let link = makeLink()
+        let rig = RecorderRig()
+        let recorder = Recorder()
+        let model = try makeModel(link: link, rig: rig, recorder: recorder)
+        let session = try await setUpRecorder(model)
+        session.update { $0.alsoRecordsWithMac = false }
+        try await model.startRecording()
+        rig.pump(1)
+        XCTAssertTrue(model.canPauseRecording, "the recorder doesn't record along")
+        try await model.pauseRecording()
+        session.update { $0.alsoRecordsWithMac = true }
+
+        recorder.device.pressButton()
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertNil(model.devices.cascade.member(session.id), "not joined")
+        XCTAssertNil(session.liveCaptureConversation)
+        XCTAssertTrue(model.recorder.isPausedByPerson, "and the pause stays")
+        try await model.resumeRecording()
+        rig.pump(1)
+        try await model.stopRecording()
+    }
+
     func testTheRecordersButtonStartsThisIPhoneAndItsMacAndItsStopStopsThem() async throws {
         let mac = try await makeMac()
         let macRecorder = LinkServicesTests.RecordingMac()

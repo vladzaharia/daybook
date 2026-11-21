@@ -98,11 +98,19 @@ enum CaptureFinalizer {
             details.fallbackReason = info.fallbackReason
         }
         if track.role == .microphone { details.echoRemoval = result.echoRemoval }
+        details.pauses = pauses(in: result, offset: track.offsetSeconds)
         return details
     }
 
     static func details(for derived: DerivedCaptureTrack, in result: CaptureResult) -> TrackCaptureDetails {
         TrackCaptureDetails(method: derived.processing, clockRate: 1, outputRoute: result.outputRouteSummary?.rawValue,
-                            echoRemoval: result.echoRemoval)
+                            echoRemoval: result.echoRemoval, pauses: pauses(in: result, offset: derived.offsetSeconds))
+    }
+
+    /// The person's pauses in the seconds of a track that starts `offset` into the session; nil when there were none.
+    static func pauses(in result: CaptureResult, offset: TimeInterval) -> [PersonPause]? {
+        let end = result.endedAt.timeIntervalSince(result.startedAt)
+        let pauses = (result.pauses ?? []).map { PersonPause(start: $0.start - offset, end: ($0.end ?? max($0.start, end)) - offset) }
+        return pauses.isEmpty ? nil : pauses
     }
 }

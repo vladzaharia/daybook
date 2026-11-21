@@ -437,7 +437,16 @@ final class CompanionRecorders {
     func hasCompany(_ meetingID: UUID) -> Bool {
         guard let since = recordingSince[meetingID] else { return false }
         if leads[meetingID] != nil || recorderLeads[meetingID] != nil || asking.contains(meetingID) { return true }
-        return links(meetingID).contains { $0.macStartedAt >= since && $0.macEndedAt == nil && mayBeRecording($0) }
+        return links(meetingID).contains { $0.macStartedAt >= since && $0.macEndedAt == nil && (mayBeRecording($0) || mayHaveStarted($0)) }
+    }
+
+    /// A recorder whose start looked failed (it didn't confirm in time) may be recording all the same, and Stop would
+    /// bring its recording in ("It started after all"): company until its own status, read live, says it isn't.
+    private func mayHaveStarted(_ link: CompanionRecording) -> Bool {
+        guard link.state == .failed, !unanswered.contains(link.id) else { return false }
+        guard let control = sessions().first(where: { $0.id == link.deviceID })?.direct as? any RecordControlConnection else { return true }
+        if control is any AnsweringRecordControl { return false }
+        return !(control.state.isConnected && control.status?.isRecording == false)
     }
 
     /// Whether the device behind `link` may be recording along: it's being asked, it said it records, or it

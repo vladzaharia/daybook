@@ -254,6 +254,17 @@ extension AppState {
         meeting.transcripts.append(copy)
     }
 
+    /// When a recording arriving into a conversation started, on this Mac's clock, when that's known well enough to
+    /// tell it from the person's pauses: what its plan found reliable, a recording moving with its start, or a
+    /// recorder's own start. Nil otherwise (a file's creation date, which copying can change).
+    func knownStart(url: URL, device: DeviceRecordingIdentity?, plan: SourceArrivalPlan?) async -> Date? {
+        if let arrival = plan?.arrival, arrival.startIsReliable, let start = arrival.start { return start }
+        if !sources.carried.isEmpty, let digest = await Task.detached(operation: { try? AudioDigest.sha256(fileURL: url) }).value,
+           let start = sources.carried[digest]?.startedAt { return start }
+        let start = await recordingStart(url: url, device: device)
+        return start.reliable ? start.date : nil
+    }
+
     /// When a recording started: a recorder's own start (Soundcore IDs are start times), which is
     /// reliable, or the file's creation date, which copying can change.
     func recordingStart(url: URL, device: DeviceRecordingIdentity?) async -> (date: Date?, reliable: Bool) {

@@ -196,8 +196,8 @@ places a track's first sample relative to the session anchor.
 ## Pausing
 
 The person can pause a recording (Pause beside Stop in Floating Notes and the toolbar, Pause Recording in the File menu
-and the menu bar extra) and resume it. A pause is for privacy, so what's said during it must never reach the kept
-recording or anything made from it.
+and the menu bar extra) and resume it. A pause is for privacy, so what's said during it must never reach the
+conversation: not its kept recordings, captions, transcript, or summary, whichever device would have heard it.
 
 - **What a pause does.** The sources keep running and nothing about them changes: no engine is stopped, started, or
   pointed at another input, and the stall watch, the space watch, and the writers' watches go on as while recording.
@@ -205,8 +205,13 @@ recording or anything made from it.
   before anything else sees it (`CapturePauses`, shared with both writers and the caption taps): `PCMTrackWriter`
   silences a buffer's paused frames before it converts, times, or writes it, and captions are given the same buffers
   with those frames silent. A buffer is judged by the host time its source stamped on it, frame by frame, so audio
-  captured before Pause but delivered after it is kept, and audio captured after it never is. The silence ramps down
-  over 5 ms from the sound before it and the sound after Resume fades in over 5 ms, so neither seam clicks.
+  captured before Pause but delivered after it is kept, and audio captured after it never is. A stamp is when the
+  audio reached the input, a device's latency after it was said (tens of milliseconds on Bluetooth), so the silence
+  runs from 50 ms before Pause (for audio not yet written when it came) to 150 ms after Resume (`CapturePauses.lead`
+  and `margin`): what was said just before Resume arrives stamped after it and isn't kept. Pause and Resume read the
+  clock under the pauses' lock, so a buffer captured after Pause is never judged before its pause begins; a buffer
+  without a host time is stamped now less its length, about when its first frame was captured. The silence ramps down
+  over 5 ms from the sound before it and the sound after it fades in over 5 ms, so neither seam clicks.
 - **The timeline.** Both tracks keep their length, sample-aligned with the session as if it had recorded, so the call
   and microphone stay together for echo removal, and notes, bookmarks, captions, and other devices' recordings keep
   their places. The session's clock (`elapsedTime`) runs through a pause; the clocks people see freeze at the moment
@@ -215,14 +220,36 @@ recording or anything made from it.
 - **The guarantee.** Nothing captured during a pause is written to disk, so no transcript, speaker pass, summary, or
   compressed copy can hold it, whatever happens to Daybook: a crash while paused leaves silence from the pause on, and
   `CaptureRecovery` ends the open pause where the audio ends. The pauses are kept in the manifest and
-  `CaptureResult.pauses` (session seconds) and said in each track's capture notes ("Paused 0:02–0:05; the gap is
-  silent."); none of that is needed for the guarantee, which holds even if the manifest can't be written. Stop while
-  paused ends the pause with the recording.
+  `CaptureResult.pauses` (session seconds, as the silences run), said in each track's capture notes ("Paused
+  0:02–0:05; the gap is silent."), and kept with each library track, in its own seconds (`TrackCaptureDetails.pauses`,
+  `PersonPause`); the silence itself never depends on any of that. Stop while paused ends the pause with the recording.
+- **Nothing heard in it is transcribed.** Speech models make words up in silence: a word, or a passage without words,
+  heard wholly inside a track's pause is left out of its transcript (`InferenceProcessingEngine.leavingOut`), on the
+  Mac and the iPhone alike, also when speakers are found again from the saved words. The spans aren't cut from what
+  the model hears (the pipeline has no place that cuts audio and puts times back), since they're silence already.
+  Compressing older recordings compares two fresh transcriptions of the original and the copy over spans taken from
+  the kept passages, so a pause left out of the transcript is simply never sampled.
 - **Only alone.** Pause is offered only while nothing records along with this Mac: no iPhone led it or records with it,
-  no recorder (Soundcore, an iPhone's recorder) is being asked, records, or never answered
-  (`MultiSourceCoordinator.hasCompany`). None of them would pause with it, so they'd keep what this Mac leaves out. A
-  recorder whose own button joins during a pause takes Pause away but leaves the pause as it is; Resume is still the
-  person's. Phones are told the recording is paused (`LinkRecordingState` phase `paused`, with the length at Pause).
+  no recorder (Soundcore, an iPhone's recorder) is being asked, records, or never answered, and no recorder whose start
+  didn't confirm until its own status, read live, says it isn't recording (`MultiSourceCoordinator.hasCompany`): one
+  that timed out may be recording anyway, and Stop would bring its file in. None of them would pause with it, so they'd
+  keep what this Mac leaves out. Phones are told the recording is paused (`LinkRecordingState` phase `paused`, with
+  the length at Pause).
+- **Nothing joins.** While paused by the person, nothing can join the conversation: a recorder's own button starts a
+  recording of its own (as it would with this Mac busy), and a phone asking to record this conversation is refused
+  (`busy`, "It’s paused on this Mac."). After Resume, joining works as before (and takes Pause away).
+- **Nothing joins later.** As a second line, a recording from another device (a recorder's file or live audio, an
+  iPhone's recording, a Watch's, a file matched by time or sound) never joins a conversation over a span the person
+  paused it (`PersonPause.admits`, checked in `AppState.importAudio` and the iPhone's `importDeviceRecording`): it
+  joins only when its start is known on the conversation's clock (a recorder's own start, a moving recording's
+  carried one) and it comes nowhere near a pause, within 30 s; otherwise it's a conversation of its own. Silencing its
+  audio inside the pause instead would need its clock aligned to the conversation's within milliseconds, which a
+  recorder's clock (whole seconds) and sound alignment can't promise. A recording the person drops on a conversation
+  themselves goes where they put it.
+- **What isn't covered.** A recording the person starts on another device into the same conversation during the pause
+  (Record inside that conversation on the iPhone) is that device's own act, recorded by it and synced into the
+  conversation as any recording of it is; an older Daybook on another device doesn't know about pauses. Neither is
+  silenced here.
 - **Not yet.** Pausing a recording made with other devices needs each to pause with it: a pause request in the link
   (an action listed by a new feature, so an older device is never offered it, and a refusal or no answer leaves the
   pause off), recorders that can pause without ending their file, and a Watch message. Until then the control isn't

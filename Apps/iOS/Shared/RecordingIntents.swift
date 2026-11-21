@@ -79,6 +79,10 @@ enum RecordingCommandError: Error, CustomLocalizedStringResourceConvertible {
 enum RecordingDialogs {
     static let recording = "Recording."
     static let paused = "Paused."
+    /// Pause refused: another device records along, and wouldn't pause with it.
+    static let recordsWithOthers = "Can’t pause while another device records."
+    /// Resume with nothing paused or recording: the recording ended (iOS ended Daybook while paused) and was saved.
+    static let recordingEnded = "That recording has ended."
     static let notRecording = "Daybook isn’t recording."
 
     /// "Bookmarked at 12:03."

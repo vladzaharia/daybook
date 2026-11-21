@@ -52,10 +52,31 @@ final class InferenceProcessingEngineTests: XCTestCase {
         speakerModel: "community-1/offline", speakerOptions: SpeakerAnalysisOptions(), fingerprint: "abc123",
         speakerMatchThreshold: 0.82, speakerMatchMargin: 0.06)
 
-    private func input(_ mode: ProcessingRequest.Mode, previous: TrackTranscript? = nil) -> TrackProcessingInput {
-        let track = RecordingTrack(source: .microphone, relativePath: "Originals/a.caf", fileName: "a.caf", duration: 12, offset: 1.5, sha256: "a")
+    private func input(_ mode: ProcessingRequest.Mode, previous: TrackTranscript? = nil, pauses: [PersonPause]? = nil) -> TrackProcessingInput {
+        var track = RecordingTrack(source: .microphone, relativePath: "Originals/a.caf", fileName: "a.caf", duration: 12, offset: 1.5, sha256: "a")
+        if let pauses { track.capture = TrackCaptureDetails(method: "microphone", pauses: pauses) }
         return TrackProcessingInput(meetingID: UUID(), track: track, audioURL: URL(fileURLWithPath: "/tmp/a.caf"), mode: mode,
                                     previousTranscript: previous, vocabulary: ["Daybook"])
+    }
+
+    /// The person's pauses are silence, where a model makes words up: a word heard wholly inside one is left out, and
+    /// its passage keeps the rest; a passage with nothing else goes. Words reused for speakers again are left out too.
+    func testBehaviorWordsHeardInsideThePersonsPauseAreLeftOut() async throws {
+        let engine = InferenceProcessingEngine(inference: Scripted(), configuration: configuration)
+        let output = try await engine.transcribe(input(.newAudio, pauses: [PersonPause(start: 0.45, end: 1.2)]), progress: { _ in })
+        XCTAssertEqual(output.transcript.words?.map(\.text), [" Ship"])
+        XCTAssertEqual(output.transcript.segments.map(\.text), ["Ship"])
+        XCTAssertEqual(output.transcript.segments.first?.end ?? 0, 0.4, accuracy: 1e-9, "the passage ends with its last word kept")
+
+        let whole = try await engine.transcribe(input(.newAudio, pauses: [PersonPause(start: 0, end: 2)]), progress: { _ in })
+        XCTAssertTrue(whole.transcript.segments.isEmpty, "nothing heard in the pause")
+        XCTAssertNil(whole.transcript.words)
+
+        let unpaused = try await engine.transcribe(input(.newAudio), progress: { _ in })
+        XCTAssertEqual(unpaused.transcript.words?.count, 2, "no pauses, nothing left out")
+        let refreshed = try await engine.transcribe(input(.speakerRefresh, previous: unpaused.transcript, pauses: [PersonPause(start: 0, end: 0.45)]),
+                                                    progress: { _ in })
+        XCTAssertEqual(refreshed.transcript.words?.map(\.text), [" Friday"])
     }
 
     func testARunRecordsItsModelsSettingsSpeakersAndWords() async throws {

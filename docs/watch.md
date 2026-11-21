@@ -163,7 +163,9 @@ whenever a segment opens or closes.
   stops. A recording that ends on its own (storage full) plays the failure haptic, not Stop's, and posts "Recording
   stopped" with the reason when Daybook isn't on the screen. The first recording asks to allow notices.
 - **No Pause of its own.** The Watch pauses only for an interruption. An iPhone recording with a Watch recording along
-  doesn't offer Pause (docs/iphone.md, "Pausing"), since the Watch wouldn't pause with it.
+  doesn't offer Pause (docs/iphone.md, "Pausing"), since the Watch wouldn't pause with it. While the person has paused
+  the iPhone's recording, the Watch isn't told of it: a Start on the Watch is a recording of its own, and one that
+  overlaps the pause never joins the conversation.
 - **The status line** (`WatchWords.statusLine`): "Starting…" while the microphone is asked, "On Watch" or "With
   iPhone" while recording, "Sends later" when the iPhone is out of reach, "Sending to iPhone…" or "Waiting for iPhone"
   after Stop.

@@ -145,6 +145,15 @@ final class MultipointCoordinator {
         return link.connectedMacs.filter { !involved.contains($0.id) && !$0.isRecording }
     }
 
+    /// Why a Mac can't record along with a recording the person paused here.
+    static let pausedHere = "It’s paused on this iPhone."
+
+    /// A connected Mac says it records this iPhone's recording (or is paused in it), asked or not.
+    var macRecordsThis: Bool {
+        guard let id = recorder.captureID else { return false }
+        return link.connectedMacs.contains { $0.recording?.conversationID == id }
+    }
+
     /// The multipoint line for the recording screen: the session, plus any Mac that reports
     /// recording this conversation on its own.
     var line: String? {
@@ -409,6 +418,11 @@ final class MultipointCoordinator {
             }
             if recorder.isActive {
                 if recorder.captureID == request.conversationID {
+                    // Paused by the person, nothing joins it: the Mac would keep what this iPhone leaves out
+                    // (docs/iphone.md, "Pausing").
+                    if recorder.isPausedByPerson {
+                        return .refused(LinkRecordRefusal(reason: .busy, message: Self.pausedHere, conversationID: request.conversationID))
+                    }
                     return .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: recorder.startedAt,
                                                    recordingID: recordingID, wasAlreadyRecording: true))
                 }

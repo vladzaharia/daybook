@@ -810,6 +810,7 @@ final class AppState {
             let duration = try await asset.load(.duration).seconds
             guard duration.isFinite, duration > 0 else { throw AppError.invalidAudio(url.lastPathComponent) }
             var target = id
+            var holdsIt = false
             if id == nil, let existing = try await library.existingMeeting(containingAudioAt: url) {
                 guard device != nil else {
                     window.openID = existing.id
@@ -817,6 +818,7 @@ final class AppState {
                     continue
                 }
                 target = existing.id
+                holdsIt = true
             }
             var plan: SourceArrivalPlan?
             if target == nil, device != nil || sources.matchesImportedFiles {
@@ -827,6 +829,13 @@ final class AppState {
                 if let chosen = plan?.attachTo, !meetings.contains(where: { $0.id == chosen }) { plan?.attachTo = nil; plan?.placement = nil; plan?.companion = nil }
             }
             target = target ?? plan?.attachTo
+            // Another device's recording, or a file matched here, never joins a conversation over a span the person
+            // paused it: it would hold what was said then. It's a conversation of its own (docs/capture.md, "Pausing").
+            if let chosen = target, !holdsIt, device != nil || plan?.attachTo == chosen,
+               let meeting = meetings.first(where: { $0.id == chosen }), meeting.personPauseSpans != nil {
+                let start = await knownStart(url: url, device: device, plan: plan)
+                if !PersonPause.admits(start: start, duration: duration, into: meeting) { target = nil; plan = nil }
+            }
             let meetingID = target ?? device.map { newMeeting(title: deviceMeetingTitle(url, $0), date: deviceRecordingStart($0) ?? Date(), selecting: false) }
                 ?? newMeeting(title: url.deletingPathExtension().lastPathComponent)
             await flush()

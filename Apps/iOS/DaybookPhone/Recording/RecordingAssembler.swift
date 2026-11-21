@@ -511,7 +511,18 @@ enum PhoneCaptureFinisher {
         }
         let start = journal.routes.first { $0.reason == "start" }?.input?.name
         return TrackCaptureDetails(method: "iphone-microphone", clockRate: clockRate(journal.segments.first, sampleRate: journal.sampleRate),
-                                   outputRoute: nil, notes: ([start.map { "Recorded with \($0)." }].compactMap { $0 } + notes).nilIfEmpty)
+                                   outputRoute: nil, notes: ([start.map { "Recorded with \($0)." }].compactMap { $0 } + notes).nilIfEmpty,
+                                   pauses: personPauses(journal, duration: Double(final.frameCount) / journal.sampleRate))
+    }
+
+    /// The person's pauses, in the joined file's seconds: from Pause to where the next part starts, or the end. One
+    /// the recording ended in (iOS ended Daybook while paused) has no audio after it, and none is listed.
+    static func personPauses(_ journal: PhoneCaptureJournal, duration: TimeInterval) -> [PersonPause]? {
+        let pauses = journal.interruptions.filter { $0.byPerson == true }.compactMap { pause -> PersonPause? in
+            let end = journal.segments.first { $0.startOffset > pause.began }?.startOffset ?? duration
+            return end > pause.began ? PersonPause(start: pause.began, end: end) : nil
+        }
+        return pauses.nilIfEmpty
     }
 
     /// Conversation seconds per track second, from the first segment's clock anchors, once there's

@@ -45,6 +45,8 @@ struct CaptureInterruption: Codable, Equatable, Sendable {
     var reason: String?
     /// True once recording continued.
     var resumed: Bool?
+    /// The person paused it (`PhoneRecorder.pauseByPerson`), not a call or the microphone.
+    var byPerson: Bool?
 }
 
 /// What the microphone was, at the start and at every route change.
@@ -310,7 +312,8 @@ struct PhoneRecording: Sendable, Equatable {
 
     /// How a recording rebuilt at launch had ended (`PhoneCaptureJournal.state`).
     enum Recovery: Equatable, Sendable {
-        /// Daybook ended while it recorded or was paused: the last seconds may be missing.
+        /// Daybook ended while it recorded or was paused (not by the person): the last seconds may be missing. One the
+        /// person had paused is whole up to the pause, and is filed as if Stop had ended it there.
         case quitWhileRecording
         /// Stop had ended it, and Daybook was ended before it was saved: it's whole.
         case interruptedWhileSaving

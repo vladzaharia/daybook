@@ -266,9 +266,10 @@ final class ProcessTapSource: CaptureAudioSource, ProcessTapReporting, @unchecke
         }
         if heard { lock.lock(); signalSeen = true; lock.unlock() }
         let stamp = time.pointee
+        // Without a host time, now less the buffer's length: about when its first frame was captured.
         let host = stamp.mFlags.contains(.hostTimeValid)
             ? AVAudioTime.seconds(forHostTime: stamp.mHostTime)
-            : CMTimeGetSeconds(CMClockGetTime(CMClockGetHostTimeClock()))
+            : CMTimeGetSeconds(CMClockGetTime(CMClockGetHostTimeClock())) - Double(frames) / format.sampleRate
         handler(buffer, host)
     }
 

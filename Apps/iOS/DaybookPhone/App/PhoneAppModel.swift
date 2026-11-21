@@ -259,6 +259,8 @@ final class PhoneAppModel: RecordingCommandHandling {
         }
         self.devices.onImported = { [weak self] filed in self?.filedElsewhere(filed) }
         self.devices.mayFileOwnRecording = { [weak self] _ in self?.leftoversRecovered == false }
+        // Paused by the person, the watch isn't told of the recording, so it can't join it.
+        self.devices.watch?.withholdsRecording = { [weak recorder] in recorder?.isPausedByPerson == true }
         // Macs hear what the recorders this iPhone manages are doing, when that changes.
         watches.append(self.devices.hub.watchRecorders { [weak self] in
             guard let self else { return }
@@ -919,24 +921,34 @@ final class PhoneAppModel: RecordingCommandHandling {
     /// recorder, a Watch, or a Mac being asked). While paused nothing joins (`MultipointCoordinator.recordOnMac`).
     var canPauseRecording: Bool {
         recorder.state == .recording && Self.recordsAlone(multipoint: multipoints.session, recorderOnly: multipoints.recorderOnly != nil,
-                                                          recorders: (devices.cascade.conversation?.members ?? []).map(\.state))
+                                                          recorders: (devices.cascade.conversation?.members ?? []).map(\.state),
+                                                          macRecordsIt: multipoints.macRecordsThis)
     }
 
-    /// Whether a recording has no company that wouldn't pause with it: no Mac recording it or asked to, no recorder
-    /// taking part on its own, and no recorder (or Watch) starting, recording, or stopping along with it.
-    nonisolated static func recordsAlone(multipoint: MultipointSession?, recorderOnly: Bool, recorders: [RecorderCascade.State]) -> Bool {
-        guard multipoint == nil, !recorderOnly else { return false }
+    /// Whether a recording has no company that wouldn't pause with it: no Mac recording it or asked to (`macRecordsIt`:
+    /// a connected Mac says it records this conversation, asked or not), no recorder taking part on its own, and no
+    /// recorder (or Watch) starting, recording, or stopping along with it.
+    nonisolated static func recordsAlone(multipoint: MultipointSession?, recorderOnly: Bool, recorders: [RecorderCascade.State],
+                                         macRecordsIt: Bool = false) -> Bool {
+        guard multipoint == nil, !recorderOnly, !macRecordsIt else { return false }
         return !recorders.contains { [.starting, .recording, .stopping].contains($0) }
     }
 
     /// The person's Pause (the recorder, the Live Activity): what the microphone hears from now until Resume isn't kept.
+    /// Refused with the reason: not recording, or another device records along.
     func pauseRecording() async throws {
-        guard canPauseRecording else { throw RecordingCommandError.notRecording }
+        guard canPauseRecording else {
+            throw recorder.state == .recording ? RecordingCommandError.failed(RecordingDialogs.recordsWithOthers) : RecordingCommandError.notRecording
+        }
         await recorder.pauseByPerson()
     }
 
+    /// Resume, from here or the Live Activity. With nothing paused, says the recording ended rather than that nothing
+    /// records: a Resume left on the Lock Screen after iOS ended Daybook during a pause finds it saved.
     func resumeRecording() async throws {
-        guard recorder.isPaused else { throw RecordingCommandError.notRecording }
+        guard recorder.isPaused else {
+            throw recorder.isActive ? RecordingCommandError.notRecording : RecordingCommandError.failed(RecordingDialogs.recordingEnded)
+        }
         do { try await recorder.resume() } catch {
             sayResumeFailed(error)
             throw Self.commandFailure(error, starting: false)

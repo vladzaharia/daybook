@@ -302,6 +302,10 @@ final class PhoneLibrary {
         // Another device's import of it may have arrived through sync meanwhile: keep that one.
         if let held = DeviceLibraryLinks.meeting(holding: identity, in: controller.meetings).flatMap(controller.meeting) { return Filed(meeting: held) }
         var target = attachTo.flatMap { controller.meeting($0) != nil ? $0 : nil }
+        // Never into a conversation over a span the person paused it: it would hold what was said then. It's a
+        // conversation of its own (docs/iphone.md, "Pausing").
+        if let chosen = target.flatMap(controller.meeting),
+           !PersonPause.admits(start: DeviceRecordingStart.date(of: identity), duration: duration, into: chosen) { target = nil }
         if target == nil { target = try await controller.existingMeeting(containingAudioAt: url)?.id }
         let id = target ?? controller.newMeeting(title: Self.deviceTitle(identity, fallback: url), date: Self.deviceStart(identity) ?? Date())
         var provenance = RecordingProvenance.file(source: source, device: identity, duration: duration,

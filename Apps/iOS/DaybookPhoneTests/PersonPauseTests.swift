@@ -26,19 +26,21 @@ final class PersonPauseTests: XCTestCase {
         let folder = try temporaryDirectory().appendingPathComponent("capture")
         try await rig.recorder.start(in: folder, title: "Standup")
         rig.pump(3)
+        // The microphone keeps handing over audio after it's told to stop, as an engine's last buffers can.
+        let microphone = rig.inputs.current
+        microphone.deliversAfterStop = true
         let paused = await rig.recorder.pauseByPerson()
         XCTAssertTrue(paused)
         XCTAssertEqual(rig.recorder.state, .paused(.person))
         XCTAssertTrue(rig.recorder.isPausedByPerson)
         XCTAssertTrue(rig.recorder.canResume, "the person resumes it whenever they like")
         XCTAssertNil(rig.recorder.pauseMessage)
-        XCTAssertFalse(rig.inputs.current.isRunning, "the microphone stops")
         let again = await rig.recorder.pauseByPerson()
         XCTAssertFalse(again, "paused already")
         let heardBefore = heard.count
 
-        rig.clock.advance(2)
-        XCTAssertEqual(heard.count, heardBefore, "nothing reaches captions while paused")
+        microphone.pump(seconds: 2)
+        XCTAssertEqual(heard.count, heardBefore, "nothing it hands over reaches captions while paused")
         // A call comes and goes meanwhile: it doesn't take the person's pause away.
         rig.session.send(.interruptionBegan(reason: nil))
         rig.session.send(.interruptionEnded(shouldResume: true))
@@ -47,6 +49,7 @@ final class PersonPauseTests: XCTestCase {
 
         try await rig.recorder.resume()
         XCTAssertEqual(rig.recorder.state, .recording)
+        XCTAssertFalse(rig.inputs.current === microphone, "the microphone was stopped: Resume starts it afresh")
         rig.pump(2)
         XCTAssertGreaterThan(heard.count, heardBefore)
 
@@ -57,9 +60,14 @@ final class PersonPauseTests: XCTestCase {
         XCTAssertLessThan(audio.rms(3.2..<4.8), 0.003, "the pause is silence")
         XCTAssertEqual(audio.rms(5.2..<6.8), toneRMS, accuracy: 0.02)
         XCTAssertTrue(recording.capture.notes?.contains("Paused 0:03–0:05; the gap is silent.") == true, "\(recording.capture.notes ?? [])")
+        let pause = try XCTUnwrap(recording.capture.pauses?.first, "kept with the track: nothing heard there is transcribed")
+        XCTAssertEqual(recording.capture.pauses?.count, 1)
+        XCTAssertEqual(pause.start, 3, accuracy: 0.01)
+        XCTAssertEqual(pause.end, 5, accuracy: 0.01)
     }
 
-    /// Daybook dies while paused: what comes back ends where the pause began, with nothing of the pause.
+    /// iOS ends Daybook while the person has it paused: what comes back ends where the pause began, with nothing of the
+    /// pause, and it's filed as if Stop had ended it there, without saying Daybook quit while recording.
     func testBehaviorACrashWhilePausedRecoversOnlyWhatCameBefore() async throws {
         let rig = RecorderRig()
         let folder = try temporaryDirectory().appendingPathComponent("capture")
@@ -72,8 +80,11 @@ final class PersonPauseTests: XCTestCase {
 
         XCTAssertEqual(try PhoneCaptureJournal.load(from: folder).state, .paused)
         let recording = try await PhoneRecorder.recover(in: folder)
-        XCTAssertEqual(recording.recovery, .quitWhileRecording)
+        XCTAssertNil(recording.recovery, "whole up to the pause: nothing to recover from")
+        XCTAssertFalse(recording.warnings.contains(RecordingWords.recoveredAfterQuit), "\(recording.warnings)")
         XCTAssertEqual(recording.duration, 3, accuracy: 0.01)
+        XCTAssertEqual(recording.endedAt.timeIntervalSince(recording.startedAt), 3, accuracy: 0.01, "it ends where the pause began")
+        XCTAssertNil(recording.capture.pauses, "no audio after it: nothing to leave out")
         let audio = try DecodedAudio(url: recording.audioURL)
         XCTAssertEqual(audio.rms(0.3..<2.8), toneRMS, accuracy: 0.02)
     }
@@ -90,6 +101,22 @@ final class PersonPauseTests: XCTestCase {
         XCTAssertFalse(PhoneAppModel.recordsAlone(multipoint: MultipointSession(conversationID: UUID(), role: .phoneLed), recorderOnly: false,
                                                   recorders: []), "a Mac recording along, or asked to")
         XCTAssertFalse(PhoneAppModel.recordsAlone(multipoint: nil, recorderOnly: true, recorders: []))
+        XCTAssertFalse(PhoneAppModel.recordsAlone(multipoint: nil, recorderOnly: false, recorders: [], macRecordsIt: true),
+                       "a Mac that says it records this conversation, asked or not")
+    }
+
+    /// A call that pauses the recording and an iOS end during it still say Daybook quit while recording.
+    func testBehaviorAnInterruptedRecordingEndedByIOSStillSaysItQuit() async throws {
+        let rig = RecorderRig()
+        let folder = try temporaryDirectory().appendingPathComponent("capture")
+        try await rig.recorder.start(in: folder, title: "Call")
+        rig.pump(3)
+        rig.session.send(.interruptionBegan(reason: nil))
+        try await waitUntil("paused for the call") { rig.recorder.isPaused }
+        await rig.recorder.flush()
+        rig.recorder.prepareForTermination()
+        let recording = try await PhoneRecorder.recover(in: folder)
+        XCTAssertEqual(recording.recovery, .quitWhileRecording)
     }
 
     /// Recording alone, the recorder and the Live Activity offer Pause; paused, Resume, with nothing posted and nothing
@@ -130,6 +157,13 @@ final class PersonPauseTests: XCTestCase {
         XCTAssertTrue(model.canPauseRecording)
         try await model.stopRecording()
         XCTAssertFalse(model.canPauseRecording)
+        // A Resume left on the Lock Screen after the recording ended says so, not that nothing records.
+        do {
+            try await model.resumeRecording()
+            XCTFail("resumed nothing")
+        } catch RecordingCommandError.failed(let words) {
+            XCTAssertEqual(words, RecordingDialogs.recordingEnded)
+        }
     }
 
     func testBehaviorAnActivityFromAnEarlierBuildOffersNoPause() throws {
@@ -148,6 +182,9 @@ final class PersonPauseTests: XCTestCase {
         XCTAssertEqual(pause?.kind, .info, "not a problem")
         XCTAssertEqual(PhoneRecorderStatus.pause(.paused(.interruption), message: PhoneRecorder.unspecifiedInterruption, canResume: false)?.kind,
                        .problem)
+        XCTAssertEqual(pause?.showsBox, false, "the status above says Paused: Resume alone")
+        XCTAssertEqual(PhoneRecorderStatus.pause(.paused(.interruption), message: PhoneRecorder.unspecifiedInterruption, canResume: false)?.showsBox,
+                       true, "a call's pause keeps its box and its words")
     }
 }
 

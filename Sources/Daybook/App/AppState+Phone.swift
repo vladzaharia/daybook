@@ -529,6 +529,9 @@ extension AppState {
 
     // MARK: A phone asks this Mac to record
 
+    /// Why a phone can't record along with a recording the person paused here.
+    static let pausedHere = "It’s paused on this Mac."
+
     /// The phone records a conversation and asks this Mac to record it too. This Mac records into
     /// the phone's conversation (creating it here if it hasn't synced yet), or says why it can't.
     func answerPhone(_ request: LinkRecordRequest, from peer: LinkPeer) async -> LinkRecordReply.Outcome {
@@ -536,6 +539,9 @@ extension AppState {
         switch request.action {
         case .start:
             if recordingID == id {
+                // Paused by the person, nothing joins it: the phone would keep what this Mac leaves out (docs/capture.md,
+                // "Pausing").
+                if isRecordingPaused { return .refused(LinkRecordRefusal(reason: .busy, message: Self.pausedHere, conversationID: id)) }
                 return .accepted(LinkRecordAck(conversationID: id, startedAt: recordingStartedAt, wasAlreadyRecording: true))
             }
             // This Mac's Can start recording for that phone (on by default) says whether it may start a recording

@@ -315,7 +315,7 @@ final class RecordingController {
     /// isn't recording, or is paused already.
     @discardableResult
     func pause() -> Bool {
-        guard state == .recording, pausedAt == nil, let pauses, pauses.begin(at: environment.hostTime()) else { return false }
+        guard state == .recording, pausedAt == nil, let pauses, pauses.begin(environment.hostTime) else { return false }
         pausedAt = elapsedTime
         levels.rest()
         if isCallAudioDetected { isCallAudioDetected = false }
@@ -326,11 +326,9 @@ final class RecordingController {
     /// Recording goes on after a pause. False when it isn't paused.
     @discardableResult
     func resume() -> Bool {
-        guard state == .recording, pausedAt != nil, let pauses else { return false }
-        let now = environment.hostTime()
-        guard pauses.end(at: now) else { return false }
+        guard state == .recording, pausedAt != nil, let pauses, pauses.end(environment.hostTime) else { return false }
         pausedAt = nil
-        listeningSince = now
+        listeningSince = environment.hostTime() + CapturePauses.margin
         persistPauses()
         return true
     }

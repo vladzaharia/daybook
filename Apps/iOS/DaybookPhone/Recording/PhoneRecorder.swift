@@ -849,7 +849,10 @@ final class PhoneRecorder {
         try await Task.detached(priority: .utility) {
             var journal = try PhoneCaptureJournal.load(from: directory)
             let recovery: PhoneRecording.Recovery?
+            // Paused by the person when iOS ended Daybook: whole up to the pause, so it's filed as if Stop ended it there.
+            let pausedByPerson = journal.state == .paused && journal.interruptions.last.map { $0.byPerson == true && $0.resumed != true } == true
             switch journal.state {
+            case .paused where pausedByPerson: recovery = nil
             case .recording, .paused: recovery = .quitWhileRecording
             case .stopping: recovery = .interruptedWhileSaving
             case .stopped: recovery = nil
@@ -858,7 +861,7 @@ final class PhoneRecorder {
             var recording = try await PhoneCaptureFinisher.finish(&journal, in: directory, recovery: recovery)
             // Cut short, it ended where its assembled audio does: counted frames can trail or lead what
             // reached the disk, and a segment the journal never heard of counts none.
-            if recovery != nil, journal.endedAt == nil { recording.endedAt = recording.startedAt.addingTimeInterval(recording.duration) }
+            if recovery != nil || pausedByPerson, journal.endedAt == nil { recording.endedAt = recording.startedAt.addingTimeInterval(recording.duration) }
             return recording
         }.value
     }
@@ -949,7 +952,7 @@ final class PhoneRecorder {
         writer?.setAcceptingAudio(false)
         input?.stop()
         input = nil
-        journal?.interruptions.append(CaptureInterruption(began: elapsedTime, reason: message))
+        journal?.interruptions.append(CaptureInterruption(began: elapsedTime, reason: message, byPerson: reason == .person ? true : nil))
         journal?.state = .paused
         onChange?()
         // Finish the segment: what's recorded is now a complete file, even if the app is suspended
@@ -1038,6 +1041,9 @@ final class PhoneRecorder {
         listeningSince = environment.clock.hostTime()
         let tap = audioTap
         try input.start(onBuffer: { buffer, host in
+                            // What an input hands over after it's told to stop (a pause) reaches nothing: not the
+                            // file, and not captions.
+                            guard writer.isAcceptingAudio else { return }
                             writer.append(buffer, hostTime: host)
                             tap?(buffer, host)
                         },

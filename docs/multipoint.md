@@ -103,8 +103,9 @@ a recorder.
 
 The person's Pause is offered only to a recording nothing records along with, on the Mac and the iPhone alike
 (docs/capture.md, "Pausing"; docs/iphone.md, "Pausing"): a recorder, an iPhone, a Mac, or a Watch recording with it
-wouldn't pause with it and would keep what it leaves out. Pausing a shared recording, and what an older device does with
-the request, is left for later.
+wouldn't pause with it and would keep what it leaves out. While paused, nothing joins it: a start from another device
+for it is refused, a recorder's button records on its own, and a recording that overlaps the pause never joins the
+conversation later. Pausing a shared recording, and what an older device does with the request, is left for later.
 
 Quitting waits up to 5 s for these stops to leave. Going to sleep is different: idle sleep is held
 off while recording, and a forced sleep (the lid, the Apple menu) stops only this Mac's tracks

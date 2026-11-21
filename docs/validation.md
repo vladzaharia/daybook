@@ -4924,3 +4924,35 @@ stays on through a pause); an iPhone pausing from the Live Activity in the pocke
 the Lock Screen (`AudioRecordingIntent` starting the microphone in the background); a pause of an hour or more.
 Not built: pausing a recording other devices record along with (a link request, recorders that pause without ending
 their file, the Watch); see docs/capture.md, "Pausing".
+
+Review fixes (same day): the guarantee now holds for the conversation, not only each device's own tracks.
+- Nothing joins a paused recording (M1): on the Mac a recorder's own button records on its own and a phone's start for
+  the conversation is refused (`busy`); on the iPhone a recorder's button doesn't join, a Mac's start is refused, and
+  the Watch isn't told of the recording (`PhoneWatch.withholdsRecording`). After Resume, joining works as before.
+  `MacPauseTests` (the earlier test that called a recorder joining during a pause correct is replaced),
+  `CascadingRecordingTests` (iPhone), `PhoneWatchTests`.
+- The iPhone counts a connected Mac that says it records its conversation, asked or not, as company, and refuses a
+  Mac's start while paused (M2). A recorder whose start didn't confirm is company on the Mac until its own status, read
+  live, says it isn't recording (M3).
+- Second line: a recording from another device, or a file matched by time or sound, never joins a conversation over a
+  span the person paused it; it joins only with a known start well clear of every pause (30 s), otherwise it's its own
+  conversation (`PersonPause.admits`; `PersonPauseSpanTests`, `MacPauseTests`). Silencing its audio there was not
+  chosen: a recorder's clock and sound alignment can't place it within milliseconds.
+- The silence runs from 50 ms before Pause to 150 ms after Resume, the clock is read under the pauses' lock, and a
+  buffer without a host time is stamped now less its length (L1, L2). The iPhone's Live Activity Pause has no
+  timestamp of its own (App Intents give none), so the pause starts when the intent runs.
+- Words heard wholly inside a pause are left out of the transcript on both apps (L3, `InferenceProcessingEngineTests`);
+  the compression check compares two fresh transcriptions over kept passages, so it isn't affected.
+- A recording the person paused when iOS ended Daybook is filed as if Stop had ended it at the pause, without "Daybook
+  quit while recording"; a Resume tapped on the leftover Live Activity says "That recording has ended."; Pause refused
+  because another device records says so (L4, L5; `PersonPauseTests`).
+- Tests that couldn't fail now can: the fade-in is checked against the ramp, the iPhone's microphone keeps delivering
+  after it's stopped (which found that captions heard what an input handed over after Pause; now nothing does), both
+  halves of the buffer straddling Pause are checked; added Resume mid-buffer, a buffer
+  delivered after Pause, a microphone that changes format during a pause (L6). The new Mac tests were run against the
+  code without each fix and failed.
+- The person's pause no longer shows a second grey "Paused" box above Resume Recording (Floating Notes, the iPhone
+  recorder); a call's pause keeps its box and words.
+
+Needs a real device: the 150 ms margin against a Bluetooth headset's real latency; iOS ending Daybook during a long pause
+and the Live Activity's Resume after it.
