@@ -30,18 +30,26 @@ final class CaptureLevelMonitor {
         return now - lastAudible <= callHoldSeconds
     }
 
+    /// `listeningSince`: host time the microphone last started listening (the start, or the last Resume); without it, the
+    /// recording's start, `elapsed` ago.
     func update(microphone mic: AudioLevelMeter.Reading?, call callReading: AudioLevelMeter.Reading?,
-                hostTime: TimeInterval, elapsed: TimeInterval) {
+                hostTime: TimeInterval, elapsed: TimeInterval, listeningSince: TimeInterval? = nil) {
         set(\.microphone, mic?.level ?? .silent)
         set(\.call, callReading?.level ?? .silent)
         let detected = Self.callAudioDetected(lastAudible: callReading?.lastAudibleHostTime, now: hostTime)
         if detected != isCallAudioDetected { isCallAudioDetected = detected }
         let capturing = callReading != nil
         if capturing != isCapturingCall { isCapturingCall = capturing }
-        // Listening since the recording started: the Mac's recordings don't pause.
-        let silent = HearingCheck.isNotHearing(mic, listeningSince: hostTime - elapsed, now: hostTime)
+        // Listening since the recording started, or went on after a pause.
+        let silent = HearingCheck.isNotHearing(mic, listeningSince: listeningSince ?? hostTime - elapsed, now: hostTime)
         if silent != isMicrophoneSilent { isMicrophoneSilent = silent }
         if let audible = mic?.lastAudibleHostTime { microphoneLastAudibleAt = Date().addingTimeInterval(-max(0, hostTime - audible)) }
+    }
+
+    /// Paused: the meters rest and nothing is said about hearing until the recording goes on.
+    func rest() {
+        microphone = .silent; call = .silent
+        isCallAudioDetected = false; isMicrophoneSilent = false
     }
 
     func reset() {

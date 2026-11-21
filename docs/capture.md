@@ -122,7 +122,7 @@ The caller supplies a fresh directory for each recording. Files are owner-only: 
 
 | File | Purpose |
 |---|---|
-| `capture-session.json` | Session ID, wall-clock and host-clock anchor, and the target call app. Saved before recording starts. |
+| `capture-session.json` | Session ID, wall-clock and host-clock anchor, the target call app, and the person's pauses (written again as each begins and ends). Saved before recording starts. |
 | `microphone.caf`, `systemAudio.caf` | The originals: independent native PCM tracks, never modified after capture. |
 | `microphone.json`, `systemAudio.json` | Track timing, format, frame count, capture method, notes, and **clock anchors**, and `gaps` (where the timeline holds no captured audio, and why). Saved after the first buffer, every ten seconds, and at the end, as compact JSON on a queue of its own, so a slow disk never holds up the audio; the last save is the finished track's. Earlier, pretty-printed sidecars read the same. |
 | `capture-result.json` | Final result: warnings, call-capture path, output-route events, and later the echo-removal report and derived tracks. |
@@ -192,6 +192,41 @@ places a track's first sample relative to the session anchor.
 
   Fusion applies it: a track this Mac recorded, and not otherwise placed, goes to `TranscriptFusion`
   as a placement with its measured rate (`SourceFusion`).
+
+## Pausing
+
+The person can pause a recording (Pause beside Stop in Floating Notes and the toolbar, Pause Recording in the File menu
+and the menu bar extra) and resume it. A pause is for privacy, so what's said during it must never reach the kept
+recording or anything made from it.
+
+- **What a pause does.** The sources keep running and nothing about them changes: no engine is stopped, started, or
+  pointed at another input, and the stall watch, the space watch, and the writers' watches go on as while recording.
+  From the host time of Pause until the host time of Resume, whatever either source captured is replaced with silence
+  before anything else sees it (`CapturePauses`, shared with both writers and the caption taps): `PCMTrackWriter`
+  silences a buffer's paused frames before it converts, times, or writes it, and captions are given the same buffers
+  with those frames silent. A buffer is judged by the host time its source stamped on it, frame by frame, so audio
+  captured before Pause but delivered after it is kept, and audio captured after it never is. The silence ramps down
+  over 5 ms from the sound before it and the sound after Resume fades in over 5 ms, so neither seam clicks.
+- **The timeline.** Both tracks keep their length, sample-aligned with the session as if it had recorded, so the call
+  and microphone stay together for echo removal, and notes, bookmarks, captions, and other devices' recordings keep
+  their places. The session's clock (`elapsedTime`) runs through a pause; the clocks people see freeze at the moment
+  of Pause and jump to the session's time at Resume, as on the iPhone. The meters rest, the hearing check waits (it
+  counts from Resume), and call audio reads as not detected.
+- **The guarantee.** Nothing captured during a pause is written to disk, so no transcript, speaker pass, summary, or
+  compressed copy can hold it, whatever happens to Daybook: a crash while paused leaves silence from the pause on, and
+  `CaptureRecovery` ends the open pause where the audio ends. The pauses are kept in the manifest and
+  `CaptureResult.pauses` (session seconds) and said in each track's capture notes ("Paused 0:02–0:05; the gap is
+  silent."); none of that is needed for the guarantee, which holds even if the manifest can't be written. Stop while
+  paused ends the pause with the recording.
+- **Only alone.** Pause is offered only while nothing records along with this Mac: no iPhone led it or records with it,
+  no recorder (Soundcore, an iPhone's recorder) is being asked, records, or never answered
+  (`MultiSourceCoordinator.hasCompany`). None of them would pause with it, so they'd keep what this Mac leaves out. A
+  recorder whose own button joins during a pause takes Pause away but leaves the pause as it is; Resume is still the
+  person's. Phones are told the recording is paused (`LinkRecordingState` phase `paused`, with the length at Pause).
+- **Not yet.** Pausing a recording made with other devices needs each to pause with it: a pause request in the link
+  (an action listed by a new feature, so an older device is never offered it, and a refusal or no answer leaves the
+  pause off), recorders that can pause without ending their file, and a Watch message. Until then the control isn't
+  offered there. The microphone's indicator in the menu bar stays on through a pause, since the engine keeps running.
 
 ## Choosing the microphone
 

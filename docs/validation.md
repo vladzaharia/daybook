@@ -4887,3 +4887,40 @@ Summarize Again is one menu wherever Reprocess is (`ConversationActions.reproces
 Checked: `SummarizeAgainChoicesTests`, `ConversationActionsTests`, `ConversationActionPerformerTests`, `LibraryWordsTests`, `LibraryListTests`, `NotebookReadersTests`, `MergeConversationsTests`, `SummarizeAgainProcessingTests`, `swift build`, and the iPhone simulator build. Not checked: the menus drawn on either app (a checked row beside a glyph in a Mac menu, the nested submenu in Info), Show from the Trash on a device, and Merge with ▸ across a midnight on a real library. Template menus keep their existing "Edit Templates…" on the Mac; the iPhone has no template editor to open, so RP-05 changes nothing there.
 
 Review fixes (same day): Merge with ▸, the merge question and the Trash's "Merged into …" no longer name a conversation the Personal lock hides (a hidden survivor reads "Merge 3 conversations?" and "In the Trash"; a locked iPhone row's menu offers only Unlock). Merge with ▸ lists only conversations Merge… would take now (not merging, recording here or on a Mac, or busy), shows each one's day and time, and is dimmed while the conversation itself records or merges. A Summarize Again choice with no handler does nothing (never a plain Summarize Again that might send a local pick to the cloud). Identify Speakers Again needs a recording; Conversation › Reprocess also waits while a recording starts or stops; Mac Info shows Reprocess for a notes-only conversation; the merge message mentions rewritten summaries only when a recording makes it transcribe again; "Merged into …" is not shown for a conversation restored and trashed again (it has a recording of its own, or changed after the merge: a heuristic from `updatedAt` and the survivor's fold revision, not a recorded fact); swipes and the selection bar list no Merge with. Checked with `ConversationActionsTests`, `LibraryWordsTests`, `ConversationActionPerformerTests`, `LibraryListTests`, `MergeConversationsTests`, `SummarizeAgainChoicesTests`, and the iPhone tests (`scripts/build-ios.sh --test`). Not checked: the lock behaviour in the running apps. A merge of Work content into a Not Filed conversation follows Not Filed's cloud switch, which predates this change.
+
+## 2026-11-21: The person's own Pause (REC-10)
+
+Pause and Resume on the Mac (Floating Notes beside Stop, Resume in the compact panel; the toolbar beside the Stop pill;
+File and the menu bar extra) and on the iPhone (the recorder's clock row, table mode beside Stop, the Live Activity),
+offered only while nothing records along (docs/capture.md, "Pausing"; docs/iphone.md, "Pausing").
+
+Verified (synthetic audio, fake sources and clocks, temporary libraries; no models):
+- The Mac (`CapturePauseTests`): a tone through a pause leaves both tracks their full length, sample-aligned, with
+  exactly zero from 5 ms after Pause until Resume and the tone either side; captions are given every buffer, silent
+  through the pause, and a buffer that straddles Pause is silenced from the frame it falls on; Pause, Resume, and Stop
+  in every order (Stop while paused ends the pause at the end); the meters rest, the hearing check doesn't fire through
+  a 30 s pause and counts from Resume, and a source that keeps delivering is never restarted; a crash while paused
+  (the files copied as they were on disk) recovers with the pause, ended where the audio ends, and nothing of it.
+- The Mac app (`MacPauseTests`): offered alone, not while a recorder records along or is being asked, still offered
+  when the recorder couldn't record; a recorder whose button joins during a pause leaves it paused; phones hear
+  `paused` with the length at Pause; Floating Notes says Paused with a frozen clock.
+- The iPhone (`PersonPauseTests`, simulator): the microphone stops, the tap hears nothing, a call that comes and goes
+  doesn't resume it, the joined file is silent through the pause and keeps the timeline; a crash while paused recovers
+  what came before; offered only alone (`recordsAlone`); nothing posted and no resume when Daybook comes to the front;
+  the Live Activity offers Pause only while recording alone and an earlier build's state offers none.
+- Existing suites, each on its own: Mac `CaptureTests`, `CaptureResilienceTests`, `RecordingControllerTests`,
+  `SystemAudioSelectionTests`, `CaptureFinalizerTests`, `CallIngestTests`, `InterruptedCaptureTests`,
+  `MicrophoneRestartTests`, `LiveCaptionsTests`, `MultipointRecordingTests`, `CascadingRecordingTests`,
+  `MacFirstMultipointTests`, `PhoneLinkTests`, `FloatingNotes*Tests`, `MenuBarStatusTests`, `AppStateTests`,
+  `RecorderSurfaceTests`; iPhone `RecordingInterruptionsTests`, `PhoneRecorderTests`, `RecordingSurfacesTests`,
+  `CaptureRecoveryTests`, `ShellTests`, `RecorderActivityTests`, `CascadingRecordingTests`.
+- `DAYBOOK_HARDWARE_TESTS=1 swift test --filter MicrophoneHardwareTests` on this Mac's built-in microphone (already
+  allowed, so no prompt; about 11 s of the room, counted and kept nowhere): 3 passed. It doesn't pause.
+- Snapshots of a simulated recording (`--simulate-recording … --pause-demo offered|paused`) and the iPhone simulator
+  with synthetic audio (`--synthetic-audio --start-recording --demo-notes --pause-after 13`).
+
+Needs a real device: a pause and resume on a Mac's own microphone and call audio (the menu bar's microphone indicator
+stays on through a pause); an iPhone pausing from the Live Activity in the pocket, staying suspended, and resuming from
+the Lock Screen (`AudioRecordingIntent` starting the microphone in the background); a pause of an hour or more.
+Not built: pausing a recording other devices record along with (a link request, recorders that pause without ending
+their file, the Watch); see docs/capture.md, "Pausing".

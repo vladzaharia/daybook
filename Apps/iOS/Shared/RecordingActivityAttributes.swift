@@ -47,6 +47,9 @@ struct RecordingActivityAttributes: ActivityAttributes {
         /// locked finishes once it's unlocked (the app's words). Optional, so activities started by an earlier build
         /// still decode.
         var savedLine: String? = nil
+        /// Recording, whether Pause is offered: only while nothing records along with it. Nil from an earlier build,
+        /// which had none.
+        var canPause: Bool? = nil
     }
 
     var conversationID: UUID
@@ -96,6 +99,9 @@ extension RecordingActivityAttributes.ContentState {
 
     /// Paused, with Resume offered: only once recording can continue.
     var offersResume: Bool { phase == .paused && canResume != false }
+
+    /// Recording, with Pause offered beside Stop.
+    var offersPause: Bool { phase == .recording && canPause == true }
 
     /// A new caption alone updates the activity at most this often: the system budgets Live Activity
     /// updates, and a line that changes faster can't be read at a glance anyway.

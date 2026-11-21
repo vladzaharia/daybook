@@ -403,6 +403,9 @@ start, the conversation it records along with, and when that was last confirmed)
 its device sessions know and sent again when they change. A receiver moves the times onto its own
 clock, keeps a phase for 45 s (it's repeated while recording), and a recorder's state until 20
 minutes past its as-of time. A recorder entry it can't read is dropped, never the whole state.
+A recording the person paused, on either device, reads `paused` with the length it had then; only a recording nothing
+records along with can be paused (docs/capture.md, "Pausing"), so no device follows it, and nothing in the protocol
+changed for it.
 
 A device recording because the other asked follows it: when the one that asked says it isn't
 recording that conversation any more, it stops too. One it can't reach is followed on evidence, not

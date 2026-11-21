@@ -25,9 +25,18 @@ struct MenuBarView: View {
         if state.isStoppingRecording {
             Text("Saving…")
         } else if state.isRecording, let start = state.recordingStartedAt {
-            Text("Recording · \(TimeLabel.short(Date().timeIntervalSince(start)))")
+            if let paused = state.recordingPausedAt {
+                Text("Paused · \(TimeLabel.short(paused))")
+            } else {
+                Text("Recording · \(TimeLabel.short(Date().timeIntervalSince(start)))")
+            }
             Button("Stop Recording") { Task { await state.stopRecording() } }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
+            if state.canResumeRecording {
+                Button("Resume Recording") { state.resumeRecording() }
+            } else if state.canPauseRecording {
+                Button("Pause Recording") { state.pauseRecording() }
+            }
             Button("Add Bookmark") { if let id = state.recordingID { state.addHighlight(id) } }
                 .keyboardShortcut("d")
         } else {

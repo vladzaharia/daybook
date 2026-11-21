@@ -248,6 +248,8 @@ final class CompanionRecorders {
     private var leads: [UUID: CompanionLead] = [:]
     /// A recorder whose own button began this Mac's recording, by session: it stops with it.
     private var recorderLeads: [UUID: String] = [:]
+    /// Recordings whose devices are being asked to record along and whose links aren't written yet.
+    private var asking: Set<UUID> = []
 
     /// `owed` keeps stops for devices that answer across relaunches; those still owed are loaded now.
     init(owed: OwedStopsStore<PendingStop>? = nil) {
@@ -291,11 +293,13 @@ final class CompanionRecorders {
         let recorders = eligible().filter { $0.session.id != lead?.sessionID }
         guard !recorders.isEmpty else { status = alone(meetingID); return }
         let cascade = LinkCascade(trigger: lead != nil ? .device : recorderLead != nil ? .recorder : trigger)
+        asking.insert(meetingID)
         starting[meetingID] = Task { [weak self] in
             guard let self else { return }
             // Each recorder's link is written first, in the recorders' order; then every one starts at
             // once, alongside the others, and the start is done when every one has answered.
             let starts = recorders.map { ($0.session, $0.control, self.addLink($0.session, $0.control, meetingID: meetingID, at: start)) }
+            self.asking.remove(meetingID)
             await withTaskGroup(of: Void.self) { group in
                 for (session, control, link) in starts {
                     group.addTask { await self.start(session, control, link: link, meetingID: meetingID, at: start, cascade: cascade) }
@@ -425,6 +429,15 @@ final class CompanionRecorders {
             link.deviceID == sessionID && link.macStartedAt >= since && link.macEndedAt == nil
                 && [.recording, .alreadyRecording].contains(link.state)
         }
+    }
+
+    /// Whether anything records this Mac's recording `meetingID` along with it, or may: the device that led it, a
+    /// recorder whose button began it, a device being asked, one that said it records, or one that never answered.
+    /// Pause is offered only without any, since none of them would pause with it (docs/capture.md, "Pausing").
+    func hasCompany(_ meetingID: UUID) -> Bool {
+        guard let since = recordingSince[meetingID] else { return false }
+        if leads[meetingID] != nil || recorderLeads[meetingID] != nil || asking.contains(meetingID) { return true }
+        return links(meetingID).contains { $0.macStartedAt >= since && $0.macEndedAt == nil && mayBeRecording($0) }
     }
 
     /// Whether the device behind `link` may be recording along: it's being asked, it said it records, or it

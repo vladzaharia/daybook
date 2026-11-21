@@ -498,6 +498,12 @@ private struct RecorderSheetContent: View {
                 Spacer(minLength: 0)
             }
             if size == .mini { miniButtons }
+            // Pause at the clock's end while it's offered: the row under it keeps Bookmark's word beside Write by Hand.
+            // The smallest size keeps Bookmark and Stop alone.
+            if size != .mini, parts.state.canPause {
+                if whole { Spacer(minLength: 0) }
+                parts.pause(.glyph).transition(fade)
+            }
         }
         .frame(minHeight: size == .mini ? RecorderControlMetrics.glyph.height : nil)
     }

@@ -560,7 +560,10 @@ struct RecordControl: View {
                 HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Saving…") }
                     .foregroundStyle(.secondary)
             case .recording:
-                RecordingPill(state: state, start: state.recordingStartedAt ?? Date())
+                HStack(spacing: 6) {
+                    RecordingPauseToggle(state: state)
+                    RecordingPill(state: state, start: state.recordingStartedAt ?? Date())
+                }
             case .idle:
                 Button { Task { await state.startRecording() } } label: {
                     Label {
@@ -615,7 +618,7 @@ private struct RecordingPill: View {
                 Image(systemName: "stop.fill")
                     .font(.system(size: 9, weight: .bold))
                     .daybookBounce(value: appeared)
-                ElapsedTime(start: start)
+                ElapsedTime(start: start, frozenAt: state.recordingPausedAt)
             }
             .font(.system(size: 13, weight: .semibold).monospacedDigit())
             .padding(.horizontal, 10).padding(.vertical, 4)
@@ -624,6 +627,35 @@ private struct RecordingPill: View {
         .help("Stop Recording (⇧⌘R)")
         .accessibilityLabel("Stop")
         .onAppear { appeared = true }
+    }
+}
+
+/// Pause beside Stop while the recording can pause (nothing records along with it), and Resume while it's paused.
+private struct RecordingPauseToggle: View {
+    @Bindable var state: AppState
+
+    var body: some View {
+        if state.canResumeRecording {
+            Button { state.resumeRecording() } label: {
+                HStack(spacing: 5) {
+                    Circle().fill(DaybookPalette.Ink.record).frame(width: 8, height: 8)
+                    Text("Resume")
+                }
+                .font(.system(size: 13, weight: .semibold))
+                .padding(.horizontal, 10).padding(.vertical, 4)
+            }
+            .buttonStyle(DaybookControlStyle(role: .standard, shape: .capsule))
+            .help("Resume Recording")
+        } else if state.canPauseRecording {
+            Button { state.pauseRecording() } label: {
+                Image(systemName: "pause.fill")
+                    .font(.system(size: 9, weight: .bold))
+                    .padding(.horizontal, 9).padding(.vertical, 6)
+            }
+            .buttonStyle(DaybookControlStyle(role: .standard, shape: .capsule))
+            .help("Pause Recording")
+            .accessibilityLabel("Pause")
+        }
     }
 }
 
@@ -745,10 +777,12 @@ private struct AddRecordingDrop: ViewModifier {
 /// does. It takes the ink around it: white on Stop's red.
 struct ElapsedTime: View {
     let start: Date
+    /// Paused here: the time holds.
+    var frozenAt: TimeInterval?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         TimelineView(.periodic(from: start, by: 1)) { context in
-            let elapsed = max(0, context.date.timeIntervalSince(start))
+            let elapsed = frozenAt ?? max(0, context.date.timeIntervalSince(start))
             Text(DaybookTime.short(elapsed))
                 .monospacedDigit()
                 .contentTransition(reduceMotion ? .opacity : .numericText(countsDown: false))

@@ -74,6 +74,10 @@ private struct FileCommands: Commands {
             }
             .keyboardShortcut("r", modifiers: [.command, .shift])
             .disabled(!state.isReady || state.isStartingRecording || state.isStoppingRecording)
+            if state.isRecording {
+                Button(state.isRecordingPaused ? "Resume Recording" : "Pause Recording") { state.togglePauseRecording() }
+                    .disabled(!(state.canPauseRecording || state.canResumeRecording))
+            }
             Button("Import Audio…") { state.chooseImport() }
                 .keyboardShortcut("i", modifiers: [.command, .shift])
             DeviceFileMenuItems(state: state)

@@ -101,6 +101,11 @@ presence, or the conversation arriving through sync; docs/devices.md, "Handing a
 Only links made by this recording are acted on; a link an interrupted session left behind never stops
 a recorder.
 
+The person's Pause is offered only to a recording nothing records along with, on the Mac and the iPhone alike
+(docs/capture.md, "Pausing"; docs/iphone.md, "Pausing"): a recorder, an iPhone, a Mac, or a Watch recording with it
+wouldn't pause with it and would keep what it leaves out. Pausing a shared recording, and what an older device does with
+the request, is left for later.
+
 Quitting waits up to 5 s for these stops to leave. Going to sleep is different: idle sleep is held
 off while recording, and a forced sleep (the lid, the Apple menu) stops only this Mac's tracks
 (saved within the 5 s the power notification holds sleep back). Nothing is sent to the devices

@@ -305,6 +305,25 @@ final class RecorderSurfaceTests: XCTestCase {
                       "awake unless the host dims it")
     }
 
+    /// Pause is the host's to offer (only a recording nothing records along with can pause): off unless it says so. Its
+    /// glyph keeps its width beside Write by Hand, and Bookmark and Stop share the rest. The person's own pause says
+    /// "Paused" and nothing more, as something to know rather than a problem, with Resume.
+    func testBehaviorPauseIsOfferedOnlyByTheHostAndThePersonsPauseSaysPaused() {
+        XCTAssertFalse(RecorderSurfaceState(title: "", clock: .since(Date()), isLive: true, bookmarkCount: 0).canPause)
+        XCTAssertTrue(RecorderSurfaceState(title: "", clock: .since(Date()), isLive: true, bookmarkCount: 0, canPause: true).canPause)
+        XCTAssertEqual(RecorderControlTiles.widths(available: 351, ideals: [150, 44, 44, 100], fills: [true, false, false, true], spacing: 12),
+                       [113.5, 44, 44, 113.5], "the glyphs keep theirs; the tiles share the rest")
+        let paused = RecordingStatusWords.personPaused
+        XCTAssertEqual(paused.title, "Paused")
+        XCTAssertEqual(paused.message, "")
+        XCTAssertTrue(paused.canResume)
+        XCTAssertEqual(paused.kind, .info)
+        XCTAssertEqual(RecorderPause(title: "Paused for a call", message: "Everything so far is saved.", canResume: false).kind, .problem)
+        var inputs = RecordingStatusInputs()
+        inputs.phase = .paused
+        XCTAssertEqual(RecordingStatusWords.phase(inputs)?.title, "Paused")
+    }
+
     func testBehaviorTheCompactNoteFieldAddsALineAsTheLastParagraph() {
         XCTAssertEqual(RecorderNoteField.appending("Ship Friday", to: ""), "Ship Friday")
         XCTAssertEqual(RecorderNoteField.appending("  Ship Friday ", to: "Agenda\n"), "Agenda\nShip Friday")

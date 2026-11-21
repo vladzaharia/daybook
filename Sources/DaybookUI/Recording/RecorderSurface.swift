@@ -51,6 +51,8 @@ public struct RecorderSurfaceState {
     public var canBookmark: Bool
     public var isSaving: Bool
     public var pause: RecorderPause?
+    /// Pause is offered beside Stop: recording, and nothing records along that wouldn't pause with it.
+    public var canPause: Bool
     /// Room the host keeps above the content (the panel's title band).
     public var topInset: CGFloat
     /// ⌘D and ⇧⌘R, with their tooltips (the Mac).
@@ -63,11 +65,11 @@ public struct RecorderSurfaceState {
     public init(phase: RecorderPhase? = nil, title: String, rename: ((String) -> Void)? = nil, byline: String? = nil,
                 chips: [RecorderChip] = [], meters: [RecorderMeter] = [], clock: RecorderTime, isLive: Bool, bookmarkCount: Int,
                 canBookmark: Bool = true, isSaving: Bool = false, pause: RecorderPause? = nil, topInset: CGFloat = 0,
-                keyboardShortcuts: Bool = false, asleep: Bool = false, hasNotice: Bool = false) {
+                keyboardShortcuts: Bool = false, asleep: Bool = false, hasNotice: Bool = false, canPause: Bool = false) {
         self.phase = phase; self.title = title; self.rename = rename; self.byline = byline; self.chips = chips; self.meters = meters
         self.clock = clock; self.isLive = isLive; self.bookmarkCount = bookmarkCount; self.canBookmark = canBookmark
         self.isSaving = isSaving; self.pause = pause; self.topInset = topInset; self.keyboardShortcuts = keyboardShortcuts
-        self.asleep = asleep; self.hasNotice = hasNotice
+        self.asleep = asleep; self.hasNotice = hasNotice; self.canPause = canPause
     }
 
     /// Whether a touch on Stop reaches it. Dimmed, the touch only wakes the screen: it never ends the recording.
@@ -82,12 +84,13 @@ public struct RecorderSurfaceActions {
     public var bookmark: () -> Void
     public var stop: () -> Void
     public var resume: () -> Void
+    public var pause: () -> Void
     /// Adds a line as the notes' last paragraph (the compact panel's note field); nil leaves the field out.
     public var addNote: ((String) -> Void)?
 
     public init(bookmark: @escaping () -> Void, stop: @escaping () -> Void, resume: @escaping () -> Void = {},
-                addNote: ((String) -> Void)? = nil) {
-        self.bookmark = bookmark; self.stop = stop; self.resume = resume; self.addNote = addNote
+                pause: @escaping () -> Void = {}, addNote: ((String) -> Void)? = nil) {
+        self.bookmark = bookmark; self.stop = stop; self.resume = resume; self.pause = pause; self.addNote = addNote
     }
 }
 
@@ -251,10 +254,24 @@ struct RecorderPieces {
             .allowsHitTesting(state.stopTakesTouch)
     }
 
-    func controls(_ metrics: RecorderControlMetrics) -> some View {
+    /// Pause beside Stop, while it's offered; dimmed in table mode, a touch only wakes, as on Stop. `resumes`: paused,
+    /// it's Resume, where the layout has no room for the pause's box.
+    @ViewBuilder
+    func pause(_ metrics: RecorderControlMetrics, resumes: Bool = false) -> some View {
+        if state.canPause {
+            PauseControl(metrics: metrics, action: actions.pause)
+                .allowsHitTesting(state.stopTakesTouch)
+        } else if resumes, state.pause?.canResume == true {
+            PauseControl(metrics: metrics, resumes: true, action: actions.resume)
+                .allowsHitTesting(state.stopTakesTouch)
+        }
+    }
+
+    func controls(_ metrics: RecorderControlMetrics, resumes: Bool = false) -> some View {
         RecorderControlRow(spacing: metrics.spacing) {
             bookmark(.tile(metrics))
         } trailing: {
+            pause(metrics, resumes: resumes)
             stop(metrics)
         }
     }
@@ -291,7 +308,8 @@ private struct CompactRecorder: View {
             }
             // The newest caption sits on the controls, as the strip does on iPhone.
             parts.slots.captions
-            PanelControlPadding(compact: true) { parts.controls(.panelCompact) }
+            // No room for the pause's box here: Resume takes Pause's place.
+            PanelControlPadding(compact: true) { parts.controls(.panelCompact, resumes: true) }
         }
     }
 }
@@ -540,7 +558,10 @@ private struct FlexStage: View {
             }
             VStack(spacing: DaybookSpacing.s3) {
                 parts.stop(RecorderControlMetrics(height: 84, radius: DaybookRadius.control, size: nil, spacing: DaybookSpacing.s3))
-                parts.slots.tools.allowsHitTesting(parts.state.toolsTakeTouch)
+                HStack(spacing: DaybookSpacing.s3) {
+                    parts.pause(.glyph)
+                    parts.slots.tools.allowsHitTesting(parts.state.toolsTakeTouch)
+                }
             }
             .frame(maxWidth: 170)
         }
@@ -608,6 +629,7 @@ private struct BookStage: View {
             Spacer(minLength: 0)
             HStack(spacing: DaybookSpacing.s3) {
                 parts.slots.tools.allowsHitTesting(parts.state.toolsTakeTouch)
+                parts.pause(.glyph)
                 parts.stop(RecorderControlMetrics(height: 52, radius: DaybookRadius.control, size: nil, spacing: DaybookSpacing.s3))
                     .frame(maxWidth: 220)
             }

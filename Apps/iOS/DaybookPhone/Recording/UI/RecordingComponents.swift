@@ -108,11 +108,14 @@ enum PhoneRecorderStatus {
     /// muted or unplugged microphone gives one) it's almost always a call.
     static func pause(_ state: PhoneRecorder.State, message: String?, canResume: Bool) -> RecorderPause? {
         guard case .paused(let reason) = state else { return nil }
+        // The person's own: "Paused", and Resume, as on the Mac.
+        if reason == .person { return RecordingStatusWords.personPaused }
         let isCall = reason == .interruption && message == PhoneRecorder.unspecifiedInterruption
         let title: String
         switch reason {
         case .interruption: title = isCall ? "Paused for a call" : "Paused"
         case .inputFailed: title = "The microphone stopped"
+        case .person: title = "Paused"
         }
         // Resume is right below once it can: the words don't ask for it.
         let words = canResume

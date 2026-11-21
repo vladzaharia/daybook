@@ -83,6 +83,9 @@ enum RecordingAwake {
 /// and route changes are followed rather than ending the recording. After Stop, `CaptureFinalizer`
 /// removes the call's echo from the microphone; this controller only captures.
 ///
+/// The person can pause it (`pause()`, `resume()`): the sources keep running and the tracks keep their length, and what
+/// they capture until Resume is kept as silence and captioned as silence (`CapturePauses`).
+///
 /// A recording ends only when someone stops it, the microphone fails for good, a writer stops moving for a
 /// minute, or the Mac is put to sleep. Its 15 Hz meter timer also watches: a source that delivers nothing for 3 s
 /// is restarted, the free space is measured against the byte rate every 30 s, and the microphone's rolling hearing
@@ -106,6 +109,10 @@ final class RecordingController {
     private(set) var spaceLeft: TimeInterval?
     /// Call audio stopped to leave the disk's last minutes to the microphone.
     private(set) var callStoppedForSpace = false
+    /// Seconds into the recording when the person paused it; nil while it records. The session's timeline (notes,
+    /// bookmarks, `elapsedTime`) keeps counting through a pause, as the tracks do.
+    private(set) var pausedAt: TimeInterval?
+    var isPaused: Bool { pausedAt != nil }
     /// The last recording ended because the Mac went to sleep. The devices recording along aren't stopped for it.
     @ObservationIgnored private(set) var stoppedForSleep = false
     /// Live "You" and "Call" meters; see `CaptureLevelMonitor`.
@@ -157,6 +164,10 @@ final class RecordingController {
     @ObservationIgnored private var restartsInFlight: Set<CapturedTrackRole> = []
     @ObservationIgnored private var lastSpaceCheck: TimeInterval = -.infinity
     @ObservationIgnored private var serviceObservation: AnyObject?
+    /// This recording's pauses, which its writers and caption taps read on the capture threads.
+    @ObservationIgnored private var pauses: CapturePauses?
+    /// Host time the microphone last started listening, for the hearing check: the start, or the last Resume.
+    @ObservationIgnored private var listeningSince: TimeInterval?
 
     /// No buffer for this long while recording restarts a source.
     static let stallSeconds: TimeInterval = 3
@@ -221,6 +232,9 @@ final class RecordingController {
         technicalNotes = [:]
         routeEvents = []
         systemAudioCapture = nil
+        pausedAt = nil
+        pauses = nil
+        listeningSince = nil
         levels.reset()
         do {
             guard !["capture-session.json", "microphone.caf", "systemAudio.caf"].contains(where: {
@@ -235,8 +249,10 @@ final class RecordingController {
             self.directory = directory
             self.manifest = manifest
             self.startedAt = startDate
+            let pauses = CapturePauses(origin: manifest.hostTimeSeconds)
+            self.pauses = pauses
             try CaptureJSON.persist(manifest, at: directory.appendingPathComponent("capture-session.json"))
-            let captions = captionTap?.onSessionTimeline(from: manifest.hostTimeSeconds)
+            let captions = captionTap?.onSessionTimeline(from: manifest.hostTimeSeconds).silencing(pauses)
             activeCaptionTap = captions
             observeRoutes()
 
@@ -274,6 +290,7 @@ final class RecordingController {
             try await mic.start(onBuffer: { buffer, time in micWriter.append(buffer, hostTimeSeconds: time); microphoneCaptions?(buffer, time) },
                                 onEvent: { [weak self] event in Task { @MainActor in self?.microphoneEvent(event) } })
             sourceStarted[.microphone] = environment.hostTime()
+            listeningSince = manifest.hostTimeSeconds
             try checkStartCancellation()
             state = .recording
             environment.keepAwake(true)
@@ -291,6 +308,42 @@ final class RecordingController {
         }
     }
 
+    /// The person paused the recording: from now until `resume()`, what either source captures is kept as silence and
+    /// captioned as silence, and the meters rest. The sources and their watches go on as while recording, so nothing
+    /// is restarted for it and both tracks stay on the session's timeline. The pause is written into the session's
+    /// manifest as it begins, for a recovery after a crash; the audio itself never depends on that. False when it
+    /// isn't recording, or is paused already.
+    @discardableResult
+    func pause() -> Bool {
+        guard state == .recording, pausedAt == nil, let pauses, pauses.begin(at: environment.hostTime()) else { return false }
+        pausedAt = elapsedTime
+        levels.rest()
+        if isCallAudioDetected { isCallAudioDetected = false }
+        persistPauses()
+        return true
+    }
+
+    /// Recording goes on after a pause. False when it isn't paused.
+    @discardableResult
+    func resume() -> Bool {
+        guard state == .recording, pausedAt != nil, let pauses else { return false }
+        let now = environment.hostTime()
+        guard pauses.end(at: now) else { return false }
+        pausedAt = nil
+        listeningSince = now
+        persistPauses()
+        return true
+    }
+
+    /// The manifest with the pauses so far. A write that fails leaves the pause as it is: its audio is silent either way.
+    private func persistPauses() {
+        guard var manifest, let directory, let pauses else { return }
+        manifest.pauses = pauses.record
+        self.manifest = manifest
+        do { try CaptureJSON.persist(manifest, at: directory.appendingPathComponent("capture-session.json")) }
+        catch { technicalNotes[.microphone, default: []].append("The pause couldn’t be saved with the recording’s details: \(error.localizedDescription)") }
+    }
+
     /// Always finalizes whatever audio was captured, even if one source failed.
     @discardableResult
     func stop() async -> CaptureResult? {
@@ -306,7 +359,8 @@ final class RecordingController {
     private func makeWriter(_ role: CapturedTrackRole, manifest: CaptureSessionManifest, directory: URL, method: String? = nil) -> PCMTrackWriter {
         let hook = environment.writing.beforeWrite
         return PCMTrackWriter(role: role, directory: directory, manifest: manifest, method: method,
-                              maximumBacklog: environment.writing.maximumBacklog, beforeWrite: hook.map { hook in { @Sendable in hook(role) } }) { [weak self] error in
+                              maximumBacklog: environment.writing.maximumBacklog, beforeWrite: hook.map { hook in { @Sendable in hook(role) } },
+                              pauses: pauses) { [weak self] error in
             Task { @MainActor in self?.writerFailed(role, error) }
         }
     }
@@ -466,9 +520,12 @@ final class RecordingController {
     func updateLevels() {
         guard state == .recording else { return }
         let now = environment.hostTime()
-        levels.update(microphone: microphoneWriter?.meter.read(), call: system == nil ? nil : systemWriter?.meter.read(),
-                      hostTime: now, elapsed: elapsedTime)
-        if levels.isCallAudioDetected != isCallAudioDetected { isCallAudioDetected = levels.isCallAudioDetected }
+        // Paused, the meters rest and the hearing check waits for Resume; the watches below go on.
+        if pausedAt == nil {
+            levels.update(microphone: microphoneWriter?.meter.read(), call: system == nil ? nil : systemWriter?.meter.read(),
+                          hostTime: now, elapsed: elapsedTime, listeningSince: listeningSince)
+            if levels.isCallAudioDetected != isCallAudioDetected { isCallAudioDetected = levels.isCallAudioDetected }
+        }
         onLevelsRead?()
         watchWriters()
         guard state == .recording else { return }
@@ -574,9 +631,12 @@ final class RecordingController {
             }
             if let error = outcome.error { warnings.append(error) }
         }
+        // Each pause, an open one ending where the recording does, is said in every track's capture notes.
+        let paused = manifest.map { manifest in CapturePause.closed(pauses?.record ?? [], at: environment.hostTime() - manifest.hostTimeSeconds) } ?? []
         // The system's words for what went wrong, with the track they're about.
         for index in tracks.indices {
-            guard let extra = technicalNotes[tracks[index].role], !extra.isEmpty else { continue }
+            let extra = paused.map(\.note) + (technicalNotes[tracks[index].role] ?? [])
+            guard !extra.isEmpty else { continue }
             tracks[index].notes = (tracks[index].notes ?? []) + extra
         }
         technicalNotes = [:]
@@ -589,9 +649,10 @@ final class RecordingController {
             if manifest.includeSystemAudio && !callAudioLeftOut && !tracks.contains(where: { $0.role == .systemAudio }) {
                 warnings.append("No system audio was received. Check the call’s output and recording permission.")
             }
-            let completed = CaptureResult(id: manifest.id, startedAt: manifest.startedAt, endedAt: Date(), tracks: tracks,
+            var completed = CaptureResult(id: manifest.id, startedAt: manifest.startedAt, endedAt: Date(), tracks: tracks,
                                           warnings: Array(Set(warnings)).sorted(), directory: directory,
                                           systemAudio: systemAudioCapture, outputRoutes: routeEvents.isEmpty ? nil : routeEvents)
+            completed.pauses = paused.isEmpty ? nil : paused
             // A full disk fails both the track and this; why the recording stopped is the error to keep.
             do { try CaptureJSON.persist(completed, at: directory.appendingPathComponent("capture-result.json")) }
             catch { lastError = lastError ?? "The audio is saved, but its recording details couldn’t be." }
@@ -601,6 +662,9 @@ final class RecordingController {
         self.manifest = nil
         self.directory = nil
         startedAt = nil
+        pausedAt = nil
+        pauses = nil
+        listeningSince = nil
         isCallAudioDetected = false
         spaceLeft = nil
         levels.reset()

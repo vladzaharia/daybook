@@ -915,6 +915,26 @@ final class PhoneAppModel: RecordingCommandHandling {
         lastStopResult = outcome.result
     }
 
+    /// Pause is offered: recording, and nothing records along with it, since nothing else would pause with it (a Mac, a
+    /// recorder, a Watch, or a Mac being asked). While paused nothing joins (`MultipointCoordinator.recordOnMac`).
+    var canPauseRecording: Bool {
+        recorder.state == .recording && Self.recordsAlone(multipoint: multipoints.session, recorderOnly: multipoints.recorderOnly != nil,
+                                                          recorders: (devices.cascade.conversation?.members ?? []).map(\.state))
+    }
+
+    /// Whether a recording has no company that wouldn't pause with it: no Mac recording it or asked to, no recorder
+    /// taking part on its own, and no recorder (or Watch) starting, recording, or stopping along with it.
+    nonisolated static func recordsAlone(multipoint: MultipointSession?, recorderOnly: Bool, recorders: [RecorderCascade.State]) -> Bool {
+        guard multipoint == nil, !recorderOnly else { return false }
+        return !recorders.contains { [.starting, .recording, .stopping].contains($0) }
+    }
+
+    /// The person's Pause (the recorder, the Live Activity): what the microphone hears from now until Resume isn't kept.
+    func pauseRecording() async throws {
+        guard canPauseRecording else { throw RecordingCommandError.notRecording }
+        await recorder.pauseByPerson()
+    }
+
     func resumeRecording() async throws {
         guard recorder.isPaused else { throw RecordingCommandError.notRecording }
         do { try await recorder.resume() } catch {
@@ -1229,7 +1249,8 @@ final class PhoneAppModel: RecordingCommandHandling {
                                           forThisRecording: recorder.captureID != nil && captions.activeMeetingID == recorder.captureID,
                                           paused: recorder.isPaused, unlocked: UIApplication.shared.isProtectedDataAvailable,
                                           newest: captions.segments.last?.text),
-            canResume: recorder.isPaused ? recorder.canResume : nil)
+            canResume: recorder.isPaused ? recorder.canResume : nil,
+            canPause: recorder.state == .recording ? canPauseRecording : nil)
     }
 
     /// The newest live caption for the Live Activity: only while captions are on and showing for this

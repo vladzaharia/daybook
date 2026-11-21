@@ -162,7 +162,8 @@ final class MultipointCoordinator {
     /// answer, so whether it started because of this iPhone is never lost. A Mac whose start comes
     /// back after this iPhone stopped, or that never answered, is stopped with it.
     func recordOnMac(_ macID: UUID, cascade: LinkCascade? = nil) async {
-        guard let mac = link.macs.first(where: { $0.id == macID }) else { return }
+        // Paused by the person, nothing joins: a Mac would record what this iPhone leaves out (docs/iphone.md, "Pausing").
+        guard !recorder.isPausedByPerson, let mac = link.macs.first(where: { $0.id == macID }) else { return }
         // This iPhone's own recording, or (in the background) only its recorder's.
         let own = recorder.isCapturing ? recorder.captureID : nil
         guard let id = own ?? recorderOnly?.conversationID else { return }

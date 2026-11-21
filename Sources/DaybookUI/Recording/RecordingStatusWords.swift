@@ -135,6 +135,9 @@ public enum RecordingStatusWords {
     /// An input that can be changed where it's named: "MacBook Pro Microphone ▾", "iPhone Microphone ▾".
     public static func inputChoice(_ name: String) -> String { "\(name) ▾" }
 
+    /// The person paused it: "Paused", and Resume Recording under it.
+    public static let personPaused = RecorderPause(title: "Paused", message: "", canResume: true, kind: .info)
+
     // MARK: Phase
 
     public static func phase(_ inputs: RecordingStatusInputs) -> RecorderPhase? {
