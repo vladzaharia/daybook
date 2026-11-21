@@ -320,14 +320,14 @@ final class StatusSheetModelTests: XCTestCase {
     let item = queue[0].item(under: "Studio Mac")
     XCTAssertEqual(item.actions, [.tryAgain(.newAudio)])
     XCTAssertTrue(item.isProblem)
-    XCTAssertEqual(item.line, "Couldn’t finish")
+    XCTAssertEqual(item.line, "Couldn’t transcribe")
     XCTAssertEqual(
       item.detail, "The speech model couldn’t start on Studio Mac. The recording is saved.",
       "in the plain words both apps give its kind")
     XCTAssertEqual(item.details, "Out of memory")
     XCTAssertNil(item.note, "a failure isn't “Requested from this iPhone”")
     XCTAssertEqual(
-      queue[0].item(under: nil).line, "Studio Mac couldn’t finish",
+      queue[0].item(under: nil).line, "Studio Mac couldn’t transcribe",
       "at the top of the card, it names the Mac")
 
     var asked = Meeting(title: "Asked")

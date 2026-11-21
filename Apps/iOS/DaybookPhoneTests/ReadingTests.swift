@@ -284,7 +284,7 @@ final class ReadingTests: XCTestCase {
         let here = pageStatus(.processing(.init(stage: .transcribing, fraction: 0.396)), recorded())
         XCTAssertEqual(here?.title, "Transcribing on this iPhone · 39%")
         XCTAssertEqual(rowStatus(.processing(reported), recorded()),
-                       ConversationRowStatus(kind: .processing, text: "Transcribing on Studio · 40%", fraction: 0.4))
+                       ConversationRowStatus(kind: .processing, text: "Transcribing on Studio · 40%", fraction: 0.4, stage: .transcribing))
     }
 
     func testCouldntFinishOffersTryAgainWithTheFailedRequestsMode() {
