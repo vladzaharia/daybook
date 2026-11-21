@@ -217,6 +217,7 @@ extension ConversationStatusPresentation.Inputs {
             inputs.summaryWaitsForModel = true
             inputs.placement.cloudOffered = state.cloudOnOffer(for: meeting)
         }
+        inputs.cancelsStarted = state.canCancelStarted(meeting)
         if status == .done { inputs.upgrade = state.upgradeOffer(for: meeting) }
         // Where an iPhone recording it waits for is: " · Sending 40%", " · Last online 10:02".
         if case .awaitingRecordings = status { inputs.arrivals = state.arrivals(for: meeting) }

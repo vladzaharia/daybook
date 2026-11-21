@@ -59,8 +59,8 @@ final class AudioEvictionTests: XCTestCase {
         uploads.confirmed = true
         await rig.sync.synchronize(.edit)
         try await waitUntil("eviction ran after the confirmation", state: { "\(rig.audio.evictions)" }) { rig.audio.evictions == 1 }
-        let stillLocal = await isLocal(rig, filed)
-        XCTAssertFalse(stillLocal, "the confirmed upload went back to iCloud")
+        // The count goes up as the eviction starts; the file goes a moment later.
+        try await waitUntilAsync("the confirmed upload went back to iCloud") { await !self.isLocal(rig, filed) }
         // Said once: later passes find nothing new confirmed.
         await rig.sync.synchronize(.edit)
         try await Task.sleep(for: .milliseconds(150))

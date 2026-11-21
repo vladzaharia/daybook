@@ -56,7 +56,7 @@ public struct AttentionBox<Actions: View>: View {
             }
         }
         .padding(compact ? 10 : DaybookSpacing.s3)
-        .frame(maxWidth: AttentionBoxLayout.hugs(density) && !spansColumn ? nil : .infinity, alignment: .leading)
+        .frame(maxWidth: AttentionBoxLayout.hugs(density) && !spansColumn && message == nil ? nil : .infinity, alignment: .leading)
         .background(AttentionBoxLayout.wash(for: kind).color, in: DaybookRadius.shape(DaybookRadius.box))
         .overlay {
             if contrast == .increased {
@@ -76,7 +76,17 @@ public struct AttentionBox<Actions: View>: View {
                 .foregroundStyle(tint)
                 .frame(width: compact ? 14 : 18)
                 .accessibilityHidden(true)
-            if beside {
+            if beside && density == .window {
+                // The actions share the title's line; the message runs under both at the box's width.
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(alignment: .firstTextBaseline, spacing: AttentionBoxLayout.actionGap(density)) {
+                        titleText(oneLine: true)
+                        actionRow
+                    }
+                    messageText(oneLine: true)
+                }
+                .layoutPriority(1)
+            } else if beside {
                 HStack(spacing: AttentionBoxLayout.actionGap(density)) {
                     words(oneLineTitle: density == .window)
                         .layoutPriority(1)
@@ -97,20 +107,28 @@ public struct AttentionBox<Actions: View>: View {
     /// whatever width is left without asking for more, so only the title decides whether the actions fit beside it.
     private func words(oneLineTitle: Bool) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(title)
-                .font(titleFont)
-                .foregroundStyle(AttentionBoxLayout.title(for: kind).ink.color)
-                .fixedSize(horizontal: oneLineTitle, vertical: true)
-            if let message {
-                NoIdealWidth(when: oneLineTitle) {
-                    Text(message)
-                        .font(messageFont)
-                        .foregroundStyle(AttentionBoxLayout.message(for: kind).ink.color)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
+            titleText(oneLine: oneLineTitle)
+            messageText(oneLine: oneLineTitle)
         }
         .accessibilityElement(children: .combine)
+    }
+
+    private func titleText(oneLine: Bool) -> some View {
+        Text(title)
+            .font(titleFont)
+            .foregroundStyle(AttentionBoxLayout.title(for: kind).ink.color)
+            .fixedSize(horizontal: oneLine, vertical: true)
+    }
+
+    @ViewBuilder private func messageText(oneLine: Bool) -> some View {
+        if let message {
+            NoIdealWidth(when: oneLine) {
+                Text(message)
+                    .font(messageFont)
+                    .foregroundStyle(AttentionBoxLayout.message(for: kind).ink.color)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 
     private var actionRow: some View {

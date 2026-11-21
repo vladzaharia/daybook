@@ -280,6 +280,10 @@ private struct StatusBand: View {
             if compact {
                 ViewThatFits(in: .horizontal) {
                     bar(.full, yields: false)
+                    // A warning is the last thing to cut: the chips shrink to glyphs before it loses a word.
+                    if phase?.detailIsWarning == true {
+                        ForEach(RecorderChipFit.allCases, id: \.self) { fit in bar(fit, yields: false) }
+                    }
                     ForEach(RecorderChipFit.allCases, id: \.self) { fit in bar(fit, yields: true) }
                 }
             } else {
@@ -308,7 +312,7 @@ private struct StatusBand: View {
     @ViewBuilder
     private func phaseLabel(_ phase: RecorderPhase, yields: Bool) -> some View {
         let label = RecordingPhaseLabel(phase.phase, title: phase.title, detail: phase.detail, detailIsWarning: phase.detailIsWarning,
-                                        detailYields: yields, metrics: .panel)
+                                        detailYields: yields, warningLeads: compact, metrics: .panel)
         // Recording, the phase is the input menu: Automatic and each input.
         if phase.choosesInput {
             MicrophoneMenu(inputs: input, phase: phase) { label }
@@ -366,18 +370,7 @@ struct ChipMenuItems: View {
                 ModelDownloadMenuItems(state: state)
             }
             if let meeting = context.meeting {
-                if let planner = state.placements[meeting.id], !planner.actions.isEmpty {
-                    // Where its summary runs: Use the Cloud, Start Now.
-                    ForEach(planner.actions, id: \.self) { action in
-                        Button(action.title) { state.chooseSummaryPlacement(action, for: meeting.id) }
-                    }
-                } else if state.processor.queue.runningID == meeting.id {
-                    Button("Pause Transcription") { state.pauseProcessing(meeting.id) }
-                } else if state.processor.queue.paused.contains(meeting.id) || (meeting.status == .failed && !isNoSpeech(meeting)) {
-                    Button(meeting.status == .failed ? "Try Again" : "Resume Transcription") {
-                        state.processor.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting))
-                    }
-                }
+                statusActionItems(for: meeting)
                 Button("Open in Daybook") { context.open() }
             }
             if let meeting = context.meeting, state.processor.queue.awaitingModels.contains(meeting.id) {
@@ -387,13 +380,8 @@ struct ChipMenuItems: View {
             if state.processor.queue.runningID == nil, !state.processor.queue.awaitingModels.isEmpty || state.modelDownloadState != nil {
                 ModelDownloadMenuItems(state: state)
             }
-            if let id = state.processor.queue.runningID, let planner = state.placements[id], !planner.actions.isEmpty {
-                ForEach(planner.actions, id: \.self) { action in
-                    Button(action.title) { state.chooseSummaryPlacement(action, for: id) }
-                }
-                Button("Open in Daybook") { context.openConversation(id) }
-            } else if let id = state.processor.queue.runningID {
-                Button("Pause Transcription") { state.pauseProcessing(id) }
+            if let id = state.processor.queue.runningID, let meeting = state.meetings.first(where: { $0.id == id }) {
+                statusActionItems(for: meeting)
                 Button("Open in Daybook") { context.openConversation(id) }
             }
             if !state.processor.queue.awaitingModels.isEmpty {
@@ -415,10 +403,25 @@ struct ChipMenuItems: View {
         NSApp.activate()
     }
 
-    /// A recording with no speech: trying again can't help, so there's no Try Again (`ProcessingRequest.FailureKind.noSpeech`).
-    private func isNoSpeech(_ meeting: Meeting) -> Bool {
-        if case .failed(let failure) = state.processingStatus(for: meeting) { return failure.isNoSpeech }
-        return false
+    /// What the page offers for this conversation, in the page's own words (`ConversationStatusPresentation.mac`), carried
+    /// out as the page does (`MacStatusActions`): Pause, Resume, Stop, Cancel, Try Again (only where it can help), Cloud
+    /// Settings…, and where a summary runs. The model downloads have their own items above.
+    @ViewBuilder private func statusActionItems(for meeting: Meeting) -> some View {
+        let actions = ConversationStatusPresentation.mac(state: state, meeting: meeting)?.actions ?? []
+        ForEach(Array(actions.filter(Self.isMenuAction).enumerated()), id: \.offset) { _, action in
+            Button(action.title) {
+                MacStatusActions(state: state, undoManager: nil) { openSettingsPane($0) }.perform(action, on: meeting.id)
+            }
+        }
+    }
+
+    /// The model downloads and Details are the status's own, not this menu's. An upgrade (which may send the transcript to the
+    /// cloud) and its Dismiss stay on the page, where the offer names the model: a bare "Upgrade" here would send it unnamed.
+    static func isMenuAction(_ action: ConversationStatusPresentation.Action) -> Bool {
+        switch action {
+        case .details, .downloadModels, .downloadSummaryModel, .chooseModels, .cancelDownload, .upgrade, .dismissUpgrade: return false
+        default: return true
+        }
     }
 }
 

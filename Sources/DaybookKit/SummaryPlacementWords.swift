@@ -22,6 +22,15 @@ public enum SummaryPlacementWords {
     /// every tick.
     public static let phrase = "\(ProcessingWords.verb(.summarizing)) in"
 
+    /// "Summarizing with Claude Sonnet 5.5 in": the same for a countdown that ends in the cloud.
+    public static func phrase(inCloud model: String) -> String { "\(inCloud(model)) in" }
+
+    /// A countdown line's words without its seconds, whatever place it names ("Summarizing in", "Summarizing with Claude
+    /// Sonnet 5.5 in").
+    public static func phrase(of countdown: String) -> String {
+        countdown.replacingOccurrences(of: #"\bin \d+ s\b.*$"#, with: "in", options: .regularExpression)
+    }
+
     /// "Summarizing in 12 s": a list row, a chip, the list's subtitle, and a line under the device it counts down to.
     public static func countdown(seconds: Int) -> String { "\(phrase) \(self.seconds(seconds))" }
 
@@ -44,6 +53,18 @@ public enum SummaryPlacementWords {
     /// "Summarizing with Claude Opus 5.5 in 12 s": a countdown that ends in the cloud (a Mac's, seen over the link).
     public static func countdown(inCloud model: String, until deadline: Date, at now: Date) -> String {
         "\(inCloud(model)) in \(seconds(secondsLeft(until: deadline, at: now)))"
+    }
+
+    /// The same, counting down to `deadline`, naming the cloud when that's where it ends: the short line of a row, a chip,
+    /// the list's subtitle (nil keeps it local, which names no place).
+    public static func countdown(inCloud model: String?, seconds: Int) -> String {
+        guard let model else { return countdown(seconds: seconds) }
+        return "\(inCloud(model)) in \(self.seconds(seconds))"
+    }
+
+    /// "Summarizing “Weekly sync” with Claude Sonnet 5.5 in 12 s": the menu bar's, for a countdown that ends in the cloud.
+    public static func countdown(of conversation: String, inCloud model: String, seconds: Int) -> String {
+        "\(inCloud(model, of: conversation)) in \(self.seconds(seconds))"
     }
 
     /// The same toward a planner's place; `thisDevice` is how this device calls itself ("this Mac", "this iPhone").

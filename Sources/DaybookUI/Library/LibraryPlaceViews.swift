@@ -6,10 +6,28 @@ import SwiftUI
 /// the place's glyph, a folder with how to fill it, and an empty library with Daybook's mark.
 public struct LibraryEmptyPlaceView: View {
     private let words: LibraryWords.EmptyPlace
+    private let quiet: Bool
 
-    public init(_ words: LibraryWords.EmptyPlace) { self.words = words }
+    /// - Parameter quiet: Only the title, small and secondary, like Mail's "No Messages": the empty library's page
+    ///   already speaks, and the list column beside it needn't.
+    public init(_ words: LibraryWords.EmptyPlace, quiet: Bool = false) {
+        self.words = words
+        self.quiet = quiet
+    }
 
-    public var body: some View {
+    @ViewBuilder public var body: some View {
+        if quiet {
+            Text(words.title)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(DaybookPalette.Ink.secondary)
+                .multilineTextAlignment(.center)
+                .padding(DaybookSpacing.s5)
+        } else {
+            full
+        }
+    }
+
+    private var full: some View {
         DaybookEmptyState(title: words.title, image: words.showsMark ? .mark : .symbol(words.symbol), message: words.description)
             .accessibilityElement(children: .combine)
     }

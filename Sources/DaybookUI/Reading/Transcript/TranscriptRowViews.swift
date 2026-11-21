@@ -85,6 +85,8 @@ struct TurnHeaderRow: View {
     let speakerID: String?
     let first: TranscriptSegment
     let actions: TranscriptRowActions
+    /// Wraps the speaker's name, which Rename Speaker's popover points at.
+    var nameAttachment: (AnyView) -> AnyView = { $0 }
     @Environment(\.daybookDensity) private var density
     @Environment(\.readingScale) private var scale
     @Environment(\.readingWidth) private var readingWidth
@@ -96,13 +98,15 @@ struct TurnHeaderRow: View {
             TranscriptTime(time: first.start) { actions.play(.segment(first)) }
         } content: {
             HStack(alignment: .firstTextBaseline, spacing: DaybookSpacing.s2) {
-                Button(name) { if let speakerID { actions.rename(speakerID, rowID) } }
-                    .buttonStyle(.plain)
-                    .font(DaybookFont.speaker.font(density, scale: scale))
-                    .foregroundStyle(DaybookPalette.speakerInk(meeting.speakerIndex(speakerID)))
-                    .disabled(speakerID == nil)
-                    .accessibilityHint(speakerID == nil ? "" : "Renames this speaker")
-                    .macHelp(speakerID == nil ? "" : "Rename this speaker")
+                nameAttachment(AnyView(
+                    Button(name) { if let speakerID { actions.rename(speakerID, rowID) } }
+                        .buttonStyle(.plain)
+                        .font(DaybookFont.speaker.font(density, scale: scale))
+                        .foregroundStyle(DaybookPalette.speakerInk(meeting.speakerIndex(speakerID)))
+                        .disabled(speakerID == nil)
+                        .accessibilityHint(speakerID == nil ? "" : "Renames this speaker")
+                        .macHelp(speakerID == nil ? "" : "Rename this speaker")
+                ))
                 if readingWidth == .narrow {
                     TranscriptTime(time: first.start) { actions.play(.segment(first)) }
                 }

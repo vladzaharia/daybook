@@ -49,9 +49,15 @@ struct SpeakerNameField<Field: View>: View {
     private func choiceButton(_ row: SpeakerNameChoice) -> some View {
         Button { commit(row.name) } label: {
             HStack(spacing: 6) {
+                if row.kind == .add {
+                    Image(systemName: "plus.circle").foregroundStyle(DaybookPalette.Ink.link).accessibilityHidden(true)
+                }
                 Text(row.kind == .add ? "Add “\(row.name)”" : row.name).lineLimit(1)
                 if row.isMe { Text(SpeakerProfileWords.you).foregroundStyle(DaybookPalette.Ink.secondary) }
                 Spacer(minLength: 0)
+                if row.kind != .add, row.name == current {
+                    Image(systemName: "checkmark").foregroundStyle(DaybookPalette.Ink.secondary).accessibilityHidden(true)
+                }
             }
             .padding(.horizontal, 6)
             .frame(minHeight: touch ? 44 : 26)
