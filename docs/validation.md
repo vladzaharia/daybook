@@ -95,6 +95,12 @@ far-field or phone audio, Whisper ran on a subset, and the 60 s bound wasn't mea
   distance, the 5%/8%/12% bars and short spans; spans from the track's or its derived copy's transcript; agreeing copy
   used with the check recorded; disagreeing copy refused and not encoded again under the same rule; no model or no
   speech skipped and recorded; stopping during the check leaves nothing and isn't a refusal.
+- 13 mutations of this round's guards, each failing the test that covers it: the transcript bar skipped; the copy's
+  stamp not checked under the lock; the stamp without its status-change time, or the earlier stamp (inode, size, and
+  the modification date as a Double), either of which deleted an original rewritten under its exact old modification
+  time; settings not asked again under the lock; settings current for any library; an unreadable settings version not
+  reported; a short read accepted; another Mac's missing copy pointed back; the moved-here protection dropped; the
+  continuous clock ignored; the iPhone's key guard dropped for a superseded original; a copy at another rate accepted.
 
 **Not verified.** The transcript bar has run only with injected transcribers: the Mac's `SpanTranscription` through a
 real model (its level path, its span cutting, its cost of about 25 s an hour) hasn't, and the per-span 8% bound may
@@ -107,7 +113,8 @@ it builds from the installed model, passing the library ID to the settings check
 continuous-clock mark after a jump. Neither do the Settings row or Info › Audio's line. An export or share under way
 isn't seen as busy. `compressionClockLooksAhead` passes compaction's tested check through untested here. The engine
 identity in the settings mark is redundant in the tests (a new engine has no library ID until its first pass), so no
-test fails without it. No real recording, no iCloud, no two physical Macs, and no iPhone were involved. An older Daybook seen more than 30 days ago that returns and edits a compressed recording
+test fails without it; nor does one fail without the mark being cleared when a pass starts, or a skipped newer
+settings version counting as Never before its pass is acknowledged (both only matter for a pass that stops partway). No real recording, no iCloud, no two physical Macs, and no iPhone were involved. An older Daybook seen more than 30 days ago that returns and edits a compressed recording
 may merge back to the original; that's not tested. Superseded originals stay in a plaintext library's iCloud.
 
 ## iPhone gives back audio sooner (2026-11-20)

@@ -459,17 +459,23 @@ final class RecordingCompressionLibraryTests: XCTestCase {
         let (id, before) = try await conversation(in: library, from: try recording())
         await library.compressRecordings([before.id], in: id, device: nil)
         let original = url(library, before.relativePath, in: id)
-        // As many bytes as before, rewritten in place, and the modification date put back: only the status-change time
-        // (which can't be set back) shows it.
+        // As many bytes as before, rewritten in place, and the modification time put back to the nanosecond: only the
+        // status-change time (which can't be set back) shows it.
+        var hashed = stat()
         library.compressionFault = { step in
-            guard step == .checked, let date = (try? FileManager.default.attributesOfItem(atPath: original.path))?[.modificationDate] as? Date,
-                  let handle = try? FileHandle(forWritingTo: original) else { return }
+            guard step == .checked, lstat(original.path, &hashed) == 0, let handle = try? FileHandle(forWritingTo: original) else { return }
             try? handle.seek(toOffset: 8_192); try? handle.write(contentsOf: Data(repeating: 0x55, count: 64)); try? handle.close()
-            try? FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: original.path)
+            var times = [timespec(tv_sec: 0, tv_nsec: Int(UTIME_OMIT)), hashed.st_mtimespec]
+            _ = utimensat(AT_FDCWD, original.path, &times, 0)
         }
         let removed = await library.finishCompressions()
         XCTAssertEqual(removed, 0)
         XCTAssertTrue(FileManager.default.fileExists(atPath: original.path))
+        var after = stat()
+        XCTAssertEqual(lstat(original.path, &after), 0)
+        XCTAssertEqual([after.st_size, Int64(after.st_mtimespec.tv_sec), Int64(after.st_mtimespec.tv_nsec)],
+                       [hashed.st_size, Int64(hashed.st_mtimespec.tv_sec), Int64(hashed.st_mtimespec.tv_nsec)], "the same size and modification time")
+        XCTAssertEqual(after.st_ino, hashed.st_ino, "the same file")
     }
 
     func testBehaviorACopyGoneBeforeTheLockKeepsTheOriginal() async throws {
