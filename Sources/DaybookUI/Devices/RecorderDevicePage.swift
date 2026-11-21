@@ -351,7 +351,11 @@ struct RecorderTileColumns: Layout {
     let spacing: CGFloat
     let minimumTile: CGFloat
 
-    private func columns(_ width: CGFloat) -> Int { max(1, min(3, Int((width + spacing) / (minimumTile + spacing)))) }
+    static func columns(width: CGFloat, spacing: CGFloat, minimumTile: CGFloat) -> Int {
+        max(1, min(3, Int((width + spacing) / (minimumTile + spacing))))
+    }
+
+    private func columns(_ width: CGFloat) -> Int { Self.columns(width: width, spacing: spacing, minimumTile: minimumTile) }
 
     private func tileWidth(_ width: CGFloat) -> CGFloat {
         let count = CGFloat(columns(width))

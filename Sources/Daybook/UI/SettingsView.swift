@@ -548,18 +548,19 @@ private struct LibrarySettings: View {
 
             // The library's own things, as the iPhone's Settings lists them under Library; Models keeps Edit… beside
             // the model each one serves.
-            Section {
+            Section(SettingsWords.libraryHeader) {
                 TemplatesSettingsRow(state: state)
                 VocabularySettingsRow(state: state)
                 SpeakerProfilesSettingsRow(state: state)
             }
 
-            Section("Imports") {
+            Section {
                 Toggle("Add imported files to conversations they overlap", isOn: $sources.matchesImportedFiles)
                     .controlSize(.regular)
+                PersonalLockToggle(lock: state.personalLock)
+            } footer: {
+                SettingsFooter(PersonalLockWords.footer)
             }
-
-            PersonalLockSection(lock: state.personalLock)
 
             Section {
                 PrivacyStatement()
@@ -586,18 +587,14 @@ private struct LibrarySettings: View {
 
 /// "Require Touch ID for Personal" (or the password, on a Mac without Touch ID) and its one line. Off by default;
 /// turning it off asks first, as unlocking does (`PersonalLock.setRequired`).
-private struct PersonalLockSection: View {
+private struct PersonalLockToggle: View {
     let lock: PersonalLock
 
     var body: some View {
-        Section {
-            Toggle(PersonalLockWords.requirement(lock.method), isOn: Binding(get: { lock.isRequired }, set: { on in
-                Task { await lock.setRequired(on) }
-            }))
-            .controlSize(.regular)
-        } footer: {
-            SettingsFooter(PersonalLockWords.footer)
-        }
+        Toggle(PersonalLockWords.requirement(lock.method), isOn: Binding(get: { lock.isRequired }, set: { on in
+            Task { await lock.setRequired(on) }
+        }))
+        .controlSize(.regular)
     }
 }
 

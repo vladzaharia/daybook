@@ -424,14 +424,17 @@ pushes, Settings).
      words (`RecorderStatusWords.problem`: the iPhone's Bluetooth is in Settings, with Open Settings). None while
      another device manages it.
   3. The handoff (below).
-  4. What can be done now, as tiles of equal width straight on the page (`RecorderActions.available`): Connect,
+  4. The import under way ("Importing 1 of 3 · about 6 min left", Stop), right under the byline while it runs: the
+     page's total, where the list column's rows show each file's bar.
+  5. What can be done now, as tiles of equal width straight on the page (`RecorderActions.available`): Connect,
      Record or Pause on Soundcore, Import N New, Check for New Recordings, Listen Live or Stop Listening. Never a
-     disabled one, never one the problem box offers, and none while another device manages it or it moves.
-  5. Figure tiles (Recorder, Case, Storage) for what the method reports: three across where 3 × 140 pt fits, else two
+     disabled one, never one the problem box offers, and none while another device manages it or it moves. On the Mac
+     they sit in the figures' three columns from the leading edge (one tile is one figure wide), falling to two and
+     one at the same widths; the iPhone's tiles span the row.
+  6. Figure tiles (Recorder, Case, Storage) for what the method reports: three across where 3 × 140 pt fits, else two
      (a third spanning the row), one under another at the accessibility sizes. Values not confirmed since it was last
      connected are quieter, with "As of today, 3:25 AM" under them, also while another device manages it (unless the
-     byline dates the same minute).
-  6. The import under way ("Importing 1 of 3 · about 6 min left", Stop), and Listen Live's saved notice.
+     byline dates the same minute). Listen Live's saved notice follows.
   7. New on <kind>, with Import, Recording now, and All Recordings, where no list beside the page shows them (the
      iPhone; the Mac's list column does).
   8. Recent imports: the library's latest from it and every recording that didn't import, merged by date. A row
