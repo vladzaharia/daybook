@@ -95,6 +95,7 @@ final class SettingsWordsTests: XCTestCase {
         XCTAssertEqual(SettingsWords.protectWhileLocked, "Protect while iPhone is locked")
         XCTAssertEqual(SettingsWords.titleCased(SettingsWords.protectWhileLocked), "Protect While iPhone Is Locked")
         XCTAssertEqual(SettingsWords.protectWhileLockedFooter, "Syncs and transcribes while unlocked.")
+        XCTAssertEqual(SettingsWords.encryptedBackupFooter, "Backups aren’t end-to-end encrypted unless Advanced Data Protection is on.")
         let settings = PhoneSettings(defaults: makeTestDefaults("SettingsWordsTests"))
         XCTAssertFalse(settings.protectsWhileLocked, "off unless the person turns it on")
     }

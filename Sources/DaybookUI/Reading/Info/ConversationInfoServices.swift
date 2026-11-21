@@ -15,6 +15,9 @@ public struct ConversationInfoServices {
     public var recordingLine: @MainActor (RecordingTrack, Meeting) -> String?
     /// Whether a recording's audio is here, where it may not be (the iPhone); nil where it always is.
     public var availability: (@MainActor (RecordingTrack, Meeting) async -> ReadingAudio)?
+    /// Fetches a recording's audio to this device without playing it, where it may not be here (the iPhone); nil where
+    /// it always is. Throws when it can't be fetched.
+    public var download: (@MainActor (RecordingTrack, Meeting) async throws -> Void)?
     /// What this device knows about the conversation for its actions: recording it, processing it.
     public var actionContext: @MainActor (Meeting) -> ConversationActions.Context
     /// Whether this app offers one of a recording's actions; one it can't do yet isn't listed.
@@ -30,13 +33,14 @@ public struct ConversationInfoServices {
                 recordingName: @escaping @MainActor (RecordingTrack, Meeting) -> String,
                 recordingLine: @escaping @MainActor (RecordingTrack, Meeting) -> String?,
                 availability: (@MainActor (RecordingTrack, Meeting) async -> ReadingAudio)? = nil,
+                download: (@MainActor (RecordingTrack, Meeting) async throws -> Void)? = nil,
                 actionContext: @escaping @MainActor (Meeting) -> ConversationActions.Context,
                 offers: @escaping @MainActor (ConversationAction.ID) -> Bool = { _ in true },
                 now: @escaping @MainActor (Meeting, Date) -> InfoNow?,
                 findsSpeakers: @escaping @MainActor () -> Bool = { true },
                 perform: @escaping @MainActor (ConversationInfoAction, Meeting) -> Void) {
         self.catalog = catalog; self.words = words; self.recordingName = recordingName; self.recordingLine = recordingLine
-        self.availability = availability; self.actionContext = actionContext; self.offers = offers; self.now = now
+        self.availability = availability; self.download = download; self.actionContext = actionContext; self.offers = offers; self.now = now
         self.findsSpeakers = findsSpeakers; self.perform = perform
     }
 }
