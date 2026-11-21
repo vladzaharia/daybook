@@ -15,6 +15,8 @@ struct SpeakerNameField<Field: View>: View {
     let me: UUID?
     /// Names the speaker: a picked row's name, or the typed text.
     let commit: (String) -> Void
+    /// Draws a glyph at the head of each row (the phone's sheet).
+    var showsGlyphs = false
     @ViewBuilder var field: Field
     @State private var highlighted: String?
     @Environment(\.daybookDensity) private var density
@@ -49,7 +51,12 @@ struct SpeakerNameField<Field: View>: View {
     private func choiceButton(_ row: SpeakerNameChoice) -> some View {
         Button { commit(row.name) } label: {
             HStack(spacing: 6) {
-                if row.kind == .add {
+                if showsGlyphs {
+                    Image(systemName: row.kind == .add ? "plus.circle" : "person.crop.circle")
+                        .foregroundStyle(row.kind == .add ? DaybookPalette.Ink.link : DaybookPalette.Ink.secondary)
+                        .frame(width: 24)
+                        .accessibilityHidden(true)
+                } else if row.kind == .add {
                     Image(systemName: "plus.circle").foregroundStyle(DaybookPalette.Ink.link).accessibilityHidden(true)
                 }
                 Text(row.kind == .add ? "Add “\(row.name)”" : row.name).lineLimit(1)

@@ -324,7 +324,7 @@ struct SpeakerProfileRow: View {
 /// When there are no profiles: how one comes about.
 struct SpeakerProfilesEmpty: View {
     var body: some View {
-        ContentUnavailableView("No Speaker Profiles", systemImage: "person.wave.2", description: Text("Name a speaker in a conversation."))
+        DaybookEmptyState(title: "No Speaker Profiles", image: .symbol("person.wave.2"), message: "Name a speaker in a conversation.")
     }
 }
 
