@@ -449,13 +449,6 @@ struct LibraryPage: View {
         .padding(.leading, barInset(.leading))
         .padding(.trailing, barInset(.trailing))
         .padding(.bottom, footSheet || statusSheetInset != nil ? 0 : DaybookSpacing.s2)
-        // Paper under the system sheet, edge to edge, so no row's rule or glyph shows in the gaps the floating sheet
-        // leaves around its corners and under itself.
-        .background(alignment: .bottom) {
-          if !footSheet, let statusSheetInset {
-            DaybookPalette.paper.frame(height: statusSheetInset).ignoresSafeArea(edges: .bottom)
-          }
-        }
       }
     }
   }
