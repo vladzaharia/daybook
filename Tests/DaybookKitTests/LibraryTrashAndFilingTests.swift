@@ -75,11 +75,13 @@ final class LibraryTrashAndFilingTests: XCTestCase {
 
         let result = try await library.deleteFromTrash(library.trashedMeetingIDs())
         XCTAssertEqual(Set(result.deleted), [first, second])
-        XCTAssertTrue(result.waiting.isEmpty)
+        XCTAssertTrue(result.failed.isEmpty)
         let hasTrash = await library.hasTrashedMeetings()
         XCTAssertFalse(hasTrash)
         for id in [first, second] {
-            XCTAssertFalse(FileManager.default.fileExists(atPath: library.rootURL.appendingPathComponent("Trash/\(id.uuidString)").path))
+            // Only the ID's tombstone stays: the folder, with nothing but its marker in it.
+            let folder = library.rootURL.appendingPathComponent("Trash/\(id.uuidString)")
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path), [TrashTombstone.fileName])
         }
         XCTAssertNotNil(library.meeting(kept), "what wasn't in the Trash stays")
         XCTAssertTrue(FileManager.default.fileExists(atPath: library.rootURL.appendingPathComponent("Meetings/\(kept.uuidString)").path))

@@ -61,9 +61,13 @@ struct TrashList: View {
         Self.restore(id, library: library, session: session)
     }
 
+    /// Delete Now's question, once the Personal lock doesn't hide it: a hidden row asks to unlock first.
     private func askToDelete(_ meeting: Meeting) {
-        session.confirmingDeleteNow = DeleteNowRequest(
-            ids: [meeting.id], title: LibraryWords.deleteNowTitle([meeting], hidden: { personalLock?.hides($0) == true }))
+        Task {
+            guard await personalLock?.unlock(toActOn: [meeting]) != false else { return }
+            session.confirmingDeleteNow = DeleteNowRequest(
+                ids: [meeting.id], title: LibraryWords.deleteNowTitle([meeting], hidden: { personalLock?.hides($0) == true }))
+        }
     }
 
     /// Puts a conversation back in the library, or says it couldn't.

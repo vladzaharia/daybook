@@ -474,7 +474,7 @@ final class PhoneSync {
 
     private func fingerprint() -> Fingerprint {
         Fingerprint(meetings: Dictionary(library.meetings.map { ($0.id, $0.updatedAt) }, uniquingKeysWith: { a, _ in a }),
-                    metadata: library.metadata, trash: Set(library.trashedMeetingIDs()))
+                    metadata: library.metadata, trash: Set(library.deletedMeetingIDs()))
     }
 
     /// The library as a pass exchanged it: what was edited while it ran still counts as waiting.

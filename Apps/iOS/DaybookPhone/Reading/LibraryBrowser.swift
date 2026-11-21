@@ -197,8 +197,12 @@ private struct ReadingLayout: View {
     Task {
       do {
         let result = try await library.deleteFromTrash(ids)
-        let lines = LibraryWords.deletedNow(deleted: result.deleted.count, waiting: result.waiting.count)
-        if !lines.isEmpty { session.confirmation = ConfirmationBeat(lines.joined(separator: " ")) }
+        let lines = LibraryWords.deletedNow(deleted: result.deleted.count, failed: result.failed.count)
+        if !result.failed.isEmpty {
+          session.alert = ReadingAlert(title: "Couldn’t Delete", message: lines.joined(separator: " "), details: nil)
+        } else if !lines.isEmpty {
+          session.confirmation = ConfirmationBeat(lines.joined(separator: " "))
+        }
       } catch {
         session.alert = ReadingAlert(title: "Couldn’t Delete", error: error, fallback: "Try again.")
       }

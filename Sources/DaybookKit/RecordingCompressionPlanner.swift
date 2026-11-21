@@ -23,8 +23,9 @@ public enum RecordingCompressionPlanner {
         public var done: Set<UUID>
         public var upgradeOffered: Set<UUID>
         public var voiceprints: [Voiceprint]
-        /// Conversations no longer in the library (the Trash) whose audio may live on in one that is: a voiceprint's
-        /// conversation moved out of, or merged away.
+        /// Conversations no longer in the library (the Trash, and those deleted from it for good, as their tombstones keep
+        /// them: `LibraryController.compressionLineage`) whose audio may live on in one that is: a voiceprint's
+        /// conversation moved out of, merged away, or holding the same recording.
         public var lineage: [Meeting]
         /// Recordings held back, by SHA-256: refused under the current rule, or waiting after a failure
         /// (`LibraryController.compressionHeldBack`).
@@ -57,9 +58,9 @@ public enum RecordingCompressionPlanner {
     /// Conversations a voice profile learned from, and every conversation holding audio that came from one: a voiceprint
     /// names the conversation and recording it was learned from, and its audio may since have been merged into another
     /// (`mergedFrom`), moved into a conversation of its own (`removal.movedTo`), or be the same recording elsewhere (its
-    /// bytes, or the track itself). `lineage` are conversations in the Trash, followed too, so a move whose source was
-    /// deleted since still leads to the copy. A move can be followed only from the conversation it left (`movedTo`), so
-    /// while any voiceprint's conversation is nowhere here (gone from the Trash too, or never on this device), every
+    /// bytes, or the track itself). `lineage` are conversations in the Trash or deleted from it for good, followed too,
+    /// so a move whose source was deleted since still leads to the copy. A move can be followed only from the conversation
+    /// it left (`movedTo`), so while any voiceprint's conversation is nowhere here (never on this device), every
     /// conversation holding a recording moved in from elsewhere (`Meeting.wasMovedHere`) is protected as well.
     public static func learnedFrom(_ meetings: [Meeting], voiceprints: [Voiceprint], lineage: [Meeting] = []) -> Set<UUID> {
         let meetings = meetings + lineage.filter { gone in !meetings.contains { $0.id == gone.id } }

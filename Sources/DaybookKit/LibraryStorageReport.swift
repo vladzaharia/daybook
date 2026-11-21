@@ -16,7 +16,8 @@ public struct LibraryStorageReport: Equatable, Sendable {
     public var conversations: Int64
     /// Models downloaded to this device.
     public var models: Int64
-    /// Of `audio` and `conversations`, what the Trash holds (it counts in them too, and isn't added again).
+    /// Of `audio` and `conversations`, what Empty Trash would free: the conversations the Trash lists (they count in
+    /// those too, and aren't added again).
     public var trash: Int64
 
     public init(audio: Int64 = 0, downloadedAudio: Int64? = nil, conversations: Int64 = 0, models: Int64 = 0, trash: Int64 = 0) {
@@ -72,7 +73,8 @@ public struct LibraryStorageReport: Equatable, Sendable {
         guard let walker = fileManager.enumerator(at: root, includingPropertiesForKeys: keys, options: [], errorHandler: { _, _ in true })
         else { return report }
         let prefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
-        let trashPrefix = prefix + "Trash/"
+        // What Empty Trash frees: the folders the Trash lists, never a tombstone or one this version can't read.
+        let emptied = Set(LibraryController.trashedMeetings(in: root).map(\.id.uuidString)), trashPrefix = prefix + "Trash/"
         // The walk's paths are under `root`, symbolic links resolved, so the folders left out are compared the same way.
         let excluded = Set(excluding.map { $0.standardizedFileURL.resolvingSymlinksInPath().path })
         for case let url as URL in walker {
@@ -85,7 +87,9 @@ public struct LibraryStorageReport: Equatable, Sendable {
             // Its length, as Finder and the sync engine's audio index count it.
             let bytes = Int64(values.fileSize ?? 0)
             let path = url.standardizedFileURL.resolvingSymlinksInPath().path
-            if path.hasPrefix(trashPrefix) { report.trash += bytes }
+            if !emptied.isEmpty, path.hasPrefix(trashPrefix), emptied.contains(String(path.dropFirst(trashPrefix.count).prefix { $0 != "/" })) {
+                report.trash += bytes
+            }
             guard isAudio(url) else {
                 report.conversations += bytes
                 continue

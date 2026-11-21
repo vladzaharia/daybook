@@ -65,7 +65,7 @@ private struct StorageSettingsSheet: View {
 
     var body: some View {
         SettingsFormSheet(title: "Storage", cancel: nil, confirm: .init("Done", perform: done)) {
-            LibraryStorageSection(report: report, emptyTrash: { emptying = state.library.trashedMeetingIDs() })
+            LibraryStorageSection(report: report, emptyTrash: askToEmptyTrash)
             RecordingCompressionSection(age: Binding(get: { state.library.recordingCompression },
                                                      set: { state.library.setRecordingCompression($0) }),
                                         startsLine: RecordingCompressionSchedule.statusLine(
@@ -85,10 +85,19 @@ private struct StorageSettingsSheet: View {
         }
         .task { waitingOnDevices = await state.compressionWaitsOnDevices() }
         .alert(LibraryWords.emptyTrashTitle(count: emptying.count), isPresented: Binding(get: { !emptying.isEmpty }, set: { if !$0 { emptying = [] } })) {
-            Button("Delete", role: .destructive) { state.deleteFromTrash(emptying) }
+            Button("Delete", role: .destructive) { let ids = emptying; Task { await state.deleteFromTrash(ids) } }
             Button("Cancel", role: .cancel) { }
         } message: {
             Text(LibraryWords.deleteNowMessage)
+        }
+    }
+
+    /// Empty Trash: what the Trash lists, as it lists it, once the Personal lock hides none of it.
+    private func askToEmptyTrash() {
+        Task {
+            let trashed = await state.library.trashedMeetings()
+            guard !trashed.isEmpty, await state.personalLock.unlock(toActOn: trashed) else { return }
+            emptying = trashed.map(\.id)
         }
     }
 }

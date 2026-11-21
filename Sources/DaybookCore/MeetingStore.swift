@@ -227,7 +227,8 @@ public actor MeetingStore {
     public func restoreFromTrash(_ id: UUID) throws -> Meeting {
         let source = trashURL(for: id)
         try LocalFiles.requireContained(source, in: rootURL.appendingPathComponent("Trash", isDirectory: true))
-        guard fm.fileExists(atPath: source.path) else { throw LibraryError.missingMeeting(id) }
+        // Deleted for good: only its tombstone is there.
+        guard fm.fileExists(atPath: source.path), !TrashTombstone.marks(source) else { throw LibraryError.missingMeeting(id) }
         let destination = rootURL.appendingPathComponent("Meetings/\(id.uuidString)", isDirectory: true)
         try LocalFiles.requireContained(destination, in: rootURL.appendingPathComponent("Meetings", isDirectory: true))
         try fm.moveItem(at: source, to: destination)
@@ -236,17 +237,72 @@ public actor MeetingStore {
         return try load(id)
     }
 
-    /// Deletes a conversation's folder from the Trash for good: its audio and notes. The ID stays deleted (sync's
-    /// record of it, in the checkpoint, is untouched). False when it isn't in the Trash, as when it was restored first.
-    public func deleteFromTrash(_ id: UUID) throws -> Bool {
-        let folder = trashURL(for: id)
+    /// What `deleteFromTrash` did with a conversation.
+    public enum TrashDeletionOutcome: Equatable, Sendable {
+        case deleted
+        /// Not in the Trash (restored first, or deleted already).
+        case notInTrash
+        /// Kept: neither of its copies can be read, or a newer Daybook wrote it.
+        case kept
+    }
+
+    /// Deletes a conversation in the Trash for good: its audio, notes, and everything else its folder holds. The folder
+    /// stays, holding only its tombstone (`TrashTombstone`), which is written durably first: from then on it's deleted,
+    /// and whatever a crash leaves of the rest goes when the library next opens (`finishTrashDeletions`). The rest is
+    /// moved into `Trash/.deleting-<id>` and that folder removed, so what's left is never a part of a conversation.
+    /// Only a conversation this version reads is deleted: one that can't be read, or that a newer Daybook wrote, is kept.
+    public func deleteFromTrash(_ id: UUID) throws -> TrashDeletionOutcome {
         let trash = rootURL.appendingPathComponent("Trash", isDirectory: true)
+        let folder = trashURL(for: id)
         try LocalFiles.requireContained(folder, in: trash)
-        guard fm.fileExists(atPath: folder.path) else { return false }
-        try fm.removeItem(at: folder)
+        guard fm.fileExists(atPath: folder.path), !TrashTombstone.marks(folder) else { return .notInTrash }
+        guard let meeting = Self.readableTrashedMeeting(id, in: folder) else { return .kept }
+        try DurableFiles.write(TrashTombstone(meeting).encoded(), to: folder.appendingPathComponent(TrashTombstone.fileName))
         cache[id] = nil
-        noteWrite(trash)
-        return true
+        // Deleted now. What can't be removed this moment (a file held open) goes at the next launch.
+        try? clearTombstone(folder, id: id)
+        noteWrite(folder)
+        return .deleted
+    }
+
+    /// At launch, before the library is read: finishes deletions a quit or crash stopped partway, removing what's left
+    /// beside a tombstone and any `.deleting-` folder.
+    public func finishTrashDeletions() {
+        let trash = rootURL.appendingPathComponent("Trash", isDirectory: true)
+        for child in (try? fm.contentsOfDirectory(at: trash, includingPropertiesForKeys: nil)) ?? [] {
+            let name = child.lastPathComponent
+            if name.hasPrefix(Self.deletingPrefix) {
+                try? fm.removeItem(at: child)
+            } else if let id = UUID(uuidString: name), TrashTombstone.marks(child) {
+                try? clearTombstone(child, id: id)
+            }
+        }
+    }
+
+    private static let deletingPrefix = ".deleting-"
+
+    /// Moves everything in a tombstone's folder but the tombstone into a hidden folder beside it, and removes that.
+    private func clearTombstone(_ folder: URL, id: UUID) throws {
+        let children = try fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil).filter { $0.lastPathComponent != TrashTombstone.fileName }
+        guard !children.isEmpty else { return }
+        let leaving = folder.deletingLastPathComponent().appendingPathComponent("\(Self.deletingPrefix)\(id.uuidString)-\(UUID().uuidString)", isDirectory: true)
+        try LocalFiles.directory(leaving)
+        for child in children { try fm.moveItem(at: child, to: leaving.appendingPathComponent(child.lastPathComponent)) }
+        try fm.removeItem(at: leaving)
+    }
+
+    /// A trashed conversation's last saved copy this version reads (the recovery copy when the main one is torn), as
+    /// the Trash lists it; nil when neither can be read, or a newer Daybook wrote it.
+    nonisolated public static func readableTrashedMeeting(_ id: UUID, in folder: URL) -> Meeting? {
+        guard !TrashTombstone.marks(folder) else { return nil }
+        let decoder = JSONDecoder()
+        for name in ["meeting.json", "meeting.recovery.json"] {
+            if let data = try? Data(contentsOf: folder.appendingPathComponent(name)),
+               let meeting = try? decoder.decode(Meeting.self, from: data), meeting.id == id {
+                return meeting.schemaVersion == 1 ? meeting : nil
+            }
+        }
+        return nil
     }
 
     private func trashURL(for id: UUID) -> URL { rootURL.appendingPathComponent("Trash/\(id.uuidString)", isDirectory: true) }

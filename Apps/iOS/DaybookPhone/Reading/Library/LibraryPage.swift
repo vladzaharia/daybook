@@ -484,8 +484,13 @@ struct LibraryPage: View {
         session.selection = []
       }
     case .emptyTrash:
-      let ids = library.trashedMeetingIDs()
-      session.confirmingDeleteNow = DeleteNowRequest(ids: ids, title: LibraryWords.emptyTrashTitle(count: ids.count))
+      // What the Trash lists, once the Personal lock hides none of it.
+      Task {
+        let trashed = await library.trashedMeetings()
+        guard !trashed.isEmpty, await personalLock?.unlock(toActOn: trashed) != false else { return }
+        session.confirmingDeleteNow = DeleteNowRequest(
+          ids: trashed.map(\.id), title: LibraryWords.emptyTrashTitle(count: trashed.count))
+      }
     case .newFolder: newFolder()
     case .devices: showStatus(StatusRequest())
     }

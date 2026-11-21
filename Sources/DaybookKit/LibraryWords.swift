@@ -136,12 +136,12 @@ extension LibraryWords {
     /// Beneath either question.
     public static let deleteNowMessage = "This can’t be undone."
 
-    /// The notice once they're gone: "Deleted 3 conversations.", and, for any that wait until sync has told the other
-    /// devices, "2 are waiting for sync."
-    public static func deletedNow(deleted: Int, waiting: Int) -> [String] {
+    /// The notice once they're gone: "Deleted 3 conversations.", and, for any that stay in the Trash, "Couldn’t delete
+    /// 2 conversations."
+    public static func deletedNow(deleted: Int, failed: Int) -> [String] {
         var lines: [String] = []
         if deleted > 0 { lines.append(deleted == 1 ? "Deleted 1 conversation." : "Deleted \(deleted) conversations.") }
-        if waiting > 0 { lines.append(waiting == 1 ? "1 is waiting for sync." : "\(waiting) are waiting for sync.") }
+        if failed > 0 { lines.append(failed == 1 ? "Couldn’t delete 1 conversation." : "Couldn’t delete \(failed) conversations.") }
         return lines
     }
 

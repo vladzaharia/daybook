@@ -340,15 +340,26 @@ private struct MacTrashList: View {
     @State private var deleting: TrashDeleteRequest?
 
     var body: some View {
+        let groups = DateGroup.groups(for: trashed)
         List(selection: Bindable(state.window).openID) {
-            ForEach(DateGroup.groups(for: trashed)) { group in
-                Section(group.title) {
+            ForEach(groups) { group in
+                Section {
                     ForEach(group.meetings) { meeting in
                         TrashRowView(meeting: meeting, restore: { MacTrash.restore([meeting.id], state: state) },
                                      timeLabel: RowDate.format(meeting.date, group: group.title), restoresOnDemand: true,
                                      isSelected: state.window.openID == meeting.id)
                             .tag(meeting.id)
                             .listRowSeparator(.hidden)
+                    }
+                } header: {
+                    // Empty Trash… at the end of the list's first header, where it belongs to the list.
+                    HStack {
+                        Text(group.title)
+                        if group.id == groups.first?.id {
+                            Spacer()
+                            Button(LibraryWords.emptyTrash) { ask(.all(trashed)) }
+                                .buttonStyle(.daybookLink)
+                        }
                     }
                 }
                 .listSectionSeparator(.hidden)
@@ -361,21 +372,15 @@ private struct MacTrashList: View {
                 Button { MacTrash.restore(Array(ids), state: state) } label: {
                     Label(TrashWords.restore, systemImage: TrashWords.restoreSymbol)
                 }
-                Button(LibraryWords.deleteNow, role: .destructive) { deleting = .some(ids, in: trashed) }
+                Button(LibraryWords.deleteNow, role: .destructive) { ask(.some(ids, in: trashed)) }
                 Divider()
             }
-            Button(LibraryWords.emptyTrash, role: .destructive) { deleting = .all(trashed) }
+            Button(LibraryWords.emptyTrash, role: .destructive) { ask(.all(trashed)) }
                 .disabled(trashed.isEmpty)
-        }
-        .toolbar {
-            ToolbarItem {
-                Button(LibraryWords.emptyTrash) { deleting = .all(trashed) }
-                    .disabled(trashed.isEmpty)
-            }
         }
         .alert(deleting?.title(hidden: { state.personalLock.hides($0) }) ?? "", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
                presenting: deleting) { request in
-            Button("Delete", role: .destructive) { state.deleteFromTrash(request.ids) }
+            Button("Delete", role: .destructive) { Task { await state.deleteFromTrash(request.ids) } }
             Button("Cancel", role: .cancel) { }
         } message: { _ in
             Text(LibraryWords.deleteNowMessage)
@@ -397,6 +402,16 @@ private struct MacTrashList: View {
             guard !Task.isCancelled, MacTrash.adopt(read, state: state) else { return }
             trashed = read
             loaded = true
+        }
+    }
+
+    /// Asks Delete Now's or Empty Trash's question, once the Personal lock hides none of what it would delete: a hidden
+    /// one asks to unlock first.
+    private func ask(_ request: TrashDeleteRequest) {
+        guard !request.meetings.isEmpty else { return }
+        Task {
+            guard await state.personalLock.unlock(toActOn: request.meetings) else { return }
+            deleting = request
         }
     }
 }

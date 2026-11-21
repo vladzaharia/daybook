@@ -121,8 +121,9 @@ final class LibraryWordsTests: XCTestCase {
         XCTAssertEqual(LibraryWords.emptyTrashTitle(count: 12), "Delete 12 conversations now?")
         XCTAssertEqual(LibraryWords.emptyTrashTitle(count: 1), "Delete 1 conversation now?")
         XCTAssertEqual(LibraryWords.deleteNowMessage, "This can’t be undone.")
-        XCTAssertEqual(LibraryWords.deletedNow(deleted: 3, waiting: 0), ["Deleted 3 conversations."])
-        XCTAssertEqual(LibraryWords.deletedNow(deleted: 1, waiting: 2), ["Deleted 1 conversation.", "2 are waiting for sync."])
+        XCTAssertEqual(LibraryWords.deletedNow(deleted: 3, failed: 0), ["Deleted 3 conversations."])
+        XCTAssertEqual(LibraryWords.deletedNow(deleted: 1, failed: 2), ["Deleted 1 conversation.", "Couldn’t delete 2 conversations."])
+        XCTAssertEqual(LibraryWords.deletedNow(deleted: 0, failed: 1), ["Couldn’t delete 1 conversation."])
     }
 
     func testBehaviorAnImportThatSkippedFilesListsEachWithItsReason() {
