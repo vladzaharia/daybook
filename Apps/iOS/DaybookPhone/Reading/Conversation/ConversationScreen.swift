@@ -43,15 +43,18 @@ struct ConversationScreen: View {
                 // Always the switch, so the bar's centre stays put. Until there's a transcript to turn to it shows Summary
                 // selected and Transcript dimmed, and the page itself says why.
                 ToolbarItem(placement: .principal) {
-                    if hasTranscript {
-                        Picker("Page", selection: $session.pageMode) {
-                            ForEach(PageMode.allCases) { Text($0.title).tag($0) }
+                    // The system's switch either way, so its size, place and glass never change. Without a transcript
+                    // it stays on Summary (a tap on Transcript does nothing) and Transcript is drawn dim.
+                    Picker("Page", selection: Binding(get: { hasTranscript ? session.pageMode : .summary },
+                                                      set: { if hasTranscript { session.pageMode = $0 } })) {
+                        ForEach(PageMode.allCases) { mode in
+                            Text(mode.title)
+                                .foregroundStyle(mode == .transcript && !hasTranscript ? DaybookPalette.Ink.faint : DaybookPalette.Ink.title)
+                                .tag(mode)
                         }
-                        .pickerStyle(.segmented)
-                        .fixedSize()
-                    } else {
-                        SummaryOnlySwitch()
                     }
+                    .pickerStyle(.segmented)
+                    .fixedSize()
                 }
                 ConversationToolbar(library: library, meeting: meeting)
             }
@@ -173,29 +176,5 @@ enum ConversationShare {
                 session.alert = ReadingAlert(title: "Couldn’t Share", error: error, fallback: "The audio couldn’t be prepared. Try again.")
             }
         }
-    }
-}
-
-/// The page switch before there is a transcript: Summary selected as the system's thumb draws it, Transcript dimmed.
-/// A disabled segmented picker would draw both grey with no thumb.
-private struct SummaryOnlySwitch: View {
-    var body: some View {
-        GlassEffectContainer {
-            HStack(spacing: 0) {
-                Text(PageMode.summary.title)
-                    .foregroundStyle(DaybookPalette.Ink.title)
-                    .frame(minWidth: 72, minHeight: 28)
-                    .glassEffect(.regular.interactive(), in: Capsule())
-                Text(PageMode.transcript.title)
-                    .foregroundStyle(DaybookPalette.Ink.faint)
-                    .frame(minWidth: 72, minHeight: 28)
-            }
-        }
-        .font(.footnote.weight(.medium))
-        .padding(2)
-        .background(DaybookPalette.quietFill, in: Capsule())
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Page")
-        .accessibilityValue(PageMode.summary.title)
     }
 }

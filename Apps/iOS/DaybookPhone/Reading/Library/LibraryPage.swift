@@ -831,6 +831,18 @@ struct PhoneStatusActions: ConversationStatusActionHandler {
   }
 }
 
+/// How many of the selection's actions the bar shows: at most five. Past five, the one before Trash becomes More,
+/// holding the rest, and Trash stays last, outside it.
+enum SelectionBarLayout {
+  static func split<Item>(_ items: [Item], isTrash: (Item) -> Bool) -> (bar: [Item], more: [Item], trash: Item?) {
+    let trash = items.last(where: isTrash)
+    let rest = items.filter { !isTrash($0) }
+    let room = trash == nil ? 5 : 4
+    guard rest.count > room else { return (rest, [], trash) }
+    return (Array(rest.prefix(room - 1)), Array(rest.dropFirst(room - 1)), trash)
+  }
+}
+
 /// The selection's actions at the bottom, where the thumb is: what `ConversationActions.batch` offers, each a glyph
 /// over a word on one baseline.
 private struct SelectionBar: View {
@@ -850,7 +862,7 @@ private struct SelectionBar: View {
         // Nothing selected yet: the same bar, waiting.
         ForEach(Self.placeholders, id: \.0) { title, symbol in item(title, symbol, role: nil) {} }
       } else {
-        let split = Self.split(actions)
+        let split = SelectionBarLayout.split(actions) { $0.id == .moveToTrash }
         ForEach(split.bar) { action in barItem(action) }
         if !split.more.isEmpty {
           Menu {
@@ -872,15 +884,6 @@ private struct SelectionBar: View {
     .padding(.horizontal, DaybookSpacing.s3)
     .padding(.vertical, 6)
     .glassEffect(.regular, in: Capsule())
-  }
-
-  /// At most five items: past five, the one before Trash becomes More, holding the rest, and Trash stays last, outside it.
-  private static func split(_ actions: [ConversationAction]) -> (bar: [ConversationAction], more: [ConversationAction], trash: ConversationAction?) {
-    let trash = actions.last { $0.id == .moveToTrash }
-    let rest = actions.filter { $0.id != .moveToTrash }
-    let room = trash == nil ? 5 : 4
-    guard rest.count > room else { return (rest, [], trash) }
-    return (Array(rest.prefix(room - 1)), Array(rest.dropFirst(room - 1)), trash)
   }
 
   private func barItem(_ action: ConversationAction) -> some View {
