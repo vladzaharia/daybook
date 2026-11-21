@@ -107,7 +107,8 @@ final class MacProcessor {
                 }
                 catch is CancellationError {
                     if queue.claimsLost.remove(id) == nil {
-                        queue.paused.insert(id)
+                        // Cancelled, not paused: its own work (no request) goes back to what it was.
+                        if queue.cancelledRunning.remove(id) == nil { queue.paused.insert(id) }
                         app.releaseRequests(in: id)
                         app.reportToPhones(id, phase: .paused)
                     }
@@ -198,9 +199,10 @@ final class MacProcessor {
         try Task.checkCancellation()
         await app.realign(id)
         if await app.sourcesAfterTranscription(id) { return }
-        _ = try await app.readPhotos(id, engine: engine, progress: progress)
+        // Reading them reports no figure (as on the iPhone): its own would restart the bar under the previous step's name.
+        _ = try await app.readPhotos(id, engine: engine, progress: { _ in })
         // Sketches drawn on notebook pages, described here as the iPhone describes them before it summarizes.
-        _ = try await app.readSketches(id, engine: engine, progress: progress)
+        _ = try await app.readSketches(id, engine: engine, progress: { _ in })
         await app.labelSpeakers(before: id)
         guard let before = app.meetings.first(where: { $0.id == id }) else { return }
         guard MeetingEvidence.summarySource(before).hasContent else { throw AppError.noSpeech }

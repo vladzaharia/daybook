@@ -318,7 +318,7 @@ final class FloatingNotesStatusTests: XCTestCase {
         XCTAssertEqual(elsewhere?.symbol, "desktopcomputer")
         let summarizing = workChip(.processing(ProcessingStatus.Progress(stage: .summarizing, fraction: nil)))
         XCTAssertEqual(summarizing?.label, "Summarizing…")
-        XCTAssertEqual(summarizing?.shortLabel, "Summary…")
+        XCTAssertEqual(summarizing?.shortLabel, "Summarizing")
         XCTAssertNil(summarizing?.progress, "No figure, no fill")
         XCTAssertEqual(workChip(.requested(.queued(position: 0, after: nil)))?.label, "Waiting to transcribe")
         XCTAssertEqual(workChip(.requested(.models))?.label, "Waiting for models")
@@ -339,7 +339,7 @@ final class FloatingNotesStatusTests: XCTestCase {
         XCTAssertEqual(transcript?.detail, "Transcript ready · Waiting to summarize after the download · 38%")
         let failure = ProcessingStatus.Failure(reason: "", hadTranscripts: false, kind: .modelsMissing)
         let chip = try XCTUnwrap(workChip(.failed(failure)))
-        XCTAssertEqual(chip.label, "Couldn’t finish")
+        XCTAssertEqual(chip.label, "Couldn’t transcribe")
         XCTAssertEqual(chip.tone, .attention)
         XCTAssertEqual(chip.detail, FailureWords(failure, words: words).message, "Its menu says it in the words both apps use")
         let silent = ProcessingStatus.Failure(reason: "", hadTranscripts: false, kind: .noSpeech)
@@ -392,6 +392,16 @@ final class FloatingNotesStatusTests: XCTestCase {
         XCTAssertEqual(later.shortLabel, Words.seconds(9))
         XCTAssertEqual(later.detail, Words.countdown(on: AppState.thisDeviceWords, seconds: 9))
         XCTAssertNil(workChip(.processing(ProcessingStatus.Progress(stage: .summarizing, fraction: nil)))?.countdownUntil, "Nothing else ticks")
+        // A countdown that ends in the cloud names its model in the chip, and its menu's first line says the same place.
+        let long = SummaryPlacementPlanner(options: SummaryOptions(thisDeviceCanSummarize: true, reachableMacs: [], cloud: sonnet),
+                                           preferences: planner.preferences, at: now.addingTimeInterval(-3.8),
+                                           conversation: .init(cloudDoesBetter: true))
+        let toCloud = try XCTUnwrap(workChip(.transcribed, planner: long, now: now))
+        XCTAssertEqual(toCloud.label, "Summarizing with Claude Sonnet 5.5 in 12 s")
+        XCTAssertEqual(toCloud.detail, toCloud.label)
+        XCTAssertEqual(toCloud.shortLabel, "12 s")
+        XCTAssertEqual(toCloud.symbol, "cloud")
+        XCTAssertEqual(toCloud.at(now.addingTimeInterval(3)).label, "Summarizing with Claude Sonnet 5.5 in 9 s")
         var cloud = planner
         XCTAssertTrue(cloud.perform(.useCloud, at: now))
         let inCloud = try XCTUnwrap(workChip(.transcribed, planner: cloud, now: now))

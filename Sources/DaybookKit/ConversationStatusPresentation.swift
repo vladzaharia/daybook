@@ -426,7 +426,8 @@ extension ConversationStatusPresentation {
                                                       isWorking: progress.fraction == nil)
             if !progress.awaiting.isEmpty { line.detail = ProcessingStatus.awaitingLine(progress.awaiting) }
             else if here, let origin = requestOrigin(meeting, words: words) { line.detail = origin }
-            if here, local.controlsQueue { line.actions = [progress.stage == .summarizing ? .stopSummary : .pause] }
+            // A summary can't pause, so it stops; the other steps pause or are given up.
+            if here, local.controlsQueue { line.actions = progress.stage == .summarizing ? [.stopSummary] : [.pause, .cancel] }
             return line
 
         case .requested(.queued(let position, let after)):
@@ -454,7 +455,7 @@ extension ConversationStatusPresentation {
             let reason = inputs.pause ?? (local.controlsQueue ? .person : nil)
             return ConversationStatusPresentation(kind: .line, symbol: "pause.circle", title: "Paused",
                                                   detail: reason.flatMap { ProcessingWords.pausedLine($0, device: words.hereDeviceName) },
-                                                  actions: local.controlsQueue ? [.resume] : [])
+                                                  actions: local.controlsQueue ? [.resume, .cancel] : [])
 
         case .requested(.device(let request)):
             let mine = request.requestedBy.id == words.thisDeviceID
@@ -793,21 +794,28 @@ public struct ConversationRowStatus: Equatable, Sendable {
     public var fraction: Double?
     /// A summary's countdown runs out then: the row counts down to it ("Summarizing in 12 s").
     public var countdownUntil: Date?
+    /// Where the countdown ends, when its words don't say it ("on Studio Mac"): a chip's menu names it.
+    public var countdownPlace: SummaryPlace?
+    /// The step a processing row is in, for the glyph and short label of a chip that draws it.
+    public var stage: ProcessingRequest.Stage?
 
-    public init(kind: Kind, text: String?, fraction: Double? = nil, countdownUntil: Date? = nil) {
+    public init(kind: Kind, text: String?, fraction: Double? = nil, countdownUntil: Date? = nil, countdownPlace: SummaryPlace? = nil,
+                stage: ProcessingRequest.Stage? = nil) {
         self.kind = kind; self.text = text; self.fraction = fraction; self.countdownUntil = countdownUntil
+        self.countdownPlace = countdownPlace; self.stage = stage
     }
 
     /// The words without their figure: the line fades when what it says changes, not at every percent.
     public var phrase: String? {
-        if countdownUntil != nil { return SummaryPlacementWords.phrase }
+        if countdownUntil != nil { return text.map(SummaryPlacementWords.phrase(of:)) ?? SummaryPlacementWords.phrase }
         return text.map(ProcessingWords.phrase)
     }
 
     /// The words at a moment: a countdown's seconds move with it.
     public func text(at now: Date) -> String? {
         guard let until = countdownUntil else { return text }
-        return SummaryPlacementWords.countdown(until: until, at: now)
+        // The words say where it ends (the cloud's model, when it's there); only their seconds move.
+        return text.map { SummaryPlacementWords.ticking($0, until: until, at: now) } ?? SummaryPlacementWords.countdown(until: until, at: now)
     }
 }
 
@@ -817,11 +825,13 @@ extension ConversationStatusPresentation {
         if inputs.isRecording { return ConversationRowStatus(kind: .recording, text: "Recording now") }
         let words = inputs.words, placement = inputs.placement
         if let run = placement.run {
-            return ConversationRowStatus(kind: .processing, text: SummaryPlacementWords.running(run, thisDevice: words.here))
+            return ConversationRowStatus(kind: .processing, text: SummaryPlacementWords.running(run, thisDevice: words.here), stage: .summarizing)
         }
         if let planner = placement.planner, let text = planner.shortLine(at: now) {
-            if case .started(.cloud) = planner.phase { return ConversationRowStatus(kind: .processing, text: text) }
-            return ConversationRowStatus(kind: .waiting, text: text, countdownUntil: planner.deadline)
+            if case .started(.cloud) = planner.phase { return ConversationRowStatus(kind: .processing, text: text, stage: .summarizing) }
+            var place: SummaryPlace?
+            if case .countingDown(let target, _) = planner.phase { place = target }
+            return ConversationRowStatus(kind: .waiting, text: text, countdownUntil: planner.deadline, countdownPlace: place)
         }
         if let link = inputs.link, !link.isFinished, let row = linkRow(link, now: now) { return row }
         if let row = statusRow(status, meeting: meeting, inputs: inputs, now: now) { return row }
@@ -832,14 +842,16 @@ extension ConversationStatusPresentation {
 
     static func linkRow(_ link: LinkWork, now: Date) -> ConversationRowStatus? {
         if link.phase == .summaryCountdown, let until = link.countdownUntil {
-            return ConversationRowStatus(kind: .waiting, text: SummaryPlacementWords.countdown(until: until, at: now), countdownUntil: until)
+            let seconds = SummaryPlacementWords.secondsLeft(until: until, at: now)
+            return ConversationRowStatus(kind: .waiting, text: SummaryPlacementWords.countdown(inCloud: link.cloudModel, seconds: seconds),
+                                         countdownUntil: until, countdownPlace: nil)
         }
         if link.phase == .summarizing, let model = link.cloudModel {
-            return ConversationRowStatus(kind: .processing, text: SummaryPlacementWords.inCloud(model))
+            return ConversationRowStatus(kind: .processing, text: SummaryPlacementWords.inCloud(model), stage: .summarizing)
         }
         if let stage = link.stage {
             return ConversationRowStatus(kind: .processing, text: ProcessingWords.elsewhere(stage, device: link.device, fraction: link.fraction),
-                                         fraction: link.fraction)
+                                         fraction: link.fraction, stage: stage)
         }
         switch link.phase {
         case .queued: return ConversationRowStatus(kind: .waiting, text: "In line on \(link.device)")
@@ -849,15 +861,23 @@ extension ConversationStatusPresentation {
         }
     }
 
+    /// The download the work waits for, in the one phrase every surface uses ("Downloading models · 40%", "Waiting for Wi‑Fi"); one
+    /// that stopped is a failure's orange glyph ("Couldn’t download …"). "Waiting for models" until the download says more.
+    static func modelsRow(_ local: LocalCapabilities) -> ConversationRowStatus {
+        guard let models = local.models else { return ConversationRowStatus(kind: .waitingForModels, text: "Waiting for models") }
+        return ConversationRowStatus(kind: models.needsAttention ? .failed : .waitingForModels, text: ProcessingWords.modelDownloadLine(models))
+    }
+
     static func statusRow(_ status: ProcessingStatus, meeting: Meeting, inputs: Inputs, now: Date = Date()) -> ConversationRowStatus? {
         let words = inputs.words
         switch status {
         case .processing(let progress):
-            return ConversationRowStatus(kind: .processing, text: workingTitle(progress, words: words), fraction: progress.fraction ?? 0)
+            return ConversationRowStatus(kind: .processing, text: workingTitle(progress, words: words), fraction: progress.fraction ?? 0,
+                                         stage: progress.stage)
         case .requested(.queued):
             return ConversationRowStatus(kind: .waiting, text: ProcessingWords.waitingHereShort(inputs.queuedMode))
         case .requested(.models):
-            return ConversationRowStatus(kind: .waitingForModels, text: "Waiting for models")
+            return modelsRow(inputs.local)
         case .requested(.paused):
             return ConversationRowStatus(kind: .paused, text: "Paused")
         case .requested(.device(let request)):
@@ -874,18 +894,18 @@ extension ConversationStatusPresentation {
             // As the page: this device's own download, or a summary nothing can make.
             if mine, inputs.mac?.present(at: now) == nil, request.mode == .newAudio, inputs.ownsUntranscribed,
                meeting.hasUntranscribedTranscribableAudio, inputs.local.transcribesOwnAfterDownload {
-                return ConversationRowStatus(kind: .waitingForModels, text: "Waiting for models")
+                return modelsRow(inputs.local)
             }
             if request.mode == .summaryOnly, !inputs.local.summarizes, inputs.mac?.isNoMac == true {
                 // Its own summary model on its way: the summary waits for that, as the page says.
                 if inputs.local.summarizesOwnAfterDownload, inputs.local.summaryModelAsked, inputs.local.models != nil {
-                    return ConversationRowStatus(kind: .waitingForModels, text: "Waiting for models")
+                    return modelsRow(inputs.local)
                 }
                 return ConversationRowStatus(kind: .waiting, text: needsMacToSummarize)
             }
             return ConversationRowStatus(kind: .waiting, text: ProcessingWords.waitingForMac(request.mode, summarized: meeting.summary != nil))
         case .failed(let failure):
-            return ConversationRowStatus(kind: .failed, text: failure.isNoSpeech ? "No speech" : "Couldn’t finish")
+            return ConversationRowStatus(kind: .failed, text: failure.isNoSpeech ? "No speech" : FailureWords.rowLine(failure))
         case .recorded:
             return meeting.tracks.isEmpty ? nil : ConversationRowStatus(kind: .notTranscribed, text: "Not transcribed yet")
         case .awaitingRecordings(let recordings):

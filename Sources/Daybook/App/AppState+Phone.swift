@@ -791,7 +791,11 @@ extension AppState {
             do { _ = try await importAudio([url], source: track.source, attachTo: target, device: identity) }
             catch {
                 movedPhoneRecordings.remove(meeting.id)
-                report("Couldn’t Add the Recording", "The \(sourceName(track)) couldn’t be added to “\(title)”. It stays in “\(meeting.title)”.", error)
+                // Not something the person did: the log has the reason, and a notice says it, with a way to the recording.
+                Self.log.notice("A recording couldn't join its conversation (\(error.logCode, privacy: .public)): \(error.localizedDescription, privacy: .private)")
+                let meetingID = meeting.id
+                post("A recording from \(phoneName(track) ?? "an iPhone") couldn’t be added.",
+                     action: LibraryNoticeAction(title: "Show") { [weak self] in self?.showConversation(meetingID) })
                 return false
             }
             guard !stays else {

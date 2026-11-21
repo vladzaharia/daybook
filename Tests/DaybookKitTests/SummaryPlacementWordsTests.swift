@@ -37,6 +37,31 @@ final class SummaryPlacementWordsTests: XCTestCase {
         XCTAssertEqual(Words.phrase, "Summarizing in", "What a line animates on: the words without their seconds")
     }
 
+    func testBehaviorACountdownThatEndsInTheCloudNamesItsModelOnEverySurface() {
+        let options = SummaryOptions(thisDeviceCanSummarize: true, reachableMacs: [], cloud: sonnet)
+        let long = SummaryPlacementPlanner(options: options, preferences: preferences(.ask), at: start,
+                                           conversation: .init(cloudDoesBetter: true))
+        guard case .countingDown(.cloud, _) = long.phase else { return XCTFail("Counts down to the cloud: \(long.phase)") }
+        XCTAssertEqual(long.shortLine(at: at(3)), "Summarizing with Claude Sonnet 5.5 in 12 s")
+        XCTAssertEqual(long.line(at: at(3), thisDevice: "this Mac"), long.shortLine(at: at(3)))
+        // The row ticks in the same words, and its animation phrase keeps the place.
+        let row = ConversationStatusPresentation.row(.recorded, meeting: Meeting(title: "T"), inputs: ConversationStatusPresentation.Inputs(
+            words: .mac(), local: .mac(), placement: .init(planner: long)), now: at(3))
+        XCTAssertEqual(row?.text, "Summarizing with Claude Sonnet 5.5 in 12 s")
+        XCTAssertEqual(row?.text(at: at(6)), "Summarizing with Claude Sonnet 5.5 in 9 s")
+        XCTAssertEqual(row?.phrase, "Summarizing with Claude Sonnet 5.5 in")
+        // The list's subtitle and the queue line.
+        let queue = QueueStatusWords.Queue(countdown: at(15), countdownCloudModel: sonnet.name, waiting: 1)
+        XCTAssertEqual(QueueStatusWords.subtitle(queue, now: at(3)), "Summarizing with Claude Sonnet 5.5 in 12 s · 1 waiting")
+        let line = QueueStatusWords.line(queue, words: .mac(), now: at(3))
+        XCTAssertEqual(line?.text, "Summarizing with Claude Sonnet 5.5 in 12 s · 1 waiting")
+        XCTAssertEqual(line?.shortText, "12 s")
+        // The menu bar.
+        XCTAssertEqual(Words.countdown(of: "“Roadmap”", inCloud: sonnet.name, seconds: 12), "Summarizing “Roadmap” with Claude Sonnet 5.5 in 12 s")
+        // Local stays as it was.
+        XCTAssertEqual(Words.phrase(of: "Summarizing in 12 s · 1 waiting"), "Summarizing in")
+    }
+
     func testBehaviorOneSecondAndManyReadAlike() {
         // "s" is a unit, not a plural: the last second and the first read the same way, and so does a queue's count.
         XCTAssertEqual(Words.countdown(seconds: 1), "Summarizing in 1 s")

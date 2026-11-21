@@ -39,6 +39,8 @@ final class ProcessingQueue {
     var awaitingSummaryModel: Set<UUID> = []
     /// Conversations whose running job stopped because another device took its request over.
     var claimsLost: Set<UUID> = []
+    /// Conversations whose running work the person cancelled: it stops without being kept paused.
+    var cancelledRunning: Set<UUID> = []
     /// What the last failure of each conversation's own job was, as the error said it where the job caught it: a job
     /// with no request has no outcome to keep its kind (`processingStatus(for:)`). Kept while Daybook runs.
     var failures: [UUID: CaughtFailure] = [:]
@@ -388,6 +390,27 @@ extension AppState {
         if removed.contains(where: { $0.requestID != nil && $0.requestID != processor.queue.running?.requestID }) {
             processor.queue.paused.insert(id)
             releaseRequests(in: id)
+        }
+    }
+
+    /// Gives up work that has started: running work stops and paused work is let go, as Cancel does for queued work. A
+    /// request another device made, which this Mac would claim again, keeps the conversation paused instead: the
+    /// person's Resume (or that device) decides.
+    func cancelStarted(_ id: UUID) {
+        if processor.queue.runningID == id {
+            if processor.queue.running?.requestID == nil { processor.queue.cancelledRunning.insert(id) }
+            processor.queue.currentRequest?.cancel()
+            return
+        }
+        guard processor.queue.paused.contains(id) else { return }
+        let me = library.thisDevice
+        library.update(id) { meeting in
+            for request in meeting.openProcessingRequests where request.requestedBy.id == me.id {
+                _ = meeting.withdrawProcessingRequest(request.id, by: me, at: Date())
+            }
+        }
+        if library.meeting(id)?.openProcessingRequests.isEmpty ?? true {
+            processor.queue.paused.remove(id)
         }
     }
 

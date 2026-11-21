@@ -92,7 +92,9 @@ extension StatusOverviewInputs {
             queue.running = state.runningStage
             queue.fraction = state.processor.queue.activity.value.fraction
             switch state.placements[id]?.phase {
-            case .countingDown(_, let until)?: queue.countdown = until
+            case .countingDown(let place, let until)?:
+                queue.countdown = until
+                if case .cloud(let model) = place { queue.countdownCloudModel = model.name }
             case .started(.cloud(let model))?: queue.cloudModel = model.name
             default: break
             }

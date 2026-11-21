@@ -163,7 +163,9 @@ enum MacListSubtitle {
         if let id = state.processor.queue.runningID, state.meetings.contains(where: { $0.id == id }) {
             queue.running = state.runningStage
             switch state.placements[id]?.phase {
-            case .countingDown(_, let until)?: queue.countdown = until
+            case .countingDown(let place, let until)?:
+                queue.countdown = until
+                if case .cloud(let model) = place { queue.countdownCloudModel = model.name }
             case .started(.cloud(let model))?: queue.cloudModel = model.name
             default: break
             }
@@ -603,7 +605,9 @@ struct MacStatusActions: ConversationStatusActionHandler {
         case .resume:
             guard let meeting = library.meeting(id) else { return }
             process(id, state.defaultProcessingMode(for: meeting))
-        case .cancel: state.cancelQueued(id)
+        case .cancel:
+            if state.processor.queue.runningID == id || state.processor.queue.paused.contains(id) { state.cancelStarted(id) }
+            else { state.cancelQueued(id) }
         case .cancelDownload: state.cancelDownload()
         case .downloadModels, .downloadSummaryModel:
             state.processor.enqueue(id)
