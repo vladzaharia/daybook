@@ -120,7 +120,7 @@ Pairing looks and reads the same on both devices: DaybookUI's `PairingView(role:
 - **Each side names the other's exact control.** Under the Mac's code: "On your iPhone, open Daybook › Settings ›
   Pair with Your Mac, choose “Studio Mac”, and enter this code." Under the iPhone's title: "On your Mac, open
   Daybook › Settings › Devices and click Pair with iPhone." The Mac's button reads Pair with iPhone… in Settings ›
-  Devices (its empty state included) and Add Device; the iPhone's reads Pair with Your Mac….
+  Devices (its empty state included) and Add Recorder…; the iPhone's reads Pair with Your Mac….
 - **The code.** Grouped `LinkPairingCode.groupSize` (3) digits apart with the one `LinkPairingCode.separator`: the
   Mac shows "482 913" (`PairingCodeView`), the iPhone's six boxes leave the same gap (`PairingCodeEntry`).
 - **The Macs on the iPhone's network.** A Mac showing a code first, then the rest, then any Mac with another library

@@ -117,7 +117,7 @@ private struct DetailsRows: View {
         Picker(selection: Binding(get: { meeting.folderID }, set: { folder in
             library.update(meeting.id, actionName: "Move to Folder", undoManager: undoManager) { $0.folderID = folder }
         })) {
-            Text("None").tag(UUID?.none)
+            Text("No Folder").tag(UUID?.none)
             if !library.folders.isEmpty { Divider() }
             ForEach(library.folders) { folder in Text(folder.name).tag(UUID?.some(folder.id)) }
         } label: { InfoRowLabel("Folder", symbol: "folder") }

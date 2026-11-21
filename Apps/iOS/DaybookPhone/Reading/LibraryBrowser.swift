@@ -126,10 +126,7 @@ private struct ReadingLayout: View {
       Button("Move to Trash", role: .destructive) { trash(session.confirmingTrash) }
       Button("Cancel", role: .cancel) {}
     } message: {
-      Text(
-        session.confirmingTrash.count > 1
-          ? "Their audio, notes, and summaries go with them."
-          : "Its audio, notes, and summary go with it.")
+      Text(LibraryWords.trashMessage(count: session.confirmingTrash.count))
     }
     .modifier(PhoneMergeConfirmation(library: library))
     .onChange(of: library.isLoaded, initial: true) { _, loaded in

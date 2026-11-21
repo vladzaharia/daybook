@@ -53,11 +53,19 @@ final class LibraryWordsTests: XCTestCase {
         XCTAssertEqual(LibraryWords.gettingConversations, "Getting your conversations…")
     }
 
+    func testBehaviorAnImportNamesWhatItCouldNotRead() {
+        XCTAssertEqual(LibraryWords.importSummary(imported: 4, failed: ["Memo.m4a"]), ["Imported 4 recordings.", "Couldn’t import “Memo.m4a”."])
+        XCTAssertEqual(LibraryWords.importSummary(imported: 1, failed: ["a.wav", "b.wav"]), ["Imported 1 recording.", "Couldn’t import 2 files."])
+        XCTAssertEqual(LibraryWords.importSummary(imported: 2, failed: []), ["Imported 2 recordings."])
+    }
+
     func testBehaviorRestoreSaysWhatCameBack() {
         XCTAssertEqual(LibraryWords.restored(Meeting(title: "Old standup")), "Restored “Old standup”.")
         XCTAssertEqual(LibraryWords.restored(Meeting(title: " ")), "Restored a conversation.")
         XCTAssertEqual(LibraryWords.trash, "Trash")
-        XCTAssertEqual(LibraryWords.searchPrompt, "Titles, notes, transcripts")
+        XCTAssertEqual(LibraryWords.searchPrompt, "Search")
+        XCTAssertEqual(LibraryWords.trashMessage(count: 1), "You can restore it from the Trash.")
+        XCTAssertEqual(LibraryWords.trashMessage(count: 3), "You can restore them from the Trash.")
     }
 
     func testANetworkSuitsLargeDownloadsOnlyOnWiFiOutsideLowDataMode() {

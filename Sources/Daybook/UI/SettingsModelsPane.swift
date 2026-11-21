@@ -126,7 +126,7 @@ private struct ModelsOverview: View {
                 }
             }
             Section {
-                Toggle("Transcribe synced recordings on this Mac", isOn: $state.processSyncedAudio)
+                Toggle("Transcribe other devices’ recordings", isOn: $state.processSyncedAudio)
                     .controlSize(.regular)
             }
             Section {

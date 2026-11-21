@@ -4832,6 +4832,20 @@ Checked by unit tests: the words for each surface (`SummaryPlacementWordsTests`,
 
 Not checked: Cancel against a live queue beyond the fake-engine tests (`CancelStartedWorkTests`: running own, running with a request, paused own, paused with another device's request, paused with this Mac's request); an iPhone still being told "paused" when a Mac's own job is cancelled; Undo for the chip menu's actions; the iPhone's own work has no Cancel yet; the chip menu on a real Mac; the notices on a real iPhone arrival or launch recovery.
 
+## 2026-11-20: Mac settings, library, devices (UX pass)
+
+Verified (unit tests, temporary libraries, synthetic audio; no models, no recording, no network):
+- Settings search keywords (`SettingsSearchTests`), the empty places of Work and Personal, the search prompt, the Trash
+  question's wording (`LibraryPlaceWordsTests`, `LibraryWordsTests`), the import notice's wording and an import that goes
+  on past a file that isn't audio, with an alert only when nothing imported (`ImportSidecarTests`), the menu bar's
+  "Saved · 18 min" (`MenuBarStatusTests`), and the Mac intents' spoken lines (`SystemEntryPointsTests`).
+- The Mac settings page order was read against the code; "Open at login" now comes from one constant (`WelcomeWords`).
+
+Not verified: Settings panes and the menu bar were not captured (see the PR), Device Details' Copy on a real recorder
+(the report is the iPhone's text under a Mac first line), the open Floating Notes chip menu's Manage Storage… (it opens
+Settings › Library, where Storage is a row; the Storage sheet itself belongs to another branch), and the partial-import
+notice has no Details… (a notice has none; the alert keeps it when nothing imported).
+
 ## 2026-11-20: Reprocessing and merge (UX pass)
 
 Summarize Again is one menu wherever Reprocess is (`ConversationActions.reprocess`, fed `Context.summarizeChoices`): More, a row's menu, Conversation ›, Info › Processing, and the iPhone's equivalents; with one way to summarize it stays a plain item, and a selection's stays plain. The cloud's row carries the cloud glyph and the row of the model that wrote the summary is checked (also at the page's foot). A local row still runs through `summarizeAgain` (never the cloud), the cloud row only while the resolved model matches and the placement allows it; Offer First is untouched. Conversation › lists Reprocess's modes from `ConversationActions` (no second Transcribe New Audio, dimmed together while Reprocess waits), and a notes-only conversation can Summarize Again from Reprocess. Merge asks "Merge 3 conversations into “Weekly sync”?" with what is redone, Merge with ▸ lists the day's and the day before's conversations, and a merged-away conversation in the Trash says "Merged into “…”" with Show.

@@ -394,7 +394,7 @@ struct FolderMenuItems: View {
     let meetingIDs: [UUID]
     @Environment(\.undoManager) private var undoManager
     var body: some View {
-        Button("None") { state.library.moveToFolder(meetingIDs, nil, undoManager: undo) }
+        Button("No Folder") { state.library.moveToFolder(meetingIDs, nil, undoManager: undo) }
         if !state.folders.isEmpty { Divider() }
         ForEach(state.folders) { folder in
             Button(folder.name) { state.library.moveToFolder(meetingIDs, folder.id, undoManager: undo) }

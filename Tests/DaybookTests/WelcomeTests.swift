@@ -163,7 +163,7 @@ final class WelcomeTests: XCTestCase {
         WelcomeLogin.apply(true, to: item)
         XCTAssertEqual(service.calls, ["register"])
         XCTAssertTrue(item.isOn)
-        XCTAssertEqual(WelcomeWords.openAtLogin, "Open Daybook at login")
+        XCTAssertEqual(WelcomeWords.openAtLogin, "Open at login")
         XCTAssertEqual(WelcomeWords.openAtLoginReason, "So Daybook can notice calls.")
     }
 
