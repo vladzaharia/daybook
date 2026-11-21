@@ -25,7 +25,7 @@ enum SettingsRoute: Hashable {
     case acknowledgements
 }
 
-/// Settings: iCloud, your Macs, recorders, recording, storage, models, cloud summaries, templates, vocabulary,
+/// Settings: iCloud, your devices (Macs and recorders), recording, storage, models, cloud summaries, templates, vocabulary,
 /// and speaker profiles, and About.
 /// `LibraryBrowser` presents it (`settingsSheet`). In the hand it's one column of pushed screens; on
 /// the open iPhone Duo, two pages: the list on the left, the chosen screen on the right.
@@ -35,6 +35,7 @@ struct SettingsScreen: View {
     @Environment(PhoneAppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @Environment(\.surfaceStyle) private var surface
+    @Environment(PersonalLock.self) private var personalLock: PersonalLock?
     @State private var path: [SettingsRoute] = []
     @State private var showingPairing = false
     @State private var showingAddDevice = false
@@ -100,8 +101,7 @@ struct SettingsScreen: View {
             Section {
                 SettingsLink(route: .icloud) { ICloudRow() }
             }
-            MacsSection(showingPairing: $showingPairing)
-            RecordersSection(showingAddDevice: $showingAddDevice)
+            DevicesSection(showingPairing: $showingPairing, showingAddDevice: $showingAddDevice)
             Section {
                 SettingsLink(route: .recording) {
                     SettingsRow(title: "Recording", detail: recordingSummary, systemImage: "waveform")
@@ -112,6 +112,8 @@ struct SettingsScreen: View {
                 SettingsLink(route: .cloud) {
                     SettingsRow(title: "Cloud", detail: model.cloudSummaries.summary, systemImage: "cloud")
                 }
+            } header: {
+                Text("This iPhone")
             }
             Section {
                 SettingsLink(route: .storage) {
@@ -128,11 +130,16 @@ struct SettingsScreen: View {
                                                                           me: model.library.controller.ownerProfileName),
                                 systemImage: "person.wave.2")
                 }
-                PersonalLockRow()
             } header: {
                 Text("Library")
-            } footer: {
-                PersonalLockFooter()
+            }
+            // Its own section, so its one line reads as the toggle's and not as Library's.
+            if personalLock != nil {
+                Section {
+                    PersonalLockRow()
+                } footer: {
+                    PersonalLockFooter()
+                }
             }
             Section {
                 SettingsLink(route: .about) {
@@ -229,7 +236,7 @@ struct SettingsScreen: View {
     }
 }
 
-/// Require Face ID for Personal (or the passcode, on an iPhone without Face ID), a row of Library, and its one line (`PersonalLock`).
+/// Require Face ID for Personal (or the passcode, on an iPhone without Face ID), a section of its own after Library, and its one line (`PersonalLock`).
 /// Off by default; turning it off asks first, as unlocking does.
 private struct PersonalLockRow: View {
     @Environment(PersonalLock.self) private var personalLock: PersonalLock?
@@ -244,7 +251,7 @@ private struct PersonalLockRow: View {
     }
 }
 
-/// The lock's one line, under the Library section it now sits in.
+/// The lock's one line, under its own section after Library.
 private struct PersonalLockFooter: View {
     @Environment(PersonalLock.self) private var personalLock: PersonalLock?
 
@@ -382,6 +389,7 @@ struct RecordingSettingsScreen: View {
     var body: some View {
         @Bindable var settings = model.settings
         Form {
+            MicrophoneSettingsRow()
             Section {
                 Toggle("Transcribe Automatically", isOn: $settings.requestsTranscription)
                 Toggle("Recording with Your Mac", isOn: $settings.acceptsMacRecordRequests)

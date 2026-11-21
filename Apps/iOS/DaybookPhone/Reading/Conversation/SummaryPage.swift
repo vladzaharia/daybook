@@ -243,6 +243,7 @@ extension ConversationStatusPresentation.Inputs {
         inputs.placement = .init(planner: placement?.planners[meeting.id], run: placement?.runs[meeting.id],
                                  cloudOffered: placement?.cloudOffer(for: meeting) != nil)
         inputs.pause = PhoneProcessor.current?.pause.map(ProcessingWords.PauseReason.init(phone:))
+        inputs.cancelsStarted = PhoneProcessor.current?.canCancelStarted(meeting, at: now) ?? false
         inputs.cloudModel = placement?.cloud?.resolved?.model.name
         if let owns = model?.library.ownsTrack {
             inputs.ownsUntranscribed = meeting.transcribableTracks

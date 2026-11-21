@@ -593,6 +593,37 @@ final class PhoneProcessor {
         stop(.pause(.background))
     }
 
+    /// Whether Cancel can give up the work this iPhone has on `meeting` (`ConversationStatusPresentation.Inputs.cancelsStarted`):
+    /// work it is doing, has paused, or has claimed and not begun, whose open requests are all its own to withdraw. Work that
+    /// carries another device's request is never dropped here, and a summary placed on this iPhone is the placement's to
+    /// stop (`PhoneSummaryPlacement.stop`), so neither is offered Cancel.
+    func canCancelStarted(_ meeting: Meeting, at now: Date = Date()) -> Bool {
+        let id = meeting.id
+        guard queue(for: meeting, at: now) != nil else { return false }
+        if running?.meetingID == id, running?.work == .summarize { return false }
+        let open = meeting.openProcessingRequests
+        guard !open.isEmpty, !open.contains(where: { summariesHere.contains($0.id) }) else { return false }
+        return open.allSatisfy { $0.requestedBy.id == library.thisDevice.id }
+    }
+
+    /// Gives up the work this iPhone has on a conversation, where `canCancelStarted` allows it: a job under way stops and
+    /// isn't kept paused, its steps already done stay done, and this iPhone's open requests are withdrawn, so no Mac
+    /// picks them up either.
+    func cancelStarted(_ meetingID: UUID, at now: Date = Date()) {
+        guard let meeting = library.meeting(meetingID), canCancelStarted(meeting, at: now) else { return }
+        let me = library.thisDevice
+        let requests = meeting.openProcessingRequests.map(\.id)
+        if running?.meetingID == meetingID { stop(.lost) }
+        paused.remove(meetingID)
+        // A claim this iPhone holds is let go first: only a request no device holds can be taken back.
+        for request in requests { library.releaseProcessingRequest(request, in: meetingID, at: now) }
+        library.update(meetingID) { meeting in
+            for request in requests { _ = meeting.withdrawProcessingRequest(request, by: me, at: now) }
+        }
+        services.changed()
+        if running == nil { pickUp() }
+    }
+
     /// The conversation went to the Trash (on this iPhone, or a Mac moved its recording into another
     /// conversation), or its recording was removed: its work stops.
     func cancel(_ meetingID: UUID) {

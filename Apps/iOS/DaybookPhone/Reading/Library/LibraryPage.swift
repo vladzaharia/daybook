@@ -449,6 +449,13 @@ struct LibraryPage: View {
         .padding(.leading, barInset(.leading))
         .padding(.trailing, barInset(.trailing))
         .padding(.bottom, footSheet || statusSheetInset != nil ? 0 : DaybookSpacing.s2)
+        // Paper under the system sheet, edge to edge, so no row's rule or glyph shows in the gaps the floating sheet
+        // leaves around its corners and under itself.
+        .background(alignment: .bottom) {
+          if !footSheet, let statusSheetInset {
+            DaybookPalette.paper.frame(height: statusSheetInset).ignoresSafeArea(edges: .bottom)
+          }
+        }
       }
     }
   }
@@ -826,7 +833,7 @@ enum PhoneActions {
 /// What this iPhone does for what a conversation's status offers, from the page and Info's Now row alike: the library's
 /// half through DaybookKit's `ConversationStatusActionHandler`, as the Mac does it, with its work processed as its menus
 /// process it (`PhoneActions.process`), and this iPhone's own here: Details, its downloads, Settings, where its summaries
-/// run, and upgrades. A Mac's queue isn't this iPhone's to pause, resume, or cancel.
+/// run, and upgrades. A Mac's queue isn't this iPhone's to pause, resume, or cancel; its own work it can give up.
 @MainActor
 struct PhoneStatusActions: ConversationStatusActionHandler {
   let library: LibraryController
@@ -846,7 +853,8 @@ struct PhoneStatusActions: ConversationStatusActionHandler {
   func performHere(_ action: ConversationStatusPresentation.Action, on id: UUID) {
     switch action {
     case .details(let words): session.sheet = .details(words)
-    case .pause, .resume, .cancel: break  // A Mac's queue.
+    case .pause, .resume: break  // A Mac's queue.
+    case .cancel: PhoneProcessor.current?.cancelStarted(id)
     case .cancelDownload: model?.models.cancelProcessingDownloads()
     case .downloadModels: model?.models.downloadProcessingSet()
     case .downloadSummaryModel:
