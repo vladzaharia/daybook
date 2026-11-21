@@ -2,6 +2,7 @@ import DaybookWatchLink
 import Foundation
 import Observation
 import SwiftUI
+import UserNotifications
 import WatchKit
 
 /// Daybook on the watch (docs/watch.md): the recorder, the recordings it holds, and the iPhone's word, tied together.
@@ -21,6 +22,10 @@ final class WatchModel {
     /// Finished recordings have segments the iPhone doesn't have yet.
     private(set) var isSending = false
     private(set) var phoneName: String?
+    /// The length recorded when the recording paused, for the clock to hold; nil while it captures.
+    private(set) var pausedLength: TimeInterval?
+    /// A start is waiting for the microphone.
+    private(set) var isStarting = false
 
     @ObservationIgnored private let store = WatchStore.standard
     @ObservationIgnored private let recorder: WatchRecorder
@@ -33,7 +38,9 @@ final class WatchModel {
     @ObservationIgnored private var launched = false
     /// A recording is starting (waiting for the microphone): nothing else starts, and the iPhone's `.start` and `.stop`
     /// wait in `waiting` until it has.
-    @ObservationIgnored private var starting = false
+    @ObservationIgnored private var starting = false {
+        didSet { isStarting = starting }
+    }
     @ObservationIgnored private var waiting: [(WatchMessage, PhoneLink.Reply?)] = []
     /// A change to report once the link is up (recordings closed at launch).
     @ObservationIgnored private var changeAtActivation: WatchChange?
@@ -96,15 +103,38 @@ final class WatchModel {
 
     /// The words under the button, only when they matter.
     var statusLine: String? {
-        if let problem { return problem }
-        if let recording {
-            if !isCapturing { return "Paused" }
-            if recording.conversationID != nil { return "With \(phoneName ?? "your iPhone")" }
-            return isReachable ? nil : "Can't reach iPhone"
-        }
-        if isSending { return isReachable ? "Sending to iPhone…" : "Can't reach iPhone" }
-        return nil
+        WatchWords.statusLine(.init(problem: problem, starting: isStarting, isRecording: recording != nil, isCapturing: isCapturing,
+                                    isJoined: recording?.conversationID != nil, isReachable: isReachable, isSending: isSending))
     }
+
+    /// Where to turn the microphone on, under "Microphone is off" (the watch can't open Settings itself).
+    var statusDetail: String? { problem == WatchWords.microphoneOff ? WatchWords.microphoneOffWhere : nil }
+
+    /// The paused recording's Resume button.
+    func resumeRecording() { resume() }
+
+    /// Whether the person must be asked before a notice can be posted: once, with the first recording.
+    private func askForNotices() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
+    /// A notice for a recording that stopped or paused by itself, only while Daybook isn't on the screen (the haptic and
+    /// the screen say it otherwise).
+    private func postNotice(id: String, title: String, body: String) {
+        guard phase != .active else { return }
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
+    }
+
+    private func removeNotice(id: String) {
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [id])
+    }
+
+    private static let pausedNoticeID = "recording.paused"
+    private static let stoppedNoticeID = "recording.stopped"
 
     // MARK: Recording
 
@@ -138,6 +168,7 @@ final class WatchModel {
             journal.isOwn = conversationID == nil && change == .startedByPhone
             try recorder.start(journal)
             problem = nil
+            askForNotices()
             WKInterfaceDevice.current().play(.start)
             recorder.setMetering(phase == .active)
             // Started on the wrist (or for no conversation), it adopts the shared recording from the context the iPhone
@@ -171,15 +202,24 @@ final class WatchModel {
         held.append(journal)
         // The last segment, and any that closed without going out.
         link.send(journal.unsent)
-        WKInterfaceDevice.current().play(.stop)
+        removeNotice(id: Self.pausedNoticeID)
+        if change == .endedOnItsOwn {
+            WKInterfaceDevice.current().play(.failure)
+            postNotice(id: Self.stoppedNoticeID, title: WatchWords.stoppedTitle, body: WatchWords.stoppedBody(problem ?? ""))
+        } else {
+            WKInterfaceDevice.current().play(.stop)
+        }
         push(change)
     }
 
     private func resume() {
         do {
             try recorder.resume()
+            problem = nil
+            removeNotice(id: Self.pausedNoticeID)
             push(.resumed)
         } catch {
+            problem = WatchWords.couldntResume
             refresh()
         }
     }
@@ -194,6 +234,8 @@ final class WatchModel {
         case .interrupted(let segment):
             if let segment { link.send([segment]) }
             level = 0
+            WKInterfaceDevice.current().play(.directionDown)
+            postNotice(id: Self.pausedNoticeID, title: WatchWords.pausedTitle, body: WatchWords.pausedBody)
             push(.interrupted)
         case .interruptionEnded:
             if phase == .active { resume() }
@@ -358,6 +400,7 @@ final class WatchModel {
     private func refresh() {
         recording = recorder.journal?.recording
         isCapturing = recorder.isCapturing
+        pausedLength = recording != nil && !isCapturing ? recorder.recorded : nil
         isSending = held.contains { !$0.undelivered.isEmpty }
         isReachable = link.isReachable
     }
