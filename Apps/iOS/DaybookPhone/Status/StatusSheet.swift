@@ -569,7 +569,7 @@ private struct StatusSections: View {
           TimelineView(.periodic(from: .now, by: 30)) { context in
             let all = StatusOverviewModel.lines(inputs, now: context.date)
             // Shown on its own (the card on the right page, a sheet over a conversation) it's never minimized.
-            let lines = StatusSheetModel.lines(for: detent, all)
+            let lines = StatusSheetModel.lines(for: detent, all, inputs: inputs, now: context.date)
             let groups = StatusSheetModel.groups(for: detent, inputs, now: context.date)
             StatusOverview(
               lines: lines.map { StatusLineItem($0) },
