@@ -621,7 +621,8 @@ public actor LibrarySyncEngine {
             // A recording moved out (Move to New Conversation, or a merge not yet in the Trash) is the copy in the
             // conversation it moved to.
             for track in meeting.tracks where !track.sha256.isEmpty && !track.isMovedOut {
-                sourceMeetings[track.sha256, default: []].insert(meeting.id)
+                // A compressed recording by its original's bytes, as the one it was made from is known.
+                sourceMeetings[track.encoding?.previousSHA256 ?? track.sha256, default: []].insert(meeting.id)
             }
         }
         if sourceMeetings.values.contains(where: { $0.count > 1 }) {

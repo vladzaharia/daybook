@@ -63,6 +63,10 @@ private struct StorageSettingsSheet: View {
     var body: some View {
         SettingsFormSheet(title: "Storage", cancel: nil, confirm: .init("Done", perform: done)) {
             LibraryStorageSection(report: report)
+            RecordingCompressionSection(age: Binding(get: { state.library.recordingCompression },
+                                                     set: { state.library.setRecordingCompression($0) }),
+                                        startsLine: RecordingCompressionSchedule.startsLine(state.compressionStartDate,
+                                                                                            age: state.library.recordingCompression))
             Section {
                 LabeledContent {
                     Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([state.storageURL]) }

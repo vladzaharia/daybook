@@ -99,6 +99,10 @@ final class AppState {
     var isListeningToEarlierRecordings = false
     var listenedRecordings = Set<UUID>()
     var backgroundListeningDelay: Duration = .seconds(20)
+    /// Compressing older recordings when idle (AppState+Compression.swift): the pass waiting or under way, and how long
+    /// an idle moment lasts before it starts.
+    @ObservationIgnored var compressionPass: Task<Void, Never>?
+    var compressionDelay: Duration = .seconds(90)
     /// This Mac's processing: the queue and model downloads it owns (`ProcessingQueue`), and the jobs it runs
     /// (MacProcessor.swift).
     let processor: MacProcessor
@@ -528,6 +532,9 @@ final class AppState {
         static let isInspectorPresented = "isInspectorPresented"
         static let showsMenuBarExtra = "showsMenuBarExtra"
         static let onboardingCompleted = "onboardingCompleted"
+        /// When this Mac may first compress older recordings: a week after the first launch of a version that does it
+        /// (`RecordingCompressionSchedule`).
+        static let compressionStartsAt = "compressionStartsAt"
     }
 
     /// Not Now (or Quit, Start Fresh, Keep It) on the library move offered at launch: once it's answered, the library
@@ -679,6 +686,8 @@ final class AppState {
             pickUpRequests()
             resumeOwedWork()
             Task { await library.relabelStrandedWords() }
+            // What a compression left when the app quit is finished or rolled back before any other starts.
+            await library.reconcileCompressions()
             listenToEarlierRecordingsWhenIdle()
         } catch {
             // On the page, where it can be looked at and tried again: what stops a folder opening is still there after a

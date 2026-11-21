@@ -28,6 +28,8 @@ extension AppState {
     /// fused again (`LibraryController.addBackgroundAudio`); nothing is transcribed. The pass stops
     /// when anything else starts, and the next idle moment picks it up.
     func listenToEarlierRecordingsWhenIdle() {
+        // The same idle moments compress older recordings (AppState+Compression.swift).
+        compressOlderRecordingsWhenIdle()
         guard !isListeningToEarlierRecordings, mayListenToEarlierRecordings else { return }
         // Each idle moment starts the wait again.
         backgroundListening?.cancel()

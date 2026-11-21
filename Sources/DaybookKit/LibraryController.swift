@@ -81,6 +81,10 @@ public final class LibraryController {
     private var savingSyncResult = false
     /// The library settings as a pass last encoded them, so a pass with unchanged settings doesn't encode them again.
     @ObservationIgnored private var encodedSettings: (metadata: LibraryMetadata, data: Data)?
+    /// Compressions under way (LibraryController+Compression.swift): their temporary copies aren't swept meanwhile.
+    @ObservationIgnored var compressionsInFlight = 0
+    /// Stops a compression at a step as a crash would there (tests).
+    @ObservationIgnored var compressionFault: ((RecordingCompressionStep) throws -> Void)?
 
     public init(rootURL: URL, sync: LibrarySyncController?) {
         self.rootURL = rootURL
@@ -178,7 +182,7 @@ public final class LibraryController {
     public func existingMeeting(containingAudioAt url: URL) async throws -> Meeting? {
         guard let store else { throw DaybookError.libraryUnavailable }
         let digest = try await AudioDigest.sha256(contentsOf: url)
-        let candidates = meetings.filter { $0.tracks.contains { $0.sha256 == digest && !$0.isMovedOut } }
+        let candidates = meetings.filter { $0.tracks.contains { $0.holdsBytes(digest) && !$0.isMovedOut } }
         guard !candidates.isEmpty, let found = await store.verifiedMeeting(withDigest: digest, among: candidates) else { return nil }
         return meeting(found.id) ?? found
     }
@@ -590,6 +594,15 @@ public final class LibraryController {
         choose(.ownerProfile, profileID?.uuidString, at: now)
     }
 
+    /// Compress Older Recordings (Settings › Storage): the library's choice, so every device shows the same and every Mac
+    /// acts on it; 30 days while nobody chose, Never for a value this version can't read.
+    public var recordingCompression: RecordingCompressionAge { metadata.recordingCompression }
+
+    /// Chooses Compress Older Recordings for the whole library. The later change wins everywhere.
+    public func setRecordingCompression(_ age: RecordingCompressionAge, at now: Date = Date()) {
+        choose(.compressOlderRecordings, age.rawValue, at: now)
+    }
+
     private func choose(_ name: LibraryChoice.Name, _ selection: String?, at now: Date) {
         let stored = metadata.choice(name)
         // The choice the library holds already: nothing new to save or sync.
@@ -845,7 +858,7 @@ public final class LibraryController {
         if stored == nil, provenance.capture != nil {
             // Same bytes imported before (recovery after a crash): find the existing track by digest.
             let digest = try await AudioDigest.sha256(contentsOf: url)
-            stored = imported.tracks.first { $0.sha256 == digest }
+            stored = imported.tracks.first { $0.holdsBytes(digest) }
         }
         update(id) { current in
             for track in imported.tracks where !current.tracks.contains(where: { $0.id == track.id }) { current.tracks.append(track) }

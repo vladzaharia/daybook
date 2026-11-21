@@ -1,5 +1,52 @@
 # Validation record
 
+## Compress older recordings (2026-11-20)
+
+A Mac replaces a conversation's lossless recordings with verified AAC copies once it's 30 days past its last processing
+and edit (docs/architecture.md, "Compressing older recordings"; docs/icloud-sync.md, "Compressed recordings"). On
+`feature/compress-older-recordings`. Conversations a voice profile learned from are left alone until profiles keep
+their own lossless clips (a follow-up).
+
+**Verified.** Synthetic audio and temporary libraries only, no models, no recording:
+- the encoder and its checks (`AudioCompressorTests`): 48, 44.1, and 16 kHz mono PCM (CAF and WAV) encode and verify
+  with the exact frame count, lag 0 in the alignment features, and envelope correlation above 0.99; stereo with one
+  sound in both channels becomes mono, stereo with two different ones stays stereo; a silent recording needs only a
+  silent copy; AAC, 22.05 kHz, three channels, and a file that isn't audio aren't compressed; a copy a frame short,
+  silenced for 7 s, of another recording, shifted by 120 ms, 40 ms late, loud where the recording is soft, not AAC, or at
+  another rate is refused; changed bytes and cancellation leave nothing behind.
+- eligibility, each condition on its own, and who compresses (`RecordingCompressionTests`); the file merge rule, both
+  orders and every ancestor, commutative, associative, and idempotent over a recording's versions, and a compression on
+  one side with an edit on the other keeping both; the setting's default, choices, unreadable values, and merge; a
+  stand-in for a version before compression keeping `encoding` and writing it back; recognising a recording by its
+  original's bytes.
+- the engine (`RecordingCompressionSyncTests`): a device in use without `compress-1` holds compression back, one seen
+  more than 30 days ago doesn't; an object counts as uploaded only once it's there.
+- the library (`RecordingCompressionLibraryTests`): the replacement (path, name, hash, provenance, alignment digests,
+  saved durably, original kept until let go, then let go once); a recording whose bytes changed, or whose track changed
+  while its copy was made, kept as it was; the original kept while the copy is damaged or the conversation on disk
+  still names the original; a crash
+  at each of the four steps, then a launch, leaving exactly one whole file the track names; the original kept until the
+  copy is uploaded, and kept while a library that synced isn't connected; two Macs, one compressing while the other edits
+  the same recording, converging on the copy with the edit, no conflict, no `SyncConflicts`, and the other Mac letting its
+  original go only while it's the original's bytes; the setting syncing; re-importing the original recognised and not
+  imported again; the first-run week recorded once; nothing in the iPhone app calling the compression steps.
+- 24 mutations of the safety checks, each failing a test: deleting before the copy is uploaded, a library that synced
+  taken as local, skipping the original's or the copy's hash, the on-disk check, or the re-check under the lock; each
+  eligibility gate (busy, Trash, age, upload, verification, voice profile, open request, devices, first-run week,
+  lossy); each check on the copy (frame count, quiet, envelope, lag, format) and on the source's hash; and both merge
+  rules.
+- AAC determinism, measured with this Mac's encoder: two encodings of the same source differ only in the MP4 headers'
+  creation and modification times (6 bytes, one-second resolution), so two Macs' copies of one recording usually differ
+  in bytes; the merge rule keeps the smaller hash.
+
+**Not verified.** The effect of AAC at 64 and 32 kbit/s on the real speech models (transcription, speaker detection,
+voice embeddings, background-audio classification) is unmeasured: no models were downloaded, and every check here is on
+synthetic sound. Re-processing a compressed conversation (Upgrade, Transcribe Again) runs on the copy. The scheduler
+(idle moments, power, the battery threshold, stopping when recording or playback starts) is built and wired but has no
+automated test; neither does the Settings row or Info › Audio's line. No real recording, no iCloud, no two physical Macs,
+and no iPhone were involved. An older Daybook seen more than 30 days ago that returns and edits a compressed recording
+may merge back to the original; that's not tested. Superseded originals stay in a plaintext library's iCloud.
+
 ## Playback levels (2026-11-20)
 
 Each recording of a conversation plays with one constant gain that brings its speech level toward the quietest recording's (docs/architecture.md, "Playback levels"). On `feature/playback-level`.

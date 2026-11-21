@@ -128,6 +128,19 @@ The caller supplies a fresh directory for each recording. Files are owner-only: 
 | `capture-result.json` | Final result: warnings, call-capture path, output-route events, and later the echo-removal report and derived tracks. |
 | `microphone.echo-cancelled.caf` | The microphone with the call's echo removed: 16 kHz mono Float32, written after Stop. |
 
+**Sizes in the library**, an hour of each, and what Compress Older Recordings keeps once a conversation is 30 days past
+its last processing and edit ([architecture](architecture.md#compressing-older-recordings); measured on synthetic audio with
+this Mac's AAC encoder, `AudioCompressorTests` and a 10-minute scratch run scaled to an hour):
+
+| Recording | As captured | Compressed |
+|---|---|---|
+| Mac microphone, 48 kHz mono Float32 CAF | 691 MB | 29 MB (AAC-LC 64 kbit/s) |
+| Call audio, 48 kHz stereo Float32 CAF | 1.38 GB | 29 MB when both channels are the same sound (mono 64 kbit/s); 44 MB otherwise (stereo 96 kbit/s) |
+| Echo-cancelled microphone, 16 kHz mono Float32 CAF | 230 MB | 15 MB (32 kbit/s) |
+| Soundcore, decoded 16 kHz mono Float32 WAV | 230 MB | 15 MB (32 kbit/s) |
+| iPhone and Watch, AAC-LC 48 kHz mono 64 kbit/s M4A | 29 MB | not compressed again |
+| Imported files | as imported | lossless ones at 44.1, 48, or 16 kHz as above; lossy ones never |
+
 `CaptureRecovery.recover(in:)` decodes finalized results or salvages inactive staging folders after
 a crash. It reads the actual CAF length, because sidecars can trail the audio. It must never run on
 a directory that's still being recorded. Clock anchors live in the sidecars, so a recovered
