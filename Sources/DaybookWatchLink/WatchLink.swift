@@ -45,14 +45,17 @@ public enum WatchMessage: Codable, Equatable, Sendable {
     /// What the watch is recording changed, and why (`WatchState.change`). No answer.
     case state(WatchState)
     /// The person marked a moment on the watch while it records (a newer message: a build that can't read it ignores it).
-    /// Sent now when the iPhone is reachable and queued when it isn't, so it arrives once, by its ID. No answer.
+    /// Sent now when the iPhone is reachable and queued when it isn't. Only a preview, for an iPhone recording the same
+    /// conversation now: the mark itself goes with the recording (`WatchRecordingInfo.bookmarks`). No answer.
     case bookmark(WatchBookmark)
     /// May the watch record on into this conversation (Keep Recording after a Stop)? Answered with `.canKeep`: whether
-    /// the conversation is in the library, not in the Trash, not hidden by the Personal lock, and nothing records here.
+    /// the conversation is in the library, not in the Trash, not hidden by the Personal lock, and nothing records into
+    /// it or merges it.
     case keep(UUID)
 }
 
-/// A bookmark made on the watch: the iPhone files it in the shared recording as its own button does.
+/// A bookmark made on the watch. It's kept in its recording (`WatchRecordingInfo.bookmarks`), so it reaches the
+/// conversation with the audio, at its place on the recording's own timeline, by its ID (a mark heard twice makes one).
 public struct WatchBookmark: Codable, Equatable, Sendable, Identifiable {
     /// Its ID, the bookmark's in the conversation (a message that arrives twice makes one).
     public var id: UUID
@@ -270,10 +273,14 @@ public struct WatchRecordingInfo: Codable, Equatable, Sendable, Identifiable {
     /// It records on into a conversation the iPhone already has (Keep Recording after a Stop): the iPhone doesn't start
     /// or stop a recording of its own for it, and imports it into that conversation as a later part.
     public var isContinuation: Bool?
+    /// The moments the person marked in it, in order. The iPhone files them with the recording's track when it imports
+    /// it (`bookmarkTimes`), in whichever conversation the recording goes to.
+    public var bookmarks: [WatchBookmark]?
 
     public init(id: String, conversationID: UUID? = nil, startedAt: Date, duration: TimeInterval = 0, segmentIndices: [Int] = [],
-                isFinished: Bool = false, byteCount: UInt64 = 0, isContinuation: Bool? = nil) {
+                isFinished: Bool = false, byteCount: UInt64 = 0, isContinuation: Bool? = nil, bookmarks: [WatchBookmark]? = nil) {
         self.isContinuation = isContinuation
+        self.bookmarks = bookmarks
         self.id = id
         self.conversationID = conversationID
         self.startedAt = startedAt
@@ -281,6 +288,18 @@ public struct WatchRecordingInfo: Codable, Equatable, Sendable, Identifiable {
         self.segmentIndices = segmentIndices
         self.isFinished = isFinished
         self.byteCount = byteCount
+    }
+
+    /// Its bookmarks on its own timeline: seconds from its first sample, from when each was made against its start, both on
+    /// the watch's clock (so no clock between the devices comes into it). One made outside the recording is left out, and
+    /// one listed twice counts once. In order.
+    public var bookmarkTimes: [(id: UUID, time: TimeInterval)] {
+        var seen = Set<UUID>()
+        return (bookmarks ?? []).compactMap { mark -> (id: UUID, time: TimeInterval)? in
+            let time = mark.madeAt.timeIntervalSince(startedAt)
+            guard time >= 0, time <= duration, seen.insert(mark.id).inserted else { return nil }
+            return (mark.id, time)
+        }.sorted { $0.time < $1.time }
     }
 }
 

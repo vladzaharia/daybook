@@ -229,12 +229,15 @@ public final class SimulatedWatch: WatchTransport {
         push(state(.stoppedOnWatch))
     }
 
-    /// The person taps Bookmark on the watch: sent to the iPhone with an ID, `ago` seconds back, twice when `again`
-    /// (a message sent and then queued).
+    /// The person taps Bookmark on the watch, `at` seconds into the recording (by default where it is now): kept in the
+    /// recording, as the watch app keeps it, and sent to the iPhone (twice when `again`: a message sent and then queued),
+    /// unless `sends` is off (the iPhone out of reach, the message still queued).
     @discardableResult
-    public func pressBookmark(ago: TimeInterval = 0, again: Bool = false) -> WatchBookmark? {
-        guard let recording else { return nil }
-        let mark = WatchBookmark(recordingID: recording.id, madeAt: now.addingTimeInterval(-ago))
+    public func pressBookmark(at offset: TimeInterval? = nil, again: Bool = false, sends: Bool = true) -> WatchBookmark? {
+        guard let current = recording else { return nil }
+        let mark = WatchBookmark(recordingID: current.id, madeAt: current.startedAt.addingTimeInterval(offset ?? current.duration))
+        recording?.bookmarks = (current.bookmarks ?? []) + [mark]
+        guard sends else { return mark }
         onMessage?(.bookmark(mark), nil)
         if again { onMessage?(.bookmark(mark), nil) }
         return mark

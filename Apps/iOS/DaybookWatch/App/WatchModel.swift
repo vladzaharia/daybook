@@ -32,7 +32,7 @@ final class WatchModel {
     private(set) var showsSummary = false
     private(set) var offersKeep = false
     private(set) var afterStopDelivered = false
-    /// Bookmarks made in the recording now.
+    /// Bookmarks kept in the recording now: they reach the iPhone with its audio, whenever that goes.
     private(set) var bookmarkCount = 0
 
     @ObservationIgnored private let store = WatchStore.standard
@@ -135,9 +135,11 @@ final class WatchModel {
 
     /// Marks this moment in the recording and the iPhone's conversation (the iPhone's own Bookmark).
     func addBookmark() {
-        guard recorder.isCapturing, let id = recorder.journal?.recording.id else { return }
-        link.send(.bookmark(WatchBookmark(recordingID: id, madeAt: Date())))
-        bookmarkCount += 1
+        guard recorder.isCapturing, let mark = recorder.bookmark(at: Date()) else { return }
+        // Kept in the recording, which takes it to the iPhone with the audio. The message only shows it at once on an
+        // iPhone recording the same conversation.
+        link.send(.bookmark(mark))
+        bookmarkCount = recorder.journal?.recording.bookmarks?.count ?? 0
         WKInterfaceDevice.current().play(.click)
     }
 
@@ -524,6 +526,7 @@ final class WatchModel {
 
     private func refresh() {
         recording = recorder.journal?.recording
+        bookmarkCount = recording?.bookmarks?.count ?? 0
         isCapturing = recorder.isCapturing
         pausedLength = recording != nil && !isCapturing ? recorder.recorded : nil
         isSending = held.contains { !$0.undelivered.isEmpty }

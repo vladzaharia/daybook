@@ -499,11 +499,12 @@ final class PhoneRecorder {
     }
 
     /// Marks this moment, or the one `ago` seconds back (a bookmark from the watch, by its ID: one that arrives twice
-    /// makes one). Nil when not recording.
+    /// makes one). Nil when not recording, or for a moment before this recording began.
     @discardableResult
     func addBookmark(id: UUID = UUID(), ago: TimeInterval = 0) -> Highlight? {
-        guard isCapturing, state != .starting, !highlights.contains(where: { $0.id == id }) else { return nil }
-        let mark = Highlight(id: id, time: max(0, elapsedTime - ago), text: "")
+        let time = elapsedTime - max(0, ago)
+        guard isCapturing, state != .starting, time >= 0, !highlights.contains(where: { $0.id == id }) else { return nil }
+        let mark = Highlight(id: id, time: time, text: "")
         highlights.append(mark)
         journal?.highlights = highlights
         persistJournal()

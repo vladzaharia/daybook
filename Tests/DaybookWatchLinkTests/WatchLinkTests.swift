@@ -123,6 +123,46 @@ final class WatchLinkTests: XCTestCase {
         XCTAssertTrue(other["rec-2"]?.recording.isFinished == true)
     }
 
+    /// A bookmark is placed on the recording's own timeline, from its moment against the recording's start on the same
+    /// (watch) clock: no clock between the devices comes into it. Only one outside the recording is left out.
+    func testBookmarksAreTimedOnTheRecordingsOwnClock() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        func mark(_ seconds: TimeInterval, id: UUID = UUID()) -> WatchBookmark {
+            WatchBookmark(id: id, recordingID: "rec-1", madeAt: start.addingTimeInterval(seconds))
+        }
+        let twice = UUID()
+        var info = recording(duration: 600)
+        info.bookmarks = [mark(420, id: twice), mark(12.5), mark(-1), mark(601), mark(420, id: twice), mark(0)]
+        XCTAssertEqual(info.bookmarkTimes.map(\.time), [0, 12.5, 420], "Inside the recording, once each, in order")
+        XCTAssertEqual(info.bookmarkTimes.last?.id, twice)
+        XCTAssertTrue(recording().bookmarkTimes.isEmpty)
+    }
+
+    /// A segment closed before a bookmark, arriving after the report that has it, never takes it away; each report's marks
+    /// are kept, whichever is the more advanced.
+    func testALaterReportNeverDropsABookmark() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let first = WatchBookmark(recordingID: "rec-1", madeAt: start.addingTimeInterval(30))
+        let second = WatchBookmark(recordingID: "rec-1", madeAt: start.addingTimeInterval(200))
+        var ledger = WatchSegmentLedger()
+        var inProgress = recording(segments: [0, 1], duration: 240)
+        inProgress.bookmarks = [first, second]
+        ledger.update(inProgress)
+        var early = recording(segments: [0], duration: 120)
+        early.bookmarks = [first]
+        ledger.received(segment(0, of: early))
+        XCTAssertEqual(ledger["rec-1"]?.recording.bookmarks, [first, second])
+        // The finished report, from a journal saved before the second mark (say), still keeps it.
+        var finished = recording(finished: true, segments: [0, 1, 2], duration: 300)
+        finished.bookmarks = [first]
+        ledger.update(finished)
+        XCTAssertEqual(ledger["rec-1"]?.recording.isFinished, true)
+        XCTAssertEqual(ledger["rec-1"]?.recording.bookmarks, [first, second])
+        // A report from a build that keeps no bookmarks leaves them as they were.
+        ledger.update(recording(finished: true, segments: [0, 1, 2], duration: 300))
+        XCTAssertEqual(ledger["rec-1"]?.recording.bookmarks, [first, second])
+    }
+
     func testASegmentLostToTheAppEndingIsntWaitedFor() {
         var ledger = WatchSegmentLedger()
         // Segment 1 was being written when the app was ended; the recovered recording lists 0 and 2.

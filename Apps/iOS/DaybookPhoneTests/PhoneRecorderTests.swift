@@ -371,7 +371,8 @@ final class PhoneRecorderTests: XCTestCase {
         XCTAssertEqual(mark.id, id)
         XCTAssertEqual(mark.time, 5)
         XCTAssertNil(rig.recorder.addBookmark(id: id, ago: 3), "A message heard twice makes one bookmark")
-        XCTAssertEqual(try XCTUnwrap(rig.recorder.addBookmark(id: UUID(), ago: 99)).time, 0, "Never before the recording began")
+        XCTAssertNil(rig.recorder.addBookmark(id: UUID(), ago: 99), "A moment before this recording began isn't in it")
+        XCTAssertEqual(try XCTUnwrap(rig.recorder.addBookmark(id: UUID(), ago: 8)).time, 0, "Its first moment is")
         let recording = try await rig.stop()
         XCTAssertEqual(recording.highlights.count, 2)
     }

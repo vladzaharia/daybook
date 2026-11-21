@@ -371,6 +371,32 @@ final class PhoneProcessingTests: XCTestCase {
         XCTAssertEqual(rig.engine.transcribed.count, 2)
     }
 
+    /// A recording added while this iPhone transcribes the conversation (Keep Recording on Apple Watch, a recorder's
+    /// import): the import's ask is the request that runs, whose job never saw the recording. Once that job ends, the
+    /// recording is transcribed here too, under the same request.
+    func testBehaviorARecordingAddedWhileTheWorkRunsIsTranscribedToo() async throws {
+        let rig = try await rig()
+        let meeting = try await record(into: rig.library)
+        let asked = try XCTUnwrap(request(rig, meeting.id))
+        rig.engine.hold(true)
+        rig.processor.pickUp()
+        try await waitUntil("the job to start") { rig.engine.isWaiting }
+
+        let url = try temporaryDirectory().appendingPathComponent("watch.m4a")
+        _ = try CaptureFiles.writeClosedSegment(to: url, seconds: 2, frequency: 550)
+        let identity = DeviceRecordingIdentity(kind: AppleWatchIntegration.id, serial: "watch", recordingID: UUID().uuidString)
+        let filed = try await rig.library.importDeviceRecording(url, identity: identity, attachTo: meeting.id, source: .microphone,
+                                                                 requestTranscription: true)
+        XCTAssertEqual(filed.request?.id, asked.id, "The ask is the request that runs")
+        let later = try XCTUnwrap(filed.meeting.tracks.first { $0.deviceRecordingID == identity.recordingID })
+
+        rig.engine.hold(false)
+        try await waitUntil("the later recording transcribed") { rig.engine.transcribed.contains(later.id) }
+        XCTAssertEqual(rig.engine.transcribed, [meeting.tracks[0].id, later.id], "Each once")
+        try await waitUntil("the work to settle") { rig.processor.running == nil }
+        XCTAssertFalse(try XCTUnwrap(rig.library.controller.meeting(meeting.id)).hasUntranscribedTranscribableAudio)
+    }
+
     func testBehaviorAnotherDevicesRecordingIsLeftToIt() async throws {
         let rig = try await rig()
         // A conversation a Mac recorded, synced here without a transcript; Transcribe asked from this iPhone.

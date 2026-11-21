@@ -241,7 +241,9 @@ final class PhoneAppModel: RecordingCommandHandling {
         wireRecorder()
         wireSync()
         multipoints.wire()
-        self.devices.hub.environment.watch.bookmark = { [weak self] id, ago, _ in self?.addWatchBookmark(id, ago: ago) }
+        self.devices.hub.environment.watch.bookmark = { [weak self] id, moment, conversation in
+            self?.addWatchBookmark(id, at: moment, conversation: conversation)
+        }
         self.devices.hub.environment.watch.canKeepRecording = { [weak self] id in self?.canAppendRecording(to: id) ?? false }
         // What this iPhone still has to process or send isn't taken back to iCloud, and an upload iCloud confirms is.
         audio.needsAudio = { [weak self] in
@@ -933,14 +935,20 @@ final class PhoneAppModel: RecordingCommandHandling {
     }
 
     /// Whether the watch may record on into this conversation (Keep Recording): it's here, not in the Trash, not hidden
-    /// by the Personal lock, and nothing records here (the watch joins that on its own).
+    /// by the Personal lock, nothing records here (the watch joins that on its own), no Mac records into it (as far as
+    /// this iPhone hears, over the link or through sync), and no merge of it runs here.
     func canAppendRecording(to id: UUID) -> Bool {
-        !recorder.isActive && library.controller.meeting(id) != nil && ReadingSession.appLock?.hides(id) != true
+        guard !recorder.isActive, let meeting = library.controller.meeting(id), ReadingSession.appLock?.hides(id) != true else { return false }
+        return meeting.status != .recording && !library.controller.mergingIDs.contains(id)
+            && !PhoneRowStatus.recording(link.connectedMacs.compactMap(\.recording)).contains(id)
     }
 
-    /// A bookmark the person made on the watch while it records along: filed as this iPhone's own button files one.
-    func addWatchBookmark(_ id: UUID, ago: TimeInterval) {
-        guard let mark = recorder.addBookmark(id: id, ago: min(ago, 120)) else { return }
+    /// A bookmark the person made on the watch, `at` its moment on this iPhone's clock, in its recording for
+    /// `conversation`: shown at once when this iPhone records that conversation too, as its own button files one (and
+    /// shared with the Macs recording along). Otherwise, or outside this recording, it arrives with the watch's recording.
+    func addWatchBookmark(_ id: UUID, at moment: Date, conversation: UUID) {
+        guard recorder.captureID == conversation,
+              let mark = recorder.addBookmark(id: id, ago: max(0, Date().timeIntervalSince(moment))) else { return }
         sharing.bookmarkAdded(mark)
     }
 

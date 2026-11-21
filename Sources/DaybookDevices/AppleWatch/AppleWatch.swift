@@ -65,11 +65,13 @@ public final class AppleWatchHooks {
     /// Joins a finished recording's segments, in order, into one M4A at the URL: each at its `startOffset`, the gaps
     /// silent. Without it, only a recording of one whole segment can be imported.
     public var join: (@MainActor ([WatchStagedSegment], URL) async throws -> Void)?
-    /// The person bookmarked a moment on the watch: its ID, how long ago it was made on this iPhone's clock, and the
-    /// watch recording it was made in. The app files it in the recording it makes along (its own bookmark button's way).
-    public var bookmark: (UUID, TimeInterval, String) -> Void = { _, _, _ in }
+    /// The person bookmarked a moment on the watch: its ID, when it was made on this iPhone's clock (by the measured
+    /// clocks; never guessed), and the conversation the watch's recording is for. Only for showing it at once in a recording
+    /// of that conversation the app makes now (its own bookmark button's way): the mark itself comes with the watch's
+    /// recording when it imports (`WatchRecordingInfo.bookmarks`).
+    public var bookmark: (UUID, Date, UUID) -> Void = { _, _, _ in }
     /// Whether the watch may record on into this conversation (Keep Recording): it's in the library, not in the Trash, not
-    /// hidden by the Personal lock, and nothing records here. Without it, never.
+    /// hidden by the Personal lock, and nothing records into it or merges it. Without it, never.
     public var canKeepRecording: (UUID) -> Bool = { _ in false }
     /// How long a message waits for the watch's answer when nobody says otherwise.
     public var requestTimeout: Duration = .seconds(10)

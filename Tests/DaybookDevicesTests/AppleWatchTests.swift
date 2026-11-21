@@ -325,25 +325,77 @@ final class AppleWatchTests: XCTestCase {
         XCTAssertEqual(bareAnswer, .canKeep(false))
     }
 
-    func testABookmarkOnTheWatchReachesTheIPhoneOnceInTheRecordingItMadeItIn() async throws {
+    /// The watch's own Stop of a recording right after a Keep Recording one finished: the recording the change is about is
+    /// the one that stopped, not the last finished, so this iPhone hears its button.
+    func testAStopAfterAKeptRecordingIsStillTheButton() async throws {
         let rig = try await rig()
-        var marks: [(UUID, TimeInterval, String)] = []
-        rig.environment.watch.bookmark = { marks.append(($0, $1, $2)) }
-
-        XCTAssertNil(rig.watch.pressBookmark(), "Nothing records: nothing to mark")
+        var pressed: [Bool] = []
+        rig.connection.onButton = { pressed.append($0) }
+        rig.watch.pressKeepRecording(into: UUID())
+        rig.watch.record(1)
+        rig.watch.pressStop()
+        let kept = try XCTUnwrap(rig.watch.finished.last)
         rig.watch.pressRecord()
         rig.watch.record(1)
-        let first = try XCTUnwrap(rig.watch.pressBookmark(ago: 3, again: true))
-        XCTAssertEqual(marks.count, 2, "The connection passes every message on; the iPhone's recorder keeps one by its ID")
-        XCTAssertEqual(marks[0].0, first.id)
-        XCTAssertEqual(marks[0].1, 3, accuracy: 1)
-        XCTAssertEqual(marks[0].2, first.recordingID)
+        XCTAssertEqual(pressed, [true])
+        var stopped = try XCTUnwrap(rig.watch.recording)
+        stopped.isFinished = true
+        // Its finished list as the watch may order it: the kept recording last.
+        rig.watch.onMessage?(.state(WatchState(watchID: rig.watch.watchID, recording: nil, isCapturing: false, finished: [stopped, kept],
+                                               change: .stoppedOnWatch, asOf: Date())), nil)
+        XCTAssertEqual(pressed, [true, false])
+    }
 
-        // One that waited past its recording's end has nowhere to go.
+    /// A bookmark on the watch is kept in its recording, timed on the recording's own clock, and goes wherever the
+    /// recording does. The message only previews it to an iPhone recording the same conversation, at its moment on this
+    /// iPhone's clock by the measured clocks: never with no measured clock, nor for a recording of no conversation.
+    func testABookmarkGoesWithItsRecordingAndIsPreviewedOnlyWhereItCanBePlaced() async throws {
+        let rig = try await rig { $0.clockOffset = 30 }
+        var previews: [(id: UUID, at: Date, conversation: UUID)] = []
+        rig.environment.watch.bookmark = { previews.append(($0, $1, $2)) }
+        XCTAssertNil(rig.watch.pressBookmark(), "Nothing records: nothing to mark")
+
+        // Its own recording, for no conversation: kept, not previewed.
+        rig.watch.pressRecord()
+        rig.watch.record(10)
+        let own = try XCTUnwrap(rig.watch.pressBookmark(at: 4))
+        rig.watch.record(2)
         rig.watch.pressStop()
-        marks = []
-        rig.watch.onMessage?(.bookmark(first), nil)
-        XCTAssertTrue(marks.isEmpty)
+        XCTAssertTrue(previews.isEmpty)
+        let ownTimes = try XCTUnwrap(WatchConnection.listedRecordings[own.recordingID]).bookmarkTimes
+        XCTAssertEqual(ownTimes.map(\.id), [own.id])
+        XCTAssertEqual(try XCTUnwrap(ownTimes.first).time, 4, accuracy: 0.001, "On the recording's own clock")
+
+        // A later part of a conversation: previewed for it, at its moment on this iPhone's clock (the watch's is 30 s ahead).
+        let conversation = UUID()
+        rig.watch.pressKeepRecording(into: conversation)
+        rig.watch.record(6)
+        let start = try XCTUnwrap(rig.watch.recording?.startedAt)
+        let kept = try XCTUnwrap(rig.watch.pressBookmark(at: 5, again: true))
+        XCTAssertEqual(previews.map(\.id), [kept.id, kept.id], "Every message passes on; the iPhone's recorder keeps one by its ID")
+        XCTAssertEqual(previews.first?.conversation, conversation)
+        XCTAssertEqual(try XCTUnwrap(previews.first).at.timeIntervalSince(start), 5 - 30, accuracy: 0.5)
+        rig.watch.pressStop()
+        XCTAssertEqual(WatchConnection.listedRecordings[kept.recordingID]?.bookmarkTimes.map(\.id), [kept.id], "Once, in its recording")
+
+        // One for a recording this iPhone hasn't heard of yet waits for that recording, which carries it.
+        previews = []
+        rig.watch.onMessage?(.bookmark(WatchBookmark(recordingID: "not-heard-of", madeAt: Date())), nil)
+        XCTAssertTrue(previews.isEmpty)
+    }
+
+    /// No measured clock (Daybook wasn't open on the watch since this iPhone was set up): no guessed moment, no preview.
+    /// The bookmark is still in its recording.
+    func testABookmarkWithNoMeasuredClockIsntPreviewed() async throws {
+        let rig = try await rig { $0.isReachable = false }
+        var previews: [UUID] = []
+        rig.environment.watch.bookmark = { id, _, _ in previews.append(id) }
+        rig.watch.pressKeepRecording(into: UUID())
+        rig.watch.record(3)
+        let queued = try XCTUnwrap(rig.watch.pressBookmark())
+        XCTAssertTrue(previews.isEmpty)
+        rig.watch.pressStop()
+        XCTAssertEqual(WatchConnection.listedRecordings[queued.recordingID]?.bookmarkTimes.map(\.id), [queued.id], "Still in its recording")
     }
 
     /// A join from a context that waited while the watch was away names a recording this iPhone doesn't record now:

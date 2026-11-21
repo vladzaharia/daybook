@@ -108,6 +108,9 @@ public final class WatchConnection: RecordingStateConnection, DetailedConnection
     /// Starts of the watch's recordings on this iPhone's clock, as listed: their IDs don't carry them
     /// (`DeviceRecordingStart.date(of:)`).
     public static var recordingStarts: [String: Date] = [:]
+    /// The watch's recordings as last listed (the ledger's newest report of each): what their import needs beyond the
+    /// audio, whether one records on into a conversation this iPhone had (`isContinuation`) and its bookmarks.
+    public static var listedRecordings: [String: WatchRecordingInfo] = [:]
 
     public init(device: ConfiguredDevice, transport: any WatchTransport, hooks: AppleWatchHooks, storage: DeviceStorage, staging: URL) {
         self.transport = transport
@@ -452,9 +455,12 @@ public final class WatchConnection: RecordingStateConnection, DetailedConnection
         case .keep(let conversation):
             reply?(.canKeep(hooks.canKeepRecording(conversation)))
         case .bookmark(let mark):
-            // Only a moment of the recording the watch is making now: one that waited past its end has nowhere to go.
-            guard watch?.recording?.id == mark.recordingID else { return }
-            hooks.bookmark(mark.id, max(0, Date().timeIntervalSince(clock.phoneTime(mark.madeAt))), mark.recordingID)
+            // A preview for a recording of the same conversation this iPhone makes now. The mark itself comes with the
+            // watch's recording (`WatchRecordingInfo.bookmarks`), so a preview that can't be placed (no measured clock,
+            // a recording not heard of yet or for no conversation) is simply not shown early.
+            let recording = watch?.recording?.id == mark.recordingID ? watch?.recording : ledger[mark.recordingID]?.recording
+            guard let conversation = recording?.conversationID, let offset = clock.offset else { return }
+            hooks.bookmark(mark.id, mark.madeAt.addingTimeInterval(-offset), conversation)
         default:
             reply?(.refused("Daybook on this iPhone doesn’t take that message."))
         }
@@ -501,9 +507,9 @@ public final class WatchConnection: RecordingStateConnection, DetailedConnection
     private func button(_ state: WatchState, previous: WatchState?) {
         guard !recordCommandPending, let change = state.change else { return }
         // Keep Recording on the watch records on into a conversation this iPhone already has: no button of this iPhone's.
-        if [state.recording, previous?.recording, state.recording == nil ? state.finished.last : nil].contains(where: { $0?.isContinuation == true }) {
-            return
-        }
+        // The recording the change is about: the one recording, else the one that just stopped (the last finished only
+        // when the state before isn't known).
+        if (state.recording ?? previous?.recording ?? state.finished.last)?.isContinuation == true { return }
         if change == .joined, let recording = state.recording, buttonTold[recording.id] == nil, recording.id != startedHereID,
            recording.conversationID == nil || recording.conversationID != hooks.sharedRecording()?.conversationID {
             // It joined a recording this iPhone doesn't record now (from a context that waited): nothing starts here,
@@ -630,6 +636,7 @@ public final class WatchConnection: RecordingStateConnection, DetailedConnection
             let recording = entry.recording
             let start = clock.phoneTime(recording.startedAt)
             Self.recordingStarts[recording.id] = start
+            Self.listedRecordings[recording.id] = recording
             let length: RecordingLength? = recording.duration > 0
                 ? (recording.isFinished ? .exact(recording.duration) : .estimated(recording.duration)) : nil
             list.append(DeviceRecording(id: recording.id, startedAt: start, length: length,
