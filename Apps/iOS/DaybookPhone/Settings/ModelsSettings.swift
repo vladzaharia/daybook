@@ -75,7 +75,10 @@ struct ModelsSettingsScreen: View {
     private func roleSection(_ role: ModelRole, models: PhoneModels) -> some View {
         if let choice = models.roleChoice(for: role) {
             Section {
-                ModelRoleRow(label: nil, choice: choice, space: models.space, actions: ModelRowActions(
+                ModelRoleRow(label: nil, choice: choice, space: models.space,
+                             isBundled: role.isLiveOnly ? models.liveDownload != nil
+                                : PhoneModels.transcribingRoles.contains(role) && models.processingDownload != nil,
+                             actions: ModelRowActions(
                     select: { models.select($0, for: role) },
                     download: { key in if let model = models.catalog.model(key) { models.downloadIfItFits(model) } },
                     cancel: { key in if let model = models.catalog.model(key) { models.cancel(model) } }))

@@ -377,7 +377,7 @@ struct InfoRowLabel: View {
 
     var body: some View {
         if density == .touch {
-            Label { Text(title) } icon: { InfoSymbol(symbol) }
+            Label { Text(title).foregroundStyle(DaybookPalette.Ink.title) } icon: { InfoSymbol(symbol) }
         } else {
             Text(title)
         }
@@ -409,6 +409,13 @@ private struct InfoLabeled: View {
 }
 
 extension View {
-    /// A picker or menu in Info: the Mac's small control (its values stay the row's size); unchanged under touch.
-    func infoControl() -> some View { macControlSize(.small) }
+    /// A picker or menu in Info: the Mac's small control (its values stay the row's size); under touch, its values in link ink
+    /// at every detent.
+    func infoControl() -> some View {
+        #if os(iOS)
+        macControlSize(.small).tint(DaybookPalette.Ink.link).foregroundStyle(DaybookPalette.Ink.link)
+        #else
+        macControlSize(.small)
+        #endif
+    }
 }

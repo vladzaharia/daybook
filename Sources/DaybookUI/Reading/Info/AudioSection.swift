@@ -136,9 +136,10 @@ struct AudioRow: View {
                 }
             }
         } label: {
-            Image(systemName: touch ? "ellipsis.circle" : "ellipsis")
+            Image(systemName: "ellipsis")
                 .font(touch ? .title3 : .body)
-                .foregroundStyle(touch ? DaybookPalette.Ink.link : DaybookPalette.Ink.secondary)
+                .foregroundStyle(DaybookPalette.Ink.secondary)
+                .daybookHitTarget()
         }
         .menuIndicator(.hidden)
         .buttonStyle(.borderless)

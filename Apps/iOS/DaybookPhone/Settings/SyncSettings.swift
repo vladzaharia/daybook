@@ -1,3 +1,4 @@
+import DaybookDesign
 import DaybookKit
 import DaybookUI
 import SwiftUI
@@ -93,9 +94,14 @@ struct LibraryDevicesScreen: View {
     @Environment(PhoneAppModel.self) private var model
 
     var body: some View {
+        let devices = PhoneSyncDemo.shown?.devices ?? model.sync.devices
         List {
-            LibraryDevicesSection(devices: model.sync.devices)
+            LibraryDevicesSection(devices: devices)
             SettingsScrollEndMarker()
+        }
+        .overlay {
+            // The connection dropping while the page is open clears the list; say so rather than show a bare page.
+            if devices.isEmpty { DaybookEmptyState(title: "No Devices", image: .symbol("iphone")) }
         }
         .refreshable { await model.sync.refreshDevices() }
         .settingsScrollEnd()

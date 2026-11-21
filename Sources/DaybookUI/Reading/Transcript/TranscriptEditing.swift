@@ -233,9 +233,54 @@ public struct HeardInRecordings: View {
     }
 
     public var body: some View {
+        content
+        .presentationCompactAdaptation(.sheet)
+        #if os(iOS)
+        .presentationDetents(density == .touch ? [.medium] : [.medium, .large])
+        #endif
+    }
+
+    private var title: String { "Heard in \(segment.provenance.count) Recordings" }
+
+    @ViewBuilder private var content: some View {
+        #if os(iOS)
+        if density == .touch {
+            NavigationStack {
+                List {
+                    ForEach(Array(segment.provenance.enumerated()), id: \.offset) { _, source in
+                        let track = meeting.tracks.first { $0.id == source.trackID }
+                        VStack(alignment: .leading, spacing: 3) {
+                            Button {
+                                if let track { play(.source(track, source.start)); dismiss() }
+                            } label: {
+                                Label("\(track.map(recordingName) ?? "Recording") · \(TimeLabel.short(source.start))", systemImage: "play.fill")
+                                    .monospacedDigit()
+                                    .foregroundStyle(DaybookPalette.Ink.link)
+                            }
+                            .disabled(track == nil)
+                            Text("“\(source.text)”")
+                                .font(DaybookFont.status.font(density))
+                                .foregroundStyle(DaybookPalette.Ink.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                .navigationTitle(title)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .topBarTrailing) { Button(role: .close) { dismiss() }.tint(DaybookPalette.Ink.title) } }
+            }
+        } else {
+            popover
+        }
+        #else
+        popover
+        #endif
+    }
+
+    private var popover: some View {
         VStack(alignment: .leading, spacing: DaybookSpacing.s3) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Heard in \(segment.provenance.count) Recordings").font(.headline).foregroundStyle(DaybookPalette.Ink.title)
+                Text(title).font(.headline).foregroundStyle(DaybookPalette.Ink.title)
                 Spacer()
                 #if os(iOS)
                 Button("Done") { dismiss() }.buttonStyle(.daybookLink).fontWeight(.semibold).daybookHitTarget()
@@ -262,10 +307,6 @@ public struct HeardInRecordings: View {
         .padding(density == .touch ? 20 : 14)
         .frame(width: density == .touch ? nil : 300, alignment: .leading)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .presentationCompactAdaptation(.sheet)
-        #if os(iOS)
-        .presentationDetents([.medium, .large])
-        #endif
     }
 }
 
@@ -282,26 +323,58 @@ struct RenameSpeakerForm: View {
 
     private var trimmed: String { draft.trimmingCharacters(in: .whitespacesAndNewlines) }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: DaybookSpacing.s3) {
-            Text("Rename Speaker").font(.headline).foregroundStyle(DaybookPalette.Ink.title)
-            SpeakerNameField(current: name, draft: $draft, isFocused: focused, profiles: profiles, me: me, commit: commit) {
-                TextField("Name", text: $draft)
-                    .textFieldStyle(.roundedBorder)
-                    .touchKeyboard(capitalization: .words)
-                    .focused($focused)
+    @ViewBuilder private var form: some View {
+        if density == .touch {
+            NavigationStack {
+                VStack(alignment: .leading, spacing: DaybookSpacing.s3) {
+                    SpeakerNameField(current: name, draft: $draft, isFocused: focused, profiles: profiles, me: me, commit: commit, showsGlyphs: true) {
+                        TextField("Name", text: $draft)
+                            .touchKeyboard(capitalization: .words)
+                            .focused($focused)
+                            .padding(.horizontal, DaybookSpacing.s3)
+                            .frame(minHeight: 44)
+                            .background(DaybookPalette.quietFill, in: DaybookRadius.shape(DaybookRadius.box))
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, DaybookSpacing.s4)
+                .padding(.top, DaybookSpacing.s3)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .background(DaybookPalette.paper.ignoresSafeArea())
+                .navigationTitle("Rename Speaker")
+                .touchInlineTitle()
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("Cancel", role: .cancel) { dismiss() } }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Rename") { commit(draft) }.fontWeight(.semibold).disabled(trimmed.isEmpty)
+                    }
+                }
             }
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Rename") { commit(draft) }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(trimmed.isEmpty)
+        } else {
+            VStack(alignment: .leading, spacing: DaybookSpacing.s3) {
+                Text("Rename Speaker").font(.headline).foregroundStyle(DaybookPalette.Ink.title)
+                SpeakerNameField(current: name, draft: $draft, isFocused: focused, profiles: profiles, me: me, commit: commit) {
+                    TextField("Name", text: $draft)
+                        .textFieldStyle(.roundedBorder)
+                        .touchKeyboard(capitalization: .words)
+                        .focused($focused)
+                }
+                HStack {
+                    Spacer()
+                    Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                    Button("Rename") { commit(draft) }
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(trimmed.isEmpty)
+                }
             }
+            .padding(16)
+            .frame(width: 252, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(density == .touch ? 20 : 16)
-        .frame(width: density == .touch ? nil : 252, alignment: .leading)
-        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    var body: some View {
+        form
         .presentationCompactAdaptation(.sheet)
         #if os(iOS)
         .presentationDetents([.medium, .large])

@@ -60,27 +60,36 @@ public struct WelcomeStepPage<Content: View, Actions: View>: View {
     private let title: String?
     private let message: String?
     private let showsMark: Bool
+    private let symbol: String?
     private let content: Content
     private let actions: Actions
+    #if os(iOS)
+    /// Room for the step's primary and Not Now, so the primary stays put on a page without one.
+    @ScaledMetric private var actionsHeight: CGFloat = 50 + DaybookSpacing.s2 + 44
+    #endif
 
-    public init(title: String?, message: String?, showsMark: Bool = false,
+    /// - Parameter symbol: The page's symbol in the iPhone's hero slot (the mark on a page that `showsMark`); the slot
+    ///   is there on every titled page, so the title never moves.
+    public init(title: String?, message: String?, showsMark: Bool = false, symbol: String? = nil,
                 @ViewBuilder content: () -> Content, @ViewBuilder actions: () -> Actions) {
         self.title = title
         self.message = message
         self.showsMark = showsMark
+        self.symbol = symbol
         self.content = content()
         self.actions = actions()
     }
 
     public var body: some View {
         #if os(iOS)
-        // Centred in the room above the buttons, as the Mac's window centres it; scrolling once text sizes need more,
-        // and never under the buttons.
+        // One geometry on every page: the hero slot and the title at a fixed height under the top, only what's under
+        // them changing; scrolling once text sizes need more, and never under the buttons.
         VStack(spacing: 0) {
             GeometryReader { proxy in
                 ScrollView {
                     VStack(spacing: 0) {
-                        Spacer(minLength: DaybookSpacing.s5)
+                        Color.clear.frame(height: max(DaybookSpacing.s5, proxy.size.height * 0.1))
+                        if title != nil { hero }
                         header
                         content
                         Spacer(minLength: DaybookSpacing.s5)
@@ -92,6 +101,7 @@ public struct WelcomeStepPage<Content: View, Actions: View>: View {
                 .scrollBounceBehavior(.basedOnSize)
             }
             VStack(spacing: DaybookSpacing.s2) { actions }
+                .frame(minHeight: actionsHeight, alignment: .top)
                 .padding(.horizontal, DaybookSpacing.s5)
                 .padding(.vertical, DaybookSpacing.s3)
                 .frame(maxWidth: WelcomeMetrics.columnWidth)
@@ -110,11 +120,31 @@ public struct WelcomeStepPage<Content: View, Actions: View>: View {
         #endif
     }
 
+    #if os(iOS)
+    /// The slot above the title: the mark, the page's symbol, or nothing, always the mark's height.
+    @ViewBuilder private var hero: some View {
+        Group {
+            if showsMark {
+                DaybookMark(size: WelcomeMetrics.markSize)
+            } else if let symbol {
+                Image(systemName: symbol)
+                    .font(.system(size: 56, weight: .regular))
+                    .foregroundStyle(DaybookPalette.brandGradient(.mark))
+            }
+        }
+        .frame(height: WelcomeMetrics.markSize)
+        .padding(.bottom, DaybookSpacing.s4)
+        .accessibilityHidden(true)
+    }
+    #endif
+
     @ViewBuilder private var header: some View {
+        #if os(macOS)
         if showsMark {
             DaybookMark(size: WelcomeMetrics.closingMarkSize)
                 .padding(.bottom, DaybookSpacing.s4)
         }
+        #endif
         if let title {
             Text(title)
                 .font(WelcomeMetrics.titleFont)
@@ -318,7 +348,7 @@ public enum WelcomeMetrics {
     public static let pointsWidth: CGFloat = 420
     public static let messageWidth: CGFloat = 420
     public static let columnWidth: CGFloat = 520
-    static let cardFill = Color(uiColor: .secondarySystemGroupedBackground)
+    static let cardFill = DaybookPalette.quietFill
     static let cardStroke = Color.clear
     #else
     public static let markSize: CGFloat = 96
