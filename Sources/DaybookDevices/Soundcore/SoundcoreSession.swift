@@ -195,6 +195,8 @@ public final class SoundcoreSession {
     /// A transfer or a Start or Pause of this session's is waiting for another app's transfer to finish.
     public private(set) var isWaitingForOtherApp = false
     public var onWaitingForOtherApp: ((Bool) -> Void)?
+    /// How many wait their turn for the link (tests).
+    var linkWaiters: Int { waiters.count }
     /// Transfers a Start or Pause stopped, to send first (each started again from its beginning).
     public private(set) var preemptedTransfers = 0
 
@@ -209,6 +211,10 @@ public final class SoundcoreSession {
     /// When another app's audio last arrived.
     private var otherAppAudioAt: ContinuousClock.Instant?
     private var waitingForOtherApp = 0
+    /// Requests that wait for the other app to be quiet are numbered in the order they were asked for, and those that
+    /// are waiting now (outside the queue for the link) by that number.
+    private var arrivals = 0
+    private var quietWaiters: Set<Int> = []
     /// The recording this session last asked the recorder for, so a late file head of its own isn't
     /// taken for another app's.
     private var lastRequestedID: UInt32?
@@ -572,14 +578,26 @@ public final class SoundcoreSession {
 
     /// `exclusive`, once no other app's audio has arrived for `SoundcoreTiming.otherAppQuiet`: a transfer
     /// or a Start or Pause sent over another app's transfer would cut it off. Listing and status don't
-    /// wait, and don't hold up meanwhile.
+    /// wait, and don't hold up meanwhile. A request that has to give the link back for another app's audio
+    /// keeps its turn: nothing asked for after it (but a Start or Pause) goes first once the other app is quiet.
     private func exclusiveWhenQuiet<T>(first: Bool = false, _ operation: () async throws -> T) async throws -> T {
         var waiting = false
-        defer { if waiting { waitedForOtherApp() } }
+        let arrival = arrivals
+        arrivals += 1
+        defer { if waiting { waitedForOtherApp() }; quietWaiters.remove(arrival) }
         while true {
             if otherAppIsTransferring {
                 if !waiting { waiting = true; waitForOtherApp() }
+                quietWaiters.insert(arrival)
                 try await quietSpell()
+                quietWaiters.remove(arrival)
+                continue
+            }
+            // Quiet, with one asked for earlier still on its way back to the link: it goes first.
+            if !first, quietWaiters.contains(where: { $0 < arrival }) {
+                quietWaiters.insert(arrival)
+                try await Task.sleep(for: .milliseconds(10))
+                quietWaiters.remove(arrival)
                 continue
             }
             let result: T? = try await exclusive(first: first) { () async throws -> T? in

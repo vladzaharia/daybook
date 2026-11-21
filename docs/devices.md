@@ -211,7 +211,8 @@ Activity (docs/iphone.md), which therefore survives a relaunch while the recorde
 `CompanionRecorders`, and a linked device's request, `RecorderRemoteControl`). On Soundcore
 (`SoundcoreSession.record`) it goes ahead of everything waiting for the link: a transfer under way (not live audio) is
 stopped (`1A 11`), the command is sent, the recorder's status is read until it confirms, and the transfer starts again
-from its beginning right after, still first in the queue and not counted as an attempt. A transfer within ten seconds
+from its beginning right after, still first in the queue (also when it has to give the link back for another app's
+transfer: nothing asked for later, Listen Live of the shared recording included, goes ahead of it) and not counted as an attempt. A transfer within ten seconds
 of its end (`SoundcoreTiming.preemptExemption`, at the pace it has come) is left to finish and the command waits for
 it. It still waits for another app's transfer, which nothing cuts off. The caller's deadline (15 s for a cascade) is
 the answer's limit: a command still waiting to be sent then is dropped and never reaches the recorder; one already
