@@ -4831,3 +4831,23 @@ Changed: a countdown that ends in the cloud names the model on the list row, the
 Checked by unit tests: the words for each surface (`SummaryPlacementWordsTests`, `ConversationStatusPresentationTests`, `RecorderSurfaceTests`, `FloatingNotesStatusTests`).
 
 Not checked: Cancel against a live queue beyond the fake-engine tests (`CancelStartedWorkTests`: running own, running with a request, paused own, paused with another device's request, paused with this Mac's request); an iPhone still being told "paused" when a Mac's own job is cancelled; Undo for the chip menu's actions; the iPhone's own work has no Cancel yet; the chip menu on a real Mac; the notices on a real iPhone arrival or launch recovery.
+
+## 2026-11-20: Mac settings, library, devices (UX pass)
+
+Verified (unit tests, temporary libraries, synthetic audio; no models, no recording, no network):
+- Settings search keywords (`SettingsSearchTests`), the empty places of Work and Personal, the search prompt, the Trash
+  question's wording (`LibraryPlaceWordsTests`, `LibraryWordsTests`), the import notice's wording and an import that goes
+  on past a file that isn't audio, with an alert only when nothing imported (`ImportSidecarTests`), the menu bar's
+  "Saved · 18 min" (`MenuBarStatusTests`), and the Mac intents' spoken lines (`SystemEntryPointsTests`).
+- The Mac settings page order was read against the code; "Open at login" now comes from one constant (`WelcomeWords`).
+
+Not verified: Settings panes and the menu bar were not captured (see the PR), Device Details' Copy on a real recorder
+(the report is the iPhone's text under a Mac first line), the open Floating Notes chip menu's Manage Storage… (it opens
+Settings › Library, where Storage is a row; the Storage sheet itself belongs to another branch), and the partial-import
+notice has no Details… (a notice has none; the alert keeps it when nothing imported).
+
+## 2026-11-20: Visual fixes on Mac Settings, setup and device pages (UX pass)
+
+Verified: the ad hoc debug build (`scripts/build-app.sh --debug --ad-hoc`, scratch libraries, the demo flags the screenshots used) was captured with `screencapture -l` beside each original: the recorder page's action tiles on the figures' columns, the problem box spanning the measure, Recent imports' titles in row type, Enter Recovery Key's field and the recovery key row, Settings' one switch size, the Library groups and footers, Recording's info button and status dot, Cloud's Quality groups, Models › Transcription's Download beside its size, Welcome's dividers, Settings › Devices' empty row, and the sheets' widths. `testActionTilesFallToTheFiguresColumnsAtTheSameWidths` holds the tiles' column count to the figures' widths.
+
+Not verified: the footer inset on macOS 15 and 26 (the Mac's extra 10 pt is kept there; only macOS 27 drops it), the iPhone's recovery key row and Recent imports after the shared-code changes beyond a simulator build, the live captions' speaker lane with real live speakers (only the layout was read), and a window that is key (every capture is of an inactive window). DS-07 (one toolbar height in Settings) is left for the owner to see first.

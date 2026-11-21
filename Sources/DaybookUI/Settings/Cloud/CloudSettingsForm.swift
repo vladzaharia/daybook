@@ -256,27 +256,36 @@ public struct CloudSummarySections: View {
                 }
                 if cloud.offers.isEmpty {
                     Text(cloud.isRefreshing ? "Finding models…" : "No models").foregroundStyle(DaybookPalette.Ink.secondary)
-                } else {
-                    CloudModelPicker(cloud: cloud)
-                    #if os(macOS)
-                    LabeledContent(label("Effort")) {
-                        Picker(label("Effort"), selection: $cloud.effort) {
-                            ForEach(cloud.efforts, id: \.self) { effort in Text(SettingsWords.effort(effort)).tag(effort) }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .fixedSize()
-                    }
-                    #else
-                    // Five levels don't fit a segmented control beside the label on a phone.
-                    Picker(label("Effort"), selection: $cloud.effort) {
-                        ForEach(cloud.efforts, id: \.self) { effort in Text(SettingsWords.effort(effort)).tag(effort) }
-                    }
-                    .pickerStyle(.menu)
-                    #endif
                 }
+                #if !os(macOS)
+                if !cloud.offers.isEmpty { modelRows }
+                #endif
             }
+            #if os(macOS)
+            // Their own labels start at the group's edge, not after the tiers' radios.
+            if !cloud.offers.isEmpty { Section { modelRows } }
+            #endif
         }
+    }
+
+    @ViewBuilder private var modelRows: some View {
+        CloudModelPicker(cloud: cloud)
+        #if os(macOS)
+        LabeledContent(label("Effort")) {
+            Picker(label("Effort"), selection: $cloud.effort) {
+                ForEach(cloud.efforts, id: \.self) { effort in Text(SettingsWords.effort(effort)).tag(effort) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+        }
+        #else
+        // Five levels don't fit a segmented control beside the label on a phone.
+        Picker(label("Effort"), selection: $cloud.effort) {
+            ForEach(cloud.efforts, id: \.self) { effort in Text(SettingsWords.effort(effort)).tag(effort) }
+        }
+        .pickerStyle(.menu)
+        #endif
     }
 }
 

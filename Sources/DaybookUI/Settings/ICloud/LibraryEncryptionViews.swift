@@ -56,7 +56,7 @@ public struct ICloudSyncSheetContent: View {
         case .enterRecoveryKey:
             EnterRecoveryKeyForm(controller: controller) { present(nil) }
         case .devices:
-            SettingsFormSheet(title: "Devices", cancel: nil, confirm: .init("Done") { present(nil) }) {
+            SettingsFormSheet(title: "Synced Devices", cancel: nil, confirm: .init("Done") { present(nil) }) {
                 LibraryDevicesSection(devices: devices)
             }
             .task { await refreshDevices() }
@@ -151,13 +151,18 @@ public struct RecoveryKeyView: View {
         SettingsFormSheet(title: "Recovery Key", cancel: nil, confirm: .init("Done", perform: done)) {
             Section {
                 // Not selectable: the system's Copy would put it on every nearby device and in clipboard history.
-                Text(key.text)
-                    .font(.system(.title3, design: .monospaced))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel(key.text.map(String.init).joined(separator: " "))
-                Button(copied ? "Copied" : "Copy") {
-                    Self.copy(key, services: services)
-                    copied = true
+                HStack(alignment: .firstTextBaseline, spacing: DaybookSpacing.s4) {
+                    Text(key.text)
+                        .font(.system(size: 20, design: .monospaced))
+                        .tracking(1)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityLabel(key.text.map(String.init).joined(separator: " "))
+                    Spacer(minLength: 0)
+                    Button(copied ? "Copied" : "Copy") {
+                        Self.copy(key, services: services)
+                        copied = true
+                    }
+                    .buttonStyle(.borderless)
                 }
             }
         }
@@ -186,11 +191,22 @@ public struct EnterRecoveryKeyForm: View {
         SettingsFormSheet(title: "Enter Recovery Key", cancel: .init("Cancel", perform: done),
                           confirm: .init("Open", isEnabled: !working && controller != nil && RecoveryKey(text) != nil, perform: open)) {
             Section {
+                #if os(macOS)
+                // Without a prompt the grouped form draws only the title, which reads as a key already typed.
+                TextField("Recovery key", text: $text, prompt: Text("XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX"))
+                    .labelsHidden()
+                    .accessibilityLabel("Recovery key")
+                    .font(.system(.body, design: .monospaced))
+                    .touchKeyboard(capitalization: .characters)
+                    .autocorrectionDisabled()
+                    .onSubmit(open)
+                #else
                 TextField(SyncSettingsCase.label("Recovery key", density), text: $text)
                     .font(.system(.body, design: .monospaced))
                     .touchKeyboard(capitalization: .characters)
                     .autocorrectionDisabled()
                     .onSubmit(open)
+                #endif
                 if let problem { ProblemLine(text: problem.message, details: problem.details) }
             }
         }
@@ -254,7 +270,7 @@ public struct LibraryDevicesRowLabel: View {
                 }
             }
         } label: {
-            Text("Devices").foregroundStyle(DaybookPalette.Ink.title)
+            Text("Synced Devices").foregroundStyle(DaybookPalette.Ink.title)
         }
         .contentShape(Rectangle())
     }

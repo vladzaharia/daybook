@@ -57,15 +57,17 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         switch self {
         case .general: ["Login", "Login Items", "Startup", "Menu Bar"]
         case .recording: ["Microphone", "Computer Audio", "System Audio", "Calls", "Automatic", "Ask", "Zoom", "Teams", "Meet", "Slack",
-                          "Apps", "Calendar", "Live Captions", "Language", "Floating Notes", "Permissions", "Screen", "Notifications"]
-        case .devices: ["iPhone", "Recorder", "Soundcore", "Add Device", "Pair", "Unpair", "Bluetooth", "Wi-Fi", "Wi‑Fi"]
+                          "Apps", "Calendar", "Live Captions", "Language", "Floating Notes", "Permissions", "Screen", "Notifications",
+                          "Screen & System Audio Recording"]
+        case .devices: ["iPhone", "Recorder", "Soundcore", "Add Device", "Add Recorder", "Pair", "Unpair", "Bluetooth", "Wi-Fi", "Wi‑Fi"]
         case .library: ["Folder", "Location", "Storage", "iCloud", "Sync", "Import", "Privacy", "Encryption", "Recovery Key",
                         "Summary Templates", "Vocabulary", "Glossary", "Speaker Profiles", "Voiceprint", "Version", "Personal", "Lock",
-                        "Touch ID", "Password"]
+                        "Touch ID", "Password", "Trash", "Backup", "Me", "You", "This Is Me", "Match Voices"]
         case .models: ["Transcription", "Speakers", "Summaries", "Language", "Download", "Quality", "Voice", "Voiceprint", "Vocabulary",
                        "Glossary", "Summary Templates", "Speaker Profiles", "Accuracy", "Synced Recordings", "Live Transcription",
-                       "Model Library", "Updates", "Parakeet", "Whisper", "Gemma", "Nemotron", "Community-1"]
-        case .cloud: ["Anthropic", "OpenAI", "Claude", "GPT", "Key", "API Key", "Always", "Offer First", "Countdown", "Effort", "Cost"]
+                       "Model Library", "Updates", "Parakeet", "Whisper", "Gemma", "Nemotron", "Community-1", "Me", "You", "This Is Me",
+                       "Number of Speakers", "Match Voices", "Other Languages", "Quick", "Balanced", "Detailed"]
+        case .cloud: ["Anthropic", "OpenAI", "Claude", "GPT", "Key", "API Key", "Always", "Offer First", "Countdown", "Effort", "Cost", "Work", "Personal", "Not Filed", "Not in Work or Personal"]
         }
     }
 
@@ -128,6 +130,8 @@ struct SettingsView: View {
                     case .models: EmptyView()
                     }
                 }
+                // One switch size across the panes; a mini switch is the Form's default in a few rows.
+                .macControlSize(.regular)
                 .navigationTitle(pane.title)
                 .defaultScrollAnchor(Self.snapshotAnchor)
             }
@@ -177,7 +181,7 @@ private struct GeneralSettings: View {
         Form {
             Section {
                 // Watching for calls and the menu bar item work only while Daybook is open.
-                Toggle("Open at login", isOn: Binding(get: { loginItem.isOn }, set: { loginItem.set($0) }))
+                Toggle(WelcomeWords.openAtLogin, isOn: Binding(get: { loginItem.isOn }, set: { loginItem.set($0) }))
                     .controlSize(.regular)
                 if let problem = loginItem.problem {
                     ProblemLine(text: problem.text, details: problem.details) {
@@ -209,13 +213,15 @@ private struct RecordingSettings: View {
         Form {
             Section {
                 MicrophoneSettingsRow()
-                Toggle(isOn: computerAudio) {
-                    Text("Include computer audio")
-                    Text("Records the other people on a call.")
-                }
+                Toggle("Include computer audio", isOn: computerAudio)
                 .controlSize(.regular)
                 LabeledContent {
                     HStack(spacing: DaybookSpacing.s2) {
+                        Picker("When a call starts", selection: callPolicy) {
+                            ForEach(CallRecordingPolicy.allCases) { Text($0.title).tag($0) }
+                        }
+                        .labelsHidden()
+                        .fixedSize()
                         Button { showingSupportedApps = true } label: {
                             Image(systemName: "info.circle")
                         }
@@ -224,11 +230,6 @@ private struct RecordingSettings: View {
                         .help("Supported Calls")
                         .accessibilityLabel("Supported calls")
                         .popover(isPresented: $showingSupportedApps, arrowEdge: .bottom) { SupportedCallsPopover() }
-                        Picker("When a call starts", selection: callPolicy) {
-                            ForEach(CallRecordingPolicy.allCases) { Text($0.title).tag($0) }
-                        }
-                        .labelsHidden()
-                        .fixedSize()
                     }
                 } label: {
                     Text("When a call starts")
@@ -239,7 +240,6 @@ private struct RecordingSettings: View {
                     return state.usesCalendar
                 }, openSettings: { PrivacySettings.open(.calendars) })
                 .controlSize(.regular)
-                .disabled(state.callPolicy == .off)
                 Toggle("Show floating notes while recording", isOn: $showsFloatingNotes)
                     .controlSize(.regular)
             }
@@ -468,7 +468,7 @@ private struct DetectionStatusLine: View {
     private var recording: Bool { monitor.isMeetingActive && state.isRecording }
     private var color: Color { recording ? DaybookPalette.Ink.record : DaybookPalette.neonMint }
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 5) {
+        HStack(alignment: .center, spacing: 5) {
             Image(systemName: "circle.fill")
                 .font(.system(size: 6))
                 .foregroundStyle(color)
@@ -530,6 +530,8 @@ private struct LibrarySettings: View {
 
     var body: some View {
         Form {
+            SyncSettingsView(state: state)
+
             Section("Location") {
                 LabeledContent {
                     Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([state.storageURL]) }
@@ -546,20 +548,19 @@ private struct LibrarySettings: View {
 
             // The library's own things, as the iPhone's Settings lists them under Library; Models keeps Edit… beside
             // the model each one serves.
-            Section {
+            Section(SettingsWords.libraryHeader) {
                 TemplatesSettingsRow(state: state)
                 VocabularySettingsRow(state: state)
                 SpeakerProfilesSettingsRow(state: state)
             }
 
-            SyncSettingsView(state: state)
-
-            Section("Imports") {
+            Section {
                 Toggle("Add imported files to conversations they overlap", isOn: $sources.matchesImportedFiles)
                     .controlSize(.regular)
+                PersonalLockToggle(lock: state.personalLock)
+            } footer: {
+                SettingsFooter(PersonalLockWords.footer)
             }
-
-            PersonalLockSection(lock: state.personalLock)
 
             Section {
                 PrivacyStatement()
@@ -586,18 +587,14 @@ private struct LibrarySettings: View {
 
 /// "Require Touch ID for Personal" (or the password, on a Mac without Touch ID) and its one line. Off by default;
 /// turning it off asks first, as unlocking does (`PersonalLock.setRequired`).
-private struct PersonalLockSection: View {
+private struct PersonalLockToggle: View {
     let lock: PersonalLock
 
     var body: some View {
-        Section {
-            Toggle(PersonalLockWords.requirement(lock.method), isOn: Binding(get: { lock.isRequired }, set: { on in
-                Task { await lock.setRequired(on) }
-            }))
-            .controlSize(.regular)
-        } footer: {
-            SettingsFooter(PersonalLockWords.footer)
-        }
+        Toggle(PersonalLockWords.requirement(lock.method), isOn: Binding(get: { lock.isRequired }, set: { on in
+            Task { await lock.setRequired(on) }
+        }))
+        .controlSize(.regular)
     }
 }
 

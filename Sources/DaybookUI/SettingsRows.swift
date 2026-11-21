@@ -183,8 +183,13 @@ public struct SettingsFooter: View {
             .multilineTextAlignment(.leading)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
-            // The Mac's grouped form insets its rows' text; the iPhone's section footer is already inset.
-            .padding(.horizontal, density == .touch ? 0 : 10)
+            // The iPhone's section footer is already inset, and so is the Mac's on macOS 27; earlier grouped forms
+            // inset their rows' text but not the footer.
+            .padding(.horizontal, density == .touch || Self.insetByForm ? 0 : 10)
+    }
+
+    private static var insetByForm: Bool {
+        if #available(macOS 27, *) { return true } else { return false }
     }
 }
 

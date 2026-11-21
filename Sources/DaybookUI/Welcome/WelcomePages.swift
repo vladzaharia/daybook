@@ -259,7 +259,14 @@ public struct WelcomeCard<Content: View>: View {
         VStack(spacing: 0) {
             Group(subviews: content) { rows in
                 ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
-                    if index > 0 { Divider().padding(.leading, dividerInset) }
+                    if index > 0 {
+                        #if os(macOS)
+                        // Stops short of the card's stroke, as Settings' groups do.
+                        Divider().padding(.leading, dividerInset).padding(.trailing, DaybookSpacing.s4)
+                        #else
+                        Divider().padding(.leading, dividerInset)
+                        #endif
+                    }
                     row
                 }
             }

@@ -160,13 +160,7 @@ public struct LiveCaptionStrip: View {
                         let newest = index == lines.count - 1
                         row(source: line.source) {
                             HStack(alignment: .firstTextBaseline, spacing: 5) {
-                                if let speaker = line.speaker {
-                                    Text(speaker)
-                                        .font(.system(size: (newest ? style.newestSize : style.olderSize) * 0.8 * scale, weight: .semibold))
-                                        .foregroundStyle(DaybookPalette.Ink.meta)
-                                        .lineLimit(1)
-                                        .fixedSize()
-                                }
+                                if !speakers.isEmpty { speakerLane(line.speaker, newest: newest) }
                                 Text(line.text)
                                     .font(.system(size: (newest ? style.newestSize : style.olderSize) * scale,
                                                   weight: newest ? style.newestWeight : .regular))
@@ -198,6 +192,25 @@ public struct LiveCaptionStrip: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(label)
         .accessibilityValue(lines.last.map { [$0.speaker ?? $0.source, $0.text].compactMap { $0 }.joined(separator: ": ") } ?? status ?? "")
+    }
+
+    /// The speakers the shown lines name, once each.
+    private var speakers: [String] {
+        var seen = Set<String>()
+        return lines.compactMap(\.speaker).filter { seen.insert($0).inserted }
+    }
+
+    /// A line's speaker right-aligned in a lane as wide as the longest name shown, so every line's words, with a
+    /// speaker or without, share one left edge.
+    private func speakerLane(_ speaker: String?, newest: Bool) -> some View {
+        let font = Font.system(size: (newest ? style.newestSize : style.olderSize) * 0.8 * scale, weight: .semibold)
+        return ZStack(alignment: .trailing) {
+            ForEach(speakers, id: \.self) { Text($0).font(font).hidden() }
+            if let speaker { Text(speaker).font(font).foregroundStyle(DaybookPalette.Ink.meta) }
+        }
+        .lineLimit(1)
+        .fixedSize()
+        .accessibilityHidden(speaker == nil)
     }
 
     /// "Live captions · tentative" on top, in sentence case: their glyph, then the words, semibold in Meta.
