@@ -25,10 +25,26 @@ public enum TranscriptEdits {
     @discardableResult
     public static func rename(_ speakerID: String, to name: String, in meetingID: UUID, library: LibraryController,
                               undoManager: UndoManager?) -> Bool {
-        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else { return false }
-        return library.update(meetingID, actionName: "Rename Speaker", undoManager: undoManager) {
-            $0.renameSpeaker(id: speakerID, name: name)
+        // The person's own name marks the speaker as them, as This Is Me does.
+        library.renameSpeakers([speakerID], to: name, in: meetingID, undoManager: undoManager)
+    }
+
+    /// Gives passages to another speaker of the conversation (`Meeting.giveSpeaker`); Undo gives them back.
+    @discardableResult
+    public static func changeSpeaker(of passageIDs: [UUID], to speakerID: String, in meetingID: UUID, library: LibraryController,
+                                     undoManager: UndoManager?) -> Bool {
+        library.update(meetingID, actionName: "Change Speaker", undoManager: undoManager) {
+            $0.giveSpeaker(speakerID, toPassages: passageIDs)
+        }
+    }
+
+    /// Gives passages to a new speaker called `name`, or the one that has that name already.
+    @discardableResult
+    public static func changeSpeaker(of passageIDs: [UUID], toNew name: String, in meetingID: UUID, library: LibraryController,
+                                     undoManager: UndoManager?) -> Bool {
+        library.update(meetingID, actionName: "Change Speaker", undoManager: undoManager) { meeting in
+            guard let speakerID = meeting.speaker(named: name) else { return }
+            meeting.giveSpeaker(speakerID, toPassages: passageIDs)
         }
     }
 
@@ -312,6 +328,10 @@ public struct HeardInRecordings: View {
 
 /// Rename Speaker: the name, changed for every passage of theirs in this conversation.
 struct RenameSpeakerForm: View {
+    /// "Rename Speaker", or "New Speaker" where the name is a speaker to be made.
+    var title = "Rename Speaker"
+    /// The button that saves it.
+    var action = "Rename"
     let name: String
     let profiles: [SpeakerProfile]
     let me: UUID?
@@ -341,18 +361,18 @@ struct RenameSpeakerForm: View {
                 .padding(.top, DaybookSpacing.s3)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .background(DaybookPalette.paper.ignoresSafeArea())
-                .navigationTitle("Rename Speaker")
+                .navigationTitle(title)
                 .touchInlineTitle()
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("Cancel", role: .cancel) { dismiss() } }
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Rename") { commit(draft) }.fontWeight(.semibold).disabled(trimmed.isEmpty)
+                        Button(action) { commit(draft) }.fontWeight(.semibold).disabled(trimmed.isEmpty)
                     }
                 }
             }
         } else {
             VStack(alignment: .leading, spacing: DaybookSpacing.s3) {
-                Text("Rename Speaker").font(.headline).foregroundStyle(DaybookPalette.Ink.title)
+                Text(title).font(.headline).foregroundStyle(DaybookPalette.Ink.title)
                 SpeakerNameField(current: name, draft: $draft, isFocused: focused, profiles: profiles, me: me, commit: commit) {
                     TextField("Name", text: $draft)
                         .textFieldStyle(.roundedBorder)
@@ -362,7 +382,7 @@ struct RenameSpeakerForm: View {
                 HStack {
                     Spacer()
                     Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                    Button("Rename") { commit(draft) }
+                    Button(action) { commit(draft) }
                         .keyboardShortcut(.defaultAction)
                         .disabled(trimmed.isEmpty)
                 }

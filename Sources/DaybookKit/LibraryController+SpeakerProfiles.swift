@@ -143,6 +143,22 @@ extension LibraryController {
         return true
     }
 
+    /// Names a person (every speaker that is them: `speakerIDs`) in a conversation. The name of the person's own
+    /// profile is This Is Me: choosing "Vlad" from the name list, or typing it, marks the speaker as the person
+    /// (`markSpeakerAsMe`), and one Undo takes back both. Nothing changes for an empty or unchanged name.
+    @discardableResult
+    public func renameSpeakers(_ speakerIDs: [String], to name: String, in id: UUID, undoManager: UndoManager? = nil) -> Bool {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return false }
+        let renamed = update(id, actionName: "Rename Speaker", undoManager: undoManager) { meeting in
+            for speakerID in speakerIDs { meeting.renameSpeaker(id: speakerID, name: name) }
+        }
+        if let me = ownerProfileName, SpeakerProfile.normalizedName(me) == SpeakerProfile.normalizedName(name) {
+            return markSpeakerAsMe(speakerIDs, in: id, undoManager: undoManager) || renamed
+        }
+        return renamed
+    }
+
     /// Takes the conversation back to `before` and the library's choice to `ownerBefore`, with its redo.
     private func registerThisIsMeUndo(_ id: UUID, before: Meeting, ownerBefore: UUID?, undoManager: UndoManager) {
         guard let after = meeting(id) else { return }

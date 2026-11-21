@@ -537,6 +537,9 @@ public enum RevisionField: Hashable, Sendable {
     case speaker(String)
     /// A passage of the transcript the person corrected.
     case segment(UUID)
+    /// A passage the person gave to another speaker, by the passage's ID: the entry holds the speaker it had and the
+    /// one it has ("" for none).
+    case segmentSpeaker(UUID)
     /// A photo added, removed, or put back.
     case photo(UUID)
     /// A photo's caption.
@@ -570,6 +573,7 @@ public enum RevisionField: Hashable, Sendable {
         switch rawValue[..<colon] {
         case "speaker": self = .speaker(target)
         case "segment": self = UUID(uuidString: target).map(Self.segment) ?? .unknown(rawValue)
+        case "segment-speaker": self = UUID(uuidString: target).map(Self.segmentSpeaker) ?? .unknown(rawValue)
         case "photo": self = UUID(uuidString: target).map(Self.photo) ?? .unknown(rawValue)
         case "photo-caption": self = UUID(uuidString: target).map(Self.photoCaption) ?? .unknown(rawValue)
         case "page": self = UUID(uuidString: target).map(Self.page) ?? .unknown(rawValue)
@@ -588,6 +592,7 @@ public enum RevisionField: Hashable, Sendable {
         case .summary: return "summary"
         case .speaker(let id): return "speaker:\(id)"
         case .segment(let id): return "segment:\(id.uuidString)"
+        case .segmentSpeaker(let id): return "segment-speaker:\(id.uuidString)"
         case .photo(let id): return "photo:\(id.uuidString)"
         case .photoCaption(let id): return "photo-caption:\(id.uuidString)"
         case .page(let id): return "page:\(id.uuidString)"
@@ -603,7 +608,7 @@ public enum RevisionField: Hashable, Sendable {
     /// The person's own words or names: a correction, a rename, or notes.
     public var isPersonsEdit: Bool {
         switch self {
-        case .notes, .segment, .speaker, .passage: return true
+        case .notes, .segment, .segmentSpeaker, .speaker, .passage: return true
         default: return false
         }
     }

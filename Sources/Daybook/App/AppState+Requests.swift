@@ -95,7 +95,7 @@ extension AppState {
 
     /// A job carrying out `request`, frozen with this Mac's models and preferences.
     func job(for request: ProcessingRequest, in meeting: Meeting) -> ProcessingJob {
-        makeJob(meetingID: meeting.id, mode: request.mode, templateID: request.templateID)
+        makeJob(meetingID: meeting.id, mode: request.mode, templateID: request.templateID, speakers: request.speakers)
     }
 
     /// Whether this Mac has what `job` needs to start, as `enqueue` gates its own work (transcript first): the models that

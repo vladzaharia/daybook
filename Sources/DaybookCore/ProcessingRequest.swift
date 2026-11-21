@@ -88,6 +88,14 @@ public struct ProcessingRequest: Codable, Equatable, Identifiable, Sendable {
         }
     }
 
+    /// What Identify Speakers asks of speaker detection for one conversation: the number of people who spoke, nil for
+    /// Automatic. A request that has one runs detection for the conversation whether or not Settings tells speakers
+    /// apart, once, and with this count instead of the library's.
+    public struct SpeakerAsk: Codable, Hashable, Sendable {
+        public var count: Int?
+        public init(count: Int? = nil) { self.count = count.flatMap { (1...32).contains($0) ? $0 : nil } }
+    }
+
     /// How a request ended. Final: a finished request is never claimed again.
     public struct Outcome: Codable, Equatable, Sendable {
         public enum Result: String, Codable, Sendable { case completed, failed }
@@ -205,13 +213,16 @@ public struct ProcessingRequest: Codable, Equatable, Identifiable, Sendable {
     public var outcome: Outcome?
     /// Set when the request redoes a step with a better model ("Upgrade"); nil for every other request.
     public var upgrade: Upgrade?
+    /// Set when the request is Identify Speakers asked for this conversation alone (`SpeakerAsk`); nil for every other.
+    public var speakers: SpeakerAsk?
 
     /// A new, open request.
     public init(id: UUID = UUID(), meetingID: UUID, mode: Mode, templateID: String? = nil, requestedBy: Device,
-                createdAt: Date = Date(), claim: Claim? = nil, outcome: Outcome? = nil, upgrade: Upgrade? = nil) {
+                createdAt: Date = Date(), claim: Claim? = nil, outcome: Outcome? = nil, upgrade: Upgrade? = nil,
+                speakers: SpeakerAsk? = nil) {
         self.id = id; self.meetingID = meetingID; self.mode = mode; self.templateID = templateID
         self.requestedBy = requestedBy; self.createdAt = createdAt; self.claim = claim; self.outcome = outcome
-        self.upgrade = upgrade
+        self.upgrade = upgrade; self.speakers = speakers
     }
 
     // MARK: State
@@ -355,7 +366,7 @@ public struct ProcessingRequest: Codable, Equatable, Identifiable, Sendable {
 
     /// The parts fixed when the request was made.
     private var request: Asked {
-        Asked(id: id, meetingID: meetingID, mode: mode, templateID: templateID, requestedBy: requestedBy, createdAt: createdAt, upgrade: upgrade)
+        Asked(id: id, meetingID: meetingID, mode: mode, templateID: templateID, requestedBy: requestedBy, createdAt: createdAt, upgrade: upgrade, speakers: speakers)
     }
     private struct Asked: Codable, Equatable {
         var id: UUID
@@ -365,6 +376,7 @@ public struct ProcessingRequest: Codable, Equatable, Identifiable, Sendable {
         var requestedBy: Device
         var createdAt: Date
         var upgrade: Upgrade?
+        var speakers: SpeakerAsk?
     }
 }
 

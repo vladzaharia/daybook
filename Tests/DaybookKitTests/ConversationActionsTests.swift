@@ -64,6 +64,21 @@ final class ConversationActionsTests: XCTestCase {
         XCTAssertEqual(recorded.children[2].availability, .unavailable("Not transcribed yet"))
     }
 
+    func testBehaviorIdentifySpeakersAgainAsksHowManyPeopleSpokeOnlyWhereTheModelTakesACount() {
+        func identify(_ context: ConversationActions.Context) -> ConversationAction {
+            ConversationActions.actions(for: meeting(), context: context)[2].actions[0].children.first { $0.id == .process(.speakerRefresh) }!
+        }
+        XCTAssertTrue(identify(.init(platform: .mac)).children.isEmpty, "a model with no count leaves it a plain action")
+        let asking = identify(.init(platform: .mac, speakerCounts: true))
+        XCTAssertEqual(asking.children.map(\.title), ["Automatic", "2 People", "3 People", "4 People", "5 People", "6 People", "7 People", "8 People"])
+        XCTAssertEqual(asking.children.first?.id, .identifySpeakers(.init()))
+        XCTAssertEqual(asking.children[2].id, .identifySpeakers(.init(count: 3)))
+        XCTAssertEqual(identify(.init(platform: .iPhone, speakerCounts: true)).children.count, 8)
+        let notYet = ConversationActions.actions(for: meeting(transcribed: false), context: .init(platform: .mac, speakerCounts: true))[2].actions[0]
+            .children.first { $0.id == .process(.speakerRefresh) }!
+        XCTAssertEqual(notYet.availability, .unavailable("Not transcribed yet"), "the counts wait for a transcript like the action")
+    }
+
     func testBehaviorWhatCantBeDoneNowSaysWhy() {
         let bare = ConversationActions.actions(for: meeting(transcribed: false, summary: false, revisions: false), context: .init(platform: .mac))
         XCTAssertEqual(bare[0].actions[0].availability, .unavailable("No summary yet"))

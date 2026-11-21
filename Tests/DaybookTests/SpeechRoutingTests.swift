@@ -45,6 +45,33 @@ final class SpeechRoutingTests: XCTestCase {
         XCTAssertEqual(configuration.languageFallbackModel, ModelReference("whisper/large-v3-turbo", revision: "rev-t"))
     }
 
+    /// Identify Speakers for one conversation (`SpeakerAsk`): the number of people and detection are the job's own; Settings stays.
+    func testASpeakerAskGivesOneJobItsCountAndDetectionWithoutChangingSettings() throws {
+        let state = try state()
+        state.installedModels = [state.transcriptionModel, state.summaryModel, "community-1/offline"]
+        state.detectSpeakers = false
+        state.processingPreferences.speakerOptions.expectedSpeakerCount = 5
+        XCTAssertTrue(state.speakerCountsOffered, "Community-1 takes a count")
+        let plain = state.makeJob(meetingID: UUID(), mode: .speakerRefresh)
+        XCTAssertFalse(plain.detectSpeakers, "Settings: speakers off")
+        XCTAssertEqual(plain.preferences.speakerOptions.expectedSpeakerCount, 5)
+
+        let asked = state.makeJob(meetingID: UUID(), mode: .speakerRefresh, speakers: .init(count: 3))
+        XCTAssertTrue(asked.detectSpeakers, "found once, though speakers are off")
+        XCTAssertEqual(asked.preferences.speakerOptions.expectedSpeakerCount, 3)
+        XCTAssertEqual(asked.engineConfiguration.speakerOptions.expectedSpeakerCount, 3)
+        XCTAssertTrue(asked.transcribingModelIDs(hasUntranscribedAudio: false).contains("community-1/offline"))
+        XCTAssertNotEqual(asked.configurationFingerprint, plain.configurationFingerprint)
+
+        let automatic = state.makeJob(meetingID: UUID(), mode: .speakerRefresh, speakers: .init())
+        XCTAssertNil(automatic.preferences.speakerOptions.expectedSpeakerCount, "Automatic, whatever Settings says")
+        XCTAssertFalse(state.detectSpeakers)
+        XCTAssertEqual(state.processingPreferences.speakerOptions.expectedSpeakerCount, 5, "Settings stays as it was")
+
+        state.installedModels = [state.transcriptionModel, state.summaryModel]
+        XCTAssertFalse(state.makeJob(meetingID: UUID(), mode: .speakerRefresh, speakers: .init()).detectSpeakers, "no speaker model here: none to run")
+    }
+
     func testAChosenLanguageTheModelDoesntCoverGoesToTheOtherLanguagesModel() throws {
         let state = try state()
         state.transcriptionModel = "parakeet/ultra"

@@ -512,6 +512,10 @@ public enum ConversationMerge {
             switch revision.kind {
             case .speaker(let id): copied.kind = .speaker(historyID(id))
             case .segment, .correctionTransfer: break
+            case .segmentSpeaker:
+                // The passage's speakers, as they are here.
+                copied.oldValue = speaker(revision.oldValue.isEmpty ? nil : revision.oldValue) ?? ""
+                copied.newValue = speaker(revision.newValue) ?? revision.newValue
             case .photo(let id), .photoCaption(let id): guard carriedPhotoIDs.contains(id) else { return nil }
             case .page(let id): guard carriedPageIDs.contains(id) else { return nil }
             case .passage(let id): guard carriedPassageIDs.contains(id) else { return nil }

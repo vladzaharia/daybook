@@ -61,6 +61,12 @@ extension AppState {
         })
     }
 
+    /// The speaker model takes a number of speakers (Settings › Models › Speakers offers one), so Identify Speakers Again can ask
+    /// how many people spoke.
+    var speakerCountsOffered: Bool {
+        ModelRouting.supportsExpectedSpeakerCount(processingPreferences.speakerModelID, catalog: modelCatalog)
+    }
+
     var speechRoute: SpeechRoute {
         let catalog = modelCatalog, engines = runtime.engines, preferences = processingPreferences, installed = installedModels
         let chosen = TranscriptionRouting.route(selected: transcriptionModel, language: transcriptionLanguage,
@@ -123,10 +129,20 @@ extension AppState {
     /// A job for `meetingID`, frozen with the routed models, these preferences with the library's language, and their
     /// revisions.
     func makeJob(meetingID: UUID, mode: ProcessingRequest.Mode, templateID: String? = nil, upgrade: ProcessingRequest.Upgrade? = nil,
-                 summarizesHere: Bool = false, summarizesInCloud: Bool = false, summaryModelID: String? = nil) -> ProcessingJob {
+                 summarizesHere: Bool = false, summarizesInCloud: Bool = false, summaryModelID: String? = nil,
+                 speakers: ProcessingRequest.SpeakerAsk? = nil) -> ProcessingJob {
         let route = speechRoute
         var preferences = processingPreferences
         preferences.speakerModelID = route.speakerModel
+        // Identify Speakers for this conversation alone (`SpeakerAsk`): the number of people the person said, whatever
+        // Settings says, and speakers found even where Tell speakers apart is off. Settings stays as it is.
+        var detects = route.findsSpeakers
+        if let speakers {
+            preferences.speakerOptions.expectedSpeakerCount = speakers.count
+            preferences.speakerModelID = ModelRouting.diarizer(selected: processingPreferences.speakerModelID, expectedSpeakers: speakers.count,
+                                                               catalog: modelCatalog, engines: runtime.engines, installed: installedModels)
+            detects = ([preferences.speakerModelID] + [route.voiceEmbedder].compactMap { $0 }).allSatisfy(installedModels.contains)
+        }
         preferences.transcriptionLanguage = route.transcription.language
         // A summary the person asked to make with another installed model: that job only (its revision frozen too). One
         // that went (uninstalled, or no longer fits) since the menu was drawn runs the chosen model, never a download.
@@ -134,7 +150,7 @@ extension AppState {
         let usable = summaryModelID.flatMap { isUsableSummaryModel($0) ? $0 : nil }
         if let usable, let revision = installedRevisions[usable] { revisions[usable] = revision }
         return ProcessingJob(meetingID: meetingID, mode: mode, transcriptionModelID: route.transcription.model, summaryModelID: usable ?? summaryModel,
-                             detectSpeakers: route.findsSpeakers, preferences: preferences, templateID: templateID,
+                             detectSpeakers: detects, preferences: preferences, templateID: templateID,
                              revisions: revisions, voiceEmbeddingModelID: route.voiceEmbedder,
                              languageFallbackModelID: route.transcription.fallback, smallTasksModelID: smallTasksModel, photoModelID: photoModel?.id,
                              upgrade: upgrade, summarizesHere: summarizesHere, summarizesInCloud: summarizesInCloud)

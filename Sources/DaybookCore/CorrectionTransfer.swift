@@ -141,7 +141,44 @@ enum CorrectionTransfer {
             output[target].id = proposal.original.id
             output[target].text = proposal.original.text
         }
+        applySpeakers(to: &output, in: meeting, unified: unified, raw: raw)
         return Result(segments: output, issues: issues)
+    }
+
+    /// Gives each passage the person moved to another speaker (`Meeting.passageSpeakers`) to the passage that is it in
+    /// the new transcript: the same passage by ID, else the one citing the same source passages, else the one the
+    /// same recording's time says. A speaker the conversation no longer has, or a passage with no single match, is
+    /// left as the new transcript has it.
+    private static func applySpeakers(to output: inout [TranscriptSegment], in meeting: Meeting,
+                                      unified: [UUID: TranscriptSegment], raw: [UUID: TranscriptSegment]) {
+        let known = Set(meeting.speakers.map(\.id))
+        for (id, speakerID) in meeting.passageSpeakers where known.contains(speakerID) {
+            guard let original = unified[id] ?? raw[id], let target = match(original, in: output) else { continue }
+            output[target].speakerID = speakerID
+        }
+    }
+
+    private static func match(_ original: TranscriptSegment, in segments: [TranscriptSegment]) -> Int? {
+        if let same = segments.firstIndex(where: { $0.id == original.id }) { return same }
+        let cited = Set(original.provenance.map(\.segmentID) + [original.id])
+        let sharing = segments.indices.filter { index in
+            segments[index].provenance.contains { cited.contains($0.segmentID) } || cited.contains(segments[index].id)
+        }
+        if sharing.count == 1 { return sharing[0] }
+        if sharing.count > 1 {
+            let scored = sharing.map { ($0, sharedSourceTime(original.provenance, segments[$0].provenance)) }.sorted { $0.1 > $1.1 }
+            return scored[0].1 > 0 && scored[0].1 >= 2 * scored[1].1 ? scored[0].0 : nil
+        }
+        // The same recording's time: the passage that covers most of it, and at least half.
+        let length = original.end - original.start
+        guard length > 0 else { return nil }
+        let overlaps = segments.indices.compactMap { index -> (Int, Double)? in
+            guard segments[index].trackID == original.trackID else { return nil }
+            let overlap = min(original.end, segments[index].end) - max(original.start, segments[index].start)
+            return overlap >= length / 2 ? (index, overlap) : nil
+        }.sorted { $0.1 > $1.1 }
+        guard let best = overlaps.first, overlaps.count == 1 || best.1 >= 2 * overlaps[1].1 else { return nil }
+        return best.0
     }
 
     /// Seconds of the same source segments that both passages cite.

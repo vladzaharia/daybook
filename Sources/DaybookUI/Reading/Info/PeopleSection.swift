@@ -11,19 +11,24 @@ struct PeopleSection: View {
     let meeting: Meeting
     /// Whether this device finds speakers (Tell speakers apart); a conversation made without that has none to show.
     var findsSpeakers = true
+    /// Finds the speakers of this conversation once, whatever Tell speakers apart says; nil leaves it out.
+    var identify: (() -> Void)?
     @Environment(\.undoManager) private var undoManager
 
     var body: some View {
         let people = meeting.peopleSpeakers
         if people.isEmpty {
             Text(findsSpeakers ? "No speakers yet" : "Speakers off").foregroundStyle(DaybookPalette.Ink.secondary)
+            if !findsSpeakers, let identify, !meeting.transcripts.isEmpty, !meeting.presentTracks.isEmpty {
+                Button(ProcessingWords.identifySpeakers, action: identify)
+                    .buttonStyle(.daybookLink)
+                    .font(.footnote)
+            }
         } else {
             ForEach(people) { person in
                 SpeakerRow(person: person, profiles: library.speakerProfiles, me: library.ownerProfileID, thisIsMe: thisIsMe(person)) { name in
                     // One person found more than once is renamed as one, so they stay one person.
-                    library.update(meeting.id, actionName: "Rename Speaker", undoManager: undoManager) { meeting in
-                        for id in person.speakerIDs { meeting.renameSpeaker(id: id, name: name) }
-                    }
+                    library.renameSpeakers(person.speakerIDs, to: name, in: meeting.id, undoManager: undoManager)
                 } identity: {
                     SpeakerIdentityLine(library: library, meeting: meeting, speakerIDs: person.speakerIDs)
                 }
