@@ -100,7 +100,7 @@ private struct NotesSection: View {
         // Each non-empty paragraph's time, matched to the saved anchors by text; nil where there is none.
         let times = meeting.paragraphTimes()
         YourNotes(meeting: meeting, library: state.library, canPlay: !meeting.presentTracks.isEmpty && !state.isRecording, play: play,
-                  passages: passages) {
+                  passages: passages, findQuery: state.window.searchText) {
             MarginNotesEditor(
                 text: Binding(get: { meeting.notes }, set: { state.editNotes(meeting.id, text: $0) }),
                 times: times,

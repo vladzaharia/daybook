@@ -260,28 +260,24 @@ public struct TranscriptPhotoRow: View {
             TranscriptTime(time: time) { services.play(.timeline(time), meeting) }
         } content: {
             Button { PhotoOpening.open(photo, in: meeting.id, services: services, fallback: openPhoto) } label: {
-                HStack(alignment: .top, spacing: DaybookSpacing.s3) {
-                    PhotoImage(photo: photo, meetingID: meeting.id, services: services)
-                        .frame(width: 72 * scale, height: 54 * scale)
-                        .clipShape(DaybookRadius.shape(5))
-                        .overlay(DaybookRadius.shape(5).stroke(Color.primary.opacity(0.12), lineWidth: 0.5))
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(alignment: .firstTextBaseline, spacing: 6) {
-                            Text("Photo").font(DaybookFont.speaker.font(density, scale: scale)).foregroundStyle(DaybookPalette.Ink.secondary)
-                            if readingWidth == .narrow {
-                                Text(TimeLabel.short(time))
-                                    .font(DaybookFont.time.font(density, scale: scale))
-                                    .foregroundStyle(DaybookPalette.Ink.meta)
+                VStack(alignment: .leading, spacing: density == .touch ? 0 : 4) {
+                    if density != .touch { photoLabel }
+                    HStack(alignment: .top, spacing: DaybookSpacing.s3) {
+                        PhotoImage(photo: photo, meetingID: meeting.id, services: services)
+                            .frame(width: 72 * scale, height: 54 * scale)
+                            .clipShape(DaybookRadius.shape(5))
+                            .overlay(DaybookRadius.shape(5).stroke(Color.primary.opacity(0.12), lineWidth: 0.5))
+                        VStack(alignment: .leading, spacing: 2) {
+                            if density == .touch { photoLabel }
+                            if let caption = photo.displayCaption {
+                                Text(FindHighlight.mark(AttributedString(caption), query: highlight))
+                                    .font(DaybookFont.body.font(density, scale: scale))
+                                    .foregroundStyle(DaybookPalette.Ink.body)
+                                    .lineLimit(2)
                             }
                         }
-                        if let caption = photo.displayCaption {
-                            Text(FindHighlight.mark(AttributedString(caption), query: highlight))
-                                .font(DaybookFont.body.font(density, scale: scale))
-                                .foregroundStyle(DaybookPalette.Ink.body)
-                                .lineLimit(2)
-                        }
+                        Spacer(minLength: 0)
                     }
-                    Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 6).padding(.vertical, 4)
                 .background(DaybookPalette.quietFill.opacity(hovering ? 1 : 0), in: DaybookRadius.shape(DaybookRadius.row))
@@ -298,6 +294,17 @@ public struct TranscriptPhotoRow: View {
             .accessibilityAction(named: "Play from \(TimeLabel.short(time))") { services.play(.timeline(time), meeting) }
         }
         .modifier(PhotoDeleteConfirmation(photo: $deleting, meetingID: meeting.id, services: services))
+    }
+    /// "Photo" on the time's baseline in a window, as every other item names itself; beside the picture under touch.
+    private var photoLabel: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text("Photo").font(DaybookFont.speaker.font(density, scale: scale)).foregroundStyle(DaybookPalette.Ink.secondary)
+            if readingWidth == .narrow {
+                Text(TimeLabel.short(time))
+                    .font(DaybookFont.time.font(density, scale: scale))
+                    .foregroundStyle(DaybookPalette.Ink.meta)
+            }
+        }
     }
 }
 

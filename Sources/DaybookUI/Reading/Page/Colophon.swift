@@ -57,9 +57,12 @@ public struct Colophon<TemplateMenu: View>: View {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Image(systemName: colophon.symbol)
                         .daybookBounce(value: arrived)
+                        .frame(width: density == .touch ? nil : 18, alignment: .trailing)
                         .accessibilityHidden(true)
                     Text(colophon.line).fixedSize(horizontal: false, vertical: true)
                 }
+                // In a window the glyph hangs in the margin, so the words start where "Template:" does.
+                .padding(.leading, density == .touch ? 0 : -23)
                 // The template and Summarize Again, beside each other when they fit.
                 FlowLayout(spacing: density == .touch ? DaybookSpacing.s3 : 4, lineSpacing: DaybookSpacing.s1) {
                     HStack(spacing: 4) {

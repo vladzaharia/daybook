@@ -10,15 +10,27 @@ public struct TrashRowView: View {
     private let meeting: Meeting
     private let restore: () -> Void
     private let show: (() -> Void)?
+    private let timeLabel: String?
+    private let restoresOnDemand: Bool
+    private let isSelected: Bool
+    @State private var hovering = false
     @Environment(\.daybookDensity) private var density
     @Environment(PersonalLock.self) private var personalLock: PersonalLock?
 
     /// `show`: a tap on its words shows it read only beside the list, where the list's selection doesn't (the
     /// iPhone's two pages); the Mac's Trash selects the row instead.
-    public init(meeting: Meeting, restore: @escaping () -> Void, show: (() -> Void)? = nil) {
+    ///
+    /// `timeLabel`: when it was, as its day section puts it (`RowDate.format`); nil spells the whole date.
+    /// `restoresOnDemand`: Restore shows while the pointer is over the row or it's selected (the Mac, whose page
+    /// beside the list has Restore too).
+    public init(meeting: Meeting, restore: @escaping () -> Void, show: (() -> Void)? = nil, timeLabel: String? = nil,
+                restoresOnDemand: Bool = false, isSelected: Bool = false) {
         self.meeting = meeting
         self.restore = restore
         self.show = show
+        self.timeLabel = timeLabel
+        self.restoresOnDemand = restoresOnDemand
+        self.isSelected = isSelected
     }
 
     private var onPaper: Bool { density != .window }
@@ -35,8 +47,10 @@ public struct TrashRowView: View {
             Button(TrashWords.restore, action: restore)
                 .buttonStyle(.daybookTinted)
                 .controlSize(.small)
+                .opacity(restoresOnDemand && !hovering && !isSelected ? 0 : 1)
                 .accessibilityLabel("\(TrashWords.restore) \(title)")
         }
+        .onHover { hovering = $0 }
         .padding(.vertical, density == .touch ? 4 : 6)
         .accessibilityAction(named: TrashWords.restore, restore)
     }
@@ -49,7 +63,7 @@ public struct TrashRowView: View {
                 .foregroundStyle(hidden ? onPaper ? AnyShapeStyle(DaybookPalette.Ink.secondary) : AnyShapeStyle(.secondary)
                                  : onPaper ? AnyShapeStyle(DaybookPalette.Ink.title) : AnyShapeStyle(.primary))
                 .lineLimit(1)
-            Text(Self.detail(meeting))
+            Text(Self.detail(meeting, timeLabel: timeLabel))
                 .font(DaybookFont.rowDetail.font(density))
                 .foregroundStyle(onPaper ? AnyShapeStyle(DaybookPalette.Ink.secondary) : AnyShapeStyle(.secondary))
                 .monospacedDigit()
@@ -61,8 +75,8 @@ public struct TrashRowView: View {
     }
 
     /// "Sep 3, 2026 at 10:15 AM · 28 min".
-    static func detail(_ meeting: Meeting) -> String {
-        [meeting.date.formatted(date: .abbreviated, time: .shortened), meeting.duration.map(DurationLabel.format)]
+    static func detail(_ meeting: Meeting, timeLabel: String? = nil) -> String {
+        [timeLabel ?? meeting.date.formatted(date: .abbreviated, time: .shortened), meeting.duration.map(DurationLabel.format)]
             .compactMap { $0 }.joined(separator: " · ")
     }
 }
@@ -237,5 +251,7 @@ private struct TrashStatusLine: View {
             }
         }
         .daybookFont(.status)
+        // In a window the glyph hangs in the margin, so the words start where the title does.
+        .padding(.leading, density == .touch ? 0 : -24)
     }
 }

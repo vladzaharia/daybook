@@ -229,9 +229,9 @@ private struct ConversationCommands: Commands {
         let queued = meeting.map { state.processor.queue.queuedIDs.contains($0.id) } ?? false
         CommandMenu("Conversation") {
             if let meeting, state.processor.queue.runningID == meeting.id {
-                Button("Pause Transcription") { state.pauseProcessing(meeting.id) }
+                Button("Pause") { state.pauseProcessing(meeting.id) }
             } else if let meeting, state.processor.queue.paused.contains(meeting.id) {
-                Button("Resume Transcription") { state.processor.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting)) }
+                Button("Resume") { state.processor.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting)) }
             } else {
                 Button("Transcribe") { if let meeting { state.processor.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting)) } }
                     .disabled(meeting?.hasUntranscribedAudio != true || locked || queued)

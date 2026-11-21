@@ -292,8 +292,10 @@ final class MultiSourceFusion {
     private func audioPlacement(_ id: UUID, clocks: [UUID: (offset: Double, rate: Double)]) -> TrackAlignment? {
         let group = clockGroup(id)
         func digestMatches(_ trackID: UUID, _ digest: String) -> Bool {
-            guard let stored = trackByID[trackID]?.sha256, !stored.isEmpty, !digest.isEmpty else { return true }
-            return stored == digest
+            guard let track = trackByID[trackID], !track.sha256.isEmpty, !digest.isEmpty else { return true }
+            // Measured on the original a compressed copy was made from: the copy keeps its timing exactly
+            // (`AudioCompressor.verify`), so the measurement still places it.
+            return track.holdsBytes(digest)
         }
         var best: TrackAlignment?
         for record in inputs.audioAlignments {

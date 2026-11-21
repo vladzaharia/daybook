@@ -57,7 +57,8 @@ struct ConversationList: View {
     private var browsing: some View {
         let meetings = state.visibleMeetings
         let selected = selection.wrappedValue
-        return List(selection: selection) {
+        return ScrollViewReader { proxy in
+        List(selection: selection) {
             ForEach(DateGroup.groups(for: meetings)) { group in
                 Section(group.title) {
                     ForEach(group.meetings) { meeting in
@@ -69,6 +70,7 @@ struct ConversationList: View {
                                                 isSelected: selected.contains(meeting.id))
                         }
                         .tag(meeting.id)
+                        .id(meeting.id)
                         .modifier(RowDrag(meeting: meeting, hidden: state.personalLock.hides(meeting)))
                         .listRowSeparator(.hidden)
                     }
@@ -89,11 +91,25 @@ struct ConversationList: View {
         } primaryAction: { ids in
             if let id = ids.first { state.window.openID = id; state.focusTitle(id) }
         }
+        // A conversation opened from elsewhere (Floating Notes, a notification, a search) comes into view; one already
+        // in view doesn't move.
+        // (A beat after the rows are laid out, so one far down the list is there to scroll to.)
+        .task(id: state.window.openID) {
+            guard let id = state.window.openID else { return }
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled else { return }
+            withAnimation(DaybookMotion.scroll) { proxy.scrollTo(id) }
+            // Rows below weren't measured yet, so the first scroll can fall short; again once they are.
+            try? await Task.sleep(for: .milliseconds(450))
+            guard !Task.isCancelled else { return }
+            withAnimation(DaybookMotion.scroll) { proxy.scrollTo(id) }
+        }
         .overlay {
             if meetings.isEmpty && state.isReady,
                let words = LibraryWords.emptyPlace(state.window.place, libraryIsEmpty: state.meetings.isEmpty, platform: .mac) {
-                LibraryEmptyPlaceView(words)
+                LibraryEmptyPlaceView(words, quiet: state.meetings.isEmpty)
             }
+        }
         }
     }
 
@@ -128,7 +144,7 @@ struct ConversationIDs: Identifiable {
 enum MacRowStatus {
     static func make(_ state: AppState, _ meeting: Meeting, now: Date = Date()) -> ConversationRowStatus? {
         let inputs = ConversationStatusPresentation.Inputs(
-            words: .mac(id: state.library.thisDevice.id), local: .mac(),
+            words: .mac(id: state.library.thisDevice.id), local: .mac(models: state.processor.queue.awaitingModels.contains(meeting.id) ? state.modelDownloadState : nil),
             isRecording: state.recordingID == meeting.id,
             placement: .init(planner: state.placements[meeting.id]),
             queuedMode: state.processor.queue.jobs.first { $0.meetingID == meeting.id }?.mode,
@@ -163,7 +179,9 @@ enum MacListSubtitle {
         if let id = state.processor.queue.runningID, state.meetings.contains(where: { $0.id == id }) {
             queue.running = state.runningStage
             switch state.placements[id]?.phase {
-            case .countingDown(_, let until)?: queue.countdown = until
+            case .countingDown(let place, let until)?:
+                queue.countdown = until
+                if case .cloud(let model) = place { queue.countdownCloudModel = model.name }
             case .started(.cloud(let model))?: queue.cloudModel = model.name
             default: break
             }
@@ -241,7 +259,7 @@ private struct SearchResults: View {
             .listRowInsets(EdgeInsets())
             .padding(.horizontal, -6.5)
             if let question = askRowQuestion {
-                AskRowView(question: question) { state.ask.ask(question) }
+                AskRowView(question: question, isOpen: state.ask.question == question) { state.ask.ask(question) }
                     .selectionDisabled()
                     .listRowSeparator(.hidden)
             }
@@ -321,10 +339,17 @@ private struct MacTrashList: View {
 
     var body: some View {
         List(selection: Bindable(state.window).openID) {
-            ForEach(trashed) { meeting in
-                TrashRowView(meeting: meeting) { MacTrash.restore([meeting.id], state: state) }
-                    .tag(meeting.id)
-                    .listRowSeparator(.hidden)
+            ForEach(DateGroup.groups(for: trashed)) { group in
+                Section(group.title) {
+                    ForEach(group.meetings) { meeting in
+                        TrashRowView(meeting: meeting, restore: { MacTrash.restore([meeting.id], state: state) },
+                                     timeLabel: RowDate.format(meeting.date, group: group.title), restoresOnDemand: true,
+                                     isSelected: state.window.openID == meeting.id)
+                            .tag(meeting.id)
+                            .listRowSeparator(.hidden)
+                    }
+                }
+                .listSectionSeparator(.hidden)
             }
         }
         .listStyle(.inset)
@@ -464,14 +489,18 @@ struct BatchActionButtons: View {
                                               each: { MeetingInspector.context(state, $0) }, merging: state.library.mergingIDs)
         let actions = groups.flatMap(\.actions)
         VStack(spacing: DaybookSpacing.s3) {
-            HStack {
-                ForEach(actions.filter { $0.role != .destructive }) { action in
-                    if let custom = MacActions.custom(action, ids: ids, state: state) {
-                        custom.fixedSize()
-                    } else {
-                        Button(action.title) { perform(action.id) }.disabled(!action.isAvailable)
+            // One row per group (reprocess, filing), so the buttons read as sets rather than one undivided line.
+            ForEach(groups.filter { group in group.actions.contains { $0.role != .destructive } }, id: \.id) { group in
+                FlowLayout(spacing: DaybookSpacing.s2, lineSpacing: DaybookSpacing.s2) {
+                    ForEach(group.actions.filter { $0.role != .destructive }) { action in
+                        if let custom = MacActions.custom(action, ids: ids, state: state) {
+                            custom.fixedSize()
+                        } else {
+                            Button(action.title) { perform(action.id) }.disabled(!action.isAvailable)
+                        }
                     }
                 }
+                .frame(maxWidth: .infinity)
             }
             // Words alone, as the buttons beside it.
             .labelStyle(.titleOnly)
@@ -614,7 +643,9 @@ struct MacStatusActions: ConversationStatusActionHandler {
         case .resume:
             guard let meeting = library.meeting(id) else { return }
             process(id, state.defaultProcessingMode(for: meeting))
-        case .cancel: state.cancelQueued(id)
+        case .cancel:
+            if state.processor.queue.runningID == id || state.processor.queue.paused.contains(id) { state.cancelStarted(id) }
+            else { state.cancelQueued(id) }
         case .cancelDownload: state.cancelDownload()
         case .downloadModels, .downloadSummaryModel:
             state.processor.enqueue(id)
@@ -724,12 +755,16 @@ private struct LibraryNoticeLine: View {
     let perform: () -> Void
     var body: some View {
         if let action {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                words
-                Button(action.title, action: perform)
-                    .buttonStyle(.daybookLink)
-                    .font(DaybookFont.status.font(.window))
-                    .fixedSize()
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    words.fixedSize()
+                    noticeButton(action)
+                }
+                // The words take the full width and the link sits under them on their edge.
+                VStack(alignment: .leading, spacing: 4) {
+                    words
+                    noticeButton(action)
+                }
             }
             // Heard as one: the line, then what it offers.
             .accessibilityElement(children: .combine)
@@ -737,6 +772,13 @@ private struct LibraryNoticeLine: View {
         } else {
             words
         }
+    }
+
+    private func noticeButton(_ action: LibraryNoticeAction) -> some View {
+        Button(action.title, action: perform)
+            .buttonStyle(.daybookLink)
+            .font(DaybookFont.status.font(.window))
+            .fixedSize()
     }
 
     /// The words take the room the link leaves, which keeps its own at the trailing edge. They wrap in that width;
@@ -785,6 +827,8 @@ private extension View {
 /// The search results' first row when the words read as a question, or one is open: Return asks it, and so does the row.
 private struct AskRowView: View {
     let question: String
+    /// Its page is the one open: the row wears the list's selection wash.
+    let isOpen: Bool
     let ask: () -> Void
 
     var body: some View {
@@ -800,5 +844,8 @@ private struct AskRowView: View {
         }
         .buttonStyle(.plain)
         .padding(.vertical, DaybookSpacing.s1)
+        .padding(.horizontal, 4)
+        .background(isOpen ? DaybookPalette.accentWash : Color.clear, in: DaybookRadius.shape(DaybookRadius.row))
+        .padding(.horizontal, -4)
     }
 }

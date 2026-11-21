@@ -271,4 +271,24 @@ extension ProcessingWords {
         case .failed: return "Models"
         }
     }
+
+    // MARK: A step's glyph and short label
+
+    /// The glyph for a step, on every surface that has a chip for it.
+    public static func symbol(_ stage: ProcessingRequest.Stage) -> String {
+        switch stage {
+        case .transcribing: return "quote.bubble"
+        case .identifyingSpeakers: return "person.2.wave.2"
+        case .summarizing: return "text.alignleft"
+        }
+    }
+
+    /// The step in one word, for a chip with no room for its figure: "Transcribing", "Speakers", "Summarizing".
+    public static func shortLabel(_ stage: ProcessingRequest.Stage) -> String {
+        switch stage {
+        case .transcribing: return verb(.transcribing)
+        case .identifyingSpeakers: return "Speakers"
+        case .summarizing: return verb(.summarizing)
+        }
+    }
 }

@@ -119,7 +119,8 @@ public struct VersionHistoryScreen: View {
         .frame(width: 760, height: 520)
         .onAppear {
             guard let meeting else { return }
-            selection = meeting.revisions.last?.id
+            // Open on a change that shows words, not one that only marks what happened.
+            selection = (meeting.revisions.last { RevisionText.showsComparison($0) } ?? meeting.revisions.last)?.id
             #if DEBUG
             if let change = requestedChange(in: meeting) { selection = change }
             #endif
@@ -223,7 +224,18 @@ struct VersionHistoryChange: View {
     @ViewBuilder private var header: some View {
         let subject = RevisionText.subject(revision, in: meeting)
         #if os(macOS)
-        Text(subject).font(.headline).foregroundStyle(DaybookPalette.Ink.title)
+        VStack(alignment: .leading, spacing: DaybookSpacing.s2) {
+            Text(subject).font(DaybookFont.sheetTitle.font(density)).foregroundStyle(DaybookPalette.Ink.title)
+            Text(revision.date.formatted(date: .abbreviated, time: .shortened))
+                .font(DaybookFont.status.font(density)).foregroundStyle(DaybookPalette.Ink.secondary)
+            if case .photo(let id) = revision.kind, let photo = meeting.photos?.first(where: { $0.id == id }) {
+                PhotoImage(photo: photo, meetingID: meeting.id, contentMode: .fit)
+                    .frame(width: 240, height: 180)
+                    .clipShape(DaybookRadius.shape(DaybookRadius.box))
+                    .overlay(DaybookRadius.shape(DaybookRadius.box).stroke(Color.primary.opacity(0.12), lineWidth: 0.5))
+                    .padding(.top, DaybookSpacing.s2)
+            }
+        }
         #else
         VStack(alignment: .leading, spacing: 4) {
             if subject != RevisionText.title(revision, in: meeting) {

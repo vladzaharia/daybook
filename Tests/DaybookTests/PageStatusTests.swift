@@ -66,6 +66,10 @@ final class PageStatusTests: XCTestCase {
         XCTAssertEqual(waiting?.title, "Downloading models · 50%")
         XCTAssertEqual(waiting?.detail, ByteSize.progress(model.approximateBytes / 2, of: model.approximateBytes))
         XCTAssertEqual(waiting?.actions, [.cancelDownload])
+        // Its list row says the same download, not a bare "Waiting for models".
+        let row = MacRowStatus.make(state, try XCTUnwrap(state.meetings.first { $0.id == research }))
+        XCTAssertEqual(row?.kind, .waitingForModels)
+        XCTAssertEqual(row?.text, "Downloading models · 50%")
         let queued = try page(northwind, state)
         XCTAssertEqual(queued?.title, "Waiting to transcribe after the download")
         XCTAssertEqual(queued?.actions, [.cancel])
