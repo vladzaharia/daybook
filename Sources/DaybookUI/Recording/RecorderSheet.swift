@@ -185,7 +185,7 @@ struct RecorderSheetColumn: View {
         RecorderSheetLayout(parts: parts, expansion: expansion, rest: RecorderSheetSize.resting(in: posture, isWide: isWide), look: .hand) { drawn in
             VStack(alignment: .leading, spacing: DaybookSpacing.s2) {
                 RecorderNotesHeader(parts: parts, inHand: true)
-                    .padding(.horizontal, RecorderInsets.touch + DaybookSpacing.s2)
+                    .padding(.horizontal, RecorderInsets.touch + DaybookSpacing.s1)
                 // At least two lines of notes. Laid out last, as the most flexible piece, they take what the sheet
                 // leaves; a higher priority would squeeze a notice to its first line instead. The caption's line
                 // gives way before they do.

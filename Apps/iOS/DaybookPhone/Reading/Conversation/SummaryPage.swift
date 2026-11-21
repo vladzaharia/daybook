@@ -94,7 +94,7 @@ struct SummaryPage: View {
                 }
                 .scrollTargetLayout()
                 .pageColumn()
-                .padding(.top, DaybookSpacing.s3)
+                .padding(.top, DaybookSpacing.s4)
                 .padding(.bottom, DaybookSpacing.s8)
             }
             .scrollPosition(id: $session.summaryAnchor, anchor: .top)
