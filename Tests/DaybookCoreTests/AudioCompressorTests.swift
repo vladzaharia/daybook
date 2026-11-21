@@ -138,7 +138,7 @@ final class AudioCompressorTests: XCTestCase {
         // Silent where the recording isn't.
         var silenced = sound
         for index in 48_000 * 5..<48_000 * 12 { silenced[index] = 0 }
-        guard case .quiet = refusal(source: source, copy: try encoded(silenced, name: "silenced")) else { return XCTFail("silenced") }
+        guard case .dropout = refusal(source: source, copy: try encoded(silenced, name: "silenced")) else { return XCTFail("silenced") }
         // Another recording of the same length.
         guard case .some = refusal(source: source, copy: try encoded(samples(rate: 48_000, seconds: 20, seed: 7, pitch: 300), name: "other")) else {
             return XCTFail("another recording")
@@ -190,6 +190,99 @@ final class AudioCompressorTests: XCTestCase {
         let late = try encoded(stepping(rate: 48_000, seconds: 20, delay: 0.04), name: "late")
         let found = refusal(source: source, copy: late)
         guard case .lag = found else { return XCTFail("40 ms late: \(String(describing: found))") }
+    }
+
+    // MARK: Sparse, quiet, and dropped-out sound
+
+    private func silence(rate: Double, seconds: Double) -> [Float] { [Float](repeating: 0, count: Int(rate * seconds)) }
+
+    private func placing(_ sound: [Float], in seconds: Double, at start: Double, rate: Double) -> [Float] {
+        var result = silence(rate: rate, seconds: seconds)
+        let offset = Int(start * rate)
+        for (index, sample) in sound.enumerated() where offset + index < result.count { result[offset + index] = sample }
+        return result
+    }
+
+    func testBehaviorSparseSpeechAgainstASilentCopyIsRefused() throws {
+        // Ten minutes with three seconds of speech: under 1% of the windows.
+        let rate = 16_000.0
+        let source = try write("sparse.caf", rate: rate, channels: [placing(samples(rate: rate, seconds: 3), in: 600, at: 300, rate: rate)])
+        let found = refusal(source: source, copy: try encoded(silence(rate: rate, seconds: 600), rate: rate, name: "sparse-silent"))
+        guard case .dropout = found else { return XCTFail("\(String(describing: found))") }
+        // The honest copy passes.
+        let (_, verification, _) = try roundTrip(source)
+        XCTAssertGreaterThan(verification.audibleWindows, 0)
+    }
+
+    func testBehaviorQuietSpeechAgainstASilentCopyIsRefused() throws {
+        // Speech at about -55 dBFS throughout.
+        let quiet = samples(rate: 16_000, seconds: 30).map { $0 * 0.0125 }
+        let source = try write("quiet.caf", rate: 16_000, channels: [quiet])
+        let found = refusal(source: source, copy: try encoded(silence(rate: 16_000, seconds: 30), rate: 16_000, name: "quiet-silent"))
+        guard case .dropout = found else { return XCTFail("\(String(describing: found))") }
+        let (_, verification, _) = try roundTrip(source)
+        XCTAssertGreaterThan(verification.audibleWindows, 0)
+    }
+
+    func testBehaviorADropoutIsRefusedWhereverItIs() throws {
+        let rate = 16_000.0
+        let sound = samples(rate: rate, seconds: 600)
+        let source = try write("ten.caf", rate: rate, channels: [sound])
+        for (name, start) in [("middle", 312.0), ("end", 597.5)] {
+            var dropped = sound
+            for index in Int(start * rate)..<min(dropped.count, Int((start + 2.5) * rate)) { dropped[index] = 0 }
+            let found = refusal(source: source, copy: try encoded(dropped, rate: rate, name: "dropout-\(name)"))
+            guard case .dropout = found else { return XCTFail("\(name): \(String(describing: found))") }
+        }
+    }
+
+    func testBehaviorALocalEnvelopeFailureCantHideInALongFile() throws {
+        // Twelve minutes; for 10 s in the middle the copy's loudness swings the other way. Over the whole file it still
+        // correlates (about 0.97); the minute it's in doesn't.
+        let rate = 16_000.0
+        let sound = swinging(rate: rate, seconds: 720)
+        var copy = sound
+        let flipped = swinging(rate: rate, seconds: 10, phase: .pi)
+        let start = Int(610 * rate)
+        for index in flipped.indices { copy[start + index] = flipped[index] }
+        let source = try write("long-source.caf", rate: rate, channels: [sound])
+        let found = refusal(source: source, copy: try encoded(copy, rate: rate, name: "long-swing"))
+        guard case .envelope = found else { return XCTFail("\(String(describing: found))") }
+    }
+
+    func testBehaviorFewAudibleWindowsAreComparedOneByOne() throws {
+        // Half a second of sound in a minute: too few windows to correlate, so each is compared, and one 10 dB down
+        // (short of the 12 dB quiet bar) is refused.
+        let rate = 16_000.0
+        let burst = samples(rate: rate, seconds: 0.5)
+        let source = try write("burst.caf", rate: rate, channels: [placing(burst, in: 60, at: 30, rate: rate)])
+        let softer = try encoded(placing(burst.map { $0 * 0.316 }, in: 60, at: 30, rate: rate), rate: rate, name: "burst-softer")
+        let found = refusal(source: source, copy: softer)
+        guard case .level = found else { return XCTFail("\(String(describing: found))") }
+    }
+
+    func testBehaviorDownsampledCopyVerifiesAgainstItsResampledLength() throws {
+        let source = try write("wide.caf", rate: 48_000, channels: [samples(rate: 48_000, seconds: 12.34567)])
+        let plan = AudioCompressor.Plan(sampleRate: 16_000, sourceSampleRate: 48_000, channels: 1, bitRate: 32_000, downmixes: false)
+        XCTAssertEqual(plan.method, "aac-lc-32-16k")
+        let copy = folder.appendingPathComponent("narrow.m4a")
+        try AudioCompressor.encode(source, to: copy, plan: plan)
+        let verification = try AudioCompressor.verify(source: source, copy: copy, plan: plan)
+        XCTAssertEqual(verification.frames, plan.expectedFrames(from: try AVAudioFile(forReading: source).length))
+        XCTAssertEqual(verification.lag, 0)
+        // Verified against the source's own length, it isn't.
+        let same = AudioCompressor.Plan(sampleRate: 16_000, channels: 1, bitRate: 32_000, downmixes: false)
+        XCTAssertThrowsError(try AudioCompressor.verify(source: source, copy: copy, plan: same))
+    }
+
+    func testBehaviorThePlanComesFromTheTable() throws {
+        let source = try write("table.caf", rate: 48_000, channels: [samples(rate: 48_000, seconds: 2)])
+        let plan = try AudioCompressor.plan(for: source)
+        let row = RecordingCompressionTable.row(.wideMono)
+        XCTAssertEqual(plan.bitRate, row.bitRate)
+        XCTAssertEqual(plan.channels, row.channels)
+        XCTAssertEqual(plan.rule, RecordingCompressionTable.rule)
+        XCTAssertEqual(TrackEncoding.currentRule, RecordingCompressionTable.rule)
     }
 
     func testBehaviorPrepareCopyRefusesChangedBytesAndLeavesNothing() async throws {

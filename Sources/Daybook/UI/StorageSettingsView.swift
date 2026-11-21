@@ -65,7 +65,7 @@ private struct StorageSettingsSheet: View {
             LibraryStorageSection(report: report)
             RecordingCompressionSection(age: Binding(get: { state.library.recordingCompression },
                                                      set: { state.library.setRecordingCompression($0) }),
-                                        startsLine: RecordingCompressionSchedule.startsLine(state.compressionStartDate,
+                                        startsLine: RecordingCompressionSchedule.startsLine(state.compressionStartsAt,
                                                                                             age: state.library.recordingCompression))
             Section {
                 LabeledContent {

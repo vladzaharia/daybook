@@ -7,8 +7,11 @@ import Foundation
 public enum RecordingCompressionSchedule {
     public static let firstRunWait: TimeInterval = 7 * 86_400
 
-    /// The day this Mac may start, recorded the first time it's asked for (a week from then).
-    public static func startDate(in defaults: UserDefaults, key: String, now: Date = Date()) -> Date {
+    /// The day this Mac may start in a library, recorded the first time it's asked for (a week from then). Kept per
+    /// library (its sync ID, or `local`), so a Mac that joins another library, or one that replaced this one, waits a
+    /// week there too.
+    public static func startDate(in defaults: UserDefaults, key: String, library: String, now: Date = Date()) -> Date {
+        let key = "\(key).\(library)"
         if let stored = defaults.object(forKey: key) as? Date { return stored }
         let start = now.addingTimeInterval(firstRunWait)
         defaults.set(start, forKey: key)

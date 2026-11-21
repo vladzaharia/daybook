@@ -39,14 +39,33 @@ their own lossless clips (a follow-up).
   creation and modification times (6 bytes, one-second resolution), so two Macs' copies of one recording usually differ
   in bytes; the merge rule keeps the smaller hash.
 
+**Review fixes (same day).** Also on synthetic audio and temporary libraries:
+- the copy's checks: three seconds of speech in ten minutes, or speech at -55 dBFS throughout, against a silent copy,
+  refused; a 2.5 s dropout in the middle of ten minutes, or at the very end, refused; ten seconds of loudness swinging
+  the other way in a twelve-minute file (0.97 over the whole file) refused by its minute; half a second of sound 10 dB
+  down, too few windows to correlate, refused window by window; a copy resampled to 16 kHz verifying against its
+  resampled length and lag 0; the plan read from the encoding table with its rule recorded.
+- the library: Never arriving while a copy is made stops the replace and starts nothing; under Never originals stay and
+  a later 90 days lets them go; something starting during the encode refuses the replace; compressing doesn't change
+  the edit date; a failed save puts the track back and the copy is swept; a file already at the copy's path is never
+  overwritten; an original another track names stays; a copy no track names stays while the named file is missing or
+  isn't its bytes; temporaries in the Trash are swept; the first-run week is per library.
+- the pass's wiring (`RecordingCompressionPlannerTests`): in use, in the Trash, not done, Upgrade offered, a voice
+  profile, settings not yet synced, a clock ahead or behind the library, Never, before the start, and an older device
+  each keep conversations out; only this Mac's tracks are read, oldest first; a voice profile's audio stays protected
+  through a merge, a move, and the same bytes.
+- unreadable settings (extra keys beside the selection) are Never; a recording of a kind this version doesn't know is
+  left alone; an iPhone lets go of an original it cached once a Mac's copy is in iCloud, not before.
+
 **Not verified.** The effect of AAC at 64 and 32 kbit/s on the real speech models (transcription, speaker detection,
 voice embeddings, background-audio classification) is unmeasured: no models were downloaded, and every check here is on
-synthetic sound. Re-processing a compressed conversation (Upgrade, Transcribe Again) runs on the copy. The scheduler
-(idle moments, power, the battery threshold, stopping when recording or playback starts) is built and wired but has no
-automated test; neither does the Settings row or Info › Audio's line. No real recording, no iCloud, no two physical Macs,
+synthetic sound. Re-processing a compressed conversation (Upgrade, Transcribe Again) runs on the copy. The scheduler's
+gathering of inputs on the Mac (idle moments, power, the battery threshold, stopping when recording or playback starts)
+has no automated test beyond the planner it feeds; neither does the Settings row or Info › Audio's line. An export or
+share under way isn't seen as busy. `compressionClockLooksAhead` passes compaction's tested check through untested
+here. No real recording, no iCloud, no two physical Macs,
 and no iPhone were involved. An older Daybook seen more than 30 days ago that returns and edits a compressed recording
 may merge back to the original; that's not tested. Superseded originals stay in a plaintext library's iCloud.
-||||||| eb28b4f1
 
 ## iPhone gives back audio sooner (2026-11-20)
 

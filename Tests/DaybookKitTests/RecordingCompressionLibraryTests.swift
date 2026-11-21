@@ -188,6 +188,138 @@ final class RecordingCompressionLibraryTests: XCTestCase {
         }
     }
 
+    // MARK: Never, and what's in the way
+
+    func testBehaviorNeverArrivingMidCompressionStopsIt() async throws {
+        let library = try await self.library("Mac", syncs: false)
+        let (id, track) = try await conversation(in: library, from: try recording())
+        library.compressionFault = { step in
+            guard step == .prepared else { return }
+            MainActor.assumeIsolated { library.setRecordingCompression(.never) }
+        }
+        let compressed = await library.compressRecordings([track.id], in: id, device: nil)
+        XCTAssertEqual(compressed, [])
+        XCTAssertNil(library.meeting(id)?.tracks.first?.encoding)
+        XCTAssertEqual(originals(library, id), [(track.relativePath as NSString).lastPathComponent], "the copy is thrown away")
+        // And nothing starts under Never.
+        library.compressionFault = nil
+        let again = await library.compressRecordings([track.id], in: id, device: nil)
+        XCTAssertEqual(again, [])
+    }
+
+    func testBehaviorUnderNeverOriginalsStayAndALaterChoiceFinishesThem() async throws {
+        let library = try await self.library("Mac", syncs: false)
+        let (id, before) = try await conversation(in: library, from: try recording())
+        await library.compressRecordings([before.id], in: id, device: nil)
+        library.setRecordingCompression(.never)
+        var removed = await library.finishCompressions()
+        XCTAssertEqual(removed, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url(library, before.relativePath, in: id).path))
+        XCTAssertNotNil(library.meeting(id)?.tracks.first?.encoding, "the track keeps naming the copy")
+        library.setRecordingCompression(.after90Days)
+        removed = await library.finishCompressions()
+        XCTAssertEqual(removed, 1)
+    }
+
+    func testBehaviorWhatStartedDuringTheEncodeStopsTheReplace() async throws {
+        let library = try await self.library("Mac", syncs: false)
+        let (id, track) = try await conversation(in: library, from: try recording())
+        let refused = await library.compressRecordings([track.id], in: id, device: nil) { _ in false }
+        XCTAssertEqual(refused, [])
+        XCTAssertEqual(originals(library, id), [(track.relativePath as NSString).lastPathComponent])
+    }
+
+    func testBehaviorCompressionIsNotAnEdit() async throws {
+        let library = try await self.library("Mac", syncs: false)
+        let (id, track) = try await conversation(in: library, from: try recording())
+        let edited = try XCTUnwrap(library.meeting(id)?.updatedAt)
+        await library.compressRecordings([track.id], in: id, device: nil)
+        XCTAssertNotNil(library.meeting(id)?.tracks.first?.encoding)
+        XCTAssertEqual(library.meeting(id)?.updatedAt, edited)
+    }
+
+    func testBehaviorAFailedSaveRestoresTheTrack() async throws {
+        let library = try await self.library("Mac", syncs: false)
+        let (id, track) = try await conversation(in: library, from: try recording())
+        let folder = library.rootURL.appendingPathComponent("Meetings/\(id.uuidString)")
+        library.compressionFault = { step in
+            if step == .renamed { try? FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: folder.path) }
+        }
+        let compressed = await library.compressRecordings([track.id], in: id, device: nil)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path)
+        XCTAssertEqual(compressed, [])
+        XCTAssertEqual(library.meeting(id)?.tracks.first.map(RecordingCompression.File.init), RecordingCompression.File(track))
+        library.compressionFault = nil
+        await library.flush()
+        await library.reconcileCompressions()
+        XCTAssertEqual(originals(library, id), [(track.relativePath as NSString).lastPathComponent], "the unsaved copy is gone")
+    }
+
+    func testBehaviorAFileAlreadyAtTheCopysPathIsLeftAlone() async throws {
+        let library = try await self.library("Mac", syncs: false)
+        let (id, track) = try await conversation(in: library, from: try recording())
+        let originalsFolder = library.rootURL.appendingPathComponent("Meetings/\(id.uuidString)/Originals")
+        var planted: URL?
+        library.compressionFault = { step in
+            guard step == .prepared, let name = try? FileManager.default.contentsOfDirectory(atPath: originalsFolder.path)
+                .first(where: { $0.hasPrefix(RecordingCompression.temporaryPrefix) }),
+                  let digest = try? AudioDigest.sha256(fileURL: originalsFolder.appendingPathComponent(name)) else { return }
+            let target = library.rootURL.appendingPathComponent("Meetings/\(id.uuidString)/\(RecordingCompression.relativePath(trackID: track.id, sha256: digest))")
+            try? Data("someone else's".utf8).write(to: target)
+            planted = target
+        }
+        let compressed = await library.compressRecordings([track.id], in: id, device: nil)
+        XCTAssertEqual(compressed, [])
+        XCTAssertNil(library.meeting(id)?.tracks.first?.encoding)
+        let target = try XCTUnwrap(planted)
+        XCTAssertEqual(try Data(contentsOf: target), Data("someone else's".utf8), "never overwritten")
+    }
+
+    func testBehaviorAnOriginalAnotherTrackStillNamesStays() async throws {
+        let library = try await self.library("Mac", syncs: false)
+        let (id, before) = try await conversation(in: library, from: try recording())
+        await library.compressRecordings([before.id], in: id, device: nil)
+        library.update(id) { meeting in
+            meeting.tracks.append(RecordingTrack(source: .microphone, relativePath: before.relativePath, fileName: before.fileName, sha256: before.sha256))
+        }
+        await library.flush()
+        let removed = await library.finishCompressions()
+        XCTAssertEqual(removed, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url(library, before.relativePath, in: id).path))
+    }
+
+    func testBehaviorAnUnnamedCopyStaysWhileTheNamedFileIsntHere() async throws {
+        struct Crash: Error {}
+        let library = try await self.library("Mac", syncs: false)
+        let (id, track) = try await conversation(in: library, from: try recording())
+        library.compressionFault = { if $0 == .renamed { throw Crash() } }
+        await library.compressRecordings([track.id], in: id, device: nil)
+        library.compressionFault = nil
+        // The file the track names is missing: the copy may be all there is.
+        let named = url(library, track.relativePath, in: id)
+        let bytes = try Data(contentsOf: named)
+        try FileManager.default.removeItem(at: named)
+        await library.reconcileCompressions()
+        XCTAssertEqual(originals(library, id).filter { $0.contains(".aac-") }.count, 1)
+        // Back, but not the bytes the track names: still kept.
+        try Data("other".utf8).write(to: named)
+        await library.reconcileCompressions()
+        XCTAssertEqual(originals(library, id).filter { $0.contains(".aac-") }.count, 1)
+        try bytes.write(to: named)
+        await library.reconcileCompressions()
+        XCTAssertEqual(originals(library, id).filter { $0.contains(".aac-") }.count, 0)
+    }
+
+    func testBehaviorTemporaryCopiesInTheTrashAreSwept() async throws {
+        let library = try await self.library("Mac", syncs: false)
+        let trashed = library.rootURL.appendingPathComponent("Trash/\(UUID().uuidString)/Originals")
+        try FileManager.default.createDirectory(at: trashed, withIntermediateDirectories: true)
+        let leftover = trashed.appendingPathComponent("\(RecordingCompression.temporaryPrefix)x.m4a")
+        try Data("x".utf8).write(to: leftover)
+        await library.reconcileCompressions()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: leftover.path))
+    }
+
     // MARK: Sync
 
     func testBehaviorOriginalStaysUntilTheCopyIsUploaded() async throws {
@@ -306,12 +438,15 @@ final class RecordingCompressionLibraryTests: XCTestCase {
     func testBehaviorFirstRunWaitIsRecordedOnceAndShownUntilItPasses() {
         let defaults = makeTestDefaults("daybook.compression.schedule")
         let first = Date(timeIntervalSince1970: 1_800_000_000)
-        let start = RecordingCompressionSchedule.startDate(in: defaults, key: "start", now: first)
+        let start = RecordingCompressionSchedule.startDate(in: defaults, key: "start", library: "L1", now: first)
         XCTAssertEqual(start, first.addingTimeInterval(7 * 86_400))
-        XCTAssertEqual(RecordingCompressionSchedule.startDate(in: defaults, key: "start", now: first.addingTimeInterval(86_400)), start, "recorded once")
+        XCTAssertEqual(RecordingCompressionSchedule.startDate(in: defaults, key: "start", library: "L1", now: first.addingTimeInterval(86_400)), start, "recorded once")
         XCTAssertNotNil(RecordingCompressionSchedule.startsLine(start, age: .after30Days, now: first))
         XCTAssertNil(RecordingCompressionSchedule.startsLine(start, age: .never, now: first))
         XCTAssertNil(RecordingCompressionSchedule.startsLine(start, age: .after30Days, now: start))
+        // Another library (one this Mac joined, or one that replaced this one) waits its own week.
+        let later = first.addingTimeInterval(20 * 86_400)
+        XCTAssertEqual(RecordingCompressionSchedule.startDate(in: defaults, key: "start", library: "L2", now: later), later.addingTimeInterval(7 * 86_400))
     }
 
     /// The iPhone shows the setting and never compresses: nothing in its app calls the steps that replace or let go.

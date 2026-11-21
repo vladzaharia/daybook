@@ -85,6 +85,9 @@ public final class LibraryController {
     @ObservationIgnored var compressionsInFlight = 0
     /// Stops a compression at a step as a crash would there (tests).
     @ObservationIgnored var compressionFault: ((RecordingCompressionStep) throws -> Void)?
+    /// The library whose settings this device last applied from sync, in this run (an acknowledged pass): until it's the
+    /// library now connected, a Mac compresses nothing there, since another device's Never may not have arrived.
+    @ObservationIgnored public internal(set) var settingsAppliedFromSync: UUID?
 
     public init(rootURL: URL, sync: LibrarySyncController?) {
         self.rootURL = rootURL
@@ -215,6 +218,17 @@ public final class LibraryController {
         change(&meeting)
         guard meeting != meetings[index] else { return }
         meeting.updatedAt = Date()
+        meetings[index] = meeting
+        persist(meeting)
+    }
+
+    /// The same, for a change that isn't an edit (a recording compressed): `updatedAt` stays, so the conversation isn't
+    /// shown as edited and its age (Compress Older Recordings' 30 days) doesn't start again.
+    func updateKeepingEditDate(_ id: UUID, _ change: (inout Meeting) -> Void) {
+        guard let index = meetings.firstIndex(where: { $0.id == id }) else { return }
+        var meeting = meetings[index]
+        change(&meeting)
+        guard meeting != meetings[index] else { return }
         meetings[index] = meeting
         persist(meeting)
     }
@@ -1035,6 +1049,7 @@ public final class LibraryController {
             guard sync.canApply(result) else { return applied }
             try await sync.acknowledge(result)
             applied?.acknowledged = true
+            settingsAppliedFromSync = await sync.libraryID()
         } catch is CancellationError {
             // Cancelled, or sync moved to another account or folder mid-pass: nothing failed, and the next pass
             // offers the unacknowledged changes again.

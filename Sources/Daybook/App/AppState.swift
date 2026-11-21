@@ -103,6 +103,8 @@ final class AppState {
     /// an idle moment lasts before it starts.
     @ObservationIgnored var compressionPass: Task<Void, Never>?
     var compressionDelay: Duration = .seconds(90)
+    /// When this Mac may first compress in the library open now, once a pass has looked (Settings says so until then).
+    var compressionStartsAt: Date?
     /// This Mac's processing: the queue and model downloads it owns (`ProcessingQueue`), and the jobs it runs
     /// (MacProcessor.swift).
     let processor: MacProcessor

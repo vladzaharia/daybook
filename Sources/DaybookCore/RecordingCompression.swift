@@ -6,8 +6,8 @@ import Foundation
 /// recorder's file again, a merge, a measurement made on the original), and so a device holding the original can tell it
 /// may let it go. Optional on the track: versions before it keep it as an unknown field and write it back unchanged.
 public struct TrackEncoding: Codable, Equatable, Sendable {
-    /// The rule this version encodes by. A recording encoded under a later rule is left as it is.
-    public static let currentRule = 1
+    /// The rule this version encodes by (`RecordingCompressionTable.rule`). A recording encoded under a later rule is left as it is.
+    public static var currentRule: Int { RecordingCompressionTable.rule }
 
     /// How the copy was made, such as `aac-lc-64` (AAC-LC at 64 kbit/s) or `aac-lc-96-stereo`.
     public var method: String
@@ -101,6 +101,8 @@ extension LibraryMetadata {
         guard let record = choice(.compressOlderRecordings) else { return .standard }
         if record.unreadableValue != nil { return .never }
         guard let value = record.value else { return .standard }
+        // Something a newer Daybook wrote beside the selection might qualify it: not understood, so Never.
+        guard value.unknownFields.isEmpty else { return .never }
         guard let selection = value.selection else { return .standard }
         return RecordingCompressionAge(rawValue: selection) ?? .never
     }

@@ -17,12 +17,53 @@ final class RecordingCompressionSyncTests: XCTestCase {
     private func engine(_ name: String, _ deviceClass: SyncDeviceClass = .mac) throws -> LibrarySyncEngine {
         try LibrarySyncEngine(localRoot: root.appendingPathComponent(name), remoteRoot: remote, deviceID: name, replica: SyncReplicaConfiguration(
             audioPolicy: deviceClass == .mac ? .eager : .onDemand,
-            device: SyncDeviceIdentity(deviceClass: deviceClass, displayName: name, canProcess: deviceClass == .mac)))
+            device: SyncDeviceIdentity(deviceClass: deviceClass, displayName: name, canProcess: deviceClass == .mac),
+            audioCache: deviceClass == .phone ? AudioCachePolicy(budgetBytes: 1 << 30) : nil))
     }
 
-    private func pass(_ engine: LibrarySyncEngine) async throws {
-        let result = try await engine.synchronize(meetings: [])
+    private func pass(_ engine: LibrarySyncEngine, _ name: String? = nil, _ meetings: [Meeting] = []) async throws {
+        let result = try await engine.synchronize(meetings: meetings)
+        if let name {
+            let store = try MeetingStore(rootURL: root.appendingPathComponent(name))
+            for meeting in result.meetings { try await store.save(meeting) }
+        }
         try await engine.acknowledge(result.checkpointID)
+    }
+
+    /// The iPhone fetched a recording a Mac later compressed: the original it cached goes once the copy is in iCloud,
+    /// whatever the budget, and not before.
+    func testBehaviorIPhoneLetsGoOfAnOriginalAMacReplaced() async throws {
+        let mac = try engine("Mac"), phone = try engine("Phone", .phone)
+        let source = root.appendingPathComponent("original.wav")
+        try Data(repeating: 7, count: 4_096).write(to: source)
+        var meeting = try await MeetingStore(rootURL: root.appendingPathComponent("Mac")).importAudio(from: source, into: Meeting(title: "Call"), source: .microphone)
+        try await pass(mac, "Mac", [meeting]); try await pass(phone, "Phone")
+        let original = meeting.tracks[0]
+        _ = try await phone.fetchAudio(for: original, in: meeting.id, options: AudioFetchOptions(pollInterval: .milliseconds(5), timeout: .seconds(10)))
+        let cached = root.appendingPathComponent("Phone/Meetings/\(meeting.id.uuidString)/\(original.relativePath)")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: cached.path))
+        // The Mac replaces it with a copy (bytes stand in for AAC: sync never decodes audio).
+        let copyBytes = Data(repeating: 9, count: 512)
+        let digest = AudioDigest.sha256(data: copyBytes)
+        let relativePath = RecordingCompression.relativePath(trackID: original.id, sha256: digest)
+        try copyBytes.write(to: root.appendingPathComponent("Mac/Meetings/\(meeting.id.uuidString)/\(relativePath)"))
+        RecordingCompression.File(relativePath: relativePath, fileName: "original.m4a", sha256: digest, encoding: TrackEncoding(
+            method: "aac-lc-64", sourceFormat: "PCM", previousSHA256: original.sha256, previousRelativePath: original.relativePath,
+            previousFileName: original.fileName, encodedAt: Date())).apply(to: &meeting.tracks[0])
+        try await MeetingStore(rootURL: root.appendingPathComponent("Mac")).save(meeting)
+        // Applied on the iPhone before the copy is in iCloud: the original stays.
+        let blob = remote.appendingPathComponent("Blobs/\(digest)")
+        try await pass(phone, "Phone")
+        try await MeetingStore(rootURL: root.appendingPathComponent("Phone")).save(meeting)
+        var report = try await phone.evictAudio()
+        XCTAssertTrue(report.evicted.isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: cached.path), "the copy isn't in iCloud yet")
+        try await pass(mac, "Mac", [meeting])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: blob.path))
+        try await pass(phone, "Phone")
+        report = try await phone.evictAudio()
+        XCTAssertEqual(report.evicted.count, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cached.path))
     }
 
     func testBehaviorEveryDeviceInUseMustKnowCompressedRecordings() async throws {

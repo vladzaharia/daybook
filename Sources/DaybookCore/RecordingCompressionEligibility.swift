@@ -58,13 +58,17 @@ public enum RecordingCompressionEligibility {
         /// Every device seen in the last 30 days compresses (presence feature `compress-1`), or the library doesn't sync.
         /// A device that doesn't would keep the original and could merge it back.
         public var everyDeviceCompresses: Bool
-        public init(now: Date, age: RecordingCompressionAge, startsAt: Date?, everyDeviceCompresses: Bool) {
+        /// This device's clock can be trusted for "30 days ago": it doesn't look ahead of the other devices'
+        /// (`LibrarySyncEngine.compressionClockLooksAhead`), and it isn't behind anything in the library (`newestDate`).
+        public var clockTrusted: Bool
+        public init(now: Date, age: RecordingCompressionAge, startsAt: Date?, everyDeviceCompresses: Bool, clockTrusted: Bool = true) {
             self.now = now; self.age = age; self.startsAt = startsAt; self.everyDeviceCompresses = everyDeviceCompresses
+            self.clockTrusted = clockTrusted
         }
     }
 
     public enum Refusal: Equatable, Sendable {
-        case off, notStarted, notEveryDevice
+        case off, notStarted, notEveryDevice, clock
         case trashed, busy, notDone, failed, notTranscribed, noSummary, noSpeakers, openRequest, upgradeOffered
         case tooRecent, teachesVoiceProfile, newerFields
         case notVerified(UUID), notUploaded(UUID)
@@ -92,10 +96,14 @@ public enum RecordingCompressionEligibility {
         return dates.max() ?? meeting.updatedAt
     }
 
+    /// The newest date anything in the library carries: a clock behind it can't say what's 30 days old.
+    public static func newestDate(in meetings: [Meeting]) -> Date? { meetings.map(lastActivity).max() }
+
     public static func decide(_ meeting: Meeting, facts: ConversationFacts, context: Context) -> Decision {
         guard let interval = context.age.interval else { return .skip(.off) }
         guard let startsAt = context.startsAt, context.now >= startsAt else { return .skip(.notStarted) }
         guard context.everyDeviceCompresses else { return .skip(.notEveryDevice) }
+        guard context.clockTrusted, context.now >= lastActivity(of: meeting) else { return .skip(.clock) }
         if facts.isTrashed { return .skip(.trashed) }
         if facts.isBusy { return .skip(.busy) }
         // What this version can't read on the conversation or a recording might say not to.

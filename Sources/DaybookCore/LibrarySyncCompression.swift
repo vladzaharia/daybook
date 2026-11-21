@@ -15,6 +15,10 @@ extension LibrarySyncEngine {
         return SyncFiles.itemState(object.url) != .absent && cloud.isUploaded(object.url)
     }
 
+    /// Whether this device's clock looks more than a week ahead of the others' (compaction's `clockLooksAhead`): a Mac
+    /// whose clock is ahead would take a recent conversation for an old one.
+    public func compressionClockLooksAhead(now: Date = Date()) -> Bool { clockLooksAhead(now: now) }
+
     /// Whether every other device seen in the last 30 days compresses (`compressionFeature`). False while a presence
     /// record can't be read yet, as for compaction.
     public func everyRecentDeviceCompresses(now: Date = Date()) -> Bool {

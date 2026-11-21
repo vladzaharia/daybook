@@ -118,6 +118,27 @@ final class RecordingCompressionTests: XCTestCase {
                       previousRelativePath: path, previousFileName: "microphone.caf", encodedAt: now)
     }
 
+    func testBehaviorAClockThatCantBeTrustedRefuses() {
+        let (meeting, facts) = eligible()
+        var untrusted = context()
+        untrusted.clockTrusted = false
+        XCTAssertEqual(decide(meeting, facts, untrusted), .skip(.clock))
+        // Behind the conversation itself.
+        var behind = meeting
+        behind.revisions.append(.init(date: now.addingTimeInterval(day), kind: .notes, oldValue: "", newValue: "x"))
+        XCTAssertEqual(decide(behind, facts), .skip(.clock))
+        XCTAssertEqual(RecordingCompressionEligibility.newestDate(in: [meeting, behind]), now.addingTimeInterval(day))
+    }
+
+    func testBehaviorARecordingOfAKindThisVersionDoesntKnowIsLeftAlone() throws {
+        let (meeting, facts) = eligible()
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(meeting.tracks[0])) as? [String: Any])
+        object["source"] = "hologram"
+        var changed = meeting
+        changed.tracks[0] = try JSONDecoder().decode(RecordingTrack.self, from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertEqual(decide(changed, facts), .skip(.newerFields))
+    }
+
     // MARK: Who compresses
 
     func testBehaviorRunnerIsTheRecordingMacWhileItIsAroundOtherwiseTheSmallestMac() {
@@ -206,9 +227,11 @@ final class RecordingCompressionTests: XCTestCase {
             metadata.choices = [.init(id: LibraryChoice.Name.compressOlderRecordings.rawValue, value: LibraryChoice(selection: selection), modifiedAt: now)]
             XCTAssertEqual(metadata.recordingCompression, expected, selection)
         }
-        let json = #"{"schemaVersion":1,"folders":[],"templates":[],"vocabulary":[],"choices":[{"id":"compressOlderRecordings","modifiedAt":0,"value":{"selection":12}}]}"#
-        let decoded = try JSONDecoder().decode(LibraryMetadata.self, from: Data(json.utf8))
-        XCTAssertEqual(decoded.recordingCompression, .never)
+        for value in [#"{"selection":12}"#, #"{"future":"weekly"}"#, #"{"selection":"30d","until":"2027"}"#] {
+            let json = #"{"schemaVersion":1,"folders":[],"templates":[],"vocabulary":[],"choices":[{"id":"compressOlderRecordings","modifiedAt":0,"value":"# + value + "}]}"
+            let decoded = try JSONDecoder().decode(LibraryMetadata.self, from: Data(json.utf8))
+            XCTAssertEqual(decoded.recordingCompression, .never, value)
+        }
     }
 
     func testBehaviorLaterSettingWinsWhenTwoLibrariesMerge() {
