@@ -19,6 +19,7 @@ struct PhoneWelcome: View {
     @State private var page: Page = PhoneWelcome.initialPage
     @State private var microphone = PhoneWelcome.microphoneState()
     @State private var showingPairing = false
+    @State private var showingAddRecorder = false
     /// The Models page's rows the person left checked; nil until they change one (`PhoneWelcomeOffer.initialChoice`).
     @State private var chosenModels: Set<PhoneWelcomeOffer.Part>?
     @Environment(\.scenePhase) private var scenePhase
@@ -38,11 +39,13 @@ struct PhoneWelcome: View {
                     go(from: .models)
                 }
             case .ready:
-                PhoneWelcomeReady(message: readyMessage, record: record, finish: finish)
+                PhoneWelcomeReady(message: readyMessage, cellularBytes: cellularBytes, downloadOverCellular: downloadOverCellular,
+                                  record: record, addRecorder: { showingAddRecorder = true }, finish: finish)
             }
         }
         .background(DaybookPalette.paper.ignoresSafeArea())
         .pairingSheet(isPresented: $showingPairing)
+        .addRecorderSheet(isPresented: $showingAddRecorder) { _ in }
         // Back from Settings, the Allow page says what's allowed now.
         .onChange(of: scenePhase) { _, phase in if phase == .active { microphone = Self.microphoneState() } }
         .task { await model.models.refresh() }
@@ -114,6 +117,17 @@ struct PhoneWelcome: View {
         if parts.contains(.transcription) { for missing in models.processingMissing { models.download(missing) } }
         if parts.contains(.summaries), let summary = models.summaryModel, models.status(of: summary).canDownload { models.download(summary) }
         go(from: .models)
+    }
+
+    /// What the models still to come would download over cellular, while they wait for Wi‑Fi and this iPhone is to run
+    /// them: the Ready page's way past the wait.
+    private var cellularBytes: Int64? {
+        guard model.settings.processesOnThisIPhone, case .waitingForWiFi(let bytes)? = model.models.processingDownloadState else { return nil }
+        return bytes
+    }
+
+    private func downloadOverCellular() {
+        model.models.allowsCellular = true
     }
 
     private func record() {
@@ -474,12 +488,25 @@ private struct PhoneWelcomeModelRow: View {
 
 private struct PhoneWelcomeReady: View {
     let message: String
+    let cellularBytes: Int64?
+    let downloadOverCellular: () -> Void
     let record: () -> Void
+    let addRecorder: () -> Void
     let finish: () -> Void
 
     var body: some View {
         WelcomeStepPage(title: WelcomeWords.readyTitle, message: message, showsMark: true) {
-            EmptyView()
+            if let cellularBytes {
+                Button(WelcomeWords.downloadOverCellular(bytes: cellularBytes), action: downloadOverCellular)
+                    .buttonStyle(.daybookLink)
+                    .padding(.top, DaybookSpacing.s3)
+            }
+            HStack(spacing: DaybookSpacing.s1) {
+                Text(WelcomeWords.recorderQuestion).foregroundStyle(DaybookPalette.Ink.secondary)
+                Button(WelcomeWords.addRecorder, action: addRecorder).buttonStyle(.daybookLink)
+            }
+            .font(.subheadline)
+            .padding(.top, DaybookSpacing.s3)
         } actions: {
             WelcomePrimaryButton(action: record) {
                 // The red dot of the library's Record, on the primary's own fill.

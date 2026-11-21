@@ -157,6 +157,8 @@ struct StorageScreen: View {
                 // An encrypted library's choice is its own (`BackupExclusion`).
                 Toggle("Include in iPhone Backups", isOn: model.libraryIsEncrypted
                        ? $settings.includesEncryptedLibraryInBackups : $settings.includesLibraryInBackups)
+            } footer: {
+                if model.libraryIsEncrypted { SettingsFooter(SettingsWords.encryptedBackupFooter) }
             }
             Section {
                 Toggle(SettingsWords.titleCased(SettingsWords.protectWhileLocked), isOn: $settings.protectsWhileLocked)

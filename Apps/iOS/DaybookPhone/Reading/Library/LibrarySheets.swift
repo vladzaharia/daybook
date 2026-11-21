@@ -60,7 +60,12 @@ struct TrashList: View {
     static func restore(_ id: UUID, library: LibraryController, session: ReadingSession) {
         Task {
             do {
-                try await library.restoreFromTrash(id)
+                let meeting = try await library.restoreFromTrash(id)
+                // As the Mac's notice: it says so, and Show leaves the Trash for the conversation.
+                session.confirmation = ConfirmationBeat(LibraryWords.restored(meeting)) { [weak session] in
+                    session?.place = .library(.section(.all))
+                    session?.open(meeting.id)
+                }
             } catch {
                 session.alert = ReadingAlert(title: "Couldn’t Restore", error: error, fallback: "Try again.")
             }

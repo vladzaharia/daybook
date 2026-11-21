@@ -38,6 +38,7 @@ struct AudioRow: View {
     let services: ConversationInfoServices
     @Binding var removing: RecordingTrack?
     @State private var availability: ReadingAudio?
+    @State private var fetch = AudioFetch.idle
     @Environment(\.daybookDensity) private var density
     @Environment(\.readingContext) private var context
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -174,20 +175,55 @@ struct AudioRow: View {
 
     private func availabilityLine(_ availability: ReadingAudio) -> some View {
         let words = Self.words(availability, thisDevice: context.thisDevice)
-        return Label(words.text, systemImage: words.symbol).labelStyle(AudioFactLabelStyle())
+        return HStack(spacing: 8) {
+            Label(words.text, systemImage: words.symbol).labelStyle(AudioFactLabelStyle())
+            if let title = Self.downloadTitle(availability, fetch: fetch, canDownload: services.download != nil) {
+                Button(title) { download() }
+                    .buttonStyle(.daybookLink)
+                    .disabled(fetch == .fetching)
+            }
+        }
     }
 
-    /// Where a recording's audio is, where that's in doubt: "On this iPhone", "In iCloud · 12 MB", "Not on this iPhone
-    /// yet", "Not in the library on this iPhone".
+    private func download() {
+        guard let fetcher = services.download else { return }
+        fetch = .fetching
+        Task {
+            do {
+                try await fetcher(track, meeting)
+                fetch = .idle
+            } catch {
+                fetch = .failed
+            }
+            if let lookup = services.availability { availability = await lookup(track, meeting) }
+        }
+    }
+
+    /// Where a recording's audio is, where that's in doubt: "On this iPhone", "Not on this iPhone", "Not in the library".
     static func words(_ availability: ReadingAudio, thisDevice: String) -> (text: String, symbol: String) {
         switch availability {
         case .local: return ("On \(thisDevice)", thisDevice.hasSuffix("iPhone") ? "iphone" : "laptopcomputer")
-        case .downloadable(let bytes?): return ("In iCloud · \(ByteSize.format(bytes))", "icloud.and.arrow.down")
-        case .downloadable(nil): return ("In iCloud", "icloud.and.arrow.down")
-        case .offline: return ("Not on \(thisDevice) yet", "icloud.slash")
-        case .missing: return ("Not in the library on \(thisDevice)", "questionmark.circle")
+        case .downloadable: return ("Not on \(thisDevice)", "icloud.and.arrow.down")
+        case .offline: return ("Not on \(thisDevice)", "icloud.slash")
+        case .missing: return ("Not in the library", "questionmark.circle")
         }
     }
+
+    /// The action beside "Not on this iPhone": "Download · 12 MB" (just "Download" when the size isn't known), "Try
+    /// Again" after it failed, nothing while it downloads or where the audio can't be fetched now.
+    static func downloadTitle(_ availability: ReadingAudio, fetch: AudioFetch, canDownload: Bool) -> String? {
+        guard canDownload, case .downloadable(let bytes) = availability else { return nil }
+        switch fetch {
+        case .fetching: return "Downloading…"
+        case .failed: return "Try Again"
+        case .idle: return bytes.map { "Download · \(ByteSize.format($0))" } ?? "Download"
+        }
+    }
+}
+
+/// Where a Download from Info stands.
+enum AudioFetch: Equatable {
+    case idle, fetching, failed
 }
 
 /// A recording that was removed: dimmed, with Put Back.
