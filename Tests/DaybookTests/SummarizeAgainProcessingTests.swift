@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookIntelligence
 @testable import DaybookKit
 import DaybookTestSupport
 import Foundation
@@ -256,5 +257,101 @@ final class SummarizeAgainProcessingTests: XCTestCase {
         rig.state.installedModels.insert(other)
         rig.state.physicalMemory = 1 << 30
         XCTAssertEqual(rig.state.makeJob(meetingID: id, mode: .summaryOnly, summaryModelID: other).summaryModelID, chosen)
+    }
+
+    // MARK: A model of this Mac's runs on this Mac
+
+    private func newer<Value: Decodable>(_ raw: String, as type: Value.Type) throws -> Value {
+        try JSONDecoder().decode(type, from: Data("\"\(raw)\"".utf8))
+    }
+
+    func testBehaviorAPlacementOrKindANewerVersionWroteGetsNoCloudRow() async throws {
+        let rig = try await rig()
+        let id = try await processed(rig, "Newer", frequency: 360)
+        _ = withCloud(rig)
+        var preferences = rig.state.cloud.preferences
+        preferences.placements = CloudPlacements(allowed: ["work": true, "personal": true, CloudPlacements.notFiledKey: true])
+        rig.state.cloud.preferences = preferences
+        XCTAssertNotNil(try cloudRow(rig, id))
+        let placement = try newer("family", as: ExtensibleOptional<LibraryPlacement>.self)
+        rig.state.library.update(id) { $0.$placement = placement }
+        XCTAssertNil(try cloudRow(rig, id), "A placement a newer version wrote")
+        let known = LibraryPlacement.work
+        rig.state.library.update(id) { $0.placement = known }
+        XCTAssertNotNil(try cloudRow(rig, id))
+        let kind = try newer("meditation", as: Extensible<MeetingKind>.self)
+        rig.state.library.update(id) { $0.$kind = kind }
+        XCTAssertNil(try cloudRow(rig, id), "A kind a newer version wrote")
+    }
+
+    func testBehaviorAModelOfThisMacRunsHereWhateverTheCloudPreferencesSay() async throws {
+        for policy in [CloudSummaryPreferences.Policy.always, .ask] {
+            let rig = try await rig()
+            let id = try await processed(rig, "Here \(policy)", frequency: 365)
+            rig.state.installedModels.insert(other)
+            let cloud = withCloud(rig, policy: policy)
+            let summarized = rig.inference.summarized.count
+            let choice = try XCTUnwrap(rig.state.summarizeAgainChoices(for: try XCTUnwrap(rig.meeting(id))).first)
+            rig.state.summarizeAgain(id, as: choice)
+            try await rig.processed(id)
+            XCTAssertTrue(cloud.summarized.isEmpty, "\(policy): no request to the cloud")
+            XCTAssertEqual(rig.inference.summarized.count, summarized + 1, "\(policy): summarized here")
+        }
+    }
+
+    func testBehaviorAModelOfThisMacThatFailsDoesNotGoToTheCloud() async throws {
+        for policy in [CloudSummaryPreferences.Policy.always, .ask] {
+            let rig = try await rig()
+            let id = try await processed(rig, "Fails \(policy)", frequency: 370)
+            let cloud = withCloud(rig, policy: policy)
+            rig.inference.failSummaries(with: LocalIntelligenceError.promptTooLong(needed: 9_000, window: 8_192))
+            rig.state.summarizeAgain(id, as: try XCTUnwrap(rig.state.summarizeAgainChoices(for: try XCTUnwrap(rig.meeting(id))).first))
+            try await rig.processed(id)
+            XCTAssertTrue(cloud.summarized.isEmpty, "\(policy): not sent after failing here")
+            XCTAssertEqual(rig.meeting(id)?.status, .failed, "\(policy)")
+        }
+    }
+
+    func testBehaviorAPerRunModelThatGoesWhileTheJobWaitsRunsTheSettingsModelHere() async throws {
+        let rig = try await rig()
+        let id = try await processed(rig, "Vanishes", frequency: 375)
+        rig.state.installedModels.insert(other)
+        let cloud = withCloud(rig, policy: .always)
+        let (busy, audio) = try await busy(rig)
+        rig.state.summarizeAgain(id, as: SummarizeAgainChoice(place: .thisDevice(model: other), title: "With Gemma 4 E2B"))
+        XCTAssertEqual(rig.state.processor.queue.jobs.first { $0.meetingID == id }?.summaryModelID, other)
+        rig.state.installedModels.remove(other)
+        try rig.inference.unblock(audio)
+        try await rig.processed(busy)
+        try await rig.processed(id)
+        XCTAssertEqual(rig.meeting(id)?.summary?.modelsByRole["summarization"], rig.state.summaryModel)
+        XCTAssertFalse(rig.state.processor.queue.awaitingSummaryModel.contains(id), "Not waiting for a model that isn't coming")
+        XCTAssertFalse(cloud.summarized.contains(id), "Never the cloud (the other conversation, under Always, may go)")
+    }
+
+    // MARK: The click
+
+    func testBehaviorACloudRowThatNoLongerQualifiesAtTheClickQueuesNothingAndSendsNothing() async throws {
+        let rig = try await rig()
+        let id = try await processed(rig, "Click", frequency: 380)
+        let cloud = withCloud(rig)
+        rig.state.library.update(id) { $0.placement = .work }
+        let row = try XCTUnwrap(try cloudRow(rig, id))
+        // The conversation changed between the menu and the click: the click-time guard alone.
+        rig.state.library.update(id) { $0.placement = .personal }
+        rig.state.summarizeAgain(id, as: row)
+        XCTAssertFalse(rig.state.processor.queue.isQueued(id))
+        XCTAssertNil(rig.state.processor.queue.runningID)
+        XCTAssertTrue(cloud.summarized.isEmpty)
+        XCTAssertNil(try cloudRow(rig, id), "The menu follows")
+    }
+
+    func testBehaviorACloudRowNamingAnotherModelThanTheOneResolvedSendsNothing() async throws {
+        let rig = try await rig()
+        let id = try await processed(rig, "Other model", frequency: 385)
+        let cloud = withCloud(rig)
+        rig.state.summarizeAgain(id, as: SummarizeAgainChoice(place: .cloud(modelID: "gpt-other"), title: "With Other"))
+        XCTAssertFalse(rig.state.processor.queue.isQueued(id))
+        XCTAssertTrue(cloud.summarized.isEmpty)
     }
 }

@@ -96,6 +96,18 @@ struct ProcessingJob: Codable, Equatable, Identifiable, Sendable {
                       summarizesHere: summarizesHere, summarizesInCloud: summarizesInCloud)
     }
 
+    /// The same job with another summary model (and its frozen revision): a per-run model that went before the job ran.
+    func withSummaryModel(_ model: String, revision: String?) -> ProcessingJob {
+        var revisions = revisions ?? [:]
+        revisions[summaryModelID] = nil
+        if let revision { revisions[model] = revision }
+        return ProcessingJob(id: id, meetingID: meetingID, createdAt: createdAt, mode: mode, transcriptionModelID: transcriptionModelID,
+                             summaryModelID: model, detectSpeakers: detectSpeakers, preferences: preferences, requestID: requestID,
+                             templateID: templateID, revisions: revisions, voiceEmbeddingModelID: voiceEmbeddingModelID,
+                             languageFallbackModelID: languageFallbackModelID, smallTasksModelID: smallTasksModelID,
+                             photoModelID: photoModelID, upgrade: upgrade, summarizesHere: summarizesHere, summarizesInCloud: summarizesInCloud)
+    }
+
     /// The same job, no longer carrying out a request: it gave the request back.
     var withoutRequest: ProcessingJob {
         ProcessingJob(id: id, meetingID: meetingID, createdAt: createdAt, mode: mode, transcriptionModelID: transcriptionModelID,

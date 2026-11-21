@@ -84,7 +84,8 @@ final class MacProcessor {
         queue.task = Task { [weak self, weak app] in
             guard let self, let app else { return }
             let queue = self.queue
-            while !Task.isCancelled, self.askHolds == 0, let job = queue.next() {
+            while !Task.isCancelled, self.askHolds == 0, let next = queue.next() {
+                let job = app.jobWithUsableSummaryModel(next)
                 let id = job.meetingID
                 // Never run a request another device holds, or one that finished elsewhere meanwhile.
                 guard app.mayRun(job) else { queue.settle(id); continue }

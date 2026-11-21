@@ -309,15 +309,24 @@ final class PhoneSummaryPlacement {
         return SummarizeAgainChoices.rows(for: meeting, local: local, defaultLocal: local.first?.id, cloud: cloudOffer, preferences: preferences)
     }
 
-    /// Summarizes again as the person chose: here as Summarize Again does, or in the cloud as accepting a cloud Upgrade does
-    /// (due, then Use the Cloud, which this iPhone's switches check as it goes).
+    /// Summarizes again as the person chose. This iPhone's own model runs here whatever the cloud preferences say: kept here
+    /// (`keptHere`) and placed through `beginHere`, so neither Always nor a failure brings the cloud back. The cloud's goes
+    /// as accepting a cloud Upgrade does, only when the model on offer now is the one the row named, and only on the
+    /// placement this call made while Daybook is on the screen (a Mac's countdown, or a summary placed meanwhile, is left
+    /// alone).
     func summarizeAgain(_ id: UUID, as choice: SummarizeAgainChoice) async {
         switch choice.place {
-        case .cloud:
+        case .cloud(let modelID):
+            guard cloudOffer(for: id)?.id == modelID else { return }
             await summaryIsDue(id)
+            guard planners[id] != nil, isOnScreen else { return }
             perform(.useCloud, for: id)
-        default:
-            summarize(id)
+        case .thisDevice:
+            guard options.thisDeviceCanSummarize, runHere != nil else { return }
+            templates[id] = nil
+            keptHere.insert(id)
+            refresh()
+            placements.beginHere(id)
         }
     }
 

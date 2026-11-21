@@ -10,6 +10,8 @@ public struct SummarizeAgainChoice: Equatable, Identifiable, Sendable {
         case cloud(modelID: String)
     }
 
+    public init(place: Place, title: String) { self.place = place; self.title = title }
+
     public var place: Place
     /// "With Gemma 4 E4B", "With Claude Sonnet 5.5".
     public var title: String

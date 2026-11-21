@@ -90,14 +90,17 @@ extension AppState {
                                           cloud: hasCloudSetup && cloudOnOffer ? cloud.resolved?.model : nil, preferences: hasCloudSetup ? cloud.preferences : CloudSummaryPreferences())
     }
 
-    /// Summarizes again as the person chose: with another installed model for this run only (the chosen one in Settings
-    /// stays), or in the cloud through the path Use the Cloud takes (`summarizeInCloud`, which checks the conversation
-    /// again and does nothing when the cloud no longer takes it).
+    /// Summarizes again as the person chose. A model of this Mac's runs here whatever the cloud preferences say
+    /// (`summarizesHere`: neither Always nor a failure sends the transcript to the cloud), with another installed model for
+    /// this run only (the chosen one in Settings stays). The cloud's goes through the path Use the Cloud takes
+    /// (`summarizeInCloud`, which checks the conversation as it is now), and only when the model resolved now is the one the
+    /// row named; otherwise nothing is sent or queued, and the menu, drawn from what's true now, no longer lists the row.
     func summarizeAgain(_ id: UUID, as choice: SummarizeAgainChoice) {
         switch choice.place {
         case .thisDevice(let model):
-            processor.enqueue(id, mode: .summaryOnly, summaryModelID: model == summaryModel ? nil : model)
-        case .cloud:
+            processor.enqueue(id, mode: .summaryOnly, summarizesHere: true, summaryModelID: model == summaryModel ? nil : model)
+        case .cloud(let modelID):
+            guard hasCloudSetup, cloud.resolved?.model.id == modelID else { return }
             summarizeInCloud(id)
         }
     }

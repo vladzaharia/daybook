@@ -4628,18 +4628,21 @@ A reported call's far side (computer audio) was barely picked up while the micro
 Verified (simulated: fake inference, fake cloud, fake provider server; no network, no models):
 - `SummarizeAgainChoicesTests` (order, one option is no menu, each cloud gate).
 - `SummarizeAgainProcessingTests` on the Mac: the app-level list for no key, Never, a switch off, Personal by default, an
-  unreadable placement, a model not installed, one that no longer fits; the cloud row queues what Use the Cloud queues
-  and sends as the person's choice; a conversation moved to Personal, its switch turned off, Never set, or the key removed
-  between choosing and sending is not sent and is summarized here; the request is byte-identical to a cloud Upgrade's;
-  another installed model runs for that job only and Settings keeps its choice; one that went falls back to the chosen.
+  unreadable placement, a placement or kind a newer version wrote, a model not installed, one that no longer fits; the
+  cloud row queues what Use the Cloud queues; a row that no longer qualifies at the click, or names another model than the
+  one resolved, queues and sends nothing; a conversation changed between choosing and sending is not sent and is summarized
+  here; the request is byte-identical to a cloud Upgrade's; a model of this Mac's runs here under Always and Offer First
+  with no request to the cloud and does not go to the cloud when it fails; another installed model runs for that job only; one
+  that went before the run, or while the job waited, runs Settings' model.
 - `PhoneSummaryPlacementTests` (iPhone simulator, `scripts/build-ios.sh --test --test-arg
-  -only-testing:DaybookPhoneTests/PhoneSummaryPlacementTests`): the same list gates, the cloud send, and moved, switched
-  off, Never, and key removed before the send.
-- Mutations: each key test fails with its guard removed (the list's `allowsCloud`; the send-time checks, which are layered
-  (the planner, `summarizeInCloud`, the iPhone's `run`), so the send tests fail only with them removed together; the key
-  removed test passes with the placement checks alone removed, since the key check is another layer).
-- One iPhone picture of the closed menu (Summarize Again with its chevron, with this iPhone's model and the cloud's).
+  -only-testing:DaybookPhoneTests/PhoneSummaryPlacementTests`): the same list gates, the cloud send, a click that no
+  longer qualifies through `summarizeAgain`, this iPhone's model under Always and Offer First and on failure, no send from
+  the background, and nothing handed to a Mac's countdown.
+- Mutations: each key test fails with its guard removed (the list's `allowsCloud`; `summarizesHere`; `keptHere`; the
+  per-run fallback; the model check at the click; the send-time checks, which are layered, so those tests fail only with
+  the layers removed together).
+- One iPhone picture of the closed menu.
 
-Not verified: the open menu in either app (a simulator can't open it from the command line here); a Mac picture (the
-unbundled debug build drew no library window under `--snapshot`); a send to a real provider; the iPhone menu on a device.
-Naming a Mac, and the app and context menus, are follow-ups.
+Not verified: the open menu in either app; a Mac picture (the unbundled debug build drew no library window under
+`--snapshot`); a send to a real provider; the iPhone menu on a device; `PhoneUpgrades.accept`'s same guard has no test of
+its own. Naming a Mac, and the app and context menus, are follow-ups.
