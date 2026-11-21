@@ -742,9 +742,32 @@ final class AppState {
         // A recording's bookmarks file ("call.highlights.json") can be chosen with it (`separatingSidecars`).
         panel.allowedContentTypes = [.audio, .movie, .json]; panel.allowsMultipleSelection = true
         guard panel.runModal() == .OK else { return }
-        Task {
-            do { try await importFiles(panel.urls, source: .imported, attachTo: id) }
-            catch { report("Couldn’t Import Audio", "Choose an audio or video file and try again.", error) }
+        Task { await importRecordings(panel.urls, attachTo: id) }
+    }
+
+    /// What the person chose, dropped, or shared: every file that reads is imported, one that doesn't is skipped and
+    /// named, and the rest still go in. A notice says what came in and what didn't; an alert appears only when
+    /// nothing imported.
+    func importRecordings(_ urls: [URL], attachTo id: UUID? = nil) async {
+        let (audio, sidecars) = Self.separatingSidecars(urls)
+        var imported = 0
+        var failures: [(name: String, error: Error)] = []
+        for url in audio {
+            // Each recording goes in with the highlights file chosen with it.
+            let companion = sidecars[url.deletingPathExtension().standardizedFileURL.path]
+            do { imported += try await importAudio([url] + (companion.map { [$0] } ?? []), source: .imported, attachTo: id).count }
+            catch { failures.append((url.lastPathComponent, error)) }
+        }
+        guard !failures.isEmpty else { return }
+        guard imported == 0 else {
+            post(LibraryWords.importSummary(imported: imported, failed: failures.map(\.name)))
+            return
+        }
+        if failures.count == 1 {
+            report("Couldn’t Import Audio", "Choose an audio or video file and try again.", failures[0].error)
+        } else {
+            problem = AppProblem(title: "Couldn’t Import Audio", message: "\(failures.count) files weren’t imported.",
+                                 details: failures.map { "\($0.name): \($0.error.localizedDescription)" }.joined(separator: "\n"))
         }
     }
 

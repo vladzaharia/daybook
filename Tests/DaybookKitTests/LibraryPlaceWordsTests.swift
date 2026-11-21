@@ -7,9 +7,11 @@ import XCTest
 final class LibraryPlaceWordsTests: XCTestCase {
     func testBehaviorAnEmptyPlaceSaysNoConversationsAndAFolderHowToFillIt() {
         XCTAssertEqual(LibraryWords.emptyPlace(.section(.work), libraryIsEmpty: false, platform: .mac),
-                       LibraryWords.EmptyPlace(title: "No Conversations", symbol: "briefcase"))
+                       LibraryWords.EmptyPlace(title: "No Conversations", symbol: "briefcase",
+                                               description: "Drag conversations here, or choose Move to Work."))
         XCTAssertEqual(LibraryWords.emptyPlace(.section(.personal), libraryIsEmpty: false, platform: .iPhone),
-                       LibraryWords.EmptyPlace(title: "No Conversations", symbol: "house"))
+                       LibraryWords.EmptyPlace(title: "No Conversations", symbol: "house",
+                                               description: "Choose Move to Personal on a conversation."))
         XCTAssertEqual(LibraryWords.emptyPlace(.folder(UUID()), libraryIsEmpty: false, platform: .mac)?.description,
                        "Drag conversations here, or choose Move to Folder.")
         XCTAssertEqual(LibraryWords.emptyPlace(.folder(UUID()), libraryIsEmpty: false, platform: .iPhone)?.description,

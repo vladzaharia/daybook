@@ -111,7 +111,7 @@ struct ConversationList: View {
     private func importAudio(_ urls: [URL]) -> Bool {
         let audio = AppState.droppedRecordings(urls)
         guard !audio.isEmpty else { return false }
-        Task { do { try await state.importFiles(audio, source: .imported, attachTo: nil) } catch { state.report("Couldn’t Import Audio", "Choose an audio or video file and try again.", error) } }
+        Task { await state.importRecordings(audio) }
         return true
     }
 }
