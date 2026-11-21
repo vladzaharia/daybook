@@ -65,6 +65,16 @@ final class ConversationStatusChoicesTests: XCTestCase {
 
     // MARK: The cloud
 
+    func testBehaviorASilentRecordingIsSaidQuietlyNotAsAProblem() {
+        let silent = ProcessingStatus.Failure(reason: "No speech", hadTranscripts: false, kind: .noSpeech)
+        let box = page(.failed(silent), recorded(), mac)
+        XCTAssertEqual(box?.kind, .box(.info), "nothing went wrong, so the warning colour stays for what needs fixing")
+        XCTAssertEqual(box?.symbol, "waveform.slash")
+        XCTAssertEqual(box?.actions, [.details("No speech")], "trying again can't find speech that isn't there")
+        let broken = ProcessingStatus.Failure(reason: "", hadTranscripts: false, kind: .other)
+        XCTAssertEqual(page(.failed(broken), recorded(), mac)?.kind, .box(.problem))
+    }
+
     func testBehaviorACloudFailureNamesTheModelAndOffersWhatHelps() {
         let key = ProcessingStatus.Failure(reason: "Anthropic didn’t accept this key.", hadTranscripts: true, device: studio, kind: .cloud(.badKey))
         var inputs = mac

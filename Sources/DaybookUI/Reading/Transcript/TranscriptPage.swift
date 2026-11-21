@@ -188,11 +188,14 @@ public struct TranscriptPage<Header: View, Placeholder: View>: View {
                          highlight: String, current: String?) -> some View {
         switch row {
         case .turn(let speakerID, let first):
-            TurnHeaderRow(meeting: meeting, rowID: row.id, speakerID: speakerID, first: first, actions: actions)
+            TurnHeaderRow(meeting: meeting, rowID: row.id, speakerID: speakerID, first: first, actions: actions,
+                          nameAttachment: { name in
+                              AnyView(name.modifier(RenamePopover(row: row.id, request: $renaming, meeting: meeting,
+                                                                  profiles: host.library.speakerProfiles,
+                                                                  me: host.library.ownerProfileID, save: rename)))
+                          })
                 .padding(.top, DaybookSpacing.s5)
                 .padding(.bottom, 2)
-                .modifier(RenamePopover(row: row.id, request: $renaming, meeting: meeting, profiles: host.library.speakerProfiles,
-                                           me: host.library.ownerProfileID, save: rename))
                 #if DEBUG
                 .onAppear {
                     guard SpeakerNamePickerDemo.opensRename, !demoRenameOpened, let speakerID else { return }

@@ -268,13 +268,21 @@ private struct CompactRecorder: View {
     let parts: RecorderPieces
 
     var body: some View {
+        GeometryReader { proxy in
+            column(clock: proxy.size.height >= 220 ? 34 : 26)
+        }
+    }
+
+    private func column(clock: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 0) {
+            Spacer(minLength: 4)
+            // The clock and meters sit midway between the band and the note field.
             HStack(alignment: .center, spacing: 12) {
-                parts.clock(26)
+                parts.clock(clock)
                 parts.meters(.compact)
             }
             .padding(.horizontal, RecorderInsets.panel)
-            .padding(.top, parts.state.topInset + 6)
+            .padding(.top, parts.state.topInset)
             Spacer(minLength: 4)
             if let add = parts.actions.addNote {
                 RecorderNoteField(add: add)

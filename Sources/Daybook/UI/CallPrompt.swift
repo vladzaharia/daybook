@@ -294,14 +294,17 @@ struct CallPromptView: View {
             // The time left: a calm hairline that drains, holding while the pointer is over the prompt. Inset by the
             // corner radius, so it never meets the curve.
             GeometryReader { geometry in
-                Capsule()
-                    .fill(DaybookPalette.Ink.meta)
-                    .frame(width: geometry.size.width * model.remaining, height: 2)
-                    .animation(reduceMotion ? nil : .linear(duration: 0.1), value: model.remaining)
+                ZStack(alignment: .leading) {
+                    Capsule().fill(DaybookPalette.quietFill)
+                    Capsule()
+                        .fill(DaybookPalette.Ink.faint)
+                        .frame(width: geometry.size.width * model.remaining)
+                        .animation(reduceMotion ? nil : .linear(duration: 0.1), value: model.remaining)
+                }
             }
-            .frame(height: 2)
-            .padding(.horizontal, DaybookRadius.panel)
-            .padding(.bottom, DaybookSpacing.s1)
+            .frame(height: 1.5)
+            .padding(.horizontal, DaybookSpacing.s4)
+            .padding(.bottom, DaybookSpacing.s4)
             .accessibilityHidden(true)
         }
         .accessibilityElement(children: .contain)
