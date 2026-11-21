@@ -320,6 +320,317 @@ final class RecordingCompressionLibraryTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: leftover.path))
     }
 
+    // MARK: Settings from sync
+
+    private func cloudFolder() throws -> URL {
+        let cloud = root.appendingPathComponent("Cloud", isDirectory: true)
+        try FileManager.default.createDirectory(at: cloud, withIntermediateDirectories: true)
+        return cloud
+    }
+
+    /// A compressed recording whose copy is uploaded, in a synced library: only the settings stand between it and letting
+    /// the original go.
+    private func compressedAndUploaded(_ library: LibraryController) async throws -> (UUID, RecordingTrack) {
+        let (id, before) = try await conversation(in: library, from: try recording())
+        await pass(library)
+        await library.compressRecordings([before.id], in: id, device: library.sync?.deviceID)
+        await pass(library)
+        return (id, before)
+    }
+
+    func testBehaviorSettingsStillDownloadingLetNothingGo() async throws {
+        let cloud = try cloudFolder()
+        let other = try await self.library("Other", cloud: cloud)
+        other.setRecordingCompression(.after90Days)
+        await pass(other)
+        // The library's settings in iCloud aren't downloaded on this Mac yet (placeholders).
+        let metadata = cloud.appendingPathComponent("Metadata")
+        let hidden = try FileManager.default.contentsOfDirectory(atPath: metadata.path).filter { !$0.hasPrefix(".") }
+        for name in hidden { try FileManager.default.moveItem(at: metadata.appendingPathComponent(name), to: metadata.appendingPathComponent(".\(name).icloud")) }
+        let library = try await self.library("Mac", cloud: cloud)
+        let (id, before) = try await compressedAndUploaded(library)
+        var current = await library.settingsAreCurrent()
+        XCTAssertFalse(current)
+        let removed = await library.finishCompressions()
+        XCTAssertEqual(removed, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url(library, before.relativePath, in: id).path))
+        let planned = RecordingCompressionPlanner.Inputs(now: Date(), age: .after30Days, startsAt: .distantPast, settingsApplied: current,
+                                                         everyDeviceCompresses: true, clockLooksAhead: false, thisDevice: "M", macs: nil, done: [])
+        XCTAssertNil(RecordingCompressionPlanner.context(planned, meetings: []).startsAt, "nothing compressed meanwhile")
+        // Downloaded: they apply, and the original goes.
+        for name in hidden { try FileManager.default.moveItem(at: metadata.appendingPathComponent(".\(name).icloud"), to: metadata.appendingPathComponent(name)) }
+        await pass(library)
+        current = await library.settingsAreCurrent()
+        XCTAssertTrue(current)
+        XCTAssertEqual(library.recordingCompression, .after90Days)
+        let finally = await library.finishCompressions()
+        XCTAssertEqual(finally, 1)
+    }
+
+    func testBehaviorAReconnectNeedsSettingsAppliedAgain() async throws {
+        let cloud = try cloudFolder()
+        let library = try await self.library("Mac", cloud: cloud)
+        await pass(library)
+        var current = await library.settingsAreCurrent()
+        XCTAssertTrue(current)
+        // Current for the library they came from, not another (one switched to mid-pass).
+        let connected = await library.sync?.libraryID()
+        let libraryID = try XCTUnwrap(connected)
+        current = await library.settingsAreCurrent(library: libraryID)
+        XCTAssertTrue(current)
+        current = await library.settingsAreCurrent(library: UUID())
+        XCTAssertFalse(current)
+        try library.sync?.connect(to: cloud, monitorChanges: false)
+        current = await library.settingsAreCurrent()
+        XCTAssertFalse(current, "another engine")
+        await pass(library)
+        current = await library.settingsAreCurrent()
+        XCTAssertTrue(current)
+    }
+
+    func testBehaviorSettingsANewerDaybookWroteCountAsNever() async throws {
+        let cloud = try cloudFolder()
+        let library = try await self.library("Mac", cloud: cloud)
+        await pass(library)
+        XCTAssertEqual(library.recordingCompression, .after30Days)
+        let metadata = try XCTUnwrap(FileManager.default.contentsOfDirectory(atPath: cloud.appendingPathComponent("Metadata").path).first)
+        let record: [String: Any] = ["schemaVersion": 1, "deviceID": "Future", "sequence": 9, "parents": [String(metadata.dropLast(5))],
+                                     "data": Data(#"{"schemaVersion":1,"folders":"not a list"}"#.utf8).base64EncodedString()]
+        let bytes = try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys])
+        try bytes.write(to: cloud.appendingPathComponent("Metadata/\(AudioDigest.sha256(data: bytes)).json"))
+        await pass(library)
+        XCTAssertEqual(library.recordingCompression, .never)
+        // In another library, one in a newer format the engine leaves out whole (so nothing of it reaches the settings
+        // here): Never too, on the engine's word (`SyncResult.settingsUnreadable`).
+        let otherCloud = root.appendingPathComponent("Other Cloud", isDirectory: true)
+        try FileManager.default.createDirectory(at: otherCloud, withIntermediateDirectories: true)
+        let first = try await self.library("First", cloud: otherCloud)
+        await pass(first)
+        let parent = try XCTUnwrap(FileManager.default.contentsOfDirectory(atPath: otherCloud.appendingPathComponent("Metadata").path).first)
+        let newer: [String: Any] = ["schemaVersion": 1, "deviceID": "Future", "sequence": 10, "parents": [String(parent.dropLast(5))],
+                                    "data": Data(#"{"schemaVersion":3}"#.utf8).base64EncodedString()]
+        let newerBytes = try JSONSerialization.data(withJSONObject: newer, options: [.sortedKeys])
+        try newerBytes.write(to: otherCloud.appendingPathComponent("Metadata/\(AudioDigest.sha256(data: newerBytes)).json"))
+        let fresh = try await self.library("Fresh", cloud: otherCloud)
+        await pass(fresh)
+        XCTAssertEqual(fresh.recordingCompression, .never)
+        await pass(fresh)
+        XCTAssertEqual(fresh.recordingCompression, .never, "and on every pass after")
+    }
+
+    // MARK: Letting go, checked again under the lock
+
+    func testBehaviorAnOriginalThatChangesAfterItsHashIsKept() async throws {
+        let library = try await self.library("Mac", syncs: false)
+        let (id, before) = try await conversation(in: library, from: try recording())
+        await library.compressRecordings([before.id], in: id, device: nil)
+        let original = url(library, before.relativePath, in: id)
+        library.compressionFault = { step in
+            guard step == .checked, let bytes = try? Data(contentsOf: original) else { return }
+            try? (bytes + Data([0])).write(to: original)
+        }
+        var removed = await library.finishCompressions()
+        XCTAssertEqual(removed, 0, "the file changed between being hashed and being deleted")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: original.path))
+        // The track changed meanwhile (another device's merge, say): kept too.
+        let saved = try Data(contentsOf: original)
+        try saved.dropLast().write(to: original)
+        library.compressionFault = { step in
+            guard step == .checked else { return }
+            MainActor.assumeIsolated { library.update(id) { $0.tracks[0].fileName = "renamed.m4a" } }
+        }
+        removed = await library.finishCompressions()
+        XCTAssertEqual(removed, 0)
+        // Another track named the original meanwhile: kept.
+        await library.flush()
+        library.compressionFault = { step in
+            guard step == .checked else { return }
+            MainActor.assumeIsolated {
+                library.update(id) { $0.tracks.append(RecordingTrack(relativePath: before.relativePath, fileName: before.fileName, sha256: before.sha256)) }
+            }
+        }
+        removed = await library.finishCompressions()
+        XCTAssertEqual(removed, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: original.path))
+    }
+
+    func testBehaviorAnOriginalRewrittenUnderItsOldDateIsKept() async throws {
+        let library = try await self.library("Mac", syncs: false)
+        let (id, before) = try await conversation(in: library, from: try recording())
+        await library.compressRecordings([before.id], in: id, device: nil)
+        let original = url(library, before.relativePath, in: id)
+        // As many bytes as before, rewritten in place, and the modification date put back: only the status-change time
+        // (which can't be set back) shows it.
+        library.compressionFault = { step in
+            guard step == .checked, let date = (try? FileManager.default.attributesOfItem(atPath: original.path))?[.modificationDate] as? Date,
+                  let handle = try? FileHandle(forWritingTo: original) else { return }
+            try? handle.seek(toOffset: 8_192); try? handle.write(contentsOf: Data(repeating: 0x55, count: 64)); try? handle.close()
+            try? FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: original.path)
+        }
+        let removed = await library.finishCompressions()
+        XCTAssertEqual(removed, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: original.path))
+    }
+
+    func testBehaviorACopyGoneBeforeTheLockKeepsTheOriginal() async throws {
+        let library = try await self.library("Mac", syncs: false)
+        let (id, before) = try await conversation(in: library, from: try recording())
+        await library.compressRecordings([before.id], in: id, device: nil)
+        let copy = url(library, try XCTUnwrap(library.meeting(id)?.tracks.first).relativePath, in: id)
+        library.compressionFault = { step in
+            if step == .checked { try? FileManager.default.removeItem(at: copy) }
+        }
+        let removed = await library.finishCompressions()
+        XCTAssertEqual(removed, 0, "the copy went after it was hashed")
+        XCTAssertEqual(try digest(url(library, before.relativePath, in: id)), before.sha256)
+    }
+
+    func testBehaviorSettingsNoLongerCurrentUnderTheLockKeepTheOriginal() async throws {
+        let library = try await self.library("Mac", cloud: try cloudFolder())
+        let (id, before) = try await compressedAndUploaded(library)
+        library.compressionFault = { step in
+            if step == .checked { MainActor.assumeIsolated { library.settingsAppliedFromSync = nil } }
+        }
+        var removed = await library.finishCompressions()
+        XCTAssertEqual(removed, 0, "settings not current by the time the lock was held")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url(library, before.relativePath, in: id).path))
+        library.compressionFault = nil
+        await pass(library)
+        removed = await library.finishCompressions()
+        XCTAssertEqual(removed, 1)
+    }
+
+    func testBehaviorOnlyThisDevicesCompressionIsPointedBackAtItsOriginal() async throws {
+        let library = try await self.library("Mac", cloud: try cloudFolder())
+        await pass(library)
+        let (id, before) = try await conversation(in: library, from: try recording())
+        // Another Mac's copy that hasn't arrived yet is on its way: the track keeps naming it.
+        await library.compressRecordings([before.id], in: id, device: "Other Mac")
+        let copy = try XCTUnwrap(library.meeting(id)?.tracks.first)
+        try FileManager.default.removeItem(at: url(library, copy.relativePath, in: id))
+        await library.reconcileCompressions()
+        XCTAssertEqual(library.meeting(id)?.tracks.first.map(RecordingCompression.File.init), RecordingCompression.File(copy))
+        // This Mac's own: named back.
+        library.update(id) { $0.tracks[0].encoding?.device = library.sync?.deviceID }
+        try await library.flushDurably()
+        await library.reconcileCompressions()
+        XCTAssertEqual(library.meeting(id)?.tracks.first.map(RecordingCompression.File.init), RecordingCompression.File(before))
+    }
+
+    func testBehaviorAMissingCopyPointsTheTrackBackAtItsOriginal() async throws {
+        let library = try await self.library("Mac", syncs: false)
+        let (id, before) = try await conversation(in: library, from: try recording())
+        await library.compressRecordings([before.id], in: id, device: nil)
+        let track = try XCTUnwrap(library.meeting(id)?.tracks.first)
+        try FileManager.default.removeItem(at: url(library, track.relativePath, in: id))
+        await library.reconcileCompressions()
+        let repaired = try XCTUnwrap(library.meeting(id)?.tracks.first)
+        XCTAssertEqual(RecordingCompression.File(repaired), RecordingCompression.File(before))
+        XCTAssertEqual(library.meeting(id)?.audioAlignments?.first?.trackDigest, before.sha256)
+        XCTAssertEqual(try digest(url(library, repaired.relativePath, in: id)), repaired.sha256)
+    }
+
+    func testBehaviorAFailedSaveKeepsWhatElseArrived() async throws {
+        let library = try await self.library("Mac", syncs: false)
+        let (id, track) = try await conversation(in: library, from: try recording())
+        let other = TrackAudioAlignment(trackID: UUID(), referenceTrackID: UUID(), alignment: nil)
+        library.update(id) { $0.audioAlignments?.append(other) }
+        try await library.flushDurably()
+        let folder = library.rootURL.appendingPathComponent("Meetings/\(id.uuidString)")
+        library.compressionFault = { step in
+            if step == .renamed { try? FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: folder.path) }
+        }
+        _ = await library.compressRecordings([track.id], in: id, device: nil)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path)
+        let records = library.meeting(id)?.audioAlignments ?? []
+        XCTAssertTrue(records.contains(other), "an unrelated measurement stays")
+        XCTAssertEqual(records.first { $0.trackID == track.id }?.trackDigest, track.sha256, "the track's goes back")
+    }
+
+    // MARK: The transcript bar
+
+    /// A conversation with speech in its transcript, so the bar listens.
+    private func spokenConversation(in library: LibraryController) async throws -> (UUID, RecordingTrack) {
+        let (id, track) = try await conversation(in: library, from: try recording(seconds: 8))
+        library.update(id) { meeting in
+            meeting.transcripts = [TrackTranscript(trackID: track.id, segments: [TranscriptSegment(trackID: track.id, start: 0.5, end: 7.5, text: "hello")])]
+        }
+        try await library.flushDurably()
+        return (id, track)
+    }
+
+    private final class Heard: @unchecked Sendable {
+        let lock = NSLock()
+        var calls = 0
+        func count() { lock.withLock { calls += 1 } }
+        var value: Int { lock.withLock { calls } }
+    }
+
+    private func listener(_ heard: Heard, copySays: String? = nil, wait: Duration? = nil) -> RecordingCompressionListener {
+        RecordingCompressionListener(model: "parakeet/test", isDeterministic: true) { url, spans in
+            heard.count()
+            if let wait { try await Task.sleep(for: wait) }
+            let original = (0..<40).map { "word\($0)" }.joined(separator: " ")
+            let isCopy = url.lastPathComponent.hasPrefix(RecordingCompression.temporaryPrefix)
+            return spans.map { _ in isCopy ? (copySays ?? original) : original }
+        }
+    }
+
+    func testBehaviorACopyThatSaysTheSameIsUsedAndTheCheckRecorded() async throws {
+        let library = try await self.library("Mac", syncs: false)
+        let (id, track) = try await spokenConversation(in: library)
+        let heard = Heard()
+        let compressed = await library.compressRecordings([track.id], in: id, device: nil, listener: listener(heard))
+        XCTAssertEqual(compressed, [track.id])
+        XCTAssertEqual(heard.value, 2, "the original and the copy")
+        let check = try XCTUnwrap(library.meeting(id)?.tracks.first?.encoding?.transcriptCheck)
+        XCTAssertTrue(check.ran)
+        XCTAssertEqual(check.model, "parakeet/test")
+        XCTAssertEqual(check.disagreement, 0)
+        XCTAssertEqual(check.sampleSeconds ?? 0, 7, accuracy: 0.01)
+    }
+
+    func testBehaviorACopyThatSaysOtherwiseIsKeptOutAndNotTriedAgain() async throws {
+        let library = try await self.library("Mac", syncs: false)
+        let (id, track) = try await spokenConversation(in: library)
+        let heard = Heard()
+        let wrong = (0..<40).map { $0 < 4 ? "other" : "word\($0)" }.joined(separator: " ")
+        var compressed = await library.compressRecordings([track.id], in: id, device: nil, listener: listener(heard, copySays: wrong))
+        XCTAssertEqual(compressed, [])
+        XCTAssertNil(library.meeting(id)?.tracks.first?.encoding)
+        XCTAssertEqual(originals(library, id), [(track.relativePath as NSString).lastPathComponent])
+        XCTAssertTrue(library.compressionWasRefused(track))
+        compressed = await library.compressRecordings([track.id], in: id, device: nil, listener: listener(heard))
+        XCTAssertEqual(compressed, [])
+        XCTAssertEqual(heard.value, 2, "not encoded or heard again under the same rule")
+    }
+
+    func testBehaviorTheBarIsSkippedAndSaidSoWithoutAModelOrSpeech() async throws {
+        let library = try await self.library("Mac", syncs: false)
+        let (spoken, spokenTrack) = try await spokenConversation(in: library)
+        _ = await library.compressRecordings([spokenTrack.id], in: spoken, device: nil, listener: nil)
+        XCTAssertEqual(library.meeting(spoken)?.tracks.first?.encoding?.transcriptCheck, TranscriptCheck(ran: false, skipped: "no model"))
+        let (silent, silentTrack) = try await conversation(in: library, from: try recording(seed: 2))
+        let heard = Heard()
+        _ = await library.compressRecordings([silentTrack.id], in: silent, device: nil, listener: listener(heard))
+        XCTAssertEqual(library.meeting(silent)?.tracks.first?.encoding?.transcriptCheck, TranscriptCheck(ran: false, skipped: "no speech"))
+        XCTAssertEqual(heard.value, 0)
+    }
+
+    func testBehaviorStoppingDuringTheCheckLeavesNothing() async throws {
+        let library = try await self.library("Mac", syncs: false)
+        let (id, track) = try await spokenConversation(in: library)
+        let heard = Heard()
+        let work = Task { await library.compressRecordings([track.id], in: id, device: nil, listener: listener(heard, wait: .seconds(30))) }
+        while heard.value == 0 { try await Task.sleep(for: .milliseconds(20)) }
+        work.cancel()
+        let compressed = await work.value
+        XCTAssertEqual(compressed, [])
+        XCTAssertNil(library.meeting(id)?.tracks.first?.encoding)
+        XCTAssertEqual(originals(library, id), [(track.relativePath as NSString).lastPathComponent], "no copy, no temporary")
+        XCTAssertFalse(library.compressionWasRefused(track), "a stop isn't a refusal")
+    }
+
     // MARK: Sync
 
     func testBehaviorOriginalStaysUntilTheCopyIsUploaded() async throws {

@@ -32,6 +32,11 @@ public struct SyncResult: Sendable {
     /// An on-demand replica's cue to bring its audio within budget again (nothing it holds is more evictable than a
     /// recording iCloud has just confirmed).
     public var confirmedUploads: Int = 0
+    /// This pass read the library's settings whole and offers them (`metadataVersions`): nothing still downloading,
+    /// deferred, or waiting for a parent. False, the settings this device holds may be behind another device's.
+    public var settingsApplied = false
+    /// A library settings version couldn't be read (a newer format, or damaged): what it says isn't known here.
+    public var settingsUnreadable = false
     public var hasPendingTransfers: Bool { pendingDownloads > 0 || pendingUploads > 0 }
     /// Synchronize again soon: this pass stopped at its work limits.
     public var hasMoreWork: Bool { deferredItems > 0 }
@@ -133,6 +138,9 @@ public actor LibrarySyncEngine {
     var verifiedAssets: [String: VerifiedAsset] = [:]
     /// What this engine remembers of the journal it read (`JournalCache`).
     var journalCache = JournalCache()
+    /// Library settings versions that couldn't be read (a newer format, damage), for the life of the process: whatever
+    /// they say isn't known here (`SyncResult.settingsUnreadable`).
+    var unreadableSettings = Set<String>()
     /// The bookkeeping of an encrypted library's sealed files, beside `sealing` (`SealingRuntime`).
     var sealingRuntime = SealingRuntime()
     /// What compaction knows of the journal (`CompactionRuntime`).
@@ -705,7 +713,8 @@ public actor LibrarySyncEngine {
             deletedMeetingIDs: pass.deletes, metadataVersions: versions, warnings: Array(Set(pass.warnings)).sorted(),
             pendingDownloads: pass.pendingDownloads, pendingUploads: pass.pendingUploads, publishedEvents: pass.published,
             changedMeetingIDs: pass.changed, notLocalAudio: pass.notLocalAudio, deferredItems: pass.budget.deferred, writtenFiles: written,
-            storageFull: uploads.storageFull, nextPublication: heldPublicationDue, confirmedUploads: pass.confirmedUploads)
+            storageFull: uploads.storageFull, nextPublication: heldPublicationDue, confirmedUploads: pass.confirmedUploads,
+            settingsApplied: settings.applied, settingsUnreadable: !unreadableSettings.isEmpty)
     }
 
     // MARK: Publication
@@ -780,7 +789,7 @@ public actor LibrarySyncEngine {
             if let name, compactionRuntime.prunedIDs.contains(name) { setAsidePruned(entry); continue }
             if let name, let cached = journalCache.settings[name], !sealedWithKeyGone(entry) { metadata[name] = cached; continue }
             let unreadableKey = entry.isSealed ? entry.path : entry.name
-            if let reason = journalCache.unreadable[unreadableKey] { warnings.append(reason); continue }
+            if let reason = journalCache.unreadable[unreadableKey] { warnings.append(reason); unreadableSettings.insert(unreadableKey); continue }
             guard budget.admitJournalRead() else { incomplete = true; continue }
             do {
                 let (hash, bytes) = try readEntry(entry, kind: .metadata)
@@ -799,6 +808,7 @@ public actor LibrarySyncEngine {
             catch let error as CancellationError { throw error }
             catch where Self.isPermanent(error) {
                 warnings.append(markUnreadable(unreadableKey, error))
+                unreadableSettings.insert(unreadableKey)
                 if entry.isSealed, let id = sealingRuntime.sealedNames[entry.path] { journalCache.unreadable[id] = journalCache.unreadable[unreadableKey] }
             }
             catch { warnings.append(SyncWarningWords.compose(SyncWarningWords.undownloadedHistory, error)); downloading += 1; incomplete = true }
@@ -853,7 +863,8 @@ public actor LibrarySyncEngine {
         let written = takeCourierWrites()
         return SyncResult(checkpointID: checkpointID, meetings: [], deletedMeetingIDs: [], metadataVersions: settings.versions,
                           warnings: Array(Set(warnings)).sorted(), pendingDownloads: pendingDownloads, pendingUploads: 0,
-                          publishedEvents: published, deferredItems: budget.deferred, writtenFiles: written)
+                          publishedEvents: published, deferredItems: budget.deferred, writtenFiles: written, settingsApplied: settings.applied,
+                          settingsUnreadable: !unreadableSettings.isEmpty)
     }
 
     /// A conversation deleted elsewhere that holds what the deletion never saw becomes a new conversation with

@@ -135,9 +135,9 @@ this Mac's AAC encoder, `AudioCompressorTests` and a 10-minute scratch run scale
 | Recording | As captured | Compressed |
 |---|---|---|
 | Mac microphone, 48 kHz mono Float32 CAF | 691 MB | 29 MB (AAC-LC 64 kbit/s) |
-| Call audio, 48 kHz stereo Float32 CAF | 1.38 GB | 29 MB when both channels are the same sound (mono 64 kbit/s); 44 MB otherwise (stereo 96 kbit/s) |
-| Echo-cancelled microphone, 16 kHz mono Float32 CAF | 230 MB | 15 MB (32 kbit/s) |
-| Soundcore, decoded 16 kHz mono Float32 WAV | 230 MB | 15 MB (32 kbit/s) |
+| Call audio, 48 kHz stereo Float32 CAF | 1.38 GB | 29 MB when both channels are the same samples (mono 64 kbit/s); 44 MB otherwise (stereo 96 kbit/s) |
+| Echo-cancelled microphone, 16 kHz mono Float32 CAF | 230 MB | about 22 MB (48 kbit/s) |
+| Soundcore, decoded 16 kHz mono Float32 WAV | 230 MB | about 22 MB (48 kbit/s) |
 | iPhone and Watch, AAC-LC 48 kHz mono 64 kbit/s M4A | 29 MB | not compressed again |
 | Imported files | as imported | lossless ones at 44.1, 48, or 16 kHz as above; lossy ones never |
 

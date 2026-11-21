@@ -9,8 +9,9 @@ import Foundation
 /// What each kind of recording is encoded as: one table, so changing the encoding is an edit here. Every copy records
 /// the rule it was made under (`TrackEncoding.rule`); bump `rule` whenever a row changes.
 public enum RecordingCompressionTable {
-    /// The rule copies are made under now.
-    public static let rule = 1
+    /// The rule copies are made under now. 2: 16 kHz recordings at 48 kbit/s (32 cost about 7% relative word error rate
+    /// on Daybook's own pipeline; 48 is within noise), stereo kept as one only when both channels are the same samples.
+    public static let rule = 2
 
     public enum Codec: String, Sendable {
         case aacLC = "aac-lc"
@@ -22,7 +23,7 @@ public enum RecordingCompressionTable {
     }
 
     /// A recording's shape: its rate (wide: 44.1 or 48 kHz; narrow: 16 kHz) and channels (stereo whose two channels are
-    /// one sound counts as alike).
+    /// the same samples, within `AudioCompressor.sameChannelsTolerance`, counts as alike: a process tap's dual mono).
     public enum Shape: String, CaseIterable, Sendable {
         case wideMono, wideStereoAlike, wideStereo, narrowMono, narrowStereoAlike, narrowStereo
     }
@@ -42,8 +43,8 @@ public enum RecordingCompressionTable {
         switch shape {
         case .wideMono, .wideStereoAlike: return Row(codec: .aacLC, bitRate: 64_000, channels: 1)
         case .wideStereo: return Row(codec: .aacLC, bitRate: 96_000, channels: 2)
-        case .narrowMono, .narrowStereoAlike: return Row(codec: .aacLC, bitRate: 32_000, channels: 1)
-        case .narrowStereo: return Row(codec: .aacLC, bitRate: 64_000, channels: 2)
+        case .narrowMono, .narrowStereoAlike: return Row(codec: .aacLC, bitRate: 48_000, channels: 1)
+        case .narrowStereo: return Row(codec: .aacLC, bitRate: 96_000, channels: 2)
         }
     }
 }
@@ -64,7 +65,7 @@ public enum AudioCompressor {
         /// The table's rule (`RecordingCompressionTable.rule`).
         public var rule: Int
         public var resamples: Bool { sampleRate != sourceSampleRate }
-        /// `TrackEncoding.method`: "aac-lc-64", "aac-lc-96-stereo", "aac-lc-32-16k".
+        /// `TrackEncoding.method`: "aac-lc-64", "aac-lc-48", "aac-lc-96-stereo"; one resampled adds its rate ("-16k").
         public var method: String {
             "\(codec.rawValue)-\(bitRate / 1_000)" + (channels == 2 ? "-stereo" : "") + (resamples ? "-\(Int(sampleRate / 1_000))k" : "")
         }
@@ -86,10 +87,13 @@ public enum AudioCompressor {
         case encodingFailed(String)
         case wrongFormat(String), frameCount(source: Int64, copy: Int64), quiet(Double), dropout(TimeInterval), envelope(Double),
              level(TimeInterval), notSilent, lag(Int)
+        /// A file delivered fewer frames than it declares (cut short, or damaged): read errors included.
+        case shortRead(declared: Int64, delivered: Int64)
 
         public var errorDescription: String? {
             switch self {
             case .unreadable: return "The recording couldn’t be read."
+            case .shortRead(let declared, let delivered): return "A file ended after \(delivered) of the \(declared) frames it declares."
             case .notLossless: return "The recording is already compressed."
             case .unsupportedLayout(let layout): return "The recording’s layout isn’t compressed (\(layout))."
             case .encodingFailed(let reason): return "Encoding failed: \(reason)"
@@ -135,10 +139,10 @@ public enum AudioCompressor {
         return "\(kind), \(Int(format.mSampleRate)) Hz, \(channels) channel\(channels == 1 ? "" : "s")"
     }
 
-    /// Two channels this alike (Pearson correlation over the whole file, and within this many dB of each other) are
-    /// one sound written twice (an app's mono call mixed down to stereo) and are kept as one. Anything less keeps both.
-    public static let sameChannelsCorrelation = 0.98
-    public static let sameChannelsLevelDifference = 1.0
+    /// Two channels this close, sample by sample over the whole file, are one sound written twice (a process tap's dual
+    /// mono) and are kept as one. Anything else keeps both: two talkers panned apart, or a small part out of phase that an
+    /// average would erase, survive only as two channels.
+    public static let sameChannelsTolerance: Float = 1e-4
 
     /// A recording's shape (`RecordingCompressionTable.Shape`); 44.1/48 or 16 kHz, one or two channels, or it isn't
     /// compressed. Reads a stereo file through once to compare its channels.
@@ -150,9 +154,25 @@ public enum AudioCompressor {
         guard wide || rate == 16_000 else { throw Refusal.unsupportedLayout("\(Int(rate)) Hz") }
         guard channels == 1 || channels == 2 else { throw Refusal.unsupportedLayout("\(channels) channels") }
         if channels == 1 { return wide ? .wideMono : .narrowMono }
-        let similarity = try channelSimilarity(file, isCancelled: isCancelled)
-        let alike = similarity.correlation >= sameChannelsCorrelation && abs(similarity.levelDifference) <= sameChannelsLevelDifference
+        let alike = try channelDifference(file, isCancelled: isCancelled) <= sameChannelsTolerance
         return wide ? (alike ? .wideStereoAlike : .wideStereo) : (alike ? .narrowStereoAlike : .narrowStereo)
+    }
+
+    /// The largest difference between a stereo file's two channels, sample by sample.
+    public static func channelDifference(of url: URL) throws -> Float {
+        guard let file = try? AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false),
+              file.processingFormat.channelCount == 2 else { throw Refusal.unreadable }
+        return try channelDifference(file, isCancelled: { false })
+    }
+
+    private static func channelDifference(_ file: AVAudioFile, isCancelled: () -> Bool) throws -> Float {
+        var largest: Float = 0
+        _ = try readChunks(file, isCancelled: isCancelled) { buffer in
+            guard let data = buffer.floatChannelData else { return }
+            for index in 0..<Int(buffer.frameLength) { largest = max(largest, abs(data[0][index] - data[1][index])) }
+        }
+        file.framePosition = 0
+        return largest
     }
 
     /// The plan for a recording: its shape's row in `RecordingCompressionTable`.
@@ -163,35 +183,6 @@ public enum AudioCompressor {
         let rate = file.processingFormat.sampleRate
         return Plan(codec: row.codec, sampleRate: row.sampleRate ?? rate, sourceSampleRate: rate, channels: row.channels,
                     bitRate: row.bitRate, downmixes: row.channels < Int(file.processingFormat.channelCount))
-    }
-
-    /// How alike a stereo file's channels are: their correlation (1 when silent in both) and level difference in dB.
-    public static func channelSimilarity(of url: URL) throws -> (correlation: Double, levelDifference: Double) {
-        guard let file = try? AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false),
-              file.processingFormat.channelCount == 2 else { throw Refusal.unreadable }
-        return try channelSimilarity(file, isCancelled: { false })
-    }
-
-    private static func channelSimilarity(_ file: AVAudioFile, isCancelled: () -> Bool) throws -> (correlation: Double, levelDifference: Double) {
-        var sumL = 0.0, sumR = 0.0, sumLL = 0.0, sumRR = 0.0, sumLR = 0.0, count = 0.0
-        try readChunks(file, isCancelled: isCancelled) { buffer in
-            let frames = Int(buffer.frameLength)
-            guard let data = buffer.floatChannelData else { return }
-            for index in 0..<frames {
-                let l = Double(data[0][index]), r = Double(data[1][index])
-                sumL += l; sumR += r; sumLL += l * l; sumRR += r * r; sumLR += l * r
-            }
-            count += Double(frames)
-        }
-        file.framePosition = 0
-        guard count > 0 else { return (1, 0) }
-        let varL = sumLL / count - (sumL / count) * (sumL / count), varR = sumRR / count - (sumR / count) * (sumR / count)
-        let level = 10 * log10(max(sumLL / count, 1e-20) / max(sumRR / count, 1e-20))
-        // Silence in both is the same sound; silence in one is two different ones.
-        if varL < 1e-14 && varR < 1e-14 { return (1, 0) }
-        if varL < 1e-14 || varR < 1e-14 { return (0, level) }
-        let covariance = sumLR / count - (sumL / count) * (sumR / count)
-        return (covariance / (varL * varR).squareRoot(), level)
     }
 
     // MARK: Encoding
@@ -265,7 +256,11 @@ public enum AudioCompressor {
                     if plan.resamples { try convert(stagedBuffer) } else { try put(stagedBuffer) }
                 }
                 if plan.resamples { try convert(nil) }
-                // A resampler's last frames short of the count are silence, so the copy is exactly as long.
+                // A resampler's last frames short of the count (its filter's tail, a few thousand at most) are silence, so the
+                // copy is exactly as long. Nothing else is ever padded: a copy short otherwise is refused.
+                if written < expected && (!plan.resamples || expected - written > Self.resamplerTail) {
+                    throw Refusal.frameCount(source: expected, copy: written)
+                }
                 while written < expected {
                     let frames = AVAudioFrameCount(min(Int64(capacity), expected - written))
                     guard let pad = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: frames) else { break }
@@ -334,9 +329,10 @@ public enum AudioCompressor {
     }
 
     /// The bars a copy must clear, over 50 ms windows of loudness (dBFS, channels averaged):
-    /// - A window is audible when it's within 30 dB of the recording's own 95th-percentile window and above -80 dBFS,
-    ///   about the quietest a 16-bit recording's noise reaches; relative, so quiet speech (-55 dBFS) counts, and sparse
-    ///   speech in a long silence counts however little of it there is.
+    /// - A window is audible above the lower of two bars, each `min(-50, max(p95 - 30, -80))` dBFS: one from the file's
+    ///   loudest 5% of windows, one from its minute's. So anything above -50 always counts (a far talker at -46 beside a
+    ///   near one at -12), quiet speech (-55 dBFS) counts, and sparse speech in a long silence counts however little of
+    ///   it there is; -80 is about the quietest a 16-bit recording's noise reaches. Each channel is judged on its own.
     /// - In an audible window the copy must not be 12 dB quieter, in more than one window in 200 over the whole file,
     ///   and never in more than 2 windows in a row: an AAC frame (1,024 samples: 21 ms at 48 kHz, 64 ms at 16 kHz) smears
     ///   an onset into at most the window either side, so 150 ms of quiet is a dropout, not the codec.
@@ -348,6 +344,8 @@ public enum AudioCompressor {
     public static let window: TimeInterval = 0.05
     public static let audibleRange = 30.0
     public static let audibleFloor = -80.0
+    /// Above this a window is audible whatever else is in the file.
+    public static let absoluteAudible = -50.0
     public static let quieterBy = 12.0
     public static let quietAllowance = 0.005
     public static let longestQuietRun = 2
@@ -375,8 +373,27 @@ public enum AudioCompressor {
         }
         let expected = plan.expectedFrames(from: original.length)
         guard encoded.length == expected else { throw Refusal.frameCount(source: expected, copy: encoded.length) }
-        let (sourceLevels, copyLevels) = try windowLevels(original, encoded, isCancelled: isCancelled)
-        let judged = try judge(sourceLevels, copyLevels)
+        let heard = try channelLevels(original, isCancelled: isCancelled), copied = try channelLevels(encoded, isCancelled: isCancelled)
+        // Every frame each file says it has, delivered: a reader that stops early is a damaged file, not a shorter one.
+        guard heard.frames == original.length else { throw Refusal.frameCount(source: original.length, copy: heard.frames) }
+        guard copied.frames == encoded.length else { throw Refusal.frameCount(source: encoded.length, copy: copied.frames) }
+        // The whole of both, window for window (a resampled copy's last window may round differently).
+        let windows = heard.levels.first?.count ?? 0, copyWindows = copied.levels.first?.count ?? 0
+        guard windows == copyWindows || (plan.resamples && abs(windows - copyWindows) <= 1) else {
+            throw Refusal.frameCount(source: Int64(windows), copy: Int64(copyWindows))
+        }
+        let count = min(windows, copyWindows)
+        // Channel by channel: a stereo copy's left against the recording's left, its right against the right; a copy
+        // kept as one against each of the recording's (the same samples, `sameChannelsTolerance`). A swapped or dropped
+        // channel fails its own comparison.
+        var judged: (audible: Int, quietShare: Double, correlation: Double?) = (0, 0, nil)
+        for channel in heard.levels.indices {
+            let copyChannel = min(channel, copied.levels.count - 1)
+            let one = try judge(Array(heard.levels[channel].prefix(count)), Array(copied.levels[copyChannel].prefix(count)))
+            judged.audible += one.audible
+            judged.quietShare = max(judged.quietShare, one.quietShare)
+            if let correlation = one.correlation { judged.correlation = min(judged.correlation ?? correlation, correlation) }
+        }
         if judged.audible == 0 {
             return Verification(frames: encoded.length, envelopeCorrelation: nil, quietShare: 0, audibleWindows: 0, lag: nil)
         }
@@ -388,11 +405,22 @@ public enum AudioCompressor {
     }
 
     /// The loudness bars, on two files' window levels (see `verify`).
-    static func judge(_ source: [Double], _ copy: [Double]) throws -> (audible: Int, quietShare: Double, correlation: Double?) {
-        let sorted = source.sorted()
-        let p95 = sorted.isEmpty ? -160 : sorted[min(sorted.count - 1, Int(Double(sorted.count) * 0.95))]
-        let threshold = max(p95 - audibleRange, audibleFloor)
-        let audible = source.map { $0 > threshold }
+    public static func judge(_ source: [Double], _ copy: [Double]) throws -> (audible: Int, quietShare: Double, correlation: Double?) {
+        guard source.count == copy.count else { throw Refusal.frameCount(source: Int64(source.count), copy: Int64(copy.count)) }
+        func bar(_ levels: ArraySlice<Double>) -> Double {
+            let sorted = levels.sorted()
+            let p95 = sorted.isEmpty ? -160 : sorted[min(sorted.count - 1, Int(Double(sorted.count) * 0.95))]
+            return min(absoluteAudible, max(p95 - audibleRange, audibleFloor))
+        }
+        // The lower of the file's bar and its minute's: a quiet talker is heard against the minute they talk in, and
+        // anything above -50 dBFS is always audible, however loud a near talker is.
+        let fileBar = bar(source[...])
+        var audible = [Bool](repeating: false, count: source.count)
+        for start in stride(from: 0, to: source.count, by: block) {
+            let range = start..<min(source.count, start + block)
+            let threshold = min(fileBar, bar(source[range]))
+            for index in range { audible[index] = source[index] > threshold }
+        }
         let audibleCount = audible.filter { $0 }.count
         guard audibleCount > 0 else {
             // Silent throughout (an unused computer-audio track): the copy must be silent too.
@@ -448,44 +476,52 @@ public enum AudioCompressor {
     }
 
     private static let chunkFrames: AVAudioFrameCount = 32_768
+    /// The most frames a resampler may leave short at the end, padded with silence.
+    static let resamplerTail: Int64 = 4_096
 
-    private static func readChunks(_ file: AVAudioFile, isCancelled: () -> Bool, _ body: (AVAudioPCMBuffer) throws -> Void) throws {
+    /// Reads a file through, a chunk at a time; returns how many frames it delivered. A file that ends before its
+    /// declared length (a read that fails, or one that delivers nothing) is refused (`shortRead`), never taken as a
+    /// shorter recording: measured on this Mac, a cut CAF, FLAC, or Apple Lossless file declares its whole length and
+    /// fails partway.
+    @discardableResult
+    private static func readChunks(_ file: AVAudioFile, isCancelled: () -> Bool, _ body: (AVAudioPCMBuffer) throws -> Void) throws -> Int64 {
         guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: chunkFrames) else { throw Refusal.unreadable }
+        var delivered: Int64 = 0
         while file.framePosition < file.length {
             if isCancelled() { throw CancellationError() }
-            try autoreleasepool {
-                let frames = AVAudioFrameCount(min(Int64(chunkFrames), file.length - file.framePosition))
-                try file.read(into: buffer, frameCount: frames)
+            do {
+                try autoreleasepool {
+                    let frames = AVAudioFrameCount(min(Int64(chunkFrames), file.length - file.framePosition))
+                    try file.read(into: buffer, frameCount: frames)
+                }
+            } catch {
+                throw Refusal.shortRead(declared: file.length, delivered: delivered)
             }
             guard buffer.frameLength > 0 else { break }
+            delivered += Int64(buffer.frameLength)
             try body(buffer)
         }
+        guard delivered == file.length else { throw Refusal.shortRead(declared: file.length, delivered: delivered) }
+        return delivered
     }
 
-    /// Each file's loudness (dBFS, channels averaged) in consecutive `window`s, read side by side.
-    private static func windowLevels(_ a: AVAudioFile, _ b: AVAudioFile, isCancelled: () -> Bool) throws -> ([Double], [Double]) {
-        func levels(_ file: AVAudioFile) throws -> [Double] {
-            let size = max(1, Int(file.processingFormat.sampleRate * window))
-            var result: [Double] = [], sum = 0.0, filled = 0
-            try readChunks(file, isCancelled: isCancelled) { buffer in
-                guard let data = buffer.floatChannelData else { return }
-                let channels = Int(buffer.format.channelCount)
-                for index in 0..<Int(buffer.frameLength) {
-                    var sample: Float = 0
-                    for channel in 0..<channels { sample += data[channel][index] }
-                    let value = Double(sample) / Double(channels)
-                    sum += value * value; filled += 1
-                    if filled == size {
-                        result.append(10 * log10(max(sum / Double(size), 1e-16)))
-                        sum = 0; filled = 0
-                    }
+    /// A file's loudness (dBFS) in consecutive `window`s, channel by channel, and how many frames it delivered.
+    static func channelLevels(_ file: AVAudioFile, isCancelled: () -> Bool) throws -> (levels: [[Double]], frames: Int64) {
+        let size = max(1, Int(file.processingFormat.sampleRate * window))
+        let channels = Int(file.processingFormat.channelCount)
+        var result = [[Double]](repeating: [], count: channels), sums = [Double](repeating: 0, count: channels), filled = 0
+        let frames = try readChunks(file, isCancelled: isCancelled) { buffer in
+            guard let data = buffer.floatChannelData else { return }
+            for index in 0..<Int(buffer.frameLength) {
+                for channel in 0..<channels { let value = Double(data[channel][index]); sums[channel] += value * value }
+                filled += 1
+                if filled == size {
+                    for channel in 0..<channels { result[channel].append(10 * log10(max(sums[channel] / Double(size), 1e-16))); sums[channel] = 0 }
+                    filled = 0
                 }
             }
-            return result
         }
-        let first = try levels(a), second = try levels(b)
-        let count = min(first.count, second.count)
-        return (Array(first.prefix(count)), Array(second.prefix(count)))
+        return (result, frames)
     }
 
     private static func amplitude(_ decibels: Double) -> Double { pow(10, decibels / 20) }

@@ -56,7 +56,7 @@ final class AudioCompressorTests: XCTestCase {
     func testBehaviorEachRecordingLayoutEncodesAndVerifies() throws {
         let cases: [(String, Double, Int, Int, Bool)] = [
             ("mic-48k.caf", 48_000, 1, 64_000, false), ("mic-44k.caf", 44_100, 1, 64_000, false),
-            ("echo-16k.caf", 16_000, 1, 32_000, false), ("soundcore-16k.wav", 16_000, 1, 32_000, false),
+            ("echo-16k.caf", 16_000, 1, 48_000, false), ("soundcore-16k.wav", 16_000, 1, 48_000, false),
         ]
         for (name, rate, channels, bitRate, downmixes) in cases {
             let settings: [String: Any]? = name.hasSuffix(".wav")
@@ -77,8 +77,7 @@ final class AudioCompressorTests: XCTestCase {
     func testBehaviorStereoWithTheSameSoundInBothChannelsBecomesMono() throws {
         let sound = samples(rate: 48_000, seconds: 15)
         let source = try write("call.caf", rate: 48_000, channels: [sound, sound])
-        let similarity = try AudioCompressor.channelSimilarity(of: source)
-        XCTAssertEqual(similarity.correlation, 1, accuracy: 1e-9)
+        XCTAssertEqual(try AudioCompressor.channelDifference(of: source), 0)
         let (plan, verification, _) = try roundTrip(source)
         XCTAssertEqual(plan, AudioCompressor.Plan(sampleRate: 48_000, channels: 1, bitRate: 64_000, downmixes: true))
         XCTAssertEqual(verification.lag, 0)
@@ -87,10 +86,135 @@ final class AudioCompressorTests: XCTestCase {
     func testBehaviorStereoWithDifferentChannelsStaysStereo() throws {
         let source = try write("call-two.caf", rate: 48_000, channels: [samples(rate: 48_000, seconds: 15, seed: 1),
                                                                          samples(rate: 48_000, seconds: 15, seed: 9, pitch: 220)])
-        XCTAssertLessThan(try AudioCompressor.channelSimilarity(of: source).correlation, AudioCompressor.sameChannelsCorrelation)
+        XCTAssertGreaterThan(try AudioCompressor.channelDifference(of: source), AudioCompressor.sameChannelsTolerance)
         let (plan, verification, _) = try roundTrip(source)
         XCTAssertEqual(plan, AudioCompressor.Plan(sampleRate: 48_000, channels: 2, bitRate: 96_000, downmixes: false))
         XCTAssertEqual(verification.lag, 0)
+    }
+
+    /// Two talkers hard-panned left and right (a call recorded with each side on its own channel).
+    private func panned(seconds: Double) -> (left: [Float], right: [Float]) {
+        let a = samples(rate: 48_000, seconds: seconds, seed: 1), b = samples(rate: 48_000, seconds: seconds, seed: 5, pitch: 230)
+        var left = a, right = b
+        // Taking turns: A in the first and third quarters, B in the second and fourth.
+        for index in left.indices {
+            let quarter = Int(Double(index) / Double(left.count) * 4)
+            if quarter % 2 == 0 { right[index] = 0 } else { left[index] = 0 }
+        }
+        return (left, right)
+    }
+
+    private func rms(_ url: URL, from start: Double, to end: Double) throws -> Double {
+        let values = try SyntheticAudio.read(url)
+        let rate = try AVAudioFile(forReading: url).processingFormat.sampleRate
+        let slice = values[Int(start * rate)..<min(values.count, Int(end * rate))]
+        return 10 * log10(max(slice.reduce(0) { $0 + Double($1 * $1) } / Double(max(slice.count, 1)), 1e-16))
+    }
+
+    func testBehaviorTalkersPannedApartBothSurvive() throws {
+        let (left, right) = panned(seconds: 16)
+        let source = try write("panned.caf", rate: 48_000, channels: [left, right])
+        // Kept as two channels: they aren't the same samples.
+        XCTAssertEqual(try AudioCompressor.shape(of: source), .wideStereo)
+        let (plan, _, _) = try roundTrip(source)
+        XCTAssertEqual(plan.channels, 2)
+        // Even averaged into one, both talkers are in it (an average, not the left channel alone).
+        let mono = folder.appendingPathComponent("panned-mono.m4a")
+        try AudioCompressor.encode(source, to: mono, plan: .init(sampleRate: 48_000, channels: 1, bitRate: 64_000, downmixes: true))
+        XCTAssertGreaterThan(try rms(mono, from: 1, to: 3), -40, "the left talker")
+        XCTAssertGreaterThan(try rms(mono, from: 5, to: 7), -40, "the right talker")
+    }
+
+    func testBehaviorADroppedOrSwappedChannelIsRefused() throws {
+        let (left, right) = panned(seconds: 16)
+        let source = try write("panned-source.caf", rate: 48_000, channels: [left, right])
+        let stereo = AudioCompressor.Plan(sampleRate: 48_000, channels: 2, bitRate: 96_000, downmixes: false)
+        for (name, channels) in [("dropped", [left, [Float](repeating: 0, count: right.count)]), ("swapped", [right, left])] {
+            let pcm = try write("\(name).caf", rate: 48_000, channels: channels)
+            let copy = folder.appendingPathComponent("\(name).m4a")
+            try AudioCompressor.encode(pcm, to: copy, plan: stereo)
+            XCTAssertThrowsError(try AudioCompressor.verify(source: source, copy: copy, plan: stereo), name)
+        }
+    }
+
+    func testBehaviorChannelsAlikeButNotIdenticalStayStereo() throws {
+        // Correlated above 0.99, with a small part out of phase that an average would erase.
+        let sound = samples(rate: 48_000, seconds: 6), other = samples(rate: 48_000, seconds: 6, seed: 3, pitch: 310)
+        let left = zip(sound, other).map { $0 + 0.02 * $1 }, right = zip(sound, other).map { $0 - 0.02 * $1 }
+        let source = try write("phase.caf", rate: 48_000, channels: [left, right])
+        XCTAssertEqual(try AudioCompressor.shape(of: source), .wideStereo)
+    }
+
+    func testBehaviorAFarTalkerSilencedBesideANearOneIsRefused() throws {
+        // The reviewer's case, on window levels: a near talker at -12 dBFS in 8% of windows, far talkers at -46, and a
+        // copy silent wherever the far talkers speak.
+        let source = (0..<2_400).map { $0 % 25 < 2 ? -12.0 : -46.0 }
+        let silent = source.map { $0 == -12 ? -12.0 : -120.0 }
+        XCTAssertThrowsError(try AudioCompressor.judge(source, silent))
+        // An honest copy, every window within 0.3 dB.
+        var state: UInt32 = 7
+        let honest = source.map { level -> Double in
+            state = state &* 1_664_525 &+ 1_013_904_223
+            return level + (Double(state) / Double(UInt32.max) - 0.5) * 0.6
+        }
+        XCTAssertNoThrow(try AudioCompressor.judge(source, honest))
+    }
+
+    func testBehaviorAQuietMinuteIsJudgedAgainstItself() throws {
+        // A loud first minute, then a minute of speech at -70 dBFS: the file's bar alone would miss it.
+        let loud = (0..<1_200).map { $0 % 3 == 0 ? -10.0 : -20.0 }, quiet = (0..<1_200).map { $0 % 3 == 0 ? -70.0 : -78.0 }
+        let source = loud + quiet
+        XCTAssertThrowsError(try AudioCompressor.judge(source, loud + quiet.map { _ in -120.0 }))
+    }
+
+    func testBehaviorAReaderThatStopsEarlyIsRefused() throws {
+        // A CAF cut short: its header still declares every frame (measured), and reading it fails partway.
+        let whole = try write("whole.caf", rate: 48_000, channels: [samples(rate: 48_000, seconds: 10)])
+        let (plan, _, copy) = try roundTrip(whole)
+        var bytes = try Data(contentsOf: whole)
+        bytes.removeLast(bytes.count / 3)
+        let short = folder.appendingPathComponent("short.caf")
+        try bytes.write(to: short)
+        XCTAssertEqual(try AVAudioFile(forReading: short).length, try AVAudioFile(forReading: whole).length, "the header still says the whole length")
+        func isShortRead(_ error: Error) -> Bool {
+            if case .shortRead? = error as? AudioCompressor.Refusal { return true }
+            return false
+        }
+        // Checked against a whole copy, it's refused as cut short (not passed, and not taken as a shorter recording).
+        XCTAssertThrowsError(try AudioCompressor.verify(source: short, copy: copy, plan: plan)) { XCTAssertTrue(isShortRead($0), "\($0)") }
+        // Encoded, it's refused, not padded out to its declared length.
+        let padded = folder.appendingPathComponent("padded.m4a")
+        XCTAssertThrowsError(try AudioCompressor.encode(short, to: padded, plan: plan)) { XCTAssertTrue(isShortRead($0), "\($0)") }
+        // A copy cut short is refused the same way.
+        var copyBytes = try Data(contentsOf: copy)
+        copyBytes.removeLast(copyBytes.count / 3)
+        let shortCopy = folder.appendingPathComponent("short-copy.m4a")
+        try copyBytes.write(to: shortCopy)
+        XCTAssertThrowsError(try AudioCompressor.verify(source: whole, copy: shortCopy, plan: plan))
+    }
+
+    func testBehaviorEachPlannedRowKeepsItsRateAndALowerBitRateIsCaught() throws {
+        for (rate, shape) in [(48_000.0, RecordingCompressionTable.Shape.wideMono), (44_100, .wideMono), (16_000, .narrowMono)] {
+            let source = try write("row-\(Int(rate)).caf", rate: rate, channels: [samples(rate: rate, seconds: 4)])
+            let (plan, _, copy) = try roundTrip(source)
+            XCTAssertEqual(try AudioCompressor.shape(of: source), shape)
+            XCTAssertEqual(try AVAudioFile(forReading: copy).fileFormat.sampleRate, rate, "the copy keeps the rate")
+            XCTAssertEqual(plan.sampleRate, rate)
+        }
+        // A table edit to a bit rate the encoder takes only at a lower rate: through AVAudioFile, with the rate given, it
+        // refuses the setting (measured) rather than lowering the rate, so no copy is made.
+        let source = try write("low.caf", rate: 48_000, channels: [samples(rate: 48_000, seconds: 4)])
+        let low = AudioCompressor.Plan(sampleRate: 48_000, channels: 1, bitRate: 24_000, downmixes: false)
+        let copy = folder.appendingPathComponent("low.m4a")
+        if (try? AudioCompressor.encode(source, to: copy, plan: low)) != nil {
+            XCTAssertEqual(try AVAudioFile(forReading: copy).fileFormat.sampleRate, 48_000, "kept the rate, or refused")
+        }
+        // A copy stored at a lower rate than the recording's (what other encoders pick at low bit rates: 32 kHz at 32
+        // kbit/s) is refused for its format, however it sounds.
+        let lowered = try write("lowered.caf", rate: 32_000, channels: [samples(rate: 32_000, seconds: 4)])
+        let loweredCopy = folder.appendingPathComponent("lowered.m4a")
+        try AudioCompressor.encode(lowered, to: loweredCopy, plan: .init(sampleRate: 32_000, channels: 1, bitRate: 32_000, downmixes: false))
+        guard case .wrongFormat? = refusal(source: source, copy: loweredCopy) else { return XCTFail("a lowered rate passed") }
     }
 
     func testBehaviorSilentRecordingNeedsOnlyASilentCopy() throws {

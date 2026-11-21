@@ -567,6 +567,37 @@ final class LibrarySyncSealingTests: XCTestCase {
         XCTAssertEqual(evicted.evicted.count, 1)
     }
 
+    /// An original recorded here that a Mac has since replaced with a compressed copy (`TrackEncoding`) waits for the same
+    /// key guard as any original recorded here, however the copy is proven.
+    func testBehaviorASupersededOriginalRecordedHereStaysUntilAnotherDeviceHoldsTheKey() async throws {
+        let phone = try phone(budget: 1 << 30)
+        try await pass(phone, "Phone")
+        try await phone.enableSealing()
+        var recorded = try await record(audioBytes(50_000, seed: 13), on: "Phone", into: Meeting(title: "Only here"))
+        try await pass(phone, "Phone", [recorded])
+        // The copy, here and verified (bytes stand in for AAC: sync never decodes audio), named by the track.
+        let original = recorded.tracks[0]
+        let copyBytes = audioBytes(4_000, seed: 14)
+        let digest = AudioDigest.sha256(data: copyBytes)
+        let relativePath = RecordingCompression.relativePath(trackID: original.id, sha256: digest)
+        let folder = local("Phone").appendingPathComponent("Meetings/\(recorded.id.uuidString)")
+        try copyBytes.write(to: folder.appendingPathComponent(relativePath))
+        RecordingCompression.File(relativePath: relativePath, fileName: "copy.m4a", sha256: digest, encoding: TrackEncoding(
+            method: "aac-lc-64", sourceFormat: "PCM", previousSHA256: original.sha256, previousRelativePath: original.relativePath,
+            previousFileName: original.fileName, encodedAt: Date())).apply(to: &recorded.tracks[0])
+        try await MeetingStore(rootURL: local("Phone")).save(recorded)
+        let originalURL = folder.appendingPathComponent(original.relativePath)
+        let kept = try await phone.evictAudio()
+        XCTAssertTrue(kept.evicted.isEmpty, "Evicted the only copy of the original this device could open")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: originalURL.path))
+        // A Mac with the key appears.
+        let mac = try mac()
+        try await pass(mac, "Mac")
+        let evicted = try await phone.evictAudio()
+        XCTAssertEqual(evicted.evicted.compactMap(\.trackID), [original.id])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: originalURL.path))
+    }
+
     /// An encrypted library's sealed copy of a recording made on this phone is other bytes than its original, so the phone
     /// held the recording twice until iCloud dropped its local copy (which on a phone it never did). Once iCloud has it,
     /// the phone asks it to, under the same proof, and keeps the original.

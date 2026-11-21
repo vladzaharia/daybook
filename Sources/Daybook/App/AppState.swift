@@ -537,6 +537,10 @@ final class AppState {
         /// When this Mac may first compress older recordings: a week after the first launch of a version that does it
         /// (`RecordingCompressionSchedule`).
         static let compressionStartsAt = "compressionStartsAt"
+        /// This Mac's last compression pass in a library, for the clock check (`RecordingCompressionClock`).
+        static let compressionLastPass = "compressionLastPass"
+        /// The same pass on the continuous clock, with the boot it counts from.
+        static let compressionLastPassClock = "compressionLastPassClock"
     }
 
     /// Not Now (or Quit, Start Fresh, Keep It) on the library move offered at launch: once it's answered, the library

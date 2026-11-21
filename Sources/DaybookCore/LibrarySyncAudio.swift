@@ -223,10 +223,15 @@ extension LibrarySyncEngine {
         var inUse = audioIndex().entries.values.reduce(UInt64(0)) { $0 + $1.stamp.size }
         var evicted: [CachedAudio] = []
         var freed: UInt64 = 0
+        // In an encrypted library, an original recorded here is evicted only once another device holds the key or a
+        // recovery key was saved: otherwise iCloud's sealed copy could be the only one, unreadable if this device is lost.
+        let originalsMayGo = sealing == nil || sealedOriginalsMayEvict()
         // An original a Mac has since replaced with a compressed copy (`TrackEncoding`) goes whatever the budget, once the
-        // copy is the recording by the usual proof: here and verified, or in iCloud and uploaded.
+        // copy is the recording by the usual proof: here and verified, or in iCloud and uploaded. One recorded here waits
+        // for the same key guard as any.
         for entry in audioIndex().entries.values.sorted(by: Self.evictionOrder) where !(entry.trackID.map { protected.contains($0) } ?? false) {
             if Task.isCancelled { break }
+            if entry.origin == .recordedHere, !originalsMayGo { continue }
             guard let url = supersededURL(entry) else { continue }
             try fm.removeItem(at: url)
             verifiedAssets.removeValue(forKey: url.path)
@@ -234,9 +239,6 @@ extension LibrarySyncEngine {
             inUse -= entry.stamp.size; freed += entry.stamp.size
             evicted.append(entry.publicValue)
         }
-        // In an encrypted library, an original recorded here is evicted only once another device holds the key or a
-        // recovery key was saved: otherwise iCloud's sealed copy could be the only one, unreadable if this device is lost.
-        let originalsMayGo = sealing == nil || sealedOriginalsMayEvict()
         let candidates = audioIndex().entries.values
             .filter { entry in !(entry.trackID.map { protected.contains($0) } ?? false) }
             .sorted(by: Self.evictionOrder)

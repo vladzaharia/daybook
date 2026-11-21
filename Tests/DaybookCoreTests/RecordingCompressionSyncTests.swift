@@ -61,6 +61,10 @@ final class RecordingCompressionSyncTests: XCTestCase {
         try await pass(mac, "Mac", [meeting])
         XCTAssertTrue(FileManager.default.fileExists(atPath: blob.path))
         try await pass(phone, "Phone")
+        // While it plays, it stays.
+        report = try await phone.evictAudio(protecting: [original.id])
+        XCTAssertTrue(report.evicted.isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: cached.path))
         report = try await phone.evictAudio()
         XCTAssertEqual(report.evicted.count, 1)
         XCTAssertFalse(FileManager.default.fileExists(atPath: cached.path))
@@ -88,6 +92,23 @@ final class RecordingCompressionSyncTests: XCTestCase {
         // Seen more than 30 days ago, it doesn't.
         let later = await mac.everyRecentDeviceCompresses(now: Date().addingTimeInterval(31 * 86_400))
         XCTAssertTrue(later)
+    }
+
+    func testBehaviorAPassSaysWhetherItAppliedTheSettings() async throws {
+        let mac = try engine("Mac")
+        var result = try await mac.synchronize(meetings: [], libraryMetadata: try JSONEncoder().encode(LibraryMetadata()))
+        try await mac.acknowledge(result.checkpointID)
+        result = try await mac.synchronize(meetings: [])
+        XCTAssertTrue(result.settingsApplied)
+        try await mac.acknowledge(result.checkpointID)
+        // A settings version still in iCloud: not applied.
+        let metadata = remote.appendingPathComponent("Metadata")
+        for name in try FileManager.default.contentsOfDirectory(atPath: metadata.path) where !name.hasPrefix(".") {
+            try FileManager.default.moveItem(at: metadata.appendingPathComponent(name), to: metadata.appendingPathComponent(".\(name).icloud"))
+        }
+        let other = try engine("Other")
+        result = try await other.synchronize(meetings: [])
+        XCTAssertFalse(result.settingsApplied)
     }
 
     func testBehaviorObjectIsUploadedOnlyOnceItIsThere() async throws {

@@ -98,6 +98,49 @@ final class RecordingCompressionPlannerTests: XCTestCase {
         XCTAssertEqual(afterMerge, [taught.id, merged.id])
     }
 
+    func testBehaviorAMoveStaysProtectedAfterItsSourceIsDeleted() {
+        var source = conversation("source", digest: "s")
+        var moved = conversation("moved", digest: "t")
+        let unrelated = conversation("unrelated", digest: "u")
+        source.tracks[0].removal = RecordingRemoval(removedAt: now, movedTo: moved.id)
+        moved.revisions.append(MeetingRevision(date: now.addingTimeInterval(-60 * day), field: RecordingRemoval.movedHereField(moved.tracks[0].id),
+                                               oldValue: "", newValue: "Moved from “source”"))
+        let print = voiceprint(source)
+        // The source is in the Trash now: followed there.
+        XCTAssertEqual(RecordingCompressionPlanner.learnedFrom([moved, unrelated], voiceprints: [print], lineage: [source]), [source.id, moved.id])
+        // Gone from the Trash too, or never on this device: the move can't be followed from the conversation it left, so
+        // every conversation a recording was moved into is protected while that voiceprint's conversation can't be found.
+        XCTAssertEqual(RecordingCompressionPlanner.learnedFrom([moved, unrelated], voiceprints: [print]), [source.id, moved.id])
+        // With every voiceprint's conversation found, only what descends from them.
+        XCTAssertEqual(RecordingCompressionPlanner.learnedFrom([moved, unrelated], voiceprints: [voiceprint(unrelated)]), [unrelated.id])
+        XCTAssertEqual(ids([moved, unrelated], inputs([moved, unrelated]) { $0.voiceprints = [print] }), [unrelated.id])
+        XCTAssertEqual(ids([moved, unrelated], inputs([moved, unrelated]) { $0.voiceprints = [voiceprint(unrelated)] }), [moved.id])
+    }
+
+    func testBehaviorTheClockRule() {
+        let lastPass = now.addingTimeInterval(-3_600)
+        XCTAssertTrue(RecordingCompressionClock.trusts(now: now, lastPass: nil, newestOtherDevice: nil))
+        XCTAssertTrue(RecordingCompressionClock.trusts(now: now, lastPass: lastPass, newestOtherDevice: now.addingTimeInterval(-day)))
+        XCTAssertFalse(RecordingCompressionClock.trusts(now: now, lastPass: now.addingTimeInterval(-4 * day), newestOtherDevice: nil), "a jump")
+        XCTAssertFalse(RecordingCompressionClock.trusts(now: now, lastPass: now.addingTimeInterval(2 * 3_600), newestOtherDevice: nil), "went back")
+        XCTAssertFalse(RecordingCompressionClock.trusts(now: now, lastPass: lastPass, newestOtherDevice: now.addingTimeInterval(-8 * day)))
+        // In the same boot, the wall clock must have moved as the continuous clock did: days off are fine, a jump isn't.
+        XCTAssertTrue(RecordingCompressionClock.trusts(now: now, lastPass: now.addingTimeInterval(-5 * day), elapsed: 5 * day - 60, newestOtherDevice: nil))
+        XCTAssertFalse(RecordingCompressionClock.trusts(now: now, lastPass: now.addingTimeInterval(-2 * day), elapsed: 3_600, newestOtherDevice: nil),
+                       "two days ahead in an hour")
+        XCTAssertFalse(RecordingCompressionClock.trusts(now: now, lastPass: now.addingTimeInterval(-60), elapsed: 3 * 3_600, newestOtherDevice: nil),
+                       "set back")
+        XCTAssertFalse(RecordingCompressionClock.trusts(now: now, lastPass: now.addingTimeInterval(-day), elapsed: day,
+                                                        newestOtherDevice: now.addingTimeInterval(-8 * day)), "the others still count")
+        let a = conversation("a", digest: "a")
+        XCTAssertEqual(ids([a], inputs([a]) { $0.clockSteady = false }), [])
+    }
+
+    func testBehaviorARefusedRecordingIsntReadAgain() {
+        let a = conversation("a", digest: "a")
+        XCTAssertEqual(ids([a], inputs([a]) { $0.refused = [a.tracks[0].sha256] }), [])
+    }
+
     func testBehaviorStillAllowedSeesWhatStartedSince() {
         let a = conversation("a", digest: "a")
         XCTAssertTrue(RecordingCompressionPlanner.stillAllowed(a, among: [a], inputs([a])))

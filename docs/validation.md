@@ -57,14 +57,57 @@ their own lossless clips (a follow-up).
 - unreadable settings (extra keys beside the selection) are Never; a recording of a kind this version doesn't know is
   left alone; an iPhone lets go of an original it cached once a Mac's copy is in iCloud, not before.
 
-**Not verified.** The effect of AAC at 64 and 32 kbit/s on the real speech models (transcription, speaker detection,
-voice embeddings, background-audio classification) is unmeasured: no models were downloaded, and every check here is on
-synthetic sound. Re-processing a compressed conversation (Upgrade, Transcribe Again) runs on the copy. The scheduler's
-gathering of inputs on the Mac (idle moments, power, the battery threshold, stopping when recording or playback starts)
-has no automated test beyond the planner it feeds; neither does the Settings row or Info › Audio's line. An export or
-share under way isn't seen as busy. `compressionClockLooksAhead` passes compaction's tested check through untested
-here. No real recording, no iCloud, no two physical Macs,
-and no iPhone were involved. An older Daybook seen more than 30 days ago that returns and edits a compressed recording
+**Measured on the real speech models (2026-11-20, a separate run).** Daybook's own processing pipeline with its default
+models, on 104 minutes of public speech, AAC-LC only (HE-AAC, Opus, and resampling before encoding were no better, or
+worse). 44.1/48 kHz at 64 kbit/s mono: 0.45% of words differ, speakers unchanged, voice-embedding cosine at least 0.99.
+16 kHz: 32 kbit/s cost about 7% relative word error rate; 48 kbit/s is within noise, so the table's 16 kHz row is 48 (rule
+2). A copy keeping only the left channel of panned call audio took the word error rate from 3% to 65%. Per file, the
+transcripts of original and copy disagreed by at most 3.3% (AAC 64) and 4.4% (AAC 48 at 16 kHz), 4.9% in the worst 60 s
+window at AAC 64; Parakeet re-runs are bit-identical, Whisper disagrees with itself by 2.9%. Those set the transcript
+bar's 5% and 8% (deterministic) and 12% (not). Limits: the 16 kHz material was upsampled source audio, there was no real
+far-field or phone audio, Whisper ran on a subset, and the 60 s bound wasn't measured separately for the 48 kbit/s row.
+
+**Second review fixes (same day).** On synthetic audio, window levels, and temporary libraries:
+- a pass applying settings is the engine's word (`SyncResult.settingsApplied`): settings still in iCloud (placeholders)
+  leave this Mac's settings not current, nothing planned and no original let go until they download; a reconnect needs
+  a pass again; a settings version in a shape or format this version can't read makes the choice Never; settings are
+  current only for the library they came from; a version the engine itself can't read (a newer format) makes the
+  choice Never, on that pass and every pass after.
+- the audible bar: a far talker at -46 dBFS silenced beside a near one at -12 refused, an honest copy within 0.3 dB
+  passing, a quiet minute judged against itself. A CAF cut short still declares its whole length (measured; FLAC and
+  Apple Lossless too) and fails partway: refused as cut short both when checked against a whole copy and when encoded
+  (not padded out), and a copy cut short refused. Each table row keeps its rate; AVAudioFile refuses a bit rate too low
+  for the rate (24 kbit/s at 48 kHz, measured) rather than lowering it; a copy stored at 32 kHz for a 48 kHz recording
+  is refused for its format.
+- stereo: talkers panned apart kept stereo and, averaged, both present; a dropped or swapped channel refused; channels
+  alike but not identical kept stereo.
+- the clock rule, across a restart and, by the continuous clock, within a boot (days asleep trusted, two days ahead in
+  an hour or a clock set back distrusted, the other devices still counting); refused recordings not read again; a
+  move's protection through the Trash, and, once its source is gone from the Trash too, every conversation a recording
+  was moved into protected while that voiceprint's conversation can't be found.
+- finishing: an original changed after its hash, one rewritten in place under its old modification date, a track
+  changed meanwhile, another track naming the original meanwhile, the copy gone before the lock, and settings no longer
+  current by the time the lock is held each keep it; a missing copy points the track back at its original, only for
+  this Mac's own compression; a failed save keeps unrelated measurements; the iPhone keeps a playing original, and in
+  an encrypted library keeps its own recording a Mac replaced until another device holds the key
+  (`LibrarySyncSealingTests`).
+- the transcript bar (`TranscriptAgreementTests`, and the library with injected transcribers): words normalized, edit
+  distance, the 5%/8%/12% bars and short spans; spans from the track's or its derived copy's transcript; agreeing copy
+  used with the check recorded; disagreeing copy refused and not encoded again under the same rule; no model or no
+  speech skipped and recorded; stopping during the check leaves nothing and isn't a refusal.
+
+**Not verified.** The transcript bar has run only with injected transcribers: the Mac's `SpanTranscription` through a
+real model (its level path, its span cutting, its cost of about 25 s an hour) hasn't, and the per-span 8% bound may
+refuse some honest 48 kbit/s copies (that row's 60 s windows weren't measured on their own). Beyond the measurement
+above (made outside this branch's tests), these tests download no models and run on synthetic sound;
+background-audio classification on copies wasn't measured. Re-processing a compressed conversation (Upgrade,
+Transcribe Again) runs on the copy. The scheduler's gathering of inputs on the Mac has no automated test beyond the
+planner it feeds: idle moments, power, the battery threshold, stopping when recording or playback starts, the listener
+it builds from the installed model, passing the library ID to the settings check, and keeping the last pass's
+continuous-clock mark after a jump. Neither do the Settings row or Info › Audio's line. An export or share under way
+isn't seen as busy. `compressionClockLooksAhead` passes compaction's tested check through untested here. The engine
+identity in the settings mark is redundant in the tests (a new engine has no library ID until its first pass), so no
+test fails without it. No real recording, no iCloud, no two physical Macs, and no iPhone were involved. An older Daybook seen more than 30 days ago that returns and edits a compressed recording
 may merge back to the original; that's not tested. Superseded originals stay in a plaintext library's iCloud.
 
 ## iPhone gives back audio sooner (2026-11-20)

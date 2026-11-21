@@ -27,19 +27,23 @@ public struct TrackEncoding: Codable, Equatable, Sendable {
     public var encodedAt: Date
     /// The sync device that made the copy (`LibrarySyncController.deviceID`), when the library syncs.
     public var device: String?
+    /// The transcript quality bar (`TranscriptAgreement`): whether it ran, with which model, and what it found.
+    public var transcriptCheck: TranscriptCheck?
     /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
     public var unknownFields = UnknownFields()
 
     public init(method: String, rule: Int = TrackEncoding.currentRule, sourceFormat: String, previousSHA256: String,
                 previousRelativePath: String, previousFileName: String, previousSize: Int64? = nil, size: Int64? = nil,
-                encodedAt: Date, device: String? = nil) {
+                encodedAt: Date, device: String? = nil, transcriptCheck: TranscriptCheck? = nil) {
         self.method = method; self.rule = rule; self.sourceFormat = sourceFormat; self.previousSHA256 = previousSHA256
         self.previousRelativePath = previousRelativePath; self.previousFileName = previousFileName
         self.previousSize = previousSize; self.size = size; self.encodedAt = encodedAt; self.device = device
+        self.transcriptCheck = transcriptCheck
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case method, rule, sourceFormat, previousSHA256, previousRelativePath, previousFileName, previousSize, size, encodedAt, device
+        case method, rule, sourceFormat, previousSHA256, previousRelativePath, previousFileName, previousSize, size, encodedAt, device,
+            transcriptCheck
     }
     private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
 
@@ -55,6 +59,7 @@ public struct TrackEncoding: Codable, Equatable, Sendable {
         size = try values.decodeIfPresent(Int64.self, forKey: .size)
         encodedAt = try values.decode(Date.self, forKey: .encodedAt)
         device = try values.decodeIfPresent(String.self, forKey: .device)
+        transcriptCheck = (try? values.decodeIfPresent(TranscriptCheck.self, forKey: .transcriptCheck)) ?? nil
         unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
     }
 
@@ -70,6 +75,7 @@ public struct TrackEncoding: Codable, Equatable, Sendable {
         try values.encodeIfPresent(size, forKey: .size)
         try values.encode(encodedAt, forKey: .encodedAt)
         try values.encodeIfPresent(device, forKey: .device)
+        try values.encodeIfPresent(transcriptCheck, forKey: .transcriptCheck)
         try unknownFields.encode(to: encoder)
     }
 }
