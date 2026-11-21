@@ -345,7 +345,7 @@ final class ConversationActionsTests: XCTestCase {
         notes.notes = "Ship it on Friday"
         let reprocess = ConversationActions.actions(for: notes, context: .init(platform: .mac)).flatMap(\.actions).first { $0.id == .reprocess }
         XCTAssertEqual(reprocess?.isAvailable, true)
-        XCTAssertEqual(reprocess?.children.map(\.availability), [.available, .unavailable("Not transcribed yet"), .unavailable("No recording yet")])
+        XCTAssertEqual(reprocess?.children.map(\.availability), [.available, .unavailable("No recording yet"), .unavailable("No recording yet")])
     }
 
     // MARK: Merge with
@@ -368,9 +368,48 @@ final class ConversationActionsTests: XCTestCase {
 
         let menu = merging(today, .init(platform: .mac, mergeCandidates: candidates))
         XCTAssertEqual(menu?.children.map(\.id), candidates.map { .mergeWith($0.id) })
+        XCTAssertTrue(menu?.children[0].title.hasPrefix("Retro · ") == true, "with its day and time: \(menu?.children[0].title ?? "")")
         XCTAssertEqual(menu?.isAvailable, true)
         XCTAssertEqual(merging(today, .init(platform: .mac))?.availability, .unavailable("No other conversations that day"))
         XCTAssertEqual(merging(today, .init(platform: .mac, isRecording: true, mergeCandidates: candidates))?.availability,
                        .unavailable("Recording now"), "waits as Merge… does")
+    }
+
+    func testBehaviorMergeWithLeavesOutWhatThePersonalLockHidesAndWhatMergeWouldRefuse() {
+        let calendar = Calendar(identifier: .gregorian)
+        let noon = calendar.date(from: DateComponents(year: 2026, month: 11, day: 20, hour: 12))!
+        var today = Meeting(title: "Standup"), locked = Meeting(title: "Therapy"), recording = Meeting(title: "Live"),
+            merging = Meeting(title: "Joining"), fine = Meeting(title: "Planning"), onMac = Meeting(title: "On a Mac")
+        today.date = noon; locked.date = noon; recording.date = noon; merging.date = noon; fine.date = noon; onMac.date = noon
+        recording.status = .recording
+        let all = [today, locked, recording, merging, fine, onMac]
+        let candidates = ConversationActions.mergeCandidates(
+            for: today, in: all, calendar: calendar,
+            context: { ConversationActions.Context(platform: .iPhone, isRecording: $0.id == onMac.id) },
+            merging: [merging.id], hidden: { $0.id == locked.id })
+        XCTAssertEqual(Set(candidates.map(\.title)), ["Planning"], "never a hidden one, or one Merge… would wait for")
+    }
+
+    func testBehaviorMergeWithWaitsWhileTheConversationIsRecordingOrMerging() {
+        var live = meeting()
+        live.status = .recording
+        let candidate = MergeCandidate(id: UUID(), title: "Planning", date: Date())
+        XCTAssertEqual(merging(live, .init(platform: .mac, mergeCandidates: [candidate]))?.availability, .unavailable("Recording now"))
+        XCTAssertEqual(merging(meeting(), .init(platform: .mac, mergeCandidates: [candidate], isMerging: true))?.availability,
+                       .unavailable("Merging now"))
+    }
+
+    func testBehaviorAnUntitledConversationInMergeWithUsesTheUntitledWording() {
+        let candidate = MergeCandidate(id: UUID(), title: "", date: Date())
+        let menu = merging(meeting(), .init(platform: .mac, mergeCandidates: [candidate]))
+        XCTAssertTrue(menu?.children[0].title.hasPrefix("Untitled Conversation · ") == true)
+    }
+
+    func testBehaviorIdentifySpeakersAgainNeedsARecording() {
+        var notes = Meeting(title: "Notes")
+        notes.notes = "Ship it"
+        notes.transcripts = [TrackTranscript(trackID: UUID(), segments: [])]
+        let modes = ConversationActions.actions(for: notes, context: .init(platform: .mac)).flatMap(\.actions).first { $0.id == .reprocess }?.children
+        XCTAssertEqual(modes?.first { $0.id == .process(.speakerRefresh) }?.availability, .unavailable("No recording yet"))
     }
 }

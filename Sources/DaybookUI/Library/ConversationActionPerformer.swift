@@ -33,8 +33,7 @@ public struct ConversationActionPerformer {
     public var copy: @MainActor (String) -> Void
     /// A moment's word over the page (`ConfirmationBeat`).
     public var confirm: @MainActor (ConfirmationBeat) -> Void
-    /// Summarizes a conversation again as a row of Summarize Again's menu chose (`SummarizeAgainChoices`); without one, as the
-    /// plain Summarize Again does.
+    /// Summarizes a conversation again as a row of Summarize Again's menu chose (`SummarizeAgainChoices`); without one, nothing.
     public var summarizeAgain: (@MainActor (UUID, SummarizeAgainChoice) -> Void)?
 
     public init(library: LibraryController, undoManager: UndoManager?,
@@ -75,7 +74,8 @@ public struct ConversationActionPerformer {
             for meeting in meetings where mode != .summaryOnly || meeting.hasSummarizableContent { process(meeting.id, mode) }
         case .summarizeAgain(let choice):
             guard first.hasSummarizableContent else { return }
-            if let summarizeAgain { summarizeAgain(first.id, choice) } else { process(first.id, .summaryOnly) }
+            // Without the app's handler nothing runs: a plain Summarize Again might send a model of this device's to the cloud.
+            summarizeAgain?(first.id, choice)
         case .versionHistory: show(.versionHistory(first.id))
         case .moveToFolder: show(.moveToFolder(chosen))
         case .tags: show(.tags(chosen))

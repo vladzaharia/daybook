@@ -89,7 +89,8 @@ final class LibraryWordsTests: XCTestCase {
         XCTAssertEqual(LibraryWords.mergeTitle([later.id, third.id], in: all), "Merge 2 conversations into “Roadmap review”?")
         earlier.title = "  "
         XCTAssertEqual(LibraryWords.mergeTitle([earlier.id, later.id], in: [earlier, later]), "Merge 2 conversations?", "no title to name")
-        XCTAssertEqual(LibraryWords.mergeMessage, "Their summaries are written again from the whole. This can’t be undone.")
+        XCTAssertEqual(LibraryWords.mergeTitle(all.map(\.id), in: all, hidden: { $0.id == earlier.id }), "Merge 3 conversations?",
+                       "the lock hides the one that stays")
     }
 
     func testAMergedAwayConversationFindsTheOneItWentInto() {
@@ -99,5 +100,29 @@ final class LibraryWordsTests: XCTestCase {
         XCTAssertEqual(LibraryWords.mergedInto(folded, in: [other, survivor, folded])?.id, survivor.id)
         XCTAssertNil(LibraryWords.mergedInto(other, in: [other, survivor, folded]))
         XCTAssertEqual(LibraryWords.mergedInto("Weekly sync"), "Merged into “Weekly sync”")
+    }
+
+    func testMergeSaysTheSummariesAreWrittenAgainOnlyWhenARecordingMakesItTranscribeAgain() {
+        let recorded = Meeting(title: "Call", tracks: [RecordingTrack(source: .microphone, relativePath: "a.m4a", fileName: "a.m4a", duration: 5)])
+        let notes = Meeting(title: "Notes"), more = Meeting(title: "More notes")
+        XCTAssertEqual(LibraryWords.mergeMessage([recorded.id, notes.id], in: [recorded, notes]),
+                       "Their summaries are written again from the whole. This can’t be undone.")
+        XCTAssertEqual(LibraryWords.mergeMessage([notes.id, more.id], in: [notes, more]), "This can’t be undone.")
+    }
+
+    func testMergedIntoHidesBehindTheLockAndIgnoresAConversationRestoredAndTrashedAgain() {
+        let now = Date()
+        var survivor = Meeting(title: "Weekly sync")
+        var folded = Meeting(title: "Roadmap review")
+        folded.updatedAt = now
+        survivor.revisions = [MeetingRevision(date: now, field: ConversationMerge.revisionField(folded.id).rawValue, oldValue: "", newValue: "Merged")]
+        XCTAssertEqual(LibraryWords.mergedInto(folded, in: [survivor, folded])?.id, survivor.id)
+        XCTAssertNil(LibraryWords.mergedInto(folded, in: [survivor, folded], hidden: { $0.id == survivor.id }), "a hidden title isn't named")
+        var edited = folded
+        edited.updatedAt = now.addingTimeInterval(3_600)
+        XCTAssertNil(LibraryWords.mergedInto(edited, in: [survivor, edited]), "changed since the merge: trashed on its own")
+        var recorded = folded
+        recorded.tracks = [RecordingTrack(source: .microphone, relativePath: "a.m4a", fileName: "a.m4a", duration: 5)]
+        XCTAssertNil(LibraryWords.mergedInto(recorded, in: [survivor, recorded]), "it has a recording of its own again")
     }
 }

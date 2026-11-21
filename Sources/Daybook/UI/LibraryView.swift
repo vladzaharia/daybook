@@ -708,7 +708,7 @@ private struct MacMergeConfirmation: ViewModifier {
     func body(content: Content) -> some View {
         content
             .focusedSceneValue(\.selectedConversations, several)
-            .alert(LibraryWords.mergeTitle(state.window.confirmingMerge, in: state.meetings),
+            .alert(LibraryWords.mergeTitle(state.window.confirmingMerge, in: state.meetings, hidden: { state.personalLock.hides($0) }),
                       isPresented: Binding(get: { !state.window.confirmingMerge.isEmpty }, set: { if !$0 { state.window.confirmingMerge = [] } })) {
             Button("Merge", role: .destructive) {
                 state.mergeConversations(state.window.confirmingMerge)
@@ -716,7 +716,7 @@ private struct MacMergeConfirmation: ViewModifier {
             }
             Button("Cancel", role: .cancel) { state.window.confirmingMerge = [] }
         } message: {
-            Text(LibraryWords.mergeMessage)
+            Text(LibraryWords.mergeMessage(state.window.confirmingMerge, in: state.meetings))
         }
     }
 }

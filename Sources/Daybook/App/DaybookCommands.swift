@@ -216,6 +216,8 @@ private struct ConversationCommands: Commands {
         let modes = reprocess.children.filter { $0.id != .process(.newAudio) }.map { mode in
             var mode = mode
             if !reprocess.isAvailable { mode.availability = reprocess.availability }
+            // Also while a recording starts or stops, as the menu always waited then.
+            else if state.isBusy(meeting.id) { mode.availability = .unavailable("Recording now") }
             return mode
         }
         return [ConversationActionGroup(id: .reprocess, actions: modes)]

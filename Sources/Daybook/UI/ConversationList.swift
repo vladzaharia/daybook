@@ -365,7 +365,7 @@ struct TrashDetail: View {
             if let meeting {
                 TrashedConversationPage(
                     meeting: meeting,
-                    mergedInto: LibraryWords.mergedInto(meeting, in: state.meetings).map { survivor in
+                    mergedInto: LibraryWords.mergedInto(meeting, in: state.meetings, hidden: { state.personalLock.hides($0) }).map { survivor in
                         (ConversationRowView.title(survivor), { state.showConversation(survivor.id) })
                     }) { MacTrash.restore([meeting.id], state: state) }
             } else {
@@ -506,7 +506,11 @@ enum MacActions {
         return ConversationActions.Context(platform: .mac, isRecording: recording, isProcessingHere: state.processor.queue.runningID == meeting.id,
                                            status: state.processingStatus(for: meeting),
                                            summarizeChoices: state.summarizeAgainChoices(for: meeting),
-                                           mergeCandidates: ConversationActions.mergeCandidates(for: meeting, in: state.meetings))
+                                           mergeCandidates: ConversationActions.mergeCandidates(
+                                               for: meeting, in: state.meetings, context: { MeetingInspector.context(state, $0) },
+                                               merging: state.library.mergingIDs,
+                                               hidden: { state.personalLock.hides($0) || !state.personalLock.lists($0) }),
+                                           isMerging: state.library.mergingIDs.contains(meeting.id))
     }
 
     /// How the Mac processes a conversation in a mode, from its menus and its status alike: its queue.

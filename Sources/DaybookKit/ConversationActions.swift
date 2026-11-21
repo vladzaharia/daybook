@@ -108,17 +108,32 @@ public struct ConversationActionGroup: Equatable, Identifiable, Sendable {
 public struct MergeCandidate: Equatable, Sendable {
     public var id: UUID
     public var title: String
-    public init(id: UUID, title: String) { self.id = id; self.title = title }
+    public var date: Date
+    public init(id: UUID, title: String, date: Date) { self.id = id; self.title = title; self.date = date }
 }
 
 public enum ConversationActions {
-    /// The conversations Merge with ▸ lists for `meeting`: those of its day and the day before, earliest first.
-    public static func mergeCandidates(for meeting: Meeting, in meetings: [Meeting], calendar: Calendar = .current) -> [MergeCandidate] {
+    /// Why `meeting` can't be merged now, when it can't: merging already, recording (as another device's sync says too), or
+    /// what its `context` says (`Context.mergeBusy`). The one rule for Merge… and Merge with ▸.
+    static func mergeBusy(_ meeting: Meeting, context: Context, merging: Set<UUID>) -> String? {
+        if merging.contains(meeting.id) { return "Merging now" }
+        return meeting.status == .recording ? "Recording now" : context.mergeBusy
+    }
+
+    /// The conversations Merge with ▸ lists for `meeting`: those of its day and the day before, earliest first, that Merge…
+    /// would take now (`mergeBusy`, with `context` what the app knows of each) and that the Personal lock doesn't hide (`hidden`:
+    /// the lock hides it, or the Focus leaves it out of the lists).
+    public static func mergeCandidates(for meeting: Meeting, in meetings: [Meeting], calendar: Calendar = .current,
+                                       context: (Meeting) -> Context = { _ in Context(platform: .mac) }, merging: Set<UUID> = [],
+                                       hidden: (Meeting) -> Bool = { _ in false }) -> [MergeCandidate] {
         let day = calendar.startOfDay(for: meeting.date)
         guard let before = calendar.date(byAdding: .day, value: -1, to: day) else { return [] }
-        return meetings.filter { $0.id != meeting.id && calendar.startOfDay(for: $0.date) >= before && calendar.startOfDay(for: $0.date) <= day }
-            .sorted { $0.date < $1.date }
-            .map { MergeCandidate(id: $0.id, title: $0.title.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        return meetings.filter {
+            $0.id != meeting.id && calendar.startOfDay(for: $0.date) >= before && calendar.startOfDay(for: $0.date) <= day
+                && !hidden($0) && mergeBusy($0, context: context($0), merging: merging) == nil
+        }
+        .sorted { $0.date < $1.date }
+        .map { MergeCandidate(id: $0.id, title: $0.title.trimmingCharacters(in: .whitespacesAndNewlines), date: $0.date) }
     }
 
     /// What the app knows besides the conversation.
@@ -138,13 +153,15 @@ public enum ConversationActions {
         public var summarizeChoices: [SummarizeAgainChoice]
         /// The conversations of its day and the day before, for Merge with ▸ (`ConversationActions.mergeCandidates`).
         public var mergeCandidates: [MergeCandidate]
+        /// A merge of this conversation is running here (`LibraryController.mergingIDs`).
+        public var isMerging: Bool
 
         public init(platform: ConversationAction.Platform, isRecording: Bool = false, isProcessingHere: Bool = false,
                     status: ProcessingStatus? = nil, canTakePhoto: Bool = false, isDeviceRecording: Bool = false,
-                    summarizeChoices: [SummarizeAgainChoice] = [], mergeCandidates: [MergeCandidate] = []) {
+                    summarizeChoices: [SummarizeAgainChoice] = [], mergeCandidates: [MergeCandidate] = [], isMerging: Bool = false) {
             self.platform = platform; self.isRecording = isRecording; self.isProcessingHere = isProcessingHere
             self.status = status; self.canTakePhoto = canTakePhoto; self.isDeviceRecording = isDeviceRecording
-            self.summarizeChoices = summarizeChoices; self.mergeCandidates = mergeCandidates
+            self.summarizeChoices = summarizeChoices; self.mergeCandidates = mergeCandidates; self.isMerging = isMerging
         }
 
         /// Why it can't change now, when it can't.
@@ -169,6 +186,7 @@ public enum ConversationActions {
         /// Why it can't be merged now, when it can't: what keeps a recording in it (`recordingBusy`), or a recording made
         /// alongside it that hasn't arrived yet, which would land on a timeline the merge moved.
         public var mergeBusy: String? {
+            if isMerging { return "Merging now" }
             if let busy = recordingBusy { return busy }
             if case .awaitingRecordings? = status { return "Waiting for a recording" }
             return nil
@@ -212,7 +230,7 @@ public enum ConversationActions {
             // A Mac's menu lists the folders; an iPhone's opens a sheet.
             ConversationAction(id: .moveToFolder, title: mac ? "Move to Folder" : "Move to Folder…", symbol: "folder"),
             ConversationAction(id: .tags, title: "Tags…", symbol: "tag"),
-            mergeWith(context),
+            mergeWith(meeting, context),
             placement(personal),
             ConversationAction(id: .showInFinder, title: "Show in Finder", symbol: ConversationAction.showInFinderSymbol, platforms: [.mac]),
         ]
@@ -264,7 +282,8 @@ public enum ConversationActions {
             ConversationAction(id: .process(.summaryOnly), title: ProcessingWords.title(.summaryOnly), symbol: "text.alignleft",
                                availability: summarizable, children: choices.count > 1 ? choices : []),
             ConversationAction(id: .process(.speakerRefresh), title: ProcessingWords.title(.speakerRefresh), symbol: "person.2",
-                               availability: meeting.transcripts.isEmpty ? .unavailable("Not transcribed yet") : .available),
+                               availability: !recorded ? .unavailable("No recording yet")
+                                   : meeting.transcripts.isEmpty ? .unavailable("Not transcribed yet") : .available),
             ConversationAction(id: .process(.fullRetranscription), title: ProcessingWords.title(.fullRetranscription), symbol: "arrow.clockwise",
                                availability: recorded ? .available : .unavailable("No recording yet")),
         ]
@@ -272,11 +291,14 @@ public enum ConversationActions {
     }
 
     /// Merge with ▸ the conversations of its day and the day before; each asks the question a selection's Merge… does.
-    static func mergeWith(_ context: Context) -> ConversationAction {
-        let availability: ConversationAction.Availability = context.mergeBusy.map { .unavailable($0) }
+    static func mergeWith(_ meeting: Meeting, _ context: Context) -> ConversationAction {
+        let availability: ConversationAction.Availability = mergeBusy(meeting, context: context, merging: []).map { .unavailable($0) }
             ?? (context.mergeCandidates.isEmpty ? .unavailable("No other conversations that day") : .available)
         let children = context.mergeCandidates.map {
-            ConversationAction(id: .mergeWith($0.id), title: $0.title.isEmpty ? "New Conversation" : $0.title, symbol: "arrow.triangle.merge")
+            // The day and time tell two of the same name apart.
+            ConversationAction(id: .mergeWith($0.id), title: "\($0.title.isEmpty ? LibraryWords.untitled : $0.title) · "
+                               + $0.date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).hour().minute()),
+                               symbol: "arrow.triangle.merge")
         }
         return ConversationAction(id: .mergeMenu, title: "Merge with", symbol: "arrow.triangle.merge", availability: availability, children: children)
     }
@@ -299,10 +321,7 @@ public enum ConversationActions {
         let mac = context.platform == .mac
         let personal = selected.allSatisfy { $0.effectivePlacement == .personal }
         let summarizable = selected.contains { $0.hasSummarizableContent }
-        let mergeBusy = context.busy ?? selected.lazy.compactMap { meeting -> String? in
-            if merging.contains(meeting.id) { return "Merging now" }
-            return meeting.status == .recording ? "Recording now" : (each?(meeting) ?? context).mergeBusy
-        }.first
+        let mergeBusy = context.busy ?? selected.lazy.compactMap { Self.mergeBusy($0, context: each?($0) ?? context, merging: merging) }.first
         let groups = [
             ConversationActionGroup(id: .reprocess, actions: [
                 ConversationAction(id: .process(.summaryOnly), title: ProcessingWords.title(.summaryOnly), symbol: "text.alignleft",

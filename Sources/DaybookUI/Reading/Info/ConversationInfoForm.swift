@@ -269,9 +269,9 @@ private struct ProcessingRows: View {
                     Label(history.title.replacingOccurrences(of: "…", with: ""), systemImage: history.symbol)
                 }
             }
-        } else if !meeting.tracks.isEmpty || !meeting.revisions.isEmpty {
+        } else if !meeting.tracks.isEmpty || !meeting.revisions.isEmpty || reprocess?.isAvailable == true {
             HStack {
-                if let reprocess, !meeting.tracks.isEmpty {
+                if let reprocess, !meeting.tracks.isEmpty || reprocess.isAvailable {
                     ReprocessMenu(action: reprocess, meeting: meeting, services: services)
                         .menuStyle(.button)
                         .controlSize(.small)

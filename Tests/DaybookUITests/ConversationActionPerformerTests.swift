@@ -230,14 +230,14 @@ final class ConversationActionPerformerTests: XCTestCase {
         XCTAssertTrue(host.processed.isEmpty, "the app's way, not the default's")
     }
 
-    func testBehaviorWithoutAChosenWayHandlerItSummarizesAsThePlainActionDoes() async throws {
+    func testBehaviorWithoutAChosenWayHandlerNothingRunsRatherThanAPlainSummarizeThatMightSendItToTheCloud() async throws {
         let library = try await makeLibrary()
         let a = conversation("Weekly product sync", in: library)
         let host = Host()
         performer(library, undoManager: nil, host: host).perform(
             .summarizeAgain(SummarizeAgainChoice(place: .thisDevice(model: nil), title: "With Gemma")), on: [a]) { _ in XCTFail("the library's") }
-        XCTAssertEqual(host.processed, [a])
-        XCTAssertEqual(host.modes, [.summaryOnly])
+        XCTAssertTrue(host.processed.isEmpty)
+        XCTAssertTrue(host.modes.isEmpty)
     }
 
     func testBehaviorTheAppsOwnActionsGoToItWithTheConversations() async throws {

@@ -122,7 +122,7 @@ struct ConversationInfo: View {
         case .process(let mode):
             PhoneActions.process(id, mode, library: library, placement: placement)
         case .summarizeAgain(let choice):
-            if let placement { Task { await placement.summarizeAgain(id, as: choice) } } else { library.summarize(id, placement: nil) }
+            if let placement { Task { await placement.summarizeAgain(id, as: choice) } }
         case .summarize(let template):
             library.summarize(id, templateID: template, placement: placement)
         case .versionHistory:
