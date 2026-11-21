@@ -49,12 +49,4 @@ enum SpeakerNameChoices {
         }
         return rows
     }
-
-    /// At most `limit` rows, the Add row kept when there is one (it is the way to name someone new), so a short list
-    /// needs no scrolling of its own.
-    static func limited(_ rows: [SpeakerNameChoice], to limit: Int) -> [SpeakerNameChoice] {
-        guard rows.count > limit, limit > 0 else { return rows }
-        guard let add = rows.last, add.kind == .add else { return Array(rows.prefix(limit)) }
-        return Array(rows.dropLast().prefix(limit - 1)) + [add]
-    }
 }

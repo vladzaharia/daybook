@@ -57,13 +57,4 @@ final class SpeakerNameChoicesTests: XCTestCase {
         let rows = SpeakerNameChoices.rows(profiles: [target, profile("Vladimir", mergedInto: target.id)], me: nil, query: "Vladimir")
         XCTAssertEqual(rows.map(\.kind), [.add])
     }
-
-    func testBehaviorALimitedListKeepsTheAddRow() {
-        let profiles = ["Anna", "Ann Lee", "Joanna", "Annie"].map { profile($0) }
-        let rows = SpeakerNameChoices.rows(profiles: profiles, me: nil, query: "ann")
-        XCTAssertEqual(names(SpeakerNameChoices.limited(rows, to: 3)), ["Ann Lee", "Anna", "Add “ann”"])
-        XCTAssertEqual(SpeakerNameChoices.limited(rows, to: 9), rows, "a short list is whole")
-        let all = SpeakerNameChoices.rows(profiles: profiles, me: nil, query: "")
-        XCTAssertEqual(SpeakerNameChoices.limited(all, to: 3).count, 3)
-    }
 }

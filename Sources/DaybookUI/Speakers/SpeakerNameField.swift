@@ -5,9 +5,8 @@ import SwiftUI
 
 /// A speaker's name field with the library's profiles listed under it (`SpeakerNameChoices`). Picking a row names the
 /// speaker that profile's name, which attaches it the way naming it by hand does; Return on free text keeps that text.
-/// Focusing a name that hasn't changed shows no list, so the rows below stay put; typing filters the profiles, and ↓
-/// lists them all. ↑ and ↓ move the highlight, Return takes it. Under touch the list is at most three rows, so it
-/// doesn't scroll inside the page.
+/// While the name is still the speaker's current one the whole list shows; typing filters it. ↑ and ↓ move the
+/// highlight, Return takes it. The list shows while the field has focus.
 struct SpeakerNameField<Field: View>: View {
     let current: String
     @Binding var draft: String
@@ -18,28 +17,20 @@ struct SpeakerNameField<Field: View>: View {
     let commit: (String) -> Void
     @ViewBuilder var field: Field
     @State private var highlighted: String?
-    /// ↓ was pressed: list every profile, though the name hasn't changed.
-    @State private var browsing = false
     @Environment(\.daybookDensity) private var density
 
     private var touch: Bool { density == .touch }
-    /// The list shows once the person types, or on ↓; never just for having focus.
-    private var listShown: Bool { isFocused && (draft != current || browsing) }
     private var rows: [SpeakerNameChoice] {
-        guard listShown else { return [] }
-        let rows = SpeakerNameChoices.rows(profiles: profiles, me: me, query: draft == current ? "" : draft)
-        return touch ? SpeakerNameChoices.limited(rows, to: 3) : rows
+        SpeakerNameChoices.rows(profiles: profiles, me: me, query: draft == current ? "" : draft)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             field
-            let rows = rows
-            if !rows.isEmpty {
-                let height = CGFloat(min(rows.count, 6)) * (touch ? 44 : 26)
-                if touch {
-                    VStack(alignment: .leading, spacing: 0) { ForEach(rows) { row in choiceButton(row) } }
-                } else {
+            if isFocused {
+                let rows = rows
+                if !rows.isEmpty {
+                    let height = CGFloat(min(rows.count, 6)) * (touch ? 44 : 26)
                     ScrollView {
                         VStack(alignment: .leading, spacing: 0) { ForEach(rows) { row in choiceButton(row) } }
                     }
@@ -48,7 +39,6 @@ struct SpeakerNameField<Field: View>: View {
             }
         }
         .onChange(of: draft) { _, _ in highlighted = nil }
-        .onChange(of: isFocused) { _, focused in if !focused { browsing = false; highlighted = nil } }
         .onSubmit {
             if let row = rows.first(where: { $0.id == highlighted }) { commit(row.name) } else { commit(draft) }
         }
@@ -74,7 +64,6 @@ struct SpeakerNameField<Field: View>: View {
 
     private func move(_ step: Int) -> KeyPress.Result {
         guard isFocused else { return .ignored }
-        if !listShown { browsing = true }
         let rows = rows
         guard !rows.isEmpty else { return .ignored }
         let at = rows.firstIndex { $0.id == highlighted }
