@@ -128,6 +128,8 @@ struct SettingsView: View {
                     case .models: EmptyView()
                     }
                 }
+                // One switch size across the panes; a mini switch is the Form's default in a few rows.
+                .macControlSize(.regular)
                 .navigationTitle(pane.title)
                 .defaultScrollAnchor(Self.snapshotAnchor)
             }
@@ -216,6 +218,11 @@ private struct RecordingSettings: View {
                 .controlSize(.regular)
                 LabeledContent {
                     HStack(spacing: DaybookSpacing.s2) {
+                        Picker("When a call starts", selection: callPolicy) {
+                            ForEach(CallRecordingPolicy.allCases) { Text($0.title).tag($0) }
+                        }
+                        .labelsHidden()
+                        .fixedSize()
                         Button { showingSupportedApps = true } label: {
                             Image(systemName: "info.circle")
                         }
@@ -224,11 +231,6 @@ private struct RecordingSettings: View {
                         .help("Supported Calls")
                         .accessibilityLabel("Supported calls")
                         .popover(isPresented: $showingSupportedApps, arrowEdge: .bottom) { SupportedCallsPopover() }
-                        Picker("When a call starts", selection: callPolicy) {
-                            ForEach(CallRecordingPolicy.allCases) { Text($0.title).tag($0) }
-                        }
-                        .labelsHidden()
-                        .fixedSize()
                     }
                 } label: {
                     Text("When a call starts")
@@ -468,7 +470,7 @@ private struct DetectionStatusLine: View {
     private var recording: Bool { monitor.isMeetingActive && state.isRecording }
     private var color: Color { recording ? DaybookPalette.Ink.record : DaybookPalette.neonMint }
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 5) {
+        HStack(alignment: .center, spacing: 5) {
             Image(systemName: "circle.fill")
                 .font(.system(size: 6))
                 .foregroundStyle(color)

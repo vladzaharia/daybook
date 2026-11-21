@@ -23,11 +23,7 @@ struct DevicesSettingsPane: View {
             if hub.sessions.isEmpty {
                 Section {
                     HStack(spacing: DaybookSpacing.s3) {
-                        Image(systemName: "recordingtape")
-                            .font(.system(size: 22))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 32)
-                            .accessibilityHidden(true)
+                        DaybookTile(symbol: "recordingtape", size: .row)
                         VStack(alignment: .leading, spacing: 2) {
                             Text("No devices yet")
                             Text("Soundcore Work, Daybook on iPhone, or any recorder that saves audio files.")

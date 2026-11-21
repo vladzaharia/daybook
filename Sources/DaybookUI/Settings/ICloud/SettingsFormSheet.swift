@@ -49,6 +49,7 @@ public struct SettingsFormSheet<Content: View>: View {
                 .padding(.top, DaybookSpacing.s5)
             Form { content }
                 .formStyle(.grouped)
+                .macControlSize(.regular)
                 .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, height in contentHeight = height }
                 .scrollDisabled(contentHeight <= Self.tallest)
                 .frame(height: contentHeight > 0 ? min(contentHeight, Self.tallest) : nil)

@@ -35,7 +35,7 @@ struct LibraryMoveSheet: View {
             .padding(.top, DaybookSpacing.s2)
         }
         .padding(DaybookSpacing.s5)
-        .frame(width: 440)
+        .frame(width: SettingsFormSheet<EmptyView>.macWidth)
         .interactiveDismissDisabled()
     }
 

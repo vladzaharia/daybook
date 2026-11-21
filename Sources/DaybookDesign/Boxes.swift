@@ -26,6 +26,7 @@ public struct AttentionBox<Actions: View>: View {
     @State private var width: CGFloat = AttentionBoxLayout.stackBelow
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.daybookDensity) private var density
+    @Environment(\.attentionBoxSpansColumn) private var spansColumn
 
     public init(kind: AttentionKind = .problem, title: String, symbol: String? = nil, message: String?, compact: Bool = false,
                 @ViewBuilder actions: () -> Actions) {
@@ -55,7 +56,7 @@ public struct AttentionBox<Actions: View>: View {
             }
         }
         .padding(compact ? 10 : DaybookSpacing.s3)
-        .frame(maxWidth: AttentionBoxLayout.hugs(density) ? nil : .infinity, alignment: .leading)
+        .frame(maxWidth: AttentionBoxLayout.hugs(density) && !spansColumn ? nil : .infinity, alignment: .leading)
         .background(AttentionBoxLayout.wash(for: kind).color, in: DaybookRadius.shape(DaybookRadius.box))
         .overlay {
             if contrast == .increased {
@@ -346,6 +347,9 @@ public struct DetailsPresenter {
 
 extension EnvironmentValues {
     @Entry public var detailsPresenter: DetailsPresenter? = nil
+    /// Whether a box in a window spans its column instead of hugging its words: a page built of full-width tiles,
+    /// where a box that stops short reads as unfinished. Its actions still follow the words.
+    @Entry public var attentionBoxSpansColumn = false
 }
 
 /// Details beside a problem: the system's own words, selectable, in a popover on the Mac and a sheet on
