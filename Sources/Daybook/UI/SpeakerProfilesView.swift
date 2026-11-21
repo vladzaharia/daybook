@@ -28,7 +28,7 @@ struct SpeakerProfilesSettingsRow: View {
             Button("Edit…") { openWindow(id: WindowID.speakerProfiles) }
         } label: {
             Text("Speaker profiles")
-            Text(SpeakerProfileWords.profiles(state.speakerProfiles.count))
+            Text(state.library.speakerProfilesSummary)
         }
     }
 }

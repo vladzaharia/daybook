@@ -185,10 +185,10 @@ final class LiveCaptionsTests: XCTestCase {
         try await waitUntil("every source") { rig.captions.segments.count == 3 }
         XCTAssertEqual(rig.captions.segments.map(\.text), ["Can we start?", "The recorder heard this.", "Sent from the phone"])
         XCTAssertEqual(rig.captions.segments[1].start, 4, accuracy: 0.001, "on this Mac's timeline")
-        XCTAssertEqual(rig.captions.segments.map { rig.captions.label(for: $0.source) }, ["You", "Soundcore", "iPhone"])
+        XCTAssertEqual(rig.captions.segments.map { rig.captions.label(for: $0.source) }, ["Me", "Soundcore", "iPhone"])
         // Floating Notes: You in the time lane; another device's line names the device before its words.
         let lines = rig.captions.segments.map { LiveCaptionLabels.line($0, names: rig.captions.sourceNames) }
-        XCTAssertEqual(lines.map(\.source), ["You", nil, nil])
+        XCTAssertEqual(lines.map(\.source), ["Me", nil, nil])
         XCTAssertEqual(lines.map(\.speaker), [nil, "Soundcore", "iPhone"])
         var named = rig.captions.segments[1]
         named.speaker = LiveCaptionSpeaker(slot: "S1", name: "Priya")
@@ -198,7 +198,7 @@ final class LiveCaptionsTests: XCTestCase {
         await rig.captions.finish()
         let saved = try XCTUnwrap(rig.captions.store.captions(for: meetingID))
         XCTAssertEqual(saved.segments.map(\.isTentative), [false, false, false], "every source's lines kept as heard")
-        XCTAssertEqual(LiveCaptionTurn.turns(saved.segments, names: saved.sourceNames ?? [:]).map(\.label), ["You", "Soundcore", "iPhone"])
+        XCTAssertEqual(LiveCaptionTurn.turns(saved.segments, names: saved.sourceNames ?? [:]).map(\.label), ["Me", "Soundcore", "iPhone"])
         // Nothing arrives once the recording's captions are done.
         rig.captions.received([line("Late", 30, 31)], from: .device("sim"), name: "Soundcore", offset: 0)
         XCTAssertTrue(rig.captions.segments.isEmpty)
@@ -290,10 +290,10 @@ final class LiveCaptionsTests: XCTestCase {
     func testBehaviorTheStripNamesASourceThatStoppedOnlyWhileAnotherListens() {
         let both: [LiveCaptionSource: LiveCaptionState] = [.microphone: .listening, .call: .listening]
         XCTAssertNil(LiveCaptionStatus.problem(both))
-        XCTAssertEqual(LiveCaptionStatus.problem([.microphone: .failed("No input"), .call: .listening]), "You: No input")
+        XCTAssertEqual(LiveCaptionStatus.problem([.microphone: .failed("No input"), .call: .listening]), "Me: No input")
         XCTAssertEqual(LiveCaptionStatus.problem([.microphone: .listening, .call: .unavailable("Not for Welsh.")]), "Call: Not for Welsh.")
         XCTAssertEqual(LiveCaptionStatus.problem([.microphone: .failed("a"), .call: .failed("b"), .device("x"): .listening],
-                                                 names: ["device:x": "Mac"]), "You: a · Call: b")
+                                                 names: ["device:x": "Mac"]), "Me: a · Call: b")
         XCTAssertNil(LiveCaptionStatus.problem([.microphone: .failed("a"), .call: .failed("b")]), "none listening: the state line says it")
     }
 
@@ -426,10 +426,10 @@ final class LiveCaptionsTests: XCTestCase {
 
         // Who each line is from, as every strip and the saved captions name them.
         let lines = captions.segments.map { CaptionLine($0, names: captions.sourceNames ?? [:]) }
-        XCTAssertEqual(lines.map(\.source), ["You", nil])
+        XCTAssertEqual(lines.map(\.source), ["Me", nil])
         XCTAssertEqual(lines.map(\.speaker), [nil, "Soundcore"])
         XCTAssertEqual(LiveCaptionsSection.lines(captions.segments, names: captions.sourceNames ?? [:], listening: true).map(\.speaker),
-                       ["You", "Soundcore"], "the page while recording, with no lane: the source before the words")
+                       ["Me", "Soundcore"], "the page while recording, with no lane: the source before the words")
         XCTAssertFalse(LiveCaptionStrip.shows(segments: [], state: .off, locale: .current), "off: not even the label")
         XCTAssertTrue(LiveCaptionStrip.shows(segments: [], state: .listening, locale: .current), "Listening…")
 

@@ -52,6 +52,7 @@ struct MeetingInspector: View {
             now: { meeting, date in
                 InfoNow.make(state.processingStatus(for: meeting), meeting: meeting, inputs: Self.inputs(state, meeting), now: date)
             },
+            findsSpeakers: { state.detectSpeakers },
             perform: { action, meeting in perform(action, in: meeting) })
     }
 

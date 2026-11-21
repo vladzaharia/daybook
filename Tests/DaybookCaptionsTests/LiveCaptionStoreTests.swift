@@ -330,13 +330,13 @@ final class LiveCaptionStoreTests: XCTestCase {
         recorder.source = .device("sim")
         var named = recorder
         named.speaker = LiveCaptionSpeaker(slot: "S1", name: "Priya")
-        XCTAssertEqual(LiveCaptionLabels.lane(you), "You")
+        XCTAssertEqual(LiveCaptionLabels.lane(you), "Me")
         XCTAssertNil(LiveCaptionLabels.lane(recorder), "another device's line has no lane")
         XCTAssertNil(LiveCaptionLabels.speaker(you, names: names))
         XCTAssertEqual(LiveCaptionLabels.speaker(recorder, names: names), "Soundcore")
         XCTAssertEqual(LiveCaptionLabels.speaker(named, names: names), "Priya", "a recognized person comes first")
         XCTAssertNil(LiveCaptionLabels.lane(line("Single source", 0)))
-        XCTAssertEqual(LiveCaptionTurn.turns([you, recorder, named], names: names).map(\.label), ["You", "Soundcore", "Priya"])
+        XCTAssertEqual(LiveCaptionTurn.turns([you, recorder, named], names: names).map(\.label), ["Me", "Soundcore", "Priya"])
         XCTAssertEqual(LiveCaptionStatus.line(.listening, locale: .current), "Listening…", "the same words before anything is heard, everywhere")
         XCTAssertNil(LiveCaptionStatus.line(.finished, locale: .current))
     }
