@@ -685,7 +685,8 @@ struct RowMenu: View {
     }
     if !meetings.isEmpty {
       ConversationActionMenuItems(
-        PhoneActions.groups(for: ids, library: library, recordingOnMac: PhoneActions.recordingOnMac(model)),
+        PhoneActions.groups(
+          for: ids, library: library, recordingOnMac: PhoneActions.recordingOnMac(model), placement: placement),
         platform: .iPhone
       ) {
         PhoneActions.perform(
@@ -703,14 +704,16 @@ struct RowMenu: View {
 enum PhoneActions {
   /// The actions for one conversation, or a selection's. `recordingOnMac` are the conversations connected Macs are
   /// recording now, which Merge… waits for.
-  static func groups(for ids: [UUID], library: LibraryController, recordingOnMac: Set<UUID> = []) -> [ConversationActionGroup] {
+  static func groups(
+    for ids: [UUID], library: LibraryController, recordingOnMac: Set<UUID> = [], placement: PhoneSummaryPlacement? = nil
+  ) -> [ConversationActionGroup] {
     let selected = library.meetings.filter { ids.contains($0.id) }
     guard let only = selected.first, selected.count == 1 else {
       return ConversationActions.batch(
         ids, in: library.meetings, context: .init(platform: .iPhone),
         each: { mergeContext($0, recordingOnMac: recordingOnMac) }, merging: library.mergingIDs)
     }
-    return groups(for: only)
+    return groups(for: only, placement: placement, in: library.meetings)
   }
 
   /// What this iPhone knows of a conversation that Merge… asks: a Mac recording it, this iPhone processing it, and its
@@ -727,12 +730,16 @@ enum PhoneActions {
   }
 
   /// One conversation's actions on this iPhone: Take Photo where there's a camera, Reprocess unless it's waiting.
-  static func groups(for meeting: Meeting) -> [ConversationActionGroup] {
+  static func groups(
+    for meeting: Meeting, placement: PhoneSummaryPlacement? = nil, in meetings: [Meeting] = []
+  ) -> [ConversationActionGroup] {
     ConversationActions.actions(
       for: meeting,
       context: .init(
         platform: .iPhone, status: ProcessingStatus.phone(meeting),
-        canTakePhoto: CameraPicker.isAvailable))
+        canTakePhoto: CameraPicker.isAvailable,
+        summarizeChoices: placement?.summarizeAgainChoices(for: meeting) ?? [],
+        mergeCandidates: ConversationActions.mergeCandidates(for: meeting, in: meetings)))
   }
 
   /// How this iPhone processes a conversation in a mode, from its menus, its status, and Info alike: a summary goes where
@@ -766,7 +773,10 @@ enum PhoneActions {
         }
       },
       copy: { LocalPasteboard.copy($0) },
-      confirm: { session.confirmation = $0 })
+      confirm: { session.confirmation = $0 },
+      summarizeAgain: placement.map { placement in
+        { id, choice in Task { await placement.summarizeAgain(id, as: choice) } }
+      })
     performer.perform(id, on: ids) { meetings in
       guard let first = meetings.first else { return }
       switch id {
@@ -775,13 +785,13 @@ enum PhoneActions {
       case .takePhoto: session.cameraFor = first.id
       case .addPhotos: session.sheet = .importPhotos(first.id)
       case .addRecordingFromFile: session.addRecording(to: first.id)
-      case .share, .reprocess:
+      case .share, .reprocess, .mergeMenu:
         break  // Menus.
       case .export, .exportMarkdown, .exportJSON, .addRecording, .showFloatingNotes, .rename, .showInFinder:
         break  // The Mac's.
       case .play, .adjustTiming, .showOriginalTranscript, .moveToNewConversation, .removeRecording:
         break  // A recording's, in Info.
-      case .copySummary, .process, .versionHistory, .moveToFolder, .tags, .moveTo, .merge, .moveToTrash:
+      case .copySummary, .process, .summarizeAgain, .versionHistory, .moveToFolder, .tags, .moveTo, .merge, .mergeWith, .moveToTrash:
         break  // The library's (`ConversationActionPerformer`).
       }
     }
@@ -875,7 +885,7 @@ private struct SelectionBar: View {
   /// Whether an action is done the moment it's chosen.
   private static func endsSelection(_ id: ConversationAction.ID) -> Bool {
     switch id {
-    case .process, .moveTo: return true
+    case .process, .summarizeAgain, .moveTo: return true
     default: return false
     }
   }

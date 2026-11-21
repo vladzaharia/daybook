@@ -365,7 +365,7 @@ private struct PhoneMergeConfirmation: ViewModifier {
         }
       }
       .alert(
-        LibraryWords.mergeTitle(session.confirmingMerge.count),
+        LibraryWords.mergeTitle(session.confirmingMerge, in: library.meetings),
         isPresented: Binding(
           get: { !session.confirmingMerge.isEmpty }, set: { if !$0 { session.confirmingMerge = [] } })
       ) {

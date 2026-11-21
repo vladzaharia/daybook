@@ -191,6 +191,16 @@ final class ConversationActionPerformerTests: XCTestCase {
         XCTAssertEqual(library.meetings, before, "nothing is merged until the person says so")
     }
 
+    func testBehaviorMergeWithAsksTheMergeQuestionForTheTwoConversations() async throws {
+        let library = try await makeLibrary()
+        let a = conversation("Weekly product sync", in: library), b = conversation("Roadmap review", in: library)
+        let host = Host()
+        let performer = performer(library, undoManager: nil, host: host)
+        performer.perform(.mergeWith(b), on: [a]) { _ in XCTFail("the library's") }
+        performer.perform(.mergeWith(UUID()), on: [a]) { _ in XCTFail("the library's") }
+        XCTAssertEqual(host.shown, [.merge([a, b])], "a conversation that's gone isn't asked about")
+    }
+
     func testBehaviorSummarizeAgainPassesOverThoseWithNothingToSummarize() async throws {
         let library = try await makeLibrary()
         let a = conversation("Weekly product sync", in: library)
@@ -204,13 +214,39 @@ final class ConversationActionPerformerTests: XCTestCase {
         XCTAssertEqual(host.modes, [.summaryOnly, .fullRetranscription, .fullRetranscription])
     }
 
+    func testBehaviorAChosenWayToSummarizeGoesToTheAppAndPassesOverWhatCannotBeSummarized() async throws {
+        let library = try await makeLibrary()
+        let a = conversation("Weekly product sync", in: library)
+        let untranscribed = conversation("Voice memo", in: library, transcribed: false)
+        let choice = SummarizeAgainChoice(place: .cloud(modelID: "claude-sonnet-5-5"), title: "With Claude Sonnet 5.5")
+        let host = Host()
+        var chosen: [(UUID, SummarizeAgainChoice)] = []
+        var performer = performer(library, undoManager: nil, host: host)
+        performer.summarizeAgain = { chosen.append(($0, $1)) }
+        performer.perform(.summarizeAgain(choice), on: [a]) { _ in XCTFail("the library's") }
+        performer.perform(.summarizeAgain(choice), on: [untranscribed]) { _ in XCTFail("the library's") }
+        XCTAssertEqual(chosen.map(\.0), [a])
+        XCTAssertEqual(chosen.first?.1, choice)
+        XCTAssertTrue(host.processed.isEmpty, "the app's way, not the default's")
+    }
+
+    func testBehaviorWithoutAChosenWayHandlerItSummarizesAsThePlainActionDoes() async throws {
+        let library = try await makeLibrary()
+        let a = conversation("Weekly product sync", in: library)
+        let host = Host()
+        performer(library, undoManager: nil, host: host).perform(
+            .summarizeAgain(SummarizeAgainChoice(place: .thisDevice(model: nil), title: "With Gemma")), on: [a]) { _ in XCTFail("the library's") }
+        XCTAssertEqual(host.processed, [a])
+        XCTAssertEqual(host.modes, [.summaryOnly])
+    }
+
     func testBehaviorTheAppsOwnActionsGoToItWithTheConversations() async throws {
         let library = try await makeLibrary()
         let a = conversation("Weekly product sync", in: library), b = conversation("Roadmap review", in: library)
         let theirs = listed([a, b], in: library).filter { !ConversationActionPerformer.carriesOut($0) }
         let expected: Set<ConversationAction.ID> = [.share, .shareMarkdown, .shareJSON, .shareAudio, .export, .exportMarkdown,
                                                     .exportJSON, .showFloatingNotes, .takePhoto, .addPhotos, .addRecording,
-                                                    .addRecordingFromFile, .reprocess, .rename, .showInFinder]
+                                                    .addRecordingFromFile, .reprocess, .mergeMenu, .rename, .showInFinder]
         XCTAssertEqual(Set(theirs), expected)
         for id in theirs {
             let host = Host()

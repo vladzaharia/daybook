@@ -2,8 +2,8 @@ import DaybookCore
 import Foundation
 
 /// One way a conversation's summary can be made again now: on this device with a model, or in the cloud.
-public struct SummarizeAgainChoice: Equatable, Identifiable, Sendable {
-    public enum Place: Equatable, Sendable {
+public struct SummarizeAgainChoice: Hashable, Identifiable, Sendable {
+    public enum Place: Hashable, Sendable {
         /// This device, with the catalog model `model` (nil: the one it has, an iPhone's).
         case thisDevice(model: String?)
         /// The cloud model Settings › Cloud chose.
@@ -21,6 +21,24 @@ public struct SummarizeAgainChoice: Equatable, Identifiable, Sendable {
         switch (place, other.place) {
         case (.thisDevice, .thisDevice), (.cloud, .cloud): return true
         default: return false
+        }
+    }
+
+    /// The glyph that marks where it sends: the cloud's, since the row is the only place that send is chosen; nil for a
+    /// model on this device.
+    public var symbol: String? {
+        if case .cloud = place { return "cloud" }
+        return nil
+    }
+
+    /// Whether this is the model that wrote `summary` (the row the menu checks).
+    public func wrote(_ summary: MeetingSummary?) -> Bool {
+        guard let summary else { return false }
+        switch place {
+        case .cloud(let modelID): return summary.cloudProvenance?.model == modelID
+        case .thisDevice(let model):
+            guard summary.cloudProvenance == nil, let model else { return false }
+            return summary.modelID == model || summary.processingSettings?.model?.variantKey == model
         }
     }
 

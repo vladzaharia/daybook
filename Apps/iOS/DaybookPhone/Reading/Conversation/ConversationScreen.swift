@@ -99,7 +99,7 @@ struct ConversationMoreMenu: View {
     @Environment(\.undoManager) private var undoManager
 
     var body: some View {
-        ConversationActionMenuItems(PhoneActions.groups(for: meeting), platform: .iPhone) { id in
+        ConversationActionMenuItems(PhoneActions.groups(for: meeting, placement: placement, in: library.meetings), platform: .iPhone) { id in
             PhoneActions.perform(id, on: [meeting.id], library: library, session: session, provider: provider,
                                  placement: placement, undoManager: undoManager)
         } custom: { action in

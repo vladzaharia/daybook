@@ -363,7 +363,11 @@ struct TrashDetail: View {
     var body: some View {
         ZStack {
             if let meeting {
-                TrashedConversationPage(meeting: meeting) { MacTrash.restore([meeting.id], state: state) }
+                TrashedConversationPage(
+                    meeting: meeting,
+                    mergedInto: LibraryWords.mergedInto(meeting, in: state.meetings).map { survivor in
+                        (ConversationRowView.title(survivor), { state.showConversation(survivor.id) })
+                    }) { MacTrash.restore([meeting.id], state: state) }
             } else {
                 DaybookPalette.paper
             }
@@ -500,7 +504,9 @@ enum MacActions {
     static func context(_ state: AppState, _ meeting: Meeting) -> ConversationActions.Context {
         let recording = state.recordingID == meeting.id && (state.isRecording || state.isStartingRecording || state.isStoppingRecording)
         return ConversationActions.Context(platform: .mac, isRecording: recording, isProcessingHere: state.processor.queue.runningID == meeting.id,
-                                           status: state.processingStatus(for: meeting))
+                                           status: state.processingStatus(for: meeting),
+                                           summarizeChoices: state.summarizeAgainChoices(for: meeting),
+                                           mergeCandidates: ConversationActions.mergeCandidates(for: meeting, in: state.meetings))
     }
 
     /// How the Mac processes a conversation in a mode, from its menus and its status alike: its queue.
@@ -529,7 +535,8 @@ enum MacActions {
                 }
             },
             copy: { LocalPasteboard.copy($0) },
-            confirm: { state.window.confirmation = $0 })
+            confirm: { state.window.confirmation = $0 },
+            summarizeAgain: { state.summarizeAgain($0, as: $1) })
         performer.perform(id, on: ids) { meetings in
             guard let first = meetings.first else { return }
             switch id {
@@ -543,13 +550,13 @@ enum MacActions {
                 state.focusTitle(first.id)
             case .showInFinder: state.showInFinder(first.id)
             case .shareMarkdown, .shareAudio: window(id, meetings.map(\.id))
-            case .export, .share, .addRecording, .reprocess:
+            case .export, .share, .addRecording, .reprocess, .mergeMenu:
                 break // Menus.
             case .shareJSON, .takePhoto:
                 break // The iPhone's.
             case .play, .adjustTiming, .showOriginalTranscript, .moveToNewConversation, .removeRecording:
                 break // A recording's, in the inspector.
-            case .copySummary, .process, .versionHistory, .moveToFolder, .tags, .moveTo, .merge, .moveToTrash:
+            case .copySummary, .process, .summarizeAgain, .versionHistory, .moveToFolder, .tags, .moveTo, .merge, .mergeWith, .moveToTrash:
                 break // The library's (`ConversationActionPerformer`).
             }
         }

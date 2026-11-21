@@ -33,23 +33,28 @@ public struct ConversationActionPerformer {
     public var copy: @MainActor (String) -> Void
     /// A moment's word over the page (`ConfirmationBeat`).
     public var confirm: @MainActor (ConfirmationBeat) -> Void
+    /// Summarizes a conversation again as a row of Summarize Again's menu chose (`SummarizeAgainChoices`); without one, as the
+    /// plain Summarize Again does.
+    public var summarizeAgain: (@MainActor (UUID, SummarizeAgainChoice) -> Void)?
 
     public init(library: LibraryController, undoManager: UndoManager?,
                 process: @escaping @MainActor (UUID, ProcessingRequest.Mode) -> Void,
                 show: @escaping @MainActor (Request) -> Void,
                 copy: @escaping @MainActor (String) -> Void,
-                confirm: @escaping @MainActor (ConfirmationBeat) -> Void) {
+                confirm: @escaping @MainActor (ConfirmationBeat) -> Void,
+                summarizeAgain: (@MainActor (UUID, SummarizeAgainChoice) -> Void)? = nil) {
         self.library = library; self.undoManager = undoManager
         self.process = process; self.show = show; self.copy = copy; self.confirm = confirm
+        self.summarizeAgain = summarizeAgain
     }
 
     /// Whether the performer carries `id` out; the rest are each app's own.
     public static func carriesOut(_ id: ConversationAction.ID) -> Bool {
         switch id {
-        case .copySummary, .process, .versionHistory, .moveToFolder, .tags, .moveTo, .merge, .moveToTrash:
+        case .copySummary, .process, .summarizeAgain, .versionHistory, .moveToFolder, .tags, .moveTo, .merge, .mergeWith, .moveToTrash:
             return true
         case .share, .shareMarkdown, .shareJSON, .shareAudio, .export, .exportMarkdown, .exportJSON,
-             .showFloatingNotes, .takePhoto, .addPhotos, .addRecording, .addRecordingFromFile, .reprocess,
+             .showFloatingNotes, .takePhoto, .addPhotos, .addRecording, .addRecordingFromFile, .reprocess, .mergeMenu,
              .rename, .showInFinder, .play, .adjustTiming, .showOriginalTranscript, .moveToNewConversation, .removeRecording:
             return false
         }
@@ -68,14 +73,18 @@ public struct ConversationActionPerformer {
         case .process(let mode):
             // A selection's Summarize Again passes over those with no transcript to summarize.
             for meeting in meetings where mode != .summaryOnly || meeting.hasSummarizableContent { process(meeting.id, mode) }
+        case .summarizeAgain(let choice):
+            guard first.hasSummarizableContent else { return }
+            if let summarizeAgain { summarizeAgain(first.id, choice) } else { process(first.id, .summaryOnly) }
         case .versionHistory: show(.versionHistory(first.id))
         case .moveToFolder: show(.moveToFolder(chosen))
         case .tags: show(.tags(chosen))
         case .moveTo(let placement): library.setPlacement(chosen, placement, undoManager: undoManager)
         case .merge: show(.merge(chosen))
+        case .mergeWith(let other): if library.meeting(other) != nil { show(.merge([first.id, other])) }
         case .moveToTrash: show(.moveToTrash(chosen))
         case .share, .shareMarkdown, .shareJSON, .shareAudio, .export, .exportMarkdown, .exportJSON,
-             .showFloatingNotes, .takePhoto, .addPhotos, .addRecording, .addRecordingFromFile, .reprocess,
+             .showFloatingNotes, .takePhoto, .addPhotos, .addRecording, .addRecordingFromFile, .reprocess, .mergeMenu,
              .rename, .showInFinder, .play, .adjustTiming, .showOriginalTranscript, .moveToNewConversation, .removeRecording:
             platform(meetings)
         }

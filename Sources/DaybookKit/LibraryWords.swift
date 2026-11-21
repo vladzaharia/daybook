@@ -96,8 +96,20 @@ extension LibraryWords {
         return title.isEmpty ? "Move this conversation to the Trash?" : "Move “\(title)” to the Trash?"
     }
 
-    /// Merge…'s question: "Merge 3 conversations?".
-    public static func mergeTitle(_ count: Int) -> String { "Merge \(count) conversations?" }
+    /// Merge…'s question, naming the conversation that stays (the earliest, whose title wins): "Merge 3 conversations into
+    /// “Weekly sync”?". Without a title to name, "Merge 3 conversations?".
+    public static func mergeTitle(_ ids: [UUID], in meetings: [Meeting]) -> String {
+        let selected = ConversationMerge.ordered(meetings.filter { ids.contains($0.id) })
+        let title = selected.first?.title.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let count = Set(ids).count
+        return title.isEmpty ? "Merge \(count) conversations?" : "Merge \(count) conversations into “\(title)”?"
+    }
+    /// The conversation a merged-away one in the Trash went into: the one in `meetings` that has folded it in.
+    public static func mergedInto(_ trashed: Meeting, in meetings: [Meeting]) -> Meeting? {
+        meetings.first { $0.id != trashed.id && ConversationMerge.hasFolded(trashed.id, into: $0) }
+    }
+    /// A merged-away conversation's status in the Trash, with Show: "Merged into “Weekly sync”".
+    public static func mergedInto(_ title: String) -> String { "Merged into “\(title)”" }
     /// Beneath it, what it costs.
-    public static let mergeMessage = "This can’t be undone."
+    public static let mergeMessage = "Their summaries are written again from the whole. This can’t be undone."
 }

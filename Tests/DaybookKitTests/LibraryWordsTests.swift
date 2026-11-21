@@ -78,4 +78,26 @@ final class LibraryWordsTests: XCTestCase {
                                      caption: "Whiteboard")
         XCTAssertEqual(meeting.photoAccessibilityLabel(captioned), "Photo: Whiteboard")
     }
+
+    func testMergeNamesTheConversationThatStaysAndSaysTheSummariesAreWrittenAgain() {
+        var earlier = Meeting(title: "Weekly sync"), later = Meeting(title: "Roadmap review"), third = Meeting(title: "Notes")
+        earlier.date = Date(timeIntervalSince1970: 1_000)
+        later.date = Date(timeIntervalSince1970: 2_000)
+        third.date = Date(timeIntervalSince1970: 3_000)
+        let all = [third, later, earlier]
+        XCTAssertEqual(LibraryWords.mergeTitle(all.map(\.id), in: all), "Merge 3 conversations into “Weekly sync”?")
+        XCTAssertEqual(LibraryWords.mergeTitle([later.id, third.id], in: all), "Merge 2 conversations into “Roadmap review”?")
+        earlier.title = "  "
+        XCTAssertEqual(LibraryWords.mergeTitle([earlier.id, later.id], in: [earlier, later]), "Merge 2 conversations?", "no title to name")
+        XCTAssertEqual(LibraryWords.mergeMessage, "Their summaries are written again from the whole. This can’t be undone.")
+    }
+
+    func testAMergedAwayConversationFindsTheOneItWentInto() {
+        var survivor = Meeting(title: "Weekly sync")
+        let folded = Meeting(title: "Roadmap review"), other = Meeting(title: "Other")
+        survivor.revisions = [MeetingRevision(field: ConversationMerge.revisionField(folded.id).rawValue, oldValue: "", newValue: "Merged")]
+        XCTAssertEqual(LibraryWords.mergedInto(folded, in: [other, survivor, folded])?.id, survivor.id)
+        XCTAssertNil(LibraryWords.mergedInto(other, in: [other, survivor, folded]))
+        XCTAssertEqual(LibraryWords.mergedInto("Weekly sync"), "Merged into “Weekly sync”")
+    }
 }

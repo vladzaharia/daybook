@@ -75,7 +75,14 @@ struct TrashedPage: View {
     var body: some View {
         ZStack {
             if let meeting {
-                TrashedConversationPage(meeting: meeting) { TrashList.restore(meeting.id, library: library, session: session) }
+                TrashedConversationPage(
+                    meeting: meeting,
+                    mergedInto: LibraryWords.mergedInto(meeting, in: library.meetings).map { survivor in
+                        (ConversationRowView.title(survivor), {
+                            session.place = .library(.section(.all))
+                            session.open(survivor.id)
+                        })
+                    }) { TrashList.restore(meeting.id, library: library, session: session) }
             } else {
                 DaybookPalette.paper.ignoresSafeArea()
             }

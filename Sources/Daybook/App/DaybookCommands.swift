@@ -1,6 +1,7 @@
 import AppKit
 import DaybookCore
 import DaybookKit
+import DaybookUI
 import SwiftUI
 
 /// The menu bar, one `Commands` per menu. Every toolbar and context-menu action has a home here, and items that don't
@@ -202,6 +203,24 @@ private struct ConversationCommands: Commands {
     /// Several conversations the library window's list selects, for Merge….
     @FocusedValue(\.selectedConversations) private var selected
 
+    /// Reprocess's modes other than Transcribe, as `ConversationActions` lists them, dimmed together while Reprocess waits. Without a
+    /// conversation they're dimmed too.
+    private func reprocessGroups(_ meeting: Meeting?) -> [ConversationActionGroup] {
+        guard let meeting,
+              let reprocess = ConversationActions.actions(for: meeting, context: MeetingInspector.context(state, meeting))
+                  .flatMap(\.actions).first(where: { $0.id == .reprocess }) else {
+            return [ConversationActionGroup(id: .reprocess, actions: [
+                ConversationAction(id: .process(.summaryOnly), title: "Summarize Again", symbol: "text.alignleft", availability: .unavailable("No conversation")),
+            ])]
+        }
+        let modes = reprocess.children.filter { $0.id != .process(.newAudio) }.map { mode in
+            var mode = mode
+            if !reprocess.isAvailable { mode.availability = reprocess.availability }
+            return mode
+        }
+        return [ConversationActionGroup(id: .reprocess, actions: modes)]
+    }
+
     var body: some Commands {
         let meeting = state.shownMeeting(shownID)
         let locked = meeting.map { state.isBusy($0.id) } ?? true
@@ -216,10 +235,11 @@ private struct ConversationCommands: Commands {
                     .disabled(meeting?.hasUntranscribedAudio != true || locked || queued)
             }
             Divider()
-            ForEach([ProcessingRequest.Mode.summaryOnly, .speakerRefresh, .newAudio, .fullRetranscription]) { mode in
-                Button(mode.title) { if let id = meeting?.id { state.processor.enqueue(id, mode: mode) } }
-                    .disabled(meeting?.tracks.isEmpty != false || locked || queued)
-            }
+            // Reprocess's modes as the More menu lists them (`ConversationActions`); Transcribe above is the new audio's.
+            ConversationActionMenuItems(reprocessGroups(meeting), platform: .mac,
+                                        perform: { id in
+                                            if let meeting { MacActions.perform(id, on: [meeting.id], state: state, undoManager: nil) { _, _ in } }
+                                        })
             Menu("Template") {
                 if let meeting { TemplateMenuItems(state: state, meetingID: meeting.id) }
             }

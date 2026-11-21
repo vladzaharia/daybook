@@ -51,7 +51,9 @@ switch is on (above). Within it:
 - **Use the Cloud**, an Upgrade to the cloud's model, and **Always**, as before.
 - **Summarize Again with the cloud's model.** Summarize Again on the page's foot is a menu when there is more than one way
   to redo the summary (`SummarizeAgainChoices`): this device's installed summary models that fit (the chosen one first),
-  then the cloud's model, "With Claude Sonnet 5.5". Rows that don't hold are absent.
+  then the cloud's model, "With Claude Sonnet 5.5". Rows that don't hold are absent. The same menu is Reprocess ▸ Summarize Again
+  in More, a row's menu, Conversation ›, and Info (`ConversationActions`; a selection's stays plain); the cloud's row carries the
+  cloud glyph, and the row of the model that wrote the current summary is checked.
   - **A model of this device's runs on this device, always.** Not under Always, and not after a failure: the Mac queues it
     as Summarize on This Mac is (`summarizesHere`), the iPhone keeps it here (`keptHere`, `beginHere`). On the Mac, another
     model than Settings' is for that job only; Settings keeps its choice. If that model goes while the job waits in the
