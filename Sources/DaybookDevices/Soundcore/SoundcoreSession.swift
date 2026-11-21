@@ -111,12 +111,19 @@ public final class SoundcoreSession {
         /// Paging stopped at a page the recorder refused, rather than at one with nothing new.
         /// Whether firmware ends its list that way is unverified, so it's only reported.
         public var endedOnRefusal = false
+        /// Paging stopped at a later page that couldn't be read; what was read before it is kept.
+        public var endedOnUnreadablePage = false
+        /// The first page that wasn't the documented shape, as a line (`SoundcoreRecording.ListPage.shape`).
+        public var replyShape: String?
 
-        public init(recordings: [SoundcoreRecording], activeRecordingID: UInt32? = nil, pages: Int = 1, endedOnRefusal: Bool = false) {
+        public init(recordings: [SoundcoreRecording], activeRecordingID: UInt32? = nil, pages: Int = 1, endedOnRefusal: Bool = false,
+                    endedOnUnreadablePage: Bool = false, replyShape: String? = nil) {
             self.recordings = recordings
             self.activeRecordingID = activeRecordingID
             self.pages = pages
             self.endedOnRefusal = endedOnRefusal
+            self.endedOnUnreadablePage = endedOnUnreadablePage
+            self.replyShape = replyShape
         }
     }
 
@@ -651,6 +658,8 @@ public final class SoundcoreSession {
     private static func page(_ number: UInt16) -> Data { Data([UInt8(number & 255), UInt8(number >> 8)]) }
 
     private var listingType: UInt8 = 0x1b
+    /// The first page of the last listing, when it couldn't be read (the list then failed).
+    public private(set) var unreadableListReply: String?
 
     private func firstPageLocked() async throws -> Listing {
         var first = try await request(listingType, 0x0e, Self.page(0), matching: Self.isListing)
@@ -661,11 +670,16 @@ public final class SoundcoreSession {
             if first.succeeded { listingType = 0x1a }
         }
         guard first.succeeded else { throw SoundcoreError.rejected }
-        let page = try SoundcoreRecording.page(first)
-        return Listing(recordings: page.recordings, activeRecordingID: page.active)
+        let page = SoundcoreRecording.read(first)
+        guard page.isValid else {
+            unreadableListReply = "page 1: " + page.shape
+            throw SoundcoreError.invalidPacket
+        }
+        return Listing(recordings: page.recordings, activeRecordingID: page.active, replyShape: page.isOdd ? "page 1: " + page.shape : nil)
     }
 
     private func listLocked() async throws -> Listing {
+        unreadableListReply = nil
         var listing = try await firstPageLocked()
         var seen = Set<UInt32>()
         listing.recordings = listing.recordings.filter { seen.insert($0.id).inserted }
@@ -675,7 +689,11 @@ public final class SoundcoreSession {
             number += 1
             let packet = try await request(listingType, 0x0e, Self.page(number), matching: Self.isListing)
             guard packet.succeeded else { listing.endedOnRefusal = true; break }
-            fresh = try SoundcoreRecording.page(packet).recordings.filter { seen.insert($0.id).inserted }
+            let page = SoundcoreRecording.read(packet)
+            if page.isOdd, listing.replyShape == nil { listing.replyShape = "page \(number + 1): " + page.shape }
+            // A later page that can't be read ends the listing with what was read before it.
+            guard page.isValid else { listing.endedOnUnreadablePage = true; break }
+            fresh = page.recordings.filter { seen.insert($0.id).inserted }
             if !fresh.isEmpty { listing.pages += 1 }
             listing.recordings += fresh
         }
