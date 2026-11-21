@@ -58,7 +58,14 @@ public struct ConversationRowView: View {
                     .foregroundStyle(hidden ? secondary : onPaper ? AnyShapeStyle(DaybookPalette.Ink.title) : AnyShapeStyle(.primary))
                     .lineLimit(large ? 3 : 1)
                 Spacer(minLength: 4)
-                RowGlyph(kind: shownKind, fraction: status?.fraction ?? 0)
+                if hidden {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(DaybookPalette.Ink.meta)
+                        .accessibilityHidden(true)
+                } else {
+                    RowGlyph(kind: shownKind, fraction: status?.fraction ?? 0)
+                }
             }
             detailLine
                 .font(DaybookFont.rowDetail.font(density))
@@ -120,7 +127,7 @@ public struct ConversationRowView: View {
             : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 6))
         return layout {
             Text(timeLabel)
-                .foregroundStyle(onPaper ? AnyShapeStyle(DaybookPalette.Ink.body) : AnyShapeStyle(.primary))
+                .foregroundStyle(hidden ? secondary : onPaper ? AnyShapeStyle(DaybookPalette.Ink.body) : AnyShapeStyle(.primary))
                 .monospacedDigit()
                 .lineLimit(1)
                 .layoutPriority(1)
@@ -144,7 +151,7 @@ public struct ConversationRowView: View {
         let lines = Self.previewLines(density, accessibilitySize: dynamicType.isAccessibilitySize, wideList: listIsWide)
         // A window's rows keep the gist's lines whatever they hold, so the column reads as an even index.
         let reserves = density == .window
-        if let status, let until = status.countdownUntil {
+        if !hidden, let status, let until = status.countdownUntil {
             // A summary's countdown, a second at a time, on the deadline's own phase: the list's subtitle counting
             // down to the same moment says the same number.
             TimelineView(.countdown(to: until)) { context in
@@ -154,7 +161,8 @@ public struct ConversationRowView: View {
                     .lineLimit(reserves ? lines : 1, reservesSpace: reserves)
             }
         } else {
-            Text(status?.text ?? (hidden ? "" : RowPreview.text(for: meeting)))
+            // Locked, a row says nothing of what's happening to it.
+            Text(hidden ? "" : status?.text ?? RowPreview.text(for: meeting))
                 .foregroundStyle(secondary)
                 .lineLimit(lines, reservesSpace: reserves)
                 .contentTransition(.opacity)
@@ -267,6 +275,10 @@ public struct RowGlyph: View {
 
     @ViewBuilder private var glyph: some View {
         switch kind {
+        case .processing? where fraction <= 0 && density != .touch:
+            // No figure to report (a cloud summary, work just begun): a line would read as a lone dot.
+            ProgressView().controlSize(.mini)
+                .frame(minWidth: sizes.slot)
         case .processing?:
             // One moving neon line says "working" in the densest surface, without words.
             WorkProgress(fraction: fraction, style: .line, width: sizes.line)

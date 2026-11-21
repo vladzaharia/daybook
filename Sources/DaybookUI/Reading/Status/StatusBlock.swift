@@ -86,6 +86,8 @@ public struct StatusBlock: View {
         }
         .daybookFont(.status)
         .frame(maxWidth: .infinity, alignment: .leading)
+        // In a window the glyph hangs in the margin, so the words start where the title does.
+        .padding(.leading, touch ? 0 : -(glyphColumn + gap))
     }
 
     private var lineWords: some View {
@@ -118,7 +120,7 @@ public struct StatusBlock: View {
         }
         .padding(DaybookSpacing.s3)
         // In a window the box is as wide as what it says, up to its column; under touch it spans the column.
-        .frame(maxWidth: AttentionBoxLayout.hugs(density) ? nil : .infinity, alignment: .leading)
+        .frame(maxWidth: AttentionBoxLayout.hugs(density) && presentation.detail == nil ? nil : .infinity, alignment: .leading)
         .background(AttentionBoxLayout.wash(for: kind).color, in: DaybookRadius.shape(DaybookRadius.box))
         .overlay {
             if contrast == .increased {
@@ -142,7 +144,17 @@ public struct StatusBlock: View {
             .font(touch ? DaybookFont.statusLead.font(.touch) : .system(size: 14))
             .frame(width: glyphColumn)
             .accessibilityHidden(true)
-            if beside {
+            if beside && !touch {
+                // In a window the actions share the title's line and the message runs under both, at the box's width.
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(alignment: .firstTextBaseline, spacing: AttentionBoxLayout.actionGap(density)) {
+                        boxTitle(kind, oneLine: true)
+                        actions(prominent: true, wraps: false).fixedSize()
+                    }
+                    boxMessage(kind, oneLine: true)
+                }
+                .layoutPriority(1)
+            } else if beside {
                 HStack(alignment: .firstTextBaseline, spacing: AttentionBoxLayout.actionGap(density)) {
                     boxWords(kind, oneLineTitle: !touch)
                         .layoutPriority(1)
@@ -163,20 +175,28 @@ public struct StatusBlock: View {
     /// more, so only the title decides whether the actions fit beside it.
     private func boxWords(_ kind: AttentionKind, oneLineTitle: Bool) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            StatusTitle(presentation: presentation)
-                .daybookFont(.statusLead)
-                .foregroundStyle(AttentionBoxLayout.title(for: kind).ink.color)
-                .fixedSize(horizontal: oneLineTitle, vertical: true)
-            if let detail = presentation.detail {
-                NoIdealWidth(when: oneLineTitle) {
-                    Text(detail)
-                        .daybookFont(.status)
-                        .foregroundStyle(AttentionBoxLayout.message(for: kind).ink.color)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
+            boxTitle(kind, oneLine: oneLineTitle)
+            boxMessage(kind, oneLine: oneLineTitle)
         }
         .accessibilityElement(children: .combine)
+    }
+
+    private func boxTitle(_ kind: AttentionKind, oneLine: Bool) -> some View {
+        StatusTitle(presentation: presentation)
+            .daybookFont(.statusLead)
+            .foregroundStyle(AttentionBoxLayout.title(for: kind).ink.color)
+            .fixedSize(horizontal: oneLine, vertical: true)
+    }
+
+    @ViewBuilder private func boxMessage(_ kind: AttentionKind, oneLine: Bool) -> some View {
+        if let detail = presentation.detail {
+            NoIdealWidth(when: oneLine) {
+                Text(detail)
+                    .daybookFont(.status)
+                    .foregroundStyle(AttentionBoxLayout.message(for: kind).ink.color)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 
     // MARK: Actions
