@@ -4831,3 +4831,17 @@ Changed: a countdown that ends in the cloud names the model on the list row, the
 Checked by unit tests: the words for each surface (`SummaryPlacementWordsTests`, `ConversationStatusPresentationTests`, `RecorderSurfaceTests`, `FloatingNotesStatusTests`).
 
 Not checked: Cancel against a live queue beyond the fake-engine tests (`CancelStartedWorkTests`: running own, running with a request, paused own, paused with another device's request, paused with this Mac's request); an iPhone still being told "paused" when a Mac's own job is cancelled; Undo for the chip menu's actions; the iPhone's own work has no Cancel yet; the chip menu on a real Mac; the notices on a real iPhone arrival or launch recovery.
+
+## 2026-11-20: Mac settings, library, devices (UX pass)
+
+Verified (unit tests, temporary libraries, synthetic audio; no models, no recording, no network):
+- Settings search keywords (`SettingsSearchTests`), the empty places of Work and Personal, the search prompt, the Trash
+  question's wording (`LibraryPlaceWordsTests`, `LibraryWordsTests`), the import notice's wording and an import that goes
+  on past a file that isn't audio, with an alert only when nothing imported (`ImportSidecarTests`), the menu bar's
+  "Saved · 18 min" (`MenuBarStatusTests`), and the Mac intents' spoken lines (`SystemEntryPointsTests`).
+- The Mac settings page order was read against the code; "Open at login" now comes from one constant (`WelcomeWords`).
+
+Not verified: Settings panes and the menu bar were not captured (see the PR), Device Details' Copy on a real recorder
+(the report is the iPhone's text under a Mac first line), the open Floating Notes chip menu's Manage Storage… (it opens
+Settings › Library, where Storage is a row; the Storage sheet itself belongs to another branch), and the partial-import
+notice has no Details… (a notice has none; the alert keeps it when nothing imported).

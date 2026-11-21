@@ -78,7 +78,7 @@ public enum SettingsWords {
     }
 
     /// The switch for conversations not filed yet.
-    public static let notFiled = "Not filed"
+    public static let notFiled = "Not in Work or Personal"
 
     /// The heading over those switches.
     public static let cloudPlacements = "Use the cloud for"

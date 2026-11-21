@@ -38,6 +38,7 @@ struct LibraryView: View {
     /// in a window as wide as the screen (`ColumnFit.inspectorFits`).
     @State private var screenWidth: CGFloat?
     @State private var problemDetails: AppProblem?
+    @State private var tagging: ConversationIDs?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var shareAnchor = SharingAnchor.Holder()
     @FocusState private var searchFocused: Bool
@@ -154,6 +155,9 @@ struct LibraryView: View {
         .onChange(of: state.window.pageMode) { _, mode in if restored { storedPage = mode.rawValue } }
         .onChange(of: state.window.pageSpreadChosen) { _, chosen in if restored { storedSpread = chosen } }
         .sheet(item: Bindable(state.window).sheet) { sheet in ConversationSheet(state: state, sheet: sheet) }
+        .sheet(item: $tagging) { request in
+            ConversationTagsChooser(library: state.library, ids: request.ids) { tagging = nil }
+        }
         .sheet(item: $state.addDeviceRequest) { request in AddDeviceSheet(state: state, request: request) }
         .sheet(item: Bindable(state.launchCheck).offer) { offer in LibraryMoveSheet(state: state, offer: offer) }
         .alert(trashTitle, isPresented: Binding(get: { !state.window.confirmingTrash.isEmpty }, set: { if !$0 { state.window.confirmingTrash = [] } })) {
@@ -164,8 +168,7 @@ struct LibraryView: View {
             }
             Button("Cancel", role: .cancel) { state.window.confirmingTrash = [] }
         } message: {
-            Text(state.window.confirmingTrash.count > 1 ? "Their audio, notes, and summaries go with them."
-                 : "Its audio, notes, and summary go with it.")
+            Text(LibraryWords.trashMessage(count: state.window.confirmingTrash.count))
         }
         .modifier(MacMergeConfirmation(state: state))
         .alert(state.shownProblem?.title ?? "", isPresented: Binding(get: { state.shownProblem != nil }, set: { if !$0 { state.dismissProblem() } }),
@@ -386,11 +389,11 @@ struct LibraryView: View {
         state.window.pageSpreadChosen = storedSpread
     }
 
-    /// Share and Tags… from More: what needs the window.
+    /// Share and Tags… from More: what needs the window. Tags… opens the chooser over the page, as a row's does.
     private func windowAction(_ id: ConversationAction.ID, _ meeting: Meeting) {
         switch id {
         case .tags:
-            state.showInspector()
+            tagging = ConversationIDs(ids: [meeting.id])
         default:
             MacShare.share(id, meeting: meeting, state: state, anchor: shareAnchor)
         }
@@ -619,7 +622,7 @@ private struct RecordingPill: View {
         }
         .buttonStyle(DaybookControlStyle(role: .stop, shape: .capsule))
         .help("Stop Recording (⇧⌘R)")
-        .accessibilityLabel("Stop recording")
+        .accessibilityLabel("Stop")
         .onAppear { appeared = true }
     }
 }
@@ -668,7 +671,7 @@ private struct EmptyLibraryView: View {
         .background(DaybookPalette.paper)
         .overlay { if isDropTargeted { DropOutline(label: "Import Audio") } }
         .dropDestination(for: URL.self) { urls, _ in
-            Task { do { try await state.importFiles(urls, source: .imported, attachTo: nil) } catch { state.report("Couldn’t Import Audio", "Choose an audio or video file and try again.", error) } }
+            Task { await state.importRecordings(urls) }
             return !urls.isEmpty
         } isTargeted: { isDropTargeted = $0 }
     }
@@ -732,7 +735,7 @@ private struct AddRecordingDrop: ViewModifier {
             .dropDestination(for: URL.self) { urls, _ in
                 let audio = AppState.droppedRecordings(urls)
                 guard !audio.isEmpty, state.recordingID != meeting.id else { return false }
-                Task { do { try await state.importFiles(audio, source: .imported, attachTo: meeting.id) } catch { state.report("Couldn’t Import Audio", "Choose an audio or video file and try again.", error) } }
+                Task { await state.importRecordings(audio, attachTo: meeting.id) }
                 return true
             } isTargeted: { targeted = $0 }
     }
