@@ -4846,6 +4846,12 @@ Not verified: Settings panes and the menu bar were not captured (see the PR), De
 Settings › Library, where Storage is a row; the Storage sheet itself belongs to another branch), and the partial-import
 notice has no Details… (a notice has none; the alert keeps it when nothing imported).
 
+## 2026-11-20: Apple Watch recorder states (REC-01, REC-02, REC-06, REC-07, REC-14, FR-02)
+
+Added `WatchWords` (the status line, microphone words, notice text, the held clock) with `WatchWordsTests`. The watch app: failure haptic and a "Recording stopped" notice for a recording that ends on its own, a directional haptic and a "Recording paused" notice for an interruption, Resume (red dot) with a small Stop while paused, "Couldn’t resume" when it fails, the clock held while paused, "Starting…" with the button dimmed during the microphone prompt, "On Watch" / "With iPhone" / "Sends later" / "Waiting for iPhone", and "Microphone is off" over where to turn it on (the iPhone says "Turn on the microphone for Daybook on your Apple Watch.").
+
+Checked: `swift test --filter WatchWordsTests`; the watch app compiles for the simulator (`scripts/build-ios.sh`). Not checked: a real watch (haptics, notices being delivered with the wrist down, the notification prompt), a real interruption or full storage, the Settings path wording on watchOS. Bookmark and the after-Stop moment (REC-03, REC-04) are not part of this.
+
 ## 2026-11-20: Reprocessing and merge (UX pass)
 
 Summarize Again is one menu wherever Reprocess is (`ConversationActions.reprocess`, fed `Context.summarizeChoices`): More, a row's menu, Conversation ›, Info › Processing, and the iPhone's equivalents; with one way to summarize it stays a plain item, and a selection's stays plain. The cloud's row carries the cloud glyph and the row of the model that wrote the summary is checked (also at the page's foot). A local row still runs through `summarizeAgain` (never the cloud), the cloud row only while the resolved model matches and the placement allows it; Offer First is untouched. Conversation › lists Reprocess's modes from `ConversationActions` (no second Transcribe New Audio, dimmed together while Reprocess waits), and a notes-only conversation can Summarize Again from Reprocess. Merge asks "Merge 3 conversations into “Weekly sync”?" with what is redone, Merge with ▸ lists the day's and the day before's conversations, and a merged-away conversation in the Trash says "Merged into “…”" with Show.
