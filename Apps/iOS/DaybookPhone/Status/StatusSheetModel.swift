@@ -110,9 +110,9 @@ enum StatusSheetModel {
     }
 
     /// The audio kept on this iPhone, as Settings › Storage's row says it: downloads and recordings
-    /// made here together, so not "downloaded".
-    static func audioOnThisIPhone(bytes: UInt64) -> String {
-        bytes == 0 ? "No audio on this iPhone" : "\(ByteCountFormatter.string(fromByteCount: Int64(clamping: bytes), countStyle: .file)) of audio"
+    /// made here together, so not "downloaded". Nil at zero: audio that went back to iCloud isn't a loss to report.
+    static func audioOnThisIPhone(bytes: UInt64) -> String? {
+        bytes == 0 ? nil : "Audio · \(ByteCountFormatter.string(fromByteCount: Int64(clamping: bytes), countStyle: .file))"
     }
 
     // MARK: Where a line leads

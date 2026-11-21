@@ -438,7 +438,7 @@ final class SyncServicesTests: XCTestCase {
         launch.release()
         try await waitUntil("what's here is measured") { audio.report != nil }
         XCTAssertEqual(audio.usage.bytes, 0)
-        XCTAssertEqual(StatusSheetModel.audioOnThisIPhone(bytes: audio.usage.bytes), "No audio on this iPhone")
+        XCTAssertNil(StatusSheetModel.audioOnThisIPhone(bytes: audio.usage.bytes))
 
         // A recording made here: it's counted, without anyone asking, and said as audio on this iPhone.
         let phone = PhoneRig(library: library, sync: sync, audio: audio)
@@ -448,7 +448,7 @@ final class SyncServicesTests: XCTestCase {
         XCTAssertGreaterThan(size, 0)
         try await waitUntil("the new recording is counted") { audio.usage.bytes >= size }
         XCTAssertEqual(audio.usage.downloadedBytes, 0, "nothing downloads without sync")
-        XCTAssertNotEqual(StatusSheetModel.audioOnThisIPhone(bytes: audio.usage.bytes), "No audio on this iPhone")
+        XCTAssertNotNil(StatusSheetModel.audioOnThisIPhone(bytes: audio.usage.bytes))
         let report = try XCTUnwrap(audio.report)
         XCTAssertEqual(UInt64(report.audio), audio.usage.bytes)
         XCTAssertNil(report.downloadedAudio, "downloads aren't told apart without sync")

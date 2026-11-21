@@ -762,7 +762,8 @@ enum StatusSheetInputs {
   static func pauseReason(_ pause: PhoneProcessor.Pause) -> ProcessingWords.PauseReason {
     switch pause {
     case .recording: return .recording
-    case .background, .locked: return .background
+    case .background: return .background
+    case .locked: return .locked
     case .heat: return .heat
     case .lowPowerMode: return .lowPowerMode
     case .lowBattery: return .lowBattery
@@ -1272,6 +1273,13 @@ private struct StatusThisIPhone: View {
   @Environment(PhoneAppModel.self) private var model
 
   var body: some View {
+    let audio = StatusSheetModel.audioOnThisIPhone(bytes: model.audio.usage.bytes)
+    if !entries.isEmpty || audio != nil {
+      group(audio: audio)
+    }
+  }
+
+  private func group(audio: String?) -> some View {
     StatusGroup(title: "This iPhone") {
       StatusCard {
         ForEach(entries) { entry in
@@ -1281,6 +1289,7 @@ private struct StatusThisIPhone: View {
           )
           .statusRowAtCardEdge()
         }
+        if let audio {
         Button {
           open(.storage)
         } label: {
@@ -1288,7 +1297,7 @@ private struct StatusThisIPhone: View {
             DaybookTile(symbol: "iphone", size: .card)
           } content: {
             HStack(spacing: DaybookSpacing.s2) {
-              Text(StatusSheetModel.audioOnThisIPhone(bytes: model.audio.usage.bytes))
+              Text(audio)
                 .font(.subheadline)
                 .foregroundStyle(DaybookPalette.Ink.title)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1299,6 +1308,7 @@ private struct StatusThisIPhone: View {
         }
         .buttonStyle(StatusRowButtonStyle())
         .accessibilityHint("Shows storage")
+        }
       }
     }
   }

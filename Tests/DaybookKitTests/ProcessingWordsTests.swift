@@ -54,6 +54,7 @@ final class ProcessingWordsTests: XCTestCase {
     func testBehaviorAPauseSaysWhenItGoesOn() {
         XCTAssertEqual(ProcessingWords.pausedLine(.recording), "Continues after the recording")
         XCTAssertEqual(ProcessingWords.pausedLine(.background), "Continues when Daybook is open")
+        XCTAssertEqual(ProcessingWords.pausedLine(.locked), "Continues when iPhone is unlocked")
         XCTAssertEqual(ProcessingWords.pausedLine(.heat), "Continues when iPhone cools down")
         XCTAssertEqual(ProcessingWords.pausedLine(.lowPowerMode), "Continues when Low Power Mode is off")
         XCTAssertEqual(ProcessingWords.pausedLine(.lowBattery, device: "iPhone"), "Continues when iPhone is charging")

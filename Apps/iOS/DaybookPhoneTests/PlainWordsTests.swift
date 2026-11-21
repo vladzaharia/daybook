@@ -100,7 +100,7 @@ final class PlainWordsTests: XCTestCase {
 
     func testDaybooksOwnErrorsAreShownAndTheSystemsGoBehindDetails() {
         let offline = ProblemWords(fallback: "Try again.", error: AudioProvidingError.offline)
-        XCTAssertEqual(offline.message, "The audio isn’t on this iPhone yet. It downloads when you’re online.")
+        XCTAssertEqual(offline.message, "Not on this iPhone")
         XCTAssertNil(offline.details)
 
         let system = ProblemWords(fallback: "The audio couldn’t be prepared. Try again.", error: CocoaError(.fileWriteOutOfSpace))

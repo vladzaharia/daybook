@@ -6,11 +6,16 @@ import SwiftUI
 public struct ConfirmationBeat: Equatable, Identifiable, Sendable {
     public let id: UUID
     public let words: String
+    /// "Show", for a beat that leads somewhere (Restore's): a button beside the words.
+    public let show: (@MainActor @Sendable () -> Void)?
 
-    public init(_ words: String) {
+    public init(_ words: String, show: (@MainActor @Sendable () -> Void)? = nil) {
         id = UUID()
         self.words = words
+        self.show = show
     }
+
+    public static func == (lhs: ConfirmationBeat, rhs: ConfirmationBeat) -> Bool { lhs.id == rhs.id }
 
     /// Copy Summary's, on both apps.
     public static var copied: ConfirmationBeat { ConfirmationBeat("Copied") }
@@ -47,6 +52,13 @@ private struct ConfirmationBeatOverlay: ViewModifier {
                         DoneMark()
                         Text(beat.words)
                             .foregroundStyle(DaybookPalette.Ink.title)
+                        if let show = beat.show {
+                            Button("Show") {
+                                self.beat = nil
+                                show()
+                            }
+                            .buttonStyle(.daybookLink)
+                        }
                     }
                     .font(density == .touch ? .subheadline.weight(.semibold) : .system(size: 12, weight: .semibold))
                     .padding(.horizontal, 12).padding(.vertical, density == .touch ? 8 : 5)
@@ -54,8 +66,8 @@ private struct ConfirmationBeatOverlay: ViewModifier {
                     .padding(.top, DaybookSpacing.s3)
                     .id(beat.id)
                     .daybookTransition(.move(edge: .top).combined(with: .opacity))
-                    .accessibilityElement(children: .combine)
-                    .allowsHitTesting(false)
+                    .accessibilityElement(children: beat.show == nil ? .combine : .contain)
+                    .allowsHitTesting(beat.show != nil)
                 }
             }
             .animation(DaybookMotion.resolved(DaybookMotion.fade, reduceMotion: reduceMotion), value: beat?.id)
