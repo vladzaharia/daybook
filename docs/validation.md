@@ -4846,6 +4846,12 @@ Not verified: Settings panes and the menu bar were not captured (see the PR), De
 Settings › Library, where Storage is a row; the Storage sheet itself belongs to another branch), and the partial-import
 notice has no Details… (a notice has none; the alert keeps it when nothing imported).
 
+## 2026-11-20: Visual fixes on Mac Settings, setup and device pages (UX pass)
+
+Verified: the ad hoc debug build (`scripts/build-app.sh --debug --ad-hoc`, scratch libraries, the demo flags the screenshots used) was captured with `screencapture -l` beside each original: the recorder page's action tiles on the figures' columns, the problem box spanning the measure, Recent imports' titles in row type, Enter Recovery Key's field and the recovery key row, Settings' one switch size, the Library groups and footers, Recording's info button and status dot, Cloud's Quality groups, Models › Transcription's Download beside its size, Welcome's dividers, Settings › Devices' empty row, and the sheets' widths. `testActionTilesFallToTheFiguresColumnsAtTheSameWidths` holds the tiles' column count to the figures' widths.
+
+Not verified: the footer inset on macOS 15 and 26 (the Mac's extra 10 pt is kept there; only macOS 27 drops it), the iPhone's recovery key row and Recent imports after the shared-code changes beyond a simulator build, the live captions' speaker lane with real live speakers (only the layout was read), and a window that is key (every capture is of an inactive window). DS-07 (one toolbar height in Settings) is left for the owner to see first.
+
 
 ## 2026-11-20: Apple Watch recorder states (REC-01, REC-02, REC-06, REC-07, REC-14, FR-02)
 

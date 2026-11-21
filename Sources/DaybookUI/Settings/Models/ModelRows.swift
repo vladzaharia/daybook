@@ -76,11 +76,10 @@ public struct ModelRoleRow: View {
         HStack(alignment: .center, spacing: DaybookSpacing.s2) {
             VStack(alignment: .leading, spacing: 2) {
                 if let label { Text(label) }
-                status(barWidth: 160)
+                status(barWidth: 160, actionBeside: true)
             }
             .layoutPriority(1)
             Spacer(minLength: DaybookSpacing.s2)
-            action
             picker
         }
     }
@@ -105,21 +104,32 @@ public struct ModelRoleRow: View {
     private var lineFont: Font { density == .touch ? .footnote : .subheadline }
 
     /// The state under the label or name, the bar while it downloads, and the checkmark once it's done.
-    @ViewBuilder private func status(barWidth: CGFloat?) -> some View {
+    /// With `actionBeside`, Download or Cancel follows the size or the bar instead of sitting before the pop-up, so the
+    /// pop-ups stay flush right.
+    @ViewBuilder private func status(barWidth: CGFloat?, actionBeside: Bool = false) -> some View {
+        let transferring = choice.status?.isTransferring ?? false
         if justDownloaded {
             ModelDoneLine(font: lineFont)
         } else if let line = choice.line(space: space) {
-            Text(line.text)
-                .font(lineFont)
-                .foregroundStyle(line.needsAttention ? DaybookPalette.Ink.warning : Color.secondary)
-                .monospacedDigit()
-                .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .firstTextBaseline, spacing: DaybookSpacing.s2) {
+                Text(line.text)
+                    .font(lineFont)
+                    .foregroundStyle(line.needsAttention ? DaybookPalette.Ink.warning : Color.secondary)
+                    .monospacedDigit()
+                    .fixedSize(horizontal: false, vertical: true)
+                if actionBeside, !transferring { action }
+            }
+        } else if actionBeside, !transferring {
+            action
         }
         if !justDownloaded, case .downloading(let fraction)? = choice.status {
-            ProgressView(value: fraction)
-                .progressViewStyle(.brand(width: barWidth))
-                .padding(.top, 2)
-                .accessibilityLabel("Downloading \(choice.selectionName)")
+            HStack(spacing: DaybookSpacing.s2) {
+                ProgressView(value: fraction)
+                    .progressViewStyle(.brand(width: barWidth))
+                    .accessibilityLabel("Downloading \(choice.selectionName)")
+                if actionBeside { action }
+            }
+            .padding(.top, 2)
         }
     }
 

@@ -94,7 +94,10 @@ private struct ListenLiveContent: View {
 
     private var byline: some View {
         HStack(spacing: 6) {
-            Image(systemName: "circle.fill").font(.system(size: 7)).foregroundStyle(DaybookPalette.Ink.record).accessibilityHidden(true)
+            // The margin's glyph is the red mark where there is a margin.
+            if readingWidth != .regular {
+                Image(systemName: "circle.fill").font(.system(size: 7)).foregroundStyle(DaybookPalette.Ink.record).accessibilityHidden(true)
+            }
             if let start = session.split.inProgress?.startedAt {
                 Text("Started \(start.formatted(date: .omitted, time: .shortened)) · \(Text(timerInterval: start...Date.distantFuture, countsDown: false)) so far")
             } else {
@@ -129,9 +132,10 @@ private struct ListeningRow: View {
                 Text("\(TimeLabel.short(connection.live.receivedSeconds)) saved")
                     .daybookFont(.status).foregroundStyle(DaybookPalette.Ink.secondary).monospacedDigit()
             }
-            Spacer(minLength: DaybookSpacing.s3)
+            // After the words, where Listen Live was, not at the far end of the measure.
             Button("Stop Listening") { connection.stopListening() }
                 .buttonStyle(.daybookTinted)
+                .padding(.leading, DaybookSpacing.s4 - DaybookSpacing.s3)
         }
         .padding(.top, DaybookSpacing.s5)
     }

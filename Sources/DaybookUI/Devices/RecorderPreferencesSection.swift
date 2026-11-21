@@ -108,8 +108,12 @@ public struct RecorderPreferencesSection: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 renameButton(services: services)
+                    #if os(macOS)
+                    .buttonStyle(.daybookTinted)
+                    #else
                     .buttonStyle(.daybookLink)
                     .daybookFont(.body)
+                    #endif
             }
             .padding(.vertical, DaybookSpacing.s2 + 2)
         }
