@@ -60,7 +60,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
                           "Apps", "Calendar", "Live Captions", "Language", "Floating Notes", "Permissions", "Screen", "Notifications"]
         case .devices: ["iPhone", "Recorder", "Soundcore", "Add Device", "Pair", "Unpair", "Bluetooth", "Wi-Fi", "Wi‑Fi"]
         case .library: ["Folder", "Location", "Storage", "iCloud", "Sync", "Import", "Privacy", "Encryption", "Recovery Key",
-                        "Summary Templates", "Vocabulary", "Glossary", "Speaker Profiles", "Voiceprint", "Version", "Personal", "Lock",
+                        "Summary Templates", "Vocabulary", "Glossary", "Speaker Profiles", "Me", "You", "This Is Me", "Voiceprint", "Version", "Personal", "Lock",
                         "Touch ID", "Password"]
         case .models: ["Transcription", "Speakers", "Summaries", "Language", "Download", "Quality", "Voice", "Voiceprint", "Vocabulary",
                        "Glossary", "Summary Templates", "Speaker Profiles", "Accuracy", "Synced Recordings", "Live Transcription",

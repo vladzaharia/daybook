@@ -590,6 +590,17 @@ public final class LibraryController {
         choose(.ownerProfile, profileID?.uuidString, at: now)
     }
 
+    /// The same, and `undoManager` can take it back under `actionName` ("This Is Me", "Not Me"); redo chooses it again.
+    public func setOwnerProfile(_ profileID: UUID?, actionName: String, undoManager: UndoManager?, at now: Date = Date()) {
+        let before = metadata.ownerProfileSelection
+        setOwnerProfile(profileID, at: now)
+        guard let undoManager, before != metadata.ownerProfileSelection else { return }
+        undoManager.registerUndo(withTarget: self) { library in
+            library.setOwnerProfile(before, actionName: actionName, undoManager: undoManager)
+        }
+        undoManager.setActionName(actionName)
+    }
+
     private func choose(_ name: LibraryChoice.Name, _ selection: String?, at now: Date) {
         let stored = metadata.choice(name)
         // The choice the library holds already: nothing new to save or sync.

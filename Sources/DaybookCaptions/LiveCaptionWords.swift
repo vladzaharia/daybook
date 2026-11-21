@@ -4,25 +4,25 @@ import Foundation
 // captioner is doing before there's anything to read, and what Settings says about the language.
 
 extension LiveCaptionSource {
-    /// "You" or "Call", as the recording surfaces and the input levels name this device's own sources.
+    /// "Me" or "Call", as the recording surfaces and the input levels name this device's own sources.
     public var label: String {
         switch self {
-        case .microphone: return "You"
+        case .microphone: return "Me"
         case .call: return "Call"
         default: return "Captions"
         }
     }
 }
 
-/// How a caption's source is named: You and Call for this device's own, the device for another's.
+/// How a caption's source is named: Me and Call for this device's own, the device for another's.
 public enum LiveCaptionLabels {
-    /// "You", "Call", or the device that heard it (`names`: other devices' names by source, raw value).
+    /// "Me", "Call", or the device that heard it (`names`: other devices' names by source, raw value).
     public static func label(for source: LiveCaptionSource?, names: [String: String]) -> String {
         guard let source else { return "Captions" }
         return names[source.rawValue] ?? source.label
     }
 
-    /// What a strip shows in its source lane: You or Call for this device's own sources; nothing for a
+    /// What a strip shows in its source lane: Me or Call for this device's own sources; nothing for a
     /// single source or another device's line.
     public static func lane(_ segment: LiveCaptionSegment) -> String? {
         guard let source = segment.source, !source.isDevice else { return nil }
@@ -44,11 +44,11 @@ public struct LiveCaptionTurn: Identifiable, Equatable, Sendable {
     /// The voice live speakers heard ("S2"), and its name when it matched someone's voice profile.
     public var speaker: LiveCaptionSpeaker?
     public var segments: [LiveCaptionSegment]
-    /// The source's name: "You", "Call", or the device that heard it.
+    /// The source's name: "Me", "Call", or the device that heard it.
     public var sourceLabel: String
     public var id: UUID { segments[0].id }
     public var start: TimeInterval { segments[0].start }
-    /// The person when live speakers named them, else the source ("You", "Call", "Soundcore").
+    /// The person when live speakers named them, else the source ("Me", "Call", "Soundcore").
     public var label: String { speaker?.name ?? sourceLabel }
 
     public static func turns(_ segments: [LiveCaptionSegment], names: [String: String] = [:]) -> [LiveCaptionTurn] {
@@ -81,7 +81,7 @@ public enum LiveCaptionStatus {
         }
     }
 
-    /// While one source listens, a source that ended says so beside the lines: "You: <reason>" (the
+    /// While one source listens, a source that ended says so beside the lines: "Me: <reason>" (the
     /// captioner's own reason), in the order You, Call. Nil when none listens or none ended.
     public static func problem(_ states: [LiveCaptionSource: LiveCaptionState], names: [String: String] = [:]) -> String? {
         guard states.values.contains(.listening) else { return nil }

@@ -18,8 +18,8 @@ struct SpeakerProfilesScreen: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 
-    /// Settings' row: "No profiles yet", "1 profile", "3 profiles", as on the Mac.
-    static func summary(_ count: Int) -> String { SpeakerProfileWords.profiles(count) }
+    /// Settings' row: "No profiles yet", "1 profile", "3 profiles · Me: Vlad", as on the Mac.
+    static func summary(_ count: Int, me: String? = nil) -> String { SpeakerProfileWords.profiles(count, me: me) }
 }
 
 /// One profile (DaybookUI's `SpeakerProfileDetail`). A conversation it labels closes Settings and opens on the

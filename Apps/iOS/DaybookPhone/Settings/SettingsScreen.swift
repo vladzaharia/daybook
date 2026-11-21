@@ -124,7 +124,8 @@ struct SettingsScreen: View {
                     SettingsRow(title: VocabularyWords.title, detail: vocabularySummary, systemImage: "character.book.closed")
                 }
                 SettingsLink(route: .speakerProfiles) {
-                    SettingsRow(title: "Speaker Profiles", detail: SpeakerProfilesScreen.summary(model.library.controller.speakerProfiles.count),
+                    SettingsRow(title: "Speaker Profiles", detail: SpeakerProfilesScreen.summary(model.library.controller.speakerProfiles.count,
+                                                                          me: model.library.controller.ownerProfileName),
                                 systemImage: "person.wave.2")
                 }
             } header: {

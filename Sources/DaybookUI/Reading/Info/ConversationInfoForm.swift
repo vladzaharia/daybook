@@ -42,7 +42,7 @@ public struct ConversationInfoForm<AudioExtras: View, AddRecording: View>: View 
                 section("Details", expanded: details) { DetailsRows(library: library, meeting: meeting, services: services) }
                 // Notes alone have no speakers and nothing processed: those sections wait for audio.
                 if !meeting.tracks.isEmpty || !meeting.speakers.isEmpty {
-                    section("People", expanded: people) { PeopleSection(library: library, meeting: meeting) }
+                    section("People", expanded: people) { PeopleSection(library: library, meeting: meeting, findsSpeakers: services.findsSpeakers()) }
                         .id(InfoSectionID.people)
                 }
                 section("Audio", expanded: audio) {
