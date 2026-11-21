@@ -850,26 +850,54 @@ private struct SelectionBar: View {
         // Nothing selected yet: the same bar, waiting.
         ForEach(Self.placeholders, id: \.0) { title, symbol in item(title, symbol, role: nil) {} }
       } else {
-        ForEach(actions) { action in
-          item(
-            ConversationActionMenuItems.shortTitle(action), action.symbol,
-            role: action.role == .destructive ? .destructive : nil
-          ) {
-            PhoneActions.perform(
-              action.id, on: ids, library: library, session: session, provider: provider,
-              placement: placement, undoManager: undoManager)
-            // Done the moment it's chosen (a sheet, or the Trash's question, ends Select itself).
-            if Self.endsSelection(action.id) {
-              session.isSelecting = false
-              session.selection = []
+        let split = Self.split(actions)
+        ForEach(split.bar) { action in barItem(action) }
+        if !split.more.isEmpty {
+          Menu {
+            ForEach(split.more) { action in
+              Button(role: action.role == .destructive ? .destructive : nil) { choose(action) } label: {
+                Label(action.title, systemImage: action.symbol)
+              }
             }
+          } label: {
+            Self.itemLabel("More", "ellipsis.circle")
           }
+          .buttonStyle(.plain)
+          .foregroundStyle(DaybookPalette.Ink.link)
         }
+        if let trash = split.trash { barItem(trash) }
       }
     }
     .disabled(ids.isEmpty)
+    .padding(.horizontal, DaybookSpacing.s3)
     .padding(.vertical, 6)
     .glassEffect(.regular, in: Capsule())
+  }
+
+  /// At most five items: past five, the one before Trash becomes More, holding the rest, and Trash stays last, outside it.
+  private static func split(_ actions: [ConversationAction]) -> (bar: [ConversationAction], more: [ConversationAction], trash: ConversationAction?) {
+    let trash = actions.last { $0.id == .moveToTrash }
+    let rest = actions.filter { $0.id != .moveToTrash }
+    let room = trash == nil ? 5 : 4
+    guard rest.count > room else { return (rest, [], trash) }
+    return (Array(rest.prefix(room - 1)), Array(rest.dropFirst(room - 1)), trash)
+  }
+
+  private func barItem(_ action: ConversationAction) -> some View {
+    item(ConversationActionMenuItems.shortTitle(action), action.symbol, role: action.role == .destructive ? .destructive : nil) {
+      choose(action)
+    }
+  }
+
+  private func choose(_ action: ConversationAction) {
+    PhoneActions.perform(
+      action.id, on: ids, library: library, session: session, provider: provider,
+      placement: placement, undoManager: undoManager)
+    // Done the moment it's chosen (a sheet, or the Trash's question, ends Select itself).
+    if Self.endsSelection(action.id) {
+      session.isSelecting = false
+      session.selection = []
+    }
   }
 
   /// Whether an action is done the moment it's chosen.
@@ -885,18 +913,20 @@ private struct SelectionBar: View {
     ("Move", "folder"), ("Tags", "tag"), ("Personal", "house"), ("Trash", "trash"),
   ]
 
+  private static func itemLabel(_ title: String, _ symbol: String) -> some View {
+    VStack(spacing: 3) {
+      // Every glyph in the same box, so the words share a baseline whatever the symbol's height.
+      Image(systemName: symbol).font(.body.weight(.medium)).frame(height: 24)
+      Text(title).font(.caption2.weight(.medium)).lineLimit(1)
+    }
+    .frame(maxWidth: .infinity, minHeight: 48)
+    .contentShape(Rectangle())
+  }
+
   private func item(
     _ title: String, _ symbol: String, role: ButtonRole?, action: @escaping () -> Void
   ) -> some View {
-    Button(role: role, action: action) {
-      VStack(spacing: 3) {
-        // Every glyph in the same box, so the words share a baseline whatever the symbol's height.
-        Image(systemName: symbol).font(.body.weight(.medium)).frame(height: 24)
-        Text(title).font(.caption2.weight(.medium)).lineLimit(1)
-      }
-      .frame(maxWidth: .infinity, minHeight: 48)
-      .contentShape(Rectangle())
-    }
+    Button(role: role, action: action) { Self.itemLabel(title, symbol) }
     .buttonStyle(.plain)
     .foregroundStyle(role == .destructive ? DaybookPalette.Ink.error : DaybookPalette.Ink.link)
   }

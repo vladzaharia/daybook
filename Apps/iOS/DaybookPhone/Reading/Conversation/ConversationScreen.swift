@@ -40,15 +40,18 @@ struct ConversationScreen: View {
             .confirmationBeat($session.confirmation)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                // Always the switch, so the bar's centre stays put. Until there's a transcript to turn to it's dimmed on
-                // Summary, as the Mac's is (a segmented picker can't dim one segment), and the page itself says why.
+                // Always the switch, so the bar's centre stays put. Until there's a transcript to turn to it shows Summary
+                // selected and Transcript dimmed, and the page itself says why.
                 ToolbarItem(placement: .principal) {
-                    Picker("Page", selection: hasTranscript ? $session.pageMode : .constant(.summary)) {
-                        ForEach(PageMode.allCases) { Text($0.title).tag($0) }
+                    if hasTranscript {
+                        Picker("Page", selection: $session.pageMode) {
+                            ForEach(PageMode.allCases) { Text($0.title).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+                        .fixedSize()
+                    } else {
+                        SummaryOnlySwitch()
                     }
-                    .pickerStyle(.segmented)
-                    .fixedSize()
-                    .disabled(!hasTranscript)
                 }
                 ConversationToolbar(library: library, meeting: meeting)
             }
@@ -170,5 +173,29 @@ enum ConversationShare {
                 session.alert = ReadingAlert(title: "Couldn’t Share", error: error, fallback: "The audio couldn’t be prepared. Try again.")
             }
         }
+    }
+}
+
+/// The page switch before there is a transcript: Summary selected as the system's thumb draws it, Transcript dimmed.
+/// A disabled segmented picker would draw both grey with no thumb.
+private struct SummaryOnlySwitch: View {
+    var body: some View {
+        GlassEffectContainer {
+            HStack(spacing: 0) {
+                Text(PageMode.summary.title)
+                    .foregroundStyle(DaybookPalette.Ink.title)
+                    .frame(minWidth: 72, minHeight: 28)
+                    .glassEffect(.regular.interactive(), in: Capsule())
+                Text(PageMode.transcript.title)
+                    .foregroundStyle(DaybookPalette.Ink.faint)
+                    .frame(minWidth: 72, minHeight: 28)
+            }
+        }
+        .font(.footnote.weight(.medium))
+        .padding(2)
+        .background(DaybookPalette.quietFill, in: Capsule())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Page")
+        .accessibilityValue(PageMode.summary.title)
     }
 }

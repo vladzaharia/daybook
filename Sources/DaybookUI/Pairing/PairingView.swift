@@ -136,7 +136,8 @@ public struct PairingView<Choice: View, Code: View>: View {
     private func glyph(size: CGFloat) -> some View {
         Image(systemName: isPaired ? "macbook.and.iphone" : role.otherSymbol)
             .font(.system(size: size, weight: .light))
-            .foregroundStyle(isPaired ? DaybookPalette.accent : DaybookPalette.Ink.secondary)
+            .foregroundStyle(isPaired ? AnyShapeStyle(DaybookPalette.accent)
+                             : density == .touch ? AnyShapeStyle(DaybookPalette.brandGradient(.mark)) : AnyShapeStyle(DaybookPalette.Ink.secondary))
             .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace.magic(fallback: .downUp)))
             .daybookBounce(value: paired)
             .frame(minHeight: size + 4)

@@ -16,19 +16,23 @@ struct TrashList: View {
 
     var body: some View {
         List {
-            ForEach(trashed) { meeting in
-                TrashRowView(meeting: meeting, restore: { restore(meeting.id) },
-                             show: twoPage ? { session.trashedID = meeting.id } : nil)
-                    .pageRowInsets(twoPage: twoPage)
-                    .listRowBackground(PageRowBackground(shown: twoPage && session.trashedID == meeting.id))
-                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                        Button { restore(meeting.id) } label: { Label(TrashWords.restore, systemImage: TrashWords.restoreSymbol) }
-                            .tint(DaybookPalette.prominentFill)
-                    }
-                    .contextMenu {
-                        Button { restore(meeting.id) } label: { Label(TrashWords.restore, systemImage: TrashWords.restoreSymbol) }
-                    }
+            Section {
+                ForEach(trashed) { meeting in
+                    TrashRowView(meeting: meeting, restore: { restore(meeting.id) },
+                                 show: twoPage ? { session.trashedID = meeting.id } : nil)
+                        .pageRowInsets(twoPage: twoPage)
+                        .listRowBackground(PageRowBackground(shown: twoPage && session.trashedID == meeting.id))
+                        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                            Button { restore(meeting.id) } label: { Label(TrashWords.restore, systemImage: TrashWords.restoreSymbol) }
+                                .tint(DaybookPalette.prominentFill)
+                        }
+                        .contextMenu {
+                            Button { restore(meeting.id) } label: { Label(TrashWords.restore, systemImage: TrashWords.restoreSymbol) }
+                        }
+                }
             }
+            // No header, so the list's top rule would show straight under the bar.
+            .listSectionSeparator(.hidden, edges: .top)
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)

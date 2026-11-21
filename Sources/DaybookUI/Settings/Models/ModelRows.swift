@@ -26,6 +26,7 @@ public struct ModelRoleRow: View {
     private let space: ModelSpace
     private let pickerTitle: String
     private let actions: ModelRowActions
+    private let isBundled: Bool
     @Environment(\.daybookDensity) private var density
     @Environment(\.dynamicTypeSize) private var typeSize
     private var stack: AnyLayout { ModelRowStack.layout(typeSize) }
@@ -37,8 +38,10 @@ public struct ModelRoleRow: View {
     ///   - label: What the row is ("Model", "Voice profiles"); nil where the section already says it.
     ///   - pickerTitle: What VoiceOver calls its pop-up or menu: the role's ("Transcription model"), unless the row is
     ///     another choice for the role ("Other languages model").
+    ///   - isBundled: Its download is offered by a row for the whole section, so this one shows its size and no button.
     public init(label: String?, choice: ModelRoleChoice, space: ModelSpace = .unknown, pickerTitle: String? = nil,
-                actions: ModelRowActions) {
+                isBundled: Bool = false, actions: ModelRowActions) {
+        self.isBundled = isBundled
         self.label = label
         self.choice = choice
         self.space = space
@@ -124,7 +127,7 @@ public struct ModelRoleRow: View {
     }
 
     @ViewBuilder private var action: some View {
-        if let key = choice.selectedModel?.key, let status = choice.status {
+        if !isBundled, let key = choice.selectedModel?.key, let status = choice.status {
             if status.isTransferring {
                 ModelActionButton("Cancel") { actions.cancel(key) }
             } else if status.canDownload {
