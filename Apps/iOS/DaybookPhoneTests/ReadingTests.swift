@@ -782,7 +782,7 @@ final class ReadingTests: XCTestCase {
             XCTFail("an evicted file can't play")
         } catch {
             XCTAssertEqual(error as? AudioProvidingError, .offline)
-            XCTAssertEqual(error.localizedDescription, "The audio isn’t on this iPhone yet. It downloads when you’re online.")
+            XCTAssertEqual(error.localizedDescription, "Not on this iPhone")
         }
         do {
             _ = try await LocalAudioProvider().localAudio(for: track, in: meeting.id) { _ in }
@@ -807,6 +807,25 @@ final class ReadingTests: XCTestCase {
         XCTAssertEqual(Set(library.controller.meetings.map(\.id)), [kept, trashed])
         let after = await library.controller.trashedMeetings()
         XCTAssertTrue(after.isEmpty)
+    }
+
+    func testRestoringFromTheTrashSaysSoWithShow() async throws {
+        let root = try temporaryDirectory()
+        let library = PhoneLibrary(rootURL: root, installation: "TEST")
+        try await library.reload()
+        let trashed = library.controller.newMeeting(title: "Weekly sync")
+        await library.controller.flush()
+        let moved = try await library.controller.moveToTrash(trashed)
+        XCTAssertTrue(moved)
+        let session = ReadingSession(personalLock: nil)
+        session.place = .library(.trash)
+        TrashList.restore(trashed, library: library.controller, session: session)
+        for _ in 0..<100 where session.confirmation == nil { try await Task.sleep(for: .milliseconds(50)) }
+        let beat = try XCTUnwrap(session.confirmation)
+        XCTAssertEqual(beat.words, "Restored “Weekly sync”.")
+        beat.show?()
+        XCTAssertEqual(session.place, .library(.section(.all)))
+        XCTAssertEqual(session.openID, trashed)
     }
 }
 

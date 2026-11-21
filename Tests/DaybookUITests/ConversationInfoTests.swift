@@ -52,9 +52,20 @@ final class ConversationInfoTests: XCTestCase {
     func testBehaviorWhereAudioIsReadsTheSameForTheDeviceAsking() {
         XCTAssertEqual(AudioRow.words(.local, thisDevice: "this iPhone").text, "On this iPhone")
         XCTAssertEqual(AudioRow.words(.local, thisDevice: "this iPhone").symbol, "iphone")
-        XCTAssertEqual(AudioRow.words(.downloadable(bytes: 12_000_000), thisDevice: "this iPhone").text, "In iCloud · \(ByteSize.format(12_000_000))")
-        XCTAssertEqual(AudioRow.words(.downloadable(bytes: nil), thisDevice: "this iPhone").text, "In iCloud")
-        XCTAssertEqual(AudioRow.words(.offline, thisDevice: "this iPhone").text, "Not on this iPhone yet")
-        XCTAssertEqual(AudioRow.words(.missing, thisDevice: "this Mac").text, "Not in the library on this Mac")
+        XCTAssertEqual(AudioRow.words(.downloadable(bytes: 12_000_000), thisDevice: "this iPhone").text, "Not on this iPhone")
+        XCTAssertEqual(AudioRow.words(.downloadable(bytes: nil), thisDevice: "this iPhone").text, "Not on this iPhone")
+        XCTAssertEqual(AudioRow.words(.offline, thisDevice: "this iPhone").text, "Not on this iPhone")
+        XCTAssertEqual(AudioRow.words(.missing, thisDevice: "this Mac").text, "Not in the library")
+    }
+
+    func testBehaviorAudioNotOnThisIPhoneOffersDownloadWithItsSize() {
+        let size = ByteSize.format(12_000_000)
+        XCTAssertEqual(AudioRow.downloadTitle(.downloadable(bytes: 12_000_000), fetch: .idle, canDownload: true), "Download · \(size)")
+        XCTAssertEqual(AudioRow.downloadTitle(.downloadable(bytes: nil), fetch: .idle, canDownload: true), "Download")
+        XCTAssertEqual(AudioRow.downloadTitle(.downloadable(bytes: nil), fetch: .fetching, canDownload: true), "Downloading…")
+        XCTAssertEqual(AudioRow.downloadTitle(.downloadable(bytes: nil), fetch: .failed, canDownload: true), "Try Again")
+        XCTAssertNil(AudioRow.downloadTitle(.offline, fetch: .idle, canDownload: true), "can't be fetched now")
+        XCTAssertNil(AudioRow.downloadTitle(.local, fetch: .idle, canDownload: true))
+        XCTAssertNil(AudioRow.downloadTitle(.downloadable(bytes: nil), fetch: .idle, canDownload: false), "the Mac's audio is always here")
     }
 }

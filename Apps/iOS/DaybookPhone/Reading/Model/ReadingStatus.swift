@@ -72,8 +72,8 @@ extension ProcessingWords.PauseReason {
     init(phone pause: PhoneProcessor.Pause) {
         switch pause {
         case .recording: self = .recording
-        // Locked, nothing shows it; unlocked, it goes on at once (or with Daybook open, as background work does).
-        case .background, .locked: self = .background
+        case .background: self = .background
+        case .locked: self = .locked
         case .heat: self = .heat
         case .lowPowerMode: self = .lowPowerMode
         case .lowBattery: self = .lowBattery

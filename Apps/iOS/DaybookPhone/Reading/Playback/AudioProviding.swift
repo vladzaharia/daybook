@@ -78,8 +78,8 @@ enum AudioProvidingError: LocalizedError, Equatable, PlainSentenceError {
 
     var errorDescription: String? {
         switch self {
-        case .offline: return "The audio isn’t on this iPhone yet. It downloads when you’re online."
-        case .missing: return "This recording’s audio isn’t in the library on this iPhone."
+        case .offline: return "Not on this iPhone"
+        case .missing: return "This audio isn’t in the library."
         case .notConfigured: return "Playback isn’t set up yet."
         }
     }
