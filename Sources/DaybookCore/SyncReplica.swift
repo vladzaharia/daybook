@@ -158,7 +158,9 @@ public struct SyncCloudFiles: Sendable {
     public static let system = SyncCloudFiles(
         requestDownload: { try FileManager.default.startDownloadingUbiquitousItem(at: $0) },
         isUploaded: { url in
-            let values = try? url.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemIsUploadedKey])
+            // `promisedItemResourceValues` also answers for an item that isn't downloaded (a placeholder or dataless file),
+            // which `resourceValues` throws for: reading it as "not an iCloud item" would turn an uploaded one into false.
+            let values = try? url.promisedItemResourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemIsUploadedKey])
             if values?.isUbiquitousItem == true { return values?.ubiquitousItemIsUploaded == true }
             return FileManager.default.fileExists(atPath: url.path)
         },
@@ -392,8 +394,11 @@ public struct AudioFetchOptions: Sendable {
     public var pollInterval: Duration
     /// Nil waits until the calling task is cancelled.
     public var timeout: Duration?
-    public init(pollInterval: Duration = .milliseconds(500), timeout: Duration? = .seconds(600)) {
-        self.pollInterval = pollInterval; self.timeout = timeout
+    /// Whether a fetch ends by bringing audio within the budget (`evictAudio`), sparing only the track it fetched. A
+    /// caller with more to protect (the iPhone) turns it off and evicts itself.
+    public var evictsAfterFetch: Bool
+    public init(pollInterval: Duration = .milliseconds(500), timeout: Duration? = .seconds(600), evictsAfterFetch: Bool = true) {
+        self.pollInterval = pollInterval; self.timeout = timeout; self.evictsAfterFetch = evictsAfterFetch
     }
 }
 

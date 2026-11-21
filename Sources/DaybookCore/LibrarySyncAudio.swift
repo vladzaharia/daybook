@@ -116,7 +116,7 @@ extension LibrarySyncEngine {
         }
         let size = Int64(stamp.size)
         progress?(AudioFetchProgress(phase: .installed, completedBytes: size, totalBytes: size))
-        if audioPolicy == .onDemand, audioCachePolicy != nil { _ = try? evictAudio(protecting: [track.id]) }
+        if audioPolicy == .onDemand, audioCachePolicy != nil, options.evictsAfterFetch { _ = try? evictAudio(protecting: [track.id]) }
         return destination
     }
 
@@ -212,7 +212,7 @@ extension LibrarySyncEngine {
     /// Eager replicas never evict.
     @discardableResult
     public func evictAudio(protecting protected: Set<UUID> = []) throws -> AudioEvictionReport {
-        guard audioPolicy == .onDemand, let policy = audioCachePolicy else {
+        guard audioPolicy == .onDemand, let policy = audioCachePolicy, accountIsCurrent() else {
             let inUse = audioIndex().entries.values.reduce(UInt64(0)) { $0 + $1.stamp.size }
             return AudioEvictionReport(evicted: [], bytesFreed: 0, bytesInUse: inUse, budgetBytes: audioCachePolicy?.budgetBytes)
         }
@@ -230,16 +230,29 @@ extension LibrarySyncEngine {
             .filter { entry in !(entry.trackID.map { protected.contains($0) } ?? false) }
             .sorted(by: Self.evictionOrder)
         for entry in candidates where inUse > policy.budgetBytes {
-            try Task.checkCancellation()
+            // Out of background time: what's done is recorded below, and the rest waits for the next eviction.
+            if Task.isCancelled { break }
             guard let url = evictableURL(entry, policy: policy, originalsMayGo: originalsMayGo) else { continue }
             try fm.removeItem(at: url)
             verifiedAssets.removeValue(forKey: url.path)
+            dropContainerCopy(of: entry)
             updateAudioIndex { $0.entries.removeValue(forKey: entry.key) }
             inUse -= entry.stamp.size; freed += entry.stamp.size
             evicted.append(entry.publicValue)
         }
         try saveAudioIndexIfNeeded()
         return AudioEvictionReport(evicted: evicted, bytesFreed: freed, bytesInUse: inUse, budgetBytes: policy.budgetBytes)
+    }
+
+    /// An original recorded here went back to iCloud: iCloud's own local copy of its object goes too, or the bytes stay on
+    /// the iPhone (as a clone of the original in a plaintext library, as other bytes in an encrypted one). Only an object
+    /// iCloud reports uploaded, so it holds the recording the library just let go of.
+    private func dropContainerCopy(of entry: AudioCacheEntry) {
+        guard entry.origin == .recordedHere, accountIsCurrent() else { return }
+        let object = remoteObject(entry.sha256)
+        guard SyncFiles.itemState(object.url) == .local, cloud.isUploaded(object.url) else { return }
+        cloud.evictLocalCopy(object.url)
+        containerCopies.removeValue(forKey: String(object.url.standardizedFileURL.path.dropFirst(remoteRoot.path.count + 1)))
     }
 
     private static func evictionOrder(_ a: AudioCacheEntry, _ b: AudioCacheEntry) -> Bool {

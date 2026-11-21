@@ -751,9 +751,10 @@ extension LibrarySyncEngine {
 
     // MARK: Disk
 
-    /// Remembers an object an eager replica's library holds a verified copy of (`containerCopies`).
+    /// Remembers an object the library holds a verified copy of (`containerCopies`): on a Mac, one it wrote or installed from;
+    /// on an iPhone, one it wrote for a recording made here, whose sealed copy in an encrypted library is other bytes
+    /// beside the original.
     func noteContainerCopy(_ path: String, holding sha256: String) {
-        guard audioPolicy == .eager else { return }
         containerCopies[path] = sha256
     }
 
@@ -778,7 +779,7 @@ extension LibrarySyncEngine {
     /// it needs again comes back on its own: an edit publishes by reference to what iCloud holds, and the sealer seals
     /// from the library's copy.
     func evictUploadedContainerCopies() {
-        guard audioPolicy == .eager, !containerCopies.isEmpty || !deliveredCopies.isEmpty else { return }
+        guard !containerCopies.isEmpty || !deliveredCopies.isEmpty, accountIsCurrent() else { return }
         let held = heldDigests()
         // Installed from a courier delivery: iCloud may list the object, and bring its copy down, only later (a Mac that
         // keeps everything local).
@@ -795,6 +796,9 @@ extension LibrarySyncEngine {
                 containerCopies[path] = nil
             case .local:
                 guard held.contains(sha256), cloud.isUploaded(url) else { continue }
+                // A sealed object only once it has been read back as what it should be: one still being written (an
+                // encryption just started) or changed since isn't the copy the cloud's is judged against.
+                if path.hasPrefix("Sealed/"), verifiedAssets[url.path] == nil || (try? assetStamp(url, digest: sha256)) != verifiedAssets[url.path] { continue }
                 cloud.evictLocalCopy(url)
                 containerCopies[path] = nil
             }

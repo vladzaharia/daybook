@@ -273,8 +273,11 @@ final class SyncServicesTests: XCTestCase {
         reader.audio.playingWindow = 0
         await reader.sync.synchronize(.launch)
         _ = try await reader.audio.localAudio(for: first.meeting.tracks[0], in: first.meeting.id) { _ in }
+        reader.audio.evictionDelay = .milliseconds(10)
         _ = try await reader.audio.localAudio(for: second.meeting.tracks[0], in: second.meeting.id) { _ in }
         // The least recently played went back to iCloud to make room for the one just played.
+        try await waitUntil("the download is followed by an eviction", state: { "\(reader.audio.evictions)" }) { reader.audio.evictions > 0 }
+        try await waitUntil("the first went back", state: { "\(reader.audio.usage)" }) { reader.audio.usage.items == 1 }
         do { let availability = await reader.audio.availability(of: first.meeting.tracks[0], in: first.meeting.id); XCTAssertEqual(availability, .downloadable(bytes: nil)) }
         do { let availability = await reader.audio.availability(of: second.meeting.tracks[0], in: second.meeting.id); XCTAssertEqual(availability, .local) }
         try await waitUntil("what's here is counted within the budget", state: { "\(reader.audio.usage)" }) {
@@ -619,10 +622,11 @@ extension XCTestCase {
     /// `identityStore` stands in for the keychain item two apps on one iPhone share.
     func makePhone(_ container: URL, name: String = "Test iPhone", budget: UInt64 = 1_000_000_000, cloud: SyncCloudFiles = .system,
                    courier: ((URL) -> any SyncCourier)? = nil, keyStore: (any LibraryKeyStore)? = nil,
-                   defaults: UserDefaults? = nil, identityStore: SyncDeviceIdentityStore? = nil) async throws -> PhoneRig {
+                   defaults: UserDefaults? = nil, identityStore: SyncDeviceIdentityStore? = nil,
+                   environment: SyncContainerEnvironment = .system) async throws -> PhoneRig {
         let root = try temporaryDirectory("phone-\(name)")
         let defaults = defaults ?? makeTestDefaults("SyncServicesTests")
-        let controller = LibrarySyncController(localRoot: root, defaults: defaults, identityStore: identityStore)
+        let controller = LibrarySyncController(localRoot: root, defaults: defaults, environment: environment, identityStore: identityStore)
         controller.replica = PhoneSync.replica(displayName: name, budget: budget, cloud: cloud)
         controller.replica.keyStore = keyStore
         // Tests run every pass themselves; an edit's automatic pass would race them.
