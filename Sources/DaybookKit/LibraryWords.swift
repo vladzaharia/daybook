@@ -61,6 +61,9 @@ extension LibraryWords {
 
     /// The Trash's name, in the sidebar, the places menu, and over its list.
     public static let trash = "Trash"
+    /// The Trash's two ways to delete for good, each asking first (`deleteNowTitle`, `emptyTrashTitle`).
+    public static let deleteNow = "Delete Now…"
+    public static let emptyTrash = "Empty Trash…"
 
     /// A conversation with no title, wherever one is listed.
     public static let untitled = "Untitled Conversation"
@@ -115,6 +118,36 @@ extension LibraryWords {
         if meetings.count > 1 { return "Move \(meetings.count) conversations to the Trash?" }
         let title = meetings.first?.title.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return title.isEmpty ? "Move this conversation to the Trash?" : "Move “\(title)” to the Trash?"
+    }
+
+    /// Delete Now's question, for conversations in the Trash: "Delete “Weekly sync” now?", "Delete 3 conversations now?",
+    /// and for one without a title, or one the Personal lock hides (`hidden`), "Delete this conversation now?".
+    public static func deleteNowTitle(_ meetings: [Meeting], hidden: (Meeting) -> Bool = { _ in false }) -> String {
+        if meetings.count > 1 { return "Delete \(meetings.count) conversations now?" }
+        let title = meetings.first.flatMap { hidden($0) ? nil : $0.title.trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
+        return title.isEmpty ? "Delete this conversation now?" : "Delete “\(title)” now?"
+    }
+
+    /// Empty Trash's question, with how many it deletes: "Delete 12 conversations now?".
+    public static func emptyTrashTitle(count: Int) -> String {
+        count == 1 ? "Delete 1 conversation now?" : "Delete \(count) conversations now?"
+    }
+
+    /// Beneath either question.
+    public static let deleteNowMessage = "This can’t be undone."
+
+    /// The notice once they're gone: "Deleted 3 conversations.", and, for any that wait until sync has told the other
+    /// devices, "2 are waiting for sync."
+    public static func deletedNow(deleted: Int, waiting: Int) -> [String] {
+        var lines: [String] = []
+        if deleted > 0 { lines.append(deleted == 1 ? "Deleted 1 conversation." : "Deleted \(deleted) conversations.") }
+        if waiting > 0 { lines.append(waiting == 1 ? "1 is waiting for sync." : "\(waiting) are waiting for sync.") }
+        return lines
+    }
+
+    /// Details for an import that skipped files: one line each, "Memo.m4a: The file isn’t valid audio."
+    public static func importFailureDetails(_ failures: [(name: String, reason: String)]) -> String {
+        failures.map { "\($0.name): \($0.reason)" }.joined(separator: "\n")
     }
 
     /// Merge…'s question, naming the conversation that stays (the earliest, whose title wins): "Merge 3 conversations into

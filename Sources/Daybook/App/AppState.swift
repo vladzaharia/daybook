@@ -775,7 +775,15 @@ final class AppState {
         }
         guard !failures.isEmpty else { return }
         guard imported == 0 else {
-            post(LibraryWords.importSummary(imported: imported, failed: failures.map(\.name)))
+            // Details lists each file that didn't come in, and why.
+            let lines = LibraryWords.importSummary(imported: imported, failed: failures.map(\.name))
+            post(Array(lines.dropLast()))
+            if let last = lines.last {
+                let details = LibraryWords.importFailureDetails(failures.map { ($0.name, $0.error.localizedDescription) })
+                post(last, action: LibraryNoticeAction(title: "Details") { [weak self] in
+                    self?.problem = AppProblem(title: "Couldn’t Import Audio", message: last, details: details)
+                })
+            }
             return
         }
         if failures.count == 1 {
@@ -1227,6 +1235,17 @@ final class AppState {
                 undoManager?.removeAllActions(withTarget: record)
                 self?.restore(record, undoManager: nil)
             })
+        }
+    }
+
+    /// Deletes conversations from the Trash for good (Delete Now, Empty Trash), as the library's one deletion does
+    /// (`LibraryController.deleteFromTrash`), and says what went.
+    func deleteFromTrash(_ ids: [UUID]) {
+        Task {
+            do {
+                let result = try await library.deleteFromTrash(ids)
+                post(LibraryWords.deletedNow(deleted: result.deleted.count, waiting: result.waiting.count))
+            } catch { report("Couldn’t Delete", "Try again.", error) }
         }
     }
 

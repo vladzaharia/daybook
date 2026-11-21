@@ -33,6 +33,13 @@ extension AppState {
         RecordingCompressionSchedule.startDate(in: preferences, key: Preference.compressionStartsAt, library: id)
     }
 
+    /// A synced library where a device seen lately can't compress yet (it hasn't the version that does): nothing is
+    /// compressed until it has. False for a library that doesn't sync.
+    func compressionWaitsOnDevices() async -> Bool {
+        guard library.compressionSync == .connected, let engine = sync.engine else { return false }
+        return await !engine.everyRecentDeviceCompresses()
+    }
+
     /// Starts a pass after an idle moment, unless one is waiting or under way.
     func compressOlderRecordingsWhenIdle() {
         // The week starts with the first idle moment in a library, whatever the power.

@@ -18,7 +18,7 @@ public final class LibraryController {
     /// here (`update`, `add`, …), which save, sync, and keep Version History.
     public private(set) var meetings: [Meeting] = [] { didSet { revision &+= 1 } }
     /// Bumped whenever `meetings` changes: the key for what's derived from them (a list's order, search).
-    public private(set) var revision = 0
+    public internal(set) var revision = 0
     /// Folders, templates, and vocabulary: synced library settings.
     public private(set) var metadata = LibraryMetadata()
     /// Vocabulary, mirrored into `metadata.vocabulary` when it changes (`saveGlossaryTerm`, `removeGlossaryTerm`).

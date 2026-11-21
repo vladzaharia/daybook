@@ -110,6 +110,25 @@ final class LibraryWordsTests: XCTestCase {
         XCTAssertEqual(LibraryWords.mergedInto("Weekly sync"), "Merged into “Weekly sync”")
     }
 
+    func testBehaviorDeleteNowStatesTheCountAndThatItCantBeUndoneWithoutNamingALockedConversation() {
+        let named = Meeting(title: "Weekly sync"), personal = Meeting(title: "Therapy notes"), untitled = Meeting(title: "  ")
+        XCTAssertEqual(LibraryWords.deleteNowTitle([named]), "Delete “Weekly sync” now?")
+        XCTAssertEqual(LibraryWords.deleteNowTitle([named, untitled]), "Delete 2 conversations now?")
+        XCTAssertEqual(LibraryWords.deleteNowTitle([untitled]), "Delete this conversation now?")
+        let locked = LibraryWords.deleteNowTitle([personal], hidden: { $0.id == personal.id })
+        XCTAssertEqual(locked, "Delete this conversation now?")
+        XCTAssertFalse(locked.contains("Therapy"), "a locked Personal conversation's title never appears")
+        XCTAssertEqual(LibraryWords.emptyTrashTitle(count: 12), "Delete 12 conversations now?")
+        XCTAssertEqual(LibraryWords.emptyTrashTitle(count: 1), "Delete 1 conversation now?")
+        XCTAssertEqual(LibraryWords.deleteNowMessage, "This can’t be undone.")
+        XCTAssertEqual(LibraryWords.deletedNow(deleted: 3, waiting: 0), ["Deleted 3 conversations."])
+        XCTAssertEqual(LibraryWords.deletedNow(deleted: 1, waiting: 2), ["Deleted 1 conversation.", "2 are waiting for sync."])
+    }
+
+    func testBehaviorAnImportThatSkippedFilesListsEachWithItsReason() {
+        XCTAssertEqual(LibraryWords.importFailureDetails([("a.wav", "Not audio."), ("b.mp3", "Unreadable.")]), "a.wav: Not audio.\nb.mp3: Unreadable.")
+    }
+
     func testMergeSaysTheSummariesAreWrittenAgainOnlyWhenARecordingMakesItTranscribeAgain() {
         let recorded = Meeting(title: "Call", tracks: [RecordingTrack(source: .microphone, relativePath: "a.m4a", fileName: "a.m4a", duration: 5)])
         let notes = Meeting(title: "Notes"), more = Meeting(title: "More notes")

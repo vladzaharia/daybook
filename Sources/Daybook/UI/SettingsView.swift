@@ -548,7 +548,7 @@ private struct LibrarySettings: View {
 
             // The library's own things, as the iPhone's Settings lists them under Library; Models keeps Edit… beside
             // the model each one serves.
-            Section(SettingsWords.libraryHeader) {
+            Section {
                 TemplatesSettingsRow(state: state)
                 VocabularySettingsRow(state: state)
                 SpeakerProfilesSettingsRow(state: state)

@@ -80,9 +80,6 @@ public enum SettingsWords {
     /// The switch for conversations not filed yet.
     public static let notFiled = "Not in Work or Personal"
 
-    /// The header over Templates, Vocabulary and Speaker Profiles, as the iPhone's Settings groups them.
-    public static let libraryHeader = "Library"
-
     /// The heading over those switches.
     public static let cloudPlacements = "Use the cloud for"
 

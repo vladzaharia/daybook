@@ -59,14 +59,18 @@ private struct StorageSettingsSheet: View {
     let state: AppState
     let report: LibraryStorageReport?
     let done: () -> Void
+    /// The Trash's conversations an Empty Trash is asking about, while it asks.
+    @State private var emptying: [UUID] = []
+    @State private var waitingOnDevices = false
 
     var body: some View {
         SettingsFormSheet(title: "Storage", cancel: nil, confirm: .init("Done", perform: done)) {
-            LibraryStorageSection(report: report)
+            LibraryStorageSection(report: report, emptyTrash: { emptying = state.library.trashedMeetingIDs() })
             RecordingCompressionSection(age: Binding(get: { state.library.recordingCompression },
                                                      set: { state.library.setRecordingCompression($0) }),
-                                        startsLine: RecordingCompressionSchedule.startsLine(state.compressionStartsAt,
-                                                                                            age: state.library.recordingCompression))
+                                        startsLine: RecordingCompressionSchedule.statusLine(
+                                            state.compressionStartsAt, age: state.library.recordingCompression,
+                                            waitingOnDevices: waitingOnDevices))
             Section {
                 LabeledContent {
                     Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([state.storageURL]) }
@@ -78,6 +82,13 @@ private struct StorageSettingsSheet: View {
                         .help(state.storageURL.path)
                 }
             }
+        }
+        .task { waitingOnDevices = await state.compressionWaitsOnDevices() }
+        .alert(LibraryWords.emptyTrashTitle(count: emptying.count), isPresented: Binding(get: { !emptying.isEmpty }, set: { if !$0 { emptying = [] } })) {
+            Button("Delete", role: .destructive) { state.deleteFromTrash(emptying) }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text(LibraryWords.deleteNowMessage)
         }
     }
 }

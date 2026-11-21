@@ -23,6 +23,7 @@ struct SidebarView: View {
                     .accessibilityValue(state.personalLock.symbol(section) == section.systemImage ? "" : PersonalLockWords.locked)
                     .tag(LibraryPlace.section(section))
                     .dropDestination(for: ConversationTransfer.self) { items, _ in drop(items, on: .section(section)) }
+                    .contextMenu { Button("New Folder") { state.requestNewFolder() } }
             }
             if !state.folders.isEmpty {
                 Section {

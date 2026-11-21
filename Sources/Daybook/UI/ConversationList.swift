@@ -336,6 +336,8 @@ private struct MacTrashList: View {
     @Bindable var state: AppState
     @State private var trashed: [Meeting] = []
     @State private var loaded = false
+    /// What a Delete Now or Empty Trash is asking about: the conversations it will delete when confirmed.
+    @State private var deleting: TrashDeleteRequest?
 
     var body: some View {
         List(selection: Bindable(state.window).openID) {
@@ -355,9 +357,28 @@ private struct MacTrashList: View {
         .listStyle(.inset)
         .softTopScrollEdge()
         .contextMenu(forSelectionType: UUID.self) { ids in
-            Button { MacTrash.restore(Array(ids), state: state) } label: {
-                Label(TrashWords.restore, systemImage: TrashWords.restoreSymbol)
+            if !ids.isEmpty {
+                Button { MacTrash.restore(Array(ids), state: state) } label: {
+                    Label(TrashWords.restore, systemImage: TrashWords.restoreSymbol)
+                }
+                Button(LibraryWords.deleteNow, role: .destructive) { deleting = .some(ids, in: trashed) }
+                Divider()
             }
+            Button(LibraryWords.emptyTrash, role: .destructive) { deleting = .all(trashed) }
+                .disabled(trashed.isEmpty)
+        }
+        .toolbar {
+            ToolbarItem {
+                Button(LibraryWords.emptyTrash) { deleting = .all(trashed) }
+                    .disabled(trashed.isEmpty)
+            }
+        }
+        .alert(deleting?.title(hidden: { state.personalLock.hides($0) }) ?? "", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+               presenting: deleting) { request in
+            Button("Delete", role: .destructive) { state.deleteFromTrash(request.ids) }
+            Button("Cancel", role: .cancel) { }
+        } message: { _ in
+            Text(LibraryWords.deleteNowMessage)
         }
         // ⌘⌫ puts the selected one back, as Put Back does in Finder's Trash.
         .onKeyPress(.delete, phases: .down) { press in
@@ -377,6 +398,25 @@ private struct MacTrashList: View {
             trashed = read
             loaded = true
         }
+    }
+}
+
+/// The conversations a Delete Now or an Empty Trash will delete: the ones in the Trash when it was asked (so one put
+/// back, or moved in, since isn't touched), and their titles for the question.
+private struct TrashDeleteRequest: Identifiable {
+    let meetings: [Meeting]
+    let isEmptying: Bool
+    var id: [UUID] { ids }
+    var ids: [UUID] { meetings.map(\.id) }
+
+    static func some(_ ids: Set<UUID>, in trashed: [Meeting]) -> TrashDeleteRequest {
+        TrashDeleteRequest(meetings: trashed.filter { ids.contains($0.id) }, isEmptying: false)
+    }
+
+    static func all(_ trashed: [Meeting]) -> TrashDeleteRequest { TrashDeleteRequest(meetings: trashed, isEmptying: true) }
+
+    func title(hidden: (Meeting) -> Bool) -> String {
+        isEmptying ? LibraryWords.emptyTrashTitle(count: meetings.count) : LibraryWords.deleteNowTitle(meetings, hidden: hidden)
     }
 }
 

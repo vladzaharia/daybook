@@ -118,13 +118,16 @@ struct LibraryDevicesScreen: View {
 struct StorageScreen: View {
     @Environment(PhoneAppModel.self) private var model
     @State private var clearing = false
+    /// The Trash's conversations an Empty Trash is asking about, while it asks.
+    @State private var emptying: [UUID] = []
 
     var body: some View {
         @Bindable var settings = model.settings
         let usage = model.audio.usage
         let syncs = model.sync.isConnected
         Form {
-            LibraryStorageSection(report: model.audio.report?.with(models: model.models.bytesOnDisk))
+            LibraryStorageSection(report: model.audio.report?.with(models: model.models.bytesOnDisk),
+                                  emptyTrash: { emptying = model.library.controller.trashedMeetingIDs() })
             // Downloads go back to iCloud and come down again when played: a budget applies only while sync runs.
             if syncs {
                 Section {
@@ -179,6 +182,19 @@ struct StorageScreen: View {
         .navigationTitle("Storage")
         .navigationBarTitleDisplayMode(.inline)
         .task { await model.audio.refreshUsage() }
+        .alert(LibraryWords.emptyTrashTitle(count: emptying.count), isPresented: Binding(get: { !emptying.isEmpty }, set: { if !$0 { emptying = [] } })) {
+            Button("Delete", role: .destructive) {
+                let ids = emptying
+                Task {
+                    do { _ = try await model.library.controller.deleteFromTrash(ids) }
+                    catch { model.say("Couldn’t delete.", details: error.localizedDescription) }
+                    await model.audio.refreshUsage()
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(LibraryWords.deleteNowMessage)
+        }
         .onChange(of: settings.audioCacheBudget) { _, budget in Task { await model.audio.setBudget(budget) } }
         .onChange(of: settings.includesLibraryInBackups) { model.applyBackupExclusion() }
         .onChange(of: settings.includesEncryptedLibraryInBackups) { model.applyBackupExclusion() }

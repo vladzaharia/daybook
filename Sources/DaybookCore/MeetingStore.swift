@@ -236,6 +236,19 @@ public actor MeetingStore {
         return try load(id)
     }
 
+    /// Deletes a conversation's folder from the Trash for good: its audio and notes. The ID stays deleted (sync's
+    /// record of it, in the checkpoint, is untouched). False when it isn't in the Trash, as when it was restored first.
+    public func deleteFromTrash(_ id: UUID) throws -> Bool {
+        let folder = trashURL(for: id)
+        let trash = rootURL.appendingPathComponent("Trash", isDirectory: true)
+        try LocalFiles.requireContained(folder, in: trash)
+        guard fm.fileExists(atPath: folder.path) else { return false }
+        try fm.removeItem(at: folder)
+        cache[id] = nil
+        noteWrite(trash)
+        return true
+    }
+
     private func trashURL(for id: UUID) -> URL { rootURL.appendingPathComponent("Trash/\(id.uuidString)", isDirectory: true) }
 
     private func preservingArtifacts(from stored: Meeting, in snapshot: Meeting) -> Meeting {

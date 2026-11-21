@@ -11,6 +11,7 @@ struct TrashList: View {
     let library: LibraryController
     var twoPage = false
     @Environment(ReadingSession.self) private var session
+    @Environment(PersonalLock.self) private var personalLock: PersonalLock?
     @State private var trashed: [Meeting] = []
     @State private var loaded = false
 
@@ -26,8 +27,12 @@ struct TrashList: View {
                             Button { restore(meeting.id) } label: { Label(TrashWords.restore, systemImage: TrashWords.restoreSymbol) }
                                 .tint(DaybookPalette.prominentFill)
                         }
+                        .swipeActions(edge: .trailing) {
+                            Button(role: .destructive) { askToDelete(meeting) } label: { Label(LibraryWords.deleteNow, systemImage: "trash") }
+                        }
                         .contextMenu {
                             Button { restore(meeting.id) } label: { Label(TrashWords.restore, systemImage: TrashWords.restoreSymbol) }
+                            Button(role: .destructive) { askToDelete(meeting) } label: { Label(LibraryWords.deleteNow, systemImage: "trash") }
                         }
                 }
             }
@@ -54,6 +59,11 @@ struct TrashList: View {
 
     private func restore(_ id: UUID) {
         Self.restore(id, library: library, session: session)
+    }
+
+    private func askToDelete(_ meeting: Meeting) {
+        session.confirmingDeleteNow = DeleteNowRequest(
+            ids: [meeting.id], title: LibraryWords.deleteNowTitle([meeting], hidden: { personalLock?.hides($0) == true }))
     }
 
     /// Puts a conversation back in the library, or says it couldn't.

@@ -22,6 +22,27 @@ extension LibraryController {
         return await Task.detached(priority: .utility) { !Self.trashedIDs(in: root).isEmpty }.value
     }
 
+    /// Deletes conversations from the Trash for good, those of `ids` still in it: one restored since is left alone. A
+    /// conversation whose deletion hasn't reached sync yet stays in the Trash (its folder is what tells the other devices),
+    /// and a pass is asked for. Returns what went and what waits.
+    @discardableResult
+    public func deleteFromTrash(_ ids: [UUID]) async throws -> TrashDeletion {
+        await acquireLock()
+        defer { releaseLock() }
+        guard let store else { throw DaybookError.libraryUnavailable }
+        var result = TrashDeletion()
+        for id in ids {
+            if compressionSync != .local, sync?.isSyncedDeletion(id) != true {
+                if trashedMeetingIDs().contains(id) { result.waiting.append(id) }
+                continue
+            }
+            if try await store.deleteFromTrash(id) { result.deleted.append(id) }
+        }
+        if !result.waiting.isEmpty { sync?.requestSync() }
+        if !result.deleted.isEmpty { revision &+= 1 }
+        return result
+    }
+
     /// The Trash's conversations under a library's root, newest first.
     nonisolated public static func trashedMeetings(in root: URL) -> [Meeting] {
         trashedIDs(in: root).compactMap { trashedMeeting($0, in: root) }.sorted { $0.date > $1.date }
@@ -47,4 +68,12 @@ extension LibraryController {
         let folders = (try? FileManager.default.contentsOfDirectory(at: trash, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
         return folders.compactMap { UUID(uuidString: $0.lastPathComponent) }
     }
+}
+
+/// What Delete Now and Empty Trash did: the conversations deleted, and those kept in the Trash until sync has told the
+/// other devices.
+public struct TrashDeletion: Equatable, Sendable {
+    public var deleted: [UUID] = []
+    public var waiting: [UUID] = []
+    public init() {}
 }
