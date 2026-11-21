@@ -249,7 +249,13 @@ extension LibraryController {
         defer { releaseLock() }
         guard let conversation = meeting(meetingID), let current = conversation.tracks.first(where: { $0.id == trackID }),
               RecordingCompression.File(current) == RecordingCompression.File(before), current.encoding == nil,
-              await mayReplace(in: conversation, stillAllowed: stillAllowed),
+              await mayReplace(in: conversation, stillAllowed: stillAllowed) else {
+            try? FileManager.default.removeItem(at: prepared.url)
+            return false
+        }
+        // A voice profile learned from it, and its clip isn't here: it stays as captured (LibraryController+VoiceClips).
+        let voice = await voiceProtectedMeetings()
+        guard !voice.meetings.contains(meetingID),
               // Still the same after the wait.
               meeting(meetingID)?.tracks.first(where: { $0.id == trackID }).map(RecordingCompression.File.init) == RecordingCompression.File(before) else {
             try? FileManager.default.removeItem(at: prepared.url)
@@ -266,9 +272,10 @@ extension LibraryController {
         }
         try DurableFiles.synchronize([destination.deletingLastPathComponent()])
         try compressionFault?(.renamed)
-        // Asked once more with nothing awaited from here to the track naming the copy: stopped, or Never, since the copy
-        // was put in place keeps the track naming the original (the copy no track names is swept later).
-        guard !Task.isCancelled, compressionPassAge != .never else { return false }
+        // Asked once more with nothing awaited from here to the track naming the copy: stopped, or Never, or a voice clip
+        // gone or a voiceprint come since the copy was put in place keeps the track naming the original (the copy no track
+        // names is swept later).
+        guard !Task.isCancelled, compressionPassAge != .never, voiceProtectionUnchanged(voice.mark) else { return false }
         let encoding = TrackEncoding(method: prepared.plan.method, rule: prepared.plan.rule, sourceFormat: prepared.sourceFormat,
                                      previousSHA256: current.sha256, previousRelativePath: current.relativePath,
                                      previousFileName: current.fileName, previousSize: prepared.sourceSize, size: prepared.size,
@@ -360,12 +367,15 @@ extension LibraryController {
         // Under Never, originals stay (a compressed track keeps naming its copy); a later choice that allows it finishes them.
         var originalsMayGo = removingOriginals && compressionPassAge != .never
         if originalsMayGo, state == .connected, await !settingsAreCurrent() { originalsMayGo = false }
+        // An original a voice profile learned from stays until this Mac holds its clips (LibraryController+VoiceClips).
+        let voiceProtected = originalsMayGo ? await voiceProtectedMeetings().meetings : []
         var found: [Removal] = []
         for meeting in meetings where mayTouch(meeting.id) {
             if Task.isCancelled { return 0 }
             guard let folder = try? await store.meetingDirectory(for: meeting.id) else { continue }
             found += await unnamedCopies(of: meeting, in: folder, store: store)
-            guard originalsMayGo, meeting.tracks.contains(where: \.isCompressed), let stored = try? await store.load(meeting.id) else { continue }
+            guard originalsMayGo, !voiceProtected.contains(meeting.id), meeting.tracks.contains(where: \.isCompressed),
+                  let stored = try? await store.load(meeting.id) else { continue }
             for track in meeting.tracks {
                 if Task.isCancelled { return 0 }
                 guard let encoding = track.encoding, encoding.previousRelativePath != track.relativePath,
@@ -394,7 +404,8 @@ extension LibraryController {
         for removal in found {
             if Task.isCancelled { break }
             // Asked again with the lock held: the library syncs as it did, and for an original in a synced library, this
-            // device's settings are still the library's, the copy is still uploaded, and the saved track still names it.
+            // device's settings are still the library's, the copy is still uploaded, and the saved track still names it;
+            // and no voice profile needs it kept for a clip this Mac doesn't hold.
             guard compressionSync == state else { break }
             if removal.isOriginal {
                 if state == .connected {
@@ -402,6 +413,8 @@ extension LibraryController {
                 }
                 guard let stored = try? await store.load(removal.meetingID),
                       stored.tracks.first(where: { $0.id == removal.trackID }).map(RecordingCompression.File.init) == removal.file else { continue }
+                // The last question awaited before the deletion.
+                guard await !voiceProtectedMeetings().meetings.contains(removal.meetingID) else { continue }
             }
             // Then, with nothing awaited between these and the deletion: the choice, the track and the file it names, no
             // other track naming the file going, and both files (the one going, the one staying) the ones hashed.
@@ -493,6 +506,8 @@ extension LibraryController {
         await repairMissingCopies(store: store)
         releaseLock()
         await finishCompressions(removingOriginals: false)
+        // A voice clip cut before a crash, and nothing more: no clip is let go before sync brings the library's settings.
+        await reconcileVoiceClips(deleting: false)
     }
 }
 

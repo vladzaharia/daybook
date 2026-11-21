@@ -710,6 +710,12 @@ extension Meeting {
         }
     }
 
+    /// A speaker the person named before its voice was known (`runsWithoutVoices`): its profile learns from it once
+    /// it's given a voice from the recording, so the recording's original is needed until then.
+    public var awaitsVoiceForNamedSpeaker: Bool {
+        runsWithoutVoices.contains { $0.speakerIDs.contains { handRename(of: $0) != nil } }
+    }
+
     /// Gives speakers without a voice embedding the ones made for them since (`runsWithoutVoices`),
     /// in `space`, by `model`. Nothing else changes: names, identities, and the transcript stay.
     /// Returns whether any speaker got one.

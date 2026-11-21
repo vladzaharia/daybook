@@ -85,6 +85,10 @@ public final class LibraryController {
     @ObservationIgnored var compressionsInFlight = 0
     /// Stops a compression at a step as a crash would there (tests).
     @ObservationIgnored var compressionFault: ((RecordingCompressionStep) throws -> Void)?
+    /// Voice clips being made (LibraryController+VoiceClips.swift): their files aren't swept meanwhile.
+    @ObservationIgnored var voiceClipsInFlight = 0
+    /// Stops a voice clip at a step as a crash would there (tests).
+    @ObservationIgnored var voiceClipFault: ((VoiceClipStep) throws -> Void)?
     /// Where this device last applied the library's settings from sync whole, in this run (`SyncResult.settingsApplied`,
     /// acknowledged): the library, its folder, and the engine. Until it's the library connected now, through the same
     /// folder and engine, a Mac compresses nothing there and lets no original go, since another device's Never may not
