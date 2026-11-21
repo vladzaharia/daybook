@@ -637,6 +637,7 @@ final class PhoneAppModel: RecordingCommandHandling {
     /// this iPhone can summarize, and the processor picks up what it can do now.
     func processingChanged() {
         placement.localSummarizer = processingSummarizer
+        placement.modelName = { [weak self] _ in self?.models.summaryModel?.name }
         processor.pickUp()
     }
 
@@ -659,6 +660,7 @@ final class PhoneAppModel: RecordingCommandHandling {
             placement?.localSummaryFailed(id, request: request, reason: reason, kind: kind) ?? false
         }
         placement.localSummarizer = processingSummarizer
+        placement.modelName = { [weak self] _ in self?.models.summaryModel?.name }
         // An upgrade of this iPhone's own recordings is its processor's work; what it can do is what its models can.
         upgrades.capabilities = { [weak self] in self?.processingCapabilities ?? .none }
         upgrades.owns = { [weak self] in self?.library.ownsTrack ?? { _ in false } }

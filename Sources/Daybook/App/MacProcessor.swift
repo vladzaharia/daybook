@@ -37,14 +37,16 @@ final class MacProcessor {
 
     /// Queues `id`'s work. A job waits only for what transcribes (transcript first): new audio starts once the models
     /// that transcribe and find speakers are here, and its summary waits at the summary step if it has to. A Summarize,
-    /// which transcribes nothing, waits for the summary model unless the cloud takes it at once.
+    /// which transcribes nothing, waits for the summary model unless the cloud takes it at once. `summaryModelID` runs this
+    /// job's summary with another installed model than the one chosen in Settings, which stays as it is.
     func enqueue(_ id: UUID, mode: ProcessingRequest.Mode = .newAudio, upgrade: ProcessingRequest.Upgrade? = nil, summarizesHere: Bool = false,
-                 summarizesInCloud: Bool = false) {
+                 summarizesInCloud: Bool = false, summaryModelID: String? = nil) {
         guard let app, id != app.recordingID, !queue.isQueued(id), let meeting = app.meetings.first(where: { $0.id == id }) else { return }
         // A conversation of an iPhone's own, queued only to check where its recording belongs, isn't owed: its mark
         // lives only while Daybook runs, and the next sync pass finds it again (`phoneTranscriptsToCheck`).
         if !app.checkingPhoneTranscripts.contains(id) { queue.owe(id, mode: mode, upgrade: upgrade) }
-        let job = app.makeJob(meetingID: id, mode: mode, upgrade: upgrade, summarizesHere: summarizesHere, summarizesInCloud: summarizesInCloud)
+        let job = app.makeJob(meetingID: id, mode: mode, upgrade: upgrade, summarizesHere: summarizesHere, summarizesInCloud: summarizesInCloud,
+                              summaryModelID: summaryModelID)
         let hasNew = meeting.hasUntranscribedTranscribableAudio
         let missing = job.transcribingModelIDs(hasUntranscribedAudio: hasNew).subtracting(app.installedModels)
         let waitsForSummaryModel = missing.isEmpty && job.mode == .summaryOnly && app.summaryWaitsForModel(job, in: meeting)
@@ -82,7 +84,8 @@ final class MacProcessor {
         queue.task = Task { [weak self, weak app] in
             guard let self, let app else { return }
             let queue = self.queue
-            while !Task.isCancelled, self.askHolds == 0, let job = queue.next() {
+            while !Task.isCancelled, self.askHolds == 0, let next = queue.next() {
+                let job = app.jobWithUsableSummaryModel(next)
                 let id = job.meetingID
                 // Never run a request another device holds, or one that finished elsewhere meanwhile.
                 guard app.mayRun(job) else { queue.settle(id); continue }

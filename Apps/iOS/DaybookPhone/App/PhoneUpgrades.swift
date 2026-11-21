@@ -72,6 +72,8 @@ final class PhoneUpgrades {
         case (.summarization, .cloud):
             // The person chose the cloud's better summary: it starts there at once.
             await placement.summaryIsDue(id)
+            // Only the placement this call made, on the screen: a Mac's countdown, or one placed meanwhile, isn't handed it.
+            guard placement.planners[id] != nil, placement.isOnScreen else { return }
             placement.perform(.useCloud, for: id)
         default:
             // A Mac's, or this iPhone's own recordings redone by its processor: a request naming the device.

@@ -129,7 +129,9 @@ private struct PageColophon: View {
                                  catalog: state.modelCatalog, deviceClass: deviceClass,
                                  notebookChanged: meeting.summaryNotebookChanged),
                  arrived: summary.createdAt, template: TemplateWords.title(for: meeting, resolved: state.resolvedTemplate(for: meeting)),
-                 summarizeAgain: summarizeAgain) {
+                 summarizeAgain: summarizeAgain,
+                 choices: summarizeAgain == nil ? [] : state.summarizeAgainChoices(for: meeting),
+                 choose: { [state, id = meeting.id] in state.summarizeAgain(id, as: $0) }) {
             TemplateMenuItems(state: state, meetingID: meeting.id)
         }
     }

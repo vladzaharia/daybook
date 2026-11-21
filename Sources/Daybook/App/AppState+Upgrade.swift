@@ -77,3 +77,31 @@ extension AppState {
         if devices != syncDevices { syncDevices = devices }
     }
 }
+
+extension AppState {
+    /// Every way this conversation's summary can be made again now (`SummarizeAgainChoices`): the summary models installed
+    /// here that fit this Mac (the chosen one first), and the cloud model Settings › Cloud resolves to while the cloud is
+    /// on offer for this conversation.
+    func summarizeAgainChoices(for meeting: Meeting) -> [SummarizeAgainChoice] {
+        let local = modelCatalog.models(for: .summarization).filter {
+            installedModels.contains($0.key) && LiveModelChoices.fitsMemory($0, physicalMemory: physicalMemory)
+        }.map { SummarizeAgainChoices.LocalModel(id: $0.key, name: $0.name) }
+        return SummarizeAgainChoices.rows(for: meeting, local: local, defaultLocal: summaryModel,
+                                          cloud: hasCloudSetup && cloudOnOffer ? cloud.resolved?.model : nil, preferences: hasCloudSetup ? cloud.preferences : CloudSummaryPreferences())
+    }
+
+    /// Summarizes again as the person chose. A model of this Mac's runs here whatever the cloud preferences say
+    /// (`summarizesHere`: neither Always nor a failure sends the transcript to the cloud), with another installed model for
+    /// this run only (the chosen one in Settings stays). The cloud's goes through the path Use the Cloud takes
+    /// (`summarizeInCloud`, which checks the conversation as it is now), and only when the model resolved now is the one the
+    /// row named; otherwise nothing is sent or queued, and the menu, drawn from what's true now, no longer lists the row.
+    func summarizeAgain(_ id: UUID, as choice: SummarizeAgainChoice) {
+        switch choice.place {
+        case .thisDevice(let model):
+            processor.enqueue(id, mode: .summaryOnly, summarizesHere: true, summaryModelID: model == summaryModel ? nil : model)
+        case .cloud(let modelID):
+            guard hasCloudSetup, cloud.resolved?.model.id == modelID else { return }
+            summarizeInCloud(id)
+        }
+    }
+}

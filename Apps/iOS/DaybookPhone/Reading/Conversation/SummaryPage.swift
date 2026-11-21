@@ -316,7 +316,9 @@ private struct PageColophon: View {
         Colophon(SummaryColophon(summary, thisDeviceID: library.thisDevice.id, words: .iPhone(id: library.thisDevice.id),
                                  deviceClass: deviceClass, notebookChanged: meeting.summaryNotebookChanged),
                  arrived: summary.createdAt, template: TemplateWords.title(for: meeting, resolved: library.resolvedTemplate(for: meeting)),
-                 summarizeAgain: summarizeAgain) {
+                 summarizeAgain: summarizeAgain,
+                 choices: summarizeAgain == nil ? [] : placement?.summarizeAgainChoices(for: meeting) ?? [],
+                 choose: { [placement, id = meeting.id] choice in Task { await placement?.summarizeAgain(id, as: choice) } }) {
             TemplatePicker(library: library, meeting: meeting)
         }
     }

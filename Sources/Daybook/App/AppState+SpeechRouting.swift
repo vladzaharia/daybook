@@ -107,17 +107,35 @@ extension AppState {
         return [route.chosenTranscription] + (detectSpeakers ? route.speakerModels : []) + [summaryModel]
     }
 
+    /// A summary model installed here that this Mac has the memory for.
+    func isUsableSummaryModel(_ id: String) -> Bool {
+        installedModels.contains(id) && modelCatalog.model(id).map { LiveModelChoices.fitsMemory($0, physicalMemory: physicalMemory) } == true
+    }
+
+    /// A Summarize Again job queued with another model than Settings' (it runs here, `summarizesHere`) whose model went while
+    /// it waited (uninstalled, or no longer fits) runs the Settings model instead, still on this Mac: never the cloud,
+    /// and not waiting for a model that isn't coming.
+    func jobWithUsableSummaryModel(_ job: ProcessingJob) -> ProcessingJob {
+        guard job.mode == .summaryOnly, job.summarizesHere, job.summaryModelID != summaryModel, !isUsableSummaryModel(job.summaryModelID) else { return job }
+        return job.withSummaryModel(summaryModel, revision: installedRevisions[summaryModel])
+    }
+
     /// A job for `meetingID`, frozen with the routed models, these preferences with the library's language, and their
     /// revisions.
     func makeJob(meetingID: UUID, mode: ProcessingRequest.Mode, templateID: String? = nil, upgrade: ProcessingRequest.Upgrade? = nil,
-                 summarizesHere: Bool = false, summarizesInCloud: Bool = false) -> ProcessingJob {
+                 summarizesHere: Bool = false, summarizesInCloud: Bool = false, summaryModelID: String? = nil) -> ProcessingJob {
         let route = speechRoute
         var preferences = processingPreferences
         preferences.speakerModelID = route.speakerModel
         preferences.transcriptionLanguage = route.transcription.language
-        return ProcessingJob(meetingID: meetingID, mode: mode, transcriptionModelID: route.transcription.model, summaryModelID: summaryModel,
+        // A summary the person asked to make with another installed model: that job only (its revision frozen too). One
+        // that went (uninstalled, or no longer fits) since the menu was drawn runs the chosen model, never a download.
+        var revisions = frozenModelRevisions
+        let usable = summaryModelID.flatMap { isUsableSummaryModel($0) ? $0 : nil }
+        if let usable, let revision = installedRevisions[usable] { revisions[usable] = revision }
+        return ProcessingJob(meetingID: meetingID, mode: mode, transcriptionModelID: route.transcription.model, summaryModelID: usable ?? summaryModel,
                              detectSpeakers: route.findsSpeakers, preferences: preferences, templateID: templateID,
-                             revisions: frozenModelRevisions, voiceEmbeddingModelID: route.voiceEmbedder,
+                             revisions: revisions, voiceEmbeddingModelID: route.voiceEmbedder,
                              languageFallbackModelID: route.transcription.fallback, smallTasksModelID: smallTasksModel, photoModelID: photoModel?.id,
                              upgrade: upgrade, summarizesHere: summarizesHere, summarizesInCloud: summarizesInCloud)
     }

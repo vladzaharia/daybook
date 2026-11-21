@@ -78,6 +78,8 @@ final class PhoneSummaryPlacement {
     /// Runs a summary placed on this iPhone, on the request claimed for it: the processor's work
     /// (`PhoneProcessor.summarizeHere`). Without it, a summary placed here goes to a Mac.
     @ObservationIgnored var runHere: ((UUID, ProcessingRequest) -> Void)?
+    /// A summary model's display name from its catalog key; nil names it by the key.
+    @ObservationIgnored var modelName: ((String) -> String?)?
     /// Summaries in the cloud with the person's own keys: `cloud`'s directory, sent as this iPhone. Tests and demos
     /// set one of their own.
     var cloudSummarizer: (any CloudSummarizing)? {
@@ -297,6 +299,35 @@ final class PhoneSummaryPlacement {
         refresh()
         placements.begin(id, immediately: true)
         if placements[id]?.phase == .waitingForMac { send(id) }
+    }
+
+    /// Every way this conversation's summary can be made again now (`SummarizeAgainChoices`): this iPhone's own summarizer
+    /// when it can run, and the cloud model while it's on offer for this conversation (this iPhone's own switches).
+    func summarizeAgainChoices(for meeting: Meeting) -> [SummarizeAgainChoice] {
+        let local = (runHere != nil ? localSummarizer : nil).flatMap { $0.canSummarize ? $0 : nil }
+            .map { [SummarizeAgainChoices.LocalModel(id: $0.model, name: modelName?($0.model) ?? $0.model)] } ?? []
+        return SummarizeAgainChoices.rows(for: meeting, local: local, defaultLocal: local.first?.id, cloud: cloudOffer, preferences: preferences)
+    }
+
+    /// Summarizes again as the person chose. This iPhone's own model runs here whatever the cloud preferences say: kept here
+    /// (`keptHere`) and placed through `beginHere`, so neither Always nor a failure brings the cloud back. The cloud's goes
+    /// as accepting a cloud Upgrade does, only when the model on offer now is the one the row named, and only on the
+    /// placement this call made while Daybook is on the screen (a Mac's countdown, or a summary placed meanwhile, is left
+    /// alone).
+    func summarizeAgain(_ id: UUID, as choice: SummarizeAgainChoice) async {
+        switch choice.place {
+        case .cloud(let modelID):
+            guard cloudOffer(for: id)?.id == modelID else { return }
+            await summaryIsDue(id)
+            guard planners[id] != nil, isOnScreen else { return }
+            perform(.useCloud, for: id)
+        case .thisDevice:
+            guard options.thisDeviceCanSummarize, runHere != nil else { return }
+            templates[id] = nil
+            keptHere.insert(id)
+            refresh()
+            placements.beginHere(id)
+        }
     }
 
     /// The person's choice for a conversation's summary: this iPhone's own countdown, a Mac's countdown shown
