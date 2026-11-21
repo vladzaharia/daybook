@@ -137,7 +137,7 @@ encodes them again. watchOS has no `AVAssetWriter`, so there are no movie fragme
   playback's), and haptics still play (`setAllowHapticsAndSystemSoundsDuringRecording`). Starting and stopping tap the
   wrist.
 - The microphone permission is asked the first time with `AVAudioApplication.requestRecordPermission`. Refused, the
-  screen says "Allow Microphone in Settings". A start (or a resume) that fails lets the audio session go.
+  screen says "Microphone is off" over "Settings › Privacy & Security › Microphone". A start (or a resume) that fails lets the audio session go.
 - The level meter is fed only while Daybook is active; with the wrist down the writer skips it, to spare the CPU
   watchOS allows a background recording.
 - Nothing starts with less than 50 MB free, and a recording in progress ends on its own when a segment would open below
@@ -157,7 +157,14 @@ whenever a segment opens or closes.
   The gap stays a gap: the iPhone fills it with silence when it joins them.
 - **Interruptions.** A call or Siri closes the open segment cleanly and reports `.interrupted`; the recording waits
   ("Paused"). When the interruption ends with Daybook active, or Daybook next becomes active, the next run starts
-  (`.resumed`).
+  (`.resumed`). Paused, the button is the red dot (Resume) with a small Stop under it, and the clock holds the length
+  recorded; a resume that fails says "Couldn’t resume" and keeps Resume. The wrist feels a pause (`.directionDown`); in
+  the background a "Recording paused" notice ("Open Daybook to resume recording.") goes once the recording goes on or
+  stops. A recording that ends on its own (storage full) plays the failure haptic, not Stop's, and posts "Recording
+  stopped" with the reason when Daybook isn't on the screen. The first recording asks to allow notices.
+- **The status line** (`WatchWords.statusLine`): "Starting…" while the microphone is asked, "On Watch" or "With
+  iPhone" while recording, "Sends later" when the iPhone is out of reach, "Sending to iPhone…" or "Waiting for iPhone"
+  after Stop.
 - **Route and format changes** stop the engine: the run ends there (its segment closes and goes out) and the next starts
   on the new format, so the restart's gap stays a gap. If it can't start again, it waits as for an interruption.
 - **The audio system resetting** closes the run the same way, and the engine is made again (the old one can't start any

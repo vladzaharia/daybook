@@ -10,9 +10,22 @@ struct RecorderView: View {
     var body: some View {
         VStack(spacing: 8) {
             elapsed
-            RecordButton(isRecording: model.recording != nil) { model.toggleRecording() }
-            LevelMeter(level: model.isCapturing ? model.level : 0)
-                .opacity(model.isCapturing ? 1 : 0)
+            if model.pausedLength != nil {
+                RecordButton(isRecording: false, label: "Resume") { model.resumeRecording() }
+                Button("Stop") { model.toggleRecording() }
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.red)
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Stop Recording")
+            } else {
+                RecordButton(isRecording: model.recording != nil, label: model.recording != nil ? "Stop Recording" : "Record") {
+                    model.toggleRecording()
+                }
+                .disabled(model.isStarting)
+                .opacity(model.isStarting ? 0.5 : 1)
+                LevelMeter(level: model.isCapturing ? model.level : 0)
+                    .opacity(model.isCapturing ? 1 : 0)
+            }
             if let line = model.statusLine {
                 Text(line)
                     .font(.footnote)
@@ -20,6 +33,14 @@ struct RecorderView: View {
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
                     .minimumScaleFactor(0.8)
+                if let detail = model.statusDetail {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.8)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -29,9 +50,12 @@ struct RecorderView: View {
     @ViewBuilder
     private var elapsed: some View {
         Group {
-            if let recording = model.recording {
+            if let paused = model.pausedLength {
+                // Held at the length recorded; the clock below counts only while the microphone captures.
+                Text(verbatim: WatchWords.clock(paused))
+                    .foregroundStyle(.secondary)
+            } else if let recording = model.recording {
                 Text(timerInterval: recording.startedAt...Date.distantFuture, countsDown: false)
-                    .foregroundStyle(model.isCapturing ? .primary : .secondary)
             } else {
                 Text(verbatim: "0:00")
                     .foregroundStyle(.secondary)
@@ -47,6 +71,7 @@ struct RecorderView: View {
 /// A large round button: a red dot to record, a red square to stop.
 private struct RecordButton: View {
     var isRecording: Bool
+    var label: String
     var action: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -73,7 +98,7 @@ private struct RecordButton: View {
         }
         .buttonStyle(.plain)
         .animation(WatchMotion.resolved(WatchMotion.state, reduceMotion: reduceMotion), value: isRecording)
-        .accessibilityLabel(isRecording ? "Stop Recording" : "Record")
+        .accessibilityLabel(label)
     }
 }
 
