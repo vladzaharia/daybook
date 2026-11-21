@@ -81,6 +81,18 @@ public final class LibraryController {
     private var savingSyncResult = false
     /// The library settings as a pass last encoded them, so a pass with unchanged settings doesn't encode them again.
     @ObservationIgnored private var encodedSettings: (metadata: LibraryMetadata, data: Data)?
+    /// Compressions under way (LibraryController+Compression.swift): their temporary copies aren't swept meanwhile.
+    @ObservationIgnored var compressionsInFlight = 0
+    /// Stops a compression at a step as a crash would there (tests).
+    @ObservationIgnored var compressionFault: ((RecordingCompressionStep) throws -> Void)?
+    /// Where this device last applied the library's settings from sync whole, in this run (`SyncResult.settingsApplied`,
+    /// acknowledged): the library, its folder, and the engine. Until it's the library connected now, through the same
+    /// folder and engine, a Mac compresses nothing there and lets no original go, since another device's Never may not
+    /// have arrived. Cleared when a pass starts; set again only by one that applied them and was acknowledged.
+    @ObservationIgnored public internal(set) var settingsAppliedFromSync: SettingsSyncMark?
+    /// The last pass skipped a settings version a newer Daybook wrote: what it says can't be known, so Compress Older
+    /// Recordings counts as Never meanwhile.
+    @ObservationIgnored public internal(set) var newerSettingsSkipped = false
 
     public init(rootURL: URL, sync: LibrarySyncController?) {
         self.rootURL = rootURL
@@ -178,7 +190,7 @@ public final class LibraryController {
     public func existingMeeting(containingAudioAt url: URL) async throws -> Meeting? {
         guard let store else { throw DaybookError.libraryUnavailable }
         let digest = try await AudioDigest.sha256(contentsOf: url)
-        let candidates = meetings.filter { $0.tracks.contains { $0.sha256 == digest && !$0.isMovedOut } }
+        let candidates = meetings.filter { $0.tracks.contains { $0.holdsBytes(digest) && !$0.isMovedOut } }
         guard !candidates.isEmpty, let found = await store.verifiedMeeting(withDigest: digest, among: candidates) else { return nil }
         return meeting(found.id) ?? found
     }
@@ -211,6 +223,17 @@ public final class LibraryController {
         change(&meeting)
         guard meeting != meetings[index] else { return }
         meeting.updatedAt = Date()
+        meetings[index] = meeting
+        persist(meeting)
+    }
+
+    /// The same, for a change that isn't an edit (a recording compressed): `updatedAt` stays, so the conversation isn't
+    /// shown as edited and its age (Compress Older Recordings' 30 days) doesn't start again.
+    func updateKeepingEditDate(_ id: UUID, _ change: (inout Meeting) -> Void) {
+        guard let index = meetings.firstIndex(where: { $0.id == id }) else { return }
+        var meeting = meetings[index]
+        change(&meeting)
+        guard meeting != meetings[index] else { return }
         meetings[index] = meeting
         persist(meeting)
     }
@@ -601,6 +624,28 @@ public final class LibraryController {
         undoManager.setActionName(actionName)
     }
 
+    /// Compress Older Recordings (Settings › Storage): the library's choice, so every device shows the same and every Mac
+    /// acts on it; 30 days while nobody chose, Never for a value this version can't read.
+    public var recordingCompression: RecordingCompressionAge { newerSettingsSkipped ? .never : metadata.recordingCompression }
+
+    /// The choice as a compression pass acts on it: Never also while any voiceprint is in a shape this version can't read
+    /// (a newer Daybook's), since which conversation it was learned from can't be known. The row shows the choice itself.
+    public var compressionPassAge: RecordingCompressionAge {
+        (metadata.voiceprints ?? []).contains { $0.unreadableValue != nil } ? .never : recordingCompression
+    }
+
+    /// The settings this device holds are the library's as sync last delivered them whole, through the folder and engine
+    /// connected now (`settingsAppliedFromSync`), and, given `library`, that library's.
+    public func settingsAreCurrent(library: UUID? = nil) async -> Bool {
+        guard let sync, let mark = settingsAppliedFromSync, library.map({ $0 == mark.library }) ?? true else { return false }
+        return await SettingsSyncMark.current(sync) == mark
+    }
+
+    /// Chooses Compress Older Recordings for the whole library. The later change wins everywhere.
+    public func setRecordingCompression(_ age: RecordingCompressionAge, at now: Date = Date()) {
+        choose(.compressOlderRecordings, age.rawValue, at: now)
+    }
+
     private func choose(_ name: LibraryChoice.Name, _ selection: String?, at now: Date) {
         let stored = metadata.choice(name)
         // The choice the library holds already: nothing new to save or sync.
@@ -856,7 +901,7 @@ public final class LibraryController {
         if stored == nil, provenance.capture != nil {
             // Same bytes imported before (recovery after a crash): find the existing track by digest.
             let digest = try await AudioDigest.sha256(contentsOf: url)
-            stored = imported.tracks.first { $0.sha256 == digest }
+            stored = imported.tracks.first { $0.holdsBytes(digest) }
         }
         update(id) { current in
             for track in imported.tracks where !current.tracks.contains(where: { $0.id == track.id }) { current.tracks.append(track) }
@@ -931,6 +976,9 @@ public final class LibraryController {
     }
 
     private func applyPass(_ sync: LibrarySyncController, protecting active: UUID?, limits: SyncPassLimits, scope: SyncPassScope) async -> SyncApplied? {
+        // Only a pass that applies the settings whole and is acknowledged says they're current; one that stops partway
+        // (cancelled, failed, the account changed) leaves them not known.
+        settingsAppliedFromSync = nil
         await flush()
         guard let store else { return nil }
         var applied: SyncApplied?
@@ -988,12 +1036,15 @@ public final class LibraryController {
             let metadataBeforeMerge = metadata
             // Each version merges on its own: one this version can't read (a newer format) is left for an update
             // instead of stopping every pass, and settings inside one it can't read travel on unchanged.
+            var skippedNewerSettings = false
             for data in result.metadataVersions {
                 guard let remote = try? JSONDecoder().decode(LibraryMetadata.self, from: data), remote.schemaVersion == 1 else {
-                    mergeWarnings.append(Self.newerSettingsWarning); continue
+                    mergeWarnings.append(Self.newerSettingsWarning); skippedNewerSettings = true; continue
                 }
                 metadata = metadata.merging(remote)
             }
+            // Never from the moment it's seen; only an acknowledged pass that skipped nothing lifts it.
+            if skippedNewerSettings || result.settingsUnreadable { newerSettingsSkipped = true }
             if metadata.hasUnreadableValues { mergeWarnings.append(Self.newerSettingsWarning) }
             let mergedGlossary = metadata.vocabulary.compactMap(\.value)
             if mergedGlossary != glossary || metadata != metadataBeforeMerge ||
@@ -1033,6 +1084,8 @@ public final class LibraryController {
             guard sync.canApply(result) else { return applied }
             try await sync.acknowledge(result)
             applied?.acknowledged = true
+            if result.settingsApplied, let mark = await SettingsSyncMark.current(sync) { settingsAppliedFromSync = mark } else { settingsAppliedFromSync = nil }
+            newerSettingsSkipped = skippedNewerSettings || result.settingsUnreadable
         } catch is CancellationError {
             // Cancelled, or sync moved to another account or folder mid-pass: nothing failed, and the next pass
             // offers the unacknowledged changes again.
@@ -1159,4 +1212,18 @@ public struct IngestedRecording: Sendable {
     public var track: RecordingTrack?
     /// The conversation as the store saved it.
     public var imported: Meeting
+}
+
+/// Where a pass applied the library's settings: the library, its sync folder, and the engine instance. A reconnect, a
+/// new folder, or another library is another mark.
+public struct SettingsSyncMark: Equatable, Sendable {
+    public var library: UUID
+    public var folder: String
+    public var engine: ObjectIdentifier
+
+    @MainActor
+    static func current(_ sync: LibrarySyncController) async -> SettingsSyncMark? {
+        guard let folder = sync.folder, let engine = sync.engine, let library = await sync.libraryID() else { return nil }
+        return SettingsSyncMark(library: library, folder: folder.standardizedFileURL.path, engine: ObjectIdentifier(engine))
+    }
 }

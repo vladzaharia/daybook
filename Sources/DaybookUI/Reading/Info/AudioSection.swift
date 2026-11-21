@@ -170,6 +170,9 @@ struct AudioRow: View {
         } else if let line = services.recordingLine(track, meeting) {
             Text(line)
         }
+        if let compressed = RecordingCompressionSchedule.infoLine(track) {
+            Text(compressed)
+        }
     }
 
     private func availabilityLine(_ availability: ReadingAudio) -> some View {

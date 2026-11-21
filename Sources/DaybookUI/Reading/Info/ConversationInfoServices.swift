@@ -77,7 +77,7 @@ public struct InfoNow: Equatable, Sendable {
 
     /// The words at a moment: a countdown's seconds move.
     public func text(at now: Date) -> String {
-        ConversationRowStatus(kind: .waiting, text: text, countdownUntil: countdownUntil).text(at: now) ?? text
+        countdownUntil.map { SummaryPlacementWords.ticking(text, until: $0, at: now) } ?? text
     }
 
     /// The row's words for a status (`ConversationStatusPresentation.row`), with the choices of a summary that's

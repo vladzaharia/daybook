@@ -109,24 +109,21 @@ enum FloatingStatus {
         case .processing:
             guard case .processing(let progress) = conversation.status else {
                 // Not this Mac's queue at work: where its summary runs said so, in the cloud with its model named.
-                return chip("cloud", text, short: "Summary…", .working)
+                return chip("cloud", text, short: ProcessingWords.shortLabel(.summarizing), .working)
             }
             let elsewhere = progress.device.map { $0.id != words.thisDeviceID } ?? false
-            let symbol: String
-            let short: String?
-            switch progress.stage {
-            case .transcribing: (symbol, short) = ("quote.bubble", nil)
-            case .identifyingSpeakers: (symbol, short) = ("person.2.wave.2", "Speakers…")
-            case .summarizing: (symbol, short) = ("text.alignleft", "Summary…")
-            }
-            return chip(elsewhere ? "desktopcomputer" : symbol, text, short: progress.fraction.map(ProcessingWords.percentText) ?? (elsewhere ? nil : short),
+            return chip(elsewhere ? "desktopcomputer" : ProcessingWords.symbol(progress.stage), text,
+                        short: progress.fraction.map(ProcessingWords.percentText) ?? (elsewhere ? nil : ProcessingWords.shortLabel(progress.stage)),
                         .working, progress: progress.fraction)
         case .waiting:
             // Where its summary runs (docs/multipoint.md, "Where summaries run"): Use the Cloud and Start Now are in its menu.
             if let until = row.countdownUntil {
                 let seconds = SummaryPlacementWords.secondsLeft(until: until, at: now)
-                return chip("clock", text, short: SummaryPlacementWords.seconds(seconds), .calm,
-                            detail: SummaryPlacementWords.countdown(on: words.here, seconds: seconds), countdown: until)
+                var endsInCloud = false
+                if case .cloud? = row.countdownPlace { endsInCloud = true }
+                return chip(endsInCloud ? "cloud" : "clock", text, short: SummaryPlacementWords.seconds(seconds), .calm,
+                            detail: row.countdownPlace.map { SummaryPlacementWords.countdown(to: $0, thisDevice: words.here, seconds: seconds) } ?? text,
+                            countdown: until)
             }
             return chip("clock", text, short: "Waiting", .calm)
         case .waitingForModels:

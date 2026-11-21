@@ -274,6 +274,10 @@ public struct LibraryChoice: Codable, Equatable, Sendable {
         case transcriptionLanguage
         /// The speaker profile that is the person themselves: a profile's ID (a UUID string), or nil for none.
         case ownerProfile
+        /// How long after it was last processed and edited a conversation's recordings are kept as captured before Macs
+        /// replace them with a verified lossy copy (`RecordingCompressionAge`): "30d", "90d", or "never"; nil for the
+        /// default (30 days).
+        case compressOlderRecordings
     }
 
     /// What was chosen; nil for the default (Automatic, for the transcription language).

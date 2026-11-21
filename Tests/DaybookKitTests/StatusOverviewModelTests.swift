@@ -751,11 +751,11 @@ final class StatusOverviewModelTests: XCTestCase {
         let entry = StatusOverviewModel.queue(
             meetings: [failed], liveProgress: [:], words: .iPhone(id: phone.id), now: now
         ).first
-        XCTAssertEqual(entry?.line, "Studio Mac couldn’t finish")
+        XCTAssertEqual(entry?.line, "Studio Mac couldn’t transcribe")
         XCTAssertEqual(entry?.detail, "Something went wrong on Studio Mac. The recording is saved.")
         XCTAssertEqual(entry?.details, "MLX error: Metal heap allocation failed (code 7)")
         XCTAssertFalse(entry?.line.contains("MLX") ?? true)
-        XCTAssertEqual(entry?.line(under: "Studio Mac"), "Couldn’t finish")
+        XCTAssertEqual(entry?.line(under: "Studio Mac"), "Couldn’t transcribe")
 
         // Over the link, the line names the Mac and nothing more.
         let live = LiveProgress(
@@ -927,14 +927,14 @@ final class StatusOverviewModelTests: XCTestCase {
         XCTAssertEqual(
             queue[1].retry, .summaryOnly, "Try Again asks again for what failed, as the page does")
         XCTAssertTrue(queue[0].failed)
-        XCTAssertEqual(queue[0].line(under: "Studio Mac"), "Couldn’t finish")
+        XCTAssertEqual(queue[0].line(under: "Studio Mac"), "Couldn’t transcribe")
         XCTAssertEqual(
             queue[0].detail, "The speech model couldn’t start on Studio Mac. The recording is saved.",
             "in the plain words both apps give its kind")
         XCTAssertEqual(queue[0].details, "Out of memory")
         XCTAssertFalse(queue[0].requestedHere)
         XCTAssertEqual(
-            queue[0].line(under: nil), "Studio Mac couldn’t finish",
+            queue[0].line(under: nil), "Studio Mac couldn’t transcribe",
             "at the top of the card, it names the Mac")
     }
 

@@ -114,6 +114,15 @@ final class FailureWordsTests: XCTestCase {
 
     // MARK: Words
 
+    func testBehaviorARowNamesTheStepThatFailed() {
+        func line(_ kind: ProcessingRequest.FailureKind, transcripts: Bool) -> String {
+            FailureWords.rowLine(ProcessingStatus.Failure(reason: "x", hadTranscripts: transcripts, device: nil, kind: kind))
+        }
+        XCTAssertEqual(line(.other, transcripts: false), "Couldn’t transcribe")
+        XCTAssertEqual(line(.other, transcripts: true), "Couldn’t summarize")
+        XCTAssertEqual(line(.cloud(.offline), transcripts: false), "Couldn’t summarize")
+    }
+
     func testBehaviorEachKindReadsTheSameOnBothDevicesWithTheDeviceNamed() {
         typealias Kind = ProcessingRequest.FailureKind
         let thisMac = DeviceWords.mac(id: "studio"), thisPhone = DeviceWords.iPhone(id: "phone")

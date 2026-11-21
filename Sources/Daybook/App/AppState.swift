@@ -99,6 +99,12 @@ final class AppState {
     var isListeningToEarlierRecordings = false
     var listenedRecordings = Set<UUID>()
     var backgroundListeningDelay: Duration = .seconds(20)
+    /// Compressing older recordings when idle (AppState+Compression.swift): the pass waiting or under way, and how long
+    /// an idle moment lasts before it starts.
+    @ObservationIgnored var compressionPass: Task<Void, Never>?
+    var compressionDelay: Duration = .seconds(90)
+    /// When this Mac may first compress in the library open now, once a pass has looked (Settings says so until then).
+    var compressionStartsAt: Date?
     /// This Mac's processing: the queue and model downloads it owns (`ProcessingQueue`), and the jobs it runs
     /// (MacProcessor.swift).
     let processor: MacProcessor
@@ -528,6 +534,13 @@ final class AppState {
         static let isInspectorPresented = "isInspectorPresented"
         static let showsMenuBarExtra = "showsMenuBarExtra"
         static let onboardingCompleted = "onboardingCompleted"
+        /// When this Mac may first compress older recordings: a week after the first launch of a version that does it
+        /// (`RecordingCompressionSchedule`).
+        static let compressionStartsAt = "compressionStartsAt"
+        /// This Mac's last compression pass in a library, for the clock check (`RecordingCompressionClock`).
+        static let compressionLastPass = "compressionLastPass"
+        /// The same pass on the continuous clock, with the boot it counts from.
+        static let compressionLastPassClock = "compressionLastPassClock"
     }
 
     /// Not Now (or Quit, Start Fresh, Keep It) on the library move offered at launch: once it's answered, the library
@@ -679,6 +692,8 @@ final class AppState {
             pickUpRequests()
             resumeOwedWork()
             Task { await library.relabelStrandedWords() }
+            // What a compression left when the app quit is finished or rolled back before any other starts.
+            await library.reconcileCompressions()
             listenToEarlierRecordingsWhenIdle()
         } catch {
             // On the page, where it can be looked at and tried again: what stops a folder opening is still there after a
@@ -1417,7 +1432,11 @@ extension AppState {
                 let title = meetings.first { $0.id == id }?.title ?? ""
                 post(title.isEmpty ? "Recovered a recording." : "Recovered “\(title)”.",
                      action: LibraryNoticeAction(title: "Show") { [weak self] in self?.showConversation(id) })
-            } catch { report("Couldn’t Recover a Recording", "An interrupted recording couldn’t be recovered. Its files are kept.", error) }
+            } catch {
+                // At launch, not something the person did: the log has the reason, and a notice says what's kept.
+                Self.log.notice("An interrupted recording couldn't be recovered (\(error.logCode, privacy: .public)): \(error.localizedDescription, privacy: .private)")
+                post(["An interrupted recording couldn’t be recovered. Its files are kept."])
+            }
         }
     }
 }
