@@ -29,6 +29,8 @@ public struct ConversationAction: Equatable, Identifiable, Sendable {
         /// A menu of the modes that apply.
         case reprocess
         case process(ProcessingRequest.Mode)
+        /// A row of Summarize Again's menu: one way to summarize now (`SummarizeAgainChoices`).
+        case summarizeAgain(SummarizeAgainChoice)
         // History
         case versionHistory
         // Filing
@@ -39,6 +41,10 @@ public struct ConversationAction: Equatable, Identifiable, Sendable {
         case showInFinder
         /// Several selected: they become one conversation (`LibraryController.mergeConversations`).
         case merge
+        /// A menu: the conversations it can be merged with.
+        case mergeMenu
+        /// Merge with ▸ a row: this conversation and that one, asked about as a selection of two is.
+        case mergeWith(UUID)
         // The Trash
         case moveToTrash
         // A recording (Info › Audio)
@@ -69,11 +75,13 @@ public struct ConversationAction: Equatable, Identifiable, Sendable {
     public var platforms: Set<Platform> = [.mac, .iPhone]
     /// A menu's items.
     public var children: [ConversationAction] = []
+    /// A menu's row that is the current choice (the model that wrote the summary), checked.
+    public var isChosen = false
 
     public init(id: ID, title: String, symbol: String, role: Role = .normal, availability: Availability = .available,
-                platforms: Set<Platform> = [.mac, .iPhone], children: [ConversationAction] = []) {
+                platforms: Set<Platform> = [.mac, .iPhone], children: [ConversationAction] = [], isChosen: Bool = false) {
         self.id = id; self.title = title; self.symbol = symbol; self.role = role; self.availability = availability
-        self.platforms = platforms; self.children = children
+        self.platforms = platforms; self.children = children; self.isChosen = isChosen
     }
 
     public var isAvailable: Bool { availability.isAvailable }
@@ -96,7 +104,38 @@ public struct ConversationActionGroup: Equatable, Identifiable, Sendable {
     public init(id: ID, actions: [ConversationAction]) { self.id = id; self.actions = actions }
 }
 
+/// Another conversation Merge with ▸ lists.
+public struct MergeCandidate: Equatable, Sendable {
+    public var id: UUID
+    public var title: String
+    public var date: Date
+    public init(id: UUID, title: String, date: Date) { self.id = id; self.title = title; self.date = date }
+}
+
 public enum ConversationActions {
+    /// Why `meeting` can't be merged now, when it can't: merging already, recording (as another device's sync says too), or
+    /// what its `context` says (`Context.mergeBusy`). The one rule for Merge… and Merge with ▸.
+    static func mergeBusy(_ meeting: Meeting, context: Context, merging: Set<UUID>) -> String? {
+        if merging.contains(meeting.id) { return "Merging now" }
+        return meeting.status == .recording ? "Recording now" : context.mergeBusy
+    }
+
+    /// The conversations Merge with ▸ lists for `meeting`: those of its day and the day before, earliest first, that Merge…
+    /// would take now (`mergeBusy`, with `context` what the app knows of each) and that the Personal lock doesn't hide (`hidden`:
+    /// the lock hides it, or the Focus leaves it out of the lists).
+    public static func mergeCandidates(for meeting: Meeting, in meetings: [Meeting], calendar: Calendar = .current,
+                                       context: (Meeting) -> Context = { _ in Context(platform: .mac) }, merging: Set<UUID> = [],
+                                       hidden: (Meeting) -> Bool = { _ in false }) -> [MergeCandidate] {
+        let day = calendar.startOfDay(for: meeting.date)
+        guard let before = calendar.date(byAdding: .day, value: -1, to: day) else { return [] }
+        return meetings.filter {
+            $0.id != meeting.id && calendar.startOfDay(for: $0.date) >= before && calendar.startOfDay(for: $0.date) <= day
+                && !hidden($0) && mergeBusy($0, context: context($0), merging: merging) == nil
+        }
+        .sorted { $0.date < $1.date }
+        .map { MergeCandidate(id: $0.id, title: $0.title.trimmingCharacters(in: .whitespacesAndNewlines), date: $0.date) }
+    }
+
     /// What the app knows besides the conversation.
     public struct Context: Equatable, Sendable {
         public var platform: ConversationAction.Platform
@@ -110,11 +149,19 @@ public enum ConversationActions {
         public var canTakePhoto: Bool
         /// This device is recording, this conversation or another, so it plays nothing until it stops.
         public var isDeviceRecording: Bool
+        /// Every way to summarize again now (`SummarizeAgainChoices`); with more than one, Summarize Again is a menu of them.
+        public var summarizeChoices: [SummarizeAgainChoice]
+        /// The conversations of its day and the day before, for Merge with ▸ (`ConversationActions.mergeCandidates`).
+        public var mergeCandidates: [MergeCandidate]
+        /// A merge of this conversation is running here (`LibraryController.mergingIDs`).
+        public var isMerging: Bool
 
         public init(platform: ConversationAction.Platform, isRecording: Bool = false, isProcessingHere: Bool = false,
-                    status: ProcessingStatus? = nil, canTakePhoto: Bool = false, isDeviceRecording: Bool = false) {
+                    status: ProcessingStatus? = nil, canTakePhoto: Bool = false, isDeviceRecording: Bool = false,
+                    summarizeChoices: [SummarizeAgainChoice] = [], mergeCandidates: [MergeCandidate] = [], isMerging: Bool = false) {
             self.platform = platform; self.isRecording = isRecording; self.isProcessingHere = isProcessingHere
             self.status = status; self.canTakePhoto = canTakePhoto; self.isDeviceRecording = isDeviceRecording
+            self.summarizeChoices = summarizeChoices; self.mergeCandidates = mergeCandidates; self.isMerging = isMerging
         }
 
         /// Why it can't change now, when it can't.
@@ -139,6 +186,7 @@ public enum ConversationActions {
         /// Why it can't be merged now, when it can't: what keeps a recording in it (`recordingBusy`), or a recording made
         /// alongside it that hasn't arrived yet, which would land on a timeline the merge moved.
         public var mergeBusy: String? {
+            if isMerging { return "Merging now" }
             if let busy = recordingBusy { return busy }
             if case .awaitingRecordings? = status { return "Waiting for a recording" }
             return nil
@@ -182,6 +230,7 @@ public enum ConversationActions {
             // A Mac's menu lists the folders; an iPhone's opens a sheet.
             ConversationAction(id: .moveToFolder, title: mac ? "Move to Folder" : "Move to Folder…", symbol: "folder"),
             ConversationAction(id: .tags, title: "Tags…", symbol: "tag"),
+            mergeWith(meeting, context),
             placement(personal),
             ConversationAction(id: .showInFinder, title: "Show in Finder", symbol: ConversationAction.showInFinderSymbol, platforms: [.mac]),
         ]
@@ -213,22 +262,45 @@ public enum ConversationActions {
     /// Speakers Again, and Transcribe Everything Again. It runs wherever the work goes (this device, a Mac, the
     /// cloud for a summary), so its glyph says "again", not where.
     static func reprocess(_ meeting: Meeting, context: Context) -> ConversationAction {
+        // Notes alone can be summarized again, so Reprocess is there for them; the modes that need a recording say so.
         var availability: ConversationAction.Availability = .available
-        if meeting.presentTracks.isEmpty { availability = .unavailable("No recording yet") }
+        let recorded = !meeting.presentTracks.isEmpty
+        if !recorded && !meeting.hasSummarizableContent { availability = .unavailable("No recording yet") }
         else if let busy = context.busy { availability = .unavailable(busy) }
         else if context.status?.isPending == true { availability = .unavailable("Already asked for") }
         var modes: [ConversationAction] = []
         if meeting.hasUntranscribedAudio {
             modes.append(ConversationAction(id: .process(.newAudio), title: ProcessingWords.title(.newAudio), symbol: "waveform"))
         }
+        let summarizable: ConversationAction.Availability = meeting.hasSummarizableContent ? .available : .unavailable("No transcript yet")
+        // With more than one way to summarize, Summarize Again is a menu of them, the same wherever Reprocess is.
+        let choices = context.summarizeChoices.map { choice in
+            ConversationAction(id: .summarizeAgain(choice), title: choice.title, symbol: choice.symbol ?? "", availability: summarizable,
+                               isChosen: choice.wrote(meeting.summary))
+        }
         modes += [
             ConversationAction(id: .process(.summaryOnly), title: ProcessingWords.title(.summaryOnly), symbol: "text.alignleft",
-                               availability: meeting.hasSummarizableContent ? .available : .unavailable("No transcript yet")),
+                               availability: summarizable, children: choices.count > 1 ? choices : []),
             ConversationAction(id: .process(.speakerRefresh), title: ProcessingWords.title(.speakerRefresh), symbol: "person.2",
-                               availability: meeting.transcripts.isEmpty ? .unavailable("Not transcribed yet") : .available),
-            ConversationAction(id: .process(.fullRetranscription), title: ProcessingWords.title(.fullRetranscription), symbol: "arrow.clockwise"),
+                               availability: !recorded ? .unavailable("No recording yet")
+                                   : meeting.transcripts.isEmpty ? .unavailable("Not transcribed yet") : .available),
+            ConversationAction(id: .process(.fullRetranscription), title: ProcessingWords.title(.fullRetranscription), symbol: "arrow.clockwise",
+                               availability: recorded ? .available : .unavailable("No recording yet")),
         ]
         return ConversationAction(id: .reprocess, title: "Reprocess", symbol: "arrow.triangle.2.circlepath", availability: availability, children: modes)
+    }
+
+    /// Merge with ▸ the conversations of its day and the day before; each asks the question a selection's Merge… does.
+    static func mergeWith(_ meeting: Meeting, _ context: Context) -> ConversationAction {
+        let availability: ConversationAction.Availability = mergeBusy(meeting, context: context, merging: []).map { .unavailable($0) }
+            ?? (context.mergeCandidates.isEmpty ? .unavailable("No other conversations that day") : .available)
+        let children = context.mergeCandidates.map {
+            // The day and time tell two of the same name apart.
+            ConversationAction(id: .mergeWith($0.id), title: "\($0.title.isEmpty ? LibraryWords.untitled : $0.title) · "
+                               + $0.date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).hour().minute()),
+                               symbol: "arrow.triangle.merge")
+        }
+        return ConversationAction(id: .mergeMenu, title: "Merge with", symbol: "arrow.triangle.merge", availability: availability, children: children)
     }
 
     /// Move to Work, or Move to Personal for one that isn't there yet.
@@ -249,10 +321,7 @@ public enum ConversationActions {
         let mac = context.platform == .mac
         let personal = selected.allSatisfy { $0.effectivePlacement == .personal }
         let summarizable = selected.contains { $0.hasSummarizableContent }
-        let mergeBusy = context.busy ?? selected.lazy.compactMap { meeting -> String? in
-            if merging.contains(meeting.id) { return "Merging now" }
-            return meeting.status == .recording ? "Recording now" : (each?(meeting) ?? context).mergeBusy
-        }.first
+        let mergeBusy = context.busy ?? selected.lazy.compactMap { Self.mergeBusy($0, context: each?($0) ?? context, merging: merging) }.first
         let groups = [
             ConversationActionGroup(id: .reprocess, actions: [
                 ConversationAction(id: .process(.summaryOnly), title: ProcessingWords.title(.summaryOnly), symbol: "text.alignleft",

@@ -318,7 +318,8 @@ private struct PageColophon: View {
                  arrived: summary.createdAt, template: TemplateWords.title(for: meeting, resolved: library.resolvedTemplate(for: meeting)),
                  summarizeAgain: summarizeAgain,
                  choices: summarizeAgain == nil ? [] : placement?.summarizeAgainChoices(for: meeting) ?? [],
-                 choose: { [placement, id = meeting.id] choice in Task { await placement?.summarizeAgain(id, as: choice) } }) {
+                 choose: { [placement, id = meeting.id] choice in Task { await placement?.summarizeAgain(id, as: choice) } },
+                 summary: summary) {
             TemplatePicker(library: library, meeting: meeting)
         }
     }

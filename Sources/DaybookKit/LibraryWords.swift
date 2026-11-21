@@ -117,8 +117,36 @@ extension LibraryWords {
         return title.isEmpty ? "Move this conversation to the Trash?" : "Move “\(title)” to the Trash?"
     }
 
-    /// Merge…'s question: "Merge 3 conversations?".
-    public static func mergeTitle(_ count: Int) -> String { "Merge \(count) conversations?" }
+    /// Merge…'s question, naming the conversation that stays (the earliest, whose title wins): "Merge 3 conversations into
+    /// “Weekly sync”?". Without a title to name, or while the Personal lock hides it (`hidden`), "Merge 3 conversations?".
+    public static func mergeTitle(_ ids: [UUID], in meetings: [Meeting], hidden: (Meeting) -> Bool = { _ in false }) -> String {
+        let selected = ConversationMerge.ordered(meetings.filter { ids.contains($0.id) })
+        let count = Set(ids).count
+        guard let survivor = selected.first, !hidden(survivor) else { return "Merge \(count) conversations?" }
+        let title = survivor.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return title.isEmpty ? "Merge \(count) conversations?" : "Merge \(count) conversations into “\(title)”?"
+    }
+    /// Beneath it, what it costs: the summaries are written again only when the merge transcribes the whole again (it has a
+    /// recording, `LibraryController.mergeConversations`).
+    public static func mergeMessage(_ ids: [UUID], in meetings: [Meeting]) -> String {
+        let reprocesses = meetings.contains { ids.contains($0.id) && !$0.presentTracks.isEmpty }
+        return (reprocesses ? "Their summaries are written again from the whole. " : "") + "This can’t be undone."
+    }
+    /// The conversation a merged-away one in the Trash went into: the one in `meetings` that folded it in and that the Personal
+    /// lock doesn't hide (`hidden`). Not one that was restored and trashed again since: that one has a recording of its own, or
+    /// changed after the merge.
+    public static func mergedInto(_ trashed: Meeting, in meetings: [Meeting], hidden: (Meeting) -> Bool = { _ in false }) -> Meeting? {
+        guard trashed.presentTracks.isEmpty else { return nil }
+        let field = ConversationMerge.revisionField(trashed.id).rawValue
+        for survivor in meetings where survivor.id != trashed.id {
+            guard let fold = survivor.revisions.first(where: { $0.field == field }) else { continue }
+            guard trashed.updatedAt <= fold.date.addingTimeInterval(120), !hidden(survivor) else { return nil }
+            return survivor
+        }
+        return nil
+    }
+    /// A merged-away conversation's status in the Trash, with Show: "Merged into “Weekly sync”".
+    public static func mergedInto(_ title: String) -> String { "Merged into “\(title)”" }
     /// Beneath it, what it costs.
-    public static let mergeMessage = "This can’t be undone."
+    public static let mergeMessage = "Their summaries are written again from the whole. This can’t be undone."
 }

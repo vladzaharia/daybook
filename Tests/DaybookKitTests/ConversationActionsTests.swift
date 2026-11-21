@@ -26,9 +26,9 @@ final class ConversationActionsTests: XCTestCase {
         XCTAssertEqual(mac.map(\.id), [.share, .add, .reprocess, .history, .filing, .trash])
         XCTAssertEqual(phone.map(\.id), mac.map(\.id))
         XCTAssertEqual(ids(mac), [[.copySummary, .share, .export], [.showFloatingNotes, .addPhotos, .addRecording], [.reprocess],
-                                  [.versionHistory], [.rename, .moveToFolder, .tags, .moveTo(.personal), .showInFinder], [.moveToTrash]])
+                                  [.versionHistory], [.rename, .moveToFolder, .tags, .mergeMenu, .moveTo(.personal), .showInFinder], [.moveToTrash]])
         XCTAssertEqual(ids(phone), [[.copySummary, .share], [.takePhoto, .addPhotos, .addRecordingFromFile], [.reprocess], [.versionHistory],
-                                    [.moveToFolder, .tags, .moveTo(.personal)], [.moveToTrash]])
+                                    [.moveToFolder, .tags, .mergeMenu, .moveTo(.personal)], [.moveToTrash]])
         // The filing the Mac's menu lacked, and the recording the iPhone's lacked, are on both now; so is Share.
         XCTAssertEqual(phone[0].actions[1].title, "Share")
         XCTAssertEqual(phone[0].actions[1].children.map(\.id), [.shareMarkdown, .shareJSON, .shareAudio])
@@ -86,8 +86,8 @@ final class ConversationActionsTests: XCTestCase {
         var personal = meeting()
         personal.placement = .personal
         let filing = ConversationActions.actions(for: personal, context: .init(platform: .iPhone))[4].actions
-        XCTAssertEqual(filing.map(\.title), ["Move to Folder…", "Tags…", "Move to Work"])
-        XCTAssertEqual(filing[2].symbol, "briefcase")
+        XCTAssertEqual(filing.map(\.title), ["Move to Folder…", "Tags…", "Merge with", "Move to Work"])
+        XCTAssertEqual(filing[3].symbol, "briefcase")
     }
 
     func testBehaviorSeveralSelectedAreFiledSummarizedOrTrashedTogether() {
@@ -295,5 +295,121 @@ final class ConversationActionsTests: XCTestCase {
         // Finder's own symbol only where the system has it; macOS 15 gets one it has.
         try check(ConversationAction.finderFallbackSymbol, title: "Show in Finder", on: [.mac])
         XCTAssertEqual(releases[try XCTUnwrap(symbols[ConversationAction.finderSymbol])]?["macOS"], "26.0")
+    }
+
+    // MARK: Summarize Again's choices
+
+    private let local = SummarizeAgainChoice(place: .thisDevice(model: "gemma/e4b"), title: "With Gemma 4 E4B")
+    private let cloud = SummarizeAgainChoice(place: .cloud(modelID: "claude-sonnet-5-5"), title: "With Claude Sonnet 5.5")
+
+    private func summarizeAgain(_ meeting: Meeting, _ choices: [SummarizeAgainChoice], platform: ConversationAction.Platform = .mac) -> ConversationAction? {
+        let groups = ConversationActions.actions(for: meeting, context: .init(platform: platform, summarizeChoices: choices))
+        return groups.flatMap(\.actions).first { $0.id == .reprocess }?.children.first { $0.id == .process(.summaryOnly) }
+    }
+
+    func testBehaviorSummarizeAgainIsAMenuOfItsChoicesWhereverReprocessIs() {
+        for platform in [ConversationAction.Platform.mac, .iPhone] {
+            let again = summarizeAgain(meeting(), [local, cloud], platform: platform)
+            XCTAssertEqual(again?.children.map(\.title), ["With Gemma 4 E4B", "With Claude Sonnet 5.5"])
+            XCTAssertEqual(again?.children.map(\.id), [.summarizeAgain(local), .summarizeAgain(cloud)])
+        }
+    }
+
+    func testBehaviorOneChoiceOrNoneLeavesSummarizeAgainPlain() {
+        XCTAssertEqual(summarizeAgain(meeting(), [local])?.children, [])
+        XCTAssertEqual(summarizeAgain(meeting(), [])?.children, [])
+    }
+
+    func testBehaviorOnlyTheCloudRowHasAGlyphAndTheModelThatWroteTheSummaryIsChecked() {
+        var written = meeting()
+        written.summary = MeetingSummary(overview: "Shipping", modelID: "gemma/e4b")
+        let rows = summarizeAgain(written, [local, cloud])?.children
+        XCTAssertEqual(rows?.map(\.symbol), ["", "cloud"])
+        XCTAssertEqual(rows?.map(\.isChosen), [true, false])
+    }
+
+    func testBehaviorTheChoicesFollowSummarizeAgainsAvailability() {
+        let untranscribed = meeting(transcribed: false, summary: false)
+        XCTAssertEqual(summarizeAgain(untranscribed, [local, cloud])?.children.map(\.availability),
+                       [.unavailable("No transcript yet"), .unavailable("No transcript yet")])
+    }
+
+    func testBehaviorASelectionsSummarizeAgainStaysPlain() {
+        let a = meeting(), b = meeting()
+        let groups = ConversationActions.batch([a.id, b.id], in: [a, b], context: .init(platform: .mac, summarizeChoices: [local, cloud]))
+        XCTAssertEqual(groups.first?.actions.first?.children, [])
+    }
+
+    func testBehaviorNotesAloneCanBeSummarizedAgainFromReprocess() {
+        var notes = Meeting(title: "Notes")
+        notes.notes = "Ship it on Friday"
+        let reprocess = ConversationActions.actions(for: notes, context: .init(platform: .mac)).flatMap(\.actions).first { $0.id == .reprocess }
+        XCTAssertEqual(reprocess?.isAvailable, true)
+        XCTAssertEqual(reprocess?.children.map(\.availability), [.available, .unavailable("No recording yet"), .unavailable("No recording yet")])
+    }
+
+    // MARK: Merge with
+
+    private func merging(_ meeting: Meeting, _ context: ConversationActions.Context) -> ConversationAction? {
+        ConversationActions.actions(for: meeting, context: context).flatMap(\.actions).first { $0.id == .mergeMenu }
+    }
+
+    func testBehaviorMergeWithListsTheConversationsOfTheSameDayAndTheDayBefore() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let noon = calendar.date(from: DateComponents(year: 2026, month: 11, day: 20, hour: 12))!
+        var today = Meeting(title: "Standup"), sameDay = Meeting(title: "Planning"), yesterday = Meeting(title: "Retro"), earlier = Meeting(title: "Old")
+        today.date = noon
+        sameDay.date = noon.addingTimeInterval(3_600)
+        yesterday.date = noon.addingTimeInterval(-86_400)
+        earlier.date = noon.addingTimeInterval(-3 * 86_400)
+        let candidates = ConversationActions.mergeCandidates(for: today, in: [today, sameDay, yesterday, earlier], calendar: calendar)
+        XCTAssertEqual(candidates.map(\.title), ["Retro", "Planning"], "earliest first, never itself or an older day")
+
+        let menu = merging(today, .init(platform: .mac, mergeCandidates: candidates))
+        XCTAssertEqual(menu?.children.map(\.id), candidates.map { .mergeWith($0.id) })
+        XCTAssertTrue(menu?.children[0].title.hasPrefix("Retro · ") == true, "with its day and time: \(menu?.children[0].title ?? "")")
+        XCTAssertEqual(menu?.isAvailable, true)
+        XCTAssertEqual(merging(today, .init(platform: .mac))?.availability, .unavailable("No other conversations that day"))
+        XCTAssertEqual(merging(today, .init(platform: .mac, isRecording: true, mergeCandidates: candidates))?.availability,
+                       .unavailable("Recording now"), "waits as Merge… does")
+    }
+
+    func testBehaviorMergeWithLeavesOutWhatThePersonalLockHidesAndWhatMergeWouldRefuse() {
+        let calendar = Calendar(identifier: .gregorian)
+        let noon = calendar.date(from: DateComponents(year: 2026, month: 11, day: 20, hour: 12))!
+        var today = Meeting(title: "Standup"), locked = Meeting(title: "Therapy"), recording = Meeting(title: "Live"),
+            merging = Meeting(title: "Joining"), fine = Meeting(title: "Planning"), onMac = Meeting(title: "On a Mac")
+        today.date = noon; locked.date = noon; recording.date = noon; merging.date = noon; fine.date = noon; onMac.date = noon
+        recording.status = .recording
+        let all = [today, locked, recording, merging, fine, onMac]
+        let candidates = ConversationActions.mergeCandidates(
+            for: today, in: all, calendar: calendar,
+            context: { ConversationActions.Context(platform: .iPhone, isRecording: $0.id == onMac.id) },
+            merging: [merging.id], hidden: { $0.id == locked.id })
+        XCTAssertEqual(Set(candidates.map(\.title)), ["Planning"], "never a hidden one, or one Merge… would wait for")
+    }
+
+    func testBehaviorMergeWithWaitsWhileTheConversationIsRecordingOrMerging() {
+        var live = meeting()
+        live.status = .recording
+        let candidate = MergeCandidate(id: UUID(), title: "Planning", date: Date())
+        XCTAssertEqual(merging(live, .init(platform: .mac, mergeCandidates: [candidate]))?.availability, .unavailable("Recording now"))
+        XCTAssertEqual(merging(meeting(), .init(platform: .mac, mergeCandidates: [candidate], isMerging: true))?.availability,
+                       .unavailable("Merging now"))
+    }
+
+    func testBehaviorAnUntitledConversationInMergeWithUsesTheUntitledWording() {
+        let candidate = MergeCandidate(id: UUID(), title: "", date: Date())
+        let menu = merging(meeting(), .init(platform: .mac, mergeCandidates: [candidate]))
+        XCTAssertTrue(menu?.children[0].title.hasPrefix("Untitled Conversation · ") == true)
+    }
+
+    func testBehaviorIdentifySpeakersAgainNeedsARecording() {
+        var notes = Meeting(title: "Notes")
+        notes.notes = "Ship it"
+        notes.transcripts = [TrackTranscript(trackID: UUID(), segments: [])]
+        let modes = ConversationActions.actions(for: notes, context: .init(platform: .mac)).flatMap(\.actions).first { $0.id == .reprocess }?.children
+        XCTAssertEqual(modes?.first { $0.id == .process(.speakerRefresh) }?.availability, .unavailable("No recording yet"))
     }
 }

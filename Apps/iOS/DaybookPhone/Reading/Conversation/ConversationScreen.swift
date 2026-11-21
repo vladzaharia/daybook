@@ -96,10 +96,16 @@ struct ConversationMoreMenu: View {
     @Environment(ReadingSession.self) private var session
     @Environment(\.audioProvider) private var provider
     @Environment(\.summaryPlacement) private var placement
+    @Environment(PersonalLock.self) private var personalLock: PersonalLock?
+    @Environment(PhoneAppModel.self) private var model: PhoneAppModel?
     @Environment(\.undoManager) private var undoManager
 
     var body: some View {
-        ConversationActionMenuItems(PhoneActions.groups(for: meeting), platform: .iPhone) { id in
+        let lock = personalLock
+        let merge = PhoneActions.MergeScope(
+            library: library, recordingOnMac: model.map(PhoneActions.recordingOnMac) ?? [],
+            hidden: { lock?.hides($0) == true || lock?.lists($0) == false })
+        ConversationActionMenuItems(PhoneActions.groups(for: meeting, placement: placement, merge: merge), platform: .iPhone) { id in
             PhoneActions.perform(id, on: [meeting.id], library: library, session: session, provider: provider,
                                  placement: placement, undoManager: undoManager)
         } custom: { action in

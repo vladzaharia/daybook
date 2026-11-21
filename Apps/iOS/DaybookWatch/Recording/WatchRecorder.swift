@@ -10,7 +10,7 @@ enum WatchRecorderError: Error {
     /// The watch's status line.
     var line: String {
         switch self {
-        case .microphoneDenied: return "Allow Microphone in Settings"
+        case .microphoneDenied: return WatchWords.microphoneOff
         case .noMicrophone: return "Couldn't use the microphone"
         case .storageFull: return "Apple Watch storage is full"
         }
@@ -19,7 +19,7 @@ enum WatchRecorderError: Error {
     /// Why the watch didn't start, for the iPhone (`WatchReply.refused`).
     var phoneWords: String {
         switch self {
-        case .microphoneDenied: return "Allow the microphone for Daybook on your Apple Watch."
+        case .microphoneDenied: return WatchWords.microphoneOffPhone
         case .noMicrophone: return "Apple Watch couldn't use its microphone."
         case .storageFull: return "Apple Watch storage is full."
         }
