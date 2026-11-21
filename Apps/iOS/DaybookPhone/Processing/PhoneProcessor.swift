@@ -130,6 +130,8 @@ final class PhoneProcessor {
     @ObservationIgnored private var heartbeat: Task<Void, Never>?
     /// Why the running job was stopped from outside (a pause, or another device took it over).
     @ObservationIgnored private var stopping: Stop?
+    /// Conversations Cancel was tapped on while their job ran: however that job ends, it isn't kept paused.
+    @ObservationIgnored private var cancelled: Set<UUID> = []
     @ObservationIgnored private var lastRenewal = Date.distantPast
     @ObservationIgnored private var lastRenewedStage: ProcessingRequest.Stage?
 
@@ -443,6 +445,8 @@ final class PhoneProcessor {
     }
 
     private func finish(_ id: UUID, requestID: UUID, outcome: Outcome) async {
+        var outcome = outcome
+        if cancelled.remove(id) != nil, case .paused = outcome { outcome = .lost }
         stopHeartbeat()
         let now = Date()
         // Where the summary goes next, once the models are let go.
@@ -603,7 +607,9 @@ final class PhoneProcessor {
         if running?.meetingID == id, running?.work == .summarize { return false }
         let open = meeting.openProcessingRequests
         guard !open.isEmpty, !open.contains(where: { summariesHere.contains($0.id) }) else { return false }
-        return open.allSatisfy { $0.requestedBy.id == library.thisDevice.id }
+        // Every open request is this iPhone's to withdraw: made here, and held by no other device.
+        let me = library.thisDevice
+        return open.allSatisfy { $0.requestedBy.id == me.id && ($0.activeClaim(at: now).map { $0.device.id == me.id } ?? true) }
     }
 
     /// Gives up the work this iPhone has on a conversation, where `canCancelStarted` allows it: a job under way stops and
@@ -613,7 +619,7 @@ final class PhoneProcessor {
         guard let meeting = library.meeting(meetingID), canCancelStarted(meeting, at: now) else { return }
         let me = library.thisDevice
         let requests = meeting.openProcessingRequests.map(\.id)
-        if running?.meetingID == meetingID { stop(.lost) }
+        if running?.meetingID == meetingID { cancelled.insert(meetingID); stop(.lost) }
         paused.remove(meetingID)
         // A claim this iPhone holds is let go first: only a request no device holds can be taken back.
         for request in requests { library.releaseProcessingRequest(request, in: meetingID, at: now) }

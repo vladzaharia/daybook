@@ -465,7 +465,7 @@ final class PhoneAppModel: RecordingCommandHandling {
     }
 
     /// A paired Mac the link has no recording state for, but whose presence in the library says it's
-    /// recording ("Recording now" in Settings › Macs).
+    /// recording ("Recording now" in Settings › Devices).
     func isRecordingBySync(_ mac: PhoneLink.Mac, now: Date = Date()) -> Bool {
         guard mac.recording == nil else { return false }
         let id = mac.syncDeviceID ?? mac.id.uuidString

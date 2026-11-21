@@ -20,7 +20,7 @@ show for a recorder are DaybookUI's (`Sources/DaybookUI/Devices/`), and each app
 | `Daybook/App/PhoneLink*.swift` | The phone's direct method over DaybookLink (`PhoneLinkConnection`) and the Mac's end of the link (`PhoneLink`) |
 | `DaybookUI/Devices/` | A recorder's page (`RecorderDevicePage`), its recordings (`DeviceRecordingsView`, `DeviceRecordingActions`, `ConversationChooser`), Listen Live (`ListenLiveView`), its handoff (`RecorderHandoffView`), options (`RecorderPreferencesSection`), menu items (`RecorderMenuItems`), and Add Device's steps (`AddRecorderFlow`), reaching each app through `RecorderServices` |
 | `Daybook/Devices/UI/` | The Mac's hosting of them: sidebar section, list column, detail column, Add Device's sheet, Device Details, Settings › Devices, menus |
-| `DaybookPhone/Devices/UI/` | The iPhone's: Settings › Recorders, the page's pushes, Add Recorder's sheet and the open Duo's pages |
+| `DaybookPhone/Devices/UI/` | The iPhone's: Settings › Devices, the page's pushes, Add Recorder's sheet and the open Duo's pages |
 | `Daybook/Devices/Demo/` | Debug-only demo states for screenshots, installed into the hub through `DeviceHub.demo` |
 
 ## Concepts
@@ -411,7 +411,7 @@ pushes, Settings).
 - **Sidebar › Devices** (Mac): every configured device, with at most one accessory (a progress ring
   while importing, a teal arc drawn by Daybook so it reads the same in an inactive window, else a count of new recordings this Mac can import: none for a recorder another
   device manages). The glyph is teal while a recorder is linked, as on the iPhone, and the
-  sidebar's own colour otherwise. A `+` on hover adds a device. On the iPhone, Settings › Recorders lists
+  sidebar's own colour otherwise. A `+` on hover adds a device. On the iPhone, Settings › Devices lists
   each with its status line.
 - **The recorder's page** (`RecorderDevicePage`), on paper in a conversation page's column so titles line up, in one
   order on both:
