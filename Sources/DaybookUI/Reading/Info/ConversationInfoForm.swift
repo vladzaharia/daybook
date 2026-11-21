@@ -117,7 +117,7 @@ private struct DetailsRows: View {
         Picker(selection: Binding(get: { meeting.folderID }, set: { folder in
             library.update(meeting.id, actionName: "Move to Folder", undoManager: undoManager) { $0.folderID = folder }
         })) {
-            Text("None").tag(UUID?.none)
+            Text("No Folder").tag(UUID?.none)
             if !library.folders.isEmpty { Divider() }
             ForEach(library.folders) { folder in Text(folder.name).tag(UUID?.some(folder.id)) }
         } label: { InfoRowLabel("Folder", symbol: "folder") }
@@ -269,9 +269,9 @@ private struct ProcessingRows: View {
                     Label(history.title.replacingOccurrences(of: "…", with: ""), systemImage: history.symbol)
                 }
             }
-        } else if !meeting.tracks.isEmpty || !meeting.revisions.isEmpty {
+        } else if !meeting.tracks.isEmpty || !meeting.revisions.isEmpty || reprocess?.isAvailable == true {
             HStack {
-                if let reprocess, !meeting.tracks.isEmpty {
+                if let reprocess, !meeting.tracks.isEmpty || reprocess.isAvailable {
                     ReprocessMenu(action: reprocess, meeting: meeting, services: services)
                         .menuStyle(.button)
                         .controlSize(.small)
@@ -300,14 +300,34 @@ private struct ReprocessMenu: View {
         Menu {
             ForEach(action.children.filter { !touch || $0.isAvailable }) { mode in
                 if case .process(let request) = mode.id {
-                    Button { services.perform(.process(request), meeting) } label: { Label(mode.title, systemImage: mode.symbol) }
-                        .disabled(!mode.isAvailable)
+                    if mode.children.isEmpty {
+                        Button { services.perform(.process(request), meeting) } label: { Label(mode.title, systemImage: mode.symbol) }
+                            .disabled(!mode.isAvailable)
+                    } else {
+                        // Summarize Again with more than one way to do it: a menu of them.
+                        Menu {
+                            ForEach(mode.children) { choice in
+                                if case .summarizeAgain(let way) = choice.id { summarizeChoice(choice, way) }
+                            }
+                        } label: { Label(mode.title, systemImage: mode.symbol) }
+                            .disabled(!mode.isAvailable)
+                    }
                 }
             }
         } label: {
             if touch { Label(action.title, systemImage: action.symbol) } else { Text(action.title) }
         }
         .disabled(!action.isAvailable)
+    }
+
+    /// One way to summarize again: checked when it wrote the summary, the cloud's marked with its glyph.
+    @ViewBuilder private func summarizeChoice(_ choice: ConversationAction, _ way: SummarizeAgainChoice) -> some View {
+        let label = Group { if choice.symbol.isEmpty { Text(choice.title) } else { Label(choice.title, systemImage: choice.symbol) } }
+        if choice.isChosen {
+            Toggle(isOn: Binding(get: { true }, set: { _ in services.perform(.summarizeAgain(way), meeting) })) { label }
+        } else {
+            Button { services.perform(.summarizeAgain(way), meeting) } label: { label }
+        }
     }
 }
 

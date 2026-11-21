@@ -280,6 +280,10 @@ private struct StatusBand: View {
             if compact {
                 ViewThatFits(in: .horizontal) {
                     bar(.full, yields: false)
+                    // A warning is the last thing to cut: the chips shrink to glyphs before it loses a word.
+                    if phase?.detailIsWarning == true {
+                        ForEach(RecorderChipFit.allCases, id: \.self) { fit in bar(fit, yields: false) }
+                    }
                     ForEach(RecorderChipFit.allCases, id: \.self) { fit in bar(fit, yields: true) }
                 }
             } else {
@@ -308,7 +312,7 @@ private struct StatusBand: View {
     @ViewBuilder
     private func phaseLabel(_ phase: RecorderPhase, yields: Bool) -> some View {
         let label = RecordingPhaseLabel(phase.phase, title: phase.title, detail: phase.detail, detailIsWarning: phase.detailIsWarning,
-                                        detailYields: yields, metrics: .panel)
+                                        detailYields: yields, warningLeads: compact, metrics: .panel)
         // Recording, the phase is the input menu: Automatic and each input.
         if phase.choosesInput {
             MicrophoneMenu(inputs: input, phase: phase) { label }
@@ -385,7 +389,10 @@ struct ChipMenuItems: View {
             }
         case .sync:
             Button("Open Sync Settings…") { openSettingsPane(.library) }
-        case .call, .storage:
+        case .storage:
+            // Storage is a row on Library's page, with the library's folder.
+            Button("Manage Storage…") { openSettingsPane(.library) }
+        case .call:
             EmptyView()
         }
     }

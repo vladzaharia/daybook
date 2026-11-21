@@ -20,14 +20,20 @@ struct MeetingInspector: View {
                 SourceHooks(state: state, meeting: meeting)
                 BackgroundAudioHook(state: state, meeting: meeting)
             } addRecording: { meeting in
-                Menu("Add Recording") {
+                Menu {
                     Button("From a File…") { state.chooseImport(attachTo: meeting.id) }
                     AddRecordingFromDeviceItems(state: state)
                     Button("Record on This Mac") { Task { await state.startRecording(into: meeting.id) } }
                         .disabled(state.isRecording || !state.canRecordInto(meeting.id))
+                } label: {
+                    // As the list's next row: a plus in the Audio rows' glyph column, the words on their names' edge.
+                    HStack(spacing: 6) {
+                        Image(systemName: "plus").frame(width: 16)
+                        Text("Add Recording")
+                    }
                 }
-                .menuStyle(.button)
-                .controlSize(.small)
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
                 .fixedSize()
                 .disabled(state.processor.queue.runningID == meeting.id || state.recordingID == meeting.id)
             }
@@ -52,7 +58,8 @@ struct MeetingInspector: View {
     static func context(_ state: AppState, _ meeting: Meeting) -> ConversationActions.Context {
         ConversationActions.Context(platform: .mac, isRecording: state.recordingID == meeting.id,
                                     isProcessingHere: state.processor.queue.runningID == meeting.id || state.processor.queue.queuedIDs.contains(meeting.id),
-                                    status: state.processingStatus(for: meeting), isDeviceRecording: state.isRecording)
+                                    status: state.processingStatus(for: meeting), isDeviceRecording: state.isRecording,
+                                    summarizeChoices: state.summarizeAgainChoices(for: meeting))
     }
 
     static func inputs(_ state: AppState, _ meeting: Meeting) -> ConversationStatusPresentation.Inputs {
@@ -85,6 +92,8 @@ struct MeetingInspector: View {
                                            changed: Self.processAgain(state))
         case .process(let mode):
             state.processor.enqueue(id, mode: mode)
+        case .summarizeAgain(let choice):
+            state.summarizeAgain(id, as: choice)
         case .summarize:
             // Choosing a different template summarizes again right away; the earlier summary stays in Version History.
             guard state.processor.queue.runningID != id else { return }

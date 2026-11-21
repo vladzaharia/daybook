@@ -42,6 +42,20 @@ final class SettingsSearchTests: XCTestCase {
         XCTAssertEqual(found("countdown"), [.cloud])
     }
 
+    /// What shipped since the first pass is findable too (SET-08), under the words the rows use.
+    func testSearchFindsWhatShippedLater() {
+        XCTAssertEqual(found("Number of Speakers"), [.models])
+        XCTAssertEqual(found("Match Voices"), [.library, .models])
+        XCTAssertEqual(found("Other Languages"), [.models])
+        XCTAssertEqual(found("Balanced"), [.models])
+        XCTAssertEqual(found("Not Filed"), [.cloud])
+        XCTAssertEqual(found("Trash"), [.library])
+        XCTAssertEqual(found("Backup"), [.library])
+        XCTAssertEqual(found("This Is Me"), [.library, .models])
+        XCTAssertEqual(found("Screen & System Audio Recording"), [.recording])
+        XCTAssertEqual(found("Add Recorder"), [.devices])
+    }
+
     func testPagesKeepTheNamesOtherPlacesOpenThemBy() {
         // Menus, pages, Floating Notes, and --open-settings name these; the window restores its page from them too.
         XCTAssertEqual(["general", "models", "cloud", "devices", "library"].compactMap(SettingsPane.init(rawValue:)).count, 5)

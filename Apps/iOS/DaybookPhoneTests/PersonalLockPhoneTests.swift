@@ -1,4 +1,5 @@
 import DaybookKit
+import DaybookUI
 import XCTest
 @testable import DaybookPhone
 
@@ -127,5 +128,33 @@ final class PersonalLockPhoneTests: XCTestCase {
         XCTAssertEqual(filter.$showsPersonal.title.key, PersonalLockWords.showPersonal)
         XCTAssertEqual(filter.$asksToRecord.title.key, PersonalLockWords.askToRecord)
         XCTAssertEqual(PersonalLockWords.requirement(.faceID), "Require Face ID for Personal")
+    }
+
+    func testBehaviorALockedRowsMenuOffersNothingThatShowsSharesSendsOrMergesIt() async throws {
+        let rig = await rig()
+        XCTAssertFalse(RowMenu.offersActions([rig.personal], lock: rig.lock), "only Unlock")
+        XCTAssertFalse(RowMenu.offersActions([rig.work, rig.personal], lock: rig.lock), "nor a selection with one")
+        XCTAssertTrue(RowMenu.offersActions([rig.work], lock: rig.lock))
+        XCTAssertTrue(RowMenu.offersActions([rig.personal], lock: nil))
+    }
+
+    func testBehaviorMergeWithNeverListsAHiddenOrMacRecordedConversation() async throws {
+        let rig = await rig()
+        let library = PhoneLibrary(rootURL: try temporaryDirectory(), installation: "TEST")
+        try await library.reload()
+        let a = library.controller.newMeeting(title: "A"), b = library.controller.newMeeting(title: "B"), c = library.controller.newMeeting(title: "C")
+        library.controller.update(b) { $0.placement = .personal }
+        func titles(recordingOnMac: Set<UUID> = [], swipe: Bool = false) -> [String] {
+            let meeting = library.controller.meeting(a)!
+            let groups = PhoneActions.groups(
+                for: meeting,
+                merge: swipe ? nil : .init(library: library.controller, recordingOnMac: recordingOnMac,
+                                           hidden: { rig.lock.hides($0) || !rig.lock.lists($0) }))
+            return ConversationActionMenuItems.action(.mergeMenu, in: groups)?.children.map(\.title) ?? []
+        }
+        XCTAssertEqual(titles().count, 1, "the Personal one is hidden while locked")
+        XCTAssertEqual(titles(recordingOnMac: [c]), [], "a Mac records the other")
+        XCTAssertEqual(titles(swipe: true), [], "a swipe lists none")
+        _ = b
     }
 }

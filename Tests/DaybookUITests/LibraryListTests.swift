@@ -37,6 +37,13 @@ final class LibraryListTests: XCTestCase {
         XCTAssertNotEqual(parts.last, TrashRowView.detail(Meeting(title: "Old standup", date: date)))
     }
 
+    func testBehaviorTheTrashRowTakesItsDaySectionsTimeLabel() {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let meeting = Meeting(title: "Old standup", date: date)
+        XCTAssertEqual(TrashRowView.detail(meeting, timeLabel: "Wednesday"), "Wednesday")
+        XCTAssertEqual(TrashRowView.detail(meeting), date.formatted(date: .abbreviated, time: .shortened), "the iPhone spells the whole date")
+    }
+
     func testBehaviorAPausedRowShowsThePauseGlyphOnBothApps() {
         XCTAssertEqual(ConversationRowStatus.Kind.paused.symbol, "pause.circle")
         XCTAssertEqual(ConversationRowStatus.Kind.waitingForModels.symbol, "arrow.down.circle")

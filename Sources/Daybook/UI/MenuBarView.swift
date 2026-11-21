@@ -1,7 +1,17 @@
 import AppKit
+import DaybookDevices
 import DaybookIntelligence
 import DaybookKit
+import DaybookUI
 import SwiftUI
+
+/// What the menu says of a recording that just stopped: the panel's "Saved · 18 min".
+enum MenuBarWords {
+    static func saved(duration: TimeInterval?) -> String {
+        guard let duration, duration > 0 else { return "Saved" }
+        return "Saved · \(DurationLabel.format(duration))"
+    }
+}
 
 /// The menu bar extra: a standard menu. Personal conversations are never named here,
 /// since the menu bar is visible while sharing a screen.
@@ -12,14 +22,21 @@ struct MenuBarView: View {
 
     var body: some View {
         // Items show the shortcuts they have in the app's menus, as Settings… and Quit do.
-        if state.isRecording, let start = state.recordingStartedAt {
+        if state.isStoppingRecording {
+            Text("Saving…")
+        } else if state.isRecording, let start = state.recordingStartedAt {
             Text("Recording · \(TimeLabel.short(Date().timeIntervalSince(start)))")
             Button("Stop Recording") { Task { await state.stopRecording() } }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
-                .disabled(state.isStoppingRecording)
             Button("Add Bookmark") { if let id = state.recordingID { state.addHighlight(id) } }
                 .keyboardShortcut("d")
         } else {
+            // For two minutes after a Stop, the recording says it's saved and can be carried on (`RecordMore`).
+            if let id = state.afterStop.conversationID, state.recordMore(after: id) == .keepRecording {
+                Text(MenuBarWords.saved(duration: state.meetings.first { $0.id == id }?.duration))
+                Button(RecordMore.keepRecording.title) { Task { await state.record(.keepRecording, after: id) } }
+                    .disabled(!state.isReady || state.isStartingRecording)
+            }
             Button("Start Recording") { Task { await state.startRecording(from: .elsewhere) } }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(!state.isReady || state.isStartingRecording)

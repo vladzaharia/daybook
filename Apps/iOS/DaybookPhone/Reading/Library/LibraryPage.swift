@@ -659,6 +659,11 @@ struct RowMenu: View {
   @Environment(PersonalLock.self) private var personalLock: PersonalLock?
   @Environment(PhoneAppModel.self) private var model
 
+  /// Whether the menu lists actions: not for a row the Personal lock hides, which offers only Unlock.
+  static func offersActions(_ meetings: [Meeting], lock: PersonalLock?) -> Bool {
+    !meetings.isEmpty && !meetings.contains { lock?.hides($0) == true }
+  }
+
   var body: some View {
     let meetings = library.meetings.filter { ids.contains($0.id) }
     if let only = meetings.first, meetings.count == 1, personalLock?.hides(only) == true {
@@ -683,9 +688,16 @@ struct RowMenu: View {
       }
       Divider()
     }
-    if !meetings.isEmpty {
+    // A row the Personal lock hides offers nothing that shows, shares, sends or merges it.
+    if Self.offersActions(meetings, lock: personalLock) {
+      let recordingOnMac = PhoneActions.recordingOnMac(model)
+      let lock = personalLock
       ConversationActionMenuItems(
-        PhoneActions.groups(for: ids, library: library, recordingOnMac: PhoneActions.recordingOnMac(model)),
+        PhoneActions.groups(
+          for: ids, library: library, recordingOnMac: recordingOnMac, placement: placement,
+          merge: .init(
+            library: library, recordingOnMac: recordingOnMac,
+            hidden: { lock?.hides($0) == true || lock?.lists($0) == false })),
         platform: .iPhone
       ) {
         PhoneActions.perform(
@@ -703,14 +715,25 @@ struct RowMenu: View {
 enum PhoneActions {
   /// The actions for one conversation, or a selection's. `recordingOnMac` are the conversations connected Macs are
   /// recording now, which Merge… waits for.
-  static func groups(for ids: [UUID], library: LibraryController, recordingOnMac: Set<UUID> = []) -> [ConversationActionGroup] {
+  static func groups(
+    for ids: [UUID], library: LibraryController, recordingOnMac: Set<UUID> = [], placement: PhoneSummaryPlacement? = nil,
+    merge: MergeScope? = nil
+  ) -> [ConversationActionGroup] {
     let selected = library.meetings.filter { ids.contains($0.id) }
     guard let only = selected.first, selected.count == 1 else {
       return ConversationActions.batch(
         ids, in: library.meetings, context: .init(platform: .iPhone),
         each: { mergeContext($0, recordingOnMac: recordingOnMac) }, merging: library.mergingIDs)
     }
-    return groups(for: only)
+    return groups(for: only, placement: placement, merge: merge)
+  }
+
+  /// What Merge with ▸ needs of the library: the conversations, what a Mac records, and what the Personal lock hides. Only the
+  /// menus list it: a swipe or the selection bar has no such menu.
+  struct MergeScope {
+    var library: LibraryController
+    var recordingOnMac: Set<UUID> = []
+    var hidden: (Meeting) -> Bool = { _ in false }
   }
 
   /// What this iPhone knows of a conversation that Merge… asks: a Mac recording it, this iPhone processing it, and its
@@ -727,12 +750,21 @@ enum PhoneActions {
   }
 
   /// One conversation's actions on this iPhone: Take Photo where there's a camera, Reprocess unless it's waiting.
-  static func groups(for meeting: Meeting) -> [ConversationActionGroup] {
-    ConversationActions.actions(
-      for: meeting,
-      context: .init(
-        platform: .iPhone, status: ProcessingStatus.phone(meeting),
-        canTakePhoto: CameraPicker.isAvailable))
+  static func groups(
+    for meeting: Meeting, placement: PhoneSummaryPlacement? = nil, merge: MergeScope? = nil
+  ) -> [ConversationActionGroup] {
+    var context = ConversationActions.Context(
+      platform: .iPhone, status: ProcessingStatus.phone(meeting), canTakePhoto: CameraPicker.isAvailable,
+      summarizeChoices: placement?.summarizeAgainChoices(for: meeting) ?? [])
+    if let merge {
+      context.isRecording = merge.recordingOnMac.contains(meeting.id)
+      context.isMerging = merge.library.mergingIDs.contains(meeting.id)
+      context.mergeCandidates = ConversationActions.mergeCandidates(
+        for: meeting, in: merge.library.meetings,
+        context: { mergeContext($0, recordingOnMac: merge.recordingOnMac) }, merging: merge.library.mergingIDs,
+        hidden: merge.hidden)
+    }
+    return ConversationActions.actions(for: meeting, context: context)
   }
 
   /// How this iPhone processes a conversation in a mode, from its menus, its status, and Info alike: a summary goes where
@@ -766,7 +798,10 @@ enum PhoneActions {
         }
       },
       copy: { LocalPasteboard.copy($0) },
-      confirm: { session.confirmation = $0 })
+      confirm: { session.confirmation = $0 },
+      summarizeAgain: placement.map { placement in
+        { id, choice in Task { await placement.summarizeAgain(id, as: choice) } }
+      })
     performer.perform(id, on: ids) { meetings in
       guard let first = meetings.first else { return }
       switch id {
@@ -775,13 +810,13 @@ enum PhoneActions {
       case .takePhoto: session.cameraFor = first.id
       case .addPhotos: session.sheet = .importPhotos(first.id)
       case .addRecordingFromFile: session.addRecording(to: first.id)
-      case .share, .reprocess:
+      case .share, .reprocess, .mergeMenu:
         break  // Menus.
       case .export, .exportMarkdown, .exportJSON, .addRecording, .showFloatingNotes, .rename, .showInFinder:
         break  // The Mac's.
       case .play, .adjustTiming, .showOriginalTranscript, .moveToNewConversation, .removeRecording:
         break  // A recording's, in Info.
-      case .copySummary, .process, .versionHistory, .moveToFolder, .tags, .moveTo, .merge, .moveToTrash:
+      case .copySummary, .process, .summarizeAgain, .versionHistory, .moveToFolder, .tags, .moveTo, .merge, .mergeWith, .moveToTrash:
         break  // The library's (`ConversationActionPerformer`).
       }
     }
@@ -906,7 +941,7 @@ private struct SelectionBar: View {
   /// Whether an action is done the moment it's chosen.
   private static func endsSelection(_ id: ConversationAction.ID) -> Bool {
     switch id {
-    case .process, .moveTo: return true
+    case .process, .summarizeAgain, .moveTo: return true
     default: return false
     }
   }

@@ -42,9 +42,20 @@ public struct ConversationActionMenuItems: View {
                 .help(reason ?? "")
             )
         }
+        // A choice among several (Summarize Again's models) is checked when it's the current one; it has a glyph only to mark
+        // where it sends (the cloud).
+        if action.isChosen {
+            return AnyView(
+                Toggle(isOn: Binding(get: { true }, set: { _ in perform(action.id) })) {
+                    if action.symbol.isEmpty { Text(action.title) } else { Label(action.title, systemImage: action.symbol) }
+                }
+                .disabled(!action.isAvailable)
+                .help(reason ?? "")
+            )
+        }
         return AnyView(
             Button(role: action.role == .destructive ? .destructive : nil) { perform(action.id) } label: {
-                Label(action.title, systemImage: action.symbol)
+                if action.symbol.isEmpty { Text(action.title) } else { Label(action.title, systemImage: action.symbol) }
             }
             .disabled(!action.isAvailable)
             .help(reason ?? "")

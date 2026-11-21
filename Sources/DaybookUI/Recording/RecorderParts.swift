@@ -509,7 +509,7 @@ public struct StopControl: View {
         .disabled(isSaving)
         .modifier(RecorderShortcut(enabled: shortcut, key: "r", modifiers: [.command, .shift], help: "Stop Recording (⇧⌘R)"))
         .modifier(RecorderPressFeedback(trigger: pressed, heavy: false))
-        .accessibilityLabel(isSaving ? "Saving" : "Stop recording")
+        .accessibilityLabel(isSaving ? "Saving" : "Stop")
         .accessibilityValue(elapsed.map { SpokenTime.format($0()) } ?? "")
         .accessibilityShowsLargeContentViewer {
             Label(isSaving ? "Saving…" : "Stop", systemImage: "stop.fill")

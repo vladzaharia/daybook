@@ -11,6 +11,7 @@ struct DeviceDetailsView: View {
     let session: DeviceSession
     let browser: DeviceBrowser
     @State private var copied = false
+    @State private var copiedReport = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// The label column: wide enough for "Recorder firmware" and "Audio key exchange".
@@ -85,12 +86,19 @@ struct DeviceDetailsView: View {
                 if browser.showsTechnicalDetails {
                     VStack(alignment: .leading, spacing: 6) {
                         ForEach(detailed?.technicalDetails ?? []) { detail in
-                            row(detail.label) { Text(detail.value) }
+                            row(detail.label) { Text(detail.value).textSelection(.enabled) }
                         }
                         if let problem = detailed?.lastTechnicalProblem {
                             row("Last problem") { Text(problem).textSelection(.enabled) }
                         }
                     }
+                    Button(copiedReport ? "Copied" : "Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(Self.report(session), forType: .string)
+                        copiedReport = true
+                    }
+                    .buttonStyle(.daybookLink)
+                    .accessibilityLabel("Copy technical details")
                     VStack(alignment: .leading, spacing: DaybookSpacing.s2) {
                         ForEach(session.kind.technicalNotes, id: \.self) { note in
                             Text(note).fixedSize(horizontal: false, vertical: true)
@@ -104,6 +112,14 @@ struct DeviceDetailsView: View {
         .padding(DaybookSpacing.s4)
         .frame(width: 400, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// What Copy puts on the clipboard, as the iPhone's does: the app's version first, then the session's own account
+    /// (its technical facts and the recorder's last list reply).
+    static func report(_ session: DeviceSession, bundle: Bundle = .main) -> String {
+        let version = bundle.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = bundle.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        return "Daybook \(version) (\(build)) on Mac\n" + session.diagnostics
     }
 
     /// A label in the shared column, then its value.

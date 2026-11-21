@@ -55,10 +55,16 @@ struct SpeakerNameField<Field: View>: View {
                     Image(systemName: row.kind == .add ? "plus.circle" : "person.crop.circle")
                         .foregroundStyle(row.kind == .add ? DaybookPalette.Ink.link : DaybookPalette.Ink.secondary)
                         .frame(width: 24)
+                        .accessibilityHidden(true)
+                } else if row.kind == .add {
+                    Image(systemName: "plus.circle").foregroundStyle(DaybookPalette.Ink.link).accessibilityHidden(true)
                 }
                 Text(row.kind == .add ? "Add “\(row.name)”" : row.name).lineLimit(1)
                 if row.isMe { Text(SpeakerProfileWords.you).foregroundStyle(DaybookPalette.Ink.secondary) }
                 Spacer(minLength: 0)
+                if row.kind != .add, row.name == current {
+                    Image(systemName: "checkmark").foregroundStyle(DaybookPalette.Ink.secondary).accessibilityHidden(true)
+                }
             }
             .padding(.horizontal, 6)
             .frame(minHeight: touch ? 44 : 26)
