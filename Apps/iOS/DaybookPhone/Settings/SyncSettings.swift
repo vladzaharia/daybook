@@ -170,6 +170,9 @@ struct StorageScreen: View {
             } footer: {
                 SettingsFooter(SettingsWords.protectWhileLockedFooter)
             }
+            // The library's choice, shown here too; only a Mac compresses.
+            RecordingCompressionSection(age: Binding(get: { model.library.controller.recordingCompression },
+                                                     set: { model.library.controller.setRecordingCompression($0) }))
             SettingsScrollEndMarker()
         }
         .settingsScrollEnd()

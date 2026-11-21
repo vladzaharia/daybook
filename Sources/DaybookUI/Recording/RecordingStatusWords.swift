@@ -287,13 +287,18 @@ public enum RecordingStatusWords {
         }
         switch row.kind {
         case .processing:
-            return chip("quote.bubble", .working, short: row.fraction.flatMap { $0 > 0 ? ProcessingWords.percentText($0) : nil },
+            // The step's glyph and word, as Floating Notes' chip says them (`FloatingStatus.workChip`).
+            return chip(row.stage.map(ProcessingWords.symbol) ?? "quote.bubble", .working,
+                        short: row.fraction.flatMap { $0 > 0 ? ProcessingWords.percentText($0) : nil } ?? row.stage.map(ProcessingWords.shortLabel),
                         progress: row.fraction)
         case .waiting:
             // A countdown's short words are its seconds ("12 s"), which move with it.
             let seconds = row.countdownUntil.map { SummaryPlacementWords.seconds(SummaryPlacementWords.secondsLeft(until: $0, at: now)) }
-            return chip("clock", .calm, short: seconds ?? "Waiting")
-        case .waitingForModels: return chip("arrow.down.circle", .attention, short: "Models")
+            var endsInCloud = false
+            if case .cloud? = row.countdownPlace { endsInCloud = true }
+            return chip(endsInCloud ? "cloud" : "clock", .calm, short: seconds ?? "Waiting")
+        // A wait, not a problem: only a download that stopped (a failed row) needs the person.
+        case .waitingForModels: return chip("arrow.down.circle", .calm, short: "Models")
         case .paused: return chip("pause.circle", .calm, short: "Paused")
         case .failed: return chip("exclamationmark.triangle.fill", .attention, short: nil)
         case .notTranscribed: return chip("quote.bubble", .calm, short: nil)

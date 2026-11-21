@@ -117,8 +117,11 @@ final class ConversationStatusPresentationTests: XCTestCase {
         XCTAssertEqual(onMac?.title, "Identifying speakers · 40%", "never Transcribing while speakers are found")
         XCTAssertEqual(onMac?.progress, 0.4)
         XCTAssertEqual(onMac?.actions, [.pause], "a Mac pauses its own work")
+        var cancellable = mac
+        cancellable.cancelsStarted = true
+        XCTAssertEqual(page(here, nil, cancellable)?.actions, [.pause, .cancel], "and gives it up when it can")
         XCTAssertEqual(onMac?.phrase, "Identifying speakers")
-        XCTAssertEqual(row(here, nil, mac), ConversationRowStatus(kind: .processing, text: "Identifying speakers · 40%", fraction: 0.4))
+        XCTAssertEqual(row(here, nil, mac), ConversationRowStatus(kind: .processing, text: "Identifying speakers · 40%", fraction: 0.4, stage: .identifyingSpeakers))
 
         let phoneHere = ProcessingStatus.processing(.init(stage: .identifyingSpeakers, fraction: 0.4, device: alexPhone))
         XCTAssertEqual(page(phoneHere, nil, phone)?.title, "Identifying speakers on this iPhone · 40%")
@@ -143,7 +146,7 @@ final class ConversationStatusPresentationTests: XCTestCase {
         XCTAssertEqual(onPhone?.title, "Transcribing on this iPhone · 40%")
         XCTAssertEqual(onPhone?.symbol, "iphone")
         XCTAssertEqual(onPhone?.actions, [], "an iPhone's queue runs itself")
-        XCTAssertEqual(row(status, meeting, phone), ConversationRowStatus(kind: .processing, text: "Transcribing on this iPhone · 40%", fraction: 0.4))
+        XCTAssertEqual(row(status, meeting, phone), ConversationRowStatus(kind: .processing, text: "Transcribing on this iPhone · 40%", fraction: 0.4, stage: .transcribing))
 
         let onMac = page(status, meeting, mac)
         XCTAssertEqual(onMac?.title, "Transcribing · 40%")
@@ -161,7 +164,7 @@ final class ConversationStatusPresentationTests: XCTestCase {
         XCTAssertEqual(onPhone?.title, onMac?.title)
         XCTAssertEqual(onPhone?.symbol, "desktopcomputer")
         XCTAssertEqual(onMac?.actions, [], "only the device doing it pauses it")
-        XCTAssertEqual(row(elsewhere, nil, phone), ConversationRowStatus(kind: .processing, text: "Transcribing on Studio Mac · 40%", fraction: 0.4))
+        XCTAssertEqual(row(elsewhere, nil, phone), ConversationRowStatus(kind: .processing, text: "Transcribing on Studio Mac · 40%", fraction: 0.4, stage: .transcribing))
         XCTAssertEqual(row(elsewhere, nil, Presentation.Inputs(words: words, local: .mac()))?.text, "Transcribing on Studio Mac · 40%")
         // With no figure yet, a spinner.
         let silent = page(.processing(.init(stage: .transcribing, fraction: nil, device: studio)), nil, phone)
@@ -219,11 +222,14 @@ final class ConversationStatusPresentationTests: XCTestCase {
                                             actions: [.downloadModels(bytes: 7_600_000_000, again: true)]))
         XCTAssertEqual(failed?.actions.map(\.title), ["Try Again"])
         XCTAssertEqual(failed?.actions.first?.isPrimary, true)
-        XCTAssertEqual(row(.requested(.models), nil, inputs), ConversationRowStatus(kind: .waitingForModels, text: "Waiting for models"))
+        XCTAssertEqual(row(.requested(.models), nil, inputs), ConversationRowStatus(kind: .failed, text: "Couldn’t download Gemma 4 12B 4-bit"))
     }
 
     func testBehaviorPausedLooksTheSameAndSaysWhyOrResumes() {
         XCTAssertEqual(page(.requested(.paused), nil, mac), Presentation(kind: .line, symbol: "pause.circle", title: "Paused", actions: [.resume]))
+        var cancellablePause = mac
+        cancellablePause.cancelsStarted = true
+        XCTAssertEqual(page(.requested(.paused), nil, cancellablePause)?.actions, [.resume, .cancel])
         var charging = phone
         charging.pause = .lowBattery
         XCTAssertEqual(page(.requested(.paused), nil, charging),
@@ -421,7 +427,7 @@ final class ConversationStatusPresentationTests: XCTestCase {
                        Presentation(kind: .line, symbol: nil, title: SummaryPlacementWords.running(.thisDevice, thisDevice: "this Mac"),
                                     isWorking: true, actions: [.stopSummary]))
         XCTAssertEqual(row(.transcribed, recorded(transcribed: true), inputs),
-                       ConversationRowStatus(kind: .processing, text: SummaryPlacementWords.running(.thisDevice, thisDevice: "this Mac")))
+                       ConversationRowStatus(kind: .processing, text: SummaryPlacementWords.running(.thisDevice, thisDevice: "this Mac"), stage: .summarizing))
 
         var cloud = phone
         cloud.placement.cloudOffered = true
@@ -546,7 +552,7 @@ final class ConversationStatusPresentationTests: XCTestCase {
                                     progress: 0.4, actions: [.cancelDownload])
         XCTAssertEqual(page(.requested(.device(request)), transcribed, inputs), arriving)
         XCTAssertEqual(page(.transcribed, transcribed, inputs), arriving)
-        XCTAssertEqual(row(.requested(.device(request)), transcribed, inputs), ConversationRowStatus(kind: .waitingForModels, text: "Waiting for models"))
+        XCTAssertEqual(row(.requested(.device(request)), transcribed, inputs), ConversationRowStatus(kind: .waitingForModels, text: "Downloading models · 40%"))
         // Waiting for Wi‑Fi: an iPhone's downloads keep to it unless Settings allows cellular, so Cancel, not Download.
         inputs.local.models = .waitingForWiFi(bytes: 3_580_000_000)
         XCTAssertEqual(page(.transcribed, transcribed, inputs),
@@ -592,7 +598,7 @@ final class ConversationStatusPresentationTests: XCTestCase {
         XCTAssertEqual(page(.requested(.device(request)), nil, inputs),
                        Presentation(kind: .line, symbol: "wifi", title: "Downloading models · Waiting for Wi‑Fi", detail: "852 MB",
                                     actions: [.cancelDownload]))
-        XCTAssertEqual(row(.requested(.device(request)), nil, inputs), ConversationRowStatus(kind: .waitingForModels, text: "Waiting for models"))
+        XCTAssertEqual(row(.requested(.device(request)), nil, inputs), ConversationRowStatus(kind: .waitingForModels, text: "Downloading models · Waiting for Wi‑Fi"))
         inputs.local = .iPhone(processesHere: true, missingModelBytes: 852_000_000, models: .failed(model: "Parakeet Ultra", bytes: 852_000_000))
         XCTAssertEqual(page(.requested(.device(request)), nil, inputs),
                        Presentation(kind: .box(.problem), symbol: "exclamationmark.triangle.fill", title: "Couldn’t download Parakeet Ultra",
