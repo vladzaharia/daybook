@@ -41,8 +41,10 @@ public enum QueueStatusWords {
         guard !queue.isEmpty else { return nil }
         func line(_ text: String, _ tone: StatusLineWords.Tone, progress: Double? = nil, short: String? = nil,
                   countdown: Date? = nil) -> StatusLineWords {
-            StatusLineWords(id: "queue", symbol: words.symbol, title: words.hereTitle, text: text, tone: tone, progress: progress,
-                            shortText: short, countdownUntil: countdown)
+            // A countdown that ends in the cloud has the cloud's glyph, so a narrow "12 s" never sits beside the device's.
+            let symbol = countdown != nil && queue.countdownCloudModel != nil ? "cloud" : words.symbol
+            return StatusLineWords(id: "queue", symbol: symbol, title: words.hereTitle, text: text, tone: tone, progress: progress,
+                                   shortText: short, countdownUntil: countdown)
         }
         let waiting = queue.waiting > 0 ? " · \(queue.waiting) waiting" : ""
         if let until = queue.countdown {

@@ -87,6 +87,21 @@ final class FloatingNotesStatusTests: XCTestCase {
     private let sonnet = CloudModel(provider: .anthropic, id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", tier: .balanced, inputPrice: 2,
                                     outputPrice: 10, priceIsEstimated: false, contextTokens: 200_000, rank: 1)
 
+    /// The chip's menu takes the page's actions, but never an upgrade (which may send the transcript to the cloud) or its
+    /// Dismiss: a bare "Upgrade" there names no model.
+    func testChipMenuLeavesOutAnUpgradeToTheCloud() {
+        let offer = UpgradeOffer(role: .summarization, place: .cloud(sonnet), model: "anthropic/claude-sonnet-5-5", quality: 94,
+                                 current: "gemma-4/e2b-4bit", currentQuality: 25)
+        var inputs = ConversationStatusPresentation.Inputs(words: .mac(id: "mac"), local: .mac())
+        inputs.upgrade = offer
+        let page = ConversationStatusPresentation.page(.done, meeting: Meeting(title: "Done"), inputs: inputs)
+        XCTAssertEqual(page?.actions, [.upgrade(offer), .dismissUpgrade(offer)], "the page offers it, naming the model")
+        XCTAssertEqual(page?.title, "Upgrade summary with Claude Sonnet 5.5")
+        XCTAssertEqual(page?.actions.filter(ChipMenuItems.isMenuAction), [])
+        XCTAssertTrue(ChipMenuItems.isMenuAction(.pause) && ChipMenuItems.isMenuAction(.resume) && ChipMenuItems.isMenuAction(.cancel)
+                      && ChipMenuItems.isMenuAction(.stopSummary) && ChipMenuItems.isMenuAction(.cloudSettings))
+    }
+
     // MARK: Phase
 
     func testRecordingPhaseNamesTheInputDeviceUntilTheMicrophoneIsSilent() {

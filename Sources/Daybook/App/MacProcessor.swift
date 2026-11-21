@@ -100,6 +100,7 @@ final class MacProcessor {
                 do {
                     try await work.value
                     app.finishRequests(of: queue.running ?? job, failure: nil)
+                    queue.cancelledRunning.remove(id)
                     // Its summary may wait for the summary model here (transcript first).
                     app.reportToPhones(id, phase: queue.awaitingSummaryModel.contains(id) ? .waitingForModels : .finished)
                     queue.finishRunning()
@@ -107,7 +108,8 @@ final class MacProcessor {
                 }
                 catch is CancellationError {
                     if queue.claimsLost.remove(id) == nil {
-                        // Cancelled, not paused: its own work (no request) goes back to what it was.
+                        // Cancelled, not paused (only work that carries no request can be: `canCancelStarted`). Its steps already
+                        // done stay done; a request this job didn't carry can still start it again.
                         if queue.cancelledRunning.remove(id) == nil { queue.paused.insert(id) }
                         app.releaseRequests(in: id)
                         app.reportToPhones(id, phase: .paused)
@@ -121,6 +123,7 @@ final class MacProcessor {
                     // The kind is kept as the error says it (a cloud key refused, models missing), not read back from words.
                     queue.failures[id] = .init(reason: error.localizedDescription, kind: ProcessingRequest.FailureKind(error))
                     app.update(id) { $0.status = .failed; $0.errorMessage = error.localizedDescription }
+                    queue.cancelledRunning.remove(id)
                     app.finishRequests(of: queue.running ?? job, failure: error)
                     app.reportToPhones(id, phase: .failed, detail: error.localizedDescription)
                     queue.finishRunning()

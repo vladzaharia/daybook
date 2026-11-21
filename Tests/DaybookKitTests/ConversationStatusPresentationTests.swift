@@ -116,7 +116,10 @@ final class ConversationStatusPresentationTests: XCTestCase {
         let onMac = page(here, nil, mac)
         XCTAssertEqual(onMac?.title, "Identifying speakers · 40%", "never Transcribing while speakers are found")
         XCTAssertEqual(onMac?.progress, 0.4)
-        XCTAssertEqual(onMac?.actions, [.pause, .cancel], "a Mac pauses its own work")
+        XCTAssertEqual(onMac?.actions, [.pause], "a Mac pauses its own work")
+        var cancellable = mac
+        cancellable.cancelsStarted = true
+        XCTAssertEqual(page(here, nil, cancellable)?.actions, [.pause, .cancel], "and gives it up when it can")
         XCTAssertEqual(onMac?.phrase, "Identifying speakers")
         XCTAssertEqual(row(here, nil, mac), ConversationRowStatus(kind: .processing, text: "Identifying speakers · 40%", fraction: 0.4, stage: .identifyingSpeakers))
 
@@ -148,7 +151,7 @@ final class ConversationStatusPresentationTests: XCTestCase {
         let onMac = page(status, meeting, mac)
         XCTAssertEqual(onMac?.title, "Transcribing · 40%")
         XCTAssertEqual(onMac?.symbol, "desktopcomputer")
-        XCTAssertEqual(onMac?.actions, [.pause, .cancel])
+        XCTAssertEqual(onMac?.actions, [.pause])
         XCTAssertEqual(row(status, meeting, mac)?.text, "Transcribing · 40%")
     }
 
@@ -223,7 +226,10 @@ final class ConversationStatusPresentationTests: XCTestCase {
     }
 
     func testBehaviorPausedLooksTheSameAndSaysWhyOrResumes() {
-        XCTAssertEqual(page(.requested(.paused), nil, mac), Presentation(kind: .line, symbol: "pause.circle", title: "Paused", actions: [.resume, .cancel]))
+        XCTAssertEqual(page(.requested(.paused), nil, mac), Presentation(kind: .line, symbol: "pause.circle", title: "Paused", actions: [.resume]))
+        var cancellablePause = mac
+        cancellablePause.cancelsStarted = true
+        XCTAssertEqual(page(.requested(.paused), nil, cancellablePause)?.actions, [.resume, .cancel])
         var charging = phone
         charging.pause = .lowBattery
         XCTAssertEqual(page(.requested(.paused), nil, charging),

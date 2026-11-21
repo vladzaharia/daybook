@@ -7,7 +7,7 @@ import Foundation
 /// - "Summarized on this Mac · Gemma 4 E4B · 31 Oct, 10:02" (the Mac's glyph by its name: a MacBook's laptop)
 /// - "Summarized on Alex’s iPhone · Gemma 4 E2B · 31 Oct, 10:02" (an iPhone)
 /// - "Summarized with Claude Sonnet 5.5 · 31 Oct, 10:02" (the cloud)
-/// - "Summarized with Claude Sonnet 5.5 · long conversation · 31 Oct, 10:02", "… · after this Mac couldn’t · …" (the cloud,
+/// - "Summarized with Claude Sonnet 5.5 · long conversation · 31 Oct, 10:02", "… · after this Mac couldn’t · …", naming the device whose own summary failed (the cloud,
 ///   when it took the summary without the person's choice)
 ///
 /// The colophon shows only once there's a summary: a transcript without one says "Not summarized yet" in its status.
@@ -29,7 +29,11 @@ public struct SummaryColophon: Equatable, Sendable {
         if origin.cloudModel != nil, let reason = summary.cloudReason {
             switch reason {
             case .longConversation: parts.append("long conversation")
-            case .localFailed: parts.append("after \(words.here) couldn’t")
+            case .localFailed:
+                // The device that sent it is the one whose own summary failed: this one, or another by its recorded name. Not
+                // known, nothing is said rather than guessed.
+                if origin.deviceID == thisDeviceID { parts.append("after \(words.here) couldn’t") }
+                else if origin.deviceID != nil, let name = origin.deviceName, !name.isEmpty { parts.append("after \(name) couldn’t") }
             case .chosen, .always: break
             }
         }

@@ -376,6 +376,9 @@ extension ConversationStatusPresentation {
         public var ownsUntranscribed: Bool
         /// Why this device's work on it is paused.
         public var pause: ProcessingWords.PauseReason?
+        /// Running or paused work here can be given up outright (Cancel): its own, or paused with only requests this device
+        /// can withdraw. Work that carries another device's request can only be paused, so it isn't offered Cancel.
+        public var cancelsStarted = false
         /// The cloud model this device summarizes with ("Claude Sonnet 5.5"), to name in a cloud failure.
         public var cloudModel: String?
         /// Rows: it's playing now, or its work just finished (the checkmark holds for a moment).
@@ -427,7 +430,7 @@ extension ConversationStatusPresentation {
             if !progress.awaiting.isEmpty { line.detail = ProcessingStatus.awaitingLine(progress.awaiting) }
             else if here, let origin = requestOrigin(meeting, words: words) { line.detail = origin }
             // A summary can't pause, so it stops; the other steps pause or are given up.
-            if here, local.controlsQueue { line.actions = progress.stage == .summarizing ? [.stopSummary] : [.pause, .cancel] }
+            if here, local.controlsQueue { line.actions = progress.stage == .summarizing ? [.stopSummary] : [.pause] + (inputs.cancelsStarted ? [.cancel] : []) }
             return line
 
         case .requested(.queued(let position, let after)):
@@ -455,7 +458,7 @@ extension ConversationStatusPresentation {
             let reason = inputs.pause ?? (local.controlsQueue ? .person : nil)
             return ConversationStatusPresentation(kind: .line, symbol: "pause.circle", title: "Paused",
                                                   detail: reason.flatMap { ProcessingWords.pausedLine($0, device: words.hereDeviceName) },
-                                                  actions: local.controlsQueue ? [.resume, .cancel] : [])
+                                                  actions: local.controlsQueue ? [.resume] + (inputs.cancelsStarted ? [.cancel] : []) : [])
 
         case .requested(.device(let request)):
             let mine = request.requestedBy.id == words.thisDeviceID

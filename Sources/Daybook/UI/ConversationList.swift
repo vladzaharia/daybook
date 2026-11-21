@@ -128,7 +128,7 @@ struct ConversationIDs: Identifiable {
 enum MacRowStatus {
     static func make(_ state: AppState, _ meeting: Meeting, now: Date = Date()) -> ConversationRowStatus? {
         let inputs = ConversationStatusPresentation.Inputs(
-            words: .mac(id: state.library.thisDevice.id), local: .mac(),
+            words: .mac(id: state.library.thisDevice.id), local: .mac(models: state.processor.queue.awaitingModels.contains(meeting.id) ? state.modelDownloadState : nil),
             isRecording: state.recordingID == meeting.id,
             placement: .init(planner: state.placements[meeting.id]),
             queuedMode: state.processor.queue.jobs.first { $0.meetingID == meeting.id }?.mode,

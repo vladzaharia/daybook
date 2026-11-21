@@ -56,6 +56,9 @@ final class SummaryPlacementWordsTests: XCTestCase {
         let line = QueueStatusWords.line(queue, words: .mac(), now: at(3))
         XCTAssertEqual(line?.text, "Summarizing with Claude Sonnet 5.5 in 12 s · 1 waiting")
         XCTAssertEqual(line?.shortText, "12 s")
+        XCTAssertEqual(line?.symbol, "cloud", "a narrow \"12 s\" never sits beside the Mac's glyph")
+        XCTAssertEqual(QueueStatusWords.line(QueueStatusWords.Queue(countdown: at(15)), words: .mac(), now: at(3))?.symbol,
+                       DeviceWords.mac().symbol, "a countdown on this Mac keeps its glyph")
         // The menu bar.
         XCTAssertEqual(Words.countdown(of: "“Roadmap”", inCloud: sonnet.name, seconds: 12), "Summarizing “Roadmap” with Claude Sonnet 5.5 in 12 s")
         // Local stays as it was.

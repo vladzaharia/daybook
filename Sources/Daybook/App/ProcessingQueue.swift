@@ -152,6 +152,8 @@ final class ProcessingQueue {
         runningID = job.meetingID
         running = job
         claimsLost.remove(job.meetingID)
+        // A Cancel that never reached this conversation's last run mustn't make a later Pause one.
+        cancelledRunning.remove(job.meetingID)
         if let index = owed.firstIndex(where: { $0.meetingID == job.meetingID }) {
             owed[index].interruptedRuns += 1
             countedRun = job.meetingID
@@ -393,25 +395,33 @@ extension AppState {
         }
     }
 
-    /// Gives up work that has started: running work stops and paused work is let go, as Cancel does for queued work. A
-    /// request another device made, which this Mac would claim again, keeps the conversation paused instead: the
-    /// person's Resume (or that device) decides.
+    /// Whether Cancel can give up the work started on `meeting` (`ConversationStatusPresentation.Inputs.cancelsStarted`):
+    /// running work that carries no request, or paused work whose open requests are all this Mac's to withdraw. Work that
+    /// carries another device's request can only be paused: it is never dropped or left for this Mac to claim again.
+    func canCancelStarted(_ meeting: Meeting) -> Bool {
+        if processor.queue.runningID == meeting.id { return processor.queue.running?.requestID == nil }
+        guard processor.queue.paused.contains(meeting.id) else { return false }
+        let me = library.thisDevice
+        return meeting.openProcessingRequests.allSatisfy { $0.requestedBy.id == me.id }
+    }
+
+    /// Gives up work that has started, where `canCancelStarted` allows it. Running work with no request is stopped and
+    /// isn't kept paused; its steps already done stay done, and nothing is rolled back. Paused work has this Mac's own open
+    /// requests withdrawn and leaves the paused list.
     func cancelStarted(_ id: UUID) {
+        guard let meeting = meetings.first(where: { $0.id == id }), canCancelStarted(meeting) else { return }
         if processor.queue.runningID == id {
-            if processor.queue.running?.requestID == nil { processor.queue.cancelledRunning.insert(id) }
+            processor.queue.cancelledRunning.insert(id)
             processor.queue.currentRequest?.cancel()
             return
         }
-        guard processor.queue.paused.contains(id) else { return }
         let me = library.thisDevice
         library.update(id) { meeting in
-            for request in meeting.openProcessingRequests where request.requestedBy.id == me.id {
+            for request in meeting.openProcessingRequests {
                 _ = meeting.withdrawProcessingRequest(request.id, by: me, at: Date())
             }
         }
-        if library.meeting(id)?.openProcessingRequests.isEmpty ?? true {
-            processor.queue.paused.remove(id)
-        }
+        processor.queue.paused.remove(id)
     }
 
     /// At launch, once the library is open: the work this Mac owed when it last quit, restarted, or crashed is queued

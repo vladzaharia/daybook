@@ -63,6 +63,17 @@ final class SummaryColophonTests: XCTestCase {
         XCTAssertEqual(line(.longConversation), "Summarized with Claude Sonnet 5.5 · long conversation · \(date)")
         XCTAssertEqual(line(.localFailed), "Summarized with Claude Sonnet 5.5 · after this Mac couldn’t · \(date)")
         XCTAssertEqual(line(.chosen), "Summarized with Claude Sonnet 5.5 · \(date)")
+        // Read from another device, the one whose own summary failed is named; unknown, nothing is guessed.
+        func failed(by device: ProcessingRequest.Device, readingOn reader: ProcessingRequest.Device, _ words: DeviceWords) -> String {
+            let summary = MeetingSummary(overview: "Plans", modelID: "anthropic/claude-sonnet-5-5", createdAt: created)
+                .placed(.cloud(sonnet), by: device, inputs: [:], cloudReason: .localFailed)
+            return SummaryColophon(summary, thisDeviceID: reader.id, words: words).line
+        }
+        XCTAssertEqual(failed(by: laptop, readingOn: phone, .iPhone(id: phone.id)),
+                       "Summarized with Claude Sonnet 5.5 · after Vlad’s MacBook Pro couldn’t · \(date)")
+        XCTAssertEqual(failed(by: phone, readingOn: phone, .iPhone(id: phone.id)),
+                       "Summarized with Claude Sonnet 5.5 · after this iPhone couldn’t · \(date)")
+        XCTAssertEqual(failed(by: ProcessingRequest.Device(id: "unknown", name: ""), readingOn: phone, .iPhone(id: phone.id)), "Summarized with Claude Sonnet 5.5 · \(date)")
         XCTAssertEqual(line(.always), "Summarized with Claude Sonnet 5.5 · \(date)")
         XCTAssertEqual(line(nil), "Summarized with Claude Sonnet 5.5 · \(date)")
     }

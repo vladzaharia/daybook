@@ -408,10 +408,11 @@ struct ChipMenuItems: View {
         }
     }
 
-    /// The model downloads and Details are the status's own, not this menu's.
+    /// The model downloads and Details are the status's own, not this menu's. An upgrade (which may send the transcript to the
+    /// cloud) and its Dismiss stay on the page, where the offer names the model: a bare "Upgrade" here would send it unnamed.
     static func isMenuAction(_ action: ConversationStatusPresentation.Action) -> Bool {
         switch action {
-        case .details, .downloadModels, .downloadSummaryModel, .chooseModels, .cancelDownload: return false
+        case .details, .downloadModels, .downloadSummaryModel, .chooseModels, .cancelDownload, .upgrade, .dismissUpgrade: return false
         default: return true
         }
     }
