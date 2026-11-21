@@ -29,13 +29,34 @@ extension LibraryWords {
             if section == .all && libraryIsEmpty && platform != .mac {
                 return EmptyPlace(title: "No Conversations Yet", symbol: "waveform", showsMark: true)
             }
-            return EmptyPlace(title: "No Conversations", symbol: section.systemImage)
+            // Work and Personal say how to fill them, as a folder does.
+            let move = section == .work ? "Move to Work" : "Move to Personal"
+            let how: String? = switch section {
+            case .all: nil
+            case .work, .personal: platform == .mac ? "Drag conversations here, or choose \(move)." : "Choose \(move) on a conversation."
+            }
+            return EmptyPlace(title: "No Conversations", symbol: section.systemImage, description: how)
         case .folder:
             let how = platform == .mac ? "Drag conversations here, or choose Move to Folder." : "Choose Move to Folder… on a conversation."
             return EmptyPlace(title: "No Conversations", symbol: "folder", description: how)
         case .trash:
             return EmptyPlace(title: "No Conversations", symbol: "trash")
         }
+    }
+
+    /// What an import says when some of its files didn't read: how many came in, and each that didn't ("Couldn’t import
+    /// “Memo.m4a”."), or only the count when there are several.
+    public static func importSummary(imported: Int, failed: [String]) -> [String] {
+        var lines: [String] = []
+        if imported > 0 { lines.append(imported == 1 ? "Imported 1 recording." : "Imported \(imported) recordings.") }
+        if failed.count == 1 { lines.append("Couldn’t import “\(failed[0])”.") }
+        else if failed.count > 1 { lines.append("Couldn’t import \(failed.count) files.") }
+        return lines
+    }
+
+    /// The question's line under Move to Trash: the Trash keeps what goes into it until it's restored.
+    public static func trashMessage(count: Int) -> String {
+        count > 1 ? "You can restore them from the Trash." : "You can restore it from the Trash."
     }
 
     /// The Trash's name, in the sidebar, the places menu, and over its list.
@@ -45,7 +66,7 @@ extension LibraryWords {
     public static let untitled = "Untitled Conversation"
 
     /// The library search field's prompt on both apps.
-    public static let searchPrompt = "Titles, notes, transcripts"
+    public static let searchPrompt = "Search"
 
     /// What an empty library says on an iPhone while this install's first sync pass is still bringing the library
     /// in (`isGettingConversations`), in place of "No Conversations Yet", with a spinner.

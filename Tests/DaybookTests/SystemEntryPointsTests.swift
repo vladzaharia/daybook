@@ -290,16 +290,27 @@ final class SystemEntryPointsTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? DaybookIntentError, .notRecording)
         }
-        try await IntentActions.startRecording(state)
+        let started = try await IntentActions.startRecording(state)
+        XCTAssertEqual(started, "Recording.")
         let id = try XCTUnwrap(state.recordingID)
         // Asked again while recording: nothing changes.
         try await IntentActions.startRecording(state)
         XCTAssertEqual(state.recordingID, id)
-        try IntentActions.addBookmark(state)
+        let bookmarked = try IntentActions.addBookmark(state)
+        XCTAssertTrue(bookmarked.hasPrefix("Bookmarked at 0:"), bookmarked)
         XCTAssertEqual(state.meetings.first { $0.id == id }?.highlights.count, 1)
-        try await IntentActions.stopRecording(state)
+        let stopped = try await IntentActions.stopRecording(state)
+        XCTAssertTrue(stopped.hasPrefix("Saved"), stopped)
         XCTAssertNil(state.recordingID)
         await state.flush()
+    }
+
+    /// What the Mac says back is what the iPhone says (REC-12): "Saved · 12 min." once the length is known.
+    func testBehaviorIntentWordsMatchTheIPhones() {
+        XCTAssertEqual(IntentWords.recording, "Recording.")
+        XCTAssertEqual(IntentWords.saved(duration: 12 * 60), "Saved · 12 min.")
+        XCTAssertEqual(IntentWords.saved(duration: nil), "Saved.")
+        XCTAssertEqual(IntentWords.bookmarked(at: 723), "Bookmarked at 12:03.")
     }
 
     /// New Note and Open Conversation open the library on the conversation; one that's gone says so.

@@ -42,6 +42,34 @@ final class ImportSidecarTests: XCTestCase {
         XCTAssertNil(state.errorMessage)
     }
 
+    /// DEV-01: a file that isn't audio doesn't stop the files after it; the notice names it.
+    func testAFileThatIsNotAudioDoesNotStopTheRest() async throws {
+        let (state, root) = try await makeState()
+        let bad = root.appendingPathComponent("Incoming/Memo.m4a")
+        try FileManager.default.createDirectory(at: bad.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("not audio".utf8).write(to: bad)
+        let good = try writeAudio(root.appendingPathComponent("Incoming/after.wav"))
+
+        await state.importRecordings([bad, good])
+        await state.flush()
+
+        XCTAssertEqual(state.meetings.count, 1)
+        XCTAssertEqual(state.noticeLines, ["Imported 1 recording.", "Couldn’t import “Memo.m4a”."])
+        XCTAssertNil(state.problem, "Something imported: no alert")
+    }
+
+    func testNothingImportedRaisesTheAlert() async throws {
+        let (state, root) = try await makeState()
+        let bad = root.appendingPathComponent("Incoming/Memo.m4a")
+        try FileManager.default.createDirectory(at: bad.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("not audio".utf8).write(to: bad)
+
+        await state.importRecordings([bad])
+
+        XCTAssertTrue(state.meetings.isEmpty)
+        XCTAssertEqual(state.problem?.title, "Couldn’t Import Audio")
+    }
+
     func testSidecarsPairWithTheirRecordingsByName() {
         let folder = URL(fileURLWithPath: "/Users/dana/Exports", isDirectory: true)
         let call = folder.appendingPathComponent("call.m4a"), callSidecar = folder.appendingPathComponent("call.highlights.json")

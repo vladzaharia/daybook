@@ -461,7 +461,7 @@ pushes, Settings).
   Live; Device Details…; Connect or Disconnect; where it can move. On the Mac it's the detail toolbar's More menu,
   with Device Settings… after it, and Refresh Status dims when it can't run; on the iPhone, the page's ellipsis, in
   the title's ink, leaving out what can't run.
-- **Add Device…** (Mac: File menu, sidebar, Settings, Welcome) and **Add Recorder…** (iPhone, which adds only
+- **Add Recorder…** (Mac: File menu, sidebar, Settings, Welcome; iPhone, which adds only
   recorders; pairing is Pair with Your Mac…): choose a kind (`RecorderKindRow`, a plain label for what it is), then
   its methods in order of preference where it has more than one on that device (the iPhone adds a Soundcore over
   Bluetooth only), then finding it nearby (`RecorderDiscoveryContent`): what was found with its signal and Connect
@@ -472,11 +472,11 @@ pushes, Settings).
   with the nearest recorder's Connect as the default). Where a step leads is one rule (`AddRecorderStep`), and a
   problem there offers only what setup can do about it (Open Settings, Try Again). On the Mac a direct method's card
   is the pre-permission screen; on the iPhone, Search. A recorder already set up opens its page; one a Mac manages
-  offers Use on This iPhone instead of a search. Settings › Devices on the Mac offers Pair with iPhone… beside Add Device….
+  offers Use on This iPhone instead of a search. Settings › Devices on the Mac offers Pair with iPhone… beside Add Recorder….
 - **Settings › Devices** (Mac): per recorder, its methods (Connect directly over Bluetooth, with the page's Import
   automatically and Record along with this Mac indented under it, Managed by, Recorder with Forget…, the folder with
   Choose…), then the page's Name with Rename… and Remove from This Mac….
-- **Menus** (Mac): File › Add Device… and Import from <device>…; Add Recording › From <device>…;
+- **Menus** (Mac): File › Add Recorder… and Import from <device>…; Add Recording › From <device>…;
   the menu bar extra's per-device line (a handoff under way, or Use <recorder> on This Mac).
 - **Handoff** (`RecorderHandoffView`, the same rules on both): at rest, "Use on This Mac" (with this Mac's own glyph)
   while another device manages it, or "Use on Alex’s iPhone" for each device it could go to, on the page and in the
@@ -565,7 +565,7 @@ that kind, the phone's device ID as serial, and the phone's recording ID.
   "Needs pairing again" with Pair Again…), Can start recording (one way, as on the iPhone: off, every start
   the phone asks for and its page's Stop are declined; whether the phone records when this Mac starts is its
   own Can Start Recording's to say), how recordings arrive (with a link to sync settings when it's off), and
-  Unpair…, confirmed in the page's words. Pair with iPhone… sits beside Add Device…, and in the empty state.
+  Unpair…, confirmed in the page's words. Pair with iPhone… sits beside Add Recorder…, and in the empty state.
 - **Bluetooth ownership** of a Soundcore shared with the phone is a synced device setting, moved
   between them by the handoff above.
 

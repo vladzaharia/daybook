@@ -73,8 +73,10 @@ struct AnswerPage: View {
                 Button(AskPageWords.askAgain) { ask.askAgain() }.buttonStyle(.daybookTinted)
             }
         case .failed:
-            status(AskPageWords.couldNotAnswer) {
-                Button(AskPageWords.askAgain) { ask.askAgain() }.buttonStyle(.daybookTinted)
+            MarginRow {
+                AttentionBox(title: AskPageWords.couldNotAnswer, message: nil) {
+                    Button(AskPageWords.askAgain) { ask.askAgain() }.buttonStyle(.daybookProminent)
+                }
             }
         case .hidden:
             status(PersonalLockWords.hiddenTitle) {
@@ -97,6 +99,8 @@ struct AnswerPage: View {
                 }
                 .daybookFont(.status)
                 .foregroundStyle(DaybookPalette.Ink.secondary)
+                // The page's status lines hang their glyph in the margin, so the words start with the answer's.
+                .overlay(alignment: .leading) { ProgressView().controlSize(.small).offset(x: -24).accessibilityHidden(true) }
                 .accessibilityElement(children: .combine)
             }
         }
@@ -116,11 +120,6 @@ struct AnswerPage: View {
             notFound(answer)
         } else {
             sentencesAndSources
-            if ask.reply?.answer.status == .partial {
-                MarginRow {
-                    Text(AskWords.partial).daybookFont(.body).foregroundStyle(DaybookPalette.Ink.secondary)
-                }
-            }
             colophon
         }
     }
@@ -144,6 +143,14 @@ struct AnswerPage: View {
         return VStack(alignment: .leading, spacing: DaybookSpacing.s4) {
             ForEach(Array(ask.sentences.enumerated()), id: \.offset) { _, sentence in
                 sentenceRow(sentence, sources: sources)
+            }
+            // What the answer leaves out is said right under it, before its sources.
+            if !ask.sentences.isEmpty, ask.reply?.answer.status == .partial {
+                MarginRow {
+                    Label(AskWords.partial, systemImage: "info.circle")
+                        .daybookFont(.status)
+                        .foregroundStyle(DaybookPalette.Ink.secondary)
+                }
             }
             if !sources.isEmpty { sourceList(sources) }
         }
@@ -205,37 +212,45 @@ struct AnswerPage: View {
         MarginRow(alignment: .top) {
             Text("\(number)").daybookFont(.marginTime).foregroundStyle(DaybookPalette.Ink.meta).monospacedDigit()
         } content: {
-            HStack(alignment: .top, spacing: DaybookSpacing.s3) {
+            VStack(alignment: .leading, spacing: 2) {
+                sourceHeader(number: number, citation)
                 Button { state.openCitation(citation) } label: {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(Self.sourceLine(citation))
-                            .daybookFont(.rowDetail)
-                            .foregroundStyle(DaybookPalette.Ink.secondary)
-                            .lineLimit(2)
-                        Text("“\(citation.text)”")
-                            .daybookFont(.rowDetail)
-                            .foregroundStyle(DaybookPalette.Ink.body)
-                            .lineLimit(2)
-                            .multilineTextAlignment(.leading)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
+                    Text("“\(citation.text)”")
+                        .daybookFont(.rowDetail)
+                        .foregroundStyle(DaybookPalette.Ink.body)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(spoken(number, citation))
                 .accessibilityHint(AskPageWords.open)
-                if citation.kind == .passage, citation.time != nil {
-                    Button { state.playCitation(citation) } label: {
-                        Image(systemName: "play.fill").font(.system(size: 11))
-                    }
+            }
+        }
+    }
+
+    /// The source's line. A passage's own time ("Priya 0:37") plays it, as the page's times do.
+    @ViewBuilder private func sourceHeader(number: Int, _ citation: AskCitation) -> some View {
+        if citation.kind == .passage, citation.time != nil {
+            let meta = AskPageWords.sourceMeta(citation)
+            let line = Self.sourceLine(citation)
+            let head = String(line.dropLast(meta.count))
+            HStack(spacing: 0) {
+                Text(head).foregroundStyle(DaybookPalette.Ink.secondary).lineLimit(1)
+                Button { state.playCitation(citation) } label: { Text(meta).lineLimit(1) }
                     .buttonStyle(.plain)
-                    .foregroundStyle(DaybookPalette.accent)
-                    .daybookHitTarget()
+                    .foregroundStyle(DaybookPalette.Ink.link)
                     .disabled(state.isRecording)
                     .help(AskPageWords.play)
                     .accessibilityLabel("\(AskPageWords.play), \(spoken(number, citation))")
-                }
             }
+            .daybookFont(.rowDetail)
+        } else {
+            Text(Self.sourceLine(citation))
+                .daybookFont(.rowDetail)
+                .foregroundStyle(DaybookPalette.Ink.secondary)
+                .lineLimit(2)
         }
     }
 

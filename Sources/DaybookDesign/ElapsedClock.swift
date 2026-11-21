@@ -140,6 +140,7 @@ public struct RecordingPhaseLabel: View {
     private let detail: String?
     private let detailIsWarning: Bool
     private let detailYields: Bool
+    private let warningLeads: Bool
     private let override: Metrics?
     @Environment(\.daybookDensity) private var density
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -149,14 +150,17 @@ public struct RecordingPhaseLabel: View {
     /// - Parameters:
     ///   - detailYields: The detail takes only the room left over (and truncates), so the label's ideal
     ///     width is the phase alone. For a bar that fits its other items first.
+    ///   - warningLeads: A warning detail stands alone after the dot, without the title, so it is never the part cut
+    ///     off (the dot and the clock already say it is recording).
     ///   - metrics: An explicit size; nil takes the surface's density's.
     public init(_ phase: Phase, title: String, detail: String? = nil, detailIsWarning: Bool = false, detailYields: Bool = false,
-                metrics: Metrics? = nil) {
+                warningLeads: Bool = false, metrics: Metrics? = nil) {
         self.phase = phase
         self.title = title
         self.detail = detail
         self.detailIsWarning = detailIsWarning
         self.detailYields = detailYields
+        self.warningLeads = warningLeads && detailIsWarning && detail != nil
         override = metrics
     }
 
@@ -196,8 +200,8 @@ public struct RecordingPhaseLabel: View {
 
     private var row: some View {
         HStack(spacing: metrics.dot * 0.65) {
-            glyph
-            titleText
+            if phase != .stopped { glyph }
+            if !warningLeads { titleText }
             if let detail, detailYields {
                 // All of it, a readable start of it, or none: cut to its first letter it says nothing.
                 ViewThatFits(in: .horizontal) {
@@ -215,7 +219,7 @@ public struct RecordingPhaseLabel: View {
     }
 
     private func detailText(_ detail: String) -> some View {
-        Text("· \(detail)")
+        Text(warningLeads ? detail : "· \(detail)")
             .font(metrics.font(weight: .regular, plus: 0.5))
             .foregroundStyle(detailIsWarning ? DaybookPalette.Ink.warning : DaybookPalette.Ink.meta)
             .lineLimit(1)
@@ -232,9 +236,8 @@ public struct RecordingPhaseLabel: View {
             DoneMark(size: metrics.textStyle == nil ? metrics.size + 1 : touchGlyph)
                 .accessibilityHidden(true)
         case .stopped:
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: metrics.size, weight: .semibold))
-                .foregroundStyle(DaybookPalette.Ink.warning)
+            // The box under the band carries the warning; the band keeps the word.
+            EmptyView()
         default:
             Circle().fill(Color.platformTertiaryLabel).frame(width: metrics.dot, height: metrics.dot)
         }
@@ -243,7 +246,6 @@ public struct RecordingPhaseLabel: View {
     private var ink: Color {
         switch phase {
         case .recording: return DaybookPalette.Ink.record
-        case .stopped: return DaybookPalette.Ink.warning
         default: return DaybookPalette.Ink.secondary
         }
     }

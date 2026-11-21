@@ -4807,6 +4807,15 @@ its own. Naming a Mac, and the app and context menus, are follow-ups.
 
 Checked (simulated recorder, no Bluetooth): the cascade test's scenario 250 times in 8 processes before the fix with a random wait before the Start and a random amount of audio received: 9 failures, in the same state as CI; 720 times after: none. `SoundcoreLinkOrderTests` (sixteen sessions at once, because which of two that wake together goes first is up to the timers): 0 of 8 runs pass without the fix, 10 of 10 with it. Not checked: a real recorder and another app's transfer on an iPhone. `SoundcoreRecordCommandTests.testAStartGoesAheadOfAnImportWhichStartsAgainAfterIt` flaked once; the same ordering may be behind it, not confirmed.
 
+## 2026-11-20: Visual fixes to the Mac's main window, sheets and Floating Notes
+
+From the visual review (VMM-01 to VMM-27, less the three held for the owner: sheet titles, Floating Notes' band edge, the toolbar's page switch). Review Earlier Corrections drawn without a navigation stack when nothing is left (the stack's empty view was the blank band: confirmed by the before and after pictures); Version History opens on a change that shows words, with the change's date and a photo's picture; Adjust Timing shows one time; Floating Notes keeps a warning whole and drops "Recording" for it, centres the compact clock and meters, and says "Stopped" without a second warning glyph; problem boxes carry their actions on the title line with the message at full width; status lines, the Trash line and the colophon hang their glyph in the margin; the empty library's column goes quiet; the notice stacks its link; a conversation opened from elsewhere scrolls into view; Rename Speaker points at the name; a locked row is wholly dimmed with a lock; search marks bookmark labels; Ask's failure, partial note, waiting line and selected row; photo rows, cloud summary rows, multi-select groups, the call prompt's countdown, "No speech" as information, the Trash in day sections, and the inspector's Add Recording.
+
+Checked: `ConversationStatusChoicesTests` (a silent recording is information, other failures stay problems) and `LibraryListTests` (the Trash row's time label); Mac pictures of each changed screen from an ad hoc build (`--library` under `/private/tmp/daybook/` only), beside the originals; `swift build`; the iPhone simulator build.
+
+Not checked: VMM-24's merging of consecutive changes (skipped: each change is restored by itself); the photo comparison in Version History on a library with a real photo; the Trash's hover Restore; Increase Contrast and Dark pictures; a scroll into view for a row far down a very long list; the iPhone's pictures (its layouts are unchanged by design, apart from "No speech" now drawn as information).
+||||||| 029dd881
+
 ## 2026-11-20: iPhone UX pass (audio not on this iPhone, Settings grouping, Welcome)
 
 Changed: audio that went back to iCloud reads "Not on this iPhone" in Info (with Download · size, or Download when the size isn't known, fetched through `AudioProviding.localAudio`, and Try Again after a failure) and in the player (with Try Again, which asks `PlaybackController` for the last request again); "It downloads when you’re online." is gone. A lock-paused job says "Continues when iPhone is unlocked". The status sheet and Storage row show "Audio · 120 MB" only when some is here. Restore on the iPhone posts "Restored “…”." with Show (`ConfirmationBeat` gained an optional Show). "Soundcore didn’t list its recordings" offers Details beside Refresh Status. Settings › Library holds Storage, Summary Templates, Vocabulary, Speaker Profiles, and Require Face ID for Personal. An encrypted library's backup toggle has a footer. Welcome's Ready page offers Download over Cellular while the models wait for Wi‑Fi, and Add Recorder….
@@ -4822,6 +4831,20 @@ Changed: a countdown that ends in the cloud names the model on the list row, the
 Checked by unit tests: the words for each surface (`SummaryPlacementWordsTests`, `ConversationStatusPresentationTests`, `RecorderSurfaceTests`, `FloatingNotesStatusTests`).
 
 Not checked: Cancel against a live queue beyond the fake-engine tests (`CancelStartedWorkTests`: running own, running with a request, paused own, paused with another device's request, paused with this Mac's request); an iPhone still being told "paused" when a Mac's own job is cancelled; Undo for the chip menu's actions; the iPhone's own work has no Cancel yet; the chip menu on a real Mac; the notices on a real iPhone arrival or launch recovery.
+
+## 2026-11-20: Mac settings, library, devices (UX pass)
+
+Verified (unit tests, temporary libraries, synthetic audio; no models, no recording, no network):
+- Settings search keywords (`SettingsSearchTests`), the empty places of Work and Personal, the search prompt, the Trash
+  question's wording (`LibraryPlaceWordsTests`, `LibraryWordsTests`), the import notice's wording and an import that goes
+  on past a file that isn't audio, with an alert only when nothing imported (`ImportSidecarTests`), the menu bar's
+  "Saved · 18 min" (`MenuBarStatusTests`), and the Mac intents' spoken lines (`SystemEntryPointsTests`).
+- The Mac settings page order was read against the code; "Open at login" now comes from one constant (`WelcomeWords`).
+
+Not verified: Settings panes and the menu bar were not captured (see the PR), Device Details' Copy on a real recorder
+(the report is the iPhone's text under a Mac first line), the open Floating Notes chip menu's Manage Storage… (it opens
+Settings › Library, where Storage is a row; the Storage sheet itself belongs to another branch), and the partial-import
+notice has no Details… (a notice has none; the alert keeps it when nothing imported).
 
 ## 2026-11-20: Apple Watch recorder states (REC-01, REC-02, REC-06, REC-07, REC-14, FR-02)
 

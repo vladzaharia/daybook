@@ -718,6 +718,11 @@ extension ConversationStatusPresentation {
         // At most two actions: the details come first when there's room for them.
         let details: [Action] = failure.reason.isEmpty ? [] : [.details(failure.reason)]
         let actions = fix.count >= 2 ? Array(fix.prefix(2)) : details + fix
+        // Nothing went wrong with a silent recording: it's said quietly, and orange stays for "fix this".
+        if failure.kind == .noSpeech {
+            return ConversationStatusPresentation(kind: .box(.info), symbol: "waveform.slash", title: words.title,
+                                                  detail: words.message, actions: actions)
+        }
         return ConversationStatusPresentation(kind: .box(.problem), symbol: "exclamationmark.triangle.fill", title: words.title,
                                               detail: words.message, actions: actions)
     }

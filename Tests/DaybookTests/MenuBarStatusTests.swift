@@ -106,4 +106,10 @@ final class MenuBarStatusTests: XCTestCase {
         inputs.sync = .storageFull
         XCTAssertEqual(MenuBarStatus.lines(inputs, now: now).first?.title, "iCloud storage is full", "iCloud isn't said twice")
     }
+
+    /// REC-08: a recording that just stopped reads "Saved · 18 min", as the panel's band does.
+    func testBehaviorTheMenuSaysSavedWithTheLength() {
+        XCTAssertEqual(MenuBarWords.saved(duration: 18 * 60), "Saved · 18 min")
+        XCTAssertEqual(MenuBarWords.saved(duration: nil), "Saved")
+    }
 }
