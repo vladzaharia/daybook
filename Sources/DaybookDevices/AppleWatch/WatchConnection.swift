@@ -449,6 +449,12 @@ public final class WatchConnection: RecordingStateConnection, DetailedConnection
             reply?(.context(hooks.phoneContext()))
         case .context:
             reply?(.context(hooks.phoneContext()))
+        case .keep(let conversation):
+            reply?(.canKeep(hooks.canKeepRecording(conversation)))
+        case .bookmark(let mark):
+            // Only a moment of the recording the watch is making now: one that waited past its end has nowhere to go.
+            guard watch?.recording?.id == mark.recordingID else { return }
+            hooks.bookmark(mark.id, max(0, Date().timeIntervalSince(clock.phoneTime(mark.madeAt))), mark.recordingID)
         default:
             reply?(.refused("Daybook on this iPhone doesn’t take that message."))
         }
@@ -494,6 +500,10 @@ public final class WatchConnection: RecordingStateConnection, DetailedConnection
     /// The watch's own Record or Stop (or Daybook opening on it and joining), pushed as it happened.
     private func button(_ state: WatchState, previous: WatchState?) {
         guard !recordCommandPending, let change = state.change else { return }
+        // Keep Recording on the watch records on into a conversation this iPhone already has: no button of this iPhone's.
+        if [state.recording, previous?.recording, state.recording == nil ? state.finished.last : nil].contains(where: { $0?.isContinuation == true }) {
+            return
+        }
         if change == .joined, let recording = state.recording, buttonTold[recording.id] == nil, recording.id != startedHereID,
            recording.conversationID == nil || recording.conversationID != hooks.sharedRecording()?.conversationID {
             // It joined a recording this iPhone doesn't record now (from a context that waited): nothing starts here,

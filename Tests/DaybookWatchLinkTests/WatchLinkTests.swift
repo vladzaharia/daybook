@@ -24,14 +24,16 @@ final class WatchLinkTests: XCTestCase {
             .clock(phoneTime: Date(timeIntervalSince1970: 9)),
             .received(WatchReceipt(recordingID: "rec-1", segments: [0, 1], imported: true)),
             .context,
-            .state(state)
+            .state(state),
+            .bookmark(WatchBookmark(id: UUID(), recordingID: "rec-1", madeAt: Date(timeIntervalSince1970: 7))),
+            .keep(conversation)
         ]
         for message in messages {
             let dictionary = try WatchPayload.dictionary(message)
             XCTAssertTrue(PropertyListSerialization.propertyList(dictionary, isValidFor: .binary), "\(message)")
             XCTAssertEqual(WatchPayload.decode(WatchMessage.self, from: dictionary), message)
         }
-        let replies: [WatchReply] = [.state(state), .context(PhoneContext(sharedRecording: nil)), .refused("No"),
+        let replies: [WatchReply] = [.canKeep(true), .state(state), .context(PhoneContext(sharedRecording: nil)), .refused("No"),
                                      .clock(WatchClockSample(phoneSent: Date(), watchTime: Date()))]
         for reply in replies {
             XCTAssertEqual(WatchPayload.decode(WatchReply.self, from: try WatchPayload.dictionary(reply)), reply)

@@ -241,6 +241,8 @@ final class PhoneAppModel: RecordingCommandHandling {
         wireRecorder()
         wireSync()
         multipoints.wire()
+        self.devices.hub.environment.watch.bookmark = { [weak self] id, ago, _ in self?.addWatchBookmark(id, ago: ago) }
+        self.devices.hub.environment.watch.canKeepRecording = { [weak self] id in self?.canAppendRecording(to: id) ?? false }
         // What this iPhone still has to process or send isn't taken back to iCloud, and an upload iCloud confirms is.
         audio.needsAudio = { [weak self] in
             guard let self else { return [] }
@@ -928,6 +930,18 @@ final class PhoneAppModel: RecordingCommandHandling {
         guard let mark = recorder.addBookmark() else { throw RecordingCommandError.notRecording }
         sharing.bookmarkAdded(mark)
         return mark.time
+    }
+
+    /// Whether the watch may record on into this conversation (Keep Recording): it's here, not in the Trash, not hidden
+    /// by the Personal lock, and nothing records here (the watch joins that on its own).
+    func canAppendRecording(to id: UUID) -> Bool {
+        !recorder.isActive && library.controller.meeting(id) != nil && ReadingSession.appLock?.hides(id) != true
+    }
+
+    /// A bookmark the person made on the watch while it records along: filed as this iPhone's own button files one.
+    func addWatchBookmark(_ id: UUID, ago: TimeInterval) {
+        guard let mark = recorder.addBookmark(id: id, ago: min(ago, 120)) else { return }
+        sharing.bookmarkAdded(mark)
     }
 
     func editNotes(_ text: String) {

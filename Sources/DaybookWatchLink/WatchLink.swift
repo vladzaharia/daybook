@@ -44,6 +44,28 @@ public enum WatchMessage: Codable, Equatable, Sendable {
     case context
     /// What the watch is recording changed, and why (`WatchState.change`). No answer.
     case state(WatchState)
+    /// The person marked a moment on the watch while it records (a newer message: a build that can't read it ignores it).
+    /// Sent now when the iPhone is reachable and queued when it isn't, so it arrives once, by its ID. No answer.
+    case bookmark(WatchBookmark)
+    /// May the watch record on into this conversation (Keep Recording after a Stop)? Answered with `.canKeep`: whether
+    /// the conversation is in the library, not in the Trash, not hidden by the Personal lock, and nothing records here.
+    case keep(UUID)
+}
+
+/// A bookmark made on the watch: the iPhone files it in the shared recording as its own button does.
+public struct WatchBookmark: Codable, Equatable, Sendable, Identifiable {
+    /// Its ID, the bookmark's in the conversation (a message that arrives twice makes one).
+    public var id: UUID
+    /// The watch recording it was made in.
+    public var recordingID: String
+    /// When it was made, on the watch's clock.
+    public var madeAt: Date
+
+    public init(id: UUID = UUID(), recordingID: String, madeAt: Date) {
+        self.id = id
+        self.recordingID = recordingID
+        self.madeAt = madeAt
+    }
 }
 
 /// An answer to a message sent with a reply handler.
@@ -53,6 +75,8 @@ public enum WatchReply: Codable, Equatable, Sendable {
     case clock(WatchClockSample)
     /// It couldn't do what was asked, in words for the person ("Open Daybook on your Apple Watch to record there.").
     case refused(String)
+    /// The answer to `.keep`.
+    case canKeep(Bool)
 }
 
 /// Record along with a shared recording, or on its own.
@@ -243,9 +267,13 @@ public struct WatchRecordingInfo: Codable, Equatable, Sendable, Identifiable {
     public var isFinished: Bool
     /// The size of its segments so far.
     public var byteCount: UInt64
+    /// It records on into a conversation the iPhone already has (Keep Recording after a Stop): the iPhone doesn't start
+    /// or stop a recording of its own for it, and imports it into that conversation as a later part.
+    public var isContinuation: Bool?
 
     public init(id: String, conversationID: UUID? = nil, startedAt: Date, duration: TimeInterval = 0, segmentIndices: [Int] = [],
-                isFinished: Bool = false, byteCount: UInt64 = 0) {
+                isFinished: Bool = false, byteCount: UInt64 = 0, isContinuation: Bool? = nil) {
+        self.isContinuation = isContinuation
         self.id = id
         self.conversationID = conversationID
         self.startedAt = startedAt

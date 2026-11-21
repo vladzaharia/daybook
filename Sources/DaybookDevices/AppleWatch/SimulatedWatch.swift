@@ -161,7 +161,7 @@ public final class SimulatedWatch: WatchTransport {
         case .received(let receipt):
             take(receipt)
             return .state(state())
-        case .context, .state:
+        case .context, .state, .bookmark, .keep:
             return .refused("The watch doesn’t take that message.")
         }
     }
@@ -214,11 +214,30 @@ public final class SimulatedWatch: WatchTransport {
         push(state(shared == nil ? .startedOnWatch : .joined))
     }
 
+    /// The person taps Keep Recording on the watch after a Stop: it records on into `conversation`, as a later part of it.
+    /// Pushed as the wrist's own start, which this iPhone's button ignores.
+    public func pressKeepRecording(into conversation: UUID) {
+        guard recording == nil else { return }
+        begin(conversation, change: .startedOnWatch, isContinuation: true)
+        push(state(.startedOnWatch))
+    }
+
     /// The person taps Stop on the watch. Pushed as its button.
     public func pressStop() {
         guard let recording else { return }
         _ = end(WatchStop(recordingID: recording.id), change: .stoppedOnWatch)
         push(state(.stoppedOnWatch))
+    }
+
+    /// The person taps Bookmark on the watch: sent to the iPhone with an ID, `ago` seconds back, twice when `again`
+    /// (a message sent and then queued).
+    @discardableResult
+    public func pressBookmark(ago: TimeInterval = 0, again: Bool = false) -> WatchBookmark? {
+        guard let recording else { return nil }
+        let mark = WatchBookmark(recordingID: recording.id, madeAt: now.addingTimeInterval(-ago))
+        onMessage?(.bookmark(mark), nil)
+        if again { onMessage?(.bookmark(mark), nil) }
+        return mark
     }
 
     /// Records `seconds` more audio, closing (and sending) a segment each time one is full.
@@ -244,8 +263,8 @@ public final class SimulatedWatch: WatchTransport {
         }
     }
 
-    private func begin(_ conversation: UUID?, change: WatchChange) {
-        recording = WatchRecordingInfo(id: UUID().uuidString, conversationID: conversation, startedAt: now)
+    private func begin(_ conversation: UUID?, change: WatchChange, isContinuation: Bool? = nil) {
+        recording = WatchRecordingInfo(id: UUID().uuidString, conversationID: conversation, startedAt: now, isContinuation: isContinuation)
         pending = 0
         elapsed = 0
         publishContext(state(change))

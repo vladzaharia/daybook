@@ -47,4 +47,16 @@ final class WatchWordsTests: XCTestCase {
     func testAStopWithNoReasonHasNoBody() {
         XCTAssertEqual(WatchWords.stoppedBody(""), "")
     }
+
+    func testAfterStopSaysWhatWasRecordedAndWhereItGoes() {
+        XCTAssertEqual(WatchWords.saved(723), "Saved · 12:03")
+        XCTAssertEqual(WatchWords.afterStopLine(isDelivered: false, isReachable: true), "Sending to iPhone…")
+        XCTAssertEqual(WatchWords.afterStopLine(isDelivered: false, isReachable: false), "Waiting for iPhone")
+        XCTAssertEqual(WatchWords.afterStopLine(isDelivered: true, isReachable: false), "Sent")
+    }
+
+    func testTheBookmarkButtonCountsOnceThereIsAMark() {
+        XCTAssertEqual(WatchWords.bookmarkTitle(count: 0), "Bookmark")
+        XCTAssertEqual(WatchWords.bookmarkTitle(count: 2), "Bookmark · 2")
+    }
 }

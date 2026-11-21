@@ -361,6 +361,21 @@ final class PhoneRecorderTests: XCTestCase {
         }
     }
 
+    func testABookmarkFromTheWatchLandsWhereItWasMadeAndOnlyOnce() async throws {
+        let rig = RecorderRig()
+        let folder = try temporaryDirectory().appendingPathComponent("capture")
+        try await rig.recorder.start(in: folder, title: "Watch")
+        rig.pump(8)
+        let id = UUID()
+        let mark = try XCTUnwrap(rig.recorder.addBookmark(id: id, ago: 3))
+        XCTAssertEqual(mark.id, id)
+        XCTAssertEqual(mark.time, 5)
+        XCTAssertNil(rig.recorder.addBookmark(id: id, ago: 3), "A message heard twice makes one bookmark")
+        XCTAssertEqual(try XCTUnwrap(rig.recorder.addBookmark(id: UUID(), ago: 99)).time, 0, "Never before the recording began")
+        let recording = try await rig.stop()
+        XCTAssertEqual(recording.highlights.count, 2)
+    }
+
     func testCrashRecoveryProducesAudioNotesAndBookmarks() async throws {
         // The recorder's real-time mode, as on a phone: fragments land as the audio passes each interval.
         let rig = RecorderRig(fragmentInterval: 1, realTimeEncoding: true)

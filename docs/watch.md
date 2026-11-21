@@ -49,6 +49,33 @@ Stopping on the wrist (`.stoppedOnWatch`) stops the shared recording everywhere.
 `.stop`, or by its context no longer sharing the recording (`.stoppedByPhone`). A recording that can't go on (storage,
 the microphone) ends on its own (`.endedOnItsOwn`).
 
+After a Stop on the wrist or by the iPhone (`WatchAfterStop`), the screen holds for ten seconds: "Saved · 12:03" with a
+checkmark and a success haptic, and under the Record button where the recording is going ("Sending to iPhone…",
+"Waiting for iPhone", then "Sent" once the iPhone's receipt names every segment). Then the normal face returns, with
+**Keep Recording** where the level meter is, for five minutes after the Stop (`WatchAfterStop.keepWindow`). The Stop (when,
+which recording, which conversation) is kept in the watch's preferences, so lowering the wrist or relaunching the app
+inside the window changes nothing; starting another recording, or the window ending, removes it. A recording that ends on
+its own shows its reason instead, one shorter than a second shows nothing, and one that never joined a conversation (the
+iPhone was never reached) offers no Keep Recording.
+
+Keep Recording records on into the same conversation as a later part, without holding anything back: the iPhone has
+saved, uploaded, and may have processed the first part by then. The watch asks the iPhone first, as the screen appears,
+when the iPhone comes within reach, when Daybook opens, and again at the tap (`.keep(conversation)`, answered
+`.canKeep`): the conversation must be in the library, not in the Trash, not hidden by the Personal lock, and nothing may
+record on the iPhone (the watch joins that on its own). Unreachable or unanswered, it isn't offered. The new recording is
+the watch's own (`isOwn`, so no context of the iPhone's stops it) with the conversation's ID and
+`WatchRecordingInfo.isContinuation`: the iPhone starts and stops nothing of its own for it (its button logic ignores it)
+and imports it like the watch's other recordings, into that conversation (`attachTo`), placed by its own start on the
+iPhone's clock, so the time between is a gap, then asks for new audio to be processed, as for any recording added to a
+conversation. It becomes the Stop of its own: another summary, and another five minutes.
+
+Bookmark: while the microphone captures, a small amber button beside Stop (a `.click` haptic, the count so far) sends
+`.bookmark(WatchBookmark)` (an ID, the watch recording, when it was made on the watch's clock), by `sendMessage` when the
+iPhone is reachable and queued otherwise. The iPhone places it in the recording the watch makes now (one that waited past
+the recording's end is dropped), `ago` seconds before it heard it by the clock samples, and files it as its own Bookmark
+button does, sharing it with the Macs recording along; a message heard twice makes one bookmark, by its ID. A build that
+can't read the message ignores it.
+
 ## Following the iPhone
 
 `WatchFollowing` decides; the model does what it says.

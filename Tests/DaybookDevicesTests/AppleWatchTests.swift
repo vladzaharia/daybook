@@ -296,6 +296,56 @@ final class AppleWatchTests: XCTestCase {
         XCTAssertEqual(pressed, [true, false, true])
     }
 
+    func testKeepRecordingOnTheWatchStartsNothingHereAndItsStopStopsNothing() async throws {
+        let rig = try await rig()
+        var pressed: [Bool] = []
+        rig.connection.onButton = { pressed.append($0) }
+        let conversation = UUID()
+
+        rig.watch.pressKeepRecording(into: conversation)
+        XCTAssertEqual(rig.watch.recording?.conversationID, conversation)
+        rig.watch.record(1)
+        rig.watch.pressStop()
+        XCTAssertEqual(pressed, [], "A later part of a conversation this iPhone has: no button of this iPhone's, either way")
+        XCTAssertEqual(rig.watch.finished.last?.conversationID, conversation)
+    }
+
+    func testKeepRecordingIsAnsweredByWhatTheIPhoneAllows() async throws {
+        let rig = try await rig()
+        let allowed = UUID(), refused = UUID()
+        rig.environment.watch.canKeepRecording = { $0 == allowed }
+        var answers: [WatchReply] = []
+        rig.watch.onMessage?(.keep(allowed), { answers.append($0) })
+        rig.watch.onMessage?(.keep(refused), { answers.append($0) })
+        XCTAssertEqual(answers, [.canKeep(true), .canKeep(false)])
+        // Without a hook, never.
+        let bare = try await self.rig()
+        var bareAnswer: WatchReply?
+        bare.watch.onMessage?(.keep(allowed), { bareAnswer = $0 })
+        XCTAssertEqual(bareAnswer, .canKeep(false))
+    }
+
+    func testABookmarkOnTheWatchReachesTheIPhoneOnceInTheRecordingItMadeItIn() async throws {
+        let rig = try await rig()
+        var marks: [(UUID, TimeInterval, String)] = []
+        rig.environment.watch.bookmark = { marks.append(($0, $1, $2)) }
+
+        XCTAssertNil(rig.watch.pressBookmark(), "Nothing records: nothing to mark")
+        rig.watch.pressRecord()
+        rig.watch.record(1)
+        let first = try XCTUnwrap(rig.watch.pressBookmark(ago: 3, again: true))
+        XCTAssertEqual(marks.count, 2, "The connection passes every message on; the iPhone's recorder keeps one by its ID")
+        XCTAssertEqual(marks[0].0, first.id)
+        XCTAssertEqual(marks[0].1, 3, accuracy: 1)
+        XCTAssertEqual(marks[0].2, first.recordingID)
+
+        // One that waited past its recording's end has nowhere to go.
+        rig.watch.pressStop()
+        marks = []
+        rig.watch.onMessage?(.bookmark(first), nil)
+        XCTAssertTrue(marks.isEmpty)
+    }
+
     /// A join from a context that waited while the watch was away names a recording this iPhone doesn't record now:
     /// nothing starts here, and only that recording stops (asked now, or owed).
     func testAJoinOfARecordingThisIPhoneDoesntRecordIsStoppedNotTheButton() async throws {
