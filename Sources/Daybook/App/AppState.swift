@@ -1432,7 +1432,11 @@ extension AppState {
                 let title = meetings.first { $0.id == id }?.title ?? ""
                 post(title.isEmpty ? "Recovered a recording." : "Recovered “\(title)”.",
                      action: LibraryNoticeAction(title: "Show") { [weak self] in self?.showConversation(id) })
-            } catch { report("Couldn’t Recover a Recording", "An interrupted recording couldn’t be recovered. Its files are kept.", error) }
+            } catch {
+                // At launch, not something the person did: the log has the reason, and a notice says what's kept.
+                Self.log.notice("An interrupted recording couldn't be recovered (\(error.logCode, privacy: .public)): \(error.localizedDescription, privacy: .private)")
+                post(["An interrupted recording couldn’t be recovered. Its files are kept."])
+            }
         }
     }
 }

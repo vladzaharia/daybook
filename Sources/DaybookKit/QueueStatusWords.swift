@@ -12,6 +12,8 @@ public enum QueueStatusWords {
         public var fraction: Double?
         /// The running conversation's summary counts down to this device until then.
         public var countdown: Date?
+        /// The countdown ends in the cloud, with this model.
+        public var countdownCloudModel: String?
         /// The running conversation's summary is in the cloud, with this model.
         public var cloudModel: String?
         /// Conversations waiting their turn.
@@ -23,9 +25,10 @@ public enum QueueStatusWords {
         /// How this device's model downloads stand: arriving, waiting for Wi‑Fi, or stopped.
         public var models: ModelDownloadState?
 
-        public init(running: ProcessingRequest.Stage? = nil, fraction: Double? = nil, countdown: Date? = nil, cloudModel: String? = nil,
-                    waiting: Int = 0, awaitingModels: Int = 0, pause: ProcessingWords.PauseReason? = nil, models: ModelDownloadState? = nil) {
-            self.running = running; self.fraction = fraction; self.countdown = countdown; self.cloudModel = cloudModel
+        public init(running: ProcessingRequest.Stage? = nil, fraction: Double? = nil, countdown: Date? = nil, countdownCloudModel: String? = nil,
+                    cloudModel: String? = nil, waiting: Int = 0, awaitingModels: Int = 0, pause: ProcessingWords.PauseReason? = nil, models: ModelDownloadState? = nil) {
+            self.running = running; self.fraction = fraction; self.countdown = countdown
+            self.countdownCloudModel = countdownCloudModel; self.cloudModel = cloudModel
             self.waiting = waiting; self.awaitingModels = awaitingModels; self.pause = pause; self.models = models
         }
 
@@ -38,13 +41,18 @@ public enum QueueStatusWords {
         guard !queue.isEmpty else { return nil }
         func line(_ text: String, _ tone: StatusLineWords.Tone, progress: Double? = nil, short: String? = nil,
                   countdown: Date? = nil) -> StatusLineWords {
-            StatusLineWords(id: "queue", symbol: words.symbol, title: words.hereTitle, text: text, tone: tone, progress: progress,
-                            shortText: short, countdownUntil: countdown)
+            // A countdown that ends in the cloud has the cloud's glyph, so a narrow "12 s" never sits beside the device's.
+            let symbol = countdown != nil && queue.countdownCloudModel != nil ? "cloud" : words.symbol
+            return StatusLineWords(id: "queue", symbol: symbol, title: words.hereTitle, text: text, tone: tone, progress: progress,
+                                   shortText: short, countdownUntil: countdown)
         }
         let waiting = queue.waiting > 0 ? " · \(queue.waiting) waiting" : ""
         if let until = queue.countdown {
-            let countdown = SummaryPlacementWords.countdown(until: until, at: now)
-            return line(countdown + waiting, .calm, short: countdown, countdown: until)
+            let countdown = SummaryPlacementWords.countdown(inCloud: queue.countdownCloudModel,
+                                                            seconds: SummaryPlacementWords.secondsLeft(until: until, at: now))
+            // Narrow, a countdown to the cloud keeps only its seconds, as a chip's does; the full words stay in the menu.
+            let short = queue.countdownCloudModel == nil ? countdown : SummaryPlacementWords.seconds(SummaryPlacementWords.secondsLeft(until: until, at: now))
+            return line(countdown + waiting, .calm, short: short, countdown: until)
         }
         if let model = queue.cloudModel {
             return line(SummaryPlacementWords.inCloud(model) + waiting, .working, short: ProcessingWords.progressLine(.summarizing, fraction: nil))
@@ -80,7 +88,10 @@ public enum QueueStatusWords {
     /// downloads: a subtitle speaks only while work is happening.
     public static func subtitle(_ queue: Queue, now: Date = Date()) -> String? {
         let waiting = queue.waiting > 0 ? " · \(queue.waiting) waiting" : ""
-        if let until = queue.countdown { return SummaryPlacementWords.countdown(until: until, at: now) + waiting }
+        if let until = queue.countdown {
+            return SummaryPlacementWords.countdown(inCloud: queue.countdownCloudModel,
+                                                   seconds: SummaryPlacementWords.secondsLeft(until: until, at: now)) + waiting
+        }
         if queue.cloudModel != nil { return ProcessingWords.verb(.summarizing) + waiting }
         if let stage = queue.running { return ProcessingWords.verb(stage) + waiting }
         if let models = queue.models, case .downloading = models { return ProcessingWords.modelDownloadLine(models) + waiting }
