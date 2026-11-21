@@ -86,6 +86,8 @@ final class PhoneProcessor {
         var release: @MainActor () async -> Void
         /// After work changed the library, and when a job ends.
         var changed: @MainActor () -> Void = {}
+        /// A job ended (done, failed for good, paused, or lost): the audio it needed may be free to go.
+        var finished: @MainActor () -> Void = {}
         /// A conversation is transcribed and fused here: where its summary runs is the placement's. `askedFor`
         /// when the person asked for the work (Transcribe Everything Again, Identify Speakers Again), so it starts
         /// at once; otherwise it's due, and may count down. The template the request asked for comes with it.
@@ -492,6 +494,7 @@ final class PhoneProcessor {
         // The transcription models go before a summary model loads.
         await services.release()
         services.changed()
+        services.finished()
         if let summaryDue { services.summaryDue(id, summaryDue.templateID, summaryDue.askedFor) }
         // Paused for a lock that's over by now: it goes on.
         if case .paused(.locked) = outcome, conditions.protectedDataAvailable, services.protectedDataAvailable() { pickUp(); return }

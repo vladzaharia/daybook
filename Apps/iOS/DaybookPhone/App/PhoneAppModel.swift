@@ -213,7 +213,7 @@ final class PhoneAppModel: RecordingCommandHandling {
             audio: { track, id in try await audio.localAudio(for: track, in: id, progress: { _ in }) },
             release: { [weak models] in await models?.releaseProcessingModels() },
             // A job ended: its recording may go back to iCloud now.
-            changed: { [weak audio] in audio?.evictSoon() }),
+            finished: { [weak audio] in audio?.evictSoon() }),
             // The system's continued-processing task, never in tests.
             continued: ContinuedProcessing(scheduler: environment.continuedProcessing()))
         let sync = self.sync, link = self.link
@@ -244,7 +244,9 @@ final class PhoneAppModel: RecordingCommandHandling {
         // What this iPhone still has to process or send isn't taken back to iCloud, and an upload iCloud confirms is.
         audio.needsAudio = { [weak self] in
             guard let self else { return [] }
+            // Also what live captions still wait on this recording's audio for (their speakers, `labelCaptionSpeakers`).
             return self.processor.meetingsNeedingAudio().union(self.multipoints.outgoing.keys)
+                .union(self.captions.waitingForSpeakers().map(\.meetingID))
         }
         sync.onUploadsConfirmed = { [weak audio] in audio?.evictSoon() }
         sharing.multipoints = multipoints

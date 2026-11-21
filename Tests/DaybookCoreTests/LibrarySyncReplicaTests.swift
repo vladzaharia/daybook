@@ -17,6 +17,9 @@ final class SimulatedICloud: @unchecked Sendable {
     /// Everything under this folder reads as not uploaded yet.
     private var uploadsHeldUnder: String?
     private var holding = false
+    /// `evictLocalCopy` really evicts (as iCloud does for an uploaded item). Off, it only records the request, which is all
+    /// most tests need: they read objects without asking for a download first.
+    private var evictsLocalCopies = false
     private var fraction: Double?
     private var onRequest: (@Sendable (URL) -> Void)?
 
@@ -38,6 +41,7 @@ final class SimulatedICloud: @unchecked Sendable {
         try data.write(to: url)
         try? FileManager.default.removeItem(at: Self.placeholder(url))
     }
+    func evictLocalCopiesForReal(_ on: Bool = true) { lock.withLock { evictsLocalCopies = on } }
     func holdDownloads(_ hold: Bool) { lock.withLock { holding = hold } }
     func reportFraction(_ value: Double?) { lock.withLock { fraction = value } }
     func whenDownloadRequested(_ hook: (@Sendable (URL) -> Void)?) { lock.withLock { onRequest = hook } }
@@ -68,7 +72,11 @@ final class SimulatedICloud: @unchecked Sendable {
                         && !(quotaFullUnder.map { path.hasPrefix($0) } ?? false)
                 }
             },
-            evictLocalCopy: { [self] url in lock.withLock { dropped.append(url.path) } },
+            evictLocalCopy: { [self] url in
+                lock.withLock { dropped.append(url.path) }
+                // As iCloud does: an uploaded item loses its bytes and stays listed (a placeholder); one still uploading doesn't.
+                if lock.withLock({ evictsLocalCopies }), FileManager.default.fileExists(atPath: url.path), files.isUploaded(url) { try? evict(url) }
+            },
             uploadRefusedForQuota: { [self] url in
                 FileManager.default.fileExists(atPath: url.path)
                     && lock.withLock { quotaFullUnder.map { url.standardizedFileURL.path.hasPrefix($0) } ?? false }
@@ -488,6 +496,101 @@ final class LibrarySyncReplicaTests: XCTestCase {
     func testBehaviorNothingIsEvictedWhenICloudsStateForTheObjectIsUnknown() async throws {
         // The object isn't in the folder (signed out of the account that holds it, or iCloud lost it): unknown, not uploaded.
         try await assertNothingEvicted { try FileManager.default.removeItem(at: $0) }
+    }
+
+    func testBehaviorAnOriginalGoesBackThroughAnEvictedObjectAndComesBackFetched() async throws {
+        // iCloud really evicts its copy once it's uploaded: the object is then a placeholder, which still counts as uploaded.
+        cloud.evictLocalCopiesForReal()
+        let (phone, meeting, track) = try await phoneThatRecorded(held: false)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: SimulatedICloud.placeholder(blob(track)).path), "iCloud's copy was dropped")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: blob(track).path))
+        XCTAssertTrue(cloud.files.isUploaded(blob(track)), "an evicted object is uploaded, not lost")
+        // The original goes through the in-cloud branch, never having been the last copy.
+        let report = try await phone.evictAudio()
+        XCTAssertEqual(report.evicted.map(\.meetingID), [meeting.id])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: localAudio("Phone", meeting.id, track).path))
+        // It plays again by downloading, hash-checked, and is a fetched copy now.
+        let url = try await phone.fetchAudio(for: track, in: meeting.id, options: fast)
+        XCTAssertEqual(try Data(contentsOf: url), audioBytes(50_000, seed: 40))
+        let cached = await phone.cachedAudio()
+        XCTAssertEqual(cached.map(\.origin), [.fetched])
+    }
+
+    func testBehaviorAFetchCanLeaveEvictionToItsCaller() async throws {
+        let mac = try mac(), phone = try phone(budget: 100_000)
+        var fromMac: [Meeting] = []
+        for (index, title) in ["First", "Second"].enumerated() {
+            fromMac.append(try await record(audioBytes(100_000, seed: UInt8(50 + index)), on: "Mac", into: Meeting(title: title)))
+        }
+        fromMac = try await pass(mac, "Mac", fromMac).meetings
+        try await pass(phone, "Phone")
+        let first = fromMac.first { $0.title == "First" }!, second = fromMac.first { $0.title == "Second" }!
+        try await phone.fetchAudio(for: first.tracks[0], in: first.id, options: fast)
+        var options = fast
+        options.evictsAfterFetch = false
+        try await phone.fetchAudio(for: second.tracks[0], in: second.id, options: options)
+        XCTAssertEqual(phone.audioAvailability(for: first).values.first, .local, "the caller decides what goes, with what it protects")
+        XCTAssertEqual(phone.audioAvailability(for: second).values.first, .local)
+        let other = try self.phone("Phone2", budget: 100_000)
+        try await pass(other, "Phone2")
+        try await other.fetchAudio(for: first.tracks[0], in: first.id, options: fast)
+        try await other.fetchAudio(for: second.tracks[0], in: second.id, options: fast)
+        XCTAssertEqual(other.audioAvailability(for: first).values.first, .notLocal, "by default a fetch brings audio within the budget")
+    }
+
+    func testBehaviorNothingIsEvictedOrDroppedWhileAnotherAccountIsSignedIn() async throws {
+        final class Account: @unchecked Sendable {
+            private let lock = NSLock(); private var _same = true
+            var same: Bool { get { lock.withLock { _same } } set { lock.withLock { _same = newValue } } }
+        }
+        let account = Account()
+        let phone = try LibrarySyncEngine(localRoot: local("Phone"), remoteRoot: remote, deviceID: "Phone", replica: SyncReplicaConfiguration(
+            audioPolicy: .onDemand, device: SyncDeviceIdentity(deviceClass: .phone, displayName: "Pocket", canProcess: false),
+            audioCache: AudioCachePolicy(budgetBytes: 1), cloud: cloud.files), accountIsCurrent: { account.same })
+        try await pass(phone, "Phone")
+        cloud.holdUploads(under: remote)
+        let recorded = try await record(audioBytes(50_000, seed: 43), on: "Phone", into: Meeting(title: "On the train"), ext: "m4a")
+        let meeting = try await pass(phone, "Phone", [recorded]).meetings.first { $0.id == recorded.id }!
+        let track = meeting.tracks[0]
+        // Uploaded, as far as this container says, but it isn't this account's.
+        cloud.holdUploads(under: nil)
+        account.same = false
+        try await pass(phone, "Phone", [meeting])
+        let report = try await phone.evictAudio()
+        XCTAssertTrue(report.evicted.isEmpty)
+        XCTAssertTrue(cloud.droppedLocalCopies.isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: localAudio("Phone", meeting.id, track).path))
+        account.same = true
+        let back = try await phone.evictAudio()
+        XCTAssertEqual(back.evicted.count, 1, "the account's own container is trusted again")
+    }
+
+    func testBehaviorEvictionStopsWhenCancelledAndStillRecordsWhatWasDone() async throws {
+        final class Gate: @unchecked Sendable {
+            private let lock = NSLock(); private var calls = 0; private var armed = false
+            func arm() { lock.withLock { armed = true; calls = 0 } }
+            /// Cancels the task asking, on the second question: after the first original went, before the second.
+            func call() { if lock.withLock({ guard armed else { return 0 }; calls += 1; return calls }) == 2 { withUnsafeCurrentTask { $0?.cancel() } } }
+        }
+        let gate = Gate()
+        var files = cloud.files
+        let base = files.isUploaded
+        files.isUploaded = { url in gate.call(); return base(url) }
+        let phone = try LibrarySyncEngine(localRoot: local("Phone"), remoteRoot: remote, deviceID: "Phone", replica: SyncReplicaConfiguration(
+            audioPolicy: .onDemand, device: SyncDeviceIdentity(deviceClass: .phone, displayName: "Pocket", canProcess: false),
+            audioCache: AudioCachePolicy(budgetBytes: 1), cloud: files))
+        try await pass(phone, "Phone")
+        var recorded: [Meeting] = []
+        for index in 0..<3 { recorded.append(try await record(audioBytes(20_000, seed: UInt8(60 + index)), on: "Phone", into: Meeting(title: "R\(index)"), ext: "m4a")) }
+        let meetings = try await pass(phone, "Phone", recorded).meetings
+        gate.arm()
+        let report = try await Task { try await phone.evictAudio() }.value
+        XCTAssertFalse(report.evicted.isEmpty); XCTAssertLessThan(report.evicted.count, 3, "stopped part way, without throwing")
+        let remaining = await phone.cachedAudio()
+        XCTAssertEqual(remaining.count, 3 - report.evicted.count, "the index records what was removed")
+        for meeting in meetings where !report.evicted.contains(where: { $0.meetingID == meeting.id }) {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: localAudio("Phone", meeting.id, meeting.tracks[0]).path))
+        }
     }
 
     func testBehaviorARecordingChangedSinceItWasVerifiedIsNeverEvicted() async throws {

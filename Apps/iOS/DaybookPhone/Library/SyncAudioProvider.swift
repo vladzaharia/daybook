@@ -44,6 +44,8 @@ final class SyncAudioProvider: AudioProviding {
     @ObservationIgnored let options: AudioFetchOptions
     /// Conversations this iPhone still needs the audio of: processing it will run, or a recording a Mac waits for that
     /// isn't sent yet. Set by the app (`PhoneAppModel`); their recordings are spared like the ones being played.
+    /// The track the player has loaded, whatever its age (`RootView`).
+    @ObservationIgnored var playingTrack: UUID?
     @ObservationIgnored var needsAudio: @MainActor () -> Set<UUID> = { [] }
     /// How long a request for eviction waits for others to join it.
     @ObservationIgnored var evictionDelay: Duration = .milliseconds(1500)
@@ -92,6 +94,9 @@ final class SyncAudioProvider: AudioProviding {
         self.library = library
         self.sync = sync
         self.budget = budget
+        // The phone evicts itself (`evictSoon`), so what it still needs is spared after a download too.
+        var options = options
+        options.evictsAfterFetch = false
         self.options = options
         let controller = library.controller
         recordingsWatch = ObservationWatch.distinctValues(of: { Set(controller.meetings.flatMap { $0.tracks.map(\.id) }) }, initial: false,
@@ -134,7 +139,7 @@ final class SyncAudioProvider: AudioProviding {
         }
         await engine.noteAudioPlayed(trackID: track.id, in: meetingID)
         // Playback, sharing and processing don't wait for the library to be measured.
-        if fetched.withLock({ $0 }) { measureSoon() }
+        if fetched.withLock({ $0 }) { measureSoon(); evictSoon() }
         return url
     }
 
@@ -158,12 +163,14 @@ final class SyncAudioProvider: AudioProviding {
         guard let engine else { return measureSoon() }
         await engine.setAudioCachePolicy(AudioCachePolicy(budgetBytes: bytes))
         _ = await evict()
+        measureSoon()
     }
 
     /// Brings local audio within the budget, sparing what's playing or was just asked for, and measures again soon after.
     @discardableResult
     func evict() async -> AudioEvictionReport? {
-        guard let engine else { return nil }
+        // "Uploaded" is judged by this account's container: with another account signed in, or none known, nothing goes.
+        guard let engine, sync.controller?.isOnSameAccount == true else { return nil }
         var report: AudioEvictionReport?
         do { report = try await engine.evictAudio(protecting: protectedTracks(within: keepWindow)) } catch is CancellationError {
             // The background time ran out: what wasn't removed stays, and the next eviction picks it up.
@@ -171,7 +178,7 @@ final class SyncAudioProvider: AudioProviding {
             // Nothing is lost: what wasn't removed stays, and the next eviction tries again.
             Self.log.error("Couldn’t bring audio within the budget: \(error.localizedDescription)")
         }
-        measureSoon()
+        if report?.evicted.isEmpty == false { measureSoon() }
         return report
     }
 
@@ -275,7 +282,7 @@ final class SyncAudioProvider: AudioProviding {
     private func protectedTracks(within window: TimeInterval, now: Date = Date()) -> Set<UUID> {
         recent = recent.filter { now.timeIntervalSince($0.value) < max(keepWindow, playingWindow) }
         let needed = needsAudio().flatMap { library.controller.meeting($0)?.tracks.map(\.id) ?? [] }
-        return Set(recent.filter { now.timeIntervalSince($0.value) < window }.keys).union(downloads.keys).union(needed)
+        return Set(recent.filter { now.timeIntervalSince($0.value) < window }.keys).union(downloads.keys).union(needed).union(playingTrack.map { [$0] } ?? [])
     }
 
     /// One figure for a progress bar: downloading fills most of it, copying and checking the rest.

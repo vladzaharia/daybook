@@ -35,6 +35,8 @@ struct RootView: View {
             }
         }
         .environment(reading)
+        // What the player has loaded isn't taken back to iCloud, however long ago it was asked for.
+        .onChange(of: reading.player.trackID, initial: true) { _, id in model.audio.playingTrack = id }
         .onChange(of: model.pendingNotebook) { _, id in
             guard let id else { return }
             model.pendingNotebook = nil

@@ -593,6 +593,41 @@ final class LibrarySyncSealingTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: original.path))
     }
 
+    func testBehaviorAnEvictedOriginalTakesItsSealedCopyWithItOnceAnotherDeviceHoldsTheKey() async throws {
+        let phone = try phone(budget: 1)
+        try await pass(phone, "Phone")
+        try await phone.enableSealing()
+        cloud.holdUploads(under: remote)
+        let recorded = try await record(audioBytes(50_000, seed: 11), on: "Phone", into: Meeting(title: "Only here"))
+        let meeting = try await pass(phone, "Phone", [recorded]).meetings.first { $0.id == recorded.id }!
+        let sealed = remote.appendingPathComponent("Sealed/Blobs/\(files("Sealed/Blobs")[0])")
+        let mac = try mac()
+        try await pass(mac, "Mac")
+        // Uploaded now, but no pass has run: the original goes, and iCloud's copy of the object goes with it.
+        cloud.holdUploads(under: nil)
+        XCTAssertFalse(cloud.droppedLocalCopies.contains(sealed.path))
+        let report = try await phone.evictAudio()
+        XCTAssertEqual(report.evicted.count, 1)
+        XCTAssertTrue(cloud.droppedLocalCopies.contains(sealed.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: local("Phone").appendingPathComponent("Meetings/\(meeting.id.uuidString)/\(meeting.tracks[0].relativePath)").path))
+    }
+
+    func testBehaviorASealedCopyThatChangedSinceItWasVerifiedIsNotDropped() async throws {
+        let phone = try phone(budget: 1)
+        try await pass(phone, "Phone")
+        try await phone.enableSealing()
+        cloud.holdUploads(under: remote)
+        let recorded = try await record(audioBytes(50_000, seed: 12), on: "Phone", into: Meeting(title: "Only here"))
+        try await pass(phone, "Phone", [recorded])
+        let sealed = remote.appendingPathComponent("Sealed/Blobs/\(files("Sealed/Blobs")[0])")
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: sealed.path)
+        var bytes = try Data(contentsOf: sealed); bytes.append(0)
+        try bytes.write(to: sealed)
+        cloud.holdUploads(under: nil)
+        try await pass(phone, "Phone")
+        XCTAssertFalse(cloud.droppedLocalCopies.contains(sealed.path), "not the object that was read back as the recording's")
+    }
+
     // MARK: The sealer
 
     func testHistoryFromBeforeIsSealedAndRetiredWithoutRepublishing() async throws {

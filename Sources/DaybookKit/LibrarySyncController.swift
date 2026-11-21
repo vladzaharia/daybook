@@ -426,7 +426,7 @@ public final class LibrarySyncController {
         // In the container, a fresh device waits for iCloud's first listing before it starts a library of its own.
         do { engine = try LibrarySyncEngine(localRoot: localRoot, remoteRoot: url, deviceID: deviceID, replica: replica,
                                             waitsForListing: transport == .iCloudContainer && monitorChanges, installation: installation,
-                                            appInstallation: appInstallation) }
+                                            appInstallation: appInstallation, accountIsCurrent: accountCheck(for: transport)) }
         catch { scopedURL?.stopAccessingSecurityScopedResource(); scopedURL = nil; throw error }
         folder = url; self.transport = transport; status = .preparing; configurationID = UUID()
         toldPresenceProblem = nil

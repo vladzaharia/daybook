@@ -112,6 +112,9 @@ public actor LibrarySyncEngine {
     public nonisolated let deviceID: String
     public nonisolated let audioPolicy: SyncAudioPolicy
     let cloud: SyncCloudFiles
+    /// Whether the account signed in now is the one this library's container belongs to. "Uploaded" is judged by that
+    /// container's files: with another account (or none known) signed in, nothing is evicted or dropped on its word.
+    let accountIsCurrent: @Sendable () -> Bool
     let presenceRefreshInterval: TimeInterval
     var device: SyncDeviceIdentity?
     var audioCachePolicy: AudioCachePolicy?
@@ -238,7 +241,9 @@ public actor LibrarySyncEngine {
     /// device ID can tell (`sharesIdentity`); `appInstallation` (this app's own), so two apps on one device sharing its
     /// identity can (`otherInstallationWrote`).
     public init(localRoot: URL, remoteRoot: URL, deviceID: String, replica: SyncReplicaConfiguration = SyncReplicaConfiguration(),
-                waitsForListing: Bool = false, installation: String? = nil, appInstallation: String? = nil) throws {
+                waitsForListing: Bool = false, installation: String? = nil, appInstallation: String? = nil,
+                accountIsCurrent: @escaping @Sendable () -> Bool = { true }) throws {
+        self.accountIsCurrent = accountIsCurrent
         mayCreateLibrary = !waitsForListing
         self.installation = installation; self.appInstallation = appInstallation
         self.localRoot = localRoot.standardizedFileURL
@@ -1890,9 +1895,10 @@ public actor LibrarySyncEngine {
             let values = try url.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemIsUploadedKey])
             let refused = cloud.uploadRefusedForQuota(url)
             present.insert(url.path)
+            let isAudioObject = url.deletingLastPathComponent().lastPathComponent == "Blobs"
             let isWaiting = refused || (values.isUbiquitousItem == true && values.ubiquitousItemIsUploaded == false)
             if isWaiting { count += 1 }
-            if isWaiting || !cloud.isUploaded(url) { waiting.insert(url.path) }
+            if isAudioObject, isWaiting || !cloud.isUploaded(url) { waiting.insert(url.path) }
             if refused { full = true }
         }
         storageFullLately = full
