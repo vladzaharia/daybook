@@ -32,6 +32,19 @@ final class TranscriptBuilderTests: XCTestCase {
         XCTAssertTrue(segments.allSatisfy { $0.trackID == source.id })
     }
 
+    /// Each run of speaker detection names its speakers after itself, so one run's S1 is never another's, whoever each
+    /// heard: a passage the person gave to a speaker keeps that speaker when the recording is heard again.
+    func testTwoRunsOfOneRecordingNeverShareASpeaker() {
+        let source = track()
+        let words = [word(" Hello", 0, 0.5), word(" again", 2, 2.5)]
+        let turns = analysis([("S1", 0, 1), ("S2", 1.9, 3)])
+        let (first, second) = (UUID(), UUID())
+        let one = TranscriptBuilder.segments(result: result(words), speakers: turns, track: source, runID: first)
+        let two = TranscriptBuilder.segments(result: result(words), speakers: turns, track: source, runID: second)
+        XCTAssertEqual(one.compactMap(\.speakerID), ["\(first.uuidString):S1", "\(first.uuidString):S2"])
+        XCTAssertTrue(Set(one.compactMap(\.speakerID)).isDisjoint(with: two.compactMap(\.speakerID)))
+    }
+
     func testMissingDiarizationDoesNotInventSpeakerFromSource() {
         for source in AudioSource.allCases {
             let segments = TranscriptBuilder.segments(result: result([word(" Hello.", 0, 1)]), speakers: nil, track: track(source))

@@ -60,6 +60,7 @@ enum LibraryDemo {
             await state.captions.readSaved()
             if finishing != nil, let id = state.meetings.first(where: { $0.title == ready })?.id { state.window.openID = id }
             if SpeakerProfileDemo.isRequested { await SpeakerProfileDemo.seed(state.library) }
+            await NotebookDemo.apply(to: state)
             settle(state)
             if FloatingNotesDemo.scenario == nil {
                 PlacementDemo.apply(to: state, processing: state.meetings.first { $0.title == transcribing }?.id)

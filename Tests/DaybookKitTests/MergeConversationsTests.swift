@@ -231,6 +231,36 @@ final class MergeConversationsTests: XCTestCase {
         XCTAssertTrue(trashed.tracks.allSatisfy(\.isMovedOut))
     }
 
+    /// Where audio recorded for a conversation merged away goes (Apple Watch's Keep Recording into it meanwhile): the one it
+    /// went into, followed through a later merge of that one. A conversation trashed by hand went into none, and its ID,
+    /// like any in the Trash, is spent.
+    func testBehaviorAMergedAwayConversationLeadsToTheOneItWentIntoThroughLaterMerges() async throws {
+        let library = try await open()
+        let earliest = try await conversation(library, "Kickoff", at: start, said: "Welcome")
+        let middle = try await conversation(library, "Design", at: start.addingTimeInterval(3_600), said: "Sketches")
+        let latest = try await conversation(library, "Review", at: start.addingTimeInterval(7_200), said: "Looks good")
+        let trashed = try await conversation(library, "Unrelated", at: start.addingTimeInterval(9_000), said: "Something else")
+        let into = try await merge([latest, middle], in: library)
+        XCTAssertEqual(into, middle)
+        let into2 = try await merge([middle, earliest], in: library)
+        XCTAssertEqual(into2, earliest)
+        let moved = try await library.moveToTrash(trashed)
+        XCTAssertTrue(moved)
+
+        let viaMiddle = await library.mergeSurvivor(of: latest)
+        XCTAssertEqual(viaMiddle, earliest, "Through the merge of the one it went into")
+        let direct = await library.mergeSurvivor(of: middle)
+        XCTAssertEqual(direct, earliest)
+        let none = await library.mergeSurvivor(of: trashed)
+        XCTAssertNil(none, "Trashed by hand: merged into nothing")
+        let alive = await library.mergeSurvivor(of: earliest)
+        XCTAssertNil(alive)
+        XCTAssertTrue(library.isGone(trashed))
+        XCTAssertTrue(library.isGone(latest), "Merged away: in the Trash")
+        XCTAssertFalse(library.isGone(earliest))
+        XCTAssertFalse(library.isGone(UUID()), "One never here isn't spent here")
+    }
+
     func testBehaviorItWaitsWhileAnyOfThemIsRecordedOrProcessedAnywhere() async throws {
         let library = try await open()
         let standup = try await conversation(library, "Standup", at: start, said: "Morning everyone")

@@ -10,7 +10,7 @@ public enum PairingWords {
 
     /// The Mac's button: Settings › Devices (beside Add Recorder…, and in its empty state) and Add Device.
     public static let pairWithIPhone = "Pair with iPhone…"
-    /// The iPhone's button: Settings › Macs and the status sheet's Macs card.
+    /// The iPhone's button: Settings › Devices and the status sheet's Macs card.
     public static let pairWithMac = "Pair with Your Mac…"
     public static let unpair = "Unpair…"
     /// On a paired device's page when its pairing no longer works: pair it again, replacing the old one.

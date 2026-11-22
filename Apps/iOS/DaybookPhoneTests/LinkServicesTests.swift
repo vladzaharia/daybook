@@ -1059,7 +1059,7 @@ final class LinkServicesTests: XCTestCase {
         // The link, looking for a paired Mac it has no address for, finds Local Network refused.
         link.applyDemo(discovery: .localNetworkDenied)
         let denied = try XCTUnwrap(link.macs.first)
-        XCTAssertEqual(denied.rowLine(recordingBySync: false), PairingWords.localNetworkOff, "its row in Settings › Macs and the status sheet")
+        XCTAssertEqual(denied.rowLine(recordingBySync: false), PairingWords.localNetworkOff, "its row in Settings › Devices and the status sheet")
         XCTAssertEqual(denied.problem, .other(PairingWords.allowLocalNetwork))
         let page = PeerPage(PeerPage.Facts(id: denied.id.uuidString, name: denied.name, kind: .mac, isConnected: false, problem: denied.problem),
                             here: PairingWords.here(.iPhone))

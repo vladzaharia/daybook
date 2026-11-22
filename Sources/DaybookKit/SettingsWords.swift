@@ -80,6 +80,9 @@ public enum SettingsWords {
     /// The switch for conversations not filed yet.
     public static let notFiled = "Not in Work or Personal"
 
+    /// The header over Templates, Vocabulary and Speaker Profiles, as the iPhone's Settings groups them.
+    public static let libraryHeader = "Library"
+
     /// The heading over those switches.
     public static let cloudPlacements = "Use the cloud for"
 
@@ -154,6 +157,15 @@ public enum SettingsWords {
     static func isLaptop(_ text: String?) -> Bool {
         guard let text else { return false }
         return text.range(of: "MacBook", options: .caseInsensitive) != nil
+    }
+
+    // MARK: Microphone
+
+    /// The problem line while the system refuses Daybook the microphone.
+    public static let microphoneRefused = "Daybook can’t use the microphone."
+    /// What Settings' Microphone row says is used: the input the person chose, else Automatic (`MicrophoneChoice`).
+    public static func microphoneValue(_ preference: MicrophoneChoice.Preference) -> String {
+        preference.device?.name ?? MicrophoneChoice.automaticTitle
     }
 
     // MARK: Calendar

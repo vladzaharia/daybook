@@ -232,7 +232,18 @@ public enum StatusOverviewModel {
             if name == notSetUp { row.isNotSetUp() }
             rows.append(row)
         }
-        if let index = rows.firstIndex(where: \.isConnected) ?? rows.firstIndex(where: { $0.name == inputs.mac.macName }) {
+        // The Mac doing the work, or the one the line above names, has its own row first: its state, with the queue under
+        // it. One known only by its work (live over the link, or a claim that synced) gets a row of its own, so the card
+        // never lists conversations with no Mac above them.
+        let working = macLine(inputs, now: now)
+        if let working, let index = rows.firstIndex(where: { $0.name == working.title }) {
+            if working.tone == .working { rows[index].text = working.text; rows[index].isConnected = true }
+        } else if let working {
+            rows.append(StatusMacRow(id: .synced(working.title), name: working.title, text: working.text,
+                                     isConnected: working.tone == .working))
+        }
+        if let index = working.flatMap({ line in rows.firstIndex(where: { $0.name == line.title && line.tone == .working }) })
+            ?? rows.firstIndex(where: \.isConnected) ?? rows.firstIndex(where: { $0.name == inputs.mac.macName }) {
             rows[index].showsQueue = true
         }
         return rows

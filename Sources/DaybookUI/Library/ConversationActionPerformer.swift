@@ -35,22 +35,25 @@ public struct ConversationActionPerformer {
     public var confirm: @MainActor (ConfirmationBeat) -> Void
     /// Summarizes a conversation again as a row of Summarize Again's menu chose (`SummarizeAgainChoices`); without one, nothing.
     public var summarizeAgain: (@MainActor (UUID, SummarizeAgainChoice) -> Void)?
+    /// Identifies a conversation's speakers once with how many people spoke (`SpeakerAsk`); without one, nothing.
+    public var identifySpeakers: (@MainActor (UUID, ProcessingRequest.SpeakerAsk) -> Void)?
 
     public init(library: LibraryController, undoManager: UndoManager?,
                 process: @escaping @MainActor (UUID, ProcessingRequest.Mode) -> Void,
                 show: @escaping @MainActor (Request) -> Void,
                 copy: @escaping @MainActor (String) -> Void,
                 confirm: @escaping @MainActor (ConfirmationBeat) -> Void,
-                summarizeAgain: (@MainActor (UUID, SummarizeAgainChoice) -> Void)? = nil) {
+                summarizeAgain: (@MainActor (UUID, SummarizeAgainChoice) -> Void)? = nil,
+                identifySpeakers: (@MainActor (UUID, ProcessingRequest.SpeakerAsk) -> Void)? = nil) {
         self.library = library; self.undoManager = undoManager
         self.process = process; self.show = show; self.copy = copy; self.confirm = confirm
-        self.summarizeAgain = summarizeAgain
+        self.summarizeAgain = summarizeAgain; self.identifySpeakers = identifySpeakers
     }
 
     /// Whether the performer carries `id` out; the rest are each app's own.
     public static func carriesOut(_ id: ConversationAction.ID) -> Bool {
         switch id {
-        case .copySummary, .process, .summarizeAgain, .versionHistory, .moveToFolder, .tags, .moveTo, .merge, .mergeWith, .moveToTrash:
+        case .copySummary, .process, .summarizeAgain, .identifySpeakers, .versionHistory, .moveToFolder, .tags, .moveTo, .merge, .mergeWith, .moveToTrash:
             return true
         case .share, .shareMarkdown, .shareJSON, .shareAudio, .export, .exportMarkdown, .exportJSON,
              .showFloatingNotes, .takePhoto, .addPhotos, .addRecording, .addRecordingFromFile, .reprocess, .mergeMenu,
@@ -76,6 +79,9 @@ public struct ConversationActionPerformer {
             guard first.hasSummarizableContent else { return }
             // Without the app's handler nothing runs: a plain Summarize Again might send a model of this device's to the cloud.
             summarizeAgain?(first.id, choice)
+        case .identifySpeakers(let ask):
+            guard first.transcripts.isEmpty == false else { return }
+            identifySpeakers?(first.id, ask)
         case .versionHistory: show(.versionHistory(first.id))
         case .moveToFolder: show(.moveToFolder(chosen))
         case .tags: show(.tags(chosen))

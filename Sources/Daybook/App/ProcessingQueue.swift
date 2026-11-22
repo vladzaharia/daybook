@@ -196,6 +196,8 @@ final class ProcessingQueue {
         var meetingID: UUID
         var mode: ProcessingRequest.Mode
         var upgrade: ProcessingRequest.Upgrade?
+        /// Identify Speakers asked for this conversation alone (`SpeakerAsk`): how many people spoke, which goes on with it.
+        var speakers: ProcessingRequest.SpeakerAsk?
         /// Runs of this work that started and never ended here: Daybook crashed, or was stopped, mid-run. A quit ends
         /// a run as it stops it.
         var interruptedRuns = 0
@@ -203,10 +205,11 @@ final class ProcessingQueue {
         /// Whether the next launch queues it again: once after a run that never ended, not after a second.
         var resumesAtLaunch: Bool { interruptedRuns < 2 }
 
-        init(meetingID: UUID, mode: ProcessingRequest.Mode, upgrade: ProcessingRequest.Upgrade?) {
+        init(meetingID: UUID, mode: ProcessingRequest.Mode, upgrade: ProcessingRequest.Upgrade?, speakers: ProcessingRequest.SpeakerAsk? = nil) {
             self.meetingID = meetingID
             self.mode = mode
             self.upgrade = upgrade
+            self.speakers = speakers
         }
 
         init(from decoder: Decoder) throws {
@@ -214,6 +217,7 @@ final class ProcessingQueue {
             meetingID = try container.decode(UUID.self, forKey: .meetingID)
             mode = try container.decode(ProcessingRequest.Mode.self, forKey: .mode)
             upgrade = try container.decodeIfPresent(ProcessingRequest.Upgrade.self, forKey: .upgrade)
+            speakers = try container.decodeIfPresent(ProcessingRequest.SpeakerAsk.self, forKey: .speakers)
             interruptedRuns = try container.decodeIfPresent(Int.self, forKey: .interruptedRuns) ?? 0
         }
     }
@@ -231,13 +235,14 @@ final class ProcessingQueue {
 
     /// This Mac owes `id` the work `mode` asks for: a later ask replaces an earlier one, and keeps its runs that never
     /// ended.
-    func owe(_ id: UUID, mode: ProcessingRequest.Mode, upgrade: ProcessingRequest.Upgrade?) {
+    func owe(_ id: UUID, mode: ProcessingRequest.Mode, upgrade: ProcessingRequest.Upgrade?, speakers: ProcessingRequest.SpeakerAsk? = nil) {
         if let index = owed.firstIndex(where: { $0.meetingID == id }) {
-            guard owed[index].mode != mode || owed[index].upgrade != upgrade else { return }
+            guard owed[index].mode != mode || owed[index].upgrade != upgrade || owed[index].speakers != speakers else { return }
             owed[index].mode = mode
             owed[index].upgrade = upgrade
+            owed[index].speakers = speakers
         } else {
-            owed.append(OwedWork(meetingID: id, mode: mode, upgrade: upgrade))
+            owed.append(OwedWork(meetingID: id, mode: mode, upgrade: upgrade, speakers: speakers))
         }
         saveOwed()
     }
@@ -441,7 +446,7 @@ extension AppState {
                 processor.queue.settle(work.meetingID)
                 continue
             }
-            processor.enqueue(work.meetingID, mode: work.mode, upgrade: work.upgrade)
+            processor.enqueue(work.meetingID, mode: work.mode, upgrade: work.upgrade, speakers: work.speakers)
         }
         resumeOwedDownloads()
     }
@@ -542,7 +547,7 @@ extension AppState {
         if canProcess {
             for id in processor.queue.awaitingModels.sorted(by: { $0.uuidString < $1.uuidString }) {
                 let owed = processor.queue.owedWork(id)
-                processor.enqueue(id, mode: owed?.mode ?? .newAudio, upgrade: owed?.upgrade)
+                processor.enqueue(id, mode: owed?.mode ?? .newAudio, upgrade: owed?.upgrade, speakers: owed?.speakers)
             }
         }
         takeUpWaitingSummaries()
