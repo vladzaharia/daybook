@@ -56,6 +56,9 @@ public enum ConversationInfoAction: Equatable {
     case process(ProcessingRequest.Mode)
     /// Reprocess ▸ Summarize Again ▸ one way to summarize (`SummarizeAgainChoices`).
     case summarizeAgain(SummarizeAgainChoice)
+    /// Identify Speakers for this conversation alone, with how many people spoke when it's said (`SpeakerAsk`): Reprocess ▸
+    /// Identify Speakers Again ▸ a count, and People's Identify Speakers where speakers are off.
+    case identifySpeakers(ProcessingRequest.SpeakerAsk)
     /// The template changed: summarize again with it (nil: Automatic).
     case summarize(templateID: String?)
     case versionHistory

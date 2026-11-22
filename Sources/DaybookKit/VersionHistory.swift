@@ -11,6 +11,11 @@ public enum RevisionRestore {
         case .segment(let id):
             guard let segment = meeting.unifiedTranscript.first(where: { $0.id == id }) else { return false }
             return segment.text != revision.oldValue
+        case .segmentSpeaker(let id):
+            // Back to the speaker it had (none, for a passage that began without one), while it's still with the one it was
+            // given and the earlier one is here.
+            guard let segment = meeting.unifiedTranscript.first(where: { $0.id == id }), (segment.speakerID ?? "") == revision.newValue else { return false }
+            return revision.oldValue.isEmpty || meeting.speakers.contains { $0.id == revision.oldValue }
         case .speaker(let id):
             guard let speaker = meeting.speakers.first(where: { $0.id == id }) else { return false }
             return speaker.name != revision.oldValue && !revision.oldValue.trimmingCharacters(in: .whitespaces).isEmpty
@@ -42,6 +47,7 @@ public enum RevisionRestore {
             meeting.setNotes(revision.oldValue)
             meeting.reanchorInk()
         case .segment(let id): meeting.correctSegment(id: id, text: revision.oldValue)
+        case .segmentSpeaker(let id): meeting.giveSpeaker(revision.oldValue, toPassages: [id])
         case .speaker(let id): meeting.renameSpeaker(id: id, name: revision.oldValue)
         case .summary:
             if let summary = decodedSummary(revision.oldValue) { meeting.setSummary(summary) }
@@ -73,6 +79,7 @@ public enum RevisionText {
         switch revision.kind {
         case .notes: return "Notes edited"
         case .segment: return "Passage corrected"
+        case .segmentSpeaker: return "Speaker changed"
         case .speaker: return "Speaker renamed"
         case .summary: return hasBefore(revision) ? "Summary replaced" : "Summary written"
         case .correctionTransfer: return "Correction reviewed"
@@ -129,7 +136,7 @@ public enum RevisionText {
     /// removed, moved, or put back, keep only a mark of what happened, which the title already says.
     public static func showsComparison(_ revision: MeetingRevision) -> Bool {
         switch revision.kind {
-        case .photo, .page, .source: return false
+        case .photo, .page, .source, .segmentSpeaker: return false
         default: return true
         }
     }
@@ -139,6 +146,11 @@ public enum RevisionText {
         case .segment(let id):
             if let segment = meeting.unifiedTranscript.first(where: { $0.id == id }) {
                 return "Passage at \(TimeLabel.short(segment.start))" + (meeting.speakerName(segment.speakerID).map { " · \($0)" } ?? "")
+            }
+        case .segmentSpeaker(let id):
+            if let segment = meeting.unifiedTranscript.first(where: { $0.id == id }) {
+                let (old, new) = (meeting.speakerName(revision.oldValue) ?? "No speaker", meeting.speakerName(revision.newValue) ?? "No speaker")
+                return "Passage at \(TimeLabel.short(segment.start)) · \(old) → \(new)"
             }
         case .speaker: return "\(revision.oldValue) → \(revision.newValue)"
         case .passage(let id):
@@ -160,7 +172,7 @@ public enum RevisionText {
         switch revision.kind {
         case .notes: return "note.text"
         case .segment: return "pencil"
-        case .speaker: return "person"
+        case .segmentSpeaker, .speaker: return "person"
         case .summary: return "text.alignleft"
         case .correctionTransfer: return "checkmark.circle"
         case .source: return "waveform"

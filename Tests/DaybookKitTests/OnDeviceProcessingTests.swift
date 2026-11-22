@@ -42,6 +42,51 @@ final class OnDeviceProcessingTests: XCTestCase {
         XCTAssertEqual(OnDeviceProcessing.next(in: meeting, device: device(all, owning: [mine.id]), at: now)?.work, .transcribe([mine.id]))
     }
 
+    /// A number of people is the speaker model's `expectedSpeakerCount`, which the iPhone's own run doesn't take: a Mac runs it.
+    func testBehaviorIdentifySpeakersWithANumberOfPeopleIsLeftToAMac() {
+        let mine = track("phone")
+        let (recordedMeeting, plain) = recorded([mine], request: .speakerRefresh)
+        var meeting = recordedMeeting
+        meeting.transcripts = [transcript(mine, at: now.addingTimeInterval(-3_600))]
+        XCTAssertEqual(OnDeviceProcessing.work(for: plain, in: meeting, device: device(all, owning: [mine.id]), at: now), .identifySpeakers([mine.id]))
+        let counted = ProcessingRequest(meetingID: meeting.id, mode: .speakerRefresh, requestedBy: phone, createdAt: now, speakers: .init(count: 3))
+        meeting.processingRequests = [counted]
+        XCTAssertNil(OnDeviceProcessing.work(for: counted, in: meeting, device: device(all, owning: [mine.id]), at: now))
+        let automatic = ProcessingRequest(meetingID: meeting.id, mode: .speakerRefresh, requestedBy: phone, createdAt: now, speakers: .init())
+        XCTAssertEqual(OnDeviceProcessing.work(for: automatic, in: meeting, device: device(all, owning: [mine.id]), at: now), .identifySpeakers([mine.id]))
+    }
+
+    /// A run and a summary made since don't answer a number of people: only the job that ran with it does.
+    func testBehaviorANumberOfPeopleIsNeverAnsweredByWhateverRanSince() {
+        let mine = track("phone")
+        var meeting = Meeting(title: "Walk and talk", tracks: [mine], status: .ready)
+        meeting.transcripts = [transcript(mine, at: now.addingTimeInterval(60))]
+        meeting.summary = MeetingSummary(overview: "Agenda first.", createdAt: now.addingTimeInterval(120))
+        let plain = ProcessingRequest(meetingID: meeting.id, mode: .speakerRefresh, requestedBy: phone, createdAt: now)
+        let counted = ProcessingRequest(meetingID: meeting.id, mode: .speakerRefresh, requestedBy: phone, createdAt: now, speakers: .init(count: 3))
+        XCTAssertTrue(plain.isSatisfied(by: meeting))
+        XCTAssertFalse(counted.isSatisfied(by: meeting))
+    }
+
+    @MainActor
+    func testBehaviorTheNumberOfPeopleIsFixedWithTheRequestAndAnotherNumberIsAnotherRequest() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookSpeakerAsk-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LibraryController(rootURL: root, sync: nil)
+        try await library.load()
+        let id = library.newMeeting(title: "Call", date: now)
+        let three = try XCTUnwrap(library.requestProcessing(id, mode: .speakerRefresh, speakers: .init(count: 3)))
+        XCTAssertEqual(library.requestProcessing(id, mode: .speakerRefresh, speakers: .init(count: 3))?.id, three.id, "the same ask is one request")
+        let four = try XCTUnwrap(library.requestProcessing(id, mode: .speakerRefresh, speakers: .init(count: 4)))
+        XCTAssertNotEqual(four.id, three.id)
+        XCTAssertEqual(library.meeting(id)?.processingRequests?.compactMap(\.speakers?.count).sorted(), [3, 4])
+        // Stored with the request, read back, and kept when two devices merge their copies.
+        let data = try JSONEncoder().encode(four)
+        XCTAssertEqual(try JSONDecoder().decode(ProcessingRequest.self, from: data).speakers, .init(count: 4))
+        XCTAssertEqual(ProcessingRequest.merged([three], [three, four])?.map(\.speakers?.count), [3, 4])
+        XCTAssertNil(ProcessingRequest.SpeakerAsk(count: 0).count, "no such number of people")
+    }
+
     func testBehaviorAMacsRecordingIsntTranscribedOnTheIPhone() {
         let mine = track("phone"), macs = track("mac")
         // Its own request, for a conversation with a Mac's recording still untranscribed.

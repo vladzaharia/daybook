@@ -99,6 +99,15 @@ public enum ProcessingWords {
         }
     }
 
+    /// A row of Identify Speakers Again's menu: "Automatic", or the number of people who spoke ("3 People").
+    public static func speakerCount(_ count: Int?) -> String { count.map { "\($0) People" } ?? "Automatic" }
+
+    /// Identify Speakers, for a conversation made without speakers (People says "Speakers off").
+    public static let identifySpeakers = "Identify Speakers"
+
+    /// A number of people asked of a speaker model that can't take one: nothing ran.
+    public static let speakerCountUnavailable = "This speaker model can’t be told how many people spoke."
+
     /// What waits to happen, by the request's mode: "transcribe", "summarize", "identify speakers".
     static func infinitive(_ mode: ProcessingRequest.Mode?, summarized: Bool = false) -> String {
         switch mode {

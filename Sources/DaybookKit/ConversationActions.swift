@@ -31,6 +31,8 @@ public struct ConversationAction: Equatable, Identifiable, Sendable {
         case process(ProcessingRequest.Mode)
         /// A row of Summarize Again's menu: one way to summarize now (`SummarizeAgainChoices`).
         case summarizeAgain(SummarizeAgainChoice)
+        /// A row of Identify Speakers Again's menu: how many people spoke (`SpeakerAsk.count`; nil is Automatic).
+        case identifySpeakers(ProcessingRequest.SpeakerAsk)
         // History
         case versionHistory
         // Filing
@@ -155,13 +157,17 @@ public enum ConversationActions {
         public var mergeCandidates: [MergeCandidate]
         /// A merge of this conversation is running here (`LibraryController.mergingIDs`).
         public var isMerging: Bool
+        /// The speaker model takes a number of speakers, so Identify Speakers Again asks how many people spoke.
+        public var speakerCounts: Bool
 
         public init(platform: ConversationAction.Platform, isRecording: Bool = false, isProcessingHere: Bool = false,
                     status: ProcessingStatus? = nil, canTakePhoto: Bool = false, isDeviceRecording: Bool = false,
-                    summarizeChoices: [SummarizeAgainChoice] = [], mergeCandidates: [MergeCandidate] = [], isMerging: Bool = false) {
+                    summarizeChoices: [SummarizeAgainChoice] = [], mergeCandidates: [MergeCandidate] = [], isMerging: Bool = false,
+                    speakerCounts: Bool = false) {
             self.platform = platform; self.isRecording = isRecording; self.isProcessingHere = isProcessingHere
             self.status = status; self.canTakePhoto = canTakePhoto; self.isDeviceRecording = isDeviceRecording
             self.summarizeChoices = summarizeChoices; self.mergeCandidates = mergeCandidates; self.isMerging = isMerging
+            self.speakerCounts = speakerCounts
         }
 
         /// Why it can't change now, when it can't.
@@ -283,11 +289,17 @@ public enum ConversationActions {
                                availability: summarizable, children: choices.count > 1 ? choices : []),
             ConversationAction(id: .process(.speakerRefresh), title: ProcessingWords.title(.speakerRefresh), symbol: "person.2",
                                availability: !recorded ? .unavailable("No recording yet")
-                                   : meeting.transcripts.isEmpty ? .unavailable("Not transcribed yet") : .available),
+                                   : meeting.transcripts.isEmpty ? .unavailable("Not transcribed yet") : .available,
+                               children: context.speakerCounts ? speakerCounts : []),
             ConversationAction(id: .process(.fullRetranscription), title: ProcessingWords.title(.fullRetranscription), symbol: "arrow.clockwise",
                                availability: recorded ? .available : .unavailable("No recording yet")),
         ]
         return ConversationAction(id: .reprocess, title: "Reprocess", symbol: "arrow.triangle.2.circlepath", availability: availability, children: modes)
+    }
+
+    /// Identify Speakers Again ▸ how many people spoke: Automatic, then 2 to 8 (what Settings › Models › Speakers offers).
+    static let speakerCounts: [ConversationAction] = ([nil] + (2...8).map { Optional($0) }).map { count in
+        ConversationAction(id: .identifySpeakers(.init(count: count)), title: ProcessingWords.speakerCount(count), symbol: "")
     }
 
     /// Merge with ▸ the conversations of its day and the day before; each asks the question a selection's Merge… does.

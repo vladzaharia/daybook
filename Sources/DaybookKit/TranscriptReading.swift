@@ -196,6 +196,8 @@ extension Meeting {
 /// conversation (`cached(for:)`) rather than at every redraw.
 public struct TranscriptLayout: Sendable {
     public let blocks: [TranscriptBlock]
+    /// Each turn's passages, by the turn's first passage: what a turn's Speaker ▸ moves together.
+    public let turnPassages: [UUID: [TranscriptSegment]]
     public let marks: BookmarkMarks
     public let playhead: PlayheadIndex
     /// Passages the person corrected (`Meeting.correctedSegmentIDs`): a row asks the set, never the history.
@@ -207,6 +209,10 @@ public struct TranscriptLayout: Sendable {
 
     private init(_ meeting: Meeting, unsure: [UUID: [TranscriptFlagMark]]) {
         blocks = TranscriptBlock.blocks(in: meeting)
+        turnPassages = Dictionary(blocks.compactMap { block -> (UUID, [TranscriptSegment])? in
+            if case .turn(_, _, let segments) = block, let first = segments.first { return (first.id, segments) }
+            return nil
+        }, uniquingKeysWith: { first, _ in first })
         marks = BookmarkMarks(meeting: meeting)
         playhead = PlayheadIndex(meeting: meeting)
         correctedSegmentIDs = meeting.correctedSegmentIDs

@@ -341,6 +341,31 @@ final class ProcessingRequestQueueTests: XCTestCase {
         XCTAssertEqual(phone.library.processingStatus(for: id), .done, "Done on the phone too")
     }
 
+    /// A number of people the speaker model here can't take: the request is left for a Mac whose model can, never run
+    /// without the number and called done; and a job of this Mac's own, asked nothing, doesn't take it on.
+    func testBehaviorANumberOfPeopleIsLeftForAMacWhoseSpeakerModelTakesIt() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let audio = try rig.audio("counted.wav", frequency: 410)
+        let id = try await rig.waitingConversation("Counted", audio: audio, script: [(0, "Three of us on the call.")])
+        state.processingPreferences.speakerModelID = "sortformer-2.1/compact"
+        let asked = try XCTUnwrap(state.library.requestProcessing(id, mode: .speakerRefresh, speakers: .init(count: 3), by: .phone))
+        let meeting = try XCTUnwrap(rig.meeting(id))
+        let job = state.job(for: asked, in: meeting)
+        state.installedModels.formUnion(job.transcribingModelIDs(hasUntranscribedAudio: true))
+        XCTAssertTrue(state.hasModels(for: job, in: meeting), "every model it needs is here")
+        XCTAssertFalse(state.takesSpeakerAsk(job))
+
+        state.pickUpRequests()
+        try await rig.processed()
+        XCTAssertTrue(try XCTUnwrap(request(rig, id)).isOpen)
+        XCTAssertNil(request(rig, id)?.claim, "left for a Mac whose speaker model takes a number")
+        XCTAssertTrue(rig.inference.transcribed.isEmpty)
+        let plain = state.makeJob(meetingID: id, mode: .speakerRefresh)
+        XCTAssertFalse(AppState.covers(plain, asked), "a plain Identify Speakers Again doesn't do what it asks")
+        XCTAssertTrue(AppState.covers(state.makeJob(meetingID: id, mode: .speakerRefresh, speakers: .init(count: 3)), asked))
+    }
+
     func testTwoMacsRacingForOneRequestOnlyOneRunsIt() async throws {
         let a = try await rig(), b = try await rig()
         let cloud = try temporaryFolder("Cloud")
