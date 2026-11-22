@@ -474,14 +474,20 @@ extension LibraryController {
         return found
     }
 
-    /// A track this device compressed that names a copy no longer here, while its original still is (its bytes are
-    /// `previousSHA256`): it names the original again, so the recording is whole. Only this device's own compressions
+    /// A track this device compressed that names a copy no longer here, while its original still is, hash-verified (its
+    /// bytes are `previousSHA256`): it names the original again, so the recording is whole, connected or not, and
+    /// whether or not iCloud has the copy. The original is the recording itself: a publication uploads it again when
+    /// iCloud no longer has it (its object may have gone, LibrarySyncSuperseded.swift), and the copy still wins a merge
+    /// with another device's state that names it, which brings the copy back here. Only this device's own compressions
     /// (or any in a library that doesn't sync): another Mac's copy that hasn't downloaded yet is on its way.
     private func repairMissingCopies(store: MeetingStore) async {
-        let thisDevice = compressionSync == .local ? nil : sync?.deviceID
+        let state = compressionSync
+        let thisDevice = state == .local ? nil : sync?.deviceID
+        // A synced library whose device isn't known yet can't tell this device's compressions: they wait for a later launch.
+        guard state == .local || thisDevice != nil else { return }
         for meeting in meetings {
             for track in meeting.tracks {
-                guard let encoding = track.encoding, encoding.device == thisDevice || compressionSync == .local,
+                guard let encoding = track.encoding, encoding.device == thisDevice || state == .local,
                       let copy = try? await store.audioURL(for: track, in: meeting.id), !FileManager.default.fileExists(atPath: copy.path),
                       let original = try? await store.audioURL(for: RecordingTrack(relativePath: encoding.previousRelativePath, fileName: ""), in: meeting.id),
                       SyncFilesProbe.isRegularFile(original),

@@ -89,6 +89,10 @@ public final class LibraryController {
     @ObservationIgnored var voiceClipsInFlight = 0
     /// Stops a voice clip at a step as a crash would there (tests).
     @ObservationIgnored var voiceClipFault: ((VoiceClipStep) throws -> Void)?
+    /// Thrown right after the engine's pass, before the library applies it (tests stop a pass there).
+    @ObservationIgnored var syncApplyFault: (() throws -> Void)?
+    /// What keeps speaker profiles in step here (the Mac's), once it runs: asked before a superseded original leaves iCloud.
+    @ObservationIgnored public internal(set) weak var speakerProfileCoordinator: SpeakerProfileCoordinator?
     /// Where this device last applied the library's settings from sync whole, in this run (`SyncResult.settingsApplied`,
     /// acknowledged): the library, its folder, and the engine. Until it's the library connected now, through the same
     /// folder and engine, a Mac compresses nothing there and lets no original go, since another device's Never may not
@@ -978,6 +982,23 @@ public final class LibraryController {
         editedDuringSync = []; settingsEditedDuringSync = false
         await acquireLock()
         var applied = await applyPass(sync, protecting: active, limits: limits, scope: scope)
+        // A superseded original's object the pass found due goes now, still under the lock, with the library's
+        // conversations, its settings, and what voice profiles hold asked again (LibrarySyncSuperseded.swift); only after a
+        // pass the library applied and acknowledged, so what it brought (a voiceprint) is asked about too.
+        // A name not yet a voiceprint here (speaker profiles not settled since what they read last changed, or no coordinator
+        // to say) is a pause too, and asks for a reconciliation (a change of options, or of what it leaves alone, isn't one
+        // it hears of); a conversation they leave alone for now (recording, processing) holds its originals.
+        if let engine = sync.engine, await engine.hasSupersededObjectsDue {
+            let current = await settingsAreCurrent()
+            let voices = speakerProfileCoordinator?.pendingVoiceWork
+            if voices?.unsettled == true { speakerProfileCoordinator?.schedule() }
+            if applied?.acknowledged == true, supersededJudgment(settingsCurrent: current) == .judge, !(voices?.unsettled ?? true),
+               let held = await meetingsHoldingOriginalsInICloud() {
+                await engine.deleteSupersededObjects(meetings: meetings, heldForVoice: held.union(voices?.skipped ?? []))
+            } else {
+                await engine.discardSupersededObjectsDue()
+            }
+        }
         releaseLock(); isApplyingSync = false
         applied?.editedDuringPass = editedDuringSync; applied?.settingsEditedDuringPass = settingsEditedDuringSync
         if !editedDuringSync.isEmpty || settingsEditedDuringSync { sync.requestSync() }
@@ -987,22 +1008,30 @@ public final class LibraryController {
     private func applyPass(_ sync: LibrarySyncController, protecting active: UUID?, limits: SyncPassLimits, scope: SyncPassScope) async -> SyncApplied? {
         // Only a pass that applies the settings whole and is acknowledged says they're current; one that stops partway
         // (cancelled, failed, the account changed) leaves them not known.
+        let settingsWereCurrent = await settingsAreCurrent()
         settingsAppliedFromSync = nil
         await flush()
         guard let store else { return nil }
         var applied: SyncApplied?
         do {
             try Task.checkCancellation()
-            // In an encrypted library, the superseded originals voice profiles still need stay through the sealer's key
-            // rotations, by the rule that lets an original go (LibraryController+VoiceClips).
-            if let engine = sync.engine, await engine.sealsObjects {
-                let compressed = meetings.contains { $0.tracks.contains(where: \.isCompressed) }
-                await engine.holdOriginalsInICloud(for: compressed ? await meetingsHoldingOriginalsInICloud() : nil, judged: Set(meetings.map(\.id)))
+            // The superseded originals voice profiles still need stay in iCloud: through the sealer's key rotations in an
+            // encrypted library, and out of what the compacting Mac of a plaintext one lets go, by the rule that lets an
+            // original go (LibraryController+VoiceClips). Where the library says to stop, every one stays.
+            if let engine = sync.engine {
+                let seals = await engine.sealsObjects, deletes = await engine.mayDeleteSupersededObjects
+                if seals || deletes {
+                    let judgment = supersededJudgment(settingsCurrent: settingsWereCurrent)
+                    let compressed = meetings.contains { $0.tracks.contains(where: \.isCompressed) }
+                    let held = judgment == .stop || !compressed ? nil : await meetingsHoldingOriginalsInICloud()
+                    await engine.holdOriginalsInICloud(for: held, judged: Set(meetings.map(\.id)), judgment: judgment)
+                }
             }
             let snapshot = meetings
             let deleted = Set(deletedMeetingIDs())
             guard let result = try await sync.synchronize(meetings: snapshot, deletedMeetingIDs: deleted, metadata: try encodedMetadata(),
                                                           limits: limits, protecting: active.map { [$0] } ?? [], scope: scope) else { return nil }
+            try syncApplyFault?()
             // Save edits made while iCloud hydrated files before applying the pass.
             await flush()
             try Task.checkCancellation()

@@ -45,6 +45,14 @@ struct SyncDeviceRecord: Codable, Equatable {
     /// A random ID for the app that wrote it, on this device. Two apps sharing the device's identity through the keychain
     /// (the iPhone app kept beside the one that replaced it) write the same `installation` and differ here. Additive.
     var appInstallation: String?
+    /// What it acknowledges of compacting Macs' notices of superseded originals, and the objects listed there it holds
+    /// (LibrarySyncSuperseded.swift). Additive: earlier versions write none, and acknowledge nothing.
+    var superseded: [SupersededAck]?
+    /// The journal entries it wrote lately, beside those acknowledgements (`SupersededWatermark`). Additive.
+    var written: SupersededWatermark?
+    /// When it last worked out those acknowledgements, on a full pass: a presence written in between (a timer, a pass of
+    /// settings alone) carries the same date, so it never passes for a new acknowledgement. Additive.
+    var supersededAt: Date?
 
     init(deviceID: String, deviceClass: SyncDeviceClass, displayName: String, canProcess: Bool, audioPolicy: String?, lastSeen: Date,
          installation: String? = nil, activity: SyncDeviceActivity? = nil) {
@@ -54,7 +62,8 @@ struct SyncDeviceRecord: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case format, schemaVersion, deviceID, deviceClass, displayName, canProcess, audioPolicy, lastSeen, installation, activity
-        case features, key, sealed, compaction, firstSeen, capabilities, appInstallation, pendingUploads, problem
+        case features, key, sealed, compaction, firstSeen, capabilities, appInstallation, pendingUploads, problem, superseded, written
+        case supersededAt
     }
 
     init(from decoder: Decoder) throws {
@@ -79,6 +88,9 @@ struct SyncDeviceRecord: Codable, Equatable {
         appInstallation = (try? values.decodeIfPresent(String.self, forKey: .appInstallation)) ?? nil
         pendingUploads = (try? values.decodeIfPresent(Int.self, forKey: .pendingUploads)).flatMap { $0.map { max(0, $0) } }
         problem = (try? values.decodeIfPresent(SyncPresenceProblem.self, forKey: .problem)) ?? nil
+        superseded = (try? values.decodeIfPresent([SupersededAck].self, forKey: .superseded)) ?? nil
+        written = (try? values.decodeIfPresent(SupersededWatermark.self, forKey: .written)) ?? nil
+        supersededAt = (try? values.decodeIfPresent(Date.self, forKey: .supersededAt)) ?? nil
     }
 
     /// The same device, saying the same thing: everything but when it was written.
@@ -157,12 +169,16 @@ extension LibrarySyncEngine {
         var record = SyncDeviceRecord(deviceID: deviceID, deviceClass: device.deviceClass, displayName: device.displayName,
                                       canProcess: device.canProcess, audioPolicy: audioPolicy.rawValue, lastSeen: now, installation: installation,
                                       activity: stamped)
-        record.features = [Self.sealingFeature, Self.compactionFeature, Self.compressionFeature, Self.voiceClipFeature]
+        record.features = [Self.sealingFeature, Self.compactionFeature, Self.compressionFeature, Self.voiceClipFeature, Self.supersededFeature]
         record.compaction = state.compactionAck
         record.capabilities = device.capabilities
         record.appInstallation = appInstallation
         record.pendingUploads = presenceUploads
         record.problem = presenceProblem ?? (presenceStorageFull ? .storageFull : nil)
+        // Acknowledgements as of the last full pass; the watermark as it stands now.
+        record.superseded = supersededRuntime.acks
+        record.written = supersededRuntime.acks == nil ? nil : supersededWatermark()
+        record.supersededAt = supersededRuntime.acks == nil ? nil : supersededRuntime.acksAt
         // Whether the library is encrypted isn't known yet (the manifest isn't downloaded): say nothing private.
         let known = checkManifestForPresence()
         if let sealing { record.key = SyncDeviceKeyState(state: .ready, id: sealing.current.idHex) }
@@ -203,7 +219,17 @@ extension LibrarySyncEngine {
             written.sealed = SealedObject.seal(inner, kind: .presence, key: sealing.current).bytes.base64EncodedString()
             written.displayName = ""; written.activity = nil
         }
-        let bytes = try SyncPresenceFiles.encode(written)
+        var bytes = try SyncPresenceFiles.encode(written)
+        // Never larger than any device reads: what acknowledgements can't carry is held instead, and then said not at all.
+        if bytes.count > SyncPresenceFiles.maximumBytes, let acks = written.superseded {
+            written.superseded = acks.map { SupersededAck(device: $0.device, epoch: $0.epoch, through: $0.through, holds: [], holdsAll: true) }
+            written.written = SupersededWatermark(settings: written.written?.settings, events: [], complete: false)
+            bytes = try SyncPresenceFiles.encode(written)
+            if bytes.count > SyncPresenceFiles.maximumBytes {
+                written.superseded = nil; written.written = nil; written.supersededAt = nil
+                bytes = try SyncPresenceFiles.encode(written)
+            }
+        }
         try SyncFiles.coordinateWrite(url, below: remoteRoot) { try LocalFiles.atomicWrite(bytes, to: $0) }
         presenceWritten = (record, now)
     }
@@ -249,7 +275,7 @@ extension LibrarySyncEngine {
             var known = KnownSyncDevice(id: deviceID, deviceClass: device.deviceClass, displayName: device.displayName,
                                         canProcess: device.canProcess, audioPolicy: audioPolicy,
                                         lastSeen: presenceWritten.map { min($0.at, now) }, isCurrentDevice: true, activity: activity)
-            known.features = [Self.sealingFeature, Self.compactionFeature, Self.compressionFeature, Self.voiceClipFeature]
+            known.features = [Self.sealingFeature, Self.compactionFeature, Self.compressionFeature, Self.voiceClipFeature, Self.supersededFeature]
             known.capabilities = device.capabilities
             known.keyState = sealing.map { SyncDeviceKeyState(state: .ready, id: $0.current.idHex) }
                 ?? waitingForKey.map { SyncDeviceKeyState(state: .waiting, id: $0) }

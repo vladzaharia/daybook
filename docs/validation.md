@@ -1,5 +1,179 @@
 # Validation record
 
+## Superseded originals: a speaker named before its voice holds too (2026-11-22, seventh round)
+
+The sixth review's blocker and follow-ups, on `storage/icloud-cleanup`. A conversation with a speaker named before its
+voice was known (`Meeting.awaitsVoiceForNamedSpeaker`) holds its originals in iCloud, the sealer's rotations included,
+as compression holds it. Compared item by item with what keeps a recording from being compressed
+(`RecordingCompressionEligibility.decide`, `RecordingCompressionPlanner.facts`), the deletion also lacked fields this
+version can't read on the conversation or a recording; those now hold its originals too. The rest are matched (Never,
+settings applied, every device compressing, the clock, the Trash, busy through what speaker profiles leave alone and
+the pass's changes, voice profiles, every recording verified and uploaded) or are readiness for compressing (failed,
+not done, untranscribed, no summary or speakers, an open request, an Upgrade offered, too recent) that nothing serves
+from iCloud's original after the fact: processing reads the conversation's own file. Speaker profiles not settled
+right before deleting now ask for a reconciliation; a Mac with none to ask deletes nothing; the conversations changed
+since the last check are compared with what's saved, so a save that failed is tried again, and nothing comes due until
+one succeeds.
+
+**Verified.** `SupersededObjectsTests` (77): a failed save of what changed saved on the next pass and still known after
+a relaunch; nothing due while it isn't saved; a conversation with a field this version can't read keeping its
+original. `SupersededOriginalsLibraryTests` (6): a speaker named after compression, found without a voice, keeping the
+original past its day (alone, and beside another voiceprint's hold) and letting it go once given its voice and its clip
+is in iCloud; no coordinator deleting nothing; unsettled profiles asking for the reconciliation that lets the next pass
+delete. 8 mutations (`scratchpad/mut/icloud-r7.py`), each failing a test.
+
+**Found, not changed here.** `finishCompressions` lets a Mac's own original go without asking
+`awaitsVoiceForNamedSpeaker`; iCloud's copy now stays for it, but no clip can be cut (clips come only from a local
+original), so iCloud keeps it until the conversation stops holding it.
+
+## Superseded originals: a name given is a voiceprint first (2026-11-22, sixth round)
+
+The fifth review's blocker and follow-ups, on `storage/icloud-cleanup`. A conversation changed (or not brought up to
+date) in a pass that ends before the restart (a trim, a withdrawal, an early return) is remembered, in the runtime and
+with the waits, and restarts its original's wait on the next pass that judges, after a relaunch too. At the root, the
+deletion under the lock also waits for speaker profiles to settle: the Mac's `SpeakerProfileCoordinator` registers with
+the library and says whether a reconciliation is running or what it reads changed since the last one settled (a name
+given not yet a voiceprint); that pauses the deletion, and a conversation it leaves alone for now holds its originals. A
+reconciliation whose result a sync dropped no longer counts as settled. A paused pass still takes what certainly isn't
+free out of the listing.
+
+**Verified.** `SupersededObjectsTests` (74): another conversation's recording still downloading while the iPhone changes
+the compressed one, then a relaunch, the next pass restarting the wait; a presence it can't read, its own notice not
+downloaded, and the library saying stop, each followed by a restart; a paused pass taking what the iPhone holds out of
+the notice; a commit, then the notice, kept from iCloud for several passes only delaying the deletion.
+`SupersededOriginalsLibraryTests` (4): a coordinator not settled since it started, a name given since it settled, and a
+conversation it leaves alone each keeping the original; the next pass after it settles deleting it.
+`SpeakerProfileLibraryTests` (25) unchanged. 11 mutations (`scratchpad/mut/icloud-r6.py`): 9 fail a test (remembering,
+applying, persisting and clearing the set; the settled check, the skipped hold, the coordinator registering, its inputs
+check; the paused pass's filter). Two can't: "unsettled while one runs" is implied (a reconciliation proceeds only while
+what it reads differs from what it last settled), and a result a sync dropped mid-reconciliation needs a sync to begin
+during the detached work, which no test can time without guessing; both stay.
+
+## Superseded originals: waits survive commits and rewrites (2026-11-22, fifth round)
+
+The fourth review's three blockers, on `storage/icloud-cleanup` (docs/icloud-sync.md, "Superseded objects go from
+iCloud"). A pass with a compaction commit not yet uploaded judges nothing: every wait goes on, listed, and nothing comes
+due (it used to drop them all). An acknowledgement starts only with the notice in iCloud and ends only when it stops
+holding (a rewrite for another object used to reset every one), and nothing comes due in a pass whose notice isn't in
+iCloud. A changed conversation's original starts its wait again in a paused pass, or one that brings settings, too.
+
+**Verified.** `SimulatedICloud` can now leave what a pass writes not uploaded until the next (`holdUploads(since:)`), as
+real iCloud does; the tests before read every write as uploaded at once, which hid the first two. `SupersededObjectsTests`
+(70, `SupersededOriginalsLibraryTests` 3): two more originals replaced, compacted, and listed in a day, each commit and
+notice uploaded only by the next pass, with an original already waiting still going on time; nothing coming due while
+a commit, or the notice, isn't uploaded, the wait and its acknowledgement kept; a pass bringing settings and an edit
+together starting the wait again; the notice held from its first write, so no acknowledgement starts. Six mutations
+(`scratchpad/mut/icloud-r5.py`), the three fixes undone and each half of them, each fail a test.
+
+**Follow-ups, not done here** (fourth review): sleep under 12 hours counts as watched and needs no sighting after it;
+the watermark covers two days; a device that joins mid-wait isn't held a day; holding everything stalls silently; the
+watermark isn't crash-safe; the voice hold's Trash read runs on every eager Mac; the epoch rotates on every read while
+the notice is missing.
+
+## Superseded originals leave iCloud, announced, acknowledged, and caught up (2026-11-22, fourth round)
+
+After a Mac replaces a recording with a compressed copy, the original's object (`Blobs/<previousSHA256>`) goes from
+iCloud once nothing can need it (docs/icloud-sync.md, "Superseded objects go from iCloud"). On `storage/icloud-cleanup`,
+with `origin/main` merged in (#121's voice clips and #120 among it).
+
+**What the reviews changed.** The first version waited only for compaction's acknowledgement, which covers history that
+exists. The second added the notice (`Superseded/`), every device's acknowledgement and holds in its presence
+(`superseded-1`), possibly gone on every device, the repair and the log, and the deletion after the pass under the
+library's lock. The third closed what a device does after it acknowledged: an epoch, the device's watermark, a presence
+written again a day after acknowledging with what it wrote applied, `Metadata/` listed again before deleting, nothing
+after a pass the library didn't apply, a day watched, withdrawing and trimming, and stale notices ignored. The fourth
+(this round) closes voice profiles and liveness:
+- an acknowledgement is new only when a full pass worked it out (`supersededAt`): a presence the timer, or a pass of
+  settings alone, writes in between carries the same date and never passes for one; the watermark is worked out again at
+  every presence write; and at the deletion every device's latest acknowledgement must have been seen in the last six
+  hours;
+- the library says whether to judge at all (`SupersededJudgment`): stop under Never, or with settings this version
+  skipped as newer or holds in a shape it can't read (every original held, the sealer's too, nothing listed); pause while
+  its settings aren't current (waits go on, nothing comes due); asked again right before deleting;
+- an original of a conversation the pass changed, or couldn't bring up to date, starts its wait again; only new settings
+  keep a wait through a pass that judges nothing;
+- a gap of more than twelve hours between checks isn't counted and starts nothing again, but every device must be seen
+  acknowledging again after it; a restart or a clock jump still starts every wait again, and an acknowledgement seen
+  after the clock's now (a clock set back) doesn't count;
+- no notice of its own where one was written starts a new epoch, the log kept; the log keeps details 90 days; a notice
+  over 8 MB isn't written; a notice of its own that's damaged, unread an hour, or too large to write is a sync warning; a
+  library encrypted while something is listed withdraws it; the holds limit counts across every notice and a presence
+  over 64 KB holds everything instead; right before deleting, this must still be the Mac that compacts and may delete; a
+  conversation in the Trash that can't be read keeps every voice hold; and what a pass didn't apply (a conversation whose
+  own change couldn't be published) isn't counted as applied.
+
+**Verified.** Temporary sync folders standing in for iCloud (`SimulatedICloud`), no network, nothing near real iCloud;
+the tests' Macs check every six hours between the moments a test names, as a running Mac does, unless a test says
+otherwise (a gap, a night):
+- `SupersededObjectsTests` (67): every case of the third round, kept (an iPhone writing again two hours before the day
+  is up now, so the six-hour bound doesn't stand in for the day), and: a presence written between full passes not
+  passing for an acknowledgement; an acknowledgement seen more than six hours before keeping it; settings written in a
+  pass of settings alone waited for; a conversation changed in the pass starting its wait again, listed still; one the
+  pass couldn't bring up to date starting again, and another conversation's unapplied event keeping it; a gap not
+  watched, nothing starting again, and every device seen after the check the Mac woke to; a Mac closed thirteen hours
+  every night deleting on the third day; a wall clock set back not making an old acknowledgement new; the library saying
+  pause (waits go on) and stop (nothing listed); a Mac that stops compacting, or a Mac with a lower ID seen, before the
+  deletion deleting nothing; no notice of its own starting a new epoch with the log kept; the log trimmed after 90 days
+  and a notice over 8 MB not written, with a warning; a notice of its own unread an hour, or damaged, warned about; a
+  library encrypted while something's listed withdrawing it; holds limited across notices and a presence over 64 KB
+  holding everything.
+- `SupersededOriginalsLibraryTests` (3): the third round's case, now with a conversation in the Trash that can't be read
+  making the voice hold say nothing, and the pass after a stopped one pausing; Never, settings skipped as newer, a folder,
+  a voiceprint, and a profile this version can't read each keeping it with nothing listed and every original held (the
+  sealer's too), then listed again from the start once undone; settings not current keeping the wait, the next pass
+  deleting; Never chosen during the pass keeping what it found due.
+- run again: `RecordingCompressionLibraryTests` (42), `VoiceClipLibraryTests` (33), `LibrarySyncVoiceClipTests` (15),
+  `VoiceClipsTests` (21), LibrarySyncCompactionTests (16), LibrarySyncCompatibilityTests (8), LibrarySyncConvergenceTests
+  (1), LibrarySyncDeletionTests (4), LibrarySyncForksTests (2), LibrarySyncHistoryTests (3), LibrarySyncInboxTests (6),
+  LibrarySyncMigrationTests (7), LibrarySyncNewContainerTests (7), LibrarySyncPageTests (15), LibrarySyncPhotoTests (3),
+  LibrarySyncRelocationTests (2), LibrarySyncReplicaTests (36), LibrarySyncSealingTests (48), LibrarySyncStartOverTests
+  (5), LibrarySyncTests (26), LibrarySyncCourierTests (11), LibrarySyncEncryptionTests (12), LibrarySyncApplyTests (8),
+  LibrarySyncContainerTests (23), RecordingCompressionSyncTests (4), RecordingCompressionTests (15),
+  RecordingCompressionPlannerTests (9), SyncPresenceRecordTests (2), SyncWarningWordsTests (5), SyncDeviceIdentityTests
+  (6), SyncStatusTests (10), SyncReviewTests (3), AppStateSyncTests (1), LibraryTrashAndFilingTests (9), TrashDeletionTests
+  (10), MergeConversationsTests (21), RecordingRemovalTests (7), LibraryControllerTests (19), MeetingExportTests (5),
+  ConversationMergeTests (26), MeetingMergeTests (7), MeetingStoreTests (21).
+- 126 mutations (`scratchpad/mut/icloud-r4.py`, the third round's 85 brought up to date plus one per new guard), each
+  run against the tests that should catch it: 123 fail a test, among them every new guard (the full-pass acknowledgement,
+  `supersededAt` in presence, the watermark at every write, the six-hour bound, the gap not watched and not restarting,
+  every device seen after it, the clock set back, stop and pause and each stop condition, the judgment asked again
+  before deleting, the restart for a changed or unapplied conversation, what wasn't applied, the new epoch, the trimmed
+  log, the refused notice and its warnings, withdrawing when encrypted, the holds limit across notices and the presence
+  fallback, the compacting-Mac and may-delete checks before deleting, the Trash failing closed). Three can't fail one,
+  being implied by another check: the day by the wall clock (an acknowledgement seen a day after it, by the wall clock,
+  and not after now, implies it); the pass acknowledged before deleting (settings current then implies it: they're
+  cleared when a pass starts and set only once it's acknowledged); and voiceprints that can't be counted (only an
+  unreadable profile or voiceprint makes them so, and that's an unreadable value). Each is kept.
+
+Also `swift build` and the iPhone app's simulator build (`scripts/build-ios.sh`, with the watch app).
+
+**Not done as asked, and why.** Acknowledging only notices that list something (L-6) made holds come and go: a device
+stops holding an object once the notice withdraws it, so the Mac lists it again (`testBehaviorAHoldDoesntComeAndGo`).
+Every live notice is still acknowledged; the 300-hold limit counts across them, and a presence over 64 KB holds
+everything instead. Decoding notices once per stamp (L-3) has no test of its own: it changes no outcome. An upload of a
+possibly gone object is still skipped when the object is in the sync folder (judged sound in review).
+
+**Known limits.** No lock across devices: what a device wrote after its latest acknowledgement the Mac saw (at most the
+six hours before the deletion, plus however long iCloud took to bring it) isn't known first; for recordings that never
+matters (the holder holds and uploads again), for a voiceprint learned then it can cost the lossless source. Every device
+must sync within six hours before a check of the compacting Mac, after it woke, so an iPhone used only while the Mac is
+closed delays deletion; an iPhone that isn't opened keeps listed objects until it's been away 30 days. A Mac restarted,
+or shut down, every day never runs a whole day and deletes nothing. A device away more than 30 days that imported the
+same bytes and let its file go back to iCloud before syncing, and a Daybook without presence (which predates compaction
+and stops at a compacted library), are held back by nothing here, as for history. A reinstalled app (a new app
+installation) makes its device acknowledge nothing for 30 days. A crash between the log and the delete leaves a log
+entry for an object still there (harmless unless it's needed again). What's remembered here, restored onto a Mac whose
+iCloud is still listing, starts a new epoch with the log as of the backup. A device away more than 30 days that imported the same bytes and let its file go back to iCloud before
+syncing, and a Daybook without presence (which predates compaction and stops at a compacted library), are held back by
+nothing here, as for history. A reinstalled app (a new app installation) makes its device acknowledge nothing for 30
+days.
+
+**Needs a real device.** iCloud itself: that a deleted `Blobs/` object frees the account's space and goes from other
+devices' containers; that `ubiquitousItemIsUploaded` is true for the copy and the notice before the deletion; how long a
+journal or presence write takes to reach the compacting Mac (the day after every acknowledgement is chosen to cover it);
+whether a dataless object's stamp stays the same as iCloud evicts and downloads it (a change only starts the wait again);
+and that deleting a legacy `.icloud` placeholder deletes the item (macOS 15 is expected to use dataless files).
+
 ## Voice clips: carried with their recordings, never waited for, checked here (2026-11-21, second review)
 
 On `storage/voice-clips`, after a second review of the clips' deletion and sync (docs/architecture.md, "Voice clips";

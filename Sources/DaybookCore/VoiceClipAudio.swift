@@ -54,11 +54,13 @@ public enum VoiceClipAudio {
     }
 
     /// The same, for frames of the original given exactly (a clip's `ranges`, to check another device's cut against this
-    /// one's original): each must lie within the file, or there's `nothingToCut`. The same frames of the same original
-    /// give the same bytes.
+    /// one's original): each must lie within the file, and together they can't hold more frames than the file has (a
+    /// record from elsewhere asks for nothing a cut of it couldn't hold), or there's `nothingToCut`. The same frames of
+    /// the same original give the same bytes.
     public static func extract(from original: URL, ranges wanted: [VoiceClipRange], into folder: URL) async throws -> Extracted {
         try await extract(from: original, into: folder) { _, length in
-            guard wanted.allSatisfy({ $0.startFrame >= 0 && $0.endFrame > $0.startFrame && $0.endFrame <= length }) else { throw Failure.nothingToCut }
+            guard wanted.allSatisfy({ $0.startFrame >= 0 && $0.endFrame > $0.startFrame && $0.endFrame <= length }),
+                  wanted.reduce(Int64(0), { $0 + $1.frames }) <= length else { throw Failure.nothingToCut }
             return wanted
         }
     }

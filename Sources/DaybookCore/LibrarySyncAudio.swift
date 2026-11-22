@@ -7,6 +7,9 @@ import Foundation
 struct AudioCacheIndex: Codable {
     var schemaVersion = 1
     var entries: [String: AudioCacheEntry] = [:]
+    /// SHA-256s the last pass found possibly gone from iCloud (LibrarySyncSuperseded.swift): a file of one is never let
+    /// go on the strength of its object. Additive.
+    var possiblyGone: [String]?
 }
 
 struct AudioCacheEntry: Codable, Equatable {
@@ -263,7 +266,7 @@ extension LibrarySyncEngine {
     private func dropContainerCopy(of entry: AudioCacheEntry) {
         guard entry.origin == .recordedHere, accountIsCurrent() else { return }
         let object = remoteObject(entry.sha256)
-        guard SyncFiles.itemState(object.url) == .local, cloud.isUploaded(object.url) else { return }
+        guard SyncFiles.itemState(object.url) == .local, uploadedStrictly(object.url) else { return }
         cloud.evictLocalCopy(object.url)
         containerCopies.removeValue(forKey: String(object.url.standardizedFileURL.path.dropFirst(remoteRoot.path.count + 1)))
     }
@@ -284,6 +287,9 @@ extension LibrarySyncEngine {
               (try? assetStamp(url, digest: entry.sha256)) == entry.stamp else { return nil }
         if entry.origin == .recordedHere && !policy.evictsUploadedOriginals { return nil }
         if entry.origin == .recordedHere, !originalsMayGo { return nil }
+        // An object that may go from iCloud (a superseded original, or one a compacting Mac's notice lists or logs) is no
+        // reason to let a file of it go: it may be the last copy (LibrarySyncSuperseded.swift).
+        if supersededRuntime.possiblyGone.contains(entry.sha256) || (audioIndex().possiblyGone ?? []).contains(entry.sha256) { return nil }
         let object = remoteObject(entry.sha256)
         let blob = object.url
         switch SyncFiles.itemState(blob) {
@@ -295,7 +301,7 @@ extension LibrarySyncEngine {
         case .local:
             guard (try? verifiedRemote(object, digest: entry.sha256)) == true else { return nil }
         }
-        if entry.origin == .recordedHere, !cloud.isUploaded(blob) { return nil }
+        if entry.origin == .recordedHere, !uploadedStrictly(blob) { return nil }
         return url
     }
 
@@ -322,7 +328,7 @@ extension LibrarySyncEngine {
         case .inCloud: break
         case .local: guard (try? verifiedRemote(object, digest: track.sha256)) == true else { return nil }
         }
-        return cloud.isUploaded(object.url) ? url : nil
+        return uploadedStrictly(object.url) ? url : nil
     }
 
     private func verifiedRemote(_ object: RemoteObject, digest: String) throws -> Bool {

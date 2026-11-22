@@ -15,10 +15,7 @@ extension LibrarySyncEngine {
     /// folder that isn't iCloud's), a file that's there is.
     public func isObjectUploaded(_ sha256: String) -> Bool {
         guard SyncFiles.isHash(sha256) else { return false }
-        let object = remoteObject(sha256)
-        guard SyncFiles.itemState(object.url) != .absent else { return false }
-        if cloud.isICloudFolder(remoteRoot) { return cloud.uploadState(object.url) == true }
-        return cloud.isUploaded(object.url)
+        return uploadedStrictly(remoteObject(sha256).url)
     }
 
     /// Conversations whose superseded originals (`TrackEncoding.previousSHA256`) must stay in iCloud for voice profiles
@@ -26,9 +23,10 @@ extension LibrarySyncEngine {
     /// iCloud). The sealer counts each one's as live, so rotating keys seals it again rather than retiring it, by the same
     /// rule anything else that lets a superseded original go from iCloud follows. Nil (not said yet, or a device that
     /// can't say): every one counts, as does any conversation the library didn't judge (`judged`: one that arrives in the
-    /// pass).
-    public func holdOriginalsInICloud(for meetings: Set<UUID>?, judged: Set<UUID> = []) {
+    /// pass). `judgment`: whether the compacting Mac may judge superseded originals at all (`SupersededJudgment`).
+    public func holdOriginalsInICloud(for meetings: Set<UUID>?, judged: Set<UUID> = [], judgment: SupersededJudgment = .judge) {
         originalsHeldForVoice = meetings.map { (held: $0, judged: judged) }
+        supersededRuntime.judgment = judgment
     }
 
     /// The library is encrypted here: its sealer decides which objects stay (`holdOriginalsInICloud`).
@@ -36,10 +34,11 @@ extension LibrarySyncEngine {
 
     /// The sealer's live objects: `live`, with each held conversation's superseded originals (`holdOriginalsInICloud`),
     /// and those originals' digests (`optional`: one already gone everywhere never keeps the sealer from finishing).
-    func withOriginalsHeldForVoice(_ live: [UUID: [SyncAsset]], meetings: [UUID: Meeting]) -> (assets: [UUID: [SyncAsset]], optional: Set<String>) {
+    func withOriginalsHeldForVoice(_ live: [UUID: [SyncAsset]], meetings: [UUID: Meeting],
+                                   unjudged: Set<UUID> = []) -> (assets: [UUID: [SyncAsset]], optional: Set<String>) {
         var assets = live, optional = Set<String>()
         for (id, current) in live {
-            let held = originalsHeldForVoice.map { $0.held.contains(id) || !$0.judged.contains(id) } ?? true
+            let held = unjudged.contains(id) || (originalsHeldForVoice.map { $0.held.contains(id) || !$0.judged.contains(id) } ?? true)
             guard held, let meeting = meetings[id] else { continue }
             let superseded = meeting.tracks.compactMap { track -> SyncAsset? in
                 guard let encoding = track.encoding, SyncFiles.isHash(encoding.previousSHA256), encoding.previousRelativePath.hasPrefix("Originals/"),
@@ -52,6 +51,10 @@ extension LibrarySyncEngine {
         }
         return (assets, optional)
     }
+
+    /// Whether the sync folder has the object with this SHA-256, downloaded or not (sealed under a key held here, or
+    /// plaintext). False for a name that isn't a SHA-256.
+    public func holdsObject(_ sha256: String) -> Bool { SyncFiles.isHash(sha256) && hasRemoteObject(sha256) }
 
     /// Whether this device's clock looks more than a week ahead of the others' (compaction's `clockLooksAhead`): a Mac
     /// whose clock is ahead would take a recent conversation for an old one.

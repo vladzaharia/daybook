@@ -16,6 +16,8 @@ final class SimulatedICloud: @unchecked Sendable {
     private var quotaFullUnder: String?
     /// Everything under this folder reads as not uploaded yet.
     private var uploadsHeldUnder: String?
+    /// Everything written at or after this moment reads as not uploaded yet.
+    private var uploadsHeldSince: Date?
     private var holding = false
     /// `evictLocalCopy` really evicts (as iCloud does for an uploaded item). Off, it only records the request, which is all
     /// most tests need: they read objects without asking for a download first.
@@ -48,6 +50,8 @@ final class SimulatedICloud: @unchecked Sendable {
     func setUploaded(_ url: URL, _ uploaded: Bool) { lock.withLock { if uploaded { notUploaded.remove(url.path) } else { notUploaded.insert(url.path) } } }
     /// Files under `folder` (nil: none) read as not uploaded yet, however they got there.
     func holdUploads(under folder: URL?) { lock.withLock { uploadsHeldUnder = folder.map { $0.standardizedFileURL.path + "/" } } }
+    /// Files written from `moment` on (nil: none) read as not uploaded yet, as iCloud's are for a while after a write.
+    func holdUploads(since moment: Date?) { lock.withLock { uploadsHeldSince = moment } }
     /// iCloud storage is full: files under `folder` (nil: none) are refused, and read as not uploaded.
     func refuseUploadsForQuota(under folder: URL?) { lock.withLock { quotaFullUnder = folder.map { $0.standardizedFileURL.path + "/" } } }
     var downloadRequests: [String] { lock.withLock { requests } }
@@ -66,7 +70,9 @@ final class SimulatedICloud: @unchecked Sendable {
             downloadFraction: { [self] _ in lock.withLock { fraction } },
             isUploaded: { [self] url in
                 let present = FileManager.default.fileExists(atPath: url.path) || FileManager.default.fileExists(atPath: Self.placeholder(url).path)
+                let written = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
                 return present && lock.withLock {
+                    if let since = uploadsHeldSince, let written, written >= since { return false }
                     let path = url.standardizedFileURL.path
                     return !notUploaded.contains(url.path) && !(uploadsHeldUnder.map { path.hasPrefix($0) } ?? false)
                         && !(quotaFullUnder.map { path.hasPrefix($0) } ?? false)

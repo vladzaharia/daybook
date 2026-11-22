@@ -306,7 +306,10 @@ public enum VoiceClips {
         if let trackID = print.trackID ?? meeting?.speakers.first(where: { $0.id == print.speakerID })?.sourceTrackID {
             return VoiceClipSource(meetingID: print.meetingID, trackID: trackID, speakerID: print.speakerID)
         }
-        return carried.first { $0.isNamed(by: print) }
+        // Only one carried source can be it: a voiceprint naming no recording, of a conversation with two recordings'
+        // clips carried from that speaker, can't be told apart, and holds its recordings back.
+        let matches = Set(carried.filter { $0.isNamed(by: print) })
+        return matches.count == 1 ? matches.first : nil
     }
 
     /// The sources clips were carried from, in every conversation here, in one order on every device.

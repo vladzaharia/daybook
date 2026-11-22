@@ -247,8 +247,8 @@ final class LibrarySyncVoiceClipTests: XCTestCase {
     /// An encrypted library whose conversation's recording a Mac compressed and whose original it let go: the original's
     /// object is sealed under the first key, and a rotation follows, past the grace. Returns the superseded original's
     /// digest and the new key.
-    private func rotateAfterCompressing(holding held: (UUID) -> Set<UUID>?,
-                                        judging judged: (UUID) -> Set<UUID> = { [$0] }) async throws -> (original: String, key: LibraryKey) {
+    private func rotateAfterCompressing(holding held: (UUID) -> Set<UUID>?, judging judged: (UUID) -> Set<UUID> = { [$0] },
+                                        beforeRetiring: (Meeting) async throws -> Void = { _ in }) async throws -> (original: String, key: LibraryKey) {
         let mac = try mac("Mac")
         try await pass(mac, "Mac")
         try await mac.enableSealing(recovery: RecoveryKey.generate())
@@ -273,6 +273,7 @@ final class LibrarySyncVoiceClipTests: XCTestCase {
         let second = try await mac.rotateKey(now: start)
         try await pass(mac, "Mac", [meeting])
         await mac.setSealerClock { start.addingTimeInterval(LibrarySyncEngine.retirementGrace + 60) }
+        try await beforeRetiring(meeting)
         try await pass(mac, "Mac", [meeting])
         let progressValue = await mac.sealerProgress
         let progress = try XCTUnwrap(progressValue)
@@ -296,6 +297,29 @@ final class LibrarySyncVoiceClipTests: XCTestCase {
     /// A conversation the library hadn't judged (one that arrives in the pass) counts as needed too.
     func testBehaviorASupersededOriginalOfAConversationTheLibraryDidntJudgeIsKept() async throws {
         let (original, key) = try await rotateAfterCompressing(holding: { _ in [] }, judging: { _ in [] })
+        XCTAssertTrue(files("Sealed/Blobs").contains(try XCTUnwrap(key.objectName(.blob, plaintextSHA256: original))))
+    }
+
+    /// The library's word was given before the pass: a conversation another device changed in it (a voiceprint or clip
+    /// may have come with the change), or any while new library settings (voiceprints among them) arrived in it, wasn't
+    /// judged, and its superseded original is kept.
+    func testBehaviorASupersededOriginalOfAConversationThatChangedInThePassIsKept() async throws {
+        let (original, key) = try await rotateAfterCompressing(holding: { _ in [] }, beforeRetiring: { meeting in
+            let phone = try self.phone("Phone")
+            let first = try await self.pass(phone, "Phone")
+            var edited = try XCTUnwrap(first.meetings.first { $0.id == meeting.id })
+            edited.notes = "Edited on the iPhone"
+            try await self.pass(phone, "Phone", [edited])
+        })
+        XCTAssertTrue(files("Sealed/Blobs").contains(try XCTUnwrap(key.objectName(.blob, plaintextSHA256: original))))
+    }
+
+    func testBehaviorASupersededOriginalIsKeptWhileNewSettingsArriveInThePass() async throws {
+        let (original, key) = try await rotateAfterCompressing(holding: { _ in [] }, beforeRetiring: { _ in
+            let phone = try self.phone("Phone")
+            let result = try await phone.synchronize(meetings: [], libraryMetadata: try SyncEncoding.data(LibraryMetadata()))
+            try await phone.acknowledge(result.checkpointID)
+        })
         XCTAssertTrue(files("Sealed/Blobs").contains(try XCTUnwrap(key.objectName(.blob, plaintextSHA256: original))))
     }
 

@@ -621,6 +621,13 @@ extension LibrarySyncEngine {
     /// object itself must be in the sync folder; one the journal names that isn't there (yet) waits, as does any for two
     /// weeks after the library started over, while devices publish their libraries again.
     func mayPublishByReference(_ sha256: String, journalAssets: Set<String>) throws -> Bool {
+        // A superseded original, or one a compacting Mac's notice lists or logs as deleted (LibrarySyncSuperseded.swift),
+        // may be gone: only the object itself will do, and not while a notice lists it (it may go any time). That waits
+        // until the notice no longer does, which it won't once this device's presence holds it.
+        if sealing == nil, supersededRuntime.possiblyGone.contains(sha256) {
+            if supersededDeletionListed(sha256) { throw SyncPendingDownload() }
+            return hasRemoteObject(sha256)
+        }
         guard let sealing else { return journalAssets.contains(sha256) || hasRemoteObject(sha256) }
         if hasRemoteObject(sha256) { return true }
         if journalAssets.contains(sha256) { throw SyncPendingDownload() }
@@ -785,7 +792,7 @@ extension LibrarySyncEngine {
         // keeps everything local).
         for (path, sha256) in deliveredCopies {
             let url = remoteRoot.appendingPathComponent(path)
-            guard SyncFiles.itemState(url) == .local, held.contains(sha256), cloud.isUploaded(url) else { continue }
+            guard SyncFiles.itemState(url) == .local, held.contains(sha256), uploadedStrictly(url) else { continue }
             cloud.evictLocalCopy(url)
             deliveredCopies[path] = nil
         }
@@ -795,7 +802,7 @@ extension LibrarySyncEngine {
             case .absent, .inCloud:
                 containerCopies[path] = nil
             case .local:
-                guard held.contains(sha256), cloud.isUploaded(url) else { continue }
+                guard held.contains(sha256), uploadedStrictly(url) else { continue }
                 // A sealed object only once it has been read back as what it should be: one still being written (an
                 // encryption just started) or changed since isn't the copy the cloud's is judged against.
                 if path.hasPrefix("Sealed/"), verifiedAssets[url.path] == nil || (try? assetStamp(url, digest: sha256)) != verifiedAssets[url.path] { continue }

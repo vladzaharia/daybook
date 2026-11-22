@@ -773,7 +773,7 @@ extension LibrarySyncEngine {
             guard whole else { return .missing }
             sealingRuntime.verified.insert(path)
         }
-        return cloud.isUploaded(url) ? .confirmed : .uploading
+        return uploadedStrictly(url) ? .confirmed : .uploading
     }
 
     /// Plaintext objects in `Blobs/` from before, by name (downloaded or not).
