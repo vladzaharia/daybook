@@ -26,6 +26,14 @@ final class WatchModel {
     private(set) var pausedLength: TimeInterval?
     /// A start is waiting for the microphone.
     private(set) var isStarting = false
+    /// The last Stop (`WatchAfterStop`): its summary shows for a few seconds, and Keep Recording is offered for five
+    /// minutes when the iPhone says the conversation can take it. Kept in the preferences, so it outlives the app.
+    private(set) var afterStop: WatchAfterStop?
+    private(set) var showsSummary = false
+    private(set) var offersKeep = false
+    private(set) var afterStopDelivered = false
+    /// Bookmarks kept in the recording now: they reach the iPhone with its audio, whenever that goes.
+    private(set) var bookmarkCount = 0
 
     @ObservationIgnored private let store = WatchStore.standard
     @ObservationIgnored private let recorder: WatchRecorder
@@ -42,10 +50,14 @@ final class WatchModel {
         didSet { isStarting = starting }
     }
     @ObservationIgnored private var waiting: [(WatchMessage, PhoneLink.Reply?)] = []
+    @ObservationIgnored private var afterStopEnding: Task<Void, Never>?
     /// A change to report once the link is up (recordings closed at launch).
     @ObservationIgnored private var changeAtActivation: WatchChange?
 
+    @ObservationIgnored private var keepAllowed = false
+    @ObservationIgnored private var keepAsking = false
     private static let followingKey = "following"
+    private static let afterStopKey = "afterStop"
     private static let watchIDKey = "watchID"
 
     init() {
@@ -72,6 +84,8 @@ final class WatchModel {
         WKInterfaceDevice.current().isBatteryMonitoringEnabled = true
         let (journals, recovered) = store.recoverAll()
         held = journals.filter(\.recording.isFinished)
+        afterStop = defaults.data(forKey: Self.afterStopKey).flatMap { try? JSONDecoder().decode(WatchAfterStop.self, from: $0) }
+        scheduleAfterStop()
         if !recovered.isEmpty { changeAtActivation = .recovered }
         refresh()
         link.activate()
@@ -90,6 +104,7 @@ final class WatchModel {
         }
         if recorder.isRecording, !recorder.isCapturing { resume() }
         followPhone()
+        askKeepAllowed()
     }
 
     /// The record button.
@@ -99,6 +114,38 @@ final class WatchModel {
         } else {
             beginStart(conversationID: nil, startedAt: nil, change: .startedOnWatch)
         }
+    }
+
+    /// Keep Recording: records on into the conversation the last Stop ended, as a later part of it, once the iPhone says
+    /// again that it can take one. The time between is a gap on the conversation's timeline (the part's own start places it).
+    func keepRecording() {
+        guard offersKeep, let conversation = afterStop?.conversationID, !starting, !keepAsking, !recorder.isRecording else { return }
+        keepAsking = true
+        Task {
+            let allowed = await link.askKeep(conversation)
+            keepAsking = false
+            guard allowed else {
+                keepAllowed = false
+                refreshAfterStop()
+                return
+            }
+            beginStart(conversationID: conversation, startedAt: nil, change: .startedOnWatch, continuation: true)
+        }
+    }
+
+    /// Marks this moment in the recording and the iPhone's conversation (the iPhone's own Bookmark).
+    func addBookmark() {
+        guard recorder.isCapturing, let mark = recorder.bookmark(at: Date()) else { return }
+        // Kept in the recording, which takes it to the iPhone with the audio. The message only shows it at once on an
+        // iPhone recording the same conversation.
+        link.send(.bookmark(mark))
+        bookmarkCount = recorder.journal?.recording.bookmarks?.count ?? 0
+        WKInterfaceDevice.current().play(.click)
+    }
+
+    /// The words under the moment after Stop: where the recording is going.
+    var afterStopLine: String {
+        WatchWords.afterStopLine(isDelivered: afterStopDelivered, isReachable: isReachable)
     }
 
     /// The words under the button, only when they matter.
@@ -149,16 +196,18 @@ final class WatchModel {
     }
 
     /// Starts a recording, unless one is recording or starting already; `reply` answers the iPhone's `.start` once it has.
-    private func beginStart(conversationID: UUID?, startedAt: Date?, change: WatchChange, reply: PhoneLink.Reply? = nil) {
+    private func beginStart(conversationID: UUID?, startedAt: Date?, change: WatchChange, continuation: Bool = false,
+                            reply: PhoneLink.Reply? = nil) {
         guard !recorder.isRecording, !starting else {
             reply?.callAsFunction(.state(state(nil)))
             return
         }
         starting = true
-        Task { await startRecording(conversationID: conversationID, startedAt: startedAt, change: change, reply: reply) }
+        Task { await startRecording(conversationID: conversationID, startedAt: startedAt, change: change, continuation: continuation, reply: reply) }
     }
 
-    private func startRecording(conversationID: UUID?, startedAt: Date?, change: WatchChange, reply: PhoneLink.Reply?) async {
+    private func startRecording(conversationID: UUID?, startedAt: Date?, change: WatchChange, continuation: Bool,
+                                reply: PhoneLink.Reply?) async {
         do {
             guard await WatchRecorder.microphoneAllowed() else { throw WatchRecorderError.microphoneDenied }
             var journal = WatchRecordingJournal(recording: WatchRecordingInfo(id: UUID().uuidString, conversationID: conversationID,
@@ -166,8 +215,16 @@ final class WatchModel {
             journal.conversationStartedAt = conversationID == nil ? nil : startedAt
             // The iPhone's Record with nothing recording there: the watch's own, which no context of the iPhone's stops.
             journal.isOwn = conversationID == nil && change == .startedByPhone
+            // Kept on after a Stop: the conversation's own, which no context of the iPhone's stops, and which the iPhone
+            // imports as a later part and starts nothing for.
+            if continuation, conversationID != nil {
+                journal.isOwn = true
+                journal.recording.isContinuation = true
+            }
             try recorder.start(journal)
             problem = nil
+            endAfterStop()
+            bookmarkCount = 0
             askForNotices()
             WKInterfaceDevice.current().play(.start)
             recorder.setMetering(phase == .active)
@@ -203,6 +260,7 @@ final class WatchModel {
         // The last segment, and any that closed without going out.
         link.send(journal.unsent)
         removeNotice(id: Self.pausedNoticeID)
+        beginAfterStop(journal.recording, change: change)
         if change == .endedOnItsOwn {
             WKInterfaceDevice.current().play(.failure)
             postNotice(id: Self.stoppedNoticeID, title: WatchWords.stoppedTitle, body: WatchWords.stoppedBody(problem ?? ""))
@@ -210,6 +268,74 @@ final class WatchModel {
             WKInterfaceDevice.current().play(.stop)
         }
         push(change)
+    }
+
+    private func beginAfterStop(_ recording: WatchRecordingInfo, change: WatchChange) {
+        endAfterStop()
+        guard let moment = WatchAfterStop(recordingID: recording.id, conversationID: recording.conversationID,
+                                          duration: recording.duration, stoppedAt: Date(), change: change) else { return }
+        afterStop = moment
+        saveAfterStop()
+        scheduleAfterStop()
+        askKeepAllowed()
+    }
+
+    /// Another recording started, or Keep Recording's five minutes passed.
+    private func endAfterStop() {
+        afterStopEnding?.cancel()
+        afterStopEnding = nil
+        afterStop = nil
+        keepAllowed = false
+        saveAfterStop()
+        refreshAfterStop()
+    }
+
+    private func saveAfterStop() {
+        if let afterStop, let data = try? JSONEncoder().encode(afterStop) {
+            defaults.set(data, forKey: Self.afterStopKey)
+        } else {
+            defaults.removeObject(forKey: Self.afterStopKey)
+        }
+    }
+
+    /// What the screen shows of the last Stop at this moment: the summary, then Keep Recording, then nothing.
+    private func refreshAfterStop(at now: Date = Date()) {
+        if let moment = afterStop, !moment.isKeepOpen(at: now), !moment.isShowing(at: now) {
+            afterStop = nil
+            saveAfterStop()
+        }
+        let idle = recorder.journal == nil && !starting
+        showsSummary = idle && afterStop?.isShowing(at: now) == true
+        offersKeep = idle && keepAllowed && afterStop?.isKeepOpen(at: now) == true
+    }
+
+    /// Updates the screen when the summary ends and when Keep Recording does, however long the app was away from either.
+    private func scheduleAfterStop() {
+        afterStopEnding?.cancel()
+        afterStopEnding = nil
+        refreshAfterStop()
+        guard let moment = afterStop else { return }
+        afterStopEnding = Task { [weak self] in
+            let summaryLeft = moment.stoppedAt.addingTimeInterval(WatchAfterStop.holds).timeIntervalSinceNow
+            if summaryLeft > 0 { try? await Task.sleep(for: .seconds(summaryLeft)) }
+            guard !Task.isCancelled else { return }
+            self?.refreshAfterStop()
+            let keepLeft = moment.keepEnds.timeIntervalSinceNow
+            if keepLeft > 0 { try? await Task.sleep(for: .seconds(keepLeft)) }
+            guard !Task.isCancelled else { return }
+            self?.refreshAfterStop()
+        }
+    }
+
+    /// Asks the iPhone whether the last Stop's conversation can take Keep Recording; unanswered, it isn't offered.
+    private func askKeepAllowed() {
+        guard let moment = afterStop, let conversation = moment.conversationID, moment.isKeepOpen(at: Date()) else { return }
+        Task {
+            let allowed = await link.askKeep(conversation)
+            guard afterStop?.recordingID == moment.recordingID else { return }
+            keepAllowed = allowed
+            refreshAfterStop()
+        }
     }
 
     private func resume() {
@@ -270,6 +396,7 @@ final class WatchModel {
     private func reachabilityChanged(_ reachable: Bool) {
         isReachable = reachable
         guard reachable else { return }
+        askKeepAllowed()
         sendUnsent()
         if phase == .active { followPhone() }
     }
@@ -316,7 +443,7 @@ final class WatchModel {
             reply?.callAsFunction(.clock(WatchClockSample(phoneSent: phoneTime, watchTime: Date())))
         case .received(let receipt):
             received(receipt)
-        case .context, .state:
+        case .context, .state, .bookmark, .keep:
             // The watch's own messages to the iPhone.
             break
         }
@@ -399,10 +526,13 @@ final class WatchModel {
 
     private func refresh() {
         recording = recorder.journal?.recording
+        bookmarkCount = recording?.bookmarks?.count ?? 0
         isCapturing = recorder.isCapturing
         pausedLength = recording != nil && !isCapturing ? recorder.recorded : nil
         isSending = held.contains { !$0.undelivered.isEmpty }
+        afterStopDelivered = afterStop.map { moment in held.first { $0.recording.id == moment.recordingID }?.undelivered.isEmpty ?? true } ?? false
         isReachable = link.isReachable
+        refreshAfterStop()
     }
 
     /// The watch app's installation ID: its tracks' serial on the iPhone.

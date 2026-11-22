@@ -290,9 +290,10 @@ final class PhoneLibrary {
 
     /// A recorder's transferred recording (the device hub's importer): into `attachTo` when that
     /// conversation is here, into the conversation already holding the same bytes, or a new one
-    /// named for the recorder and dated at the recording's start.
+    /// named for the recorder and dated at the recording's start. `bookmarks` (Apple Watch's), timed
+    /// on the recording itself, are filed on its track, so they follow it wherever it's placed.
     func importDeviceRecording(_ url: URL, identity: DeviceRecordingIdentity, attachTo: UUID?, source: AudioSource,
-                               requestTranscription: Bool) async throws -> Filed {
+                               requestTranscription: Bool, bookmarks: [Highlight] = []) async throws -> Filed {
         try await reload()
         let duration = try await Self.duration(of: url)
         // A cancelled transfer (Stop on the device page) stops waiting for the lock and imports nothing;
@@ -310,6 +311,17 @@ final class PhoneLibrary {
         if identity.kind == AppleWatchIntegration.id { provenance.startedAt = DeviceRecordingStart.date(of: identity) }
         let ingested = try await controller.ingest(url, into: id, provenance: provenance)
         await noteBroughtIn(ingested.track)
+        if let track = ingested.track?.id ?? controller.meeting(id)?.tracks.first(where: { $0.device == identity })?.id, !bookmarks.isEmpty {
+            // One filed already (shown at once in this iPhone's recording of the conversation) stays as it is, and one the
+            // person deleted there stays deleted.
+            controller.update(id) { meeting in
+                let deleted = Set(meeting.revisions.compactMap { revision -> UUID? in
+                    guard case .bookmark(let mark) = revision.kind, revision.newValue == MeetingRevision.bookmarkRemoved else { return nil }
+                    return mark
+                })
+                meeting.addRecordingWork(trackID: track, notes: [], bookmarks: bookmarks.filter { !deleted.contains($0.id) }, joining: true)
+            }
+        }
         let request = requestTranscription ? controller.requestProcessing(id, mode: .newAudio) : nil
         claimIfProcessedHere(request, in: id)
         try await controller.flushDurably([id])

@@ -80,6 +80,32 @@ final class PhoneLink: NSObject {
         }
     }
 
+    /// Tells the iPhone something that needs no answer: now when it's reachable, and queued for when Daybook next runs there.
+    func send(_ message: WatchMessage) {
+        guard let session, isActivated, let dictionary = try? WatchPayload.dictionary(message) else { return }
+        if session.isReachable {
+            session.sendMessage(dictionary, replyHandler: nil) { [weak session] _ in _ = session?.transferUserInfo(dictionary) }
+        } else {
+            _ = session.transferUserInfo(dictionary)
+        }
+    }
+
+    /// Asks the iPhone whether the watch may record on into a conversation (Keep Recording). False when it can't be
+    /// asked: unreachable, or no answer.
+    func askKeep(_ conversation: UUID) async -> Bool {
+        guard let session, isActivated, session.isReachable,
+              let message = try? WatchPayload.dictionary(WatchMessage.keep(conversation)) else { return false }
+        return await withCheckedContinuation { continuation in
+            session.sendMessage(message, replyHandler: { dictionary in
+                if case .canKeep(let allowed)? = WatchPayload.decode(WatchReply.self, from: dictionary) {
+                    continuation.resume(returning: allowed)
+                } else {
+                    continuation.resume(returning: false)
+                }
+            }, errorHandler: { _ in continuation.resume(returning: false) })
+        }
+    }
+
     /// Asks the iPhone what it's recording; the answer comes to `onContext`. Unreachable, or with no answer, the
     /// application context it last sent stands in (not as an answer).
     func askContext() {
