@@ -452,7 +452,9 @@ final class SupersededObjectsTests: XCTestCase {
         // The iPhone's Trash holds it too, which it says in its presence; its own Trash goes, so only the Mac's keeps it.
         try? FileManager.default.removeItem(at: local("Phone").appendingPathComponent("Trash"))
         let now = Date()
-        try await noticed(mac, phone, at: now)
+        for offset in [0.0, 60, 120] { try await noticed(mac, phone, at: now.addingTimeInterval(offset)) }
+        let state = await mac.supersededState()
+        XCTAssertTrue(state.objects.isEmpty, "never listed while the Trash here names it")
         try await pass(mac, "Mac", at: now.addingTimeInterval(2 * day))
         XCTAssertTrue(exists(blob(compressed.original.sha256)))
     }
@@ -878,6 +880,30 @@ final class SupersededObjectsTests: XCTestCase {
         XCTAssertNil(state.deleted[compressed.original.sha256])
         try await pass(mac, "Mac", at: now.addingTimeInterval(day + 120))
         XCTAssertFalse(exists(object))
+    }
+
+    /// In iCloud Drive an iPhone lets an original it recorded go back to iCloud only on iCloud's own yes for its object.
+    func testBehaviorAnIPhoneLetsItsOwnRecordingGoOnlyOnICloudsOwnYes() async throws {
+        let answers = UploadAnswers()
+        let files = cloud.files
+        let strict = SyncCloudFiles(requestDownload: files.requestDownload, isUploaded: files.isUploaded,
+                                    uploadState: { url in answers.unanswered.contains(url.lastPathComponent) ? nil : files.isUploaded(url) },
+                                    isICloudFolder: { _ in true })
+        let phone = try LibrarySyncEngine(localRoot: local("Phone"), remoteRoot: remote, deviceID: "Phone", replica: SyncReplicaConfiguration(
+            audioPolicy: .onDemand, device: SyncDeviceIdentity(deviceClass: .phone, displayName: "Pocket", canProcess: false),
+            audioCache: AudioCachePolicy(budgetBytes: 1), cloud: strict, keyStore: keychain, sealsNewLibrary: false))
+        let source = root.appendingPathComponent("phone.wav")
+        try Data(repeating: 9, count: 4_096).write(to: source)
+        let meeting = try await MeetingStore(rootURL: local("Phone")).importAudio(from: source, into: Meeting(title: "Walk"), source: .microphone)
+        try await pass(phone, "Phone")
+        let file = local("Phone").appendingPathComponent("Meetings/\(meeting.id.uuidString)/\(meeting.tracks[0].relativePath)")
+        answers.unanswered = [meeting.tracks[0].sha256]
+        var report = try await phone.evictAudio()
+        XCTAssertTrue(report.evicted.isEmpty, "iCloud can't say it has it")
+        XCTAssertTrue(exists(file))
+        answers.unanswered = []
+        report = try await phone.evictAudio()
+        XCTAssertEqual(report.evicted.map(\.sha256), [meeting.tracks[0].sha256])
     }
 
     // MARK: Crashes

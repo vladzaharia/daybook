@@ -20,7 +20,7 @@ error; a Trash conversation that can't be read keeps everything; the wait uses t
 #103's clock guard does. #103's missing-copy repair works in a synced library again.
 
 **Verified.** Temporary sync folders standing in for iCloud (`SimulatedICloud`), no network, nothing near real iCloud:
-- `SupersededObjectsTests` (37): the object going a day after every device acknowledged its notice and not a minute
+- `SupersededObjectsTests` (36): the object going a day after every device acknowledged its notice and not a minute
   before, with the log in the notice and the iPhone counting it gone after; a device that hasn't caught up keeping it
   while seen in the last 30 days (also at 23), not once it's away longer; nothing going while every other device is away,
   before or after it was free; a device without `compress-1`, or without `superseded-1` (nothing listed), or with no
@@ -43,13 +43,13 @@ error; a Trash conversation that can't be read keeps everything; the wait uses t
   entry arrived, the copy's file gone, a device holding it now, a track here naming it now) keeping it; a delete that
   fails being the report's error, its log entry taken back, and done on a later pass; a stop resuming; what's remembered
   lost starting the wait again, the log and the sequence coming back from the notice; the iPhone's cached original going
-  only through its verified path.
+  only through its verified path; in iCloud Drive, the iPhone letting its own recording go only on iCloud's own yes.
 - `SupersededOriginalsLibraryTests` (1): through the library, a single Mac's compressed recording a voiceprint learned
   from after compressing keeping its original in iCloud while that voiceprint's clip isn't confirmed there, then, its
   clip cut and uploaded, listed, acknowledged, and deleted by the library's own sync a day later.
 - `RecordingCompressionLibraryTests` (42): a missing copy pointed back at its original in a synced library, connected
   with the copy in iCloud and the original's object gone (uploaded again on the next pass), and before connecting.
-- `VoiceClipLibraryTests` (34): a compressed recording moved keeping its clip current; the Move test without a stamp
+- `VoiceClipLibraryTests` (33): a compressed recording moved keeping its clip current; the Move test without a stamp
   change, the conversation left never naming the clip again; Undo of a move bringing the clip back; only the clip
   accepted here confirming its source in iCloud; a stale clip not letting the sweep take another file of its speech.
 - `LibrarySyncVoiceClipTests` (15): the sealer keeping a superseded original of a conversation another device changed in
@@ -62,7 +62,19 @@ error; a Trash conversation that can't be read keeps everything; the wait uses t
   LibrarySyncRelocationTests (2), LibrarySyncReplicaTests (36), LibrarySyncSealingTests (48), LibrarySyncStartOverTests
   (5), LibrarySyncTests (26), RecordingCompressionSyncTests (4), RecordingCompressionTests (15), SyncPresenceRecordTests
   (2), SyncWarningWordsTests (5).
-- MUTATIONS_LINE
+- 56 mutations of the safety checks (`scratchpad/mut/icloud-r2.py`, a sibling of the clips runner), each failing a
+  test: every condition above, each step after the pass, the notice and its acknowledgement, holding, possibly gone
+  (eviction, by reference, after a relaunch), the repair and the warning, the clock guard, the library's wiring, the
+  missing-copy repair, the sealer's judged list, and each carried clip fix. Three first went uncaught and now are: a
+  track or the Trash here naming the object (the iPhone's own hold covered it, so the Trash test now has the iPhone stop
+  holding), a device's hold (the journal covered it once the entry was published; the by-reference test catches it), and
+  the day after every acknowledgement (the first test's acknowledgement came seconds after it was free; the notice test,
+  acknowledged two days later, catches it). Not mutated, being implied by another check: the day since it was free (an
+  acknowledgement is never before it), the wall clock within a boot (the continuous clock says a day too), and the
+  encrypted-library guard (a copy's plaintext object isn't there, so nothing is free). Not mutated, with no test that
+  isolates them: an acknowledgement counting only for this Mac's own notice, a change of copies starting the wait again,
+  and an on-demand replica needing the object itself rather than a journal entry to publish a possibly gone one by
+  reference.
 
 **Not done as asked, and why.** An upload of a possibly gone object is still skipped when the object is in the sync
 folder: writing the same bytes over an object iCloud lists (often dataless) can't be checked without real iCloud, and
