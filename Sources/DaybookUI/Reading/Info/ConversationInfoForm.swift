@@ -42,7 +42,8 @@ public struct ConversationInfoForm<AudioExtras: View, AddRecording: View>: View 
                 section("Details", expanded: details) { DetailsRows(library: library, meeting: meeting, services: services) }
                 // Notes alone have no speakers and nothing processed: those sections wait for audio.
                 if !meeting.tracks.isEmpty || !meeting.speakers.isEmpty {
-                    section("People", expanded: people) { PeopleSection(library: library, meeting: meeting, findsSpeakers: services.findsSpeakers()) }
+                    section("People", expanded: people) { PeopleSection(library: library, meeting: meeting, findsSpeakers: services.findsSpeakers(),
+                                                                          identify: { services.perform(.identifySpeakers(.init()), meeting) }) }
                         .id(InfoSectionID.people)
                 }
                 section("Audio", expanded: audio) {
@@ -304,10 +305,13 @@ private struct ReprocessMenu: View {
                         Button { services.perform(.process(request), meeting) } label: { Label(mode.title, systemImage: mode.symbol) }
                             .disabled(!mode.isAvailable)
                     } else {
-                        // Summarize Again with more than one way to do it: a menu of them.
+                        // Summarize Again with more than one way to do it, Identify Speakers Again with how many people spoke: a menu.
                         Menu {
                             ForEach(mode.children) { choice in
                                 if case .summarizeAgain(let way) = choice.id { summarizeChoice(choice, way) }
+                                if case .identifySpeakers(let ask) = choice.id {
+                                    Button(choice.title) { services.perform(.identifySpeakers(ask), meeting) }
+                                }
                             }
                         } label: { Label(mode.title, systemImage: mode.symbol) }
                             .disabled(!mode.isAvailable)

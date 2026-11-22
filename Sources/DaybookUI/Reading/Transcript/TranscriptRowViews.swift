@@ -68,6 +68,10 @@ struct TranscriptRowActions {
     var canPlay: Bool
     var correct: (TranscriptSegment) -> Void
     var rename: (_ speakerID: String, _ anchor: String) -> Void
+    /// Gives passages to another speaker of the conversation.
+    var changeSpeaker: (_ passages: [UUID], _ speakerID: String) -> Void
+    /// Asks for the name of a new speaker to give passages to, at the row `anchor`.
+    var newSpeaker: (_ passages: [UUID], _ anchor: String) -> Void
     var bookmark: (TranscriptSegment) -> Void
     var showHeardIn: (TranscriptSegment) -> Void
     var showNotes: () -> Void
@@ -84,6 +88,8 @@ struct TurnHeaderRow: View {
     let rowID: String
     let speakerID: String?
     let first: TranscriptSegment
+    /// The passages of the turn, which Speaker ▸ moves together.
+    var passages: [TranscriptSegment] = []
     let actions: TranscriptRowActions
     /// Wraps the speaker's name, which Rename Speaker's popover points at.
     var nameAttachment: (AnyView) -> AnyView = { $0 }
@@ -113,8 +119,41 @@ struct TurnHeaderRow: View {
                 Spacer(minLength: 0)
             }
         }
+        .contextMenu {
+            if let speakerID {
+                Button("Rename Speaker…", systemImage: "person.text.rectangle") { actions.rename(speakerID, rowID) }
+            }
+            ChangeSpeakerMenu(meeting: meeting, passages: passages, anchor: rowID, actions: actions)
+        }
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// Speaker ▸ on a passage's menu, or a turn's: this conversation's people by name, the passage's own checked, then New
+/// Speaker…. It moves only what the menu is on. The words are the people's names, never the conversation's title.
+struct ChangeSpeakerMenu: View {
+    let meeting: Meeting
+    let passages: [TranscriptSegment]
+    let anchor: String
+    let actions: TranscriptRowActions
+
+    var body: some View {
+        let ids = passages.map(\.id)
+        let current = Set(passages.map(\.speakerID))
+        Menu {
+            ForEach(meeting.peopleSpeakers) { person in
+                let isCurrent = current.count == 1 && current.first.map { $0.map(person.speakerIDs.contains) ?? false } == true
+                Button { actions.changeSpeaker(ids, person.speaker.id) } label: {
+                    if isCurrent { Label(person.speaker.name, systemImage: "checkmark") } else { Text(person.speaker.name) }
+                }
+            }
+            Divider()
+            Button("New Speaker…") { actions.newSpeaker(ids, anchor) }
+        } label: {
+            Label("Speaker", systemImage: "person.2")
+        }
+        .disabled(ids.isEmpty)
     }
 }
 
@@ -220,6 +259,10 @@ struct PassageRow: View {
         .accessibilityAction(named: "Add Bookmark Here") { actions.bookmark(segment) }
         .accessibilityActions {
             if let speakerID = segment.speakerID { Button("Rename Speaker") { actions.rename(speakerID, rowID) } }
+            ForEach(meeting.peopleSpeakers) { person in
+                Button("Speaker: \(person.speaker.name)") { actions.changeSpeaker([segment.id], person.speaker.id) }
+            }
+            Button("New Speaker") { actions.newSpeaker([segment.id], rowID) }
             if segment.provenance.count > 1 { Button("Heard in \(segment.provenance.count) Recordings") { actions.showHeardIn(segment) } }
             unsureButtons
         }
@@ -271,6 +314,7 @@ struct PassageRow: View {
         if let speakerID = segment.speakerID {
             Button("Rename Speaker…", systemImage: "person.text.rectangle") { actions.rename(speakerID, rowID) }
         }
+        ChangeSpeakerMenu(meeting: meeting, passages: [segment], anchor: rowID, actions: actions)
         if !unsure.isEmpty {
             Divider()
             unsureButtons

@@ -13,8 +13,8 @@ struct SpeakerNameField<Field: View>: View {
     let isFocused: Bool
     let profiles: [SpeakerProfile]
     let me: UUID?
-    /// Names the speaker: a picked row's name, or the typed text.
-    let commit: (String) -> Void
+    /// Names the speaker: a picked row's name with its profile, or the typed text (no profile: an Add row is typed text).
+    let commit: (String, UUID?) -> Void
     /// Draws a glyph at the head of each row (the phone's sheet).
     var showsGlyphs = false
     @ViewBuilder var field: Field
@@ -42,14 +42,14 @@ struct SpeakerNameField<Field: View>: View {
         }
         .onChange(of: draft) { _, _ in highlighted = nil }
         .onSubmit {
-            if let row = rows.first(where: { $0.id == highlighted }) { commit(row.name) } else { commit(draft) }
+            if let row = rows.first(where: { $0.id == highlighted }) { commit(row.name, row.profileID) } else { commit(draft, nil) }
         }
         .onKeyPress(.downArrow) { move(1) }
         .onKeyPress(.upArrow) { move(-1) }
     }
 
     private func choiceButton(_ row: SpeakerNameChoice) -> some View {
-        Button { commit(row.name) } label: {
+        Button { commit(row.name, row.profileID) } label: {
             HStack(spacing: 6) {
                 if showsGlyphs {
                     Image(systemName: row.kind == .add ? "plus.circle" : "person.crop.circle")

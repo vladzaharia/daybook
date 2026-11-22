@@ -40,21 +40,16 @@ struct ConversationScreen: View {
             .confirmationBeat($session.confirmation)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                // Always the switch, so the bar's centre stays put. Until there's a transcript to turn to it shows Summary
-                // selected and Transcript dimmed, and the page itself says why.
-                ToolbarItem(placement: .principal) {
-                    // The system's switch either way, so its size, place and glass never change. Without a transcript
-                    // it stays on Summary (a tap on Transcript does nothing) and Transcript is drawn dim.
-                    Picker("Page", selection: Binding(get: { hasTranscript ? session.pageMode : .summary },
-                                                      set: { if hasTranscript { session.pageMode = $0 } })) {
-                        ForEach(PageMode.allCases) { mode in
-                            Text(mode.title)
-                                .foregroundStyle(mode == .transcript && !hasTranscript ? DaybookPalette.Ink.faint : DaybookPalette.Ink.title)
-                                .tag(mode)
+                // The system's switch, only once there's a transcript to turn to: until then there's one page, and a switch
+                // with a side that does nothing isn't shown.
+                if hasTranscript {
+                    ToolbarItem(placement: .principal) {
+                        Picker("Page", selection: $session.pageMode) {
+                            ForEach(PageMode.allCases) { mode in Text(mode.title).tag(mode) }
                         }
+                        .pickerStyle(.segmented)
+                        .fixedSize()
                     }
-                    .pickerStyle(.segmented)
-                    .fixedSize()
                 }
                 ConversationToolbar(library: library, meeting: meeting)
             }
@@ -70,8 +65,8 @@ struct ConversationScreen: View {
     }
 }
 
-/// Info and More, the same in every layout. Glyphs alone, in title ink like the system's back chevron: teal is for
-/// what's selected and for text you can act on.
+/// More, the same in every layout: a glyph alone, in title ink like the system's back chevron (teal is for what's
+/// selected and for text you can act on). Info is its first item, above what DaybookKit's `ConversationActions` lists.
 struct ConversationToolbar: ToolbarContent {
     let library: LibraryController
     let meeting: Meeting
@@ -79,11 +74,9 @@ struct ConversationToolbar: ToolbarContent {
 
     var body: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
-            Button { session.sheet = .info(meeting.id) } label: { Label("Info", systemImage: "info.circle") }
-                .tint(DaybookPalette.Ink.title)
-        }
-        ToolbarItem(placement: .topBarTrailing) {
             Menu {
+                Button { session.sheet = .info(meeting.id) } label: { Label("Info", systemImage: "info.circle") }
+                Divider()
                 ConversationMoreMenu(library: library, meeting: meeting)
             } label: {
                 Label("More", systemImage: "ellipsis")

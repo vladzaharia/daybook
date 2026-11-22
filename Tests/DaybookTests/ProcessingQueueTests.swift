@@ -62,6 +62,33 @@ final class ProcessingQueueTests: XCTestCase {
         for id in state.processor.queue.awaitingModels.sorted(by: { $0.uuidString < $1.uuidString }) { state.processor.enqueue(id) }
     }
 
+    /// Identify Speakers asked with a number of people goes on with that number after a quit.
+    func testBehaviorANumberOfPeopleAskedIsStillAskedAfterARelaunch() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let audio = try rig.audio("three.wav", frequency: 350)
+        let id = try await rig.macConversation("Three of us", at: Date(), seconds: 0.5, audio: audio)
+        try rig.inference.block(audio)
+        state.processor.enqueue(id, mode: .speakerRefresh, speakers: .init(count: 3))
+        try await waitUntil("it to be identifying speakers") { rig.inference.isWaiting(on: audio) }
+        XCTAssertEqual(state.processor.queue.running?.speakers, .init(count: 3))
+        state.cancelProcessing()
+        try await waitUntil("the job to stop") { state.processor.queue.runningID == nil && state.processor.queue.task == nil }
+
+        let next = await relaunch(rig)
+        XCTAssertEqual(next.processor.queue.owedWork(id)?.speakers, .init(count: 3))
+        next.sources.inference = rig.inference
+        next.sources.alignAudio = { _, _, _, _ in nil }
+        next.installedModels = [next.transcriptionModel, next.summaryModel, next.processingPreferences.speakerModelID]
+        next.takeUpWorkWaitingForModels()
+        let job = try XCTUnwrap(next.processor.queue.running ?? next.processor.queue.jobs.first { $0.meetingID == id })
+        XCTAssertEqual(job.mode, .speakerRefresh)
+        XCTAssertEqual(job.speakers, .init(count: 3))
+        XCTAssertEqual(job.preferences.speakerOptions.expectedSpeakerCount, 3)
+        next.cancelProcessing()
+        try rig.inference.unblock(audio)
+    }
+
     func testBehaviorWorkDaybookDidntComeBackFromTwiceIsLeftToThePerson() async throws {
         let rig = try await rig()
         let audio = try rig.audio("heavy.wav", frequency: 320)

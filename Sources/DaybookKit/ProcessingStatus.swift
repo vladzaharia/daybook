@@ -450,6 +450,8 @@ extension ProcessingRequest {
     /// from the conversation itself rather than "waiting".
     public func isSatisfied(by meeting: Meeting) -> Bool {
         guard let summary = meeting.summary, summary.createdAt >= createdAt else { return false }
+        // A number of people the person gave isn't anything a later run shows it heard: only the job that ran with it says so.
+        if speakers?.count != nil { return false }
         switch mode {
         case .newAudio, .summaryOnly:
             return !meeting.hasUntranscribedTranscribableAudio

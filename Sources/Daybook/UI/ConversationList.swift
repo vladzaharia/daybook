@@ -539,7 +539,7 @@ enum MacActions {
                                                for: meeting, in: state.meetings, context: { MeetingInspector.context(state, $0) },
                                                merging: state.library.mergingIDs,
                                                hidden: { state.personalLock.hides($0) || !state.personalLock.lists($0) }),
-                                           isMerging: state.library.mergingIDs.contains(meeting.id))
+                                           isMerging: state.library.mergingIDs.contains(meeting.id), speakerCounts: state.speakerCountsOffered)
     }
 
     /// How the Mac processes a conversation in a mode, from its menus and its status alike: its queue.
@@ -569,7 +569,8 @@ enum MacActions {
             },
             copy: { LocalPasteboard.copy($0) },
             confirm: { state.window.confirmation = $0 },
-            summarizeAgain: { state.summarizeAgain($0, as: $1) })
+            summarizeAgain: { state.summarizeAgain($0, as: $1) },
+            identifySpeakers: { state.processor.enqueue($0, mode: .speakerRefresh, speakers: $1) })
         performer.perform(id, on: ids) { meetings in
             guard let first = meetings.first else { return }
             switch id {
@@ -589,7 +590,7 @@ enum MacActions {
                 break // The iPhone's.
             case .play, .adjustTiming, .showOriginalTranscript, .moveToNewConversation, .removeRecording:
                 break // A recording's, in the inspector.
-            case .copySummary, .process, .summarizeAgain, .versionHistory, .moveToFolder, .tags, .moveTo, .merge, .mergeWith, .moveToTrash:
+            case .copySummary, .process, .summarizeAgain, .identifySpeakers, .versionHistory, .moveToFolder, .tags, .moveTo, .merge, .mergeWith, .moveToTrash:
                 break // The library's (`ConversationActionPerformer`).
             }
         }

@@ -61,7 +61,7 @@ extension AppState {
                 // A recording the conversation was waiting for is added whatever the setting (Mac first), and so is a summary
                 // this Mac left asked for when it transcribed without its summary model.
                 guard processSyncedAudio || meeting.hasAwaitedRecordingToAdd(now: now) || request.requestedBy.id == me.id,
-                      hasModels(for: job, in: meeting), meeting.id != recordingID,
+                      hasModels(for: job, in: meeting), takesSpeakerAsk(job), meeting.id != recordingID,
                       !processor.queue.paused.contains(meeting.id), !movedPhoneRecordings.contains(meeting.id) else {
                     if held { library.releaseProcessingRequest(request.id, in: meeting.id, at: now) }
                     continue
@@ -69,7 +69,7 @@ extension AppState {
                 // One job per conversation: one queued or running already takes the request on. The
                 // running one claims it now; a queued one when it starts.
                 if let running = processor.queue.running, running.meetingID == meeting.id {
-                    if running.requestID == nil, Self.covers(running.mode, request.mode), let claimed = claim(request) {
+                    if running.requestID == nil, Self.covers(running, request), let claimed = claim(request) {
                         processor.queue.running = running.carrying(claimed)
                         processor.startClaimHeartbeat()
                         // Another device asked for its summary (its own countdown ran out): no second countdown here.
@@ -80,7 +80,7 @@ extension AppState {
                     continue
                 }
                 if let index = processor.queue.jobs.firstIndex(where: { $0.meetingID == meeting.id }) {
-                    if processor.queue.jobs[index].requestID == nil, Self.covers(processor.queue.jobs[index].mode, request.mode) {
+                    if processor.queue.jobs[index].requestID == nil, Self.covers(processor.queue.jobs[index], request) {
                         processor.queue.jobs[index] = processor.queue.jobs[index].carrying(request)
                     }
                     continue
@@ -95,7 +95,7 @@ extension AppState {
 
     /// A job carrying out `request`, frozen with this Mac's models and preferences.
     func job(for request: ProcessingRequest, in meeting: Meeting) -> ProcessingJob {
-        makeJob(meetingID: meeting.id, mode: request.mode, templateID: request.templateID)
+        makeJob(meetingID: meeting.id, mode: request.mode, templateID: request.templateID, speakers: request.speakers)
     }
 
     /// Whether this Mac has what `job` needs to start, as `enqueue` gates its own work (transcript first): the models that
@@ -111,9 +111,15 @@ extension AppState {
         guard job.requestID == nil else { return job }
         let me = library.thisDevice, now = Date()
         guard let request = meeting.openProcessingRequests.first(where: {
-            $0.isClaimable(by: me, at: now) && !isCarried($0.id) && !$0.isSatisfied(by: meeting) && Self.covers(job.mode, $0.mode) && mayCarryOut($0)
+            $0.isClaimable(by: me, at: now) && !isCarried($0.id) && !$0.isSatisfied(by: meeting) && Self.covers(job, $0) && mayCarryOut($0)
         }) else { return job }
         return job.carrying(request)
+    }
+
+    /// Whether `job` also does what `request` asks for: its mode covers the request's, and a request that says how
+    /// speakers are found for it (`SpeakerAsk`) is carried out only by a job asked the same.
+    static func covers(_ job: ProcessingJob, _ request: ProcessingRequest) -> Bool {
+        covers(job.mode, request.mode) && (request.speakers == nil || request.speakers == job.speakers)
     }
 
     /// Whether a job in `mode` also does what a request in `asked` mode asks for.
@@ -162,7 +168,7 @@ extension AppState {
         guard let requestID = job.requestID else { return true }
         guard let request = request(requestID, in: job.meetingID), request.isOpen else { return false }
         let me = library.thisDevice, now = Date()
-        guard let meeting = meetings.first(where: { $0.id == job.meetingID }), hasModels(for: job, in: meeting) else {
+        guard let meeting = meetings.first(where: { $0.id == job.meetingID }), hasModels(for: job, in: meeting), takesSpeakerAsk(job) else {
             if request.isClaimed(by: me, at: now) { library.releaseProcessingRequest(requestID, in: job.meetingID, at: now) }
             return false
         }

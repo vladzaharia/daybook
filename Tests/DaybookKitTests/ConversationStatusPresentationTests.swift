@@ -241,6 +241,21 @@ final class ConversationStatusPresentationTests: XCTestCase {
         }
     }
 
+    func testBehaviorAnIPhoneCanOnlyCancelItsOwnWorkAndNeverPauseIt() {
+        let working = ProcessingStatus.processing(.init(stage: .transcribing, fraction: 0.4, device: alexPhone))
+        let queued = ProcessingStatus.requested(.queued(position: 0, after: nil))
+        let paused = ProcessingStatus.requested(.paused)
+        var cancellable = phone
+        cancellable.cancelsStarted = true
+        for status in [working, queued, paused] {
+            XCTAssertEqual(page(status, nil, phone)?.actions, [], "no Cancel the iPhone can't carry out")
+            XCTAssertEqual(page(status, nil, cancellable)?.actions, [.cancel], "its own work is given up, never paused")
+        }
+        // A Mac's work is still no iPhone's to cancel.
+        let onMac = ProcessingStatus.processing(.init(stage: .transcribing, fraction: 0.4, device: studio))
+        XCTAssertEqual(page(onMac, nil, cancellable)?.actions, [])
+    }
+
     func testBehaviorARequestWaitingForAMacSaysWhetherOneIsAround() {
         let request = ProcessingRequest(meetingID: UUID(), mode: .newAudio, requestedBy: alexPhone, createdAt: now)
         var inputs = phone

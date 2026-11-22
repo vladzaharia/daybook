@@ -58,7 +58,7 @@ final class PhoneSettings {
 
     /// Whether each paired Mac may start recording here: on when a Mac is paired (recording on one
     /// device starts every device connected to it, docs/multipoint.md), and switchable in that Mac's row
-    /// in Settings › Macs (Can Start Recording). A choice belongs to one pairing (by its date), so pairing
+    /// in Settings › Devices (Can Start Recording). A choice belongs to one pairing (by its date), so pairing
     /// again turns it on again.
     private var macRecordDecisions: [String: MacRecordDecision] {
         didSet { defaults.set(try? JSONEncoder().encode(macRecordDecisions), forKey: Keys.macRecordDecisions) }

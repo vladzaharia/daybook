@@ -11,19 +11,24 @@ struct PeopleSection: View {
     let meeting: Meeting
     /// Whether this device finds speakers (Tell speakers apart); a conversation made without that has none to show.
     var findsSpeakers = true
+    /// Finds the speakers of this conversation once, whatever Tell speakers apart says; nil leaves it out.
+    var identify: (() -> Void)?
     @Environment(\.undoManager) private var undoManager
 
     var body: some View {
         let people = meeting.peopleSpeakers
         if people.isEmpty {
             Text(findsSpeakers ? "No speakers yet" : "Speakers off").foregroundStyle(DaybookPalette.Ink.secondary)
+            if !findsSpeakers, let identify, !meeting.transcripts.isEmpty, !meeting.presentTracks.isEmpty {
+                Button(ProcessingWords.identifySpeakers, action: identify)
+                    .buttonStyle(.daybookLink)
+                    .font(.footnote)
+            }
         } else {
             ForEach(people) { person in
-                SpeakerRow(person: person, profiles: library.speakerProfiles, me: library.ownerProfileID, thisIsMe: thisIsMe(person)) { name in
+                SpeakerRow(person: person, profiles: library.speakerProfiles, me: library.ownerProfileID, thisIsMe: thisIsMe(person)) { name, picked in
                     // One person found more than once is renamed as one, so they stay one person.
-                    library.update(meeting.id, actionName: "Rename Speaker", undoManager: undoManager) { meeting in
-                        for id in person.speakerIDs { meeting.renameSpeaker(id: id, name: name) }
-                    }
+                    library.renameSpeakers(person.speakerIDs, to: name, picked: picked, in: meeting.id, undoManager: undoManager)
                 } identity: {
                     SpeakerIdentityLine(library: library, meeting: meeting, speakerIDs: person.speakerIDs)
                 }
@@ -71,7 +76,8 @@ struct SpeakerRow<Identity: View>: View {
     let me: UUID?
     /// This Is Me under the name; false from it means there was nothing to go by, and the name takes focus.
     var thisIsMe: (() -> Bool)?
-    let save: (String) -> Void
+    /// The name, and the profile when it's a row of the name list that was picked.
+    let save: (String, UUID?) -> Void
     @ViewBuilder var identity: Identity
     @State private var draft = ""
     @FocusState private var focused: Bool
@@ -156,7 +162,7 @@ struct SpeakerRow<Identity: View>: View {
             // Escape leaves the field with the name it had.
             .onExitCommand { draft = person.speaker.name; focused = false }
             #endif
-            .onChange(of: focused) { _, active in if !active { commit(draft) } }
+            .onChange(of: focused) { _, active in if !active { commit(draft, nil) } }
             .accessibilityLabel("Speaker name")
             .accessibilityHint("Edit to rename this speaker everywhere in the conversation.")
         #if os(iOS)
@@ -172,10 +178,10 @@ struct SpeakerRow<Identity: View>: View {
         #endif
     }
 
-    private func commit(_ name: String) {
+    private func commit(_ name: String, _ picked: UUID?) {
         let value = name.trimmingCharacters(in: .whitespacesAndNewlines)
         draft = value.isEmpty ? person.speaker.name : value
-        if !value.isEmpty, value != person.speaker.name { save(value) }
+        if !value.isEmpty, value != person.speaker.name { save(value, picked) }
         focused = false
     }
 }

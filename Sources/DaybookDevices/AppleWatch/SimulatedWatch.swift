@@ -161,7 +161,7 @@ public final class SimulatedWatch: WatchTransport {
         case .received(let receipt):
             take(receipt)
             return .state(state())
-        case .context, .state:
+        case .context, .state, .bookmark, .keep:
             return .refused("The watch doesn’t take that message.")
         }
     }
@@ -214,11 +214,33 @@ public final class SimulatedWatch: WatchTransport {
         push(state(shared == nil ? .startedOnWatch : .joined))
     }
 
+    /// The person taps Keep Recording on the watch after a Stop: it records on into `conversation`, as a later part of it.
+    /// Pushed as the wrist's own start, which this iPhone's button ignores.
+    public func pressKeepRecording(into conversation: UUID) {
+        guard recording == nil else { return }
+        begin(conversation, change: .startedOnWatch, isContinuation: true)
+        push(state(.startedOnWatch))
+    }
+
     /// The person taps Stop on the watch. Pushed as its button.
     public func pressStop() {
         guard let recording else { return }
         _ = end(WatchStop(recordingID: recording.id), change: .stoppedOnWatch)
         push(state(.stoppedOnWatch))
+    }
+
+    /// The person taps Bookmark on the watch, `at` seconds into the recording (by default where it is now): kept in the
+    /// recording, as the watch app keeps it, and sent to the iPhone (twice when `again`: a message sent and then queued),
+    /// unless `sends` is off (the iPhone out of reach, the message still queued).
+    @discardableResult
+    public func pressBookmark(at offset: TimeInterval? = nil, again: Bool = false, sends: Bool = true) -> WatchBookmark? {
+        guard let current = recording else { return nil }
+        let mark = WatchBookmark(recordingID: current.id, madeAt: current.startedAt.addingTimeInterval(offset ?? current.duration))
+        recording?.bookmarks = (current.bookmarks ?? []) + [mark]
+        guard sends else { return mark }
+        onMessage?(.bookmark(mark), nil)
+        if again { onMessage?(.bookmark(mark), nil) }
+        return mark
     }
 
     /// Records `seconds` more audio, closing (and sending) a segment each time one is full.
@@ -244,8 +266,8 @@ public final class SimulatedWatch: WatchTransport {
         }
     }
 
-    private func begin(_ conversation: UUID?, change: WatchChange) {
-        recording = WatchRecordingInfo(id: UUID().uuidString, conversationID: conversation, startedAt: now)
+    private func begin(_ conversation: UUID?, change: WatchChange, isContinuation: Bool? = nil) {
+        recording = WatchRecordingInfo(id: UUID().uuidString, conversationID: conversation, startedAt: now, isContinuation: isContinuation)
         pending = 0
         elapsed = 0
         publishContext(state(change))

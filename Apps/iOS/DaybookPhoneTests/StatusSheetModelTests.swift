@@ -339,6 +339,63 @@ final class StatusSheetModelTests: XCTestCase {
     XCTAssertEqual(waiting.first?.item(under: "Studio Mac").note, "Requested from this iPhone")
   }
 
+  // MARK: One job, shown once
+
+  private func working(_ title: String = "Standup") -> StatusQueueEntry {
+    StatusQueueEntry(
+      id: UUID(), title: title, line: "Transcribing on Studio Mac · 55%", requestedHere: true, progress: 0.55, isRunning: true,
+      mac: "Studio Mac", brief: "Transcribing · 55%")
+  }
+
+  /// A Mac known only by its work still has the first row of its card, with its state, and the queue is under it: the
+  /// card never starts with conversations under a "Macs" heading.
+  func testBehaviorAMacKnownOnlyByItsWorkHasARowAboveItsQueue() {
+    var inputs = StatusOverviewInputs(words: .iPhone())
+    inputs.queue = [working()]
+    inputs.liveProgress = [
+      LiveProgress(LinkProcessingProgress(meetingID: inputs.queue[0].id, phase: .transcribing, fraction: 0.55, macName: "Studio Mac"))
+    ]
+    let rows = StatusOverviewModel.macRows(inputs, now: now)
+    XCTAssertEqual(rows.map(\.name), ["Studio Mac"])
+    XCTAssertEqual(rows.first?.text, "Transcribing · 55%")
+    XCTAssertEqual(rows.first?.showsQueue, true, "its queue is under it")
+    XCTAssertTrue(StatusOverviewModel.sections(inputs, now: now).contains(.macs))
+
+    // A paired Mac that's working says so on its row, not only "Connected".
+    let studio = UUID()
+    inputs.pairedMacs = [StatusOverviewInputs.Mac(id: studio, name: "Studio Mac", line: "Connected", isConnected: true)]
+    let paired = StatusOverviewModel.macRows(inputs, now: now)
+    XCTAssertEqual(paired.count, 1, "one row for the Mac")
+    XCTAssertEqual(paired.first?.id, .paired(studio))
+    XCTAssertEqual(paired.first?.text, "Transcribing · 55%")
+    XCTAssertEqual(paired.first?.showsQueue, true)
+  }
+
+  /// Dragged up, a line whose device or work a card below says isn't drawn too, so a job has one bar; iCloud's line,
+  /// which no card says, stays. Minimized is the one line, as ever.
+  func testBehaviorDraggedUpALineACardSaysIsNotRepeated() {
+    var inputs = StatusOverviewInputs(words: .iPhone())
+    inputs.queue = [working()]
+    inputs.liveProgress = [
+      LiveProgress(LinkProcessingProgress(meetingID: inputs.queue[0].id, phase: .transcribing, fraction: 0.55, macName: "Studio Mac"))
+    ]
+    inputs.recording.recorders = [recorder()]
+    inputs.syncTone = .attention
+    inputs.syncLine = "Signed out"
+    let all = StatusOverviewModel.lines(inputs, now: now)
+    XCTAssertEqual(all.map(\.id), ["recorder-sc", StatusOverviewModel.macID, StatusOverviewModel.syncID])
+    XCTAssertEqual(StatusSheetModel.lines(for: .medium, all, inputs: inputs, now: now).map(\.id), [StatusOverviewModel.syncID])
+    XCTAssertEqual(StatusSheetModel.lines(for: .large, all, inputs: inputs, now: now).map(\.id), [StatusOverviewModel.syncID])
+    XCTAssertEqual(
+      StatusSheetModel.lines(for: .compact, all, inputs: inputs, now: now).map(\.id), [StatusOverviewModel.syncID],
+      "minimized: the one line with something to say")
+
+    // A Mac no card lists keeps its line (there is no card).
+    var older = StatusOverviewInputs(words: .iPhone())
+    older.mac = .noMac
+    XCTAssertEqual(StatusSheetModel.lines(for: .medium, StatusOverviewModel.lines(older, now: now), inputs: older, now: now), [])
+  }
+
   // MARK: Asking for more
 
   /// A line's tap at the foot (or More › Devices): a line that needs the person opens where it's fixed, inside the

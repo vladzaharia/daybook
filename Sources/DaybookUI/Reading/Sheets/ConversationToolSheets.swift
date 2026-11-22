@@ -101,7 +101,7 @@ public struct ReviewCorrectionsSheet: View {
     private func reviewContent(_ issue: CorrectionTransferIssue, position: Int, in meeting: Meeting, scrolls: Bool) -> some View {
         VStack(alignment: .leading, spacing: DaybookSpacing.s3) {
             SheetTitle("Review Earlier Corrections", detail: issues.count > 1 ? "\(position + 1) of \(issues.count)" : nil)
-            Text("You corrected this before the audio was transcribed again:")
+            Text(Self.lead(issue, in: meeting))
                 .font(DaybookFont.status.font(density)).foregroundStyle(DaybookPalette.Ink.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Text("“\(issue.originalSegment.text)”")
@@ -171,6 +171,14 @@ public struct ReviewCorrectionsSheet: View {
     /// The passage chosen for the correction on show; choosing one chooses it for that correction.
     private func target(for issue: CorrectionTransferIssue) -> Binding<UUID?> {
         Binding(get: { place.target(for: issue) }, set: { place.choose($0, for: issue) })
+    }
+
+    /// What the person did to the passage: corrected it, or gave it to someone (`Meeting.correctsWords`).
+    static func lead(_ issue: CorrectionTransferIssue, in meeting: Meeting) -> String {
+        guard !meeting.correctsWords(issue), let name = meeting.speakerName(issue.speakerID) else {
+            return "You corrected this before the audio was transcribed again:"
+        }
+        return "You gave this to \(name) before the audio was transcribed again:"
     }
 
     /// The passages the correction most likely belongs to, else the whole transcript.

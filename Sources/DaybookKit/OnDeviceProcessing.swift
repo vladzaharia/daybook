@@ -73,6 +73,8 @@ public enum OnDeviceProcessing {
             return transcribes(can) && fusesHere(meeting) ? .placeSummary : nil
         case .fullRetranscription, .speakerRefresh:
             guard !tracks.isEmpty, tracks.allSatisfy(device.owns) else { return nil }
+            // A number of people the person gave is the speaker model's `expectedSpeakerCount`, which a Mac runs with.
+            if request.speakers?.count != nil { return nil }
             // Each recording once: a run made since the request was asked is that recording done.
             let pending = tracks.filter { track in !meeting.transcripts.contains { $0.trackID == track.id && $0.createdAt >= request.createdAt } }
             if pending.isEmpty { return can.findsSpeakers && fusesHere(meeting) ? .placeSummary : nil }

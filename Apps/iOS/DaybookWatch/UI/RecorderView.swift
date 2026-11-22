@@ -18,15 +18,36 @@ struct RecorderView: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("Stop Recording")
             } else {
-                RecordButton(isRecording: model.recording != nil, label: model.recording != nil ? "Stop Recording" : "Record") {
-                    model.toggleRecording()
+                HStack(spacing: 8) {
+                    RecordButton(isRecording: model.recording != nil, label: model.recording != nil ? "Stop Recording" : "Record") {
+                        model.toggleRecording()
+                    }
+                    .disabled(model.isStarting)
+                    .opacity(model.isStarting ? 0.5 : 1)
+                    if model.recording != nil {
+                        BookmarkButton(count: model.bookmarkCount, isEnabled: model.isCapturing) { model.addBookmark() }
+                            .transition(.scale.combined(with: .opacity))
+                    }
                 }
-                .disabled(model.isStarting)
-                .opacity(model.isStarting ? 0.5 : 1)
-                LevelMeter(level: model.isCapturing ? model.level : 0)
-                    .opacity(model.isCapturing ? 1 : 0)
+                if model.offersKeep {
+                    Button(WatchWords.keepRecording) { model.keepRecording() }
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.red)
+                        .buttonStyle(.plain)
+                        .transition(.opacity)
+                } else {
+                    LevelMeter(level: model.isCapturing ? model.level : 0)
+                        .opacity(model.isCapturing ? 1 : 0)
+                }
             }
-            if let line = model.statusLine {
+            if model.recording == nil, model.pausedLength == nil, model.showsSummary {
+                Text(verbatim: model.afterStopLine)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.8)
+            } else if let line = model.statusLine {
                 Text(line)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -45,6 +66,10 @@ struct RecorderView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(WatchMotion.resolved(WatchMotion.state, reduceMotion: reduceMotion), value: model.statusLine)
+        .animation(WatchMotion.resolved(WatchMotion.state, reduceMotion: reduceMotion), value: model.showsSummary)
+        .animation(WatchMotion.resolved(WatchMotion.state, reduceMotion: reduceMotion), value: model.offersKeep)
+        .animation(WatchMotion.resolved(WatchMotion.state, reduceMotion: reduceMotion), value: model.recording != nil)
+        .sensoryFeedback(trigger: model.showsSummary) { _, shows in shows ? .success : nil }
     }
 
     @ViewBuilder
@@ -56,6 +81,10 @@ struct RecorderView: View {
                     .foregroundStyle(.secondary)
             } else if let recording = model.recording {
                 Text(timerInterval: recording.startedAt...Date.distantFuture, countsDown: false)
+            } else if model.showsSummary, let moment = model.afterStop {
+                Label(moment.title, systemImage: "checkmark.circle.fill")
+                    .font(.system(size: 20, weight: .semibold, design: .rounded).monospacedDigit())
+                    .foregroundStyle(.green)
             } else {
                 Text(verbatim: "0:00")
                     .foregroundStyle(.secondary)
@@ -99,6 +128,34 @@ private struct RecordButton: View {
         .buttonStyle(.plain)
         .animation(WatchMotion.resolved(WatchMotion.state, reduceMotion: reduceMotion), value: isRecording)
         .accessibilityLabel(label)
+    }
+}
+
+/// Marks this moment: a small amber button beside Stop, with the count of marks so far.
+private struct BookmarkButton: View {
+    var count: Int
+    var isEnabled: Bool
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 0) {
+                Image(systemName: "bookmark.fill")
+                    .font(.system(size: 18, weight: .semibold))
+                if count > 0 {
+                    Text(verbatim: "\(count)")
+                        .font(.caption2.monospacedDigit())
+                }
+            }
+            .foregroundStyle(.orange)
+            .frame(width: 48, height: 48)
+            .glassEffect(in: Circle())
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.4)
+        .accessibilityLabel(WatchWords.bookmarkTitle(count: count))
     }
 }
 

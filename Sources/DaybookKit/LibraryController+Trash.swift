@@ -16,6 +16,29 @@ extension LibraryController {
         return await Task.detached(priority: .userInitiated) { Self.trashedMeeting(id, in: root) }.value
     }
 
+    /// Whether a conversation's ID is spent here: it's in the Trash (where Restore needs it), or its deletion was published
+    /// through sync (a conversation made under it would be deleted again by the next pass). Audio for it goes elsewhere.
+    public func isGone(_ id: UUID) -> Bool {
+        trashedMeetingIDs().contains(id) || sync?.isSyncedDeletion(id) == true
+    }
+
+    /// The conversation in the library that a merge folded `id` into, followed through later merges (`ConversationMerge`):
+    /// where audio recorded for a conversation merged away meanwhile goes. Nil when none did, or when the one in the Trash
+    /// was restored and trashed again since (`LibraryWords.mergedInto`).
+    public func mergeSurvivor(of id: UUID) async -> UUID? {
+        let trashed = await trashedMeetings()
+        let everything = meetings + trashed
+        var current = id
+        var seen: Set<UUID> = [id]
+        while true {
+            let survivor = trashed.first { $0.id == current }.map { LibraryWords.mergedInto($0, in: everything) }
+                ?? everything.first { $0.id != current && ConversationMerge.hasFolded(current, into: $0) }
+            guard let survivor, seen.insert(survivor.id).inserted else { return nil }
+            if meeting(survivor.id) != nil { return survivor.id }
+            current = survivor.id
+        }
+    }
+
     /// Whether anything is in the Trash, looked up off the main actor: the Mac's sidebar lists the Trash once it is.
     public func hasTrashedMeetings() async -> Bool {
         let root = rootURL

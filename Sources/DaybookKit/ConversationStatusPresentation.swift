@@ -376,8 +376,9 @@ extension ConversationStatusPresentation {
         public var ownsUntranscribed: Bool
         /// Why this device's work on it is paused.
         public var pause: ProcessingWords.PauseReason?
-        /// Running or paused work here can be given up outright (Cancel): its own, or paused with only requests this device
-        /// can withdraw. Work that carries another device's request can only be paused, so it isn't offered Cancel.
+        /// Running, paused or waiting work here can be given up outright (Cancel): its own, or paused with only requests this
+        /// device can withdraw. Work that carries another device's request can only be paused, so it isn't offered Cancel.
+        /// On a device that can't pause (the iPhone) it is the only control its work has.
         public var cancelsStarted = false
         /// The cloud model this device summarizes with ("Claude Sonnet 5.5"), to name in a cloud failure.
         public var cloudModel: String?
@@ -431,6 +432,8 @@ extension ConversationStatusPresentation {
             else if here, let origin = requestOrigin(meeting, words: words) { line.detail = origin }
             // A summary can't pause, so it stops; the other steps pause or are given up.
             if here, local.controlsQueue { line.actions = progress.stage == .summarizing ? [.stopSummary] : [.pause] + (inputs.cancelsStarted ? [.cancel] : []) }
+            // A device that can't pause its work (the iPhone) can still give its own up.
+            else if here, inputs.cancelsStarted { line.actions = [.cancel] }
             return line
 
         case .requested(.queued(let position, let after)):
@@ -441,7 +444,7 @@ extension ConversationStatusPresentation {
             else if let title = inputs.runningTitle { behind = .conversation(title) }
             else { behind = .nothing }
             return ConversationStatusPresentation(kind: .line, symbol: "clock", title: ProcessingWords.waitingHere(inputs.queuedMode, behind: behind),
-                                                  actions: local.controlsQueue ? [.cancel] : [])
+                                                  actions: local.controlsQueue || inputs.cancelsStarted ? [.cancel] : [])
 
         case .requested(.models):
             if local.managesModels, let models = local.models { return modelsHere(models) }
@@ -458,7 +461,8 @@ extension ConversationStatusPresentation {
             let reason = inputs.pause ?? (local.controlsQueue ? .person : nil)
             return ConversationStatusPresentation(kind: .line, symbol: "pause.circle", title: "Paused",
                                                   detail: reason.flatMap { ProcessingWords.pausedLine($0, device: words.hereDeviceName) },
-                                                  actions: local.controlsQueue ? [.resume] + (inputs.cancelsStarted ? [.cancel] : []) : [])
+                                                  actions: local.controlsQueue ? [.resume] + (inputs.cancelsStarted ? [.cancel] : [])
+                                                                           : (inputs.cancelsStarted ? [.cancel] : []))
 
         case .requested(.device(let request)):
             let mine = request.requestedBy.id == words.thisDeviceID

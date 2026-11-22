@@ -84,7 +84,8 @@ public struct VersionHistoryScreen: View {
     private var content: some View {
         NavigationSplitView {
             List(selection: $selection) {
-                // A sheet has no title bar: the sheet names itself at the top of its list.
+                // A sheet with a list beside its page has no title bar to carry the name (a navigation bar over a split view hides
+                // the list's first rows), so the sheet names itself at the top of its list.
                 Text(VersionHistoryWords.title)
                     .font(.headline)
                     .foregroundStyle(DaybookPalette.Ink.title)
@@ -92,10 +93,10 @@ public struct VersionHistoryScreen: View {
                     .selectionDisabled()
                     .accessibilityAddTraits(.isHeader)
                 if let meeting {
-                    ForEach(VersionHistoryList.days(meeting.revisions), id: \.day) { group in
+                    ForEach(VersionHistoryList.entries(meeting.revisions), id: \.day) { group in
                         Section(group.day) {
-                            ForEach(group.revisions) { revision in
-                                VersionHistoryRow(revision: revision, in: meeting).tag(revision.id)
+                            ForEach(group.entries) { entry in
+                                VersionHistoryRow(revision: entry.revision, count: entry.count, in: meeting).tag(entry.id)
                             }
                         }
                     }
@@ -135,8 +136,12 @@ struct VersionHistoryRow: View {
     let revision: MeetingRevision
     let meeting: Meeting
 
-    init(revision: MeetingRevision, in meeting: Meeting) {
+    /// How many changes the row stands for (`VersionHistoryList.Entry`).
+    let count: Int
+
+    init(revision: MeetingRevision, count: Int = 1, in meeting: Meeting) {
         self.revision = revision
+        self.count = count
         self.meeting = meeting
     }
 
@@ -151,7 +156,7 @@ struct VersionHistoryRow: View {
                 .foregroundStyle(DaybookPalette.Ink.secondary)
                 .frame(width: 20)
                 .accessibilityHidden(true)
-            Text(RevisionText.title(revision, in: meeting))
+            Text(RevisionText.title(revision, count: count, in: meeting))
             Spacer()
             Text(time).font(.caption).monospacedDigit().foregroundStyle(DaybookPalette.Ink.secondary)
         }

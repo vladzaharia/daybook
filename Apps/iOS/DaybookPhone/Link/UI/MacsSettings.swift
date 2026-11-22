@@ -4,15 +4,20 @@ import DaybookLink
 import DaybookUI
 import SwiftUI
 
-/// Settings › Macs: paired Macs and how each is doing, and Pair with Your Mac.
-struct MacsSection: View {
+/// Settings › Devices: the paired Macs and the recorders, then Pair with Your Mac and Add Recorder, as one section.
+struct DevicesSection: View {
     @Environment(PhoneAppModel.self) private var model
+    @Environment(\.settingsPages) private var pages
     @Binding var showingPairing: Bool
+    @Binding var showingAddDevice: Bool
 
     var body: some View {
         Section {
             ForEach(model.link.macs) { mac in
                 SettingsLink(route: .mac(mac.id)) { MacRow(mac: mac, recordingBySync: model.isRecordingBySync(mac)) }
+            }
+            ForEach(model.devices.sessions) { session in
+                SettingsLink(route: .device(session.id)) { DeviceRow(session: session) }
             }
             Button {
                 showingPairing = true
@@ -20,8 +25,14 @@ struct MacsSection: View {
                 // The Mac's instructions name this item, so it's always the same words.
                 SettingsActionLabel(title: PairingWords.pairWithMac, systemImage: "plus")
             }
+            // Open, Add Recorder is the right page's; in the hand, a sheet.
+            if pages != nil {
+                SettingsLink(route: .addRecorder) { SettingsActionLabel(title: "Add Recorder…", systemImage: "plus") }
+            } else {
+                Button { showingAddDevice = true } label: { SettingsActionLabel(title: "Add Recorder…", systemImage: "plus") }
+            }
         } header: {
-            Text("Macs")
+            Text("Devices")
         } footer: {
             if let footer = Self.footer(model.macPresence, pairedNames: model.link.macs.map(\.name)) { Text(footer) }
         }
@@ -53,7 +64,7 @@ struct MacRow: View {
 }
 
 extension PhoneLink.Mac {
-    /// The line under its name in a list (Settings › Macs, the status sheet): recording, else the link's state.
+    /// The line under its name in a list (Settings › Devices, the status sheet): recording, else the link's state.
     func rowLine(recordingBySync: Bool) -> String {
         if let recording, isRecording {
             return recording.phase == .paused ? "Paused recording" : "Recording now"

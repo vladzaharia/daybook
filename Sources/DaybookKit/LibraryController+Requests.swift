@@ -16,12 +16,15 @@ extension LibraryController {
     /// Asks for processing. An open request for the same work is returned instead of a second one.
     @discardableResult
     public func requestProcessing(_ id: UUID, mode: ProcessingRequest.Mode, templateID: String? = nil,
+                                  speakers: ProcessingRequest.SpeakerAsk? = nil,
                                   by device: ProcessingRequest.Device? = nil, at now: Date = Date()) -> ProcessingRequest? {
         guard let meeting = meeting(id) else { return nil }
-        if let open = meeting.openProcessingRequests.first(where: { $0.mode == mode && $0.templateID == templateID && !$0.isSatisfied(by: meeting) }) {
+        if let open = meeting.openProcessingRequests.first(where: {
+            $0.mode == mode && $0.templateID == templateID && $0.speakers == speakers && !$0.isSatisfied(by: meeting)
+        }) {
             return open
         }
-        let request = ProcessingRequest(meetingID: id, mode: mode, templateID: templateID, requestedBy: device ?? thisDevice, createdAt: now)
+        let request = ProcessingRequest(meetingID: id, mode: mode, templateID: templateID, requestedBy: device ?? thisDevice, createdAt: now, speakers: speakers)
         update(id) { $0.upsertProcessingRequest(request) }
         return request
     }

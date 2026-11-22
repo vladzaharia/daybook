@@ -11,6 +11,11 @@ public enum RevisionRestore {
         case .segment(let id):
             guard let segment = meeting.unifiedTranscript.first(where: { $0.id == id }) else { return false }
             return segment.text != revision.oldValue
+        case .segmentSpeaker(let id):
+            // Back to the speaker it had (none, for a passage that began without one), while it's still with the one it was
+            // given and the earlier one is here.
+            guard let segment = meeting.unifiedTranscript.first(where: { $0.id == id }), (segment.speakerID ?? "") == revision.newValue else { return false }
+            return revision.oldValue.isEmpty || meeting.speakers.contains { $0.id == revision.oldValue }
         case .speaker(let id):
             guard let speaker = meeting.speakers.first(where: { $0.id == id }) else { return false }
             return speaker.name != revision.oldValue && !revision.oldValue.trimmingCharacters(in: .whitespaces).isEmpty
@@ -42,6 +47,7 @@ public enum RevisionRestore {
             meeting.setNotes(revision.oldValue)
             meeting.reanchorInk()
         case .segment(let id): meeting.correctSegment(id: id, text: revision.oldValue)
+        case .segmentSpeaker(let id): meeting.giveSpeaker(revision.oldValue, toPassages: [id])
         case .speaker(let id): meeting.renameSpeaker(id: id, name: revision.oldValue)
         case .summary:
             if let summary = decodedSummary(revision.oldValue) { meeting.setSummary(summary) }
@@ -73,6 +79,7 @@ public enum RevisionText {
         switch revision.kind {
         case .notes: return "Notes edited"
         case .segment: return "Passage corrected"
+        case .segmentSpeaker: return "Speaker changed"
         case .speaker: return "Speaker renamed"
         case .summary: return hasBefore(revision) ? "Summary replaced" : "Summary written"
         case .correctionTransfer: return "Correction reviewed"
@@ -97,6 +104,28 @@ public enum RevisionText {
         }
     }
 
+    /// What changes of one kind have in common, for merging them in a list; nil for a change that is never merged.
+    public static func mergeKey(_ revision: MeetingRevision) -> String? {
+        switch revision.kind {
+        case .photo: return "photo:\(revision.newValue)"
+        case .page: return "page:\(revision.newValue)"
+        default: return nil
+        }
+    }
+
+    /// A row's title: the change's own, or for several, how many ("2 Photos added").
+    public static func title(_ revision: MeetingRevision, count: Int, in meeting: Meeting) -> String {
+        guard count > 1 else { return title(revision, in: meeting) }
+        let noun: String
+        switch revision.kind {
+        case .photo: noun = "Photos"
+        case .page: noun = "Pages"
+        default: return title(revision, in: meeting)
+        }
+        let what = title(revision, in: meeting).split(separator: " ", maxSplits: 1).dropFirst().first.map(String.init) ?? ""
+        return "\(count) \(noun) \(what)"
+    }
+
     /// Whether there was text before the change to show. A conversation's first summary was
     /// written, not replaced: it shows on its own, with no empty Before (and nothing to restore).
     public static func hasBefore(_ revision: MeetingRevision) -> Bool {
@@ -107,7 +136,7 @@ public enum RevisionText {
     /// removed, moved, or put back, keep only a mark of what happened, which the title already says.
     public static func showsComparison(_ revision: MeetingRevision) -> Bool {
         switch revision.kind {
-        case .photo, .page, .source: return false
+        case .photo, .page, .source, .segmentSpeaker: return false
         default: return true
         }
     }
@@ -117,6 +146,11 @@ public enum RevisionText {
         case .segment(let id):
             if let segment = meeting.unifiedTranscript.first(where: { $0.id == id }) {
                 return "Passage at \(TimeLabel.short(segment.start))" + (meeting.speakerName(segment.speakerID).map { " · \($0)" } ?? "")
+            }
+        case .segmentSpeaker(let id):
+            if let segment = meeting.unifiedTranscript.first(where: { $0.id == id }) {
+                let (old, new) = (meeting.speakerName(revision.oldValue) ?? "No speaker", meeting.speakerName(revision.newValue) ?? "No speaker")
+                return "Passage at \(TimeLabel.short(segment.start)) · \(old) → \(new)"
             }
         case .speaker: return "\(revision.oldValue) → \(revision.newValue)"
         case .passage(let id):
@@ -138,7 +172,7 @@ public enum RevisionText {
         switch revision.kind {
         case .notes: return "note.text"
         case .segment: return "pencil"
-        case .speaker: return "person"
+        case .segmentSpeaker, .speaker: return "person"
         case .summary: return "text.alignleft"
         case .correctionTransfer: return "checkmark.circle"
         case .source: return "waveform"
@@ -289,6 +323,40 @@ public enum VersionHistoryList {
         for revision in revisions.reversed() {
             let day = DateGroup.title(for: revision.date, now: now, calendar: calendar)
             if result.last?.day == day { result[result.count - 1].revisions.append(revision) } else { result.append((day, [revision])) }
+        }
+        return result
+    }
+
+    /// A row of the Mac's list: a change, or several of one kind a moment apart. It stands for its newest change.
+    public struct Entry: Identifiable, Equatable, Sendable {
+        public let revision: MeetingRevision
+        /// How many changes it stands for; 1 for a change on its own.
+        public let count: Int
+        public var id: MeetingRevision.ID { revision.id }
+    }
+
+    /// Changes of one kind (photos added, pages deleted) less than this apart read as one row.
+    public static let mergeWindow: TimeInterval = 60
+
+    /// `days`, with consecutive changes of one kind within a minute of each other merged into one row ("2 Photos added"). Only
+    /// photo and page changes merge: they have no words to compare, so nothing is lost by reading them together.
+    public static func entries(_ revisions: [MeetingRevision], now: Date = Date(),
+                               calendar: Calendar = .current) -> [(day: String, entries: [Entry])] {
+        var result: [(day: String, entries: [Entry])] = []
+        var previous: MeetingRevision?
+        for group in days(revisions, now: now, calendar: calendar) {
+            var entries: [Entry] = []
+            for revision in group.revisions {
+                if let last = entries.last, let before = previous, let key = RevisionText.mergeKey(revision), key == RevisionText.mergeKey(last.revision),
+                   before.date.timeIntervalSince(revision.date) <= mergeWindow {
+                    entries[entries.count - 1] = Entry(revision: last.revision, count: last.count + 1)
+                } else {
+                    entries.append(Entry(revision: revision, count: 1))
+                }
+                previous = revision
+            }
+            result.append((group.day, entries))
+            previous = nil
         }
         return result
     }
