@@ -266,6 +266,12 @@ extension PhoneAppModel {
                 recoveryWaitsForUnlock = true
                 continue
             }
+            // A recording into a conversation deleted for good goes with it: it's never filed back.
+            if let journal = try? PhoneCaptureJournal.load(from: folder),
+               LibraryController.isDeletedForGood(journal.id, in: library.controller.rootURL) {
+                try? FileManager.default.removeItem(at: folder)
+                continue
+            }
             do {
                 let recording = try await PhoneRecorder.recover(in: folder)
                 // Made with Macs: it joins their conversation, and the ones this iPhone started are stopped.

@@ -66,6 +66,41 @@ final class LibraryTrashAndFilingTests: XCTestCase {
         XCTAssertEqual(trashed.map(\.title), ["Torn"])
     }
 
+    func testBehaviorEmptyTrashDeletesExactlyWhatWasTrashedAndNothingElse() async throws {
+        let library = try await open()
+        let first = library.newMeeting(title: "Old standup"), second = library.newMeeting(title: "Roadmap review")
+        let kept = library.newMeeting(title: "Kept")
+        _ = try await library.moveToTrash(first)
+        _ = try await library.moveToTrash(second)
+
+        let result = try await library.deleteFromTrash(library.trashedMeetingIDs())
+        XCTAssertEqual(Set(result.deleted), [first, second])
+        XCTAssertTrue(result.failed.isEmpty)
+        let hasTrash = await library.hasTrashedMeetings()
+        XCTAssertFalse(hasTrash)
+        for id in [first, second] {
+            // Only the ID's tombstone stays: the folder, with nothing but its marker in it.
+            let folder = library.rootURL.appendingPathComponent("Trash/\(id.uuidString)")
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path), [TrashTombstone.fileName])
+        }
+        XCTAssertNotNil(library.meeting(kept), "what wasn't in the Trash stays")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: library.rootURL.appendingPathComponent("Meetings/\(kept.uuidString)").path))
+    }
+
+    func testBehaviorDeleteNowTakesOnlyTheChosenOnesAndNotOneRestoredAMomentBefore() async throws {
+        let library = try await open()
+        let chosen = library.newMeeting(title: "Chosen"), restored = library.newMeeting(title: "Restored"), left = library.newMeeting(title: "Left")
+        for id in [chosen, restored, left] { _ = try await library.moveToTrash(id) }
+
+        // The question was asked about all three; one is put back before the answer.
+        try await library.restoreFromTrash(restored)
+        let result = try await library.deleteFromTrash([chosen, restored])
+        XCTAssertEqual(result.deleted, [chosen], "the restored one isn't in the Trash to delete")
+        XCTAssertNotNil(library.meeting(restored), "it is still in the library")
+        let remaining = await library.trashedMeetings()
+        XCTAssertEqual(remaining.map(\.id), [left], "one not chosen stays in the Trash")
+    }
+
     func testBehaviorTheTrashPlaceListsNoneOfTheLibrarysConversations() {
         XCTAssertEqual(LibraryPlace.trash.meetings(in: [Meeting(title: "A")]), [])
         XCTAssertTrue(LibraryPlace.trash.isTrash)

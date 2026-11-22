@@ -107,6 +107,30 @@ final class AppStateTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: staged.appendingPathComponent("microphone.caf").path))
     }
 
+    func testRecoveryNeverBringsBackAConversationDeletedForGoodAndItsStagingGoes() async throws {
+        let (state, root, defaults) = try await makeState()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let id = state.newMeeting(title: "Deleted for good")
+        await state.flush()
+        state.trashMeeting(id)
+        try await waitUntil("it to go to the Trash") { !state.meetings.contains { $0.id == id } }
+        // A recording into it whose filing failed, left in Staging.
+        let staged = root.appendingPathComponent("Staging/\(id.uuidString)")
+        try FileManager.default.createDirectory(at: staged, withIntermediateDirectories: true)
+        _ = try audio(staged, name: "microphone.caf", frequency: 220)
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .millisecondsSince1970
+        let manifest = CaptureSessionManifest(id: UUID(), startedAt: Date(), hostTimeSeconds: 1, includeSystemAudio: false)
+        try encoder.encode(manifest).write(to: staged.appendingPathComponent("capture-session.json"))
+        _ = try await state.library.deleteFromTrash([id])
+
+        let restarted = AppState(libraryURL: root, defaults: defaults)
+        await restarted.initialize()
+        await restarted.flush()
+        XCTAssertTrue(restarted.meetings.isEmpty, "never recovered into the library")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staged.path), "the person deleted it: its recording goes too")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("Meetings/\(id.uuidString)").path))
+    }
+
     func testBehaviorQuittingWhileRecordingAsksAndASecondQuitWaitsForTheFirst() {
         XCTAssertEqual(QuitDecision.decide(quitting: false, hasState: true, recording: true, poweringOff: false), .askToStopRecording)
         XCTAssertEqual(QuitDecision.decide(quitting: false, hasState: true, recording: true, poweringOff: true), .finishThenQuit,
@@ -229,6 +253,30 @@ final class AppStateTests: XCTestCase {
         try await waitUntil("both to come back") { state.meetings.count == 3 }
         XCTAssertFalse(undo.canUndo, "Undone from the notice: Edit › Undo has nothing left to take back")
         XCTAssertNil(state.notice)
+        await state.flush()
+    }
+
+    func testBehaviorDeleteNowTakesBackTheMoveToTrashUndoForWhatItDeleted() async throws {
+        let (state, root, _) = try await makeState()
+        let ids = await threeConversations(state)
+        let undo = undoManager()
+        state.trashMeetings([ids[1]], undoManager: undo)
+        try await waitUntil("it to go") { state.meetings.count == 2 }
+        state.trashMeetings([ids[0], ids[2]], undoManager: undo)
+        try await waitUntil("both to go") { state.meetings.isEmpty }
+        XCTAssertEqual(state.noticeLines, ["Moved “Tuesday” to the Trash.", "Moved 2 conversations to the Trash."])
+        let staged = root.appendingPathComponent("Staging/\(ids[1].uuidString)")
+        try FileManager.default.createDirectory(at: staged, withIntermediateDirectories: true)
+
+        await state.deleteFromTrash([ids[1], ids[2]])
+        XCTAssertEqual(state.noticeLines, ["Moved 2 conversations to the Trash.", "Deleted 2 conversations."],
+                       "Tuesday's Undo goes with it; the other still has one to put back")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staged.path), "a recording left for it goes too")
+        XCTAssertEqual(undo.undoActionName, "Move to Trash")
+        undo.undo()
+        try await waitUntil("the one left to come back") { state.meetings.count == 1 }
+        XCTAssertEqual(state.meetings.map(\.id), [ids[0]])
+        XCTAssertFalse(undo.canUndo, "Tuesday's Move to Trash has nothing to undo")
         await state.flush()
     }
 

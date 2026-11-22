@@ -128,6 +128,17 @@ private struct ReadingLayout: View {
     } message: {
       Text(LibraryWords.trashMessage(count: session.confirmingTrash.count))
     }
+    .alert(
+      session.confirmingDeleteNow?.title ?? "",
+      isPresented: Binding(
+        get: { session.confirmingDeleteNow != nil }, set: { if !$0 { session.confirmingDeleteNow = nil } }),
+      presenting: session.confirmingDeleteNow
+    ) { request in
+      Button("Delete", role: .destructive) { deleteNow(request.ids) }
+      Button("Cancel", role: .cancel) {}
+    } message: { _ in
+      Text(LibraryWords.deleteNowMessage)
+    }
     .modifier(PhoneMergeConfirmation(library: library))
     .onChange(of: library.isLoaded, initial: true) { _, loaded in
       guard loaded else { return }
@@ -177,6 +188,23 @@ private struct ReadingLayout: View {
           message: failures.count == 1
             ? "Try again." : "\(failures.count) conversations weren’t moved. Try again.",
           details: failures.joined(separator: "\n"))
+      }
+    }
+  }
+
+  /// Deletes conversations from the Trash for good (`LibraryController.deleteFromTrash`) and says what went.
+  private func deleteNow(_ ids: [UUID]) {
+    Task {
+      do {
+        let result = try await library.deleteFromTrash(ids)
+        let lines = LibraryWords.deletedNow(deleted: result.deleted.count, failed: result.failed.count)
+        if !result.failed.isEmpty {
+          session.alert = ReadingAlert(title: "Couldn’t Delete", message: lines.joined(separator: " "), details: nil)
+        } else if !lines.isEmpty {
+          session.confirmation = ConfirmationBeat(lines.joined(separator: " "))
+        }
+      } catch {
+        session.alert = ReadingAlert(title: "Couldn’t Delete", error: error, fallback: "Try again.")
       }
     }
   }

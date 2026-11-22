@@ -175,7 +175,8 @@ public struct TrashedConversationPage: View {
                 }
             }
             .frame(maxWidth: ReadingGeometry.measure(density), alignment: .leading)
-            .padding(.horizontal, DaybookSpacing.s5)
+            // In a window the status glyph hangs 24 pt into the margin: the margin keeps it 8 pt off the divider.
+            .padding(.horizontal, density == .touch ? DaybookSpacing.s5 : DaybookSpacing.s6)
             .padding(.vertical, DaybookSpacing.s6)
             .frame(maxWidth: .infinity)
             .textSelection(.enabled)

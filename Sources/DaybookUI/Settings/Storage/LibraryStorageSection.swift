@@ -9,10 +9,15 @@ import SwiftUI
 /// library folder.
 public struct LibraryStorageSection: View {
     private let report: LibraryStorageReport?
+    private let emptyTrash: (() -> Void)?
     @Environment(\.daybookDensity) private var density
 
     /// - Parameter report: Nil while it's measured.
-    public init(report: LibraryStorageReport?) { self.report = report }
+    /// - Parameter emptyTrash: Asks to delete what the Trash holds; shown beside its size while it holds any.
+    public init(report: LibraryStorageReport?, emptyTrash: (() -> Void)? = nil) {
+        self.report = report
+        self.emptyTrash = emptyTrash
+    }
 
     private var here: String { "this \(ICloudSyncShown.device)" }
 
@@ -28,6 +33,16 @@ public struct LibraryStorageSection: View {
                 figure("Audio", report.audio, detail: StorageWords.audioBreakdown(report, here: here))
                 figure("Conversations", report.conversations)
                 figure("Models", report.models)
+                if report.trash > 0 {
+                    LabeledContent {
+                        HStack {
+                            Text(ByteSize.format(report.trash)).monospacedDigit()
+                            if let emptyTrash { Button(LibraryWords.emptyTrash, action: emptyTrash) }
+                        }
+                    } label: {
+                        Text(LibraryWords.trash)
+                    }
+                }
             } else {
                 ProgressView().controlSize(.small).frame(maxWidth: .infinity, alignment: .leading)
             }
