@@ -9,15 +9,17 @@ import SwiftUI
 struct PeopleSection: View {
     let library: LibraryController
     let meeting: Meeting
+    /// Whether this device finds speakers (Tell speakers apart); a conversation made without that has none to show.
+    var findsSpeakers = true
     @Environment(\.undoManager) private var undoManager
 
     var body: some View {
         let people = meeting.peopleSpeakers
         if people.isEmpty {
-            Text("No speakers yet").foregroundStyle(DaybookPalette.Ink.secondary)
+            Text(findsSpeakers ? "No speakers yet" : "Speakers off").foregroundStyle(DaybookPalette.Ink.secondary)
         } else {
             ForEach(people) { person in
-                SpeakerRow(person: person, profiles: library.speakerProfiles, me: library.ownerProfileID) { name in
+                SpeakerRow(person: person, profiles: library.speakerProfiles, me: library.ownerProfileID, thisIsMe: thisIsMe(person)) { name in
                     // One person found more than once is renamed as one, so they stay one person.
                     library.update(meeting.id, actionName: "Rename Speaker", undoManager: undoManager) { meeting in
                         for id in person.speakerIDs { meeting.renameSpeaker(id: id, name: name) }
@@ -44,8 +46,20 @@ extension PeopleSection {
     /// row's own Not <name>; the library-wide Not Me is on the profile.
     @ViewBuilder fileprivate func meMenu(_ person: MeetingPerson) -> some View {
         if library.canMarkSpeakerAsMe(person.speakerIDs, in: meeting.id) {
-            Button(SpeakerProfileWords.thisIsMe) { library.markSpeakerAsMe(person.speakerIDs, in: meeting.id) }
+            Button(SpeakerProfileWords.thisIsMe) { library.markSpeakerAsMe(person.speakerIDs, in: meeting.id, undoManager: undoManager) }
         }
+    }
+
+    /// This Is Me on the row, for the person it is most likely to be: while the library has no profile that is the
+    /// person's own, anyone it does something for, and the microphone's "Me" when it does. With nothing to go by yet
+    /// (the "Me" speaker has no name), it takes the person to the name, which is what it needs.
+    fileprivate func thisIsMe(_ person: MeetingPerson) -> (() -> Bool)? {
+        let isMicrophone = person.speaker.name == FusionOptions().ownerName
+        let noneYet = library.ownerProfileID == nil
+        let offered = library.canMarkSpeakerAsMe(person.speakerIDs, in: meeting.id) ? (noneYet || isMicrophone) : (noneYet && isMicrophone)
+        guard offered else { return nil }
+        let (ids, id, undoManager) = (person.speakerIDs, meeting.id, undoManager)
+        return { library.markSpeakerAsMe(ids, in: id, undoManager: undoManager) }
     }
 }
 
@@ -55,6 +69,8 @@ struct SpeakerRow<Identity: View>: View {
     let person: MeetingPerson
     let profiles: [SpeakerProfile]
     let me: UUID?
+    /// This Is Me under the name; false from it means there was nothing to go by, and the name takes focus.
+    var thisIsMe: (() -> Bool)?
     let save: (String) -> Void
     @ViewBuilder var identity: Identity
     @State private var draft = ""
@@ -85,6 +101,12 @@ struct SpeakerRow<Identity: View>: View {
             }
             // Lined up with the name, past the ink dot.
             identity.padding(.leading, dot + gap)
+            if let thisIsMe {
+                Button(SpeakerProfileWords.thisIsMe) { if !thisIsMe() { focused = true } }
+                    .buttonStyle(.daybookLink)
+                    .font(touch ? .footnote : .caption)
+                    .padding(.leading, dot + gap)
+            }
         }
         .onAppear {
             draft = person.speaker.name

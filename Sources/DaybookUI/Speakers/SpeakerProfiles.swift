@@ -307,7 +307,7 @@ struct SpeakerProfileRow: View {
             HStack(spacing: 6) {
                 Text(profile.name).foregroundStyle(DaybookPalette.Ink.title)
                 if library.ownerProfileID == profile.id {
-                    Text(SpeakerProfileWords.you)
+                    Text(SpeakerProfileWords.me)
                         .font(.caption2.weight(.semibold)).foregroundStyle(DaybookPalette.Ink.secondary)
                         .padding(.horizontal, 6).padding(.vertical, 1)
                         .background(Capsule().fill(Color.primary.opacity(0.08)))
@@ -342,16 +342,22 @@ struct SpeakerProfileMenu: View {
     }
 }
 
-/// This Is Me on a profile that isn't the person's, Not Me on the one that is.
+/// This Is Me on a profile that isn't the person's, Not Me on the one that is. Where another profile is the person's,
+/// it says so ("This Is Me (instead of Vlad)"), and undo puts that one back.
 struct ThisIsMeButton: View {
     let library: LibraryController
     let profile: SpeakerProfile
+    @Environment(\.undoManager) private var undoManager
 
     var body: some View {
         if library.ownerProfileID == profile.id {
-            Button(SpeakerProfileWords.notMe) { library.setOwnerProfile(nil) }
+            Button(SpeakerProfileWords.notMe) {
+                library.setOwnerProfile(nil, actionName: SpeakerProfileWords.notMe, undoManager: undoManager)
+            }
         } else {
-            Button(SpeakerProfileWords.thisIsMe) { library.setOwnerProfile(profile.id) }
+            Button(library.ownerProfileName.map(SpeakerProfileWords.thisIsMe(insteadOf:)) ?? SpeakerProfileWords.thisIsMe) {
+                library.setOwnerProfile(profile.id, actionName: SpeakerProfileWords.thisIsMe, undoManager: undoManager)
+            }
         }
     }
 }

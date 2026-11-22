@@ -438,6 +438,64 @@ final class SpeakerProfileLibraryTests: XCTestCase {
         XCTAssertFalse(library.canMarkSpeakerAsMe(["call:b"], in: id), "now the person's me")
     }
 
+    private func undoManager() -> UndoManager {
+        let undo = UndoManager()
+        undo.groupsByEvent = false
+        return undo
+    }
+
+    /// One action, as a menu or a button makes it: its own undo group.
+    private func grouped(_ undo: UndoManager, _ action: () -> Void) {
+        undo.beginUndoGrouping()
+        action()
+        undo.endUndoGrouping()
+    }
+
+    func testBehaviorThisIsMeFromAConversationCanBeUndoneAndRedone() async throws {
+        let library = try await library("Mac", synced: false)
+        let id = conversation("quiet", in: library, daysAgo: 1, [("me", mine(87), 5)])
+        library.renameSpeaker("quiet:me", to: "Vlad", in: id)
+        let undo = undoManager()
+        grouped(undo) { XCTAssertTrue(library.markSpeakerAsMe(["quiet:me"], in: id, undoManager: undo)) }
+        XCTAssertEqual(library.metadata.ownerProfileSelection, SpeakerProfile.id(forName: "Vlad"))
+        XCTAssertEqual(undo.undoActionName, "This Is Me")
+        undo.undo()
+        XCTAssertNil(library.metadata.ownerProfileSelection, "the choice it made is taken back")
+        XCTAssertEqual(name(library, id, "quiet:me"), "Vlad", "the name the person gave stays")
+        undo.redo()
+        XCTAssertEqual(library.metadata.ownerProfileSelection, SpeakerProfile.id(forName: "Vlad"))
+    }
+
+    func testBehaviorThisIsMeNamingAnotherSpeakerAsMeUndoesToTheNameItHad() async throws {
+        let (library, vlad, _) = try await markingLibrary()
+        library.setOwnerProfile(vlad.id)
+        let id = conversation("call", in: library, daysAgo: 1, [("a", SyntheticVoice.near(SyntheticVoice.person(6), similarity: 0.95, seed: 83), 200)])
+        let before = name(library, id, "call:a")
+        let undo = undoManager()
+        grouped(undo) { XCTAssertTrue(library.markSpeakerAsMe(["call:a"], in: id, undoManager: undo)) }
+        XCTAssertEqual(name(library, id, "call:a"), "Vlad")
+        undo.undo()
+        XCTAssertEqual(name(library, id, "call:a"), before)
+        XCTAssertEqual(library.ownerProfileID, vlad.id)
+    }
+
+    func testBehaviorReplacingMeFromSpeakerProfilesSaysSoAndUndoPutsTheEarlierOneBack() async throws {
+        let (library, vlad, bob) = try await markingLibrary()
+        library.setOwnerProfile(vlad.id)
+        XCTAssertEqual(library.ownerProfileName, "Vlad")
+        XCTAssertEqual(library.speakerProfilesSummary, "2 profiles · Me: Vlad")
+        let undo = undoManager()
+        grouped(undo) { library.setOwnerProfile(bob.id, actionName: SpeakerProfileWords.thisIsMe, undoManager: undo) }
+        XCTAssertEqual(library.ownerProfileID, bob.id)
+        XCTAssertEqual(undo.undoActionName, "This Is Me")
+        undo.undo()
+        XCTAssertEqual(library.ownerProfileID, vlad.id)
+        undo.redo()
+        XCTAssertEqual(library.ownerProfileID, bob.id)
+        library.setOwnerProfile(nil)
+        XCTAssertEqual(library.speakerProfilesSummary, "2 profiles", "no me, nothing added")
+    }
+
     func testBehaviorMarkingARecognizedSpeakerAdoptsItsProfileAndConfirmsIt() async throws {
         let (library, vlad, _) = try await markingLibrary()
         let id = conversation("call", in: library, daysAgo: 1, [("me", mine(85), 200)])

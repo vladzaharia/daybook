@@ -60,7 +60,7 @@ struct SpeakerNameField<Field: View>: View {
                     Image(systemName: "plus.circle").foregroundStyle(DaybookPalette.Ink.link).accessibilityHidden(true)
                 }
                 Text(row.kind == .add ? "Add “\(row.name)”" : row.name).lineLimit(1)
-                if row.isMe { Text(SpeakerProfileWords.you).foregroundStyle(DaybookPalette.Ink.secondary) }
+                if row.isMe { Text(SpeakerProfileWords.me).foregroundStyle(DaybookPalette.Ink.secondary) }
                 Spacer(minLength: 0)
                 if row.kind != .add, row.name == current {
                     Image(systemName: "checkmark").foregroundStyle(DaybookPalette.Ink.secondary).accessibilityHidden(true)
@@ -72,7 +72,7 @@ struct SpeakerNameField<Field: View>: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(row.isMe ? "\(row.name), \(SpeakerProfileWords.you)" : (row.kind == .add ? "Add “\(row.name)”" : row.name))
+        .accessibilityLabel(row.isMe ? "\(row.name), \(SpeakerProfileWords.me)" : (row.kind == .add ? "Add “\(row.name)”" : row.name))
     }
 
     private func move(_ step: Int) -> KeyPress.Result {

@@ -13,13 +13,16 @@ public enum SpeakerProfileWords {
         }
     }
 
-    /// Settings' row: "No profiles yet", "1 profile", "3 profiles".
-    public static func profiles(_ count: Int) -> String {
+    /// Settings' row: "No profiles yet", "1 profile", "3 profiles", then "· Me: Vlad" once one is the person's own.
+    public static func profiles(_ count: Int, me: String? = nil) -> String {
+        let counted: String
         switch count {
-        case 0: return "No profiles yet"
-        case 1: return "1 profile"
-        default: return "\(count) profiles"
+        case 0: counted = "No profiles yet"
+        case 1: counted = "1 profile"
+        default: counted = "\(count) profiles"
         }
+        guard count > 0, let me, !me.isEmpty else { return counted }
+        return "\(counted) · \(Self.me): \(me)"
     }
 
     /// Where a voiceprint came from: a name the person gave, one they confirmed, or one Daybook learned.
@@ -39,7 +42,10 @@ public enum SpeakerProfileWords {
     /// Marking the profile that is the person themselves, and its mark in the list.
     public static let thisIsMe = "This Is Me"
     public static let notMe = "Not Me"
-    public static let you = "You"
+    /// This Is Me where another profile is the person's: "This Is Me (instead of Vlad)".
+    public static func thisIsMe(insteadOf name: String) -> String { "This Is Me (instead of \(name))" }
+    /// What names the person themself: the transcript's microphone speaker, captions, the list's mark, a profile's capsule.
+    public static let me = "Me"
 
     /// A conversation a voiceprint came from that isn't in the library any more.
     public static let deletedConversation = "Deleted conversation"

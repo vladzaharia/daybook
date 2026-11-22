@@ -63,7 +63,7 @@ final class LiveTranscriptionTests: XCTestCase {
             line("One thing first.", .call, "S1", "Priya"),
             line("Go ahead.", .call, "S2"),
         ])
-        XCTAssertEqual(turns.map(\.label), ["You", "Priya", "Call"])
+        XCTAssertEqual(turns.map(\.label), ["Me", "Priya", "Call"])
         XCTAssertEqual(turns.map(\.segments.count), [2, 2, 1])
     }
 }

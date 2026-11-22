@@ -51,6 +51,11 @@ final class ConversationInfoWordsTests: XCTestCase {
         XCTAssertTrue(SpeakerProfileWords.deleteMessage.contains("stops recognizing this voice"))
         XCTAssertEqual(SpeakerProfileWords.mergeInto("Vlad"), "Merge Into Vlad", "the same on the Mac and the iPhone")
         XCTAssertEqual(SpeakerProfileWords.profiles(0), "No profiles yet")
+        XCTAssertEqual(SpeakerProfileWords.profiles(3, me: "Vlad"), "3 profiles · Me: Vlad")
+        XCTAssertEqual(SpeakerProfileWords.profiles(1, me: "Vlad"), "1 profile · Me: Vlad")
+        XCTAssertEqual(SpeakerProfileWords.profiles(3, me: nil), "3 profiles")
+        XCTAssertEqual(SpeakerProfileWords.me, "Me", "one word for the person")
+        XCTAssertEqual(SpeakerProfileWords.thisIsMe(insteadOf: "Vlad"), "This Is Me (instead of Vlad)")
         XCTAssertEqual(SpeakerProfileWords.voiceprints(2), "2 voiceprints")
         for words in [SpeakerProfileWords.deleteMessage, SpeakerProfileWords.forgetMessage,
                       SpeakerProfileWords.removeVoiceprintMessage("Vlad", from: "Planning walk")] {

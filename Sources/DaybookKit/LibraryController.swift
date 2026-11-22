@@ -613,6 +613,17 @@ public final class LibraryController {
         choose(.ownerProfile, profileID?.uuidString, at: now)
     }
 
+    /// The same, and `undoManager` can take it back under `actionName` ("This Is Me", "Not Me"); redo chooses it again.
+    public func setOwnerProfile(_ profileID: UUID?, actionName: String, undoManager: UndoManager?, at now: Date = Date()) {
+        let before = metadata.ownerProfileSelection
+        setOwnerProfile(profileID, at: now)
+        guard let undoManager, before != metadata.ownerProfileSelection else { return }
+        undoManager.registerUndo(withTarget: self) { library in
+            library.setOwnerProfile(before, actionName: actionName, undoManager: undoManager)
+        }
+        undoManager.setActionName(actionName)
+    }
+
     /// Compress Older Recordings (Settings › Storage): the library's choice, so every device shows the same and every Mac
     /// acts on it; 30 days while nobody chose, Never for a value this version can't read.
     public var recordingCompression: RecordingCompressionAge { newerSettingsSkipped ? .never : metadata.recordingCompression }
