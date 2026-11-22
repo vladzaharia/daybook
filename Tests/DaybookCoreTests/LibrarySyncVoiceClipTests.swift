@@ -112,7 +112,10 @@ final class LibrarySyncVoiceClipTests: XCTestCase {
         try assertNoPlaintext()
     }
 
-    func testBehaviorAnEagerReplicaWaitsForAClipBeforeTheConversationApplies() async throws {
+    /// A clip whose object isn't there (not downloaded yet, or gone: a Daybook from before clips that seals may delete
+    /// it) never holds its conversation back: an eager replica applies it without the clip, which it doesn't hold (so
+    /// the source stays uncovered there), and installs it on a later pass once the object is there.
+    func testBehaviorAnEagerReplicaAppliesAConversationWithoutAClipThatIsntThereAndInstallsItLater() async throws {
         let (meeting, clip, bytes) = try await meetingWithClip(on: "A")
         let a = try mac("A")
         try await pass(a, "A", [meeting])
@@ -120,17 +123,91 @@ final class LibrarySyncVoiceClipTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: blob), bytes, "one object, named by its bytes")
         try FileManager.default.removeItem(at: blob)
         let b = try mac("B")
-        let waiting = try await b.synchronize(meetings: [])
-        XCTAssertTrue(waiting.meetings.isEmpty, "the conversation waits for the clip it names")
-        XCTAssertGreaterThan(waiting.pendingDownloads, 0)
-        try await b.acknowledge(waiting.checkpointID)
+        let applied = try await pass(b, "B")
+        XCTAssertEqual(applied.pendingDownloads, 0, "nothing waits for the clip")
+        XCTAssertEqual(applied.meetings.first?.voiceClips, [clip], "the conversation still names it")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: clipFile("B", meeting, clip).path))
         try bytes.write(to: blob)
-        let arrived = try await pass(b, "B")
-        XCTAssertEqual(arrived.pendingDownloads, 0)
-        XCTAssertEqual(arrived.meetings.first?.voiceClips, [clip])
-        XCTAssertEqual(try Data(contentsOf: clipFile("B", meeting, clip)), bytes)
+        let later = try await pass(b, "B")
+        XCTAssertEqual(later.pendingDownloads, 0)
+        XCTAssertEqual(try Data(contentsOf: clipFile("B", meeting, clip)), bytes, "installed once it's there")
         let history = await b.voiceClipFilesInHistory(of: meeting.id)
         XCTAssertEqual(history, [clip.relativePath])
+    }
+
+    /// A Mac that holds a clip whole puts its object back when it's gone from iCloud.
+    func testBehaviorAMacHoldingAClipUploadsItAgainWhenItsObjectIsGone() async throws {
+        let (meeting, clip, bytes) = try await meetingWithClip(on: "A")
+        let a = try mac("A")
+        try await pass(a, "A", [meeting])
+        let blob = remote.appendingPathComponent("Blobs/\(clip.sha256)")
+        try FileManager.default.removeItem(at: blob)
+        let again = try await pass(a, "A", [meeting])
+        XCTAssertEqual(again.publishedEvents, 0, "nothing changed in the conversation")
+        XCTAssertEqual(try Data(contentsOf: blob), bytes)
+    }
+
+    /// The iPhone never fetches clips; one whose object is gone is left out of what it publishes, by reference or
+    /// otherwise, and the conversation still publishes and applies everywhere.
+    func testBehaviorTheIPhonePublishesAConversationWhoseClipObjectIsGone() async throws {
+        let (meeting, clip, _) = try await meetingWithClip(on: "Mac")
+        let mac = try mac("Mac"), phone = try phone("Phone")
+        try await pass(mac, "Mac", [meeting])
+        let phoneResult = try await pass(phone, "Phone")
+        var onPhone = try XCTUnwrap(phoneResult.meetings.first)
+        /// Whether the event whose notes are `notes` lists the clip among its assets.
+        func listed(_ notes: String) throws -> Bool? {
+            let events = try FileManager.default.contentsOfDirectory(atPath: remote.appendingPathComponent("Events").path).filter { $0.hasSuffix(".json") }
+            for name in events {
+                let event = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: remote.appendingPathComponent("Events/\(name)"))) as? [String: Any])
+                guard (event["snapshot"] as? [String: Any])?["notes"] as? String == notes else { continue }
+                return ((event["assets"] as? [[String: Any]]) ?? []).contains { $0["sha256"] as? String == clip.sha256 }
+            }
+            return nil
+        }
+        // While the object is there, an edit lists the clip by reference.
+        onPhone.setNotes("First, on the phone")
+        let first = try await pass(phone, "Phone", [onPhone])
+        XCTAssertEqual(first.publishedEvents, 1)
+        XCTAssertEqual(try listed("First, on the phone"), true, "by reference to the object the sync folder holds")
+        onPhone = first.meetings.first { $0.id == meeting.id } ?? onPhone
+        try FileManager.default.removeItem(at: remote.appendingPathComponent("Blobs/\(clip.sha256)"))
+        onPhone.setNotes("Typed on the phone")
+        let sent = try await pass(phone, "Phone", [onPhone])
+        XCTAssertEqual(sent.publishedEvents, 1)
+        XCTAssertEqual(sent.warnings, [])
+        XCTAssertEqual(try listed("Typed on the phone"), false, "never by reference to an object that isn't there")
+        let other = try self.mac("Other")
+        let arrived = try await pass(other, "Other")
+        XCTAssertEqual(arrived.pendingDownloads, 0)
+        XCTAssertEqual(arrived.meetings.first?.notes, "Typed on the phone")
+        XCTAssertEqual(arrived.meetings.first?.voiceClips, [clip])
+    }
+
+    /// In an encrypted library too: a clip whose sealed object is gone never holds a publication or the sealer back.
+    func testBehaviorAGoneClipObjectHoldsNothingBackInAnEncryptedLibrary() async throws {
+        let mac = try mac("Mac"), phone = try phone("Phone")
+        try await pass(mac, "Mac")
+        let key = try await mac.enableSealing(recovery: RecoveryKey.generate())
+        let (meeting, clip, _) = try await meetingWithClip(on: "Mac")
+        try await pass(mac, "Mac", [meeting])
+        let phoneResult = try await pass(phone, "Phone")
+        var onPhone = try XCTUnwrap(phoneResult.meetings.first)
+        // The clip's sealed object goes, and the Mac doesn't hold the clip either.
+        let object = try XCTUnwrap(key.objectName(.blob, plaintextSHA256: clip.sha256))
+        XCTAssertTrue(files("Sealed/Blobs").contains(object))
+        try FileManager.default.removeItem(at: clipFile("Mac", meeting, clip))
+        try FileManager.default.removeItem(at: remote.appendingPathComponent("Sealed/Blobs/\(object)"))
+        onPhone.setNotes("Typed on the phone")
+        let sent = try await pass(phone, "Phone", [onPhone])
+        XCTAssertEqual(sent.publishedEvents, 1, "published, not waiting for an object that isn't coming")
+        XCTAssertEqual(sent.warnings, [])
+        let pulled = try await pass(mac, "Mac", [meeting])
+        XCTAssertEqual(pulled.pendingDownloads, 0)
+        XCTAssertEqual(pulled.meetings.first?.notes, "Typed on the phone")
+        let progressValue = await mac.sealerProgress
+        let progress = try XCTUnwrap(progressValue)
+        XCTAssertEqual(progress.remaining, 0, "nothing left to seal: the clip isn't anywhere to seal from")
     }
 
     /// An event from a Daybook that keeps `voiceClips` as a key it doesn't know lists no clip assets: the clip still
@@ -165,6 +242,98 @@ final class LibrarySyncVoiceClipTests: XCTestCase {
         XCTAssertEqual(result.publishedEvents, 0, "a path that isn't the source's is never published")
         XCTAssertFalse(result.warnings.isEmpty)
         do { try await a.validateVoiceClipAssets(meeting); XCTFail("accepted it") } catch LibrarySyncError.invalidBlob { }
+    }
+
+    /// An encrypted library whose conversation's recording a Mac compressed and whose original it let go: the original's
+    /// object is sealed under the first key, and a rotation follows, past the grace. Returns the superseded original's
+    /// digest and the new key.
+    private func rotateAfterCompressing(holding held: (UUID) -> Set<UUID>?,
+                                        judging judged: (UUID) -> Set<UUID> = { [$0] }) async throws -> (original: String, key: LibraryKey) {
+        let mac = try mac("Mac")
+        try await pass(mac, "Mac")
+        try await mac.enableSealing(recovery: RecoveryKey.generate())
+        var (meeting, _, _) = try await meetingWithClip(on: "Mac")
+        try await pass(mac, "Mac", [meeting])
+        // The copy, here and verified (bytes stand in for AAC: sync never decodes audio), named by the track.
+        let original = meeting.tracks[0]
+        let copyBytes = Data((0..<3_000).map { UInt8(truncatingIfNeeded: $0 &* 7) })
+        let digest = AudioDigest.sha256(data: copyBytes)
+        let relativePath = RecordingCompression.relativePath(trackID: original.id, sha256: digest)
+        let folder = local("Mac").appendingPathComponent("Meetings/\(meeting.id.uuidString)")
+        try copyBytes.write(to: folder.appendingPathComponent(relativePath))
+        RecordingCompression.File(relativePath: relativePath, fileName: "copy.m4a", sha256: digest, encoding: TrackEncoding(
+            method: "aac-lc-64", sourceFormat: "PCM", previousSHA256: original.sha256, previousRelativePath: original.relativePath,
+            previousFileName: original.fileName, encodedAt: Date())).apply(to: &meeting.tracks[0])
+        try await MeetingStore(rootURL: local("Mac")).save(meeting)
+        try await pass(mac, "Mac", [meeting])
+        try FileManager.default.removeItem(at: folder.appendingPathComponent(original.relativePath))
+        await mac.holdOriginalsInICloud(for: held(meeting.id), judged: judged(meeting.id))
+        let start = Date()
+        await mac.setSealerClock { start }
+        let second = try await mac.rotateKey(now: start)
+        try await pass(mac, "Mac", [meeting])
+        await mac.setSealerClock { start.addingTimeInterval(LibrarySyncEngine.retirementGrace + 60) }
+        try await pass(mac, "Mac", [meeting])
+        let progressValue = await mac.sealerProgress
+        let progress = try XCTUnwrap(progressValue)
+        XCTAssertTrue(progress.oldKeysRetired, "\(progress)")
+        return (original.sha256, second)
+    }
+
+    /// The sealer keeps a superseded original a voice profile still needs in iCloud (its conversation is among
+    /// `meetingsHoldingOriginalsInICloud`, or the library hasn't said): sealed again under the new key, not retired with
+    /// the old one.
+    func testBehaviorASupersededOriginalAVoiceProfileNeedsStaysThroughAKeyRotation() async throws {
+        let (original, key) = try await rotateAfterCompressing { [$0] }
+        XCTAssertTrue(files("Sealed/Blobs").contains(try XCTUnwrap(key.objectName(.blob, plaintextSHA256: original))))
+    }
+
+    func testBehaviorASupersededOriginalIsKeptWhileTheLibraryHasntSaid() async throws {
+        let (original, key) = try await rotateAfterCompressing { _ in nil }
+        XCTAssertTrue(files("Sealed/Blobs").contains(try XCTUnwrap(key.objectName(.blob, plaintextSHA256: original))))
+    }
+
+    /// A conversation the library hadn't judged (one that arrives in the pass) counts as needed too.
+    func testBehaviorASupersededOriginalOfAConversationTheLibraryDidntJudgeIsKept() async throws {
+        let (original, key) = try await rotateAfterCompressing(holding: { _ in [] }, judging: { _ in [] })
+        XCTAssertTrue(files("Sealed/Blobs").contains(try XCTUnwrap(key.objectName(.blob, plaintextSHA256: original))))
+    }
+
+    func testBehaviorASupersededOriginalNoVoiceProfileNeedsGoesWithTheOldKey() async throws {
+        let (original, key) = try await rotateAfterCompressing { _ in [] }
+        XCTAssertFalse(files("Sealed/Blobs").contains(try XCTUnwrap(key.objectName(.blob, plaintextSHA256: original))))
+        XCTAssertEqual(files("Sealed/Blobs").count, 2, "the copy and the clip, under the new key")
+    }
+
+    /// What letting a file go on the strength of iCloud's copy asks (`isObjectUploaded`): in a sync folder in iCloud
+    /// Drive, only the provider's own yes; an item it can't answer for (the container detached after the person signed
+    /// out) isn't uploaded. In a folder that isn't iCloud's, a file that's there is.
+    func testBehaviorInICloudDriveOnlyTheProvidersOwnYesIsUploaded() async throws {
+        let (meeting, clip, _) = try await meetingWithClip(on: "Mac")
+        try await pass(try mac("Mac"), "Mac", [meeting])
+        func engine(_ name: String, uploadState: @escaping @Sendable (URL) -> Bool?, iCloud: Bool) throws -> LibrarySyncEngine {
+            try LibrarySyncEngine(localRoot: local(name), remoteRoot: remote, deviceID: name, replica: SyncReplicaConfiguration(
+                audioPolicy: .eager, device: SyncDeviceIdentity(deviceClass: .mac, displayName: name, canProcess: true),
+                cloud: SyncCloudFiles(requestDownload: { _ in }, isUploaded: { FileManager.default.fileExists(atPath: $0.path) },
+                                      uploadState: uploadState, isICloudFolder: { _ in iCloud }),
+                keyStore: keychain, sealsNewLibrary: false))
+        }
+        let recording = try XCTUnwrap(meeting.tracks.first).sha256
+        let detached = try engine("Detached", uploadState: { _ in nil }, iCloud: true)
+        let detachedClip = await detached.isObjectUploaded(clip.sha256), detachedRecording = await detached.isObjectUploaded(recording)
+        XCTAssertFalse(detachedClip, "the provider can't say: not uploaded")
+        XCTAssertFalse(detachedRecording)
+        let answering = try engine("Answering", uploadState: { _ in true }, iCloud: true)
+        let answered = await answering.isObjectUploaded(clip.sha256)
+        XCTAssertTrue(answered)
+        let notYet = try engine("NotYet", uploadState: { _ in false }, iCloud: true)
+        let pending = await notYet.isObjectUploaded(clip.sha256)
+        XCTAssertFalse(pending)
+        let elsewhere = try engine("Elsewhere", uploadState: { _ in nil }, iCloud: false)
+        let there = await elsewhere.isObjectUploaded(clip.sha256)
+        XCTAssertTrue(there, "a folder that isn't iCloud's: there is uploaded")
+        let missing = await elsewhere.isObjectUploaded(String(repeating: "0", count: 64))
+        XCTAssertFalse(missing)
     }
 
     func testBehaviorEveryDeviceInUseMustKeepVoiceClips() async throws {

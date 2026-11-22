@@ -592,6 +592,25 @@ final class VoiceClipLibraryTests: XCTestCase {
         XCTAssertEqual(older, [])
         let held = await compress(a, id, track)
         XCTAssertEqual(held, [])
+        // Nor is a clip cut or named meanwhile: its record could be dropped, its object deleted.
+        let (otherID, otherTrack) = try await conversation(in: a, seed: 5)
+        teach(a, from: otherID, track: otherTrack)
+        let none = await a.makeVoiceClips(olderThan: .distantFuture)
+        XCTAssertEqual(none, 0)
+        XCTAssertNil(a.meeting(otherID)?.voiceClips)
+        XCTAssertEqual(clipFiles(a, otherID), [])
+        // The older device comes into use while a clip is cut: it isn't named (asked again under the lock).
+        try data.write(to: url)
+        let olderRecord = try JSONSerialization.data(withJSONObject: {
+            var record = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+            record["features"] = (record["features"] as? [String] ?? []).filter { $0 != LibrarySyncEngine.voiceClipFeature }
+            return record
+        }())
+        a.voiceClipFault = { step in if step == .placed { try olderRecord.write(to: url) } }
+        let late = await a.makeVoiceClips(olderThan: .distantFuture)
+        a.voiceClipFault = nil
+        XCTAssertEqual(late, 0)
+        XCTAssertNil(a.meeting(otherID)?.voiceClips)
         try data.write(to: url)
         let updated = await a.coveredVoiceSources()
         XCTAssertEqual(updated, [key(id, track)])
@@ -632,8 +651,309 @@ final class VoiceClipLibraryTests: XCTestCase {
         let fromClip = try XCTUnwrap(sample)
         XCTAssertTrue(fromClip.isClip)
         XCTAssertEqual(fromClip.url, clipOnC)
-        let held = await c.meetingsHoldingOriginalsInICloud()
-        XCTAssertEqual(held, [], "its clip is in iCloud")
+        // Only a Mac that cut the clip, or matched it against its own original, lets the original go from iCloud on its
+        // strength: C never had the original, so to C it stays.
+        let heldOnC = await c.meetingsHoldingOriginalsInICloud()
+        XCTAssertEqual(heldOnC, [id])
+        let heldOnA = await a.meetingsHoldingOriginalsInICloud()
+        XCTAssertEqual(heldOnA, [], "its clip is in iCloud")
+    }
+
+    /// A clip another Mac cut is checked against this Mac's own original before this Mac lets that original go on its
+    /// strength: its own cut of the clip's frames must give the clip's bytes. One that doesn't covers nothing here; the
+    /// original stays, and this Mac cuts its own.
+    func testBehaviorAClipFromAnotherMacIsCheckedAgainstThisMacsOriginalBeforeTheOriginalGoes() async throws {
+        let cloud = try cloudFolder()
+        let a = try await library("A", cloud: cloud), b = try await library("B", cloud: cloud)
+        let (id, before) = try await conversation(in: a)
+        teach(a, from: id, track: before)
+        await pass(a); await pass(b)
+        await a.makeVoiceClips(olderThan: .distantFuture)
+        // What A names is a cut that isn't of this recording (another recording's samples, at the same frames), as a
+        // Mac whose cutting went wrong would name it.
+        let honest = try XCTUnwrap(clip(a, id))
+        let elsewhere = try recording(seed: 9)
+        let forged = try await VoiceClipAudio.extract(from: elsewhere, ranges: honest.ranges, into: root)
+        let source = VoiceClipSource(meetingID: id, trackID: before.id, speakerID: speaker)
+        var wrong = honest
+        wrong.sha256 = forged.sha256; wrong.size = forged.size
+        wrong.relativePath = VoiceClip.relativePath(for: source, sha256: forged.sha256)
+        try FileManager.default.moveItem(at: forged.url, to: URL(fileURLWithPath: path(a, wrong.relativePath, in: id)))
+        try FileManager.default.removeItem(atPath: path(a, honest.relativePath, in: id))
+        a.update(id) { $0.voiceClips = [wrong] }
+        try await a.flushDurably()
+        await a.verifyVoiceClips()
+        let compressed = await compress(a, id, before)
+        XCTAssertEqual(compressed, [before.id])
+        await pass(a); await pass(b); await pass(a); await pass(b)
+        XCTAssertEqual(b.meeting(id)?.voiceClips, [wrong])
+        await b.verifyVoiceClips()
+        XCTAssertNotNil(b.meeting(id)?.tracks.first?.encoding)
+        // Held whole and current, but not yet checked against B's own original: B's original stays.
+        let unchecked = await b.finishCompressions()
+        XCTAssertEqual(unchecked, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: path(b, before.relativePath, in: id)))
+        // Checked: B's own cut gives other bytes, so it covers nothing here and is recorded so.
+        let madeOnB = await b.makeVoiceClips(olderThan: nil)
+        XCTAssertEqual(madeOnB, 0)
+        XCTAssertEqual(b.voiceClipState()?.checked["\(id.uuidString)/\(wrong.relativePath)"]?.matches, false)
+        let covered = await b.coveredVoiceSources()
+        XCTAssertEqual(covered, [])
+        let kept = await b.finishCompressions()
+        XCTAssertEqual(kept, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: path(b, before.relativePath, in: id)))
+        // Then B cuts its own from its original, which is the honest one, and lets its original go on that.
+        let recut = await b.makeVoiceClips(olderThan: nil)
+        XCTAssertEqual(recut, 1)
+        XCTAssertEqual(b.meeting(id)?.voiceClips?.first?.sha256, honest.sha256, "the same bytes A's honest cut was")
+        await pass(b)
+        let removed = await b.finishCompressions()
+        XCTAssertEqual(removed, 1)
+    }
+
+    /// A clip whose object is gone from iCloud holds nothing back: the conversation applies on another Mac without it,
+    /// where the source stays uncovered (its original is kept), and comes back from a Mac that holds it.
+    func testBehaviorAClipWhoseObjectIsGoneIsUploadedAgainByAMacThatHoldsIt() async throws {
+        let cloud = try cloudFolder()
+        let a = try await library("A", cloud: cloud), b = try await library("B", cloud: cloud)
+        let (id, track) = try await conversation(in: a)
+        teach(a, from: id, track: track)
+        await pass(a); await pass(b)
+        await a.makeVoiceClips(olderThan: .distantFuture)
+        await pass(a)
+        let clip = try XCTUnwrap(clip(a, id))
+        let walker = FileManager.default.enumerator(at: cloud, includingPropertiesForKeys: nil)
+        let object = try XCTUnwrap(walker?.compactMap { $0 as? URL }.first { $0.lastPathComponent == clip.sha256 })
+        try FileManager.default.removeItem(at: object)
+        await pass(b)
+        XCTAssertEqual(b.meeting(id)?.voiceClips, [clip], "applied, naming the clip")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: path(b, clip.relativePath, in: id)))
+        let uncovered = await b.coveredVoiceSources()
+        XCTAssertEqual(uncovered, [])
+        let held = await compress(b, id, track)
+        XCTAssertEqual(held, [], "the original stays on B")
+        await pass(a)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: object.path), "A put it back")
+        await pass(b)
+        await b.verifyVoiceClips()
+        let covered = await b.coveredVoiceSources()
+        XCTAssertEqual(covered, [key(id, track)])
+    }
+
+    /// An encrypted library tells its sealer, before each pass, which conversations' superseded originals voice profiles
+    /// still need in iCloud (`meetingsHoldingOriginalsInICloud`): while the clip isn't there yet, this one's; once it is,
+    /// none.
+    func testBehaviorAnEncryptedLibraryTellsItsSealerWhichOriginalsVoiceProfilesStillNeed() async throws {
+        let cloud = try cloudFolder()
+        let local = root.appendingPathComponent("Mac", isDirectory: true)
+        let sync = LibrarySyncController(localRoot: local, defaults: makeTestDefaults("daybook.voiceclips.sealed"))
+        sync.replica.keyStore = MemoryLibraryKeyStore()
+        sync.replica.sealsNewLibrary = true
+        try sync.connect(to: cloud, monitorChanges: false)
+        let library = LibraryController(rootURL: local, sync: sync)
+        try await library.load()
+        await pass(library)
+        let sealed = await sync.engine?.sealsObjects
+        XCTAssertEqual(sealed, true)
+        let (id, track) = try await conversation(in: library)
+        teach(library, from: id, track: track)
+        await pass(library)
+        await library.makeVoiceClips(olderThan: .distantFuture)
+        let compressed = await compress(library, id, track)
+        XCTAssertEqual(compressed, [track.id])
+        await pass(library)
+        let first = await sync.engine?.originalsHeldForVoice
+        XCTAssertEqual(first?.held, [id], "the clip wasn't in iCloud yet when the pass began")
+        XCTAssertEqual(first?.judged, Set(library.meetings.map(\.id)))
+        await pass(library)
+        let later = await sync.engine?.originalsHeldForVoice
+        XCTAssertEqual(later?.held, [])
+    }
+
+    // MARK: Clips that go with their recordings
+
+    /// Deleted on one Mac and restored from the Trash on another: the conversation comes back under a new ID, and the
+    /// voiceprints, which name the one deleted, are still covered by its clips, which come along and are never swept.
+    func testBehaviorAConversationDeletedOnOneMacAndRestoredOnAnotherKeepsItsClips() async throws {
+        let cloud = try cloudFolder()
+        let a = try await library("A", cloud: cloud), b = try await library("B", cloud: cloud)
+        let (id, track) = try await conversation(in: a)
+        teach(a, from: id, track: track)
+        await a.makeVoiceClips(olderThan: .distantFuture)
+        await pass(a); await pass(b)
+        let clip = try XCTUnwrap(clip(b, id))
+        _ = try await a.moveToTrash(id)
+        await pass(a); await pass(b)
+        XCTAssertNil(b.meeting(id))
+        let restored = try await b.restoreFromTrash(id)
+        XCTAssertNotEqual(restored.id, id)
+        let carried = try XCTUnwrap(restored.voiceClips?.first)
+        XCTAssertEqual(carried.carriedFrom, VoiceClipSource(meetingID: id, trackID: track.id, speakerID: speaker))
+        XCTAssertEqual(carried.relativePath, clip.relativePath)
+        XCTAssertEqual(clipFiles(b, restored.id), [(clip.relativePath as NSString).lastPathComponent])
+        await b.verifyVoiceClips()
+        let covered = await b.coveredVoiceSources()
+        XCTAssertEqual(covered, [key(id, track)])
+        let holding = await b.holdingBackVoiceprints()
+        XCTAssertTrue(holding.isEmpty)
+        await pass(b)
+        let now = Date()
+        try age(path(b, carried.relativePath, in: restored.id), by: 3 * 86_400)
+        await b.reconcileVoiceClips(now: now)
+        let deleted = await b.reconcileVoiceClips(now: now.addingTimeInterval(3 * VoiceClips.orphanGrace))
+        XCTAssertEqual(deleted, 0)
+        XCTAssertEqual(clipFiles(b, restored.id), [(clip.relativePath as NSString).lastPathComponent], "never swept")
+        // It syncs with its clip: the other Mac is covered by it too.
+        await pass(a)
+        XCTAssertEqual(a.meeting(restored.id)?.voiceClips, [carried])
+        XCTAssertEqual(try AudioDigest.sha256(fileURL: URL(fileURLWithPath: path(a, carried.relativePath, in: restored.id))), clip.sha256)
+        await a.verifyVoiceClips()
+        let onA = await a.coveredVoiceSources()
+        XCTAssertEqual(onA, [key(id, track)])
+    }
+
+    /// Edited here while another Mac deleted it: what this Mac added is kept as a new conversation, with the clips.
+    func testBehaviorAConversationKeptAfterAnotherMacDeletedItKeepsItsClips() async throws {
+        let cloud = try cloudFolder()
+        let a = try await library("A", cloud: cloud), b = try await library("B", cloud: cloud)
+        let (id, track) = try await conversation(in: a)
+        teach(a, from: id, track: track)
+        await a.makeVoiceClips(olderThan: .distantFuture)
+        await pass(a); await pass(b)
+        let clip = try XCTUnwrap(clip(b, id))
+        _ = try await a.moveToTrash(id)
+        await pass(a)
+        b.editNotes(id, text: "Added on B while A deleted it")
+        await pass(b)
+        let kept = try XCTUnwrap(b.meetings.first { $0.id != id && $0.notes.contains("Added on B") })
+        let carried = try XCTUnwrap(kept.voiceClips?.first)
+        XCTAssertEqual(carried.source(in: kept.id), VoiceClipSource(meetingID: id, trackID: track.id, speakerID: speaker))
+        XCTAssertEqual(clipFiles(b, kept.id), [(clip.relativePath as NSString).lastPathComponent])
+        await b.verifyVoiceClips()
+        let covered = await b.coveredVoiceSources()
+        XCTAssertEqual(covered, [key(id, track)])
+        let now = Date()
+        try age(path(b, carried.relativePath, in: kept.id), by: 3 * 86_400)
+        await b.reconcileVoiceClips(now: now)
+        await b.reconcileVoiceClips(now: now.addingTimeInterval(3 * VoiceClips.orphanGrace))
+        XCTAssertEqual(clipFiles(b, kept.id).count, 1)
+        XCTAssertEqual(b.meeting(kept.id)?.voiceClips, [carried])
+    }
+
+    /// Merged into another, a conversation's clips go with its recordings: the merged one names them, carried from it,
+    /// and they still cover the voiceprints that name the conversation merged away.
+    func testBehaviorMergingConversationsCarriesTheirClips() async throws {
+        let library = try await self.library("Mac")
+        let (first, firstTrack) = try await conversation(in: library)
+        let (second, secondTrack) = try await conversation(in: library, seed: 2)
+        library.update(first) { $0.date = Date().addingTimeInterval(-3_600) }
+        teach(library, from: first, track: firstTrack)
+        teach(library, from: second, track: secondTrack)
+        let made = await library.makeVoiceClips(olderThan: .distantFuture)
+        XCTAssertEqual(made, 2)
+        let own = try XCTUnwrap(clip(library, first)), folded = try XCTUnwrap(clip(library, second))
+        let survivor = try await library.mergeConversations([first, second], audio: { track, id in try await library.audioURL(for: track, in: id) },
+                                                            photo: { photo, id in try await library.photoURL(for: photo, in: id) },
+                                                            context: { ConversationActions.Context(platform: .mac, status: ProcessingStatus($0)) })
+        XCTAssertEqual(survivor, first)
+        XCTAssertNil(library.meeting(second))
+        let clips = try XCTUnwrap(library.meeting(first)?.voiceClips)
+        XCTAssertEqual(clips.count, 2)
+        XCTAssertTrue(clips.contains(own))
+        let carried = try XCTUnwrap(clips.first { $0.carriedFrom != nil })
+        XCTAssertEqual(carried.carriedFrom, folded.source(in: second))
+        XCTAssertEqual(carried.relativePath, folded.relativePath)
+        XCTAssertNotEqual(carried.trackID, secondTrack.id, "on the recording's copy in the merged conversation")
+        XCTAssertEqual(try AudioDigest.sha256(fileURL: URL(fileURLWithPath: path(library, carried.relativePath, in: first))), folded.sha256)
+        await library.verifyVoiceClips()
+        let covered = await library.coveredVoiceSources()
+        XCTAssertEqual(covered, [key(first, firstTrack), key(second, secondTrack)])
+        let holding = await library.holdingBackVoiceprints()
+        XCTAssertTrue(holding.isEmpty)
+        let now = Date()
+        await library.reconcileVoiceClips(now: now)
+        let deleted = await library.reconcileVoiceClips(now: now.addingTimeInterval(3 * VoiceClips.orphanGrace))
+        XCTAssertEqual(deleted, 0)
+        XCTAssertEqual(clipFiles(library, first).count, 2)
+    }
+
+    /// Move to New Conversation takes the recording's clip with it: the conversation it left names it no more, the new
+    /// one names it carried from there, and the recording in its new conversation isn't held back for want of a clip.
+    func testBehaviorARecordingMovedToANewConversationTakesItsClipWithIt() async throws {
+        let library = try await self.library("Mac")
+        let (id, track) = try await conversation(in: library)
+        teach(library, from: id, track: track)
+        await library.makeVoiceClips(olderThan: .distantFuture)
+        let clip = try XCTUnwrap(clip(library, id))
+        let newID = try await library.moveRecordingToNewConversation(track.id, from: id, audio: { try await library.audioURL(for: $0, in: id) },
+                                                                     undoManager: nil)
+        XCTAssertNil(library.meeting(id)?.voiceClips)
+        let moved = try XCTUnwrap(library.meeting(newID))
+        let carried = try XCTUnwrap(moved.voiceClips?.first)
+        XCTAssertEqual(carried.carriedFrom, clip.source(in: id))
+        XCTAssertEqual(carried.trackID, moved.tracks.first?.id)
+        XCTAssertEqual(clipFiles(library, newID), [(clip.relativePath as NSString).lastPathComponent])
+        await library.verifyVoiceClips()
+        let covered = await library.coveredVoiceSources()
+        XCTAssertEqual(covered, [key(id, track)])
+        let newTrack = try XCTUnwrap(moved.tracks.first)
+        let compressed = await compress(library, newID, newTrack)
+        XCTAssertEqual(compressed, [newTrack.id], "its clip came with it")
+        // The file left behind goes a day later: the new conversation's is held whole.
+        try age(path(library, clip.relativePath, in: id), by: 2 * 86_400)
+        await library.reconcileVoiceClips()
+        XCTAssertEqual(clipFiles(library, id), [])
+        XCTAssertEqual(clipFiles(library, newID).count, 1)
+    }
+
+    /// A Daybook from before clips that drops a clip's record in a merge leaves its file: a Mac that found it whole names
+    /// it again while a voiceprint needs it; one with no record of it keeps the file, since the speech is still needed,
+    /// and a cut of it again takes its name.
+    func testBehaviorAClipRecordAMergeDroppedIsNamedAgain() async throws {
+        let library = try await self.library("Mac")
+        let (id, track) = try await conversation(in: library)
+        teach(library, from: id, track: track)
+        await library.makeVoiceClips(olderThan: .distantFuture)
+        let clip = try XCTUnwrap(clip(library, id))
+        library.update(id) { $0.voiceClips = nil }
+        try await library.flushDurably()
+        let dropped = await library.coveredVoiceSources()
+        XCTAssertEqual(dropped, [])
+        let now = Date()
+        // Not saved: nothing relies on a record the disk doesn't name.
+        let folder = library.rootURL.appendingPathComponent("Meetings/\(id.uuidString)")
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: folder.path)
+        await library.reconcileVoiceClips(now: now)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path)
+        XCTAssertNil(library.meeting(id)?.voiceClips)
+        let unsaved = await library.coveredVoiceSources()
+        XCTAssertEqual(unsaved, [])
+        await library.reconcileVoiceClips(now: now)
+        XCTAssertEqual(library.meeting(id)?.voiceClips, [clip], "named again")
+        let reopened = try await self.library("Mac")
+        XCTAssertEqual(reopened.meeting(id)?.voiceClips, [clip], "durably")
+        let back = await library.coveredVoiceSources()
+        XCTAssertEqual(back, [key(id, track)])
+        // Not while its file isn't as it was found whole.
+        library.update(id) { $0.voiceClips = nil }
+        try await library.flushDurably()
+        let file = URL(fileURLWithPath: path(library, clip.relativePath, in: id))
+        let bytes = try Data(contentsOf: file)
+        var damaged = bytes
+        damaged[damaged.count - 3] ^= 0x01
+        try damaged.write(to: file)
+        await library.reconcileVoiceClips(now: now)
+        XCTAssertNil(library.meeting(id)?.voiceClips)
+        // With no record of it here, it isn't named again, and it stays: a voiceprint still needs its speech.
+        try bytes.write(to: file)
+        try FileManager.default.removeItem(at: library.rootURL.appendingPathComponent("voice-clips.json"))
+        try age(file.path, by: 3 * 86_400)
+        await library.reconcileVoiceClips(now: now.addingTimeInterval(3 * VoiceClips.orphanGrace))
+        XCTAssertNil(library.meeting(id)?.voiceClips)
+        XCTAssertEqual(clipFiles(library, id), [(clip.relativePath as NSString).lastPathComponent])
+        let recut = await library.makeVoiceClips(olderThan: .distantFuture)
+        XCTAssertEqual(recut, 1)
+        XCTAssertEqual(library.meeting(id)?.voiceClips?.first?.relativePath, clip.relativePath, "the same bytes, the same name")
     }
 
     /// What cleaning superseded originals out of iCloud asks: a source counts as covered there only once its clip's

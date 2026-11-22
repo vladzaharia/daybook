@@ -57,8 +57,14 @@ public struct VoiceClip: Codable, Equatable, Identifiable, Sendable {
     /// Where clips live in a conversation's folder.
     public static let folder = "Originals/VoiceClips"
 
+    /// The recording of the conversation that names it that it was cut from, and its speaker there.
     public var trackID: UUID
     public var speakerID: String
+    /// The source voiceprints name, when the clip came here with its recording from another conversation (a copy kept
+    /// under a new ID, a merge, Move to New Conversation): voiceprints still name the conversation they were learned
+    /// from, so this clip is that source's, and the recording `trackID` here is that source's recording. Nil for a clip
+    /// cut in this conversation, whose source is its own recording and speaker.
+    public var carriedFrom: VoiceClipSource?
     /// `Originals/VoiceClips/<source key>-<first 16 hex of sha256>.caf` (`relativePath(for:sha256:)`).
     public var relativePath: String
     /// The clip file's SHA-256 and size.
@@ -79,19 +85,52 @@ public struct VoiceClip: Codable, Equatable, Identifiable, Sendable {
     public var stale: Bool?
     /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
     public var unknownFields = UnknownFields()
+    /// The whole of a clip record this version can't read (a newer Daybook's shape), written back as it came. Such a record
+    /// covers nothing, is never hydrated, published, or let go here, and keeps the file it names (`unreadPath`).
+    public private(set) var unread: SyncJSONValue?
 
     public init(trackID: UUID, speakerID: String, relativePath: String, sha256: String, size: Int64, originalSHA256: String,
-                originalFrames: Int64, sampleRate: Double, channels: Int, ranges: [VoiceClipRange], createdAt: Date, stale: Bool? = nil) {
+                originalFrames: Int64, sampleRate: Double, channels: Int, ranges: [VoiceClipRange], createdAt: Date, stale: Bool? = nil,
+                carriedFrom: VoiceClipSource? = nil) {
         self.trackID = trackID; self.speakerID = speakerID; self.relativePath = relativePath; self.sha256 = sha256; self.size = size
         self.originalSHA256 = originalSHA256; self.originalFrames = originalFrames; self.sampleRate = sampleRate; self.channels = channels
-        self.ranges = ranges; self.createdAt = createdAt; self.stale = stale
+        self.ranges = ranges; self.createdAt = createdAt; self.stale = stale; self.carriedFrom = carriedFrom
     }
 
-    /// One clip a speaker of a recording.
-    public var id: String { "\(trackID.uuidString)|\(speakerID)" }
+    private init(unread value: SyncJSONValue) {
+        trackID = UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)); speakerID = ""
+        if case .object(let fields) = value, case .string(let path)? = fields["relativePath"] { relativePath = path } else { relativePath = "" }
+        sha256 = ""; size = 0; originalSHA256 = ""; originalFrames = 0; sampleRate = 0; channels = 0; ranges = []
+        createdAt = Date(timeIntervalSince1970: 0)
+        unread = value
+    }
 
+    /// One clip a speaker of a recording; a carried one by the source it's of; one this version can't read by what it is.
+    public var id: String {
+        if let unread { return "unread|\(SyncEncoding.string(unread))" }
+        if let carriedFrom { return "\(carriedFrom.meetingID.uuidString)|\(carriedFrom.trackID.uuidString)|\(carriedFrom.speakerID)" }
+        return "\(trackID.uuidString)|\(speakerID)"
+    }
+
+    /// The source it's a clip of, in the conversation `meetingID` that names it: its own recording and speaker there, or
+    /// the source it was carried from.
     public func source(in meetingID: UUID) -> VoiceClipSource {
-        VoiceClipSource(meetingID: meetingID, trackID: trackID, speakerID: speakerID)
+        carriedFrom ?? VoiceClipSource(meetingID: meetingID, trackID: trackID, speakerID: speakerID)
+    }
+
+    /// This clip in another conversation, carried there with its recording (now `trackID` there): still the same
+    /// source's, at the same path, so it's the same file and the same object.
+    public func carried(from meetingID: UUID, to trackID: UUID) -> VoiceClip {
+        var copy = self
+        copy.carriedFrom = source(in: meetingID)
+        copy.trackID = trackID
+        return copy
+    }
+
+    /// The path a record this version can't read names, so its file is kept: only one under `Originals/VoiceClips/`.
+    public var unreadPath: String? {
+        guard unread != nil, relativePath.hasPrefix(Self.folder + "/"), !relativePath.contains("..") else { return nil }
+        return relativePath
     }
 
     /// The library path for a source's clip with this digest: each cut of it has its own path, so a clip cut again
@@ -100,9 +139,11 @@ public struct VoiceClip: Codable, Equatable, Identifiable, Sendable {
         "\(folder)/\(source.key)-\(sha256.prefix(16)).caf"
     }
 
-    /// Its path is the one its source and digest give, so it can't name anything but a clip of that source.
+    /// Its path is the one its source and digest give, so it can't name anything but a clip of that source. Never for a
+    /// record this version can't read.
     public func isStored(in meetingID: UUID) -> Bool {
-        SyncFiles.isHash(sha256) && SyncFiles.isHash(originalSHA256) && relativePath == Self.relativePath(for: source(in: meetingID), sha256: sha256)
+        unread == nil && SyncFiles.isHash(sha256) && SyncFiles.isHash(originalSHA256)
+            && relativePath == Self.relativePath(for: source(in: meetingID), sha256: sha256)
     }
 
     /// The clip's file in a library's conversation (`<root>/Meetings/<ID>/<relativePath>`); nil when its path isn't the
@@ -122,31 +163,36 @@ public struct VoiceClip: Codable, Equatable, Identifiable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case trackID, speakerID, relativePath, sha256, size, originalSHA256, originalFrames, sampleRate, channels, ranges, createdAt, stale
+        case trackID, speakerID, carriedFrom, relativePath, sha256, size, originalSHA256, originalFrames, sampleRate, channels, ranges, createdAt, stale
     }
     private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
 
+    /// Reads one clip record; one this version can't read is kept as it came (`unread`), so a conversation's list never
+    /// fails as a whole and a newer version's records survive a round trip.
     public init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        trackID = try values.decode(UUID.self, forKey: .trackID)
-        speakerID = try values.decode(String.self, forKey: .speakerID)
-        relativePath = try values.decode(String.self, forKey: .relativePath)
-        sha256 = try values.decode(String.self, forKey: .sha256)
-        size = try values.decode(Int64.self, forKey: .size)
-        originalSHA256 = try values.decode(String.self, forKey: .originalSHA256)
-        originalFrames = try values.decode(Int64.self, forKey: .originalFrames)
-        sampleRate = try values.decode(Double.self, forKey: .sampleRate)
-        channels = try values.decode(Int.self, forKey: .channels)
-        ranges = try values.decode([VoiceClipRange].self, forKey: .ranges)
-        createdAt = try values.decode(Date.self, forKey: .createdAt)
-        stale = try values.decodeIfPresent(Bool.self, forKey: .stale)
-        unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
+        do {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            var clip = VoiceClip(trackID: try values.decode(UUID.self, forKey: .trackID), speakerID: try values.decode(String.self, forKey: .speakerID),
+                                 relativePath: try values.decode(String.self, forKey: .relativePath), sha256: try values.decode(String.self, forKey: .sha256),
+                                 size: try values.decode(Int64.self, forKey: .size), originalSHA256: try values.decode(String.self, forKey: .originalSHA256),
+                                 originalFrames: try values.decode(Int64.self, forKey: .originalFrames),
+                                 sampleRate: try values.decode(Double.self, forKey: .sampleRate), channels: try values.decode(Int.self, forKey: .channels),
+                                 ranges: try values.decode([VoiceClipRange].self, forKey: .ranges), createdAt: try values.decode(Date.self, forKey: .createdAt),
+                                 stale: try values.decodeIfPresent(Bool.self, forKey: .stale),
+                                 carriedFrom: try values.decodeIfPresent(VoiceClipSource.self, forKey: .carriedFrom))
+            clip.unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
+            self = clip
+        } catch {
+            self = VoiceClip(unread: try SyncJSONValue(from: decoder))
+        }
     }
 
     public func encode(to encoder: Encoder) throws {
+        if let unread { try unread.encode(to: encoder); return }
         var values = encoder.container(keyedBy: CodingKeys.self)
         try values.encode(trackID, forKey: .trackID)
         try values.encode(speakerID, forKey: .speakerID)
+        try values.encodeIfPresent(carriedFrom, forKey: .carriedFrom)
         try values.encode(relativePath, forKey: .relativePath)
         try values.encode(sha256, forKey: .sha256)
         try values.encode(size, forKey: .size)
@@ -191,20 +237,40 @@ public struct VoiceClip: Codable, Equatable, Identifiable, Sendable {
 }
 
 extension Meeting {
-    /// The clip of one of this conversation's sources, when it names one.
+    /// The clip this conversation names of a source (its own, or one carried here), when it names one.
     public func voiceClip(for source: VoiceClipSource) -> VoiceClip? {
-        guard source.meetingID == id else { return nil }
-        return voiceClips?.first { $0.trackID == source.trackID && $0.speakerID == source.speakerID }
+        voiceClips?.first { $0.unread == nil && $0.source(in: id) == source }
     }
+
+    /// The conversation's clips list is one this version reads (a newer Daybook's shape is kept as an unknown key, and no
+    /// clip is cut, carried, or let go in it here).
+    public var voiceClipsAreReadable: Bool { unknownFields["voiceClips"] == nil }
 
     /// The clip holds what the transcript says its speaker said, cut from the lossless original its recording has now
     /// (the track's file, or the one a compressed copy replaced): its frames are the ones the speaker's passages give
-    /// now (`VoiceClips.spans`), and it isn't marked stale.
+    /// now (`VoiceClips.spans`), and it isn't marked stale. A clip carried here from another conversation holds the
+    /// passages its source had when it came (the transcript here, made again or edited, isn't the one its voiceprints
+    /// were learned from), so only its recording is asked for: still the original it was cut from.
     public func voiceClipIsCurrent(_ clip: VoiceClip) -> Bool {
-        guard clip.stale != true, let track = tracks.first(where: { $0.id == clip.trackID }),
+        guard clip.unread == nil, clip.stale != true, let track = tracks.first(where: { $0.id == clip.trackID }),
               clip.originalSHA256 == track.sha256 || clip.originalSHA256 == track.encoding?.previousSHA256 else { return false }
+        if clip.carriedFrom != nil { return true }
         let ranges = VoiceClipAudio.ranges(VoiceClips.spans(for: clip.source(in: id), in: self), rate: clip.sampleRate, length: clip.originalFrames)
         return ranges == clip.ranges
+    }
+
+    /// This conversation's clips of `trackIDs` (each mapped to its recording in `into`), carried to another conversation
+    /// with their recordings: those that hold their source's speech now (`voiceClipIsCurrent`), still that source's, at
+    /// the same paths; one that doesn't goes marked stale (it may be all there is of that speech, and is never taken for
+    /// it). Empty when this conversation's list is in a shape this version can't read.
+    public func voiceClipsCarried(_ trackIDs: [UUID: UUID]) -> [VoiceClip] {
+        guard voiceClipsAreReadable else { return [] }
+        return (voiceClips ?? []).compactMap { clip in
+            guard clip.unread == nil, clip.isStored(in: id), let target = trackIDs[clip.trackID] else { return nil }
+            var carried = clip.carried(from: id, to: target)
+            if !voiceClipIsCurrent(clip) { carried.stale = true }
+            return carried
+        }
     }
 }
 
@@ -234,10 +300,18 @@ public enum VoiceClips {
     }
 
     /// The recording and speaker a voiceprint was learned from: its own track, else its speaker's recording; nil when
-    /// neither is known.
-    public static func source(of print: Voiceprint, in meeting: Meeting?) -> VoiceClipSource? {
-        guard let trackID = print.trackID ?? meeting?.speakers.first(where: { $0.id == print.speakerID })?.sourceTrackID else { return nil }
-        return VoiceClipSource(meetingID: print.meetingID, trackID: trackID, speakerID: print.speakerID)
+    /// neither is known. When its conversation can't say (it isn't here: deleted, merged away), a clip carried from it to
+    /// another conversation does (`carried`, `carriedSources`).
+    public static func source(of print: Voiceprint, in meeting: Meeting?, carried: [VoiceClipSource] = []) -> VoiceClipSource? {
+        if let trackID = print.trackID ?? meeting?.speakers.first(where: { $0.id == print.speakerID })?.sourceTrackID {
+            return VoiceClipSource(meetingID: print.meetingID, trackID: trackID, speakerID: print.speakerID)
+        }
+        return carried.first { $0.isNamed(by: print) }
+    }
+
+    /// The sources clips were carried from, in every conversation here, in one order on every device.
+    public static func carriedSources(in meetings: [Meeting]) -> [VoiceClipSource] {
+        meetings.flatMap { ($0.voiceClips ?? []).compactMap { $0.unread == nil ? $0.carriedFrom : nil } }.sorted { $0.key < $1.key }
     }
 
     /// The voiceprints that count: each whose profile (merges followed) exists, or has no record here at all, since it
@@ -254,12 +328,24 @@ public enum VoiceClips {
     public static func plan(metadata: LibraryMetadata, meetings: [Meeting]) -> Plan {
         guard let prints = counting(metadata) else { return Plan(readable: false) }
         let byID = Dictionary(meetings.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let carried = carriedSources(in: meetings)
         var plan = Plan()
         for print in prints {
-            guard let source = source(of: print, in: byID[print.meetingID]) else { continue }
+            guard let source = source(of: print, in: byID[print.meetingID], carried: carried) else { continue }
             plan.wanted[source.key] = source
         }
         return plan
+    }
+
+    /// Whether a clip file named by source key `key`, in conversation `meeting`'s folder, holds speech a voiceprint that
+    /// counts still needs, wherever it sits: a voiceprint's source has that key (one that names no recording, by each
+    /// recording of `meeting`, which a copy kept under a new ID shares). True for every key while a record can't be read.
+    public static func isNeeded(_ key: String, in meeting: Meeting, metadata: LibraryMetadata, wanted: Plan) -> Bool {
+        guard wanted.readable, let prints = counting(metadata) else { return true }
+        if wanted.wanted[key] != nil { return true }
+        return prints.contains { print in
+            print.trackID == nil && meeting.tracks.contains { VoiceClipSource(meetingID: print.meetingID, trackID: $0.id, speakerID: print.speakerID).key == key }
+        }
     }
 
     /// The voiceprints that still hold their recordings back (`RecordingCompressionPlanner.learnedFrom`): each one of a
@@ -268,8 +354,9 @@ public enum VoiceClips {
     public static func holdingBack(metadata: LibraryMetadata, meetings: [Meeting], covered: Set<String>) -> [Voiceprint] {
         guard let prints = counting(metadata) else { return (metadata.voiceprints ?? []).compactMap(\.value) }
         let byID = Dictionary(meetings.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let carried = carriedSources(in: meetings)
         return prints.filter { print in
-            guard let key = source(of: print, in: byID[print.meetingID])?.key else { return true }
+            guard let key = source(of: print, in: byID[print.meetingID], carried: carried)?.key else { return true }
             return !covered.contains(key)
         }
     }

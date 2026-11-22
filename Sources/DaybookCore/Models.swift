@@ -869,8 +869,16 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         transcriptFlags = (try? values.decodeIfPresent([TranscriptFlag].self, forKey: .transcriptFlags)) ?? nil
         transcriptFlagsVersion = (try? values.decodeIfPresent(Int.self, forKey: .transcriptFlagsVersion)) ?? nil
         transcriptFlagDismissals = (try? values.decodeIfPresent([TranscriptFlagDismissal].self, forKey: .transcriptFlagDismissals)) ?? nil
-        voiceClips = try values.decodeIfPresent([VoiceClip].self, forKey: .voiceClips)
-        unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
+        // Clip records are read one at a time (`VoiceClip.unread` keeps one this version can't read); a list in a shape this
+        // version can't read is kept as it came, as an unknown key, and written back unchanged, never a reason to reject the
+        // conversation (`voiceClipsAreReadable`: nothing is cut, carried, or let go in it here).
+        if let decoded = try? values.decodeIfPresent([VoiceClip].self, forKey: .voiceClips) {
+            voiceClips = decoded
+            unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
+        } else {
+            voiceClips = nil
+            unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys.subtracting([CodingKeys.voiceClips.rawValue]))
+        }
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -915,7 +923,8 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         try values.encodeIfPresent(transcriptFlags, forKey: .transcriptFlags)
         try values.encodeIfPresent(transcriptFlagsVersion, forKey: .transcriptFlagsVersion)
         try values.encodeIfPresent(transcriptFlagDismissals, forKey: .transcriptFlagDismissals)
-        try values.encodeIfPresent(voiceClips, forKey: .voiceClips)
+        // A list in a shape this version can't read is written back as it came, in its place.
+        if voiceClipsAreReadable { try values.encodeIfPresent(voiceClips, forKey: .voiceClips) }
         try unknownFields.encode(to: encoder)
     }
 }

@@ -20,22 +20,24 @@ extension LibrarySyncEngine {
         return others.allSatisfy { ($0.features ?? []).contains(Self.voiceClipFeature) }
     }
 
-    /// Adds each clip's file to a publication's assets. A file this replica holds whole is uploaded; one it lacks (an
-    /// on-demand replica never fetches clips) or holds damaged is published by reference to the object already in the
-    /// journal or `Blobs/`, which the pass that applies it copies back (`hydrate`). Nothing to name means the clip is gone.
+    /// Adds each clip's file to a publication's assets. A file this replica holds whole is uploaded (again, if its object
+    /// went); one it lacks (an on-demand replica never fetches clips) or holds damaged is published by reference to the
+    /// object, only while the sync folder has it. One whose object is nowhere is left out of the event: the conversation
+    /// still names it, and still publishes (a missing clip never holds a conversation back); a Mac that holds it whole
+    /// uploads it again (`hydrate`). A record this version can't read names nothing here.
     func appendVoiceClipAssets(_ meeting: Meeting, directory: URL, journalAssets: Set<String>,
                                assets: inout [SyncAsset], byReference: inout Set<String>) throws {
-        for clip in meeting.voiceClips ?? [] {
+        for clip in meeting.voiceClips ?? [] where clip.unread == nil {
             try Task.checkCancellation()
             guard clip.isStored(in: meeting.id) else { throw LibrarySyncError.invalidBlob(clip.relativePath) }
             let url = try LocalFiles.relativeURL(clip.relativePath, in: directory)
             try SyncFiles.noSymlinks(url, below: localRoot)
             if try verified(url, digest: clip.sha256) {
                 // Uploaded below.
-            } else if try mayPublishByReference(clip.sha256, journalAssets: journalAssets) {
+            } else if hasRemoteObject(clip.sha256) {
                 byReference.insert(clip.relativePath)
             } else {
-                throw LibrarySyncError.missingLocalAudio((clip.relativePath as NSString).lastPathComponent)
+                continue
             }
             let asset = SyncAsset(relativePath: clip.relativePath, sha256: clip.sha256)
             if !assets.contains(asset) { assets.append(asset) }
@@ -43,17 +45,65 @@ extension LibrarySyncEngine {
     }
 
     /// The format of every clip: under `Originals/VoiceClips/`, at the path its source and whole digest give. Not that
-    /// the event lists it: a Daybook that keeps `voiceClips` as an unknown key publishes edits without its assets.
+    /// the event lists it: a Daybook that keeps `voiceClips` as an unknown key publishes edits without its assets, and a
+    /// clip whose object is nowhere is left out. A record this version can't read isn't checked: it names nothing here.
     func validateVoiceClipAssets(_ snapshot: Meeting) throws {
-        for clip in snapshot.voiceClips ?? [] where !clip.isStored(in: snapshot.id) {
+        for clip in snapshot.voiceClips ?? [] where clip.unread == nil && !clip.isStored(in: snapshot.id) {
             throw LibrarySyncError.invalidBlob(clip.relativePath)
         }
     }
 
-    /// The assets a merged snapshot's clips need: what an eager replica hydrates before the conversation applies, and
-    /// what the sealer counts as live (`mergedAssets`).
+    /// The assets a merged snapshot's clips need: what an eager replica installs when they're here (never waiting for
+    /// one, `hydrate`), and what the sealer counts as live (`mergedAssets`).
     nonisolated func voiceClipAssets(of meeting: Meeting) -> [SyncAsset] {
         (meeting.voiceClips ?? []).filter { $0.isStored(in: meeting.id) }.map { SyncAsset(relativePath: $0.relativePath, sha256: $0.sha256) }
+    }
+
+    /// A clip's asset: one that never holds its conversation back.
+    nonisolated static func isVoiceClip(_ asset: SyncAsset) -> Bool { asset.relativePath.hasPrefix(VoiceClip.folder + "/") }
+
+    /// An eager replica's clip: installed when its object is here whole; when it isn't (not downloaded yet, or gone: a
+    /// Daybook from before clips that seals may have deleted it), its download is asked for and the conversation applies
+    /// without it, so this Mac doesn't hold it and the source stays uncovered here (its original is kept) until a later
+    /// pass installs it. One this Mac holds whole whose object is nowhere is uploaded again. True when it's here whole.
+    func hydrateVoiceClip(_ asset: SyncAsset, at destination: URL, in directory: URL, warnings: inout [String]) throws -> Bool {
+        if try verified(destination, digest: asset.sha256) {
+            // Never as plaintext into a library that's encrypted where this device can't seal yet.
+            if !hasRemoteObject(asset.sha256), sealing != nil || (waitingForKey == nil && !syncedSealedLibraryHere) {
+                do { try upload(asset, from: destination) } catch let error as CancellationError { throw error } catch {}
+            }
+            return true
+        }
+        let object = remoteObject(asset.sha256)
+        guard SyncFiles.itemState(object.url) == .local else {
+            if SyncFiles.itemState(object.url) == .inCloud { try? cloud.requestDownload(object.url) }
+            return false
+        }
+        do {
+            try LocalFiles.directory(destination.deletingLastPathComponent())
+            let temporary = destination.deletingLastPathComponent().appendingPathComponent(".download-\(UUID().uuidString)")
+            defer { try? fm.removeItem(at: temporary) }
+            guard try copyPlaintext(object.url, of: object, below: remoteRoot, libraryID: libraryID, to: temporary, expected: asset.sha256) == asset.sha256 else {
+                return false
+            }
+            try install(temporary, at: destination, in: directory, warnings: &warnings)
+            verifiedAssets[destination.path] = try assetStamp(destination, digest: asset.sha256)
+            noteContainerCopy(String(object.url.standardizedFileURL.path.dropFirst(remoteRoot.path.count + 1)), holding: asset.sha256)
+            return true
+        } catch let error as CancellationError {
+            throw error
+        } catch {
+            // Damaged, or unreadable here: the conversation applies without it.
+            return false
+        }
+    }
+
+    /// Whether there's anything to seal a clip from: its file held whole here, or its object in the sync folder (under a
+    /// key held here, or plaintext) or a courier's delivery.
+    func voiceClipIsAnywhere(_ asset: SyncAsset, meetingID: UUID) -> Bool {
+        let directory = localRoot.appendingPathComponent("Meetings/\(meetingID.uuidString)", isDirectory: true)
+        if let local = try? LocalFiles.relativeURL(asset.relativePath, in: directory), (try? verified(local, digest: asset.sha256)) == true { return true }
+        return hasRemoteObject(asset.sha256) || courierObject(asset.sha256) != nil
     }
 
     /// The paths of the clips this device's applied copy of a conversation names (what other devices' unpublished edits

@@ -50,10 +50,25 @@ public enum VoiceClipAudio {
     /// then hashes it. Every frame a span asks for must be delivered. Off the caller's actor; cancellable. Anything short
     /// of an exact clip throws, and leaves nothing behind.
     public static func extract(from original: URL, spans: [VoiceClipSpan], into folder: URL) async throws -> Extracted {
+        try await extract(from: original, into: folder) { rate, length in ranges(spans, rate: rate, length: length) }
+    }
+
+    /// The same, for frames of the original given exactly (a clip's `ranges`, to check another device's cut against this
+    /// one's original): each must lie within the file, or there's `nothingToCut`. The same frames of the same original
+    /// give the same bytes.
+    public static func extract(from original: URL, ranges wanted: [VoiceClipRange], into folder: URL) async throws -> Extracted {
+        try await extract(from: original, into: folder) { _, length in
+            guard wanted.allSatisfy({ $0.startFrame >= 0 && $0.endFrame > $0.startFrame && $0.endFrame <= length }) else { throw Failure.nothingToCut }
+            return wanted
+        }
+    }
+
+    private static func extract(from original: URL, into folder: URL,
+                                ranges: @escaping @Sendable (Double, Int64) throws -> [VoiceClipRange]) async throws -> Extracted {
         let temporary = folder.appendingPathComponent("\(VoiceClips.temporaryPrefix)\(UUID().uuidString).caf")
         do {
             return try await BlockingFileWork.run { isCancelled in
-                let (rate, channels, ranges, length) = try write(original, spans: spans, to: temporary, isCancelled: isCancelled)
+                let (rate, channels, ranges, length) = try write(original, ranges: ranges, to: temporary, isCancelled: isCancelled)
                 try DurableFiles.synchronize([temporary])
                 try verify(clip: temporary, original: original, ranges: ranges, rate: rate, channels: channels, isCancelled: isCancelled)
                 let digest = try AudioDigest.sha256(fileURL: temporary, isCancelled: isCancelled)
@@ -69,25 +84,49 @@ public enum VoiceClipAudio {
 
     private static let chunkFrames: AVAudioFrameCount = 32_768
 
-    private static func clipFormat(rate: Double, channels: AVAudioChannelCount) -> AVAudioFormat? {
-        AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: channels, interleaved: false)
-    }
-
-    private static func write(_ original: URL, spans: [VoiceClipSpan], to destination: URL,
+    private static func write(_ original: URL, ranges: (Double, Int64) throws -> [VoiceClipRange], to destination: URL,
                               isCancelled: () -> Bool) throws -> (Double, Int, [VoiceClipRange], Int64) {
         let source: AVAudioFile
         do { source = try AVAudioFile(forReading: original, commonFormat: .pcmFormatFloat32, interleaved: false) } catch { throw Failure.unreadable }
         let rate = source.processingFormat.sampleRate, channels = source.processingFormat.channelCount
         guard channels >= 1, channels <= 2 else { throw Failure.unsupportedLayout }
-        let ranges = ranges(spans, rate: rate, length: source.length)
-        guard !ranges.isEmpty, let format = clipFormat(rate: rate, channels: channels),
+        let ranges = try ranges(rate, source.length)
+        guard !ranges.isEmpty, rate.isFinite, rate > 0,
               let buffer = AVAudioPCMBuffer(pcmFormat: source.processingFormat, frameCapacity: chunkFrames) else { throw Failure.nothingToCut }
-        // Closed (and its header written) at the end of this scope, before it's flushed.
-        do {
-            let clip = try AVAudioFile(forWriting: destination, settings: format.settings, commonFormat: .pcmFormatFloat32, interleaved: false)
-            try read(source, ranges: ranges, into: buffer, isCancelled: isCancelled) { try clip.write(from: $0) }
+        guard FileManager.default.createFile(atPath: destination.path, contents: nil), let out = try? FileHandle(forWritingTo: destination) else {
+            throw Failure.unreadable
+        }
+        defer { try? out.close() }
+        try out.write(contentsOf: cafHeader(rate: rate, channels: Int(channels), frames: ranges.reduce(0) { $0 + $1.frames }))
+        try read(source, ranges: ranges, into: buffer, isCancelled: isCancelled) { chunk in
+            guard let data = chunk.floatChannelData else { throw Failure.unreadable }
+            let frames = Int(chunk.frameLength), count = Int(channels)
+            var bytes = Data(count: frames * count * 4)
+            bytes.withUnsafeMutableBytes { raw in
+                for frame in 0..<frames {
+                    for channel in 0..<count {
+                        raw.storeBytes(of: data[channel][frame].bitPattern.littleEndian, toByteOffset: (frame * count + channel) * 4, as: UInt32.self)
+                    }
+                }
+            }
+            try out.write(contentsOf: bytes)
         }
         return (rate, Int(channels), ranges, source.length)
+    }
+
+    /// The clip's file is written here, not by Core Audio's writer (whose padding is its own), so the same frames of the
+    /// same original are the same bytes on every Mac and every version: a CAF header, its `desc` chunk (32-bit float
+    /// Linear PCM, little-endian, interleaved, the original's rate and channels), and a `data` chunk of `frames` frames.
+    static func cafHeader(rate: Double, channels: Int, frames: Int64) -> Data {
+        var data = Data()
+        func append<T: FixedWidthInteger>(_ value: T) { withUnsafeBytes(of: value.bigEndian) { data.append(contentsOf: $0) } }
+        data.append(contentsOf: Array("caff".utf8)); append(UInt16(1)); append(UInt16(0))
+        data.append(contentsOf: Array("desc".utf8)); append(Int64(32))
+        append(rate.bitPattern); data.append(contentsOf: Array("lpcm".utf8))
+        // kCAFLinearPCMFormatFlagIsFloat | kCAFLinearPCMFormatFlagIsLittleEndian.
+        append(UInt32(3)); append(UInt32(4 * channels)); append(UInt32(1)); append(UInt32(channels)); append(UInt32(32))
+        data.append(contentsOf: Array("data".utf8)); append(Int64(4 + frames * Int64(4 * channels))); append(UInt32(0))
+        return data
     }
 
     /// Reads each range of `file` in chunks into `buffer`, handing every chunk to `body`. A read may deliver fewer frames

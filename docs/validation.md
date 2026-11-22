@@ -1,5 +1,69 @@
 # Validation record
 
+## Voice clips: carried with their recordings, never waited for, checked here (2026-11-21, second review)
+
+On `storage/voice-clips`, after a second review of the clips' deletion and sync (docs/architecture.md, "Voice clips";
+docs/icloud-sync.md, "Voice clips"): a clip goes with its recording to another conversation carried from its source
+(restored or kept under a new ID, merged, moved), so voiceprints naming the conversation that's gone stay covered and
+the sweep never takes speech a voiceprint needs wherever its file sits; a clip's object missing never holds a
+conversation, a publication, the sealer, or compaction back, and a Mac holding the clip uploads it again; no clip is
+cut or named while a device in use doesn't keep them; a Mac lets an original go on a clip it didn't cut only once its own
+cut of the clip's frames from its own original gives the same bytes (the cut is now written by Daybook itself, so it's
+the same bytes everywhere); in iCloud Drive only iCloud's own yes is "uploaded"; an encrypted library's sealer keeps the
+superseded originals voice profiles still need through key rotations; the voice check before letting originals go is
+asked once under the lock; a clip record (or list) in a newer shape never makes its conversation unreadable; a record
+dropped by an older Daybook's merge is named again from what this Mac found whole.
+
+**Verified.** Synthetic audio and temporary libraries only, no models, no recording:
+- `VoiceClipsTests` (20): the same frames of the same original give the same bytes (a header and the samples, nothing
+  else), and frames past the end are nothing to cut; a copy kept under a new ID carrying its clips from their source at
+  the same paths, current while its recording is still that original whatever its transcript says now, one that wasn't
+  current going stale, kept again still the first source's, read back the same; a voiceprint naming a conversation
+  that's gone by its speaker alone finding its source through the carried clip; a file needed by its source key in
+  another conversation's folder, by a voiceprint naming no recording through the recordings there, and every file while a
+  record can't be read; a record in a newer shape kept, written back, covering nothing, keeping its path, and a list in
+  another shape kept as an unknown key with nothing carried from it.
+- `LibrarySyncVoiceClipTests` (13): an eager Mac applying a conversation whose clip's object is gone, then installing it
+  once it's there; a Mac holding a clip putting its object back; the iPhone publishing a conversation whose clip object
+  is gone, the event not listing it, another Mac applying it; in an encrypted library a publication and the sealer not
+  held by a clip that's nowhere; `isObjectUploaded` false when iCloud can't answer in iCloud Drive, true only on its own
+  yes there, a file that's there elsewhere; a superseded original kept through a key rotation while a voice profile
+  needs it, while the library hasn't said, and for a conversation the library didn't judge, and retired with the old key
+  once nothing needs it.
+- `VoiceClipLibraryTests` (29): a conversation deleted on one Mac and restored on another, covered there by its carried
+  clip, never swept, and the other Mac covered by it after sync; one kept after another Mac deleted it, the same; a merge
+  carrying the folded conversation's clip onto the recording's copy with its file, both voiceprints covered, nothing
+  swept; Move to New Conversation taking the clip, the new conversation's recording compressed, the file left behind
+  swept a day later; a record a merge dropped named again (not while its file changed), and with no record of it here
+  the file kept and a cut of it again taking its name; another Mac's clip held but unchecked keeping B's original, then
+  checked: a cut that isn't of this recording covering nothing, B cutting its own (the same bytes the honest cut was) and
+  letting the original go; a clip whose object is gone applying without it on B, B's original kept, A putting it back, B
+  covered; an older device in use: nothing cut or named, also when it comes into use mid-cut; an encrypted library
+  telling its sealer which conversations' originals stay, then none once the clip is in iCloud; a new Mac without the
+  original keeping it in iCloud while the Mac that cut the clip doesn't.
+- `MeetingExportTests` (5): Full Data carries clip records as it carries the recordings' paths and digests, read back the
+  same.
+- unchanged: `LibrarySyncSealingTests` (48), `RecordingCompressionLibraryTests` (41), `RecordingCompressionSyncTests`
+  (4), `RecordingCompressionTests` (15), `MergeConversationsTests` (20), `RecordingRemovalTests` (7),
+  `LibrarySyncApplyTests` (8), `LibrarySyncContainerTests` (23), `LibrarySyncReplicaTests` (36),
+  `LibraryControllerTests` (19), `ConversationMergeTests` (25), `MeetingMergeTests` (7), `LibrarySyncTests` (26),
+  `LibrarySyncForksTests` (2), `MeetingStoreTests` (21).
+- 62 mutations of the safety checks, each failing a test: the 35 before, run again (texts updated where the code
+  moved), and 27 new: a carried clip its source's, found through for a conversation that's gone, holding its source's
+  passages, going stale when it wasn't current; a merge carrying clips, and carried clips' files coming along; the sweep
+  asking every voiceprint wherever the file sits; nothing cut, or named under the lock, while a device in use doesn't
+  keep clips; a missing clip never holding its conversation back, left out of a publication, not holding the sealer; a
+  Mac holding a clip uploading it again; an unchecked clip not letting an original go, one that differs covering
+  nothing, the check comparing bytes, a clip cut here counting as checked; in iCloud Drive only iCloud's own yes; held
+  and unjudged superseded originals live in the sealer, and the library telling it; a record and a list in a newer shape
+  kept; a move carrying the record; a dropped record named again, only with its stamp, and taken back when not saved.
+  Breaking "published by reference" first went uncaught (a Mac installs a clip from what the conversation names,
+  whatever the event lists), so the iPhone test now checks the event lists it while its object is there.
+
+**Needs a real Mac and library.** iCloud's answer for an item after signing out of iCloud (the provider's
+`ubiquitousItemIsUploaded` and `isUbiquitousItem` on a detached container), a key rotation in a real encrypted library
+with compressed recordings, and the same clip bytes cut on two Macs on different macOS versions.
+
 ## Voice clips: compressing recordings a voice profile learned from (2026-11-21)
 
 The speech every voiceprint was learned from is kept as a lossless clip in its conversation, synced with it, so the

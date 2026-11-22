@@ -117,6 +117,12 @@ extension LibraryController {
             for file in pageFiles {
                 try await store.copyPageFile(from: file.url, relativePath: file.file.relativePath, sha256: file.file.sha256, into: survivorID)
             }
+            // The voice clips the fold carries, at the same paths (`ConversationMerge.fold`): each one here comes along; one
+            // this device doesn't hold (the iPhone never fetches clips) is the object iCloud has.
+            for folded in folding {
+                try copyVoiceClipFiles(folded.voiceClipsCarried(Dictionary(folded.tracks.map { ($0.id, $0.id) }, uniquingKeysWith: { a, _ in a })),
+                                       from: folded.id, to: survivorID)
+            }
         } catch {
             releaseLock()
             throw error

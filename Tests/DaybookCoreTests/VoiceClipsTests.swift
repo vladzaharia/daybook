@@ -251,8 +251,100 @@ final class VoiceClipsTests: XCTestCase {
         var elsewhere = decoded
         elsewhere.voiceClips?[0].relativePath = "Originals/a.caf"
         XCTAssertThrowsError(try MeetingStore.validate(elsewhere, expectedID: elsewhere.id, rootURL: root))
-        // A copy kept under a new ID names none: voiceprints name the conversation they were learned from.
-        XCTAssertNil(decoded.keptAs(UUID(), field: "source:restored", title: "Restored").voiceClips)
+    }
+
+    /// A conversation restored under a new ID, or kept after another device deleted it: voiceprints still name the
+    /// conversation they were learned from, so its clips come along carried from there, at the same paths, and still
+    /// cover those voiceprints.
+    func testBehaviorACopyKeptUnderANewIDCarriesItsClipsFromTheirSource() throws {
+        var conversation = meeting([("s1", 0, 10), ("s2", 10, 14)])
+        let current = clip(conversation)
+        var outdated = clip(conversation, speaker: "s2")
+        outdated.ranges = [VoiceClipRange(startFrame: 0, endFrame: 16)]
+        conversation.voiceClips = [current, outdated]
+        let newID = UUID()
+        let kept = conversation.keptAs(newID, field: "source:restored", title: "Restored")
+        let clips = try XCTUnwrap(kept.voiceClips)
+        XCTAssertEqual(clips.count, 2)
+        let carried = try XCTUnwrap(clips.first { $0.speakerID == "s1" })
+        XCTAssertEqual(carried.carriedFrom, current.source(in: conversation.id))
+        XCTAssertEqual(carried.source(in: newID), current.source(in: conversation.id), "still the source its voiceprints name")
+        XCTAssertEqual(carried.relativePath, current.relativePath, "the same path, so the file that came is its")
+        XCTAssertTrue(carried.isStored(in: newID))
+        XCTAssertTrue(kept.voiceClipIsCurrent(carried))
+        XCTAssertEqual(kept.voiceClip(for: current.source(in: conversation.id)), carried)
+        // One that no longer held its speaker's passages goes marked, and is never taken for them.
+        XCTAssertEqual(clips.first { $0.speakerID == "s2" }?.stale, true)
+        // The transcript here made again doesn't change what the voiceprints learned: the carried clip stays current while
+        // its recording is still the original it was cut from.
+        var redone = kept
+        redone.transcripts[0].segments[0].speakerID = "s9"
+        XCTAssertTrue(redone.voiceClipIsCurrent(carried))
+        redone.tracks[0].sha256 = String(repeating: "e", count: 64)
+        XCTAssertFalse(redone.voiceClipIsCurrent(carried))
+        // Kept again: still the first source's.
+        let again = kept.keptAs(UUID(), field: "source:restored", title: "Restored")
+        XCTAssertEqual(again.voiceClips?.first { $0.speakerID == "s1" }?.carriedFrom, current.source(in: conversation.id))
+        // Saved and read back as it was.
+        XCTAssertEqual(try JSONDecoder().decode(Meeting.self, from: JSONEncoder().encode(kept)).voiceClips, clips)
+        // A voiceprint naming the conversation that's gone, by its speaker alone, finds its source through the carried clip.
+        let profile = SpeakerProfile(id: UUID(), name: "Vlad")
+        let byName = print(profile.id, conversation, trackID: .some(nil))
+        let library = metadata(profiles: [profile], prints: [byName])
+        XCTAssertEqual(VoiceClips.plan(metadata: library, meetings: [kept]).wanted.keys.sorted(), [carried.source(in: newID).key])
+        XCTAssertTrue(VoiceClips.holdingBack(metadata: library, meetings: [kept], covered: [carried.source(in: newID).key]).isEmpty)
+        XCTAssertEqual(VoiceClips.holdingBack(metadata: library, meetings: [kept], covered: []).map(\.id), [byName.id])
+    }
+
+    /// A file's speech is needed wherever it sits: by its source key, whichever conversation's folder holds it.
+    func testBehaviorAClipFileIsNeededByItsSourceKeyWhereverItSits() {
+        let conversation = meeting([("s1", 0, 10)])
+        let profile = SpeakerProfile(id: UUID(), name: "Vlad")
+        let named = print(profile.id, conversation), bySpeaker = print(profile.id, conversation, speaker: "s2", trackID: .some(nil))
+        let library = metadata(profiles: [profile], prints: [named, bySpeaker])
+        let plan = VoiceClips.plan(metadata: library, meetings: [])
+        let copy = conversation.keptAs(UUID(), field: "source:restored", title: "Restored")
+        let own = VoiceClipSource(meetingID: conversation.id, trackID: conversation.tracks[0].id, speakerID: "s1").key
+        let speakers = VoiceClipSource(meetingID: conversation.id, trackID: conversation.tracks[0].id, speakerID: "s2").key
+        XCTAssertTrue(VoiceClips.isNeeded(own, in: copy, metadata: library, wanted: plan), "in another conversation's folder too")
+        XCTAssertTrue(VoiceClips.isNeeded(speakers, in: copy, metadata: library, wanted: plan), "a voiceprint naming no recording, by the recordings there")
+        XCTAssertFalse(VoiceClips.isNeeded(speakers, in: meeting([("s1", 0, 10)]), metadata: library, wanted: plan))
+        XCTAssertFalse(VoiceClips.isNeeded(String(repeating: "0", count: 32), in: copy, metadata: library, wanted: plan))
+        XCTAssertTrue(VoiceClips.isNeeded(String(repeating: "0", count: 32), in: copy, metadata: library, wanted: VoiceClips.Plan(readable: false)),
+                      "every file while a record can't be read")
+    }
+
+    /// A clip record, or a list of them, in a shape a newer Daybook wrote never makes the conversation unreadable: it's
+    /// kept as it came and written back, covers nothing, and keeps the file it names.
+    func testBehaviorAClipRecordThisVersionCantReadIsKeptAndCoversNothing() throws {
+        var conversation = meeting([("s1", 0, 10)])
+        let readable = clip(conversation)
+        conversation.voiceClips = [readable]
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(conversation)) as? [String: Any])
+        var clips = try XCTUnwrap(object["voiceClips"] as? [[String: Any]])
+        let path = "Originals/VoiceClips/\(String(repeating: "f", count: 32))-ffffffffffffffff.caf"
+        clips.append(["relativePath": path, "frames": ["shape": 2]])
+        object["voiceClips"] = clips
+        let decoded = try JSONDecoder().decode(Meeting.self, from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertEqual(decoded.voiceClips?.count, 2)
+        XCTAssertEqual(decoded.voiceClips?.first, readable)
+        let unread = try XCTUnwrap(decoded.voiceClips?.last)
+        XCTAssertNotNil(unread.unread)
+        XCTAssertFalse(unread.isStored(in: decoded.id))
+        XCTAssertFalse(decoded.voiceClipIsCurrent(unread))
+        XCTAssertEqual(unread.unreadPath, path)
+        XCTAssertNoThrow(try MeetingStore.validate(decoded, expectedID: decoded.id, rootURL: root))
+        let written = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(decoded)) as? [String: Any])
+        XCTAssertEqual((written["voiceClips"] as? [[String: Any]])?.last?["relativePath"] as? String, path, "written back as it came")
+        XCTAssertEqual(VoiceClip.mergedList(base: [], local: decoded.voiceClips ?? [], remote: []).count, 2)
+        // A list in another shape altogether: kept as an unknown key, nothing cut or carried in it here.
+        object["voiceClips"] = ["byTrack": ["x": 1]]
+        let other = try JSONDecoder().decode(Meeting.self, from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertNil(other.voiceClips)
+        XCTAssertFalse(other.voiceClipsAreReadable)
+        XCTAssertTrue(other.voiceClipsCarried([conversation.tracks[0].id: UUID()]).isEmpty)
+        let back = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(other)) as? [String: Any])
+        XCTAssertEqual((back["voiceClips"] as? [String: Any])?.keys.sorted(), ["byTrack"])
     }
 
     // MARK: Cutting
@@ -316,6 +408,31 @@ final class VoiceClipsTests: XCTestCase {
             XCTAssertEqual(clip.ranges, [VoiceClipRange(startFrame: Int64(0.5 * rate), endFrame: Int64(1.25 * rate)),
                                          VoiceClipRange(startFrame: Int64(3 * rate), endFrame: Int64(4.5 * rate))])
             try assertHolds(clip, of: original)
+        }
+    }
+
+    /// What a Mac checks another's clip with (`LibraryController.makeVoiceClips`): its own cut of the clip's frames from its
+    /// own original, which must give the same bytes.
+    func testBehaviorTheSameFramesOfTheSameOriginalGiveTheSameClip() async throws {
+        let spans = [VoiceClipSpan(start: 0.5, end: 1.25), VoiceClipSpan(start: 2, end: 5.9)]
+        for original in [try recording(name: "mono.caf"), try recording(channels: 2, name: "stereo.caf")] {
+            let first = try await VoiceClipAudio.extract(from: original, spans: spans, into: root)
+            let again = try await VoiceClipAudio.extract(from: original, ranges: first.ranges, into: root)
+            XCTAssertEqual(again.sha256, first.sha256, "the same bytes")
+            XCTAssertEqual(again.ranges, first.ranges)
+            XCTAssertEqual(try Data(contentsOf: again.url), try Data(contentsOf: first.url))
+            // Written here, not by Core Audio's writer: a header and the samples, nothing else.
+            let frames = first.ranges.reduce(0) { $0 + $1.frames }
+            XCTAssertEqual(first.size, 68 + frames * 4 * Int64(first.channels))
+            XCTAssertEqual(try Data(contentsOf: first.url).prefix(68), VoiceClipAudio.cafHeader(rate: 48_000, channels: first.channels, frames: frames))
+            try assertHolds(again, of: original)
+            // Frames past the original's end aren't there to cut.
+            do {
+                _ = try await VoiceClipAudio.extract(from: original, ranges: [VoiceClipRange(startFrame: 0, endFrame: 48_000 * 7)], into: root)
+                XCTFail("past the end")
+            } catch let failure as VoiceClipAudio.Failure {
+                XCTAssertEqual(failure, .nothingToCut)
+            }
         }
     }
 

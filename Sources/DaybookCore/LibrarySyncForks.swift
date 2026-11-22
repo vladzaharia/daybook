@@ -37,9 +37,14 @@ extension Meeting {
             return copy
         }
         kept.processingRequests = open.isEmpty ? nil : open
-        // A voice clip is named by its conversation (its path is the source's, `VoiceClip.isStored`), and voiceprints name
-        // the conversation they were learned from, not this copy: the copy names none (the files that came are swept).
-        kept.voiceClips = nil
+        // Voiceprints name the conversation they were learned from, not this copy: its clips come along carried from that
+        // source (the same recordings, under the same IDs; the same paths, so the files that came are theirs), and so still
+        // cover what the voiceprints learned. A list in a shape this version can't read stays as it came.
+        if voiceClipsAreReadable {
+            let carried = voiceClipsCarried(Dictionary(tracks.map { ($0.id, $0.id) }, uniquingKeysWith: { a, _ in a }))
+                + (voiceClips ?? []).filter { $0.unread != nil }
+            kept.voiceClips = carried.isEmpty ? nil : carried
+        }
         kept.revisions.append(MeetingRevision(id: SyncEncoding.uuid("\(id.uuidString):\(field)"), date: updatedAt,
                                               field: "\(field):\(self.id.uuidString)", oldValue: self.id.uuidString, newValue: title))
         return kept
