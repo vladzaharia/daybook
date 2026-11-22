@@ -457,9 +457,12 @@ final class SupersededObjectsTests: XCTestCase {
         let compressed = try await recordedAndCompressed(mac, phone)
         try await acknowledged(mac, phone)
         let now = try await acknowledgedSince(mac, compressed.original.sha256)
+        // It writes again within the day, then not after it.
+        try await noticed(mac, phone, at: now.addingTimeInterval(3600))
         try await pass(mac, "Mac", at: now.addingTimeInterval(day + 60))
         try await pass(mac, "Mac", at: now.addingTimeInterval(3 * day))
-        XCTAssertTrue(exists(blob(compressed.original.sha256)), "the iPhone hasn't written since it acknowledged")
+        XCTAssertTrue(exists(blob(compressed.original.sha256)), "the iPhone hasn't written since the day was up")
+        XCTAssertEqual(try notice()?.deleted, [])
         try await noticed(mac, phone, at: now.addingTimeInterval(3 * day + 60))
         XCTAssertFalse(exists(blob(compressed.original.sha256)))
     }
@@ -564,6 +567,7 @@ final class SupersededObjectsTests: XCTestCase {
             try await noticed(mac, pad, at: now.addingTimeInterval(offset * day + 60), "Mac", "Pad")
         }
         XCTAssertTrue(exists(blob(compressed.original.sha256)))
+        XCTAssertEqual(try notice()?.deleted, [], "never deleted")
     }
 
     // MARK: What keeps it
@@ -1040,6 +1044,29 @@ final class SupersededObjectsTests: XCTestCase {
         XCTAssertNil(presence["superseded"], "nor is it acknowledged")
     }
 
+    /// The same for a Mac reinstalled under a new device ID: its earlier identity's notice is ignored at once.
+    func testBehaviorANoticeFromAnEarlierIdentityOfAReinstalledMacIsIgnored() async throws {
+        let mac = try mac(), phone = try phone()
+        let compressed = try await recordedAndCompressed(mac, phone)
+        try await acknowledged(mac, phone)
+        try agePresence("Mac", days: 2)
+        var reinstalled = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: presenceURL("Mac"))) as? [String: Any])
+        let formatter = ISO8601DateFormatter()
+        reinstalled["deviceID"] = "Mac reinstalled"
+        reinstalled["firstSeen"] = formatter.string(from: Date().addingTimeInterval(-day))
+        reinstalled["lastSeen"] = formatter.string(from: Date())
+        reinstalled["superseded"] = nil
+        try JSONSerialization.data(withJSONObject: reinstalled).write(to: presenceURL("Mac reinstalled"))
+        var reference = Meeting(title: "By reference")
+        var track = compressed.original
+        track.id = UUID()
+        reference.tracks = [track]
+        try await MeetingStore(rootURL: local("Phone")).save(reference)
+        let events = Set(files("Events"))
+        try await pass(phone, "Phone")
+        XCTAssertNotEqual(Set(files("Events")), events, "published by reference: the earlier identity's notice doesn't count")
+    }
+
     /// An encrypted library's sealer retires what nothing live uses on its own: nothing here lists, waits, or deletes.
     func testBehaviorAnEncryptedLibraryListsAndDeletesNothingHere() async throws {
         let mac = try mac(seals: true), phone = try phone()
@@ -1311,6 +1338,8 @@ final class SupersededObjectsTests: XCTestCase {
         try await pass(relaunched, "Mac", at: now)
         XCTAssertNotEqual(try notice()?.epoch, old.epoch)
         XCTAssertGreaterThanOrEqual(try XCTUnwrap(try notice()?.sequence), old.sequence)
+        // Once the new notice is in iCloud, the old acknowledgement, through any sequence, still counts for nothing.
+        try await pass(relaunched, "Mac", at: now.addingTimeInterval(30))
         var state = await relaunched.supersededState()
         XCTAssertNotNil(state.objects[compressed.original.sha256])
         XCTAssertNil(state.objects[compressed.original.sha256]?.acknowledgedSince, "the old epoch's acknowledgement counts for nothing")
@@ -1382,7 +1411,6 @@ final class SupersededObjectsTests: XCTestCase {
         // The iPhone no longer has the conversation (deleted there): only the notice says the original may go.
         let phoneStore = try MeetingStore(rootURL: local("Phone"))
         _ = try await phoneStore.moveToTrash(compressed.meeting.id)
-        try FileManager.default.removeItem(at: local("Phone").appendingPathComponent("Trash"))
         try await pass(phone, "Phone")
         var gone = await phone.supersededRuntime.possiblyGone
         XCTAssertTrue(gone.contains(compressed.original.sha256))

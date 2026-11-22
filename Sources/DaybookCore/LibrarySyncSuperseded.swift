@@ -260,11 +260,13 @@ extension LibrarySyncEngine {
             seen.insert(record.deviceID)
         }
         supersededRuntime.records = supersededRuntime.records.filter { seen.contains($0.key) }
-        // Who wrote them: presence that can't be read says nothing, and every notice counts meanwhile.
-        if let presence = allPresence(now: now, includingRetired: true) {
+        // Who wrote them: presence that can't be read says nothing, and every notice counts meanwhile. An earlier identity
+        // of a reinstalled Mac never deletes again.
+        if supersededRuntime.records.keys.contains(where: { $0 != deviceID }), let presence = allPresence(now: now, includingRetired: true) {
+            let earlier = Set(((try? knownDevices(now: now)) ?? []).filter { $0.supersededBy != nil }.map(\.id))
             supersededRuntime.staleWriters = Set(supersededRuntime.records.keys.filter { writer in
                 guard writer != deviceID else { return false }
-                guard let record = presence.first(where: { $0.deviceID == writer }) else { return true }
+                guard let record = presence.first(where: { $0.deviceID == writer }), !earlier.contains(writer) else { return true }
                 return record.deviceClass != .mac || record.audioPolicy != SyncAudioPolicy.eager.rawValue
                     || now.timeIntervalSince(record.lastSeen) >= Self.recentDevice
             })
