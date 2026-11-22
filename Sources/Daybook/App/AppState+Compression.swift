@@ -33,6 +33,13 @@ extension AppState {
         RecordingCompressionSchedule.startDate(in: preferences, key: Preference.compressionStartsAt, library: id)
     }
 
+    /// A synced library where a device seen lately can't compress yet (it hasn't the version that does): nothing is
+    /// compressed until it has. False for a library that doesn't sync.
+    func compressionWaitsOnDevices() async -> Bool {
+        guard library.compressionSync == .connected, let engine = sync.engine else { return false }
+        return await !engine.everyRecentDeviceCompresses()
+    }
+
     /// Starts a pass after an idle moment, unless one is waiting or under way.
     func compressOlderRecordingsWhenIdle() {
         // The week starts with the first idle moment in a library, whatever the power.
@@ -86,7 +93,8 @@ extension AppState {
         let engine = sync.engine
         // In a synced library, applied for the library this pass is for (`id`): a library switched mid-pass isn't.
         let settingsApplied = syncState == .local ? id == "local" : await library.settingsAreCurrent(library: UUID(uuidString: id) ?? UUID())
-        let lineage = await library.trashedMeetings()
+        // The Trash, and what was deleted from it for good, as its tombstones keep it.
+        let lineage = await library.compressionLineage()
         // Never too while a voiceprint can't be read (`compressionPassAge`).
         return .init(now: now, age: library.compressionPassAge, startsAt: start, settingsApplied: settingsApplied,
                      everyDeviceCompresses: syncState == .local ? true : await engine?.everyRecentDeviceCompresses(now: now) ?? false,

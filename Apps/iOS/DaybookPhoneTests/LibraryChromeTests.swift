@@ -23,6 +23,13 @@ final class LibraryChromeTests: XCTestCase {
       "no Select with nothing to select")
     XCTAssertEqual(
       LibraryChrome.more(in: .trash, isEmpty: false), [.newFolder, .devices], "nothing is written into the Trash")
+    XCTAssertEqual(
+      LibraryChrome.more(in: .trash, isEmpty: false, trashIsEmpty: false), [.emptyTrash, .newFolder, .devices],
+      "Empty Trash only in a Trash that holds something")
+    XCTAssertEqual(
+      LibraryChrome.more(in: .section(.all), isEmpty: false, trashIsEmpty: false),
+      [.newNote, .select, .newFolder, .devices], "and nowhere else")
+    XCTAssertEqual(LibraryChrome.MoreItem.emptyTrash.title, "Empty Trash…")
     XCTAssertEqual(LibraryChrome.MoreItem.newNote.title, "New Note")
     XCTAssertEqual(LibraryChrome.MoreItem.devices.title, "Devices")
     XCTAssertEqual(LibraryChrome.MoreItem.select.title, "Select Conversations")

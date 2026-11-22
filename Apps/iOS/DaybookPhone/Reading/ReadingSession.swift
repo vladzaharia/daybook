@@ -96,6 +96,8 @@ final class ReadingSession {
     var alert: ReadingAlert?
     /// Conversations waiting for the person to confirm moving them to the Trash.
     var confirmingTrash: [UUID] = []
+    /// Delete Now or Empty Trash waiting for the person to confirm.
+    var confirmingDeleteNow: DeleteNowRequest?
     /// Conversations waiting for the person to confirm merging them (Merge…).
     var confirmingMerge: [UUID] = []
     /// How far a merge's downloads have come (0...1), while it runs; nil otherwise.
@@ -331,4 +333,10 @@ struct ReadingAlert: Equatable {
         let words = ProblemWords(title: title, fallback: fallback, error: error)
         self.init(title: words.title, message: words.message, details: words.details)
     }
+}
+
+/// Conversations in the Trash that Delete Now or Empty Trash will delete once confirmed, and the question it asks.
+struct DeleteNowRequest: Equatable {
+    let ids: [UUID]
+    let title: String
 }
