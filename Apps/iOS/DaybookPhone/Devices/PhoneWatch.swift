@@ -24,6 +24,9 @@ final class PhoneWatch {
     private let phoneName: String
     private var watches: [ObservationWatch] = []
     private var started = false
+    /// True while the person has paused this iPhone's recording: the watch isn't told of it, so nothing joins it then
+    /// (docs/iphone.md, "Pausing"); a Start on the watch is a recording of its own.
+    var withholdsRecording: () -> Bool = { false }
 
     /// What the watch is told, without when.
     struct Context: Equatable {
@@ -39,7 +42,7 @@ final class PhoneWatch {
         self.cascade = cascade
         self.phoneName = phoneName ?? ProcessingRequest.Device.currentName
         let hooks = hub.environment.watch
-        hooks.sharedRecording = { [weak cascade] in cascade.flatMap { Self.sharedRecording($0) } }
+        hooks.sharedRecording = { [weak self] in self?.sharedRecording }
         hooks.phoneContext = { [weak self] in self?.phoneContext() ?? PhoneContext() }
         hooks.join = { segments, output in _ = try await Self.join(segments, into: output) }
     }
@@ -79,8 +82,11 @@ final class PhoneWatch {
 
     /// What the watch is told now.
     var context: Context {
-        Context(sharedRecording: Self.sharedRecording(cascade), recordsAlong: session?.device.recordsAlongsideMac ?? true)
+        Context(sharedRecording: sharedRecording, recordsAlong: session?.device.recordsAlongsideMac ?? true)
     }
+
+    /// The shared recording the watch may join now: none while the person has paused it.
+    var sharedRecording: WatchSharedRecording? { withholdsRecording() ? nil : Self.sharedRecording(cascade) }
 
     /// The answer to the watch's `.context`, stamped as it's given.
     func phoneContext() -> PhoneContext {

@@ -201,8 +201,8 @@ struct HearingDot: View {
     }
 }
 
-/// Bookmark and Stop while recording; Resume and Stop once a pause can end; Stop alone during the call
-/// and when it's stale. Each label has its own ink on its fill (4.5:1 in both appearances); a filled
+/// Bookmark and Stop while recording, with Pause between them (its glyph alone) while it's offered; Resume and Stop once
+/// a pause can end; Stop alone during the call and when it's stale. Each label has its own ink on its fill (4.5:1 in both appearances); a filled
 /// button's default white label vanished on Resume's white and Bookmark's amber. `iconsOnly` shows the
 /// glyphs alone (the small family), each still named for VoiceOver.
 struct ActivityButtons: View {
@@ -234,6 +234,15 @@ struct ActivityButtons: View {
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(DaybookPalette.ActivityInk.resume.label.color)
                         .frame(maxWidth: .infinity)
+                }
+                .tint(DaybookPalette.ActivityInk.resume.fill.color)
+            }
+            if state.offersPause, !isStale {
+                Button(intent: PauseRecordingIntent()) {
+                    Label("Pause", systemImage: "pause.fill")
+                        .labelStyle(.iconOnly)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(DaybookPalette.ActivityInk.resume.label.color)
                 }
                 .tint(DaybookPalette.ActivityInk.resume.fill.color)
             }

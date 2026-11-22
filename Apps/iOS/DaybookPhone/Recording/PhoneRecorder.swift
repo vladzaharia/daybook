@@ -33,6 +33,9 @@ struct PhoneRecorderEnvironment {
 /// - Timeline: the conversation starts at the first sample. Elapsed time, note times, bookmarks,
 ///   and segment offsets are all measured on the continuous clock from there, so they agree with
 ///   each other and with the finished file.
+/// - The person can pause it (`pauseByPerson`), the same way: input stops and the segment closes, so nothing is heard,
+///   captioned, or kept until Resume, and the gap is silent in the joined file. Only the person resumes it: an
+///   interruption that begins and ends meanwhile leaves it paused.
 /// - Interruptions (a call, Siri, an alarm) pause: input stops and the current segment is finished,
 ///   so everything recorded so far is a complete file even if the app is then suspended and killed.
 ///   When the interruption ends the recorder resumes if the system recommends it, otherwise it
@@ -96,6 +99,8 @@ final class PhoneRecorder {
         case interruption
         /// The microphone couldn't restart after a route change or reset.
         case inputFailed
+        /// The person paused it.
+        case person
     }
 
     private(set) var state: State = .idle
@@ -226,6 +231,8 @@ final class PhoneRecorder {
 
     var isActive: Bool { state != .idle }
     var isPaused: Bool { if case .paused = state { return true } else { return false } }
+    /// Paused by the person (`pauseByPerson`), not by an interruption.
+    var isPausedByPerson: Bool { state == .paused(.person) }
     /// Recording or paused: notes and bookmarks get conversation times.
     var isCapturing: Bool { state == .recording || state == .starting || isPaused }
     var bookmarkCount: Int { highlights.count }
@@ -319,6 +326,16 @@ final class PhoneRecorder {
         }
         persistJournal()
         onChange?()
+    }
+
+    /// The person paused the recording: input stops and the open segment closes, so from now nothing is heard, given to
+    /// `audioTap`, or written until `resume()`, and Stop joins the parts with silence in the gap. A crash while paused
+    /// leaves only what was recorded before. It stays paused until the person resumes it. False when it isn't recording.
+    @discardableResult
+    func pauseByPerson() async -> Bool {
+        guard state == .recording else { return false }
+        await pause(.person, message: nil)
+        return true
     }
 
     /// What Stop tells its caller as it goes, on the main actor.
@@ -834,7 +851,10 @@ final class PhoneRecorder {
         try await Task.detached(priority: .utility) {
             var journal = try PhoneCaptureJournal.load(from: directory)
             let recovery: PhoneRecording.Recovery?
+            // Paused by the person when iOS ended Daybook: whole up to the pause, so it's filed as if Stop ended it there.
+            let pausedByPerson = journal.state == .paused && journal.interruptions.last.map { $0.byPerson == true && $0.resumed != true } == true
             switch journal.state {
+            case .paused where pausedByPerson: recovery = nil
             case .recording, .paused: recovery = .quitWhileRecording
             case .stopping: recovery = .interruptedWhileSaving
             case .stopped: recovery = nil
@@ -843,7 +863,7 @@ final class PhoneRecorder {
             var recording = try await PhoneCaptureFinisher.finish(&journal, in: directory, recovery: recovery)
             // Cut short, it ended where its assembled audio does: counted frames can trail or lead what
             // reached the disk, and a segment the journal never heard of counts none.
-            if recovery != nil, journal.endedAt == nil { recording.endedAt = recording.startedAt.addingTimeInterval(recording.duration) }
+            if recovery != nil || pausedByPerson, journal.endedAt == nil { recording.endedAt = recording.startedAt.addingTimeInterval(recording.duration) }
             return recording
         }.value
     }
@@ -922,17 +942,19 @@ final class PhoneRecorder {
         journal?.routes.append(CaptureRouteEvent(time: elapsedTime, input: now, reason: reason))
     }
 
-    private func pause(_ reason: PauseReason, message: String) async {
+    private func pause(_ reason: PauseReason, message: String?) async {
         guard state == .recording else { return }
         inputGeneration = UUID()
         state = .paused(reason)
         if !pages.isEmpty { sampleClock() }
         pauseMessage = message
+        // The person's own pause goes on whenever they say.
+        if reason == .person { canResume = true }
         pausedAt = elapsedTime
         writer?.setAcceptingAudio(false)
         input?.stop()
         input = nil
-        journal?.interruptions.append(CaptureInterruption(began: elapsedTime, reason: message))
+        journal?.interruptions.append(CaptureInterruption(began: elapsedTime, reason: message, byPerson: reason == .person ? true : nil))
         journal?.state = .paused
         onChange?()
         // Finish the segment: what's recorded is now a complete file, even if the app is suspended
@@ -1021,6 +1043,9 @@ final class PhoneRecorder {
         listeningSince = environment.clock.hostTime()
         let tap = audioTap
         try input.start(onBuffer: { buffer, host in
+                            // What an input hands over after it's told to stop (a pause) reaches nothing: not the
+                            // file, and not captions.
+                            guard writer.isAcceptingAudio else { return }
                             writer.append(buffer, hostTime: host)
                             tap?(buffer, host)
                         },

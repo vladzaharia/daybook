@@ -131,7 +131,8 @@ struct RecorderScreen: View {
             isSaving: recorder.state == .stopping || model.isFiling,
             pause: PhoneRecorderStatus.pause(recorder.state, message: recorder.pauseMessage, canResume: recorder.canResume),
             asleep: asleep,
-            hasNotice: RecordingNotice.isShowing(model))
+            hasNotice: RecordingNotice.isShowing(model),
+            canPause: model.canPauseRecording)
     }
 
     private func surfaceActions() -> RecorderSurfaceActions {
@@ -139,7 +140,8 @@ struct RecorderScreen: View {
         return RecorderSurfaceActions(
             bookmark: { Task { try? await model.addBookmark() } },
             stop: { Task { try? await model.stopRecording() } },
-            resume: { Task { try? await model.resumeRecording() } })
+            resume: { Task { try? await model.resumeRecording() } },
+            pause: { Task { try? await model.pauseRecording() } })
     }
 
     private func slots(writing: Binding<Bool>, notebookFits: Bool = false) -> RecorderSlots {
@@ -213,7 +215,8 @@ private struct PhoneChipMenu: View {
     let chip: RecorderChip
 
     var body: some View {
-        if case .peer(let id) = chip.target, let mac = model.macsToRecordWith.first(where: { $0.id.uuidString == id }) {
+        // Not while the person has paused it: the Mac would record what this iPhone leaves out.
+        if case .peer(let id) = chip.target, !model.recorder.isPausedByPerson, let mac = model.macsToRecordWith.first(where: { $0.id.uuidString == id }) {
             Button("Record on \(mac.name) Too") { Task { await model.recordOnMac(mac.id) } }
         }
     }

@@ -654,15 +654,71 @@ public struct RecorderControlTiles: Layout {
 
 // MARK: - Pause
 
+/// Pause, a glyph-sized circle beside Stop (a secondary control, so Bookmark and Stop keep their room), offered only
+/// while the recording can pause: one nothing else records along with. Paused, the pause's box offers Resume; where
+/// there's no room for the box (the compact panel), this circle is Resume instead, the red dot.
+public struct PauseControl: View {
+    private let height: CGFloat
+    private let side: CGFloat
+    private let size: CGFloat?
+    private let resumes: Bool
+    private let action: () -> Void
+    @State private var pressed = 0
+
+    public init(metrics: RecorderControlMetrics, resumes: Bool = false, action: @escaping () -> Void) {
+        height = metrics.height
+        side = min(metrics.height, RecorderControlMetrics.glyph.height)
+        size = metrics.size
+        self.resumes = resumes
+        self.action = action
+    }
+
+    private var title: String { resumes ? "Resume Recording" : "Pause Recording" }
+
+    public var body: some View {
+        Button {
+            pressed += 1
+            action()
+        } label: {
+            Group {
+                if resumes {
+                    Circle().fill(DaybookPalette.Ink.record).frame(width: side * 0.32, height: side * 0.32)
+                        .daybookGlow(DaybookPalette.Ink.record, radius: 3)
+                } else {
+                    Image(systemName: "pause.fill")
+                        .font(size.map { .system(size: $0, weight: .bold) } ?? .title3.weight(.bold))
+                        .foregroundStyle(DaybookPalette.Ink.title)
+                }
+            }
+            .frame(width: side, height: side)
+            .contentShape(Circle())
+        }
+        .daybookControl(.standard, shape: .circle)
+        .frame(height: height)
+        #if os(macOS)
+        .help(title)
+        #endif
+        .modifier(RecorderPressFeedback(trigger: pressed, heavy: false))
+        .accessibilityLabel(resumes ? "Resume" : "Pause")
+        .accessibilityShowsLargeContentViewer { Label(resumes ? "Resume" : "Pause", systemImage: resumes ? "record.circle" : "pause.fill") }
+    }
+}
+
 /// Why a recording is paused, and whether it can go on.
 public struct RecorderPause: Equatable, Sendable {
     public var title: String
+    /// Empty says nothing more than the title (the person's own pause).
     public var message: String
     public var canResume: Bool
+    /// `.problem` for what paused it on its own (a call, a microphone that stopped); `.info` for the person's own.
+    public var kind: AttentionKind
 
-    public init(title: String, message: String, canResume: Bool) {
-        self.title = title; self.message = message; self.canResume = canResume
+    public init(title: String, message: String, canResume: Bool, kind: AttentionKind = .problem) {
+        self.title = title; self.message = message; self.canResume = canResume; self.kind = kind
     }
+
+    /// Whether its box names it: not the person's own pause, which the status above already says (Resume alone).
+    public var showsBox: Bool { kind == .problem || !message.isEmpty }
 }
 
 /// The recording is paused: what happened in one box, and Resume Recording under it once it can.
@@ -679,7 +735,9 @@ public struct RecorderPauseBox: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: DaybookSpacing.s2) {
-            AttentionBox(title: pause.title, symbol: "pause.circle.fill", message: pause.message)
+            if pause.showsBox {
+                AttentionBox(kind: pause.kind, title: pause.title, symbol: "pause.circle.fill", message: pause.message.isEmpty ? nil : pause.message)
+            }
             // Resume only once it can: during a call the message says when it will.
             if pause.canResume {
                 Button(action: resume) {

@@ -7,7 +7,7 @@ import Foundation
 // Control Center control, the widget's buttons, Siri, Shortcuts, and the Action button).
 //
 // The recording intents conform to `AudioRecordingIntent` (start, stop, resume) or
-// `LiveActivityIntent` (bookmark), so the system always performs them in the app's process, where
+// `LiveActivityIntent` (bookmark, pause), so the system always performs them in the app's process, where
 // the recorder lives, launching the app in the background when needed. An intent that starts
 // recording from the background must start a Live Activity; the app does that for every recording.
 // Each says what happened in a short line, which Siri speaks ("Recording.", "Saved to Daybook.").
@@ -24,6 +24,7 @@ protocol RecordingCommandHandling: AnyObject {
     func startRecording() async throws
     func stopRecording() async throws
     func resumeRecording() async throws
+    func pauseRecording() async throws
     @discardableResult func addBookmark() async throws -> TimeInterval
 }
 
@@ -77,6 +78,11 @@ enum RecordingCommandError: Error, CustomLocalizedStringResourceConvertible {
 /// The lines Siri and Shortcuts say after each recording command.
 enum RecordingDialogs {
     static let recording = "Recording."
+    static let paused = "Paused."
+    /// Pause refused: another device records along, and wouldn't pause with it.
+    static let recordsWithOthers = "Can’t pause while another device records."
+    /// Resume with nothing paused or recording: the recording ended (iOS ended Daybook while paused) and was saved.
+    static let recordingEnded = "That recording has ended."
     static let notRecording = "Daybook isn’t recording."
 
     /// "Bookmarked at 12:03."
@@ -119,6 +125,19 @@ struct ResumeRecordingIntent: AudioRecordingIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         try await RecordingCommands.current().resumeRecording()
         return .result(dialog: IntentDialog(stringLiteral: RecordingDialogs.recording))
+    }
+}
+
+/// The Live Activity's Pause: stops the microphone until Resume. Only offered while nothing records along.
+struct PauseRecordingIntent: LiveActivityIntent {
+    static let title: LocalizedStringResource = "Pause Recording"
+    static let description = IntentDescription("Pauses the recording until you resume it.")
+    static let isDiscoverable = false
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        try await RecordingCommands.current().pauseRecording()
+        return .result(dialog: IntentDialog(stringLiteral: RecordingDialogs.paused))
     }
 }
 

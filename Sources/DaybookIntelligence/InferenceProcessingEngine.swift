@@ -74,10 +74,28 @@ public struct InferenceProcessingEngine: ProcessingEngine {
         { progress(ProcessingProgress(fraction: $0.fraction, message: $0.message, stage: $0.stage ?? stage)) }
     }
 
+    /// `result` without the words, and passages, heard wholly inside one of the person's pauses (`PersonPause`). A
+    /// passage keeps its other words, its text and times theirs.
+    static func leavingOut(_ pauses: [PersonPause], from result: RecognitionResult) -> RecognitionResult {
+        let segments = result.segments.compactMap { segment -> RecognizedSegment? in
+            guard !segment.words.isEmpty else {
+                return PersonPause.keepsWord(start: segment.start, end: segment.end, in: pauses) ? segment : nil
+            }
+            let words = segment.words.filter { PersonPause.keepsWord(start: $0.start, end: $0.end, in: pauses) }
+            guard let first = words.first, let last = words.last else { return nil }
+            guard words.count < segment.words.count else { return segment }
+            return RecognizedSegment(start: first.start, end: last.end, text: words.map(\.text).joined().trimmingCharacters(in: .whitespaces),
+                                     confidence: segment.confidence, words: words)
+        }
+        var kept = RecognitionResult(segments: segments, language: result.language, duration: result.duration)
+        kept.provenance = result.provenance
+        return kept
+    }
+
     public func transcribe(_ input: TrackProcessingInput, progress: @escaping ProcessingProgressHandler) async throws -> TrackProcessingOutput {
         let transcribing = Self.reporting(.transcribing, to: progress)
         let identifying = Self.reporting(.identifyingSpeakers, to: progress)
-        let result: RecognitionResult
+        var result: RecognitionResult
         var transcriptModel = configuration.transcriptionModel.id
         var transcriptProvenance: ModelProvenance?
         var notices: [String] = []
@@ -115,6 +133,8 @@ public struct InferenceProcessingEngine: ProcessingEngine {
             routing = routed.parameters
             notices += routed.notices
         }
+        // The person's pauses are silence, where a model can make up words: nothing heard in one is kept.
+        if let pauses = input.track.capture?.pauses, !pauses.isEmpty { result = Self.leavingOut(pauses, from: result) }
         var analysis: SpeakerAnalysis?
         if configuration.detectSpeakers {
             do {

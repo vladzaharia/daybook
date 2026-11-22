@@ -71,7 +71,8 @@ extension AppState {
             return self?.macRecordingState() ?? LinkRecordingState(phase: .idle)
         }
         watches.append(ObservationWatch.distinctValues(of: { [weak self] in
-            RecordingPhaseKey(recording: self?.recordingID, starting: self?.isStartingRecording == true, stopping: self?.isStoppingRecording == true)
+            RecordingPhaseKey(recording: self?.recordingID, starting: self?.isStartingRecording == true, stopping: self?.isStoppingRecording == true,
+                              paused: self?.recorder.isPaused == true)
         }, initial: false) { [weak self] _ in self?.phoneLink.sendRecordingState() })
         // And what the recorders this Mac manages are doing, when that changes.
         watches.append(devices.watchRecorders { [weak self] in self?.phoneLink.sendRecordingState(onlyIfRecordersChanged: true) })
@@ -176,14 +177,18 @@ extension AppState {
             return LinkRecordingState(phase: .paused, conversationID: slept.meetingID, startedAt: slept.startedAt,
                                       elapsed: slept.startedAt.map { max(0, slept.endedAt.timeIntervalSince($0)) } ?? 0, sentAt: now)
         }
-        let phase: LinkRecordingState.Phase = isStoppingRecording ? .stopping : recordingID != nil ? .recording : isStartingRecording ? .starting : .idle
+        // Paused by the person, it says so (only a recording with nothing along can be: no phone follows it), with the length
+        // it had then.
+        let paused = recordingID != nil && !isStoppingRecording ? recorder.pausedAt : nil
+        let phase: LinkRecordingState.Phase = isStoppingRecording ? .stopping : paused != nil ? .paused : recordingID != nil ? .recording
+            : isStartingRecording ? .starting : .idle
         // A recorder recording along with this Mac's recording says which conversation.
         let links = recordingID.flatMap { id in meetings.first { $0.id == id }?.companions } ?? []
         let recorders = LinkRecorderState.states(of: sources.recorders.sessions()) { session in
             links.contains { $0.deviceID == session.id && $0.macEndedAt == nil && [.recording, .alreadyRecording].contains($0.state) } ? self.recordingID : nil
         }
         return LinkRecordingState(phase: phase, conversationID: recordingID, startedAt: recordingStartedAt,
-                                  elapsed: recordingStartedAt.map { max(0, now.timeIntervalSince($0)) } ?? 0, sentAt: now,
+                                  elapsed: paused ?? recordingStartedAt.map { max(0, now.timeIntervalSince($0)) } ?? 0, sentAt: now,
                                   recorders: recorders)
     }
 
@@ -524,6 +529,9 @@ extension AppState {
 
     // MARK: A phone asks this Mac to record
 
+    /// Why a phone can't record along with a recording the person paused here.
+    static let pausedHere = "It’s paused on this Mac."
+
     /// The phone records a conversation and asks this Mac to record it too. This Mac records into
     /// the phone's conversation (creating it here if it hasn't synced yet), or says why it can't.
     func answerPhone(_ request: LinkRecordRequest, from peer: LinkPeer) async -> LinkRecordReply.Outcome {
@@ -531,6 +539,9 @@ extension AppState {
         switch request.action {
         case .start:
             if recordingID == id {
+                // Paused by the person, nothing joins it: the phone would keep what this Mac leaves out (docs/capture.md,
+                // "Pausing").
+                if isRecordingPaused { return .refused(LinkRecordRefusal(reason: .busy, message: Self.pausedHere, conversationID: id)) }
                 return .accepted(LinkRecordAck(conversationID: id, startedAt: recordingStartedAt, wasAlreadyRecording: true))
             }
             // This Mac's Can start recording for that phone (on by default) says whether it may start a recording
@@ -826,6 +837,7 @@ private struct RecordingPhaseKey: Equatable {
     var recording: UUID?
     var starting: Bool
     var stopping: Bool
+    var paused: Bool
 }
 
 /// A paired phone's Can start recording on this Mac, as the link's watch compares it.

@@ -30,14 +30,18 @@ public struct TrackCaptureDetails: Codable, Equatable, Sendable {
     /// The local link's ID for the device that recorded it (`LinkIdentity.deviceID`), the one an iPhone's `peerClocks`
     /// names, so its clock against another recorder's is known.
     public var deviceID: String?
+    /// The person's own pauses, in this recording's seconds: silent in it, never transcribed, and no other device's
+    /// recording joins the conversation over them (`PersonPause`).
+    public var pauses: [PersonPause]?
 
     public init(method: String? = nil, capturedApps: [String]? = nil, fallbackReason: String? = nil,
                 clockRate: Double? = nil, outputRoute: String? = nil, echoRemoval: EchoRemovalReport? = nil,
                 notes: [String]? = nil, peerClocks: [CapturePeerClock]? = nil, recorderClock: CaptureRecorderClock? = nil,
-                captureID: UUID? = nil, deviceID: String? = nil) {
+                captureID: UUID? = nil, deviceID: String? = nil, pauses: [PersonPause]? = nil) {
         self.method = method; self.capturedApps = capturedApps; self.fallbackReason = fallbackReason
         self.clockRate = clockRate; self.outputRoute = outputRoute; self.echoRemoval = echoRemoval; self.notes = notes
         self.peerClocks = peerClocks; self.recorderClock = recorderClock; self.captureID = captureID; self.deviceID = deviceID
+        self.pauses = pauses
     }
 }
 

@@ -17,6 +17,17 @@ struct CaptureCaptionTap: Sendable {
         CaptureCaptionTap(microphone: Self.shift(microphone, by: origin), call: Self.shift(call, by: origin))
     }
 
+    /// The same handlers, given silence for what was captured during a pause (`CapturePauses`), judged by the host time
+    /// they're called with: captions keep their timeline through a pause and never hear it.
+    func silencing(_ pauses: CapturePauses) -> CaptureCaptionTap {
+        CaptureCaptionTap(microphone: Self.silence(microphone, pauses), call: Self.silence(call, pauses))
+    }
+
+    private static func silence(_ handler: CaptureBufferHandler?, _ pauses: CapturePauses) -> CaptureBufferHandler? {
+        guard let handler else { return nil }
+        return { @Sendable buffer, host in handler(pauses.silenced(buffer, at: host) ?? buffer, host) }
+    }
+
     private static func shift(_ handler: CaptureBufferHandler?, by origin: TimeInterval) -> CaptureBufferHandler? {
         guard let handler else { return nil }
         return { @Sendable buffer, host in handler(buffer, host - origin) }

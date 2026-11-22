@@ -117,6 +117,8 @@ struct CaptureResult: Codable, Identifiable, Equatable {
     /// Set once the recording has been finalized for transcription.
     var echoRemoval: EchoRemovalReport?
     var derivedTracks: [DerivedCaptureTrack]?
+    /// The person's pauses, in session seconds: every track is silent through each (`CapturePauses`).
+    var pauses: [CapturePause]?
 
     init(id: UUID, startedAt: Date, endedAt: Date, tracks: [CapturedAudioTrack], warnings: [String], directory: URL,
          systemAudio: SystemAudioCaptureInfo? = nil, outputRoutes: [AudioRouteEvent]? = nil,
@@ -141,6 +143,8 @@ struct CaptureSessionManifest: Codable {
     var includeSystemAudio: Bool
     /// The call app the recording was started for, when known.
     var callApp: CallAppTarget?
+    /// The person's pauses so far, in session seconds, written as each begins and ends; one still open has no end.
+    var pauses: [CapturePause]? = nil
 }
 
 /// The meeting app whose audio a process tap should record.
